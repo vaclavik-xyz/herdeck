@@ -63,5 +63,15 @@ async def main():
         if t.label or t.color not in ("dim",):
             print(f"  [{t.index:2}] {t.color:6} {t.label!r}")
 
+    if not tiles:
+        print("FAIL: no render (connector never produced a frame)")
+        return 1
+    link = tiles[-1]            # last tile is the connection indicator
+    if link.color != "green":
+        print("FAIL: not connected to the bridge (Link tile is not green)")
+        return 1
+    print("OK: connected and rendered")
+    return 0
 
-asyncio.run(main())
+
+raise SystemExit(asyncio.run(main()))

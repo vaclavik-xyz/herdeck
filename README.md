@@ -25,9 +25,12 @@ herdr's socket lives at `~/.config/herdr/herdr.sock` (macOS & Linux).
    ```bash
    HERDR_SOCKET=~/.config/herdr/herdr.sock \
    HERDECK_BIND=100.x.y.z HERDECK_PORT=8788 \
-   HERDECK_SERVER_ID=dev HERDECK_TOKEN=<random-token> \
+   HERDECK_SERVER_ID=workbox HERDECK_TOKEN=<random-token> \
    PYTHONPATH=~/herdeck/src ~/herdeck/.venv/bin/python -m herdeck.bridge
    ```
+   The Mac routes commands by the **config `id`** of the server it connects to,
+   so `HERDECK_SERVER_ID` is only a cosmetic label — the connector re-stamps
+   inbound state to the config id (they need not match).
 3. To keep it running: **macOS** → `deploy/dev.herdeck.bridge.plist`
    (`launchctl load -w ~/Library/LaunchAgents/dev.herdeck.bridge.plist`);
    **Linux** → `deploy/herdeck-bridge.service` (systemd).

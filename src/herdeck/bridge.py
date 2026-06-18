@@ -89,11 +89,12 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
 
 
 class HerdrEvents:
-    """Yields wire panes that changed, by polling herdr's pane.list and diffing.
+    """Yields the full agent list whenever it changes, by polling pane.list.
 
-    herdr's `events.subscribe` is per-pane; polling the full list and diffing is
-    simpler and robust for a small agent fleet, and inherits SocketHerdr's
-    reconnect handling.
+    herdr's `events.subscribe` is per-pane; polling and diffing the whole list is
+    simpler and robust for a small fleet. Yielding the FULL list (not per-pane
+    deltas) means additions, status changes AND removals are all reflected — a
+    pane that closes simply drops out of the next snapshot.
     """
 
     def __init__(self, herdr: HerdrClient, poll_interval: float = 1.5):
@@ -101,25 +102,28 @@ class HerdrEvents:
         self._interval = poll_interval
 
     async def stream(self):
-        prev: dict[str, dict] = {}
+        prev: list[dict] | None = None
         while True:
             try:
                 raw = await self._herdr.list_panes()
             except Exception:
                 raw = None
             if raw is not None:
-                cur = {w["pane_id"]: w for w in _wire_panes(raw)}
-                for pane_id, wire in cur.items():
-                    if prev.get(pane_id) != wire:
-                        yield wire
-                prev = cur
+                cur = _wire_panes(raw)
+                if cur != prev:
+                    yield cur
+                    prev = cur
             await asyncio.sleep(self._interval)
 
 
-async def _broadcast(event_stream, clients: set, server_id: str) -> None:
-    """Forward each changed wire pane to all connected clients as an event."""
-    async for pane in event_stream:
-        msg = encode({"type": "event", "server_id": server_id, "pane": pane})
+async def _broadcast(snapshot_stream, clients: set, server_id: str) -> None:
+    """Forward each changed full agent list to all clients as a snapshot.
+
+    Snapshots (not per-pane events) are used so that removed/finished panes
+    disappear from the deck instead of lingering until a manual refresh.
+    """
+    async for panes in snapshot_stream:
+        msg = encode({"type": "snapshot", "server_id": server_id, "panes": panes})
         for ws in list(clients):
             try:
                 await ws.send(msg)

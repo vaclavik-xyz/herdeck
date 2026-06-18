@@ -140,3 +140,23 @@ async def test_result_frame_goes_to_on_result(ws_server):
     assert results == [("r1", {"skipped": True})]
     conn.stop()
     await asyncio.wait_for(task, timeout=2.0)
+
+
+def test_dispatch_rekeys_inbound_to_config_server_id():
+    # bridge reports its own server_id; the connector must re-stamp inbound
+    # state to the configured id so command routing stays consistent.
+    cfg = ServerConfig("dev", "ws://x", "t")
+    seen = {}
+    conn = Connector(
+        cfg,
+        on_snapshot=lambda sid, st: seen.update(sid=sid, states=st),
+        on_event=lambda sid, s: None,
+        on_connection=lambda sid, up: None,
+    )
+    raw = ('{"type":"snapshot","server_id":"some-bridge-id","panes":'
+           '[{"pane_id":"w1:p1","agent_type":"claude","label":"api",'
+           '"status":"blocked","project":"api"}]}')
+    conn._dispatch(raw)
+    assert seen["sid"] == "dev"
+    assert seen["states"][0].key.server_id == "dev"
+    assert seen["states"][0].agent_type == "claude"

@@ -92,9 +92,9 @@ async def test_act_skipped_when_not_blocked(herdr):
     assert herdr.sent == []
 
 
-# --- broadcast fan-out ---
+# --- broadcast fan-out (snapshots) ---
 
-async def test_broadcast_fans_out_events_to_all_clients():
+async def test_broadcast_fans_out_snapshots_to_all_clients():
     from herdeck.bridge import _broadcast
     sent_a, sent_b = [], []
 
@@ -105,15 +105,15 @@ async def test_broadcast_fans_out_events_to_all_clients():
     clients = {FakeWS(sent_a), FakeWS(sent_b)}
 
     async def stream():
-        yield {"pane_id": "w1:p1", "agent_type": "claude", "label": "api",
-               "status": "blocked", "project": "api"}
+        yield [{"pane_id": "w1:p1", "agent_type": "claude", "label": "api",
+                "status": "blocked", "project": "api"}]
 
     await _broadcast(stream(), clients, "workbox")
     assert len(sent_a) == 1 and len(sent_b) == 1
     msg = json.loads(sent_a[0])
-    assert msg["type"] == "event"
+    assert msg["type"] == "snapshot"
     assert msg["server_id"] == "workbox"
-    assert msg["pane"]["pane_id"] == "w1:p1"
+    assert msg["panes"][0]["pane_id"] == "w1:p1"
 
 
 async def test_broadcast_survives_a_dead_client():
@@ -129,20 +129,23 @@ async def test_broadcast_survives_a_dead_client():
     clients = {GoodWS(), DeadWS()}
 
     async def stream():
-        yield {"pane_id": "p", "status": "working"}
+        yield [{"pane_id": "p", "status": "working"}]
 
     await _broadcast(stream(), clients, "s")   # must not raise
     assert len(good) == 1
 
 
-# --- poll-diff event source ---
+# --- poll-diff snapshot source ---
 
-async def test_herdr_events_yields_changed_panes():
+async def test_herdr_events_yields_full_list_on_change_and_removal():
     from herdeck.bridge import HerdrEvents
 
     seq = [
-        [raw_pane("w1:p1", agent="claude", status="idle")],
-        [raw_pane("w1:p1", agent="claude", status="blocked")],  # changed
+        [raw_pane("w1:p1", agent="claude", status="idle"),
+         raw_pane("w1:p2", agent="codex", status="working")],
+        [raw_pane("w1:p1", agent="claude", status="blocked"),
+         raw_pane("w1:p2", agent="codex", status="working")],   # p1 changed
+        [raw_pane("w1:p1", agent="claude", status="blocked")],   # p2 removed
     ]
 
     class FakeHerdr:
@@ -154,9 +157,11 @@ async def test_herdr_events_yields_changed_panes():
 
     gen = HerdrEvents(FakeHerdr(), poll_interval=0).stream()
     first = await gen.__anext__()
-    assert first["status"] == "idle"          # new pane -> emitted
+    assert {p["pane_id"] for p in first} == {"w1:p1", "w1:p2"}
     second = await gen.__anext__()
-    assert second["status"] == "blocked"      # changed -> emitted
+    assert [p for p in second if p["pane_id"] == "w1:p1"][0]["status"] == "blocked"
+    third = await gen.__anext__()
+    assert {p["pane_id"] for p in third} == {"w1:p1"}   # removal reflected
     await gen.aclose()
 
 

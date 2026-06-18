@@ -6,7 +6,7 @@ from collections.abc import Callable
 import websockets
 
 from .config import ServerConfig
-from .model import AgentState
+from .model import AgentKey, AgentState
 from .protocol import decode_inbound, encode, Error, Event, Result, Snapshot
 
 
@@ -89,12 +89,29 @@ class Connector:
             except asyncio.TimeoutError:
                 pass
 
+    def _rekey(self, state: AgentState) -> AgentState:
+        """Force the agent key to THIS connector's configured server id.
+
+        The bridge sets its own server_id in frames; routing on the Mac is keyed
+        by the config id, so we re-stamp inbound state to keep them consistent
+        regardless of the bridge's HERDECK_SERVER_ID.
+        """
+        if state.key.server_id == self.server.id:
+            return state
+        return AgentState(
+            key=AgentKey(self.server.id, state.key.pane_id),
+            agent_type=state.agent_type,
+            label=state.label,
+            status=state.status,
+            project=state.project,
+        )
+
     def _dispatch(self, raw: str) -> None:
         msg = decode_inbound(raw)
         if isinstance(msg, Snapshot):
-            self._on_snapshot(msg.server_id, msg.states)
+            self._on_snapshot(self.server.id, [self._rekey(s) for s in msg.states])
         elif isinstance(msg, Event):
-            self._on_event(msg.server_id, msg.state)
+            self._on_event(self.server.id, self._rekey(msg.state))
         elif isinstance(msg, Result):
             self._on_result(msg.req, msg.data)
         elif isinstance(msg, Error):
