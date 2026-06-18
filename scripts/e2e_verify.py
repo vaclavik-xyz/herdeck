@@ -62,6 +62,7 @@ async def main():
     task = asyncio.create_task(conn.run())
     await asyncio.sleep(3.5)
     tiles = list(deck.last)        # capture WHILE connected
+    frames_seen = frames["n"]      # capture frame count at the same instant
     conn.stop()
     try:
         await asyncio.wait_for(task, 2.0)
@@ -80,10 +81,10 @@ async def main():
     if link.color != "green":
         print("FAIL: not connected to the bridge (Link tile is not green)")
         return 1
-    if frames["n"] == 0:
+    if frames_seen == 0:
         print("FAIL: connected but the bridge sent no snapshot/event")
         return 1
-    print(f"OK: connected and rendered ({frames['n']} bridge frames)")
+    print(f"OK: connected and rendered ({frames_seen} bridge frames)")
     return 0
 
 
