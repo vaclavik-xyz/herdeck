@@ -7,7 +7,7 @@ import websockets
 
 from .config import ServerConfig
 from .model import AgentState
-from .protocol import decode_inbound, encode, Event, Result, Snapshot
+from .protocol import decode_inbound, encode, Error, Event, Result, Snapshot
 
 
 class Connector:
@@ -18,6 +18,7 @@ class Connector:
         on_event: Callable[[str, AgentState], None],
         on_connection: Callable[[str, bool], None],
         on_result: Callable[[str, dict], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
         backoff_base: float = 0.5,
         backoff_max: float = 30.0,
     ):
@@ -26,18 +27,24 @@ class Connector:
         self._on_event = on_event
         self._on_connection = on_connection
         self._on_result = on_result or (lambda req, data: None)
+        self._on_error = on_error or (lambda message: None)
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._stop = False
         self._ws = None
         self._loop = None
+        self._wake = None
 
     def stop(self) -> None:
         self._stop = True
-        ws = self._ws
         loop = self._loop
-        if ws is not None and loop is not None:
-            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(ws.close()))
+        ws = self._ws
+        wake = self._wake
+        if loop is not None:
+            if ws is not None:
+                loop.call_soon_threadsafe(lambda: asyncio.ensure_future(ws.close()))
+            if wake is not None:
+                loop.call_soon_threadsafe(wake.set)
 
     async def send(self, msg: dict) -> None:
         ws = self._ws
@@ -49,6 +56,7 @@ class Connector:
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
+        self._wake = asyncio.Event()
         attempt = 0
         while not self._stop:
             connected = False
@@ -76,7 +84,10 @@ class Connector:
                 break
             delay = min(self._backoff_base * (2 ** attempt), self._backoff_max)
             attempt += 1
-            await asyncio.sleep(delay)
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
 
     def _dispatch(self, raw: str) -> None:
         msg = decode_inbound(raw)
@@ -86,3 +97,5 @@ class Connector:
             self._on_event(msg.server_id, msg.state)
         elif isinstance(msg, Result):
             self._on_result(msg.req, msg.data)
+        elif isinstance(msg, Error):
+            self._on_error(msg.message)

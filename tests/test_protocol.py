@@ -5,6 +5,7 @@ from herdeck.protocol import (
     Snapshot,
     Event,
     Result,
+    Error,
 )
 
 
@@ -56,3 +57,10 @@ def test_unknown_status_falls_back():
     )
     msg = decode_inbound(raw)
     assert msg.state.status is Status.UNKNOWN
+
+
+def test_decode_error():
+    from herdeck.protocol import Error
+    msg = decode_inbound('{"type":"error","message":"bad request"}')
+    assert isinstance(msg, Error)
+    assert msg.message == "bad request"

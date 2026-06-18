@@ -63,6 +63,13 @@ def _command_to_msg(cmd: Command, req_counter: list[int]) -> dict:
     raise ValueError(f"unknown command kind: {cmd.kind}")
 
 
+async def _guarded(conn: Connector) -> None:
+    try:
+        await conn.run()
+    except Exception:
+        pass
+
+
 async def _run(config: Config, deck: DeckDriver) -> None:
     loop = asyncio.get_running_loop()
     connectors: dict[str, Connector] = {}
@@ -89,7 +96,7 @@ async def _run(config: Config, deck: DeckDriver) -> None:
         )
         connectors[server.id] = conn
 
-    await asyncio.gather(*(c.run() for c in connectors.values()))
+    await asyncio.gather(*(_guarded(c) for c in connectors.values()))
 
 
 def main() -> None:

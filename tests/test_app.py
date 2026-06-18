@@ -57,3 +57,13 @@ def test_press_is_marshalled_through_schedule():
     assert len(pending) == 1
     pending[0]()                 # run the scheduled work
     assert sent == [Command("read", "workbox", "p1", source="detection")]
+
+
+async def test_guarded_swallows_connector_exception():
+    from herdeck.app import _guarded
+
+    class Boom:
+        async def run(self):
+            raise RuntimeError("boom")
+
+    await _guarded(Boom())   # must not raise

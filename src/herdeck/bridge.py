@@ -71,12 +71,12 @@ class SocketHerdr:
         if self._writer is None or self._writer.is_closing():
             self._reader, self._writer = await asyncio.open_unix_connection(self._path)
 
-    async def _rpc(self, method: str, params: dict) -> dict:
+    async def _rpc(self, method: str, params: dict, *, retry: bool = True) -> dict:
+        # self._lock serializes RPCs, so the fixed request id "b" is safe.
         async with self._lock:
-            # self._lock serializes RPCs, so the fixed request id "b" is safe:
-            # only one request/response is ever in flight at a time.
-            last_exc = None
-            for attempt in range(2):
+            attempts = 2 if retry else 1
+            last_exc: Exception | None = None
+            for _ in range(attempts):
                 try:
                     await self._ensure()
                     self._writer.write((json.dumps(
@@ -89,7 +89,7 @@ class SocketHerdr:
                 except (OSError, ConnectionError) as exc:
                     last_exc = exc
                     self._reader = None
-                    self._writer = None                # force reconnect on retry
+                    self._writer = None
             raise last_exc
 
     async def list_panes(self) -> list[dict]:
@@ -105,7 +105,7 @@ class SocketHerdr:
         return res.get("result", {}).get("text", "")
 
     async def send_keys(self, pane_id: str, keys: list[str]) -> None:
-        await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": keys})
+        await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": keys}, retry=False)
 
 
 async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str):

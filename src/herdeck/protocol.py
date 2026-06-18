@@ -45,7 +45,12 @@ class Result:
     data: dict
 
 
-def decode_inbound(raw: str) -> Snapshot | Event | Result:
+@dataclass
+class Error:
+    message: str
+
+
+def decode_inbound(raw: str) -> Snapshot | Event | Result | Error:
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "snapshot":
@@ -56,4 +61,6 @@ def decode_inbound(raw: str) -> Snapshot | Event | Result:
         return Event(sid, _pane_to_state(sid, msg["pane"]))
     if kind == "result":
         return Result(msg["req"], msg.get("data", {}))
+    if kind == "error":
+        return Error(msg.get("message", ""))
     raise ValueError(f"unknown inbound message type: {kind}")
