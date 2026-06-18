@@ -19,12 +19,6 @@ class Command:
     source: str | None = None
     keys: list[str] = field(default_factory=list)
 
-    def __eq__(self, other):
-        return (isinstance(other, Command)
-                and (self.kind, self.server_id, self.pane_id, self.source,
-                     self.keys) == (other.kind, other.server_id, other.pane_id,
-                                    other.source, other.keys))
-
 
 _STATUS_COLOR = {
     Status.WORKING: "green",

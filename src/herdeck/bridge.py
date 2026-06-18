@@ -58,6 +58,64 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     raise ValueError(f"unknown client message: {kind}")
 
 
+def _event_to_pane(msg: dict) -> dict | None:
+    """Best-effort extraction of a pane dict from a herdr event message.
+    The exact herdr event schema is reconciled during bring-up; we accept
+    either a top-level 'pane' object or the params payload of a
+    pane.agent_status_changed event."""
+    payload = msg.get("pane") or msg.get("params") or {}
+    pane_id = payload.get("pane_id")
+    if not pane_id:
+        return None
+    return {
+        "pane_id": pane_id,
+        "agent_type": payload.get("agent_type", "default"),
+        "label": payload.get("label", ""),
+        "status": payload.get("status", "unknown"),
+        "project": payload.get("project", ""),
+    }
+
+
+class HerdrEvents:
+    """Dedicated herdr socket subscribed to agent status changes."""
+
+    def __init__(self, socket_path: str, reconnect_delay: float = 1.0):
+        self._path = socket_path
+        self._reconnect_delay = reconnect_delay
+
+    async def stream(self):
+        """Async-yield pane dicts as agent status changes occur; reconnects on drop."""
+        while True:
+            try:
+                reader, writer = await asyncio.open_unix_connection(self._path)
+                writer.write((json.dumps({
+                    "id": "sub", "method": "events.subscribe",
+                    "params": {"subscriptions": [{"type": "pane.agent_status_changed"}]},
+                }) + "\n").encode())
+                await writer.drain()
+                while True:
+                    line = await reader.readline()
+                    if not line:
+                        break
+                    pane = _event_to_pane(json.loads(line.decode()))
+                    if pane is not None:
+                        yield pane
+            except (OSError, ConnectionError, ValueError):
+                pass
+            await asyncio.sleep(self._reconnect_delay)
+
+
+async def _broadcast(event_stream, clients: set, server_id: str) -> None:
+    """Forward each pane from event_stream to all connected client websockets."""
+    async for pane in event_stream:
+        msg = encode({"type": "event", "server_id": server_id, "pane": pane})
+        for ws in list(clients):
+            try:
+                await ws.send(msg)
+            except Exception:
+                pass
+
+
 class SocketHerdr:
     """Talks to a real herdr instance over its Unix socket (newline JSON)."""
 
@@ -108,32 +166,35 @@ class SocketHerdr:
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": keys}, retry=False)
 
 
-async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str):
+async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, clients: set):
     auth = ws.request.headers.get("Authorization", "")
     if not hmac.compare_digest(auth, f"Bearer {token}"):
         await ws.close(code=4401, reason="unauthorized")
         return
-    # push initial snapshot, then relay client commands
     panes = await herdr.list_panes()
     await ws.send(encode({"type": "snapshot", "server_id": server_id, "panes": panes}))
-    async for raw in ws:
-        try:
-            out = await handle_client_message(herdr, server_id, raw)
-        except Exception as exc:
-            # handle_client_message only raises ValueError/KeyError, which never
-            # contain the token, so surfacing str(exc) is safe.
-            out = encode({"type": "error", "message": str(exc)})
-        await ws.send(out)
+    clients.add(ws)
+    try:
+        async for raw in ws:
+            try:
+                out = await handle_client_message(herdr, server_id, raw)
+            except Exception as exc:
+                out = encode({"type": "error", "message": str(exc)})
+            await ws.send(out)
+    finally:
+        clients.discard(ws)
 
 
 async def serve(socket_path: str, host: str, port: int, server_id: str, token: str):
     herdr = SocketHerdr(socket_path)
+    events = HerdrEvents(socket_path)
+    clients: set = set()
 
     async def handler(ws):
-        await _serve_connection(ws, herdr, server_id, token)
+        await _serve_connection(ws, herdr, server_id, token, clients)
 
     async with websockets.serve(handler, host, port):
-        await asyncio.Future()  # run forever
+        await _broadcast(events.stream(), clients, server_id)  # runs forever
 
 
 def main() -> None:

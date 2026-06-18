@@ -51,6 +51,59 @@ async def test_act_skipped_when_not_blocked(herdr):
     assert herdr.sent == []
 
 
+async def test_broadcast_fans_out_events_to_all_clients():
+    from herdeck.bridge import _broadcast
+
+    sent_a, sent_b = [], []
+
+    class FakeWS:
+        def __init__(self, log): self._log = log
+        async def send(self, msg): self._log.append(msg)
+
+    clients = {FakeWS(sent_a), FakeWS(sent_b)}
+
+    async def stream():
+        yield {"pane_id": "w1:p1", "agent_type": "claude", "label": "api",
+               "status": "blocked", "project": "api"}
+
+    await _broadcast(stream(), clients, "workbox")
+    assert len(sent_a) == 1 and len(sent_b) == 1
+    import json as _json
+    msg = _json.loads(sent_a[0])
+    assert msg["type"] == "event"
+    assert msg["server_id"] == "workbox"
+    assert msg["pane"]["pane_id"] == "w1:p1"
+
+
+async def test_broadcast_survives_a_dead_client():
+    from herdeck.bridge import _broadcast
+
+    good = []
+
+    class GoodWS:
+        async def send(self, msg): good.append(msg)
+
+    class DeadWS:
+        async def send(self, msg): raise RuntimeError("closed")
+
+    clients = {GoodWS(), DeadWS()}
+
+    async def stream():
+        yield {"pane_id": "p", "status": "working"}
+
+    await _broadcast(stream(), clients, "s")   # must not raise
+    assert len(good) == 1
+
+
+def test_event_to_pane_extracts_fields():
+    from herdeck.bridge import _event_to_pane
+    pane = _event_to_pane({"pane": {"pane_id": "w1:p2", "agent_type": "codex",
+                                    "status": "working"}})
+    assert pane == {"pane_id": "w1:p2", "agent_type": "codex", "label": "",
+                    "status": "working", "project": ""}
+    assert _event_to_pane({"params": {}}) is None
+
+
 async def test_rpc_retries_reads_but_not_send_keys(monkeypatch):
     import asyncio as _asyncio
     from herdeck.bridge import SocketHerdr

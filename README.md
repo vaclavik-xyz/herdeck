@@ -21,3 +21,11 @@ See blocked agents at a glance and Approve / Deny / Stop with one press.
 
 ## Adding an agent type
 Add an `[answer_profiles.<name>]` block with `approve`/`deny`/`stop` key lists.
+
+## Security
+- The bridge WebSocket is authenticated with a bearer token and should be bound
+  to the Tailscale interface only (`HERDECK_BIND`), never `0.0.0.0`.
+- The token is read from an environment variable; never commit it. Note the
+  example `deploy/com.herdeck.app.plist` stores it inline — for real use, keep
+  the plist readable only by your user (`chmod 600`) or source the token from a
+  secret store / Keychain instead.
