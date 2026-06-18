@@ -15,10 +15,12 @@ class App:
     """Glue between orchestrator (sync) and connectors (async)."""
 
     def __init__(self, config: Config, deck: DeckDriver,
-                 send: Callable[[Command], None]):
+                 send: Callable[[Command], None],
+                 schedule: Callable[[Callable[[], None]], None] | None = None):
         self.config = config
         self.deck = deck
         self._send = send
+        self._schedule = schedule or (lambda fn: fn())
         self.orch = Orchestrator(config)
         deck.on_press(self._on_press)
 
@@ -38,6 +40,11 @@ class App:
         self._refresh()
 
     def _on_press(self, index: int) -> None:
+        # _on_press may fire on the device thread; marshal the real work
+        # onto whatever loop/thread `schedule` targets (the asyncio loop in _run).
+        self._schedule(lambda: self._handle_press(index))
+
+    def _handle_press(self, index: int) -> None:
         for cmd in self.orch.on_press(index):
             self._send(cmd)
         self._refresh()
@@ -67,7 +74,8 @@ async def _run(config: Config, deck: DeckDriver) -> None:
             asyncio.run_coroutine_threadsafe(
                 conn.send(_command_to_msg(cmd, req_counter)), loop)
 
-    app = App(config, deck, send)
+    app = App(config, deck, send,
+              schedule=lambda fn: loop.call_soon_threadsafe(fn))
 
     for server in config.servers:
         conn = Connector(
