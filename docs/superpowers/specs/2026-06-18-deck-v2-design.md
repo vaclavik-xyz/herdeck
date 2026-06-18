@@ -184,4 +184,59 @@ fewer frames).
 - **Panel legibility:** 392×196 fits a short title + ~3 wrapped lines; long
   request text is truncated with an ellipsis (full text via Spec 2 terminal-attach).
 - **Cell 14 press index** is unconfirmed (only 13 observed); paging uses index 13,
-  which is confirmed pressable.
+  which is confirmed pressable. `on_press` treats both 13 and 14 as "panel → next
+  page" defensively.
+- **ZIP rebuild per tick:** `set_buttons(update_only=True)` only changes the device
+  command byte; the host still rebuilds the full `build.zip` every call. A 0.4s
+  spinner tick therefore rebuilds the ZIP each cycle. Mitigations: pre-generate
+  all spinner-phase icons (no rasterization on the tick hot-path); only animate
+  when working-tile count is small; raise the tick interval if a hardware test
+  shows churn. Measure in the manual test.
+
+## 9. Resolved review items (authoritative — the plan follows these)
+
+- **R-1 (test migration is a first-class step).** Removing the system tiles and
+  changing `render()` to return `RenderState` breaks existing tests. The plan's
+  FIRST implementation step migrates them: delete the `SLOT_NEXT/REFRESH/CONN`
+  imports and the `test_overview_has_system_tiles`,
+  `test_connection_tile_red_when_server_down`, `test_next_jumps_to_first_blocked`,
+  `test_refresh_requests_list` tests; redirect the ~8 `deck.last[5]` /
+  `tiles[5]` drill-detection assertions in `test_orchestrator_nav.py` /
+  `test_app.py` to the panel (`deck.last_panel`); update `app._refresh` and
+  `_run`'s initial refresh to unpack `RenderState` and call `render_panel`.
+
+- **R-2 (drill-in for any agent).** Tapping ANY agent tile (not just blocked)
+  enters drill-in and issues a `read` Command, so the panel shows the agent's
+  current request/last output. Drill action tiles: `0 Approve`, `1 Approve!`,
+  `2 Deny`, `3 Stop`, `4 Back`. **Approve/Approve!/Deny are enabled only when the
+  agent is `blocked`** (otherwise rendered dim and their press returns `[]`).
+  **Stop and Back are always enabled.** `panel_detail` shows agent label + status +
+  the read text (truncated); if there is no text yet it shows status only.
+
+- **R-3 (driver interface naming).** Keep the existing `slot_count()` name (no new
+  `tile_count`); it returns the renderable tile count (13). The orchestrator uses
+  it directly as the agent-tile capacity and **no longer computes
+  `slot_next/refresh/conn`** (system tiles are gone). `module SLOT_*` constants are
+  removed.
+
+- **R-4 (working dir = `os.chdir`).** The driver creates and `os.chdir`s into an
+  app-owned dir (`~/.cache/herdeck`), because strmdck's `.build`/`.cache` paths are
+  hardcoded relative and cannot be made absolute without patching the library.
+  `app.main` resolves `HERDECK_CONFIG` to an absolute path and loads the config
+  **before** constructing the deck (so the chdir can't break config loading). The
+  driver's `_ICON_DIR` stays relative (resolves under the new CWD).
+
+- **R-5 (icon cache contract).** strmdck's `_prepare_zip` reads tile images from
+  `./.cache/icons/_generated/<name>` relative to CWD. The IconProvider therefore
+  writes its final composited per-tile PNGs into **that exact directory** (under
+  the app working dir) and `TileView`→`set_buttons` references them by bare
+  filename. Spinner-phase variants are pre-generated there at startup. This
+  directory contract is the single most important integration point.
+
+- **R-6 (connection type).** `panel_overview(counts, page_index, page_count,
+  down: set[str])` — connected iff `down` is empty; otherwise the panel shows a
+  red/disconnected accent. Mirrors the orchestrator's existing `self._down`.
+
+- **R-7 (suppress strmdck stdout).** strmdck prints `send_zip` / parse debug to
+  stdout; at spinner cadence this floods logs. The driver suppresses/redirects
+  strmdck stdout (e.g. wrap calls with `contextlib.redirect_stdout`).
