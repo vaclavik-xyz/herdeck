@@ -23,19 +23,53 @@ class D200Driver(DeckDriver):
     BRIGHTNESS = 80
     _ICON_DIR = os.path.join(".cache", "icons", "_generated")
 
-    def __init__(self):
-        from strmdck.device_manager import auto_connect  # lazy: no HW import at module load
+    # The D200 exposes two HID interfaces: the deck control surface
+    # (usage_page 0x0c) and a standalone keyboard (0x01, claimed by macOS).
+    _CONTROL_USAGE_PAGE = 0x0c
 
-        dev = auto_connect()
-        if dev is None:
-            raise RuntimeError(
-                "No Ulanzi D200 found. Is it plugged in and the official "
-                "Ulanzi app closed (it holds the USB device)?"
-            )
-        self._dev = dev
+    def __init__(self):
+        self._dev = self._open_device()
         self._callback: Callable[[int], None] | None = None
         self._icons = self._generate_icons()
         self._dev.set_brightness(self.BRIGHTNESS, force=True)
+
+    def _open_device(self, retries: int = 5, delay: float = 1.0):
+        """Open the deck's control interface by path.
+
+        strmdck's auto_connect opens by (vendor, product), which on macOS
+        nondeterministically grabs the keyboard interface (held by the OS) and
+        fails. We pick the control interface (usage_page 0x0c) by path instead,
+        with a short retry for reopen contention right after a prior session.
+        """
+        import time
+
+        import hid  # lazy: no HW import at module load
+        from strmdck.devices.ulanzi_d200 import UlanziD200Device
+
+        vid, pid = UlanziD200Device.USB_VENDOR_ID, UlanziD200Device.USB_PRODUCT_ID
+        last_err = None
+        for _ in range(retries):
+            matches = [d for d in hid.enumerate()
+                       if (d["vendor_id"], d["product_id"]) == (vid, pid)]
+            # Prefer the control interface; fall back to any matching path.
+            paths = [d["path"] for d in matches
+                     if d.get("usage_page") == self._CONTROL_USAGE_PAGE]
+            paths += [d["path"] for d in matches
+                      if d.get("usage_page") != self._CONTROL_USAGE_PAGE]
+            for path in paths:
+                try:
+                    hid_dev = hid.device()
+                    hid_dev.open_path(path)
+                    hid_dev.set_nonblocking(True)
+                    return UlanziD200Device(hid_dev)
+                except Exception as exc:  # interface busy / wrong one
+                    last_err = exc
+            time.sleep(delay)
+        raise RuntimeError(
+            "No openable Ulanzi D200 control interface found. Is it plugged in "
+            "and the official Ulanzi app closed (it holds the USB device)? "
+            f"(last error: {last_err})"
+        )
 
     # --- icon generation ---
     def _generate_icons(self) -> dict[str, str]:

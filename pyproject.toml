@@ -9,7 +9,8 @@ requires-python = ">=3.12"
 dependencies = ["websockets>=14"]
 
 [project.optional-dependencies]
-deck = ["strmdck", "pillow>=10"]
+# strmdck (rc) under-declares its runtime deps, so pin them explicitly.
+deck = ["strmdck", "pillow>=10", "deepdiff", "python-dotenv", "hidapi"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
