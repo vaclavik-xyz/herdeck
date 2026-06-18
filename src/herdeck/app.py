@@ -164,3 +164,7 @@ def main() -> None:
         asyncio.run(_run(config, deck))
     finally:
         deck.close()
+
+
+if __name__ == "__main__":
+    main()

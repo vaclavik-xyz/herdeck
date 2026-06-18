@@ -215,3 +215,7 @@ def main() -> None:
     server_id = os.environ.get("HERDECK_SERVER_ID", "server")
     token = os.environ["HERDECK_TOKEN"]
     asyncio.run(serve(socket_path, host, port, server_id, token))
+
+
+if __name__ == "__main__":
+    main()
