@@ -4,14 +4,15 @@ Connects the real Connector + Orchestrator + FakeRenderer to a running
 herdeck bridge, waits a few seconds, and prints the resulting deck tiles.
 """
 import asyncio
+import os
 
 from herdeck.config import AnswerProfile, Config, ServerConfig
 from herdeck.connector import Connector
 from herdeck.app import App
 from herdeck.driver.fake import FakeRenderer
 
-URL = "ws://127.0.0.1:8788"
-TOKEN = "testtoken"
+URL = os.environ.get("HERDECK_E2E_URL", "ws://127.0.0.1:8788")
+TOKEN = os.environ.get("HERDECK_E2E_TOKEN", "testtoken")
 
 
 def make_config():
