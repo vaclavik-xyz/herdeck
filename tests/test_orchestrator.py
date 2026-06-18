@@ -57,3 +57,37 @@ def test_event_updates_existing_tile():
     o.apply_event("workbox", state("p1", Status.BLOCKED))
     tiles = {t.index: t for t in o.render()}
     assert tiles[0].color == "amber"
+
+
+def test_event_merge_preserves_known_fields():
+    o = Orchestrator(make_config())
+    o.apply_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "api",
+                   Status.WORKING, "api")
+    ])
+    # partial status-only event: agent_type defaulted, label/project empty
+    o.apply_event("workbox",
+                  AgentState(AgentKey("workbox", "p1"), "default", "",
+                             Status.BLOCKED, ""))
+    s = o._agents[AgentKey("workbox", "p1")]
+    assert s.status is Status.BLOCKED      # updated
+    assert s.agent_type == "claude"        # preserved
+    assert s.label == "api"               # preserved
+    assert s.project == "api"             # preserved
+
+
+def test_tile_position_stable_across_status_change():
+    o = Orchestrator(make_config())
+    o.apply_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "zzz", Status.WORKING),
+        AgentState(AgentKey("workbox", "p2"), "claude", "aaa", Status.WORKING),
+    ])
+    before = [t.label for t in o.render()][:2]
+    # p1's label changes and status flips; tiles must NOT reorder (sorted by pane_id)
+    o.apply_event("workbox",
+                  AgentState(AgentKey("workbox", "p1"), "claude", "aaa", Status.BLOCKED))
+    after_keys = [(o._agents[AgentKey("workbox", "p1")]), (o._agents[AgentKey("workbox", "p2")])]
+    tiles = o.render()
+    # p1 is still at index 0 (pane_id "p1" < "p2"), regardless of label
+    assert tiles[0].color == "amber"   # p1 now blocked, still index 0
+    assert tiles[1].color == "green"   # p2 still working at index 1

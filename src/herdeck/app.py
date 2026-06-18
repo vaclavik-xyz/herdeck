@@ -93,6 +93,7 @@ async def _run(config: Config, deck: DeckDriver) -> None:
                 app.handle_event, sid, s),
             on_connection=lambda sid, up: loop.call_soon_threadsafe(
                 app.handle_connection, sid, up),
+            on_result=lambda req, data, sid=server.id: send(Command("list", sid)),
         )
         connectors[server.id] = conn
 

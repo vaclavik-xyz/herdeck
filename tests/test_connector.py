@@ -118,3 +118,25 @@ async def test_stop_during_backoff_returns_quickly():
     conn.stop()
     await asyncio.wait_for(task, timeout=2.0)   # must return well under the 10s backoff
     assert task.done()
+
+
+async def test_result_frame_goes_to_on_result(ws_server):
+    results = []
+    cfg = ServerConfig("workbox", f"ws://127.0.0.1:{ws_server['port']}", "tok")
+    conn = Connector(cfg, on_snapshot=lambda sid, st: None,
+                     on_event=lambda sid, s: None,
+                     on_connection=lambda sid, up: None,
+                     on_result=lambda req, data: results.append((req, data)))
+    task = asyncio.create_task(conn.run())
+    for _ in range(50):
+        if ws_server["connections"]:
+            break
+        await asyncio.sleep(0.02)
+    await ws_server["connections"][0].send('{"type":"result","req":"r1","data":{"skipped":true}}')
+    for _ in range(50):
+        if results:
+            break
+        await asyncio.sleep(0.02)
+    assert results == [("r1", {"skipped": True})]
+    conn.stop()
+    await asyncio.wait_for(task, timeout=2.0)

@@ -47,7 +47,20 @@ class Orchestrator:
             self._agents[s.key] = s
 
     def apply_event(self, server_id: str, state: AgentState) -> None:
-        self._agents[state.key] = state
+        existing = self._agents.get(state.key)
+        if existing is None:
+            self._agents[state.key] = state
+            return
+        # Merge: a partial event must not erase known fields.
+        self._agents[state.key] = AgentState(
+            key=state.key,
+            agent_type=(state.agent_type
+                        if state.agent_type and state.agent_type != "default"
+                        else existing.agent_type),
+            label=state.label or existing.label,
+            status=state.status,
+            project=state.project or existing.project,
+        )
 
     def set_connection(self, server_id: str, up: bool) -> None:
         if up:
@@ -60,7 +73,7 @@ class Orchestrator:
         order = {sid: i for i, sid in enumerate(self.config.overview_order)}
         return sorted(
             self._agents.values(),
-            key=lambda s: (order.get(s.key.server_id, 999), s.label, s.key.pane_id),
+            key=lambda s: (order.get(s.key.server_id, 999), s.key.pane_id),
         )
 
     def _agent_color(self, s: AgentState) -> str:
