@@ -30,17 +30,28 @@ class Connector:
         self._backoff_max = backoff_max
         self._stop = False
         self._ws = None
+        self._loop = None
 
     def stop(self) -> None:
         self._stop = True
+        ws = self._ws
+        loop = self._loop
+        if ws is not None and loop is not None:
+            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(ws.close()))
 
     async def send(self, msg: dict) -> None:
-        if self._ws is not None:
-            await self._ws.send(encode(msg))
+        ws = self._ws
+        if ws is not None:
+            try:
+                await ws.send(encode(msg))
+            except websockets.WebSocketException:
+                pass
 
     async def run(self) -> None:
+        self._loop = asyncio.get_running_loop()
         attempt = 0
         while not self._stop:
+            connected = False
             try:
                 async with websockets.connect(
                     self.server.url,
@@ -50,6 +61,7 @@ class Connector:
                 ) as ws:
                     self._ws = ws
                     attempt = 0
+                    connected = True
                     self._on_connection(self.server.id, True)
                     await ws.send(encode({"type": "list"}))   # resync-on-reconnect
                     async for raw in ws:
@@ -58,7 +70,8 @@ class Connector:
                 pass
             finally:
                 self._ws = None
-                self._on_connection(self.server.id, False)
+                if connected:
+                    self._on_connection(self.server.id, False)
             if self._stop:
                 break
             delay = min(self._backoff_base * (2 ** attempt), self._backoff_max)

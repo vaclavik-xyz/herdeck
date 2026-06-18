@@ -39,7 +39,7 @@ async def test_connector_sends_list_on_connect(ws_server):
         await asyncio.sleep(0.02)
     assert any('"list"' in m for m in ws_server["received"])
     conn.stop()
-    task.cancel()
+    await asyncio.wait_for(task, timeout=2.0)
 
 
 async def test_connector_resyncs_after_drop(ws_server):
@@ -63,6 +63,21 @@ async def test_connector_resyncs_after_drop(ws_server):
             break
         await asyncio.sleep(0.02)
     assert after > before          # resync happened
-    assert ups == [True, False, True] or ups[:1] == [True]
+    assert ups[:3] == [True, False, True]
     conn.stop()
-    task.cancel()
+    await asyncio.wait_for(task, timeout=2.0)
+
+
+async def test_stop_terminates_run_without_cancel(ws_server):
+    cfg = ServerConfig("workbox", f"ws://127.0.0.1:{ws_server['port']}", "tok")
+    conn = Connector(cfg, on_snapshot=lambda sid, st: None,
+                     on_event=lambda sid, s: None,
+                     on_connection=lambda sid, up: None)
+    task = asyncio.create_task(conn.run())
+    for _ in range(50):
+        if ws_server["connections"]:
+            break
+        await asyncio.sleep(0.02)
+    conn.stop()
+    await asyncio.wait_for(task, timeout=2.0)   # must return on its own
+    assert task.done()
