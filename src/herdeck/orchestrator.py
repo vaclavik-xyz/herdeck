@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from .config import Config
 from .driver.base import TileView
 from .model import AgentKey, AgentState, Status
@@ -7,6 +9,22 @@ from .model import AgentKey, AgentState, Status
 SLOT_NEXT = 12
 SLOT_REFRESH = 13
 SLOT_CONN = 14
+
+
+@dataclass
+class Command:
+    kind: str                 # "list" | "read" | "act_if_blocked"
+    server_id: str
+    pane_id: str | None = None
+    source: str | None = None
+    keys: list[str] = field(default_factory=list)
+
+    def __eq__(self, other):
+        return (isinstance(other, Command)
+                and (self.kind, self.server_id, self.pane_id, self.source,
+                     self.keys) == (other.kind, other.server_id, other.pane_id,
+                                    other.source, other.keys))
+
 
 _STATUS_COLOR = {
     Status.WORKING: "green",
@@ -24,6 +42,7 @@ class Orchestrator:
         self.slots = self.cols * self.rows
         self._agents: dict[AgentKey, AgentState] = {}
         self._down: set[str] = set()
+        self._drill: AgentKey | None = None
 
     # --- inbound state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
@@ -57,7 +76,74 @@ class Orchestrator:
 
     # --- render ---
     def render(self) -> list[TileView]:
+        if self._drill is not None:
+            return self._render_drill()
         return self._render_overview()
+
+    _DRILL_LABELS = ["Approve", "Approve!", "Deny", "Stop", "Back"]
+
+    def _render_drill(self) -> list[TileView]:
+        tiles = []
+        for i in range(self.slots):
+            label = self._DRILL_LABELS[i] if i < len(self._DRILL_LABELS) else ""
+            color = {0: "green", 1: "green", 2: "red", 3: "red",
+                     4: "grey"}.get(i, "dim")
+            tiles.append(TileView(i, label, color))
+        return tiles
+
+    def _profile_for(self, key: AgentKey):
+        agent_type = self._agents[key].agent_type
+        return self.config.profiles.get(agent_type, self.config.profiles["default"])
+
+    def on_press(self, index: int) -> list[Command]:
+        if self._drill is not None:
+            return self._press_drill(index)
+        return self._press_overview(index)
+
+    def _first_blocked(self) -> AgentState | None:
+        for s in self._ordered_agents():
+            if s.status is Status.BLOCKED:
+                return s
+        return None
+
+    def _enter_drill(self, key: AgentKey) -> list[Command]:
+        self._drill = key
+        return [Command("read", key.server_id, key.pane_id, source="detection")]
+
+    def _press_overview(self, index: int) -> list[Command]:
+        if index == SLOT_REFRESH:
+            sids = {s.server_id for s in self._agents} or {
+                s.id for s in self.config.servers
+            }
+            return [Command("list", sid) for sid in sorted(sids)]
+        if index == SLOT_NEXT:
+            s = self._first_blocked()
+            return self._enter_drill(s.key) if s else []
+        if index == SLOT_CONN:
+            return []
+        agents = self._ordered_agents()
+        if index < len(agents):
+            s = agents[index]
+            if s.status is Status.BLOCKED:
+                return self._enter_drill(s.key)
+        return []
+
+    def _press_drill(self, index: int) -> list[Command]:
+        key = self._drill
+        if index == 4:                       # Back
+            self._drill = None
+            return []
+        if key not in self._agents:
+            self._drill = None
+            return []
+        profile = self._profile_for(key)
+        keymap = {0: profile.approve, 1: profile.approve_always,
+                  2: profile.deny, 3: profile.stop}
+        keys = keymap.get(index)
+        if keys is None:
+            return []
+        self._drill = None
+        return [Command("act_if_blocked", key.server_id, key.pane_id, keys=keys)]
 
     def _render_overview(self) -> list[TileView]:
         tiles: list[TileView] = []
