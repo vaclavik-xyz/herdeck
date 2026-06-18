@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 from typing import Protocol
@@ -72,12 +73,24 @@ class SocketHerdr:
 
     async def _rpc(self, method: str, params: dict) -> dict:
         async with self._lock:
-            await self._ensure()
-            self._writer.write((json.dumps(
-                {"id": "b", "method": method, "params": params}) + "\n").encode())
-            await self._writer.drain()
-            line = await self._reader.readline()
-            return json.loads(line.decode())
+            # self._lock serializes RPCs, so the fixed request id "b" is safe:
+            # only one request/response is ever in flight at a time.
+            last_exc = None
+            for attempt in range(2):
+                try:
+                    await self._ensure()
+                    self._writer.write((json.dumps(
+                        {"id": "b", "method": method, "params": params}) + "\n").encode())
+                    await self._writer.drain()
+                    line = await self._reader.readline()
+                    if not line:                       # EOF: herdr dropped the socket
+                        raise ConnectionError("herdr socket closed")
+                    return json.loads(line.decode())
+                except (OSError, ConnectionError) as exc:
+                    last_exc = exc
+                    self._reader = None
+                    self._writer = None                # force reconnect on retry
+            raise last_exc
 
     async def list_panes(self) -> list[dict]:
         res = await self._rpc("pane.list", {})
@@ -97,14 +110,19 @@ class SocketHerdr:
 
 async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str):
     auth = ws.request.headers.get("Authorization", "")
-    if auth != f"Bearer {token}":
+    if not hmac.compare_digest(auth, f"Bearer {token}"):
         await ws.close(code=4401, reason="unauthorized")
         return
     # push initial snapshot, then relay client commands
     panes = await herdr.list_panes()
     await ws.send(encode({"type": "snapshot", "server_id": server_id, "panes": panes}))
     async for raw in ws:
-        out = await handle_client_message(herdr, server_id, raw)
+        try:
+            out = await handle_client_message(herdr, server_id, raw)
+        except Exception as exc:
+            # handle_client_message only raises ValueError/KeyError, which never
+            # contain the token, so surfacing str(exc) is safe.
+            out = encode({"type": "error", "message": str(exc)})
         await ws.send(out)
 
 
