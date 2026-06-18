@@ -70,9 +70,16 @@ optional `approve_always`) key lists. `<name>` matches herdr's detected `agent`
   launchd/systemd units store it inline — for real use keep them readable only by
   your user (`chmod 600`) or source the token from a secret store / Keychain.
 
-## Known bring-up items
-- The `strmdck` calls in `driver/d200.py` and the cwd→label derivation are
-  written against the real library/herdr protocol but need a physically attached
-  D200 to verify rendering and key input.
+## Hardware notes (verified on a real D200, macOS)
+- Rendering and key input both work on macOS. The driver opens the deck's
+  **control interface by path** (HID usage_page `0x0c`); opening by vendor/product
+  nondeterministically grabs the keyboard interface (held by the OS) and fails.
+- Quit the official **Ulanzi Studio** app first — it auto-runs and holds the
+  device. Physical buttons below the screen report indices beyond the 13 tiles
+  and are ignored by the orchestrator.
+
+## Known follow-ups
+- Confirm exact approve/deny key sequences per agent against live prompts
+  (config-only changes).
 - Drill-in shows the read prompt text on a spare tile; richer prompt display is
   future work.
