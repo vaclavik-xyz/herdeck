@@ -6,6 +6,9 @@ from .config import Config
 from .driver.base import TileView
 from .model import AgentKey, AgentState, Status
 
+# Default system-tile indices for a 15-slot (5x3) deck. The orchestrator
+# computes its own per-instance indices from the real slot count (see __init__);
+# these module constants are the 15-slot reference used by tests.
 SLOT_NEXT = 12
 SLOT_REFRESH = 13
 SLOT_CONN = 14
@@ -30,10 +33,16 @@ _STATUS_COLOR = {
 
 
 class Orchestrator:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, slots: int | None = None):
         self.config = config
         self.cols, self.rows = config.grid
-        self.slots = self.cols * self.rows
+        # The real button count comes from the deck driver; fall back to the
+        # grid product when not provided (e.g. in isolated unit tests).
+        self.slots = slots if slots is not None else self.cols * self.rows
+        # Last three slots are the system tiles (Next / Refresh / Link).
+        self.slot_next = self.slots - 3
+        self.slot_refresh = self.slots - 2
+        self.slot_conn = self.slots - 1
         self._agents: dict[AgentKey, AgentState] = {}
         self._down: set[str] = set()
         self._drill: AgentKey | None = None
@@ -125,15 +134,15 @@ class Orchestrator:
         return [Command("read", key.server_id, key.pane_id, source="detection")]
 
     def _press_overview(self, index: int) -> list[Command]:
-        if index == SLOT_REFRESH:
+        if index == self.slot_refresh:
             sids = {s.server_id for s in self._agents} or {
                 s.id for s in self.config.servers
             }
             return [Command("list", sid) for sid in sorted(sids)]
-        if index == SLOT_NEXT:
+        if index == self.slot_next:
             s = self._first_blocked()
             return self._enter_drill(s.key) if s else []
-        if index == SLOT_CONN:
+        if index == self.slot_conn:
             return []
         agents = self._ordered_agents()
         if index < len(agents):
@@ -162,14 +171,14 @@ class Orchestrator:
     def _render_overview(self) -> list[TileView]:
         tiles: list[TileView] = []
         agents = self._ordered_agents()
-        for i in range(SLOT_NEXT):  # agent slots 0..11
+        for i in range(self.slot_next):  # agent slots 0 .. slot_next-1
             if i < len(agents):
                 s = agents[i]
                 tiles.append(TileView(i, s.label, self._agent_color(s)))
             else:
                 tiles.append(TileView(i, "", "dim"))
         conn_color = "red" if self._down else "green"
-        tiles.append(TileView(SLOT_NEXT, "Next", "grey"))
-        tiles.append(TileView(SLOT_REFRESH, "Refresh", "grey"))
-        tiles.append(TileView(SLOT_CONN, "Link", conn_color))
+        tiles.append(TileView(self.slot_next, "Next", "grey"))
+        tiles.append(TileView(self.slot_refresh, "Refresh", "grey"))
+        tiles.append(TileView(self.slot_conn, "Link", conn_color))
         return tiles

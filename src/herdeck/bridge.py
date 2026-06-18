@@ -10,6 +10,9 @@ import websockets
 
 from .protocol import encode
 
+# herdr agent_status values that mark a pane as worth showing on the deck.
+_AGENT_STATUSES = {"idle", "working", "blocked", "done"}
+
 
 class HerdrClient(Protocol):
     async def list_panes(self) -> list[dict]: ...
@@ -18,8 +21,34 @@ class HerdrClient(Protocol):
     async def send_keys(self, pane_id: str, keys: list[str]) -> None: ...
 
 
+def _is_agent_pane(p: dict) -> bool:
+    """A raw herdr pane worth showing on the deck hosts a detected agent."""
+    return bool(p.get("agent")) or p.get("agent_status") in _AGENT_STATUSES
+
+
+def _herdr_pane_to_wire(p: dict) -> dict:
+    """Map a raw herdr pane to herdeck's wire pane schema.
+
+    herdr uses `agent` / `agent_status` and has no human label, so we derive a
+    label/project from the pane's working directory.
+    """
+    cwd = p.get("foreground_cwd") or p.get("cwd") or ""
+    label = os.path.basename(cwd.rstrip("/")) or p.get("workspace_id", "")
+    return {
+        "pane_id": p["pane_id"],
+        "agent_type": p.get("agent", "default"),
+        "label": label,
+        "status": p.get("agent_status", "unknown"),
+        "project": label,
+    }
+
+
+def _wire_panes(raw: list[dict]) -> list[dict]:
+    return [_herdr_pane_to_wire(p) for p in raw if _is_agent_pane(p)]
+
+
 class StubHerdr:
-    """In-memory herdr for tests."""
+    """In-memory herdr (raw herdr pane shape) for tests."""
 
     def __init__(self, panes: list[dict]):
         self.panes = panes
@@ -43,7 +72,7 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "list":
-        panes = await herdr.list_panes()
+        panes = _wire_panes(await herdr.list_panes())
         return encode({"type": "snapshot", "server_id": server_id, "panes": panes})
     if kind == "read":
         text = await herdr.read_pane(msg["pane_id"], msg.get("source", "detection"))
@@ -51,7 +80,7 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
                        "data": {"text": text, "pane_id": msg["pane_id"]}})
     if kind == "act":
         pane = await herdr.get_pane(msg["pane_id"])
-        if pane.get("status") != "blocked":
+        if pane.get("agent_status") != "blocked":
             return encode({"type": "result", "req": msg["req"],
                            "data": {"skipped": True}})
         await herdr.send_keys(msg["pane_id"], msg["keys"])
@@ -59,69 +88,38 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     raise ValueError(f"unknown client message: {kind}")
 
 
-def _event_to_pane(msg: dict) -> dict | None:
-    """Best-effort extraction of a pane dict from a herdr event message.
-    The exact herdr event schema is reconciled during bring-up; we accept
-    either a top-level 'pane' object or the params payload of a
-    pane.agent_status_changed event."""
-    payload = msg.get("pane") or msg.get("params") or {}
-    pane_id = payload.get("pane_id")
-    if not pane_id:
-        return None
-    return {
-        "pane_id": pane_id,
-        "agent_type": payload.get("agent_type", "default"),
-        "label": payload.get("label", ""),
-        "status": payload.get("status", "unknown"),
-        "project": payload.get("project", ""),
-    }
-
-
 class HerdrEvents:
-    """Dedicated herdr socket subscribed to agent status changes."""
+    """Yields wire panes that changed, by polling herdr's pane.list and diffing.
 
-    def __init__(self, socket_path: str, reconnect_delay: float = 1.0):
-        self._path = socket_path
-        self._reconnect_delay = reconnect_delay
+    herdr's `events.subscribe` is per-pane; polling the full list and diffing is
+    simpler and robust for a small agent fleet, and inherits SocketHerdr's
+    reconnect handling.
+    """
+
+    def __init__(self, herdr: HerdrClient, poll_interval: float = 1.5):
+        self._herdr = herdr
+        self._interval = poll_interval
 
     async def stream(self):
-        """Async-yield pane dicts as agent status changes occur; reconnects on drop."""
+        prev: dict[str, dict] = {}
         while True:
             try:
-                reader, writer = await asyncio.open_unix_connection(self._path)
-                writer.write((json.dumps({
-                    "id": "sub", "method": "events.subscribe",
-                    "params": {"subscriptions": [{"type": "pane.agent_status_changed"}]},
-                }) + "\n").encode())
-                await writer.drain()
-                while True:
-                    line = await reader.readline()
-                    if not line:
-                        break
-                    pane = _event_to_pane(json.loads(line.decode()))
-                    if pane is not None:
-                        yield pane
-            except (OSError, ConnectionError, ValueError):
-                pass
-            await asyncio.sleep(self._reconnect_delay)
+                raw = await self._herdr.list_panes()
+            except Exception:
+                raw = None
+            if raw is not None:
+                cur = {w["pane_id"]: w for w in _wire_panes(raw)}
+                for pane_id, wire in cur.items():
+                    if prev.get(pane_id) != wire:
+                        yield wire
+                prev = cur
+            await asyncio.sleep(self._interval)
 
 
-async def _broadcast(event_stream, clients: set, server_id: str, herdr: HerdrClient) -> None:
-    """Forward each status change to all clients, enriched to a full pane.
-
-    If enrichment fails we skip the event rather than forward partial data
-    that would overwrite good cached state; it reconciles on the next event,
-    a Refresh, or reconnect.
-    """
+async def _broadcast(event_stream, clients: set, server_id: str) -> None:
+    """Forward each changed wire pane to all connected clients as an event."""
     async for pane in event_stream:
-        try:
-            full = await herdr.get_pane(pane["pane_id"])
-            enriched = _event_to_pane({"pane": full})
-        except Exception:
-            enriched = None
-        if enriched is None:
-            continue
-        msg = encode({"type": "event", "server_id": server_id, "pane": enriched})
+        msg = encode({"type": "event", "server_id": server_id, "pane": pane})
         for ws in list(clients):
             try:
                 await ws.send(msg)
@@ -169,11 +167,11 @@ class SocketHerdr:
 
     async def get_pane(self, pane_id: str) -> dict:
         res = await self._rpc("pane.get", {"pane_id": pane_id})
-        return res.get("result", {})
+        return res.get("result", {}).get("pane", {})
 
     async def read_pane(self, pane_id: str, source: str) -> str:
         res = await self._rpc("pane.read", {"pane_id": pane_id, "source": source})
-        return res.get("result", {}).get("text", "")
+        return res.get("result", {}).get("read", {}).get("text", "")
 
     async def send_keys(self, pane_id: str, keys: list[str]) -> None:
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": keys}, retry=False)
@@ -184,7 +182,7 @@ async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, 
     if not hmac.compare_digest(auth, f"Bearer {token}"):
         await ws.close(code=4401, reason="unauthorized")
         return
-    panes = await herdr.list_panes()
+    panes = _wire_panes(await herdr.list_panes())
     await ws.send(encode({"type": "snapshot", "server_id": server_id, "panes": panes}))
     clients.add(ws)
     try:
@@ -200,14 +198,14 @@ async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, 
 
 async def serve(socket_path: str, host: str, port: int, server_id: str, token: str):
     herdr = SocketHerdr(socket_path)
-    events = HerdrEvents(socket_path)
+    events = HerdrEvents(herdr)
     clients: set = set()
 
     async def handler(ws):
         await _serve_connection(ws, herdr, server_id, token, clients)
 
     async with websockets.serve(handler, host, port):
-        await _broadcast(events.stream(), clients, server_id, herdr)
+        await _broadcast(events.stream(), clients, server_id)  # runs forever
 
 
 def main() -> None:

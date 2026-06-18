@@ -21,7 +21,7 @@ class App:
         self.deck = deck
         self._send = send
         self._schedule = schedule or (lambda fn: fn())
-        self.orch = Orchestrator(config)
+        self.orch = Orchestrator(config, slots=deck.slot_count())
         deck.on_press(self._on_press)
         self._req = 0
         self._active_read_req: str | None = None
@@ -102,6 +102,14 @@ async def _guarded(conn: Connector) -> None:
         pass
 
 
+async def _guard(coro) -> None:
+    """Run an awaitable, swallowing exceptions so one task can't kill the rest."""
+    try:
+        await coro
+    except Exception:
+        pass
+
+
 async def _run(config: Config, deck: DeckDriver) -> None:
     loop = asyncio.get_running_loop()
     connectors: dict[str, Connector] = {}
@@ -114,6 +122,10 @@ async def _run(config: Config, deck: DeckDriver) -> None:
 
     app = App(config, deck, send,
               schedule=lambda fn: loop.call_soon_threadsafe(fn))
+    # Start every server marked down; render once so the deck isn't blank.
+    for server in config.servers:
+        app.orch.set_connection(server.id, False)
+    app._refresh()
 
     for server in config.servers:
         conn = Connector(
@@ -129,7 +141,14 @@ async def _run(config: Config, deck: DeckDriver) -> None:
         )
         connectors[server.id] = conn
 
-    await asyncio.gather(*(_guarded(c) for c in connectors.values()))
+    tasks = [_guarded(c) for c in connectors.values()]
+    # Real hardware decks expose an async key reader and a keep-alive loop;
+    # the fake renderer does not. Run them if present.
+    if hasattr(deck, "run_reader"):
+        tasks.append(_guard(deck.run_reader()))
+    if hasattr(deck, "keep_alive_loop"):
+        tasks.append(_guard(deck.keep_alive_loop()))
+    await asyncio.gather(*tasks)
 
 
 def main() -> None:
