@@ -1,0 +1,55 @@
+import pytest
+
+from herdeck.config import load_config, ConfigError
+
+
+CONFIG = """
+[[servers]]
+id = "workbox"
+url = "wss://workbox.tailnet.ts.net:8788"
+token_env = "HERDECK_WORKBOX_TOKEN"
+
+[deck]
+grid = "5x3"
+overview_order = ["workbox"]
+
+[answer_profiles.claude]
+approve = ["1", "enter"]
+approve_always = ["2", "enter"]
+deny = ["esc"]
+stop = ["ctrl+c"]
+
+[answer_profiles.default]
+approve = ["enter"]
+deny = ["esc"]
+stop = ["ctrl+c"]
+"""
+
+
+def _write(tmp_path, text):
+    p = tmp_path / "config.toml"
+    p.write_text(text)
+    return p
+
+
+def test_load_resolves_token_from_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    cfg = load_config(_write(tmp_path, CONFIG))
+    assert cfg.servers[0].id == "workbox"
+    assert cfg.servers[0].token == "secret123"
+    assert cfg.grid == (5, 3)
+    assert cfg.overview_order == ["workbox"]
+
+
+def test_missing_token_env_raises(tmp_path, monkeypatch):
+    monkeypatch.delenv("HERDECK_WORKBOX_TOKEN", raising=False)
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, CONFIG))
+
+
+def test_profile_approve_always_defaults_to_approve(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "x")
+    cfg = load_config(_write(tmp_path, CONFIG))
+    assert cfg.profiles["claude"].approve_always == ["2", "enter"]
+    # default profile has no approve_always -> falls back to approve
+    assert cfg.profiles["default"].approve_always == ["enter"]
