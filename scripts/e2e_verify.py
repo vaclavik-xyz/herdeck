@@ -41,10 +41,20 @@ async def main():
             asyncio.run_coroutine_threadsafe(c.send(_command_to_msg(cmd, app)), loop)
 
     app = App(cfg, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn))
+    frames = {"n": 0}
+
+    def on_snap(sid, st):
+        frames["n"] += 1
+        loop.call_soon_threadsafe(app.handle_snapshot, sid, st)
+
+    def on_evt(sid, s):
+        frames["n"] += 1
+        loop.call_soon_threadsafe(app.handle_event, sid, s)
+
     conn = Connector(
         cfg.servers[0],
-        on_snapshot=lambda sid, st: loop.call_soon_threadsafe(app.handle_snapshot, sid, st),
-        on_event=lambda sid, s: loop.call_soon_threadsafe(app.handle_event, sid, s),
+        on_snapshot=on_snap,
+        on_event=on_evt,
         on_connection=lambda sid, up: loop.call_soon_threadsafe(app.handle_connection, sid, up),
         on_result=lambda req, data, sid="dev": loop.call_soon_threadsafe(app.handle_result, sid, req, data),
     )
@@ -70,7 +80,10 @@ async def main():
     if link.color != "green":
         print("FAIL: not connected to the bridge (Link tile is not green)")
         return 1
-    print("OK: connected and rendered")
+    if frames["n"] == 0:
+        print("FAIL: connected but the bridge sent no snapshot/event")
+        return 1
+    print(f"OK: connected and rendered ({frames['n']} bridge frames)")
     return 0
 
 
