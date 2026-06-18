@@ -30,6 +30,7 @@ async def test_read_returns_result(herdr):
     assert msg["type"] == "result"
     assert msg["req"] == "r1"
     assert msg["data"]["text"] == "Allow edit to config.py?"
+    assert msg["data"]["pane_id"] == "w1:p1"
 
 
 async def test_act_if_blocked_sends_keys_when_blocked(herdr):
@@ -66,11 +67,16 @@ async def test_broadcast_fans_out_events_to_all_clients():
 
     clients = {FakeWS(sent_a), FakeWS(sent_b)}
 
+    class FullHerdr:
+        async def get_pane(self, pane_id):
+            return {"pane_id": pane_id, "agent_type": "claude", "label": "api",
+                    "status": "blocked", "project": "api"}
+
     async def stream():
         yield {"pane_id": "w1:p1", "agent_type": "claude", "label": "api",
                "status": "blocked", "project": "api"}
 
-    await _broadcast(stream(), clients, "workbox", _NoGet())
+    await _broadcast(stream(), clients, "workbox", FullHerdr())
     assert len(sent_a) == 1 and len(sent_b) == 1
     import json as _json
     msg = _json.loads(sent_a[0])
@@ -90,12 +96,16 @@ async def test_broadcast_survives_a_dead_client():
     class DeadWS:
         async def send(self, msg): raise RuntimeError("closed")
 
+    class FullHerdr:
+        async def get_pane(self, pane_id):
+            return {"pane_id": pane_id, "status": "working"}
+
     clients = {GoodWS(), DeadWS()}
 
     async def stream():
         yield {"pane_id": "p", "status": "working"}
 
-    await _broadcast(stream(), clients, "s", _NoGet())   # must not raise
+    await _broadcast(stream(), clients, "s", FullHerdr())   # must not raise
     assert len(good) == 1
 
 
@@ -120,6 +130,19 @@ async def test_broadcast_enriches_partial_event_via_get_pane():
     await _broadcast(stream(), {WS()}, "workbox", Herdr())
     pane = _json.loads(sent[0])["pane"]
     assert pane["agent_type"] == "claude" and pane["label"] == "api"
+
+
+async def test_broadcast_skips_event_when_get_pane_fails():
+    from herdeck.bridge import _broadcast
+    sent = []
+    class WS:
+        async def send(self, m): sent.append(m)
+    class Herdr:
+        async def get_pane(self, pane_id): raise RuntimeError("boom")
+    async def stream():
+        yield {"pane_id": "w1:p1", "status": "blocked"}
+    await _broadcast(stream(), {WS()}, "workbox", Herdr())
+    assert sent == []     # partial event was skipped, not forwarded
 
 
 def test_event_to_pane_extracts_fields():

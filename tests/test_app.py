@@ -74,9 +74,19 @@ def test_read_result_shows_detection():
     app = App(make_config(), deck, send=lambda cmd: None)
     app.handle_snapshot("workbox", [
         AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED)])
-    deck.simulate_press(0)                       # enter drill
-    app.handle_result("workbox", {"text": "Allow edit?"})
+    deck.simulate_press(0)                       # enter drill on p1
+    app.handle_result("workbox", {"text": "Allow edit?", "pane_id": "p1"})
     assert deck.last[5].label == "Allow edit?"
+
+
+def test_read_result_for_other_pane_is_ignored():
+    deck = FakeRenderer(15)
+    app = App(make_config(), deck, send=lambda cmd: None)
+    app.handle_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED)])
+    deck.simulate_press(0)                       # drilled into p1
+    app.handle_result("workbox", {"text": "stale", "pane_id": "p2"})
+    assert deck.last[5].label == ""             # not shown (wrong pane)
 
 
 def test_act_result_triggers_resync_list():

@@ -47,7 +47,8 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
         return encode({"type": "snapshot", "server_id": server_id, "panes": panes})
     if kind == "read":
         text = await herdr.read_pane(msg["pane_id"], msg.get("source", "detection"))
-        return encode({"type": "result", "req": msg["req"], "data": {"text": text}})
+        return encode({"type": "result", "req": msg["req"],
+                       "data": {"text": text, "pane_id": msg["pane_id"]}})
     if kind == "act":
         pane = await herdr.get_pane(msg["pane_id"])
         if pane.get("status") != "blocked":
@@ -106,16 +107,21 @@ class HerdrEvents:
 
 
 async def _broadcast(event_stream, clients: set, server_id: str, herdr: HerdrClient) -> None:
-    """Forward each status change to all clients, enriched to a full pane."""
+    """Forward each status change to all clients, enriched to a full pane.
+
+    If enrichment fails we skip the event rather than forward partial data
+    that would overwrite good cached state; it reconciles on the next event,
+    a Refresh, or reconnect.
+    """
     async for pane in event_stream:
         try:
             full = await herdr.get_pane(pane["pane_id"])
             enriched = _event_to_pane({"pane": full})
-            if enriched is not None:
-                pane = enriched
         except Exception:
-            pass  # fall back to the (possibly partial) event pane
-        msg = encode({"type": "event", "server_id": server_id, "pane": pane})
+            enriched = None
+        if enriched is None:
+            continue
+        msg = encode({"type": "event", "server_id": server_id, "pane": enriched})
         for ws in list(clients):
             try:
                 await ws.send(msg)

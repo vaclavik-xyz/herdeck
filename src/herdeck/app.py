@@ -41,10 +41,11 @@ class App:
 
     def handle_result(self, server_id: str, data: dict) -> None:
         text = data.get("text")
-        if text is not None:                 # a `read` result -> show prompt
-            self.orch.set_detection(text)
-            self._refresh()
-        else:                                # an `act` result -> resync
+        if text is not None:                       # a `read` result
+            if self.orch.is_drill_pane(server_id, data.get("pane_id")):
+                self.orch.set_detection(text)
+                self._refresh()
+        else:                                      # an `act` result -> resync
             self._send(Command("list", server_id))
 
     def _on_press(self, index: int) -> None:
