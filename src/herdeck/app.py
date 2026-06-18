@@ -39,6 +39,14 @@ class App:
         self.orch.set_connection(server_id, up)
         self._refresh()
 
+    def handle_result(self, server_id: str, data: dict) -> None:
+        text = data.get("text")
+        if text is not None:                 # a `read` result -> show prompt
+            self.orch.set_detection(text)
+            self._refresh()
+        else:                                # an `act` result -> resync
+            self._send(Command("list", server_id))
+
     def _on_press(self, index: int) -> None:
         # _on_press may fire on the device thread; marshal the real work
         # onto whatever loop/thread `schedule` targets (the asyncio loop in _run).
@@ -93,7 +101,8 @@ async def _run(config: Config, deck: DeckDriver) -> None:
                 app.handle_event, sid, s),
             on_connection=lambda sid, up: loop.call_soon_threadsafe(
                 app.handle_connection, sid, up),
-            on_result=lambda req, data, sid=server.id: send(Command("list", sid)),
+            on_result=lambda req, data, sid=server.id: loop.call_soon_threadsafe(
+                app.handle_result, sid, data),
         )
         connectors[server.id] = conn
 

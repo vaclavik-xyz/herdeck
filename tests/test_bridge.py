@@ -51,6 +51,10 @@ async def test_act_skipped_when_not_blocked(herdr):
     assert herdr.sent == []
 
 
+class _NoGet:
+    async def get_pane(self, pane_id): raise RuntimeError("no get")
+
+
 async def test_broadcast_fans_out_events_to_all_clients():
     from herdeck.bridge import _broadcast
 
@@ -66,7 +70,7 @@ async def test_broadcast_fans_out_events_to_all_clients():
         yield {"pane_id": "w1:p1", "agent_type": "claude", "label": "api",
                "status": "blocked", "project": "api"}
 
-    await _broadcast(stream(), clients, "workbox")
+    await _broadcast(stream(), clients, "workbox", _NoGet())
     assert len(sent_a) == 1 and len(sent_b) == 1
     import json as _json
     msg = _json.loads(sent_a[0])
@@ -91,8 +95,31 @@ async def test_broadcast_survives_a_dead_client():
     async def stream():
         yield {"pane_id": "p", "status": "working"}
 
-    await _broadcast(stream(), clients, "s")   # must not raise
+    await _broadcast(stream(), clients, "s", _NoGet())   # must not raise
     assert len(good) == 1
+
+
+async def test_broadcast_enriches_partial_event_via_get_pane():
+    from herdeck.bridge import _broadcast
+    import json as _json
+
+    sent = []
+
+    class WS:
+        async def send(self, m): sent.append(m)
+
+    class Herdr:
+        async def get_pane(self, pane_id):
+            return {"pane_id": pane_id, "agent_type": "claude", "label": "api",
+                    "status": "blocked", "project": "api"}
+
+    async def stream():
+        yield {"pane_id": "w1:p1", "agent_type": "default", "label": "",
+               "status": "blocked", "project": ""}
+
+    await _broadcast(stream(), {WS()}, "workbox", Herdr())
+    pane = _json.loads(sent[0])["pane"]
+    assert pane["agent_type"] == "claude" and pane["label"] == "api"
 
 
 def test_event_to_pane_extracts_fields():

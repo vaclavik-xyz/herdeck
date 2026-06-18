@@ -105,9 +105,16 @@ class HerdrEvents:
             await asyncio.sleep(self._reconnect_delay)
 
 
-async def _broadcast(event_stream, clients: set, server_id: str) -> None:
-    """Forward each pane from event_stream to all connected client websockets."""
+async def _broadcast(event_stream, clients: set, server_id: str, herdr: HerdrClient) -> None:
+    """Forward each status change to all clients, enriched to a full pane."""
     async for pane in event_stream:
+        try:
+            full = await herdr.get_pane(pane["pane_id"])
+            enriched = _event_to_pane({"pane": full})
+            if enriched is not None:
+                pane = enriched
+        except Exception:
+            pass  # fall back to the (possibly partial) event pane
         msg = encode({"type": "event", "server_id": server_id, "pane": pane})
         for ws in list(clients):
             try:
@@ -194,7 +201,7 @@ async def serve(socket_path: str, host: str, port: int, server_id: str, token: s
         await _serve_connection(ws, herdr, server_id, token, clients)
 
     async with websockets.serve(handler, host, port):
-        await _broadcast(events.stream(), clients, server_id)  # runs forever
+        await _broadcast(events.stream(), clients, server_id, herdr)
 
 
 def main() -> None:

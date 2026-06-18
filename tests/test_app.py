@@ -67,3 +67,21 @@ async def test_guarded_swallows_connector_exception():
             raise RuntimeError("boom")
 
     await _guarded(Boom())   # must not raise
+
+
+def test_read_result_shows_detection():
+    deck = FakeRenderer(15)
+    app = App(make_config(), deck, send=lambda cmd: None)
+    app.handle_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED)])
+    deck.simulate_press(0)                       # enter drill
+    app.handle_result("workbox", {"text": "Allow edit?"})
+    assert deck.last[5].label == "Allow edit?"
+
+
+def test_act_result_triggers_resync_list():
+    deck = FakeRenderer(15)
+    sent = []
+    app = App(make_config(), deck, send=sent.append)
+    app.handle_result("workbox", {"skipped": True})
+    assert Command("list", "workbox") in sent

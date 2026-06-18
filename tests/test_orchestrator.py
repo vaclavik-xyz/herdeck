@@ -59,22 +59,6 @@ def test_event_updates_existing_tile():
     assert tiles[0].color == "amber"
 
 
-def test_event_merge_preserves_known_fields():
-    o = Orchestrator(make_config())
-    o.apply_snapshot("workbox", [
-        AgentState(AgentKey("workbox", "p1"), "claude", "api",
-                   Status.WORKING, "api")
-    ])
-    # partial status-only event: agent_type defaulted, label/project empty
-    o.apply_event("workbox",
-                  AgentState(AgentKey("workbox", "p1"), "default", "",
-                             Status.BLOCKED, ""))
-    s = o._agents[AgentKey("workbox", "p1")]
-    assert s.status is Status.BLOCKED      # updated
-    assert s.agent_type == "claude"        # preserved
-    assert s.label == "api"               # preserved
-    assert s.project == "api"             # preserved
-
 
 def test_tile_position_stable_across_status_change():
     o = Orchestrator(make_config())

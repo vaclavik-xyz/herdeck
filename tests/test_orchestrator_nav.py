@@ -89,3 +89,12 @@ def test_unknown_agent_type_uses_default_profile():
     o.on_press(0)
     assert o.on_press(0) == [Command("act_if_blocked", "workbox", "p1",
                                      keys=["enter"])]
+
+
+def test_drill_shows_detection_text():
+    o = Orchestrator(make_config())
+    o.apply_snapshot("workbox", [blocked("p1")])
+    o.on_press(0)                       # enter drill
+    o.set_detection("Allow edit to config.py?")
+    tiles = o.render()
+    assert tiles[5].label == "Allow edit to config.py?"[:40]

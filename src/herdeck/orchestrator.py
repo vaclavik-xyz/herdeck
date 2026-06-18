@@ -37,6 +37,7 @@ class Orchestrator:
         self._agents: dict[AgentKey, AgentState] = {}
         self._down: set[str] = set()
         self._drill: AgentKey | None = None
+        self._detection: str = ""
 
     # --- inbound state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
@@ -47,20 +48,10 @@ class Orchestrator:
             self._agents[s.key] = s
 
     def apply_event(self, server_id: str, state: AgentState) -> None:
-        existing = self._agents.get(state.key)
-        if existing is None:
-            self._agents[state.key] = state
-            return
-        # Merge: a partial event must not erase known fields.
-        self._agents[state.key] = AgentState(
-            key=state.key,
-            agent_type=(state.agent_type
-                        if state.agent_type and state.agent_type != "default"
-                        else existing.agent_type),
-            label=state.label or existing.label,
-            status=state.status,
-            project=state.project or existing.project,
-        )
+        self._agents[state.key] = state
+
+    def set_detection(self, text: str) -> None:
+        self._detection = text
 
     def set_connection(self, server_id: str, up: bool) -> None:
         if up:
@@ -92,7 +83,12 @@ class Orchestrator:
     def _render_drill(self) -> list[TileView]:
         tiles = []
         for i in range(self.slots):
-            label = self._DRILL_LABELS[i] if i < len(self._DRILL_LABELS) else ""
+            if i < len(self._DRILL_LABELS):
+                label = self._DRILL_LABELS[i]
+            elif i == 5 and self._detection:
+                label = self._detection[:40]
+            else:
+                label = ""
             color = {0: "green", 1: "green", 2: "red", 3: "red",
                      4: "grey"}.get(i, "dim")
             tiles.append(TileView(i, label, color))
@@ -115,6 +111,7 @@ class Orchestrator:
 
     def _enter_drill(self, key: AgentKey) -> list[Command]:
         self._drill = key
+        self._detection = ""
         return [Command("read", key.server_id, key.pane_id, source="detection")]
 
     def _press_overview(self, index: int) -> list[Command]:
