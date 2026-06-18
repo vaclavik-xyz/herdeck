@@ -1,0 +1,16 @@
+[Unit]
+Description=Herdeck bridge (herdr socket -> Tailscale WebSocket)
+After=network-online.target tailscaled.service
+
+[Service]
+Environment=HERDR_SOCKET=/run/user/1000/herdr.sock
+Environment=HERDECK_BIND=100.x.y.z          # this host's Tailscale IP
+Environment=HERDECK_PORT=8788
+Environment=HERDECK_SERVER_ID=workbox
+Environment=HERDECK_TOKEN=change-me
+ExecStart=/usr/bin/python -m herdeck.bridge
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

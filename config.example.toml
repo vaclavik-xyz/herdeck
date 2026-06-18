@@ -1,0 +1,24 @@
+[[servers]]
+id = "workbox"
+url = "wss://workbox.tailnet.ts.net:8788"   # Tailscale MagicDNS name
+token_env = "HERDECK_WORKBOX_TOKEN"          # token comes from this env var
+
+[deck]
+grid = "5x3"                 # confirm against D200Driver.slot_count()
+overview_order = ["workbox"]
+
+[answer_profiles.claude]
+approve = ["1", "enter"]
+approve_always = ["2", "enter"]
+deny = ["esc"]
+stop = ["ctrl+c"]
+
+[answer_profiles.codex]
+approve = ["y", "enter"]     # verify empirically against codex prompt
+deny = ["n", "enter"]
+stop = ["ctrl+c"]
+
+[answer_profiles.default]
+approve = ["enter"]
+deny = ["esc"]
+stop = ["ctrl+c"]
