@@ -57,13 +57,17 @@ class D200Driver(DeckDriver):
             paths += [d["path"] for d in matches
                       if d.get("usage_page") != self._CONTROL_USAGE_PAGE]
             for path in paths:
+                hid_dev = hid.device()
                 try:
-                    hid_dev = hid.device()
                     hid_dev.open_path(path)
                     hid_dev.set_nonblocking(True)
                     return UlanziD200Device(hid_dev)
                 except Exception as exc:  # interface busy / wrong one
                     last_err = exc
+                    try:
+                        hid_dev.close()  # don't leak the handle / hold the iface
+                    except Exception:
+                        pass
             time.sleep(delay)
         raise RuntimeError(
             "No openable Ulanzi D200 control interface found. Is it plugged in "
