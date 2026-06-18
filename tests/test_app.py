@@ -69,14 +69,28 @@ async def test_guarded_swallows_connector_exception():
     await _guarded(Boom())   # must not raise
 
 
-def test_read_result_shows_detection():
+def test_read_result_shows_detection_when_req_and_pane_match():
     deck = FakeRenderer(15)
     app = App(make_config(), deck, send=lambda cmd: None)
     app.handle_snapshot("workbox", [
         AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED)])
     deck.simulate_press(0)                       # enter drill on p1
-    app.handle_result("workbox", {"text": "Allow edit?", "pane_id": "p1"})
+    req = app.next_req_for(Command("read", "workbox", "p1", source="detection"))
+    app.handle_result("workbox", req, {"text": "Allow edit?", "pane_id": "p1"})
     assert deck.last[5].label == "Allow edit?"
+
+
+def test_stale_read_result_with_old_req_is_ignored():
+    deck = FakeRenderer(15)
+    app = App(make_config(), deck, send=lambda cmd: None)
+    app.handle_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED)])
+    deck.simulate_press(0)
+    stale = app.next_req_for(Command("read", "workbox", "p1", source="detection"))
+    # a newer read supersedes the active req
+    app.next_req_for(Command("read", "workbox", "p1", source="detection"))
+    app.handle_result("workbox", stale, {"text": "stale", "pane_id": "p1"})
+    assert deck.last[5].label == ""             # old req ignored
 
 
 def test_read_result_for_other_pane_is_ignored():
@@ -84,14 +98,15 @@ def test_read_result_for_other_pane_is_ignored():
     app = App(make_config(), deck, send=lambda cmd: None)
     app.handle_snapshot("workbox", [
         AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED)])
-    deck.simulate_press(0)                       # drilled into p1
-    app.handle_result("workbox", {"text": "stale", "pane_id": "p2"})
-    assert deck.last[5].label == ""             # not shown (wrong pane)
+    deck.simulate_press(0)
+    req = app.next_req_for(Command("read", "workbox", "p2", source="detection"))
+    app.handle_result("workbox", req, {"text": "x", "pane_id": "p2"})
+    assert deck.last[5].label == ""             # wrong pane
 
 
 def test_act_result_triggers_resync_list():
     deck = FakeRenderer(15)
     sent = []
     app = App(make_config(), deck, send=sent.append)
-    app.handle_result("workbox", {"skipped": True})
+    app.handle_result("workbox", "r9", {"skipped": True})
     assert Command("list", "workbox") in sent

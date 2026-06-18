@@ -23,6 +23,17 @@ class App:
         self._schedule = schedule or (lambda fn: fn())
         self.orch = Orchestrator(config)
         deck.on_press(self._on_press)
+        self._req = 0
+        self._active_read_req: str | None = None
+
+    def next_req_for(self, cmd: Command) -> str | None:
+        if cmd.kind == "list":
+            return None
+        self._req += 1
+        req = f"r{self._req}"
+        if cmd.kind == "read":
+            self._active_read_req = req
+        return req
 
     def _refresh(self) -> None:
         self.deck.render(self.orch.render())
@@ -39,10 +50,11 @@ class App:
         self.orch.set_connection(server_id, up)
         self._refresh()
 
-    def handle_result(self, server_id: str, data: dict) -> None:
+    def handle_result(self, server_id: str, req: str, data: dict) -> None:
         text = data.get("text")
         if text is not None:                       # a `read` result
-            if self.orch.is_drill_pane(server_id, data.get("pane_id")):
+            if (req == self._active_read_req
+                    and self.orch.is_drill_pane(server_id, data.get("pane_id"))):
                 self.orch.set_detection(text)
                 self._refresh()
         else:                                      # an `act` result -> resync
@@ -59,11 +71,10 @@ class App:
         self._refresh()
 
 
-def _command_to_msg(cmd: Command, req_counter: list[int]) -> dict:
+def _command_to_msg(cmd: Command, app: "App") -> dict:
     if cmd.kind == "list":
         return {"type": "list"}
-    req_counter[0] += 1
-    req = f"r{req_counter[0]}"
+    req = app.next_req_for(cmd)
     if cmd.kind == "read":
         return {"type": "read", "req": req, "pane_id": cmd.pane_id,
                 "source": cmd.source}
@@ -82,13 +93,12 @@ async def _guarded(conn: Connector) -> None:
 async def _run(config: Config, deck: DeckDriver) -> None:
     loop = asyncio.get_running_loop()
     connectors: dict[str, Connector] = {}
-    req_counter = [0]
 
     def send(cmd: Command) -> None:
         conn = connectors.get(cmd.server_id)
         if conn is not None:
             asyncio.run_coroutine_threadsafe(
-                conn.send(_command_to_msg(cmd, req_counter)), loop)
+                conn.send(_command_to_msg(cmd, app)), loop)
 
     app = App(config, deck, send,
               schedule=lambda fn: loop.call_soon_threadsafe(fn))
@@ -103,7 +113,7 @@ async def _run(config: Config, deck: DeckDriver) -> None:
             on_connection=lambda sid, up: loop.call_soon_threadsafe(
                 app.handle_connection, sid, up),
             on_result=lambda req, data, sid=server.id: loop.call_soon_threadsafe(
-                app.handle_result, sid, data),
+                app.handle_result, sid, req, data),
         )
         connectors[server.id] = conn
 
