@@ -43,9 +43,13 @@ class App:
         self.orch.set_detection("")
 
     def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        key = self.orch.drill_key()
+        before = self.orch.get_agent(key) if key is not None else None
         self.orch.apply_snapshot(server_id, states)
-        if self.orch.is_drilling():
-            self._invalidate_read()
+        if key is not None and key.server_id == server_id:
+            after = self.orch.get_agent(key)
+            if after != before:            # drilled pane changed or vanished
+                self._invalidate_read()
         self._refresh()
 
     def handle_event(self, server_id: str, state: AgentState) -> None:

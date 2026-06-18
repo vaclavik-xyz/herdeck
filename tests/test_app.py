@@ -126,3 +126,52 @@ def test_event_on_drilled_pane_invalidates_inflight_read():
     # the delayed read result for the old req must now be ignored
     app.handle_result("workbox", req, {"text": "stale prompt", "pane_id": "p1"})
     assert deck.last[5].label == ""
+
+
+def test_snapshot_from_other_server_does_not_invalidate_read():
+    deck = FakeRenderer(15)
+    cfg = make_config()
+    # two servers so a snapshot from "other" is plausible
+    from herdeck.config import ServerConfig
+    cfg.servers.append(ServerConfig("other", "wss://y", "t"))
+    cfg.overview_order = ["workbox", "other"]
+    app = App(cfg, deck, send=lambda cmd: None)
+    app.handle_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED)])
+    deck.simulate_press(0)                       # drill into workbox/p1
+    req = app.next_req_for(Command("read", "workbox", "p1", source="detection"))
+    # unrelated snapshot from another server
+    app.handle_snapshot("other", [
+        AgentState(AgentKey("other", "q1"), "codex", "web", Status.WORKING)])
+    app.handle_result("workbox", req, {"text": "Allow edit?", "pane_id": "p1"})
+    assert deck.last[5].label == "Allow edit?"   # read NOT cancelled
+
+
+def test_snapshot_changing_drilled_pane_invalidates_read():
+    deck = FakeRenderer(15)
+    app = App(make_config(), deck, send=lambda cmd: None)
+    app.handle_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED)])
+    deck.simulate_press(0)
+    req = app.next_req_for(Command("read", "workbox", "p1", source="detection"))
+    # same server, drilled pane changes state
+    app.handle_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.WORKING)])
+    app.handle_result("workbox", req, {"text": "stale", "pane_id": "p1"})
+    assert deck.last[5].label == ""              # read cancelled
+
+
+def test_snapshot_not_touching_drilled_pane_keeps_read():
+    deck = FakeRenderer(15)
+    app = App(make_config(), deck, send=lambda cmd: None)
+    app.handle_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED),
+        AgentState(AgentKey("workbox", "p2"), "claude", "web", Status.WORKING)])
+    deck.simulate_press(0)                       # drill into p1 (index 0)
+    req = app.next_req_for(Command("read", "workbox", "p1", source="detection"))
+    # same server snapshot where p1 is unchanged (p2 differs)
+    app.handle_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED),
+        AgentState(AgentKey("workbox", "p2"), "claude", "web", Status.IDLE)])
+    app.handle_result("workbox", req, {"text": "Allow edit?", "pane_id": "p1"})
+    assert deck.last[5].label == "Allow edit?"   # unchanged p1 -> read kept

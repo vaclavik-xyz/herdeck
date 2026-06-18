@@ -53,8 +53,11 @@ class Orchestrator:
     def set_detection(self, text: str) -> None:
         self._detection = text
 
-    def is_drilling(self) -> bool:
-        return self._drill is not None
+    def drill_key(self) -> AgentKey | None:
+        return self._drill
+
+    def get_agent(self, key: AgentKey) -> AgentState | None:
+        return self._agents.get(key)
 
     def is_drill_pane(self, server_id: str, pane_id: str | None) -> bool:
         return (self._drill is not None and pane_id is not None
