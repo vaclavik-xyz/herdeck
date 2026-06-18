@@ -53,6 +53,9 @@ class Orchestrator:
     def set_detection(self, text: str) -> None:
         self._detection = text
 
+    def is_drilling(self) -> bool:
+        return self._drill is not None
+
     def is_drill_pane(self, server_id: str, pane_id: str | None) -> bool:
         return (self._drill is not None and pane_id is not None
                 and self._drill == AgentKey(server_id, pane_id))

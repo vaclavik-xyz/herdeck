@@ -110,3 +110,19 @@ def test_act_result_triggers_resync_list():
     app = App(make_config(), deck, send=sent.append)
     app.handle_result("workbox", "r9", {"skipped": True})
     assert Command("list", "workbox") in sent
+
+
+def test_event_on_drilled_pane_invalidates_inflight_read():
+    deck = FakeRenderer(15)
+    app = App(make_config(), deck, send=lambda cmd: None)
+    app.handle_snapshot("workbox", [
+        AgentState(AgentKey("workbox", "p1"), "claude", "api", Status.BLOCKED)])
+    deck.simulate_press(0)                       # drill into p1
+    req = app.next_req_for(Command("read", "workbox", "p1", source="detection"))
+    # p1 changes state while the read is in flight
+    app.handle_event("workbox",
+                     AgentState(AgentKey("workbox", "p1"), "claude", "api",
+                                Status.WORKING))
+    # the delayed read result for the old req must now be ignored
+    app.handle_result("workbox", req, {"text": "stale prompt", "pane_id": "p1"})
+    assert deck.last[5].label == ""

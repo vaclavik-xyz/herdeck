@@ -38,12 +38,20 @@ class App:
     def _refresh(self) -> None:
         self.deck.render(self.orch.render())
 
+    def _invalidate_read(self) -> None:
+        self._active_read_req = None
+        self.orch.set_detection("")
+
     def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         self.orch.apply_snapshot(server_id, states)
+        if self.orch.is_drilling():
+            self._invalidate_read()
         self._refresh()
 
     def handle_event(self, server_id: str, state: AgentState) -> None:
         self.orch.apply_event(server_id, state)
+        if self.orch.is_drill_pane(server_id, state.key.pane_id):
+            self._invalidate_read()
         self._refresh()
 
     def handle_connection(self, server_id: str, up: bool) -> None:
