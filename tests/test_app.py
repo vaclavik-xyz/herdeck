@@ -142,3 +142,9 @@ def test_tick_uses_partial_render_when_available():
                                            Status.WORKING)])
     app.handle_tick()
     assert deck.partial and deck.partial[0].spinner is not None
+
+
+def test_command_to_msg_focus():
+    app = App(make_config(), FakeRenderer(13), send=lambda c: None)
+    m = _command_to_msg(Command("focus", "dev", "p1"), app)
+    assert m["type"] == "focus" and m["pane_id"] == "p1" and m["req"]

@@ -14,7 +14,7 @@ _OPTION_LABEL_MAX = 14
 
 @dataclass
 class Command:
-    kind: str                 # "list" | "read" | "act_if_blocked" | "act_force"
+    kind: str                 # list | read | focus | act_if_blocked | act_force
     server_id: str
     pane_id: str | None = None
     source: str | None = None
@@ -153,7 +153,9 @@ class Orchestrator:
             key = shown[index].key
             self._drill = key
             self._detection = ""
-            return [Command("read", key.server_id, key.pane_id, source="detection")]
+            # Focus the agent in the on-screen herdr session AND read its prompt.
+            return [Command("focus", key.server_id, key.pane_id),
+                    Command("read", key.server_id, key.pane_id, source="detection")]
         return []
 
     def _press_drill(self, index: int) -> list[Command]:
@@ -166,9 +168,13 @@ class Orchestrator:
             self._drill = None
             return []
         if index == stop_i:                  # Stop — always, unconditional
-            return [Command("act_force", key.server_id, key.pane_id,
-                            keys=self._profile_for(key).stop)]
+            cmd = Command("act_force", key.server_id, key.pane_id,
+                          keys=self._profile_for(key).stop)
+            self._drill = None               # return to the fleet overview
+            return [cmd]
         if index < len(options):             # send the chosen option's number
-            return [Command("act_if_blocked", key.server_id, key.pane_id,
-                            keys=[options[index].key])]
+            cmd = Command("act_if_blocked", key.server_id, key.pane_id,
+                          keys=[options[index].key])
+            self._drill = None               # return to the fleet overview
+            return [cmd]
         return []                            # blank tile

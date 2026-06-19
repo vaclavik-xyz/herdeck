@@ -208,3 +208,12 @@ async def test_rpc_retries_reads_but_not_send_keys(monkeypatch):
     with pytest.raises(Exception):
         await h.send_keys("w1:p1", ["1"])  # non-idempotent -> NOT retried
     assert len(writes) == 1
+
+
+async def test_focus_calls_herdr_focus_agent(herdr):
+    out = await handle_client_message(
+        herdr, "workbox",
+        '{"type":"focus","req":"f1","pane_id":"w1:p1"}')
+    msg = json.loads(out)
+    assert msg["data"]["focused"] is True
+    assert herdr.focused == ["w1:p1"]

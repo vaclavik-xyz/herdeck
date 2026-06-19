@@ -126,6 +126,8 @@ def _command_to_msg(cmd: Command, app: "App") -> dict:
     if cmd.kind == "read":
         return {"type": "read", "req": req, "pane_id": cmd.pane_id,
                 "source": cmd.source}
+    if cmd.kind == "focus":
+        return {"type": "focus", "req": req, "pane_id": cmd.pane_id}
     if cmd.kind in ("act_if_blocked", "act_force"):
         return {"type": "act", "req": req, "pane_id": cmd.pane_id, "keys": cmd.keys,
                 "guard": cmd.kind == "act_if_blocked"}
