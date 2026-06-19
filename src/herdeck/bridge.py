@@ -22,6 +22,7 @@ class HerdrClient(Protocol):
     async def focus_agent(self, pane_id: str) -> None: ...
     async def send_text(self, pane_id: str, text: str) -> None: ...
     async def start_agent(self, name: str, argv: list[str]) -> None: ...
+    async def worktrees(self) -> list[dict]: ...
 
 
 def _is_agent_pane(p: dict) -> bool:
@@ -29,32 +30,56 @@ def _is_agent_pane(p: dict) -> bool:
     return bool(p.get("agent")) or p.get("agent_status") in _AGENT_STATUSES
 
 
-def _herdr_pane_to_wire(p: dict) -> dict:
+def _worktrees_by_workspace(worktrees: list[dict]) -> dict[str, dict]:
+    """Index herdr worktrees by the workspace they're open in."""
+    return {wt["open_workspace_id"]: wt
+            for wt in (worktrees or []) if wt.get("open_workspace_id")}
+
+
+def _herdr_pane_to_wire(p: dict, wt_by_ws: dict[str, dict] | None = None) -> dict:
     """Map a raw herdr pane to herdeck's wire pane schema.
 
-    herdr uses `agent` / `agent_status` and has no human label, so we derive a
-    label/project from the pane's working directory.
+    herdr uses `agent` / `agent_status` and has no human label. We derive repo +
+    branch from the pane's open worktree (herdr `worktree.list`), falling back to
+    the working-directory basename when no worktree info is available.
     """
     cwd = p.get("foreground_cwd") or p.get("cwd") or ""
     label = os.path.basename(cwd.rstrip("/")) or p.get("workspace_id", "")
+    wt = (wt_by_ws or {}).get(p.get("workspace_id", ""), {})
+    repo = wt.get("label") or label
+    branch = wt.get("branch") or ""
     return {
         "pane_id": p["pane_id"],
         "agent_type": p.get("agent", "default"),
         "label": label,
         "status": p.get("agent_status", "unknown"),
         "project": label,
+        "repo": repo,
+        "branch": branch,
     }
 
 
-def _wire_panes(raw: list[dict]) -> list[dict]:
-    return [_herdr_pane_to_wire(p) for p in raw if _is_agent_pane(p)]
+def _wire_panes(raw: list[dict], worktrees: list[dict] | None = None) -> list[dict]:
+    wt_by_ws = _worktrees_by_workspace(worktrees or [])
+    return [_herdr_pane_to_wire(p, wt_by_ws) for p in raw if _is_agent_pane(p)]
+
+
+async def _wired_snapshot(herdr: HerdrClient) -> list[dict]:
+    """Fetch panes + worktrees from herdr and build the wire snapshot."""
+    raw = await herdr.list_panes()
+    try:
+        worktrees = await herdr.worktrees()
+    except Exception:
+        worktrees = []
+    return _wire_panes(raw, worktrees)
 
 
 class StubHerdr:
     """In-memory herdr (raw herdr pane shape) for tests."""
 
-    def __init__(self, panes: list[dict]):
+    def __init__(self, panes: list[dict], worktrees: list[dict] | None = None):
         self.panes = panes
+        self._worktrees = worktrees or []
         self.detection: dict[str, str] = {}
         self.sent: list[tuple[str, list[str]]] = []
         self.focused: list[str] = []
@@ -62,6 +87,9 @@ class StubHerdr:
 
     async def list_panes(self) -> list[dict]:
         return self.panes
+
+    async def worktrees(self) -> list[dict]:
+        return self._worktrees
 
     async def get_pane(self, pane_id: str) -> dict:
         return next(p for p in self.panes if p["pane_id"] == pane_id)
@@ -86,7 +114,7 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "list":
-        panes = _wire_panes(await herdr.list_panes())
+        panes = await _wired_snapshot(herdr)
         return encode({"type": "snapshot", "server_id": server_id, "panes": panes})
     if kind == "read":
         text = await herdr.read_pane(msg["pane_id"], msg.get("source", "detection"))
@@ -144,11 +172,10 @@ class HerdrEvents:
         try:
             while True:
                 try:
-                    raw = await self._herdr.list_panes()
+                    cur = await _wired_snapshot(self._herdr)
                 except Exception:
-                    raw = None
-                if raw is not None:
-                    cur = _wire_panes(raw)
+                    cur = None
+                if cur is not None:
                     if cur != prev:
                         yield cur
                         prev = cur
@@ -287,13 +314,17 @@ class SocketHerdr:
         # No workspace_id -> herdr starts the agent in the focused workspace.
         await self._rpc("agent.start", {"name": name, "argv": argv}, retry=False)
 
+    async def worktrees(self) -> list[dict]:
+        res = await self._rpc("worktree.list", {})
+        return res.get("result", {}).get("worktrees", [])
+
 
 async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, clients: set):
     auth = ws.request.headers.get("Authorization", "")
     if not hmac.compare_digest(auth, f"Bearer {token}"):
         await ws.close(code=4401, reason="unauthorized")
         return
-    panes = _wire_panes(await herdr.list_panes())
+    panes = await _wired_snapshot(herdr)
     await ws.send(encode({"type": "snapshot", "server_id": server_id, "panes": panes}))
     clients.add(ws)
     try:

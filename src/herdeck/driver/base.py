@@ -21,7 +21,12 @@ class TileView:
     color: str
     icon: str | None = None          # icon-cache filename (D200); None for fake
     agent_type: str | None = None
-    spinner: int | None = None       # spinner frame phase for working tiles
+    spinner: int | None = None       # rotation phase for working tiles
+    # Rich agent-tile content (None on control tiles, which render `label` only):
+    repo: str | None = None
+    branch: str | None = None
+    status_text: str | None = None   # WORKING / IDLE / BLOCKED / DONE
+    time_text: str | None = None     # elapsed in current status, e.g. "3m"
 
 
 @dataclass

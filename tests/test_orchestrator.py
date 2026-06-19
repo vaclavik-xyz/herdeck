@@ -59,3 +59,15 @@ def test_event_updates_tile():
     o.apply_snapshot("dev", [state("p1", Status.WORKING)])
     o.apply_event("dev", state("p1", Status.BLOCKED))
     assert o.render().tiles[0].color == "amber"
+
+
+def test_agent_tile_has_repo_branch_status_and_time():
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
+    s = AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)
+    s.repo, s.branch = "macdoktor-crm", "feat/x"
+    o.apply_snapshot("dev", [s])
+    clk[0] = 1000.0 + 185          # 3 minutes later
+    t = o.render().tiles[0]
+    assert t.repo == "macdoktor-crm" and t.branch == "feat/x"
+    assert t.status_text == "WORKING" and t.time_text == "3m"

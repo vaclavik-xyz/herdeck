@@ -25,3 +25,5 @@ class AgentState:
     label: str
     status: Status
     project: str = ""
+    repo: str = ""          # git repo name (from herdr worktree label)
+    branch: str = ""        # git branch (from herdr worktree)

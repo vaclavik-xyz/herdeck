@@ -104,6 +104,8 @@ class Connector:
             label=state.label,
             status=state.status,
             project=state.project,
+            repo=state.repo,
+            branch=state.branch,
         )
 
     def _dispatch(self, raw: str) -> None:

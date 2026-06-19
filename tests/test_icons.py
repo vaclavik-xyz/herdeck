@@ -106,3 +106,16 @@ def test_letter_glyph_is_large_when_font_available(tmp_path):
         lum = src.convert("L")
     white = sum(lum.histogram()[201:])    # bright (near-white letter) pixels
     assert white > 800                     # a big bold letter (inset) covers a real area
+
+
+def test_render_tile_agent_and_control(tmp_path):
+    from herdeck.driver.base import TileView
+    p = make_provider(tmp_path)
+    agent = TileView(0, "", "amber", agent_type="claude", repo="api",
+                     branch="feat/x", status_text="BLOCKED", time_text="1m")
+    name = p.render_tile(agent)
+    with Image.open(os.path.join(str(tmp_path), name)) as im:
+        assert im.size == (196, 196)
+    n_stop = p.render_tile(TileView(0, "Stop", "red"))
+    n_back = p.render_tile(TileView(0, "Back", "grey"))
+    assert n_stop != n_back and n_stop != name

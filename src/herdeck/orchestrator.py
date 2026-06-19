@@ -29,11 +29,14 @@ class RenderState:
 
 
 class Orchestrator:
-    def __init__(self, config: Config, slots: int | None = None):
+    def __init__(self, config: Config, slots: int | None = None, clock=None):
+        import time
         self.config = config
         cols, rows = config.grid
         self.slots = slots if slots is not None else cols * rows
+        self._clock = clock or time.monotonic
         self._agents: dict[AgentKey, AgentState] = {}
+        self._since: dict[AgentKey, tuple[Status, float]] = {}  # status start time
         self._down: set[str] = set()
         self._drill: AgentKey | None = None
         self._detection: str = ""
@@ -45,15 +48,36 @@ class Orchestrator:
         """Overview tiles available for agents (the last tile is the launcher)."""
         return max(1, self.slots - 1)
 
+    def _touch(self, state: AgentState) -> None:
+        """Record when a pane entered its current status (for elapsed time)."""
+        prev = self._since.get(state.key)
+        if prev is None or prev[0] is not state.status:
+            self._since[state.key] = (state.status, self._clock())
+
+    def _elapsed_text(self, key: AgentKey) -> str:
+        rec = self._since.get(key)
+        if rec is None:
+            return ""
+        s = int(max(0, self._clock() - rec[1]))
+        if s < 60:
+            return f"{s}s"
+        if s < 3600:
+            return f"{s // 60}m"
+        return f"{s // 3600}h"
+
     # --- inbound state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         self._agents = {k: v for k, v in self._agents.items()
                         if k.server_id != server_id}
         for s in states:
             self._agents[s.key] = s
+            self._touch(s)
+        live = set(self._agents)
+        self._since = {k: v for k, v in self._since.items() if k in live}
 
     def apply_event(self, server_id: str, state: AgentState) -> None:
         self._agents[state.key] = state
+        self._touch(state)
 
     def set_connection(self, server_id: str, up: bool) -> None:
         self._down.discard(server_id) if up else self._down.add(server_id)
@@ -100,9 +124,14 @@ class Orchestrator:
             elif i < len(shown):
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
-                tiles.append(TileView(i, s.label, self._agent_color(s),
-                                      icon=None, agent_type=s.agent_type,
-                                      spinner=phase))
+                down = s.key.server_id in self._down
+                tiles.append(TileView(
+                    i, s.label, self._agent_color(s),
+                    icon=None, agent_type=s.agent_type, spinner=phase,
+                    repo=(s.repo or s.label),
+                    branch=s.branch or "",
+                    status_text=("OFFLINE" if down else s.status.value.upper()),
+                    time_text=self._elapsed_text(s.key)))
             else:
                 tiles.append(TileView(i, "", "dim"))
         panel = layout.panel_overview(layout.summary(ordered), self._page % pages,

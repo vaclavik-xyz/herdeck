@@ -19,14 +19,20 @@ _PANEL_RIGHT_INDEX = 14
 
 
 def compose_panel(panel: PanelView) -> Image.Image:
-    """Render a PanelView to a 392x196 image (title + lines on a color)."""
-    img = Image.new("RGB", (PANEL_W, PANEL_H), COLORS.get(panel.color, COLORS["dim"]))
+    """Render a PanelView to a 392x196 image with large, readable text."""
+    from ..icons import _font, _truncate
+    bg = (40, 30, 12) if panel.color == "amber" else (30, 30, 34)
+    img = Image.new("RGB", (PANEL_W, PANEL_H), bg)
     d = ImageDraw.Draw(img)
-    d.text((12, 10), panel.title, fill=(255, 255, 255))
+    title_f = _font(30)
+    d.text((16, 12), _truncate(d, panel.title, title_f, PANEL_W - 32),
+           font=title_f, fill=(255, 255, 255))
+    line_f = _font(24)
     y = 60
     for line in panel.lines[:3]:
-        d.text((12, y), line[:48], fill=(235, 235, 235))
-        y += 42
+        d.text((16, y), _truncate(d, line, line_f, PANEL_W - 32),
+               font=line_f, fill=(232, 232, 236))
+        y += 40
     return img
 
 
@@ -103,9 +109,10 @@ class D200Driver(DeckDriver):
         for t in tiles:
             if t.index >= self._dev.BUTTON_COUNT:
                 continue
-            agent = t.agent_type or "_empty"
-            name = self._icons.icon_for(agent, t.color, t.spinner)
-            buttons[t.index] = {"name": t.label, "icon": name}
+            icon = self._icons.render_tile(t)
+            # name="" so the device draws no label of its own — all text is
+            # baked into the icon with our own font.
+            buttons[t.index] = {"name": "", "icon": icon}
         return buttons
 
     def render(self, tiles: list[TileView]) -> None:

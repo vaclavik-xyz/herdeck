@@ -96,28 +96,68 @@ _FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
 )
 _GLYPH_FONT_SIZE = 120
-_big_font_cache: list = []  # memoised [font_or_None]
+_font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default)
+
+# Bump when tile composition changes so stale cached tile PNGs are ignored.
+TILE_VERSION = 1
+TILE_BG = (26, 26, 30)           # dark agent-tile background
+SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
 
-def _load_big_font():
-    """A large scalable font for the letter fallback; None if none is available."""
-    if _big_font_cache:
-        return _big_font_cache[0]
+def _font(size: int):
+    """A scalable font at the given size; None only if nothing is available."""
+    if size in _font_cache:
+        return _font_cache[size]
     from PIL import ImageFont
     font = None
     for path in _FONT_CANDIDATES:
         try:
-            font = ImageFont.truetype(path, _GLYPH_FONT_SIZE)
+            font = ImageFont.truetype(path, size)
             break
         except Exception:
             continue
     if font is None:
-        try:                       # Pillow >= 10 supports a sized default font
-            font = ImageFont.load_default(size=_GLYPH_FONT_SIZE)
+        try:
+            font = ImageFont.load_default(size=size)
         except Exception:
             font = None
-    _big_font_cache.append(font)
+    _font_cache[size] = font
     return font
+
+
+def _load_big_font():
+    """A large scalable font for the letter fallback; None if none is available."""
+    return _font(_GLYPH_FONT_SIZE)
+
+
+def _truncate(draw, text, font, max_w):
+    if not text or draw.textlength(text, font=font) <= max_w:
+        return text
+    while text and draw.textlength(text + "…", font=font) > max_w:
+        text = text[:-1]
+    return text + "…"
+
+
+def _wrap(draw, text, font, max_w, max_lines=2):
+    """Wrap text (splitting on '/' too, for branch names) to <= max_lines."""
+    words = text.replace("/", " / ").split()
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        test = (cur + " " + w).strip()
+        if draw.textlength(test, font=font) <= max_w:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+        if len(lines) == max_lines:
+            break
+    if cur and len(lines) < max_lines:
+        lines.append(cur)
+    if lines:
+        lines[-1] = _truncate(draw, lines[-1], font, max_w)
+    return lines[:max_lines]
 
 
 class IconProvider:
@@ -219,3 +259,65 @@ class IconProvider:
             d.arc(box, head - i - step, head - i,
                   fill=(255, 255, 255, alpha), width=w)
         img.alpha_composite(ov.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS))
+
+    # --- rich tile rendering (full tile incl. text; device label left empty) ---
+    def render_tile(self, tile) -> str:
+        """Render a full TileView (logo, repo, branch, status, time) to a cached
+        PNG and return its filename. Agent tiles (tile.repo set) get the rich
+        layout; control tiles render their centred label on a colour."""
+        import hashlib
+        sig = "|".join(str(x) for x in (
+            TILE_VERSION, tile.color, tile.label, tile.agent_type, tile.spinner,
+            tile.repo, tile.branch, tile.status_text, tile.time_text))
+        name = "tile_" + hashlib.sha1(sig.encode()).hexdigest()[:16] + ".png"
+        path = os.path.join(self._cache_dir, name)
+        if os.path.exists(path):
+            return name
+        img = (self._compose_agent_tile(tile) if tile.repo is not None
+               else self._compose_label_tile(tile))
+        img.convert("RGB").save(path)
+        return name
+
+    def _compose_label_tile(self, tile) -> Image.Image:
+        bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE),
+                       COLORS.get(tile.color, COLORS["dim"]) + (255,))
+        if tile.label:
+            d = ImageDraw.Draw(bg)
+            f = _font(28)
+            t = _truncate(d, tile.label, f, ICON_SIZE - 16)
+            w = d.textlength(t, font=f)
+            bb = d.textbbox((0, 0), t, font=f)
+            d.text(((ICON_SIZE - w) / 2, (ICON_SIZE - (bb[3] - bb[1])) / 2 - bb[1]),
+                   t, font=f, fill=(255, 255, 255))
+        return bg
+
+    def _compose_agent_tile(self, tile) -> Image.Image:
+        accent = COLORS.get(tile.color, COLORS["dim"])
+        bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), TILE_BG + (255,))
+        d = ImageDraw.Draw(bg)
+        # logo top-left, rotated by the spinner phase while working
+        logo = self._base_glyph(tile.agent_type or "default").resize((46, 46), Image.LANCZOS)
+        if tile.spinner is not None:
+            logo = logo.rotate(-tile.spinner * SPIN_DEG, resample=Image.BICUBIC)
+        bg.alpha_composite(logo, (12, 12))
+        # status word + elapsed time, top-right
+        if tile.status_text:
+            fs = _font(16)
+            d.text((ICON_SIZE - 12 - d.textlength(tile.status_text, font=fs), 13),
+                   tile.status_text, font=fs, fill=accent)
+        if tile.time_text:
+            ft = _font(15)
+            d.text((ICON_SIZE - 12 - d.textlength(tile.time_text, font=ft), 35),
+                   tile.time_text, font=ft, fill=(165, 165, 170))
+        # repo (primary) + branch (secondary, wrapped)
+        fr = _font(23)
+        d.text((12, 68), _truncate(d, tile.repo or "", fr, ICON_SIZE - 24),
+               font=fr, fill=(255, 255, 255))
+        if tile.branch:
+            fb = _font(16)
+            y = 98
+            for line in _wrap(d, tile.branch, fb, ICON_SIZE - 24, 2):
+                d.text((12, y), line, font=fb, fill=(180, 180, 188))
+                y += 20
+        d.rectangle([0, ICON_SIZE - 8, ICON_SIZE, ICON_SIZE], fill=accent)  # accent
+        return bg

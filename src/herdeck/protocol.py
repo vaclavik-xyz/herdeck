@@ -24,6 +24,8 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         label=pane.get("label", ""),
         status=_status(pane.get("status", "unknown")),
         project=pane.get("project", ""),
+        repo=pane.get("repo", ""),
+        branch=pane.get("branch", ""),
     )
 
 

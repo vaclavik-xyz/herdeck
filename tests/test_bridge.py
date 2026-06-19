@@ -4,7 +4,7 @@ import pytest
 
 from herdeck.bridge import (
     handle_client_message, StubHerdr, _wire_panes, _is_agent_pane,
-    _herdr_pane_to_wire,
+    _herdr_pane_to_wire, _worktrees_by_workspace,
 )
 
 
@@ -29,7 +29,16 @@ def test_herdr_pane_to_wire_maps_fields():
     w = _herdr_pane_to_wire(raw_pane(agent="codex", status="working",
                                      cwd="/Users/admin/projects/web"))
     assert w == {"pane_id": "w1:p1", "agent_type": "codex", "label": "web",
-                 "status": "working", "project": "web"}
+                 "status": "working", "project": "web", "repo": "web", "branch": ""}
+
+
+def test_herdr_pane_to_wire_adds_repo_and_branch_from_worktree():
+    raw = raw_pane(agent="claude", status="idle", cwd="/x/macdoktor-crm")
+    raw["workspace_id"] = "w1"
+    wt_by_ws = _worktrees_by_workspace([
+        {"open_workspace_id": "w1", "label": "macdoktor-crm", "branch": "feat/x"}])
+    w = _herdr_pane_to_wire(raw, wt_by_ws)
+    assert w["repo"] == "macdoktor-crm" and w["branch"] == "feat/x"
 
 
 def test_is_agent_pane_filters_plain_shells():
