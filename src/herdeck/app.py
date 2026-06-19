@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 
 from .config import Config, load_config
@@ -11,6 +12,8 @@ from .model import AgentState
 from .orchestrator import Command, Orchestrator
 
 TICK_INTERVAL = 0.4
+
+log = logging.getLogger("herdeck")
 
 
 class App:
@@ -50,6 +53,10 @@ class App:
         self.orch.set_detection("")
 
     def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("snapshot %s: %s", server_id,
+                      [(s.key.pane_id, s.agent_type, s.label, s.status.value)
+                       for s in states])
         key = self.orch.drill_key()
         before = self.orch.get_agent(key) if key is not None else None
         self.orch.apply_snapshot(server_id, states)
@@ -71,11 +78,15 @@ class App:
     def handle_result(self, server_id: str, req: str, data: dict) -> None:
         text = data.get("text")
         if text is not None:
-            if (req == self._active_read_req
-                    and self.orch.is_drill_pane(server_id, data.get("pane_id"))):
+            accepted = (req == self._active_read_req
+                        and self.orch.is_drill_pane(server_id, data.get("pane_id")))
+            log.debug("result read req=%s pane=%s accepted=%s text=%r",
+                      req, data.get("pane_id"), accepted, (text or "")[:60])
+            if accepted:
                 self.orch.set_detection(text)
                 self._refresh()
         else:
+            log.debug("result act req=%s data=%s -> re-list", req, data)
             self._send(Command("list", server_id))
 
     def handle_tick(self) -> None:
@@ -96,7 +107,14 @@ class App:
         self._schedule(lambda: self._handle_press(index))
 
     def _handle_press(self, index: int) -> None:
-        for cmd in self.orch.on_press(index):
+        cmds = self.orch.on_press(index)
+        if log.isEnabledFor(logging.DEBUG):
+            rs = self.orch.render()
+            labels = [t.label for t in rs.tiles[:6] if t.label]
+            log.debug("press idx=%s -> cmds=%s | view=%s panel=%r/%s",
+                      index, [(c.kind, c.pane_id, c.keys) for c in cmds],
+                      labels, rs.panel.title, rs.panel.lines)
+        for cmd in cmds:
             self._send(cmd)
         self._refresh()
 
@@ -175,6 +193,11 @@ async def _run(config: Config, deck: DeckDriver) -> None:
 def main() -> None:
     import os
 
+    if os.environ.get("HERDECK_DEBUG"):
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s %(levelname)s %(message)s",
+        )
     config_path = os.path.abspath(os.environ.get("HERDECK_CONFIG", "config.toml"))
     config = load_config(config_path)   # load BEFORE the deck chdir's (R-4)
     if os.environ.get("HERDECK_FAKE_DECK"):
