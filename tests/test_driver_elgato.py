@@ -91,3 +91,11 @@ def test_key_down_forwards_index_and_key_up_is_ignored():
     assert seen == [7]
     deck.callback(deck, 7, False)                        # key-up -> ignored
     assert seen == [7]
+
+
+def test_render_working_only_touches_the_given_keys(monkeypatch):
+    deck = FakeDeck(key_count=15)
+    drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
+    monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
+    drv.render_working([TileView(2, "x", "amber"), TileView(5, "y", "amber")])
+    assert set(deck.images) == {2, 5}                    # untouched keys keep their image
