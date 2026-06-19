@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 
-from .config import Config, load_config
+from .config import Config, ConfigError, load_config
 from .connector import Connector
 from .driver.base import DeckDriver
 from .driver.fake import FakeRenderer
@@ -167,14 +167,27 @@ async def _ticker(app: "App", loop) -> None:
         loop.call_soon_threadsafe(app.handle_tick)
 
 
+def resolve_mode(*, mock, config_path, config_has_servers, socket_path,
+                 socket_exists):
+    """Decide how to run from already-gathered facts (pure; no IO)."""
+    if mock:
+        return ("mock",)
+    if config_path is not None and config_has_servers:
+        return ("remote", config_path)
+    if socket_exists:
+        return ("local", socket_path)
+    return ("error",
+            f"No herdr socket at {socket_path} and no [[servers]] config. "
+            f"Is herdr running? Set HERDR_SOCKET or create a config "
+            f"(see config.example.toml).")
+
+
 def _mock_config() -> Config:
     """A zero-setup config for the offline simulator (no file/token needed)."""
-    from .config import AnswerProfile, ServerConfig
+    from .config import DEFAULT_PROFILES, ServerConfig
     return Config(
         servers=[ServerConfig("mock", "ws://mock", "x")],
-        profiles={"claude": AnswerProfile(["1", "enter"], ["esc"], ["ctrl+c"], ["2", "enter"]),
-                  "codex": AnswerProfile(["y", "enter"], ["n", "enter"], ["ctrl+c"], ["y", "enter"]),
-                  "default": AnswerProfile(["enter"], ["esc"], ["ctrl+c"], ["enter"])},
+        profiles=dict(DEFAULT_PROFILES),
         overview_order=["mock"],
         grid=(5, 3),
     )
@@ -232,6 +245,8 @@ async def _run_mock(config: Config, deck: DeckDriver) -> None:
 
 
 async def _run(config: Config, deck: DeckDriver) -> None:
+    if not config.servers:
+        raise ConfigError("no servers configured for remote run")
     loop = asyncio.get_running_loop()
     connectors: dict[str, Connector] = {}
 
@@ -269,8 +284,79 @@ async def _run(config: Config, deck: DeckDriver) -> None:
     await asyncio.gather(*tasks)
 
 
+def make_deck(kind, slots, *, d200_factory=None, web_factory=None):
+    """Build the deck driver. kind None => auto (d200, else web fallback)."""
+    import os
+
+    if web_factory is None:
+        def web_factory():
+            from .driver.web import WebDeck
+            host = os.environ.get("HERDECK_WEB_BIND", "127.0.0.1")
+            port = int(os.environ.get("HERDECK_WEB_PORT", "8800"))
+            d = WebDeck(slots, host=host, port=port)
+            print(f"herdeck web simulator on http://{d.host}:{d.port}")
+            return d
+
+    if d200_factory is None:
+        def d200_factory():
+            from .driver.d200 import D200Driver
+            return D200Driver()
+
+    if kind == "fake":
+        return FakeRenderer(slots)
+    if kind == "web":
+        return web_factory()
+    if kind == "d200":
+        return d200_factory()
+    if kind is not None:
+        raise ValueError(f"unsupported deck kind: {kind}")
+    try:
+        return d200_factory()
+    except Exception as exc:
+        print(f"No Stream Deck opened ({exc}); close Ulanzi Studio if it is "
+              f"running. Falling back to the web simulator.")
+        return web_factory()
+
+
+def local_config(port, token, partial=None):
+    """Synthesize the config for local mode from the bound bridge port/token."""
+    from .config import (Config, DEFAULT_MACROS, DEFAULT_PROFILES,
+                         DEFAULT_START_PROFILES, ServerConfig)
+    profiles = dict(DEFAULT_PROFILES)
+    if partial is not None:
+        profiles.update(partial.profiles)
+    return Config(
+        servers=[ServerConfig("local", f"ws://127.0.0.1:{port}", token)],
+        profiles=profiles,
+        overview_order=["local"],
+        grid=partial.grid if partial else (5, 3),
+        macros=partial.macros if partial else list(DEFAULT_MACROS),
+        start_profiles=(partial.start_profiles if partial
+                        else dict(DEFAULT_START_PROFILES)),
+    )
+
+
+async def _run_local(socket_path, deck, partial=None):
+    from .bridge import start_local_bridge
+    host, port, token, _handle = await start_local_bridge(socket_path)
+    await _run(local_config(port, token, partial), deck)
+
+
+def _discover_config_path():
+    import os
+    p = os.environ.get("HERDECK_CONFIG")
+    if p:
+        return os.path.abspath(p)
+    for cand in (os.path.expanduser("~/.config/herdeck/config.toml"),
+                 os.path.abspath("config.toml")):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
 def main() -> None:
     import os
+    import sys
 
     if os.environ.get("HERDECK_DEBUG"):
         logging.basicConfig(
@@ -278,28 +364,30 @@ def main() -> None:
             format="%(asctime)s %(levelname)s %(message)s",
         )
     mock = bool(os.environ.get("HERDECK_MOCK"))
-    if mock:
-        config = _mock_config()          # zero-setup: no config file or token needed
-    else:
-        config_path = os.path.abspath(os.environ.get("HERDECK_CONFIG", "config.toml"))
-        config = load_config(config_path)   # load BEFORE the deck chdir's (R-4)
-    # HERDECK_DECK selects the driver: d200 (default) | web | fake.
-    kind = os.environ.get("HERDECK_DECK") or ("fake" if os.environ.get("HERDECK_FAKE_DECK") else "d200")
-    # The last two grid cells are the status panel, not buttons (like the D200).
-    slots = config.grid[0] * config.grid[1] - 2
-    if kind == "fake":
-        deck: DeckDriver = FakeRenderer(slots)
-    elif kind == "web":
-        from .driver.web import WebDeck
-        host = os.environ.get("HERDECK_WEB_BIND", "127.0.0.1")
-        port = int(os.environ.get("HERDECK_WEB_PORT", "8800"))
-        deck = WebDeck(slots, host=host, port=port)
-        print(f"herdeck web simulator on http://{deck.host}:{deck.port}")
-    else:
-        from .driver.d200 import D200Driver
-        deck = D200Driver()
+    config_path = None if mock else _discover_config_path()
+    file_config = load_config(config_path) if config_path else None
+    socket_path = os.path.expanduser(
+        os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock"))
+    mode = resolve_mode(
+        mock=mock, config_path=config_path,
+        config_has_servers=bool(file_config and file_config.servers),
+        socket_path=socket_path, socket_exists=os.path.exists(socket_path))
+    if mode[0] == "error":
+        print(mode[1], file=sys.stderr)
+        sys.exit(2)
+
+    grid = file_config.grid if file_config else (5, 3)
+    slots = grid[0] * grid[1] - 2
+    kind = os.environ.get("HERDECK_DECK") or (
+        "fake" if os.environ.get("HERDECK_FAKE_DECK") else None)
+    deck = make_deck(kind, slots)
     try:
-        asyncio.run(_run_mock(config, deck) if mock else _run(config, deck))
+        if mode[0] == "mock":
+            asyncio.run(_run_mock(_mock_config(), deck))
+        elif mode[0] == "remote":
+            asyncio.run(_run(file_config, deck))
+        else:
+            asyncio.run(_run_local(mode[1], deck, file_config))
     finally:
         deck.close()
 

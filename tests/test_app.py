@@ -1,5 +1,9 @@
-from herdeck.app import App, _command_to_msg, _guard
-from herdeck.config import Config, ServerConfig, AnswerProfile
+import asyncio
+
+import pytest
+
+from herdeck.app import App, _command_to_msg, _guard, _run
+from herdeck.config import Config, ServerConfig, AnswerProfile, ConfigError
 from herdeck.driver.fake import FakeRenderer
 from herdeck.model import AgentKey, AgentState, Status
 from herdeck.orchestrator import Command
@@ -19,6 +23,17 @@ def make_config():
 
 def blocked(pane="p1"):
     return AgentState(AgentKey("dev", pane), "claude", "api", Status.BLOCKED)
+
+
+async def test_run_requires_at_least_one_server():
+    cfg = Config(
+        servers=[],
+        profiles={"default": AnswerProfile(["enter"], ["esc"], ["ctrl+c"], ["enter"])},
+        overview_order=[],
+        grid=(5, 3),
+    )
+    with pytest.raises(ConfigError, match="no servers configured"):
+        await asyncio.wait_for(_run(cfg, FakeRenderer(13)), timeout=0.01)
 
 
 def test_snapshot_renders_tiles_and_panel():
