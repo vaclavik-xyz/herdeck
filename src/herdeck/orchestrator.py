@@ -14,11 +14,12 @@ _OPTION_LABEL_MAX = 14
 
 @dataclass
 class Command:
-    kind: str                 # list | read | focus | act_if_blocked | act_force
+    kind: str                 # list | read | focus | act_if_blocked | act_force | send_text
     server_id: str
     pane_id: str | None = None
     source: str | None = None
     keys: list[str] = field(default_factory=list)
+    text: str | None = None   # for send_text (macros)
 
 
 @dataclass
@@ -107,22 +108,38 @@ class Orchestrator:
         return [i for i, s in enumerate(shown) if s.status is Status.WORKING]
 
     def _drill_layout(self) -> tuple[list, int, int]:
-        """Parsed options plus the fixed Stop/Back tile indices for the drill view."""
+        """Drill action tiles plus the fixed Stop/Back indices.
+
+        Blocked agent -> parsed prompt options (send the number). Otherwise ->
+        configured quick-send macros (send text). Each action is a dict with a
+        ``label`` and a callable ``make`` that builds the Command for a key.
+        """
         agent = self._agents.get(self._drill)
-        options = (layout.parse_options(self._detection)
-                   if agent is not None and agent.status is Status.BLOCKED else [])
         stop_i, back_i = self.slots - 2, self.slots - 1
-        return options[:stop_i], stop_i, back_i
+        actions: list[dict] = []
+        if agent is not None and agent.status is Status.BLOCKED:
+            for opt in layout.parse_options(self._detection):
+                actions.append({
+                    "label": f"{opt.key} {opt.label}"[:_OPTION_LABEL_MAX],
+                    "make": (lambda key, k=opt.key: Command(
+                        "act_if_blocked", key.server_id, key.pane_id, keys=[k])),
+                })
+        elif agent is not None:
+            for m in self.config.macros:
+                actions.append({
+                    "label": m.label[:_OPTION_LABEL_MAX],
+                    "make": (lambda key, t=m.text: Command(
+                        "send_text", key.server_id, key.pane_id, text=t)),
+                })
+        return actions[:stop_i], stop_i, back_i
 
     def _render_drill(self) -> RenderState:
         agent = self._agents.get(self._drill)
-        options, stop_i, back_i = self._drill_layout()
+        actions, stop_i, back_i = self._drill_layout()
         tiles: list[TileView] = []
         for i in range(self.slots):
-            if i < len(options):
-                opt = options[i]
-                tiles.append(TileView(i, f"{opt.key} {opt.label}"[:_OPTION_LABEL_MAX],
-                                      "blue"))
+            if i < len(actions):
+                tiles.append(TileView(i, actions[i]["label"], "blue"))
             elif i == stop_i:
                 tiles.append(TileView(i, "Stop", "red"))
             elif i == back_i:
@@ -160,7 +177,7 @@ class Orchestrator:
 
     def _press_drill(self, index: int) -> list[Command]:
         key = self._drill
-        options, stop_i, back_i = self._drill_layout()
+        actions, stop_i, back_i = self._drill_layout()
         if index == back_i:                  # Back to overview
             self._drill = None
             return []
@@ -172,9 +189,8 @@ class Orchestrator:
                           keys=self._profile_for(key).stop)
             self._drill = None               # return to the fleet overview
             return [cmd]
-        if index < len(options):             # send the chosen option's number
-            cmd = Command("act_if_blocked", key.server_id, key.pane_id,
-                          keys=[options[index].key])
+        if index < len(actions):             # send option number or macro text
+            cmd = actions[index]["make"](key)
             self._drill = None               # return to the fleet overview
             return [cmd]
         return []                            # blank tile

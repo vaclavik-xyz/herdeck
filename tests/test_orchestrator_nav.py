@@ -72,14 +72,15 @@ def test_drill_panel_shows_detail_after_read_result():
     assert "Allow edit?" in o.render().panel.lines[0]
 
 
-def test_no_options_when_not_blocked():
+def test_non_blocked_shows_macros_not_parsed_options():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.WORKING)])
     o.on_press(0)                       # drill into a working agent
-    o.set_detection(PROMPT)             # even with a prompt, not blocked -> no options
+    o.set_detection(PROMPT)             # a prompt is present but agent isn't blocked
     rs = o.render()
-    assert rs.tiles[0].label == ""      # no option tiles
-    assert o.on_press(0) == []          # pressing a blank tile does nothing
+    labels = [t.label for t in rs.tiles[:4]]
+    assert "1 Yes" not in labels        # prompt options are NOT offered (not blocked)
+    assert rs.tiles[0].label == "continue"   # macros are shown instead
 
 
 def test_stop_works_even_when_not_blocked_and_returns_to_overview():
@@ -107,3 +108,16 @@ def test_panel_press_pages_in_overview():
     second = [t.label for t in o.render().tiles]
     assert first != second
     assert o.render().panel.title == "page 2/2"
+
+
+def test_macros_shown_and_sent_for_non_blocked_agent():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)                       # drill into a working agent
+    rs = o.render()
+    # macros from config fill the action tiles
+    assert rs.tiles[0].label == "continue"
+    # pressing a macro sends its text and returns to overview
+    cmds = o.on_press(0)
+    assert cmds == [Command("send_text", "dev", "p1", text="continue")]
+    assert not o.is_drilling()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -26,11 +26,27 @@ class AnswerProfile:
 
 
 @dataclass
+class Macro:
+    label: str          # short tile label
+    text: str           # text sent to the agent (via herdr agent.send)
+
+
+# Quick-send macros shown when drilling into a non-blocked agent.
+DEFAULT_MACROS: list[Macro] = [
+    Macro("continue", "continue"),
+    Macro("run tests", "run the tests"),
+    Macro("commit", "commit the changes"),
+    Macro("/compact", "/compact"),
+]
+
+
+@dataclass
 class Config:
     servers: list[ServerConfig]
     profiles: dict[str, AnswerProfile]
     overview_order: list[str]
     grid: tuple[int, int]
+    macros: list[Macro] = field(default_factory=lambda: list(DEFAULT_MACROS))
 
 
 def _parse_grid(value: str) -> tuple[int, int]:
@@ -77,5 +93,9 @@ def load_config(path: str | Path) -> Config:
     if "default" not in profiles:
         raise ConfigError("answer_profiles.default is required")
 
+    raw_macros = data.get("macros", [])
+    macros = ([Macro(label=m["label"], text=m["text"]) for m in raw_macros]
+              if raw_macros else list(DEFAULT_MACROS))
+
     return Config(servers=servers, profiles=profiles,
-                  overview_order=overview_order, grid=grid)
+                  overview_order=overview_order, grid=grid, macros=macros)

@@ -241,3 +241,12 @@ async def test_push_event_wakes_stream_before_poll():
     second = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
     assert second[0]["status"] == "blocked"
     await gen.aclose()
+
+
+async def test_send_text_calls_herdr(herdr):
+    out = await handle_client_message(
+        herdr, "workbox",
+        '{"type":"send_text","req":"s1","pane_id":"w1:p1","text":"continue"}')
+    msg = json.loads(out)
+    assert msg["data"]["sent"] is True
+    assert herdr.sent == [("w1:p1", "continue")]

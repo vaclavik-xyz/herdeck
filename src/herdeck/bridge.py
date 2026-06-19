@@ -20,6 +20,7 @@ class HerdrClient(Protocol):
     async def read_pane(self, pane_id: str, source: str) -> str: ...
     async def send_keys(self, pane_id: str, keys: list[str]) -> None: ...
     async def focus_agent(self, pane_id: str) -> None: ...
+    async def send_text(self, pane_id: str, text: str) -> None: ...
 
 
 def _is_agent_pane(p: dict) -> bool:
@@ -72,6 +73,9 @@ class StubHerdr:
     async def focus_agent(self, pane_id: str) -> None:
         self.focused.append(pane_id)
 
+    async def send_text(self, pane_id: str, text: str) -> None:
+        self.sent.append((pane_id, text))
+
 
 async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) -> str:
     msg = json.loads(raw)
@@ -95,6 +99,9 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     if kind == "focus":
         await herdr.focus_agent(msg["pane_id"])
         return encode({"type": "result", "req": msg["req"], "data": {"focused": True}})
+    if kind == "send_text":
+        await herdr.send_text(msg["pane_id"], msg["text"])
+        return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     raise ValueError(f"unknown client message: {kind}")
 
 
@@ -260,6 +267,10 @@ class SocketHerdr:
     async def focus_agent(self, pane_id: str) -> None:
         # herdr focuses the agent on screen; target is the agent's pane id.
         await self._rpc("agent.focus", {"target": pane_id})
+
+    async def send_text(self, pane_id: str, text: str) -> None:
+        # Send a message to the agent (typed + submitted by herdr).
+        await self._rpc("agent.send", {"target": pane_id, "text": text}, retry=False)
 
 
 async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, clients: set):

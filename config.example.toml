@@ -24,3 +24,18 @@ stop = ["ctrl+c"]
 approve = ["enter"]
 deny = ["esc"]
 stop = ["ctrl+c"]
+
+# Quick-send macros (shown when drilling into a non-blocked agent).
+# Omit this section to use the built-in defaults (continue / run tests / commit / /compact).
+[[macros]]
+label = "continue"
+text = "continue"
+[[macros]]
+label = "run tests"
+text = "run the tests"
+[[macros]]
+label = "commit"
+text = "commit the changes"
+[[macros]]
+label = "/compact"
+text = "/compact"
