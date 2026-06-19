@@ -167,6 +167,21 @@ async def _ticker(app: "App", loop) -> None:
         loop.call_soon_threadsafe(app.handle_tick)
 
 
+def resolve_mode(*, mock, config_path, config_has_servers, socket_path,
+                 socket_exists):
+    """Decide how to run from already-gathered facts (pure; no IO)."""
+    if mock:
+        return ("mock",)
+    if config_path is not None and config_has_servers:
+        return ("remote", config_path)
+    if socket_exists:
+        return ("local", socket_path)
+    return ("error",
+            f"No herdr socket at {socket_path} and no [[servers]] config. "
+            f"Is herdr running? Set HERDR_SOCKET or create a config "
+            f"(see config.example.toml).")
+
+
 def _mock_config() -> Config:
     """A zero-setup config for the offline simulator (no file/token needed)."""
     from .config import DEFAULT_PROFILES, ServerConfig
