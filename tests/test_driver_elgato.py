@@ -1,4 +1,22 @@
+import io
+
+from PIL import Image
+
+from herdeck.driver.base import TileView
 from herdeck.driver.elgato import ElgatoDriver
+
+
+class FakeIcons:
+    """Stand-in icon provider returning real (tiny) PNG bytes per tile."""
+
+    def __init__(self):
+        self.rendered: list[TileView] = []
+
+    def render_tile_bytes(self, tile: TileView) -> bytes:
+        self.rendered.append(tile)
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+        return buf.getvalue()
 
 
 class FakeDeck:
@@ -42,3 +60,13 @@ class FakeDeck:
 def test_slot_count_reserves_two_keys_for_the_panel():
     assert ElgatoDriver(device=FakeDeck(key_count=15)).slot_count() == 13
     assert ElgatoDriver(device=FakeDeck(key_count=32)).slot_count() == 30
+
+
+def test_render_resizes_and_writes_native_key_images(monkeypatch):
+    deck = FakeDeck(key_count=15, key_size=(72, 72))
+    drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
+    monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
+    drv.render([TileView(0, "a", "green"), TileView(1, "b", "blue")])
+    assert set(deck.images) == {0, 1}
+    assert all(deck.images[k] for k in (0, 1))           # non-empty bytes written
+    assert len(deck.images[0]) == 72 * 72 * 3            # resized to the deck key size

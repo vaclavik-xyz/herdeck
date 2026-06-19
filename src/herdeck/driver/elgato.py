@@ -38,8 +38,32 @@ class ElgatoDriver(DeckDriver):
     def slot_count(self) -> int:
         return self._dev.key_count() - _PANEL_KEYS
 
+    def _icon_provider(self):
+        if self._icons is None:
+            import os
+            import tempfile
+            from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
+            cache = os.path.join(tempfile.gettempdir(), "herdeck-elgato-icons")
+            self._icons = IconProvider(cache_dir=cache,
+                                       slug_map=DEFAULT_AGENT_SLUGS,
+                                       overrides_dir=None)
+        return self._icons
+
+    def _to_native(self, image):
+        # Lazy import: StreamDeck is only needed on the hardware path.
+        from StreamDeck.ImageHelpers import PILHelper
+        return PILHelper.to_native_key_format(self._dev, image)
+
+    def _key_image(self, tile: TileView):
+        import io
+        from PIL import Image
+        png = self._icon_provider().render_tile_bytes(tile)
+        image = Image.open(io.BytesIO(png)).resize(self._dev.key_image_format()["size"])
+        return self._to_native(image)
+
     def render(self, tiles: list[TileView]) -> None:
-        pass
+        for tile in tiles:
+            self._dev.set_key_image(tile.index, self._key_image(tile))
 
     def render_panel(self, panel: PanelView) -> None:
         pass
