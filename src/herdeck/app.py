@@ -169,12 +169,10 @@ async def _ticker(app: "App", loop) -> None:
 
 def _mock_config() -> Config:
     """A zero-setup config for the offline simulator (no file/token needed)."""
-    from .config import AnswerProfile, ServerConfig
+    from .config import DEFAULT_PROFILES, ServerConfig
     return Config(
         servers=[ServerConfig("mock", "ws://mock", "x")],
-        profiles={"claude": AnswerProfile(["1", "enter"], ["esc"], ["ctrl+c"], ["2", "enter"]),
-                  "codex": AnswerProfile(["y", "enter"], ["n", "enter"], ["ctrl+c"], ["y", "enter"]),
-                  "default": AnswerProfile(["enter"], ["esc"], ["ctrl+c"], ["enter"])},
+        profiles=dict(DEFAULT_PROFILES),
         overview_order=["mock"],
         grid=(5, 3),
     )

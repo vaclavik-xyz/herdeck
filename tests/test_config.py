@@ -1,6 +1,6 @@
 import pytest
 
-from herdeck.config import load_config, ConfigError
+from herdeck.config import DEFAULT_PROFILES, AnswerProfile, load_config, ConfigError
 
 
 CONFIG = """
@@ -30,6 +30,14 @@ def _write(tmp_path, text):
     p = tmp_path / "config.toml"
     p.write_text(text)
     return p
+
+
+def test_default_profiles_cover_claude_codex_default():
+    assert set(DEFAULT_PROFILES) == {"claude", "codex", "default"}
+    assert isinstance(DEFAULT_PROFILES["default"], AnswerProfile)
+    assert DEFAULT_PROFILES["claude"].approve == ["1", "enter"]
+    assert DEFAULT_PROFILES["claude"].approve_always == ["2", "enter"]
+    assert DEFAULT_PROFILES["default"].stop == ["ctrl+c"]
 
 
 def test_load_resolves_token_from_env(tmp_path, monkeypatch):

@@ -45,6 +45,13 @@ DEFAULT_START_PROFILES: dict[str, list[str]] = {
     "codex": ["codex"],
 }
 
+# Built-in answer profiles used when a config omits them (and by local mode).
+DEFAULT_PROFILES: dict[str, AnswerProfile] = {
+    "claude": AnswerProfile(["1", "enter"], ["esc"], ["ctrl+c"], ["2", "enter"]),
+    "codex": AnswerProfile(["y", "enter"], ["n", "enter"], ["ctrl+c"], ["y", "enter"]),
+    "default": AnswerProfile(["enter"], ["esc"], ["ctrl+c"], ["enter"]),
+}
+
 
 @dataclass
 class Config:
