@@ -45,10 +45,29 @@ herdr's socket lives at `~/.config/herdr/herdr.sock` (macOS & Linux).
    (or load `deploy/com.herdeck.app.plist` to autostart at login).
 
 ## Development without hardware
-`HERDECK_FAKE_DECK=1 HERDECK_CONFIG=~/.config/herdeck/config.toml python -m herdeck.app`
-uses an in-memory renderer — useful to verify the pipeline against a live bridge.
-`scripts/e2e_verify.py` connects the real pipeline to a bridge and prints the
-resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).
+
+**Browser simulator (recommended).** `HERDECK_DECK=web` runs a pixel-faithful
+deck in the browser — it renders tiles/panel with the exact device code and turns
+clicks into presses. Two ways to use it:
+
+- **Against the live bridge** (real agents, even remotely over Tailscale):
+  ```bash
+  HERDECK_DECK=web HERDECK_CONFIG=~/.config/herdeck/config.toml \
+  HERDECK_DEV_TOKEN=<token> python -m herdeck.app
+  # open http://127.0.0.1:8800  (set HERDECK_WEB_BIND to a Tailscale IP for remote)
+  ```
+- **Fully offline** (synthetic, lively agents — no bridge, config, or token):
+  ```bash
+  HERDECK_MOCK=1 HERDECK_DECK=web python -m herdeck.app
+  # open http://127.0.0.1:8800
+  ```
+
+`HERDECK_WEB_PORT` (default 8800) and `HERDECK_WEB_BIND` (default 127.0.0.1)
+configure the server. Click a tile to press it; click the panel to page.
+
+**Headless.** `HERDECK_FAKE_DECK=1 python -m herdeck.app` uses an in-memory
+renderer (no UI). `scripts/e2e_verify.py` connects the pipeline to a bridge and
+prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).
 
 ## The deck (Ulanzi D200)
 The D200 has **13 buttons** (a 5×3 grid minus the small status window). The
