@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-from herdeck.app import make_deck, resolve_mode
+from herdeck.app import local_config, make_deck, resolve_mode
 from herdeck.bridge import StubHerdr, start_local_bridge
-from herdeck.config import ServerConfig
+from herdeck.config import AnswerProfile, Config, ServerConfig
 from herdeck.connector import Connector
 from herdeck.driver.fake import FakeRenderer
 
@@ -92,3 +92,24 @@ async def test_start_local_bridge_serves_snapshot_to_connector():
         server.close()
         await server.wait_closed()
         run.cancel()
+
+
+def test_local_config_defaults():
+    cfg = local_config(9999, "tok")
+    assert cfg.servers[0].id == "local"
+    assert cfg.servers[0].url == "ws://127.0.0.1:9999"
+    assert cfg.servers[0].token == "tok"
+    assert cfg.overview_order == ["local"]
+    assert cfg.profiles["default"].approve == ["enter"]
+
+
+def test_local_config_merges_partial_profiles():
+    partial = Config(
+        servers=[],
+        profiles={"claude": AnswerProfile(["x"], ["y"], ["z"], ["x"])},
+        overview_order=[],
+        grid=(5, 3),
+    )
+    cfg = local_config(1, "t", partial)
+    assert cfg.profiles["claude"].approve == ["x"]
+    assert cfg.profiles["default"].approve == ["enter"]

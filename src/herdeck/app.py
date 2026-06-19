@@ -318,6 +318,30 @@ def make_deck(kind, slots, *, d200_factory=None, web_factory=None):
         return web_factory()
 
 
+def local_config(port, token, partial=None):
+    """Synthesize the config for local mode from the bound bridge port/token."""
+    from .config import (Config, DEFAULT_MACROS, DEFAULT_PROFILES,
+                         DEFAULT_START_PROFILES, ServerConfig)
+    profiles = dict(DEFAULT_PROFILES)
+    if partial is not None:
+        profiles.update(partial.profiles)
+    return Config(
+        servers=[ServerConfig("local", f"ws://127.0.0.1:{port}", token)],
+        profiles=profiles,
+        overview_order=["local"],
+        grid=partial.grid if partial else (5, 3),
+        macros=partial.macros if partial else list(DEFAULT_MACROS),
+        start_profiles=(partial.start_profiles if partial
+                        else dict(DEFAULT_START_PROFILES)),
+    )
+
+
+async def _run_local(socket_path, deck, partial=None):
+    from .bridge import start_local_bridge
+    host, port, token, _handle = await start_local_bridge(socket_path)
+    await _run(local_config(port, token, partial), deck)
+
+
 def main() -> None:
     import os
 
