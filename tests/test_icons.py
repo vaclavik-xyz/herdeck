@@ -86,3 +86,11 @@ def test_agent_type_with_path_chars_is_sanitized(tmp_path):
     # no traversal: the written file stays inside cache_dir
     assert "/" not in name and ".." not in name
     assert os.path.exists(os.path.join(str(tmp_path), name))
+
+
+def test_sanitized_names_do_not_collide(tmp_path):
+    p = IconProvider(cache_dir=str(tmp_path), slug_map={}, overrides_dir=None,
+                     fetch=_fake_fetch, rasterize=_fake_rasterize)
+    n1 = p.icon_for("a/b", "green")
+    n2 = p.icon_for("a_b", "green")
+    assert n1 != n2     # distinct raw types -> distinct cache files

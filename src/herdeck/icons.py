@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from collections.abc import Callable
@@ -17,8 +18,17 @@ _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 def _safe_name(agent_type: str) -> str:
-    """Filesystem-safe token for an inbound agent type (no path traversal)."""
-    return _UNSAFE_NAME.sub("_", agent_type) or "_"
+    """Filesystem-safe, collision-resistant token for an inbound agent type.
+
+    Known agent types (alphanumerics) pass through unchanged for readable
+    filenames; anything else is sanitized and disambiguated with a short hash so
+    distinct raw values (e.g. ``a/b`` vs ``a_b``) never share a cache file.
+    """
+    safe = _UNSAFE_NAME.sub("_", agent_type)
+    if safe == agent_type and safe:
+        return safe
+    digest = hashlib.sha1(agent_type.encode()).hexdigest()[:8]
+    return f"{safe or '_'}_{digest}"
 
 # agent type -> Simple Icons slug (None => generated glyph fallback)
 DEFAULT_AGENT_SLUGS: dict[str, str | None] = {
