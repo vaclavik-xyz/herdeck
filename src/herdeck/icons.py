@@ -7,9 +7,10 @@ from collections.abc import Callable
 
 from PIL import Image, ImageDraw
 
-from .driver.base import COLORS
+from .driver.base import COLORS, PanelView
 
 ICON_SIZE = 196
+PANEL_W, PANEL_H = 392, 196      # the D200 status window spans two 196px cells
 # The spinner has this many distinct frames; keep the cache bounded so a
 # long-running working tile reuses frames instead of writing forever.
 SPINNER_FRAMES = 8
@@ -128,6 +129,26 @@ def _font(size: int):
 def _load_big_font():
     """A large scalable font for the letter fallback; None if none is available."""
     return _font(_GLYPH_FONT_SIZE)
+
+
+def compose_panel(panel: PanelView) -> "Image.Image":
+    """Render a PanelView to a 392x196 image with large, readable text.
+
+    Shared by the D200 driver (split into two cells) and the web simulator.
+    """
+    bg = (40, 30, 12) if panel.color == "amber" else (30, 30, 34)
+    img = Image.new("RGB", (PANEL_W, PANEL_H), bg)
+    d = ImageDraw.Draw(img)
+    title_f = _font(30)
+    d.text((16, 12), _truncate(d, panel.title, title_f, PANEL_W - 32),
+           font=title_f, fill=(255, 255, 255))
+    line_f = _font(24)
+    y = 60
+    for line in panel.lines[:3]:
+        d.text((16, y), _truncate(d, line, line_f, PANEL_W - 32),
+               font=line_f, fill=(232, 232, 236))
+        y += 40
+    return img
 
 
 def _truncate(draw, text, font, max_w):
@@ -280,6 +301,13 @@ class IconProvider:
                else self._compose_label_tile(tile))
         img.convert("RGB").save(path)
         return name
+
+    def render_tile_bytes(self, tile) -> bytes:
+        """Render a tile and return its PNG bytes (for the web simulator)."""
+        import io
+        name = self.render_tile(tile)
+        with open(os.path.join(self._cache_dir, name), "rb") as fh:
+            return fh.read()
 
     def _compose_label_tile(self, tile) -> Image.Image:
         bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE),

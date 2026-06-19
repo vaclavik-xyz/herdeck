@@ -5,35 +5,18 @@ import io
 import os
 from collections.abc import Callable
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
-from .base import COLORS, DeckDriver, PanelView, TileView
+from ..icons import compose_panel
+from .base import DeckDriver, PanelView, TileView
 
-PANEL_W, PANEL_H = 392, 196
+PANEL_W = 392
 _CELL = 196
 # strmdck reads tile icons here, relative to CWD:
 _ICON_DIR = os.path.join(".cache", "icons", "_generated")
 # the two panel cells (grid 3_2 and 4_2):
 _PANEL_LEFT_INDEX = 13
 _PANEL_RIGHT_INDEX = 14
-
-
-def compose_panel(panel: PanelView) -> Image.Image:
-    """Render a PanelView to a 392x196 image with large, readable text."""
-    from ..icons import _font, _truncate
-    bg = (40, 30, 12) if panel.color == "amber" else (30, 30, 34)
-    img = Image.new("RGB", (PANEL_W, PANEL_H), bg)
-    d = ImageDraw.Draw(img)
-    title_f = _font(30)
-    d.text((16, 12), _truncate(d, panel.title, title_f, PANEL_W - 32),
-           font=title_f, fill=(255, 255, 255))
-    line_f = _font(24)
-    y = 60
-    for line in panel.lines[:3]:
-        d.text((16, y), _truncate(d, line, line_f, PANEL_W - 32),
-               font=line_f, fill=(232, 232, 236))
-        y += 40
-    return img
 
 
 def split_panel(img: Image.Image) -> tuple[Image.Image, Image.Image]:
