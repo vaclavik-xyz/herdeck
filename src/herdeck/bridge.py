@@ -79,10 +79,12 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
         return encode({"type": "result", "req": msg["req"],
                        "data": {"text": text, "pane_id": msg["pane_id"]}})
     if kind == "act":
-        pane = await herdr.get_pane(msg["pane_id"])
-        if pane.get("agent_status") != "blocked":
-            return encode({"type": "result", "req": msg["req"],
-                           "data": {"skipped": True}})
+        guard = msg.get("guard", True)
+        if guard:
+            pane = await herdr.get_pane(msg["pane_id"])
+            if pane.get("agent_status") != "blocked":
+                return encode({"type": "result", "req": msg["req"],
+                               "data": {"skipped": True}})
         await herdr.send_keys(msg["pane_id"], msg["keys"])
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     raise ValueError(f"unknown client message: {kind}")

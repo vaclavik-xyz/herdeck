@@ -92,6 +92,16 @@ async def test_act_skipped_when_not_blocked(herdr):
     assert herdr.sent == []
 
 
+async def test_act_unguarded_sends_even_when_not_blocked(herdr):
+    herdr.panes[0]["agent_status"] = "working"
+    out = await handle_client_message(
+        herdr, "workbox",
+        '{"type":"act","req":"r9","pane_id":"w1:p1","keys":["ctrl+c"],"guard":false}')
+    msg = json.loads(out)
+    assert msg["data"]["sent"] is True
+    assert herdr.sent == [("w1:p1", ["ctrl+c"])]
+
+
 # --- broadcast fan-out (snapshots) ---
 
 async def test_broadcast_fans_out_snapshots_to_all_clients():
