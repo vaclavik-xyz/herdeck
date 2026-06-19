@@ -178,9 +178,11 @@ class Orchestrator:
                         "make": (lambda key, k=opt.key: Command(
                             "act_if_blocked", key.server_id, key.pane_id, keys=[k])),
                     })
-            else:
-                # No numbered options parsed (e.g. a y/n prompt): fall back to the
-                # agent's configured Approve / Approve! / Deny key sequences.
+            elif self._detection.strip():
+                # Read completed but no numbered options (e.g. a y/n prompt): fall
+                # back to the agent's configured Approve / Approve! / Deny keys.
+                # (Skipped while detection is empty so we never offer blind
+                # approval before the prompt has been read.)
                 profile = self._profile_for(self._drill)
                 for label, keys in (("Approve", profile.approve),
                                     ("Approve!", profile.approve_always),

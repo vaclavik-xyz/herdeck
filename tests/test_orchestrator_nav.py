@@ -153,3 +153,12 @@ def test_blocked_without_numbered_options_falls_back_to_profile():
     assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1",
                                      keys=["1", "enter"])]   # claude approve seq
     assert not o.is_drilling()
+
+
+def test_no_fallback_actions_before_read_completes():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)                              # drilled, detection still empty
+    rs = o.render()
+    assert rs.tiles[0].label == ""             # no actions yet (no blind approve)
+    assert o.on_press(0) == []
