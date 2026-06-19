@@ -67,6 +67,11 @@ class ElgatoDriver(DeckDriver):
         for tile in tiles:
             self._dev.set_key_image(tile.index, self._key_image(tile))
 
+    def render_working(self, tiles: list[TileView]) -> None:
+        # Each set_key_image updates one key independently, so a partial refresh
+        # of just the working (spinner) tiles leaves every other key untouched.
+        self.render(tiles)
+
     def render_panel(self, panel: PanelView) -> None:
         from ..icons import compose_panel
         from .d200 import split_panel
