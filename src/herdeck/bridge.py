@@ -139,32 +139,36 @@ class SocketHerdr:
     def __init__(self, socket_path: str):
         self._path = socket_path
         self._lock = asyncio.Lock()
-        self._reader = None
-        self._writer = None
-
-    async def _ensure(self):
-        if self._writer is None or self._writer.is_closing():
-            self._reader, self._writer = await asyncio.open_unix_connection(self._path)
 
     async def _rpc(self, method: str, params: dict, *, retry: bool = True) -> dict:
+        # herdr closes the unix socket after each request (one-shot), so we open
+        # a fresh connection per RPC instead of reusing one — reuse fails on the
+        # second call of a burst (e.g. act = get_pane + send_keys) as the
+        # server-side close isn't detected before the next write.
         # self._lock serializes RPCs, so the fixed request id "b" is safe.
         async with self._lock:
             attempts = 2 if retry else 1
             last_exc: Exception | None = None
             for _ in range(attempts):
+                reader = writer = None
                 try:
-                    await self._ensure()
-                    self._writer.write((json.dumps(
+                    reader, writer = await asyncio.open_unix_connection(self._path)
+                    writer.write((json.dumps(
                         {"id": "b", "method": method, "params": params}) + "\n").encode())
-                    await self._writer.drain()
-                    line = await self._reader.readline()
-                    if not line:                       # EOF: herdr dropped the socket
+                    await writer.drain()
+                    line = await reader.readline()
+                    if not line:                       # EOF before a response
                         raise ConnectionError("herdr socket closed")
                     return json.loads(line.decode())
                 except (OSError, ConnectionError) as exc:
                     last_exc = exc
-                    self._reader = None
-                    self._writer = None
+                finally:
+                    if writer is not None:
+                        writer.close()
+                        try:
+                            await writer.wait_closed()
+                        except Exception:
+                            pass
             raise last_exc
 
     async def list_panes(self) -> list[dict]:
