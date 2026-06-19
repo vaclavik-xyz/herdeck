@@ -27,8 +27,8 @@ def test_icon_for_known_slug_writes_png(tmp_path):
     name = p.icon_for("claude", "green")
     path = os.path.join(str(tmp_path), name)
     assert os.path.exists(path)
-    im = Image.open(path)
-    assert im.size == (196, 196)
+    with Image.open(path) as im:
+        assert im.size == (196, 196)
 
 
 def test_unknown_slug_falls_back_to_glyph(tmp_path):
@@ -44,8 +44,8 @@ def test_user_override_takes_precedence(tmp_path):
     p = make_provider(tmp_path, overrides=overrides)
     name = p.icon_for("claude", "green")
     # the produced icon must derive from the override (a specific pixel survives)
-    im = Image.open(os.path.join(str(tmp_path), name)).convert("RGBA")
-    assert im.size == (196, 196)
+    with Image.open(os.path.join(str(tmp_path), name)) as im:
+        assert im.convert("RGBA").size == (196, 196)
 
 
 def test_results_are_cached(tmp_path):
@@ -102,7 +102,8 @@ def test_letter_glyph_is_large_when_font_available(tmp_path):
         return  # no scalable font on this system; bitmap fallback is acceptable
     p = make_provider(tmp_path)
     name = p.icon_for("zeta", "blue")     # unknown agent -> letter glyph
-    im = Image.open(os.path.join(str(tmp_path), name)).convert("RGB")
+    with Image.open(os.path.join(str(tmp_path), name)) as src:
+        im = src.convert("RGB")
     white = sum(1 for px in im.getdata()
                 if px[0] > 200 and px[1] > 200 and px[2] > 200)
     assert white > 1500            # a big bold letter covers a real area
