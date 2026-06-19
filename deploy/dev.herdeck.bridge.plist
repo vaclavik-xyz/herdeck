@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- macOS LaunchAgent for the herdeck bridge (runs on the herdr host).
+     Install: copy to ~/Library/LaunchAgents/, fill in the values, then
+       launchctl load -w ~/Library/LaunchAgents/dev.herdeck.bridge.plist
+     Keep it readable only by your user: chmod 600 (it holds the token). -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.herdeck.bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/herdeck/.venv/bin/python</string>
+    <string>-m</string>
+    <string>herdeck.bridge</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/you/herdeck</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HERDR_SOCKET</key><string>/Users/you/.config/herdr/herdr.sock</string>
+    <key>HERDECK_BIND</key><string>100.x.y.z</string>
+    <key>HERDECK_PORT</key><string>8788</string>
+    <key>HERDECK_SERVER_ID</key><string>dev</string>
+    <key>HERDECK_TOKEN</key><string>change-me</string>
+    <key>PYTHONPATH</key><string>/Users/you/herdeck/src</string>
+  </dict>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/you/herdeck/bridge.log</string>
+  <key>StandardErrorPath</key><string>/Users/you/herdeck/bridge.log</string>
+</dict>
+</plist>

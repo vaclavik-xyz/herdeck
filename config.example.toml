@@ -1,0 +1,47 @@
+[[servers]]
+id = "workbox"
+url = "ws://100.x.y.z:8788"          # server's Tailscale IP (WireGuard-encrypted)
+token_env = "HERDECK_WORKBOX_TOKEN"   # token comes from this env var
+
+[deck]
+# Physical layout hint; the real button count comes from the deck driver
+# (the Ulanzi D200 exposes 13 buttons). Only used as a fallback (e.g. fake deck).
+grid = "5x3"
+overview_order = ["workbox"]
+
+[answer_profiles.claude]
+approve = ["1", "enter"]
+approve_always = ["2", "enter"]
+deny = ["esc"]
+stop = ["ctrl+c"]
+
+[answer_profiles.codex]
+approve = ["y", "enter"]     # verify empirically against codex prompt
+deny = ["n", "enter"]
+stop = ["ctrl+c"]
+
+[answer_profiles.default]
+approve = ["enter"]
+deny = ["esc"]
+stop = ["ctrl+c"]
+
+# Quick-send macros (shown when drilling into a non-blocked agent).
+# Omit this section to use the built-in defaults (continue / run tests / commit / /compact).
+[[macros]]
+label = "continue"
+text = "continue"
+[[macros]]
+label = "run tests"
+text = "run the tests"
+[[macros]]
+label = "commit"
+text = "commit the changes"
+[[macros]]
+label = "/compact"
+text = "/compact"
+
+# Agent types startable from the deck's "+ New" tile -> the argv herdr runs.
+# Omit to use defaults (claude / codex). Started in the focused herdr workspace.
+[start_profiles]
+claude = ["claude"]
+codex = ["codex"]

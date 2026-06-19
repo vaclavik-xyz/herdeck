@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "herdeck"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["websockets>=14"]
+
+[project.optional-dependencies]
+# strmdck (rc) under-declares its runtime deps, so pin them explicitly.
+deck = ["strmdck", "pillow>=10", "cairosvg", "deepdiff", "python-dotenv", "hidapi"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10"]
+
+[project.scripts]
+herdeck = "herdeck.app:main"
+herdeck-bridge = "herdeck.bridge:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+herdeck = ["assets/*.svg"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src"]
