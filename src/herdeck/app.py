@@ -10,6 +10,8 @@ from .driver.fake import FakeRenderer
 from .model import AgentState
 from .orchestrator import Command, Orchestrator
 
+TICK_INTERVAL = 0.4
+
 
 class App:
     """Glue between orchestrator (sync) and connectors (async)."""
@@ -36,7 +38,12 @@ class App:
         return req
 
     def _refresh(self) -> None:
-        self.deck.render(self.orch.render())
+        rs = self.orch.render()
+        try:
+            self.deck.render(rs.tiles)
+            self.deck.render_panel(rs.panel)
+        except Exception:
+            pass  # a render failure must never freeze the loop
 
     def _invalidate_read(self) -> None:
         self._active_read_req = None
@@ -47,8 +54,7 @@ class App:
         before = self.orch.get_agent(key) if key is not None else None
         self.orch.apply_snapshot(server_id, states)
         if key is not None and key.server_id == server_id:
-            after = self.orch.get_agent(key)
-            if after != before:            # drilled pane changed or vanished
+            if self.orch.get_agent(key) != before:
                 self._invalidate_read()
         self._refresh()
 
@@ -64,17 +70,19 @@ class App:
 
     def handle_result(self, server_id: str, req: str, data: dict) -> None:
         text = data.get("text")
-        if text is not None:                       # a `read` result
+        if text is not None:
             if (req == self._active_read_req
                     and self.orch.is_drill_pane(server_id, data.get("pane_id"))):
                 self.orch.set_detection(text)
                 self._refresh()
-        else:                                      # an `act` result -> resync
+        else:
             self._send(Command("list", server_id))
 
+    def handle_tick(self) -> None:
+        if self.orch.tick():          # any working tiles -> re-render
+            self._refresh()
+
     def _on_press(self, index: int) -> None:
-        # _on_press may fire on the device thread; marshal the real work
-        # onto whatever loop/thread `schedule` targets (the asyncio loop in _run).
         self._schedule(lambda: self._handle_press(index))
 
     def _handle_press(self, index: int) -> None:
@@ -90,8 +98,9 @@ def _command_to_msg(cmd: Command, app: "App") -> dict:
     if cmd.kind == "read":
         return {"type": "read", "req": req, "pane_id": cmd.pane_id,
                 "source": cmd.source}
-    if cmd.kind == "act_if_blocked":
-        return {"type": "act", "req": req, "pane_id": cmd.pane_id, "keys": cmd.keys}
+    if cmd.kind in ("act_if_blocked", "act_force"):
+        return {"type": "act", "req": req, "pane_id": cmd.pane_id, "keys": cmd.keys,
+                "guard": cmd.kind == "act_if_blocked"}
     raise ValueError(f"unknown command kind: {cmd.kind}")
 
 
@@ -103,11 +112,16 @@ async def _guarded(conn: Connector) -> None:
 
 
 async def _guard(coro) -> None:
-    """Run an awaitable, swallowing exceptions so one task can't kill the rest."""
     try:
         await coro
     except Exception:
         pass
+
+
+async def _ticker(app: "App", loop) -> None:
+    while True:
+        await asyncio.sleep(TICK_INTERVAL)
+        loop.call_soon_threadsafe(app.handle_tick)
 
 
 async def _run(config: Config, deck: DeckDriver) -> None:
@@ -120,9 +134,7 @@ async def _run(config: Config, deck: DeckDriver) -> None:
             asyncio.run_coroutine_threadsafe(
                 conn.send(_command_to_msg(cmd, app)), loop)
 
-    app = App(config, deck, send,
-              schedule=lambda fn: loop.call_soon_threadsafe(fn))
-    # Start every server marked down; render once so the deck isn't blank.
+    app = App(config, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn))
     for server in config.servers:
         app.orch.set_connection(server.id, False)
     app._refresh()
@@ -142,8 +154,7 @@ async def _run(config: Config, deck: DeckDriver) -> None:
         connectors[server.id] = conn
 
     tasks = [_guarded(c) for c in connectors.values()]
-    # Real hardware decks expose an async key reader and a keep-alive loop;
-    # the fake renderer does not. Run them if present.
+    tasks.append(_guard(_ticker(app, loop)))
     if hasattr(deck, "run_reader"):
         tasks.append(_guard(deck.run_reader()))
     if hasattr(deck, "keep_alive_loop"):
@@ -154,7 +165,8 @@ async def _run(config: Config, deck: DeckDriver) -> None:
 def main() -> None:
     import os
 
-    config = load_config(os.environ.get("HERDECK_CONFIG", "config.toml"))
+    config_path = os.path.abspath(os.environ.get("HERDECK_CONFIG", "config.toml"))
+    config = load_config(config_path)   # load BEFORE the deck chdir's (R-4)
     if os.environ.get("HERDECK_FAKE_DECK"):
         deck: DeckDriver = FakeRenderer(config.grid[0] * config.grid[1])
     else:
