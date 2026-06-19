@@ -217,3 +217,27 @@ async def test_focus_calls_herdr_focus_agent(herdr):
     msg = json.loads(out)
     assert msg["data"]["focused"] is True
     assert herdr.focused == ["w1:p1"]
+
+
+async def test_push_event_wakes_stream_before_poll():
+    import asyncio
+    from herdeck.bridge import HerdrEvents
+
+    seq = [[raw_pane("w1:p1", agent="claude", status="idle")],
+           [raw_pane("w1:p1", agent="claude", status="blocked")]]
+
+    class FakeHerdr:
+        def __init__(self): self.calls = 0
+        async def list_panes(self):
+            i = min(self.calls, len(seq) - 1)
+            self.calls += 1
+            return seq[i]
+
+    ev = HerdrEvents(FakeHerdr(), poll_interval=100)   # would block without a wake
+    gen = ev.stream()
+    first = await gen.__anext__()
+    assert first[0]["status"] == "idle"
+    ev._wake.set()                                     # simulate a herdr push event
+    second = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert second[0]["status"] == "blocked"
+    await gen.aclose()

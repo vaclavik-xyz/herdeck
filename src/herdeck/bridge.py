@@ -98,32 +98,91 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     raise ValueError(f"unknown client message: {kind}")
 
 
-class HerdrEvents:
-    """Yields the full agent list whenever it changes, by polling pane.list.
+# herdr events that change fleet membership (need a status re-subscribe after).
+_GLOBAL_EVENT_TYPES = ("pane.created", "pane.closed", "pane.exited",
+                       "pane.agent_detected")
+_FLEET_EVENT_NAMES = {"pane_created", "pane_closed", "pane_exited",
+                      "pane_agent_detected"}
 
-    herdr's `events.subscribe` is per-pane; polling and diffing the whole list is
-    simpler and robust for a small fleet. Yielding the FULL list (not per-pane
-    deltas) means additions, status changes AND removals are all reflected — a
-    pane that closes simply drops out of the next snapshot.
+
+class HerdrEvents:
+    """Yields the full agent list whenever it changes.
+
+    The source of truth is a diff of ``pane.list`` (so additions, status changes
+    AND removals are all reflected — a closed pane simply drops out). Re-lists are
+    triggered immediately by herdr's push events (``events.subscribe``) when a
+    socket path is given, with a slow poll as a safety net; without one it falls
+    back to pure polling.
     """
 
-    def __init__(self, herdr: HerdrClient, poll_interval: float = 1.5):
+    def __init__(self, herdr: HerdrClient, socket_path: str | None = None,
+                 poll_interval: float = 5.0):
         self._herdr = herdr
+        self._socket_path = socket_path
         self._interval = poll_interval
+        self._wake = asyncio.Event()
 
     async def stream(self):
+        listener = (asyncio.create_task(self._listen())
+                    if self._socket_path else None)
         prev: list[dict] | None = None
+        try:
+            while True:
+                try:
+                    raw = await self._herdr.list_panes()
+                except Exception:
+                    raw = None
+                if raw is not None:
+                    cur = _wire_panes(raw)
+                    if cur != prev:
+                        yield cur
+                        prev = cur
+                try:                          # wake on a push event, else slow poll
+                    await asyncio.wait_for(self._wake.wait(), timeout=self._interval)
+                except (asyncio.TimeoutError, TimeoutError):
+                    pass
+                self._wake.clear()
+        finally:
+            if listener is not None:
+                listener.cancel()
+
+    async def _listen(self) -> None:
+        """Hold a herdr event subscription; wake the stream on every event."""
         while True:
+            writer = None
             try:
-                raw = await self._herdr.list_panes()
+                reader, writer = await asyncio.open_unix_connection(self._socket_path)
+                agent_panes = [p["pane_id"]
+                               for p in _wire_panes(await self._herdr.list_panes())]
+                subs = [{"type": t} for t in _GLOBAL_EVENT_TYPES]
+                subs += [{"type": "pane.agent_status_changed", "pane_id": pid}
+                         for pid in agent_panes]
+                writer.write((json.dumps({"id": "e", "method": "events.subscribe",
+                                          "params": {"subscriptions": subs}})
+                              + "\n").encode())
+                await writer.drain()
+                await reader.readline()       # subscription ack
+                while True:
+                    line = await reader.readline()
+                    if not line:
+                        break
+                    self._wake.set()
+                    try:
+                        name = json.loads(line).get("event")
+                    except Exception:
+                        name = None
+                    if name in _FLEET_EVENT_NAMES:
+                        break                 # fleet changed -> re-subscribe panes
             except Exception:
-                raw = None
-            if raw is not None:
-                cur = _wire_panes(raw)
-                if cur != prev:
-                    yield cur
-                    prev = cur
-            await asyncio.sleep(self._interval)
+                pass
+            finally:
+                if writer is not None:
+                    writer.close()
+                    try:
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+            await asyncio.sleep(0.3)          # brief backoff before re-subscribe
 
 
 async def _broadcast(snapshot_stream, clients: set, server_id: str) -> None:
@@ -224,7 +283,7 @@ async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, 
 
 async def serve(socket_path: str, host: str, port: int, server_id: str, token: str):
     herdr = SocketHerdr(socket_path)
-    events = HerdrEvents(herdr)
+    events = HerdrEvents(herdr, socket_path=socket_path)   # push events + slow poll
     clients: set = set()
 
     async def handler(ws):
