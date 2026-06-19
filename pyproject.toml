@@ -10,7 +10,7 @@ dependencies = ["websockets>=14"]
 
 [project.optional-dependencies]
 # strmdck (rc) under-declares its runtime deps, so pin them explicitly.
-deck = ["strmdck", "pillow>=10", "deepdiff", "python-dotenv", "hidapi"]
+deck = ["strmdck", "pillow>=10", "cairosvg", "deepdiff", "python-dotenv", "hidapi"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]

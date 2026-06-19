@@ -79,7 +79,17 @@ class App:
             self._send(Command("list", server_id))
 
     def handle_tick(self) -> None:
-        if self.orch.tick():          # any working tiles -> re-render
+        working = self.orch.tick()
+        if not working:
+            return
+        if hasattr(self.deck, "render_working"):
+            rs = self.orch.render()
+            tiles = [t for t in rs.tiles if t.index in set(working)]
+            try:
+                self.deck.render_working(tiles)
+            except Exception:
+                pass
+        else:
             self._refresh()
 
     def _on_press(self, index: int) -> None:

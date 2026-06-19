@@ -121,3 +121,21 @@ def test_snapshot_changing_drilled_pane_invalidates_read():
                                            Status.WORKING)])
     app.handle_result("dev", req, {"text": "stale", "pane_id": "p1"})
     assert deck.last_panel.lines == []
+
+
+def test_tick_uses_partial_render_when_available():
+    from herdeck.driver.fake import FakeRenderer
+
+    class PartialFake(FakeRenderer):
+        def __init__(self, n):
+            super().__init__(n)
+            self.partial = None
+        def render_working(self, tiles):
+            self.partial = tiles
+
+    deck = PartialFake(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
+                                           Status.WORKING)])
+    app.handle_tick()
+    assert deck.partial and deck.partial[0].spinner is not None
