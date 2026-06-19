@@ -54,3 +54,8 @@ def test_explicit_d200_failure_propagates():
 def test_fake_kind_returns_fake_renderer():
     deck = make_deck("fake", 13, d200_factory=_boom, web_factory=_Web)
     assert isinstance(deck, FakeRenderer)
+
+
+def test_unknown_explicit_deck_kind_raises():
+    with pytest.raises(ValueError, match="unsupported deck kind"):
+        make_deck("dw00", 13, d200_factory=_boom, web_factory=_Web)
