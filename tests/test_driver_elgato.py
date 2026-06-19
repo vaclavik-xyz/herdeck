@@ -79,3 +79,15 @@ def test_render_panel_writes_the_two_reserved_keys(monkeypatch):
     drv.render_panel(PanelView("overview", ["1 working"], "grey"))
     assert set(deck.images) == {13, 14}                  # the two reserved panel keys
     assert all(deck.images[k] for k in (13, 14))         # non-empty halves
+
+
+def test_key_down_forwards_index_and_key_up_is_ignored():
+    deck = FakeDeck(key_count=15)
+    drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
+    seen: list[int] = []
+    drv.on_press(seen.append)
+    assert deck.callback is not None                     # registered with the device
+    deck.callback(deck, 7, True)                         # key-down -> forward index
+    assert seen == [7]
+    deck.callback(deck, 7, False)                        # key-up -> ignored
+    assert seen == [7]
