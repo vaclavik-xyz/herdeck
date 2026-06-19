@@ -42,18 +42,41 @@ class _Web:
         self.kind = "web"
 
 
+class _Elgato:
+    def __init__(self):
+        self.kind = "elgato"
+
+
 def _boom():
     raise RuntimeError("no device")
 
 
 def test_auto_falls_back_to_web_when_d200_unavailable():
-    deck = make_deck(None, 13, d200_factory=_boom, web_factory=_Web)
+    deck = make_deck(None, 13, d200_factory=_boom, elgato_factory=_boom,
+                     web_factory=_Web)
     assert isinstance(deck, _Web)
 
 
 def test_explicit_d200_failure_propagates():
     with pytest.raises(RuntimeError):
         make_deck("d200", 13, d200_factory=_boom, web_factory=_Web)
+
+
+def test_explicit_elgato_kind_uses_factory():
+    deck = make_deck("elgato", 13, d200_factory=_boom, elgato_factory=_Elgato,
+                     web_factory=_Web)
+    assert isinstance(deck, _Elgato)
+
+
+def test_auto_tries_elgato_after_d200_and_before_web():
+    deck = make_deck(None, 13, d200_factory=_boom, elgato_factory=_Elgato,
+                     web_factory=_Web)
+    assert isinstance(deck, _Elgato)
+
+
+def test_explicit_elgato_failure_propagates():
+    with pytest.raises(RuntimeError):
+        make_deck("elgato", 13, elgato_factory=_boom, web_factory=_Web)
 
 
 def test_fake_kind_returns_fake_renderer():

@@ -7,8 +7,6 @@ from .config import Config
 from .driver.base import PanelView, TileView
 from .model import AgentKey, AgentState, Status
 
-# Panel cells (button indices 13/14) report as a press on the panel.
-PANEL_INDICES = (13, 14)
 _OPTION_LABEL_MAX = 14
 
 
@@ -47,6 +45,14 @@ class Orchestrator:
     def _agent_slots(self) -> int:
         """Overview tiles available for agents (the last tile is the launcher)."""
         return max(1, self.slots - 1)
+
+    def _panel_indices(self) -> tuple[int, int]:
+        """The two reserved panel keys, just past the addressable tiles.
+
+        Decks without a status window (Elgato) park the panel on the last two
+        physical keys; the D200/web (slots == 13) keep the historical (13, 14).
+        """
+        return (self.slots, self.slots + 1)
 
     def _touch(self, state: AgentState) -> None:
         """Record when a pane entered its current status (for elapsed time)."""
@@ -231,7 +237,7 @@ class Orchestrator:
         return self._press_overview(index)
 
     def _press_overview(self, index: int) -> list[Command]:
-        if index in PANEL_INDICES:
+        if index in self._panel_indices():
             self._page += 1
             return []
         if index == self.slots - 1:             # "+ New" launcher tile

@@ -284,8 +284,9 @@ async def _run(config: Config, deck: DeckDriver) -> None:
     await asyncio.gather(*tasks)
 
 
-def make_deck(kind, slots, *, d200_factory=None, web_factory=None):
-    """Build the deck driver. kind None => auto (d200, else web fallback)."""
+def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None,
+              web_factory=None):
+    """Build the deck driver. kind None => auto (d200, elgato, else web)."""
     import os
 
     if web_factory is None:
@@ -302,20 +303,30 @@ def make_deck(kind, slots, *, d200_factory=None, web_factory=None):
             from .driver.d200 import D200Driver
             return D200Driver()
 
+    if elgato_factory is None:
+        def elgato_factory():
+            from .driver.elgato import ElgatoDriver
+            return ElgatoDriver()
+
     if kind == "fake":
         return FakeRenderer(slots)
     if kind == "web":
         return web_factory()
     if kind == "d200":
         return d200_factory()
+    if kind == "elgato":
+        return elgato_factory()
     if kind is not None:
         raise ValueError(f"unsupported deck kind: {kind}")
-    try:
-        return d200_factory()
-    except Exception as exc:
-        print(f"No Stream Deck opened ({exc}); close Ulanzi Studio if it is "
-              f"running. Falling back to the web simulator.")
-        return web_factory()
+    # Auto-detect: prefer the D200, then Elgato, else the web simulator.
+    for factory in (d200_factory, elgato_factory):
+        try:
+            return factory()
+        except Exception as exc:
+            print(f"No Stream Deck opened ({exc}); close any vendor app holding "
+                  f"the device.")
+    print("Falling back to the web simulator.")
+    return web_factory()
 
 
 def local_config(port, token, partial=None):
