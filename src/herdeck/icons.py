@@ -10,12 +10,25 @@ from PIL import Image, ImageDraw
 from .driver.base import COLORS
 
 ICON_SIZE = 196
-# The spinner has this many distinct frames (arc steps 360/45); keep the cache
-# bounded so a long-running working tile reuses frames instead of writing forever.
+# The spinner has this many distinct frames; keep the cache bounded so a
+# long-running working tile reuses frames instead of writing forever.
 SPINNER_FRAMES = 8
 # Bump when the rendered icon output changes so stale cached PNGs from older
-# versions (e.g. pre-User-Agent fallback glyphs) are ignored, not reused.
-CACHE_VERSION = 2
+# versions are ignored, not reused.
+CACHE_VERSION = 3
+
+# The agent mark is inset (not edge-to-edge) so the comet ring has clean room
+# around it and tiles look deliberate rather than cramped.
+LOGO_SCALE = 0.62
+# Comet working-ring geometry, in ICON_SIZE pixels.
+RING_INSET = 12
+RING_WIDTH = 7
+RING_SPAN = 150          # degrees of comet tail
+_SS = 4                  # supersample factor for an anti-aliased ring
+
+# Bundled SVG marks for agents that Simple Icons does not carry (e.g. codex →
+# the OpenAI logo). Shipped under the package's assets/ dir.
+_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_-]+")
 
@@ -118,17 +131,22 @@ class IconProvider:
     def __init__(self, cache_dir: str, slug_map: dict[str, str | None],
                  overrides_dir: str | None = None,
                  fetch: Callable[[str], str | None] = _default_fetch,
-                 rasterize: Callable[[str, int], Image.Image] = _default_rasterize):
+                 rasterize: Callable[[str, int], Image.Image] = _default_rasterize,
+                 assets_dir: str | None = _ASSETS_DIR):
         self._cache_dir = cache_dir
         self._slug_map = slug_map
         self._overrides_dir = overrides_dir
         self._fetch = fetch
         self._rasterize = rasterize
+        self._assets_dir = assets_dir
         os.makedirs(cache_dir, exist_ok=True)
         self._glyph_cache: dict[str, Image.Image] = {}
 
     def _base_glyph(self, agent_type: str) -> Image.Image:
-        """A monochrome mark for an agent type: override PNG, Simple Icon, or letter."""
+        """A monochrome mark for an agent type.
+
+        Precedence: user override PNG > bundled SVG asset > Simple Icons > letter.
+        """
         if agent_type in self._glyph_cache:
             return self._glyph_cache[agent_type]
         img: Image.Image | None = None
@@ -136,6 +154,11 @@ class IconProvider:
             ov = os.path.join(self._overrides_dir, f"{_safe_name(agent_type)}.png")
             if os.path.exists(ov):
                 img = Image.open(ov).convert("RGBA").resize((ICON_SIZE, ICON_SIZE))
+        if img is None and self._assets_dir:
+            asset = os.path.join(self._assets_dir, f"{_safe_name(agent_type)}.svg")
+            if os.path.exists(asset):
+                with open(asset, encoding="utf-8") as fh:
+                    img = self._rasterize(fh.read(), ICON_SIZE)
         if img is None:
             slug = self._slug_map.get(agent_type)
             if slug:
@@ -171,15 +194,28 @@ class IconProvider:
         if os.path.exists(path):
             return name
         bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), COLORS.get(color, COLORS["dim"]) + (255,))
-        glyph = self._base_glyph(agent_type)
-        bg.alpha_composite(glyph)
+        # Inset the agent mark so the working ring has clean room around it.
+        size = int(ICON_SIZE * LOGO_SCALE)
+        glyph = self._base_glyph(agent_type).resize((size, size), Image.LANCZOS)
+        off = (ICON_SIZE - size) // 2
+        bg.alpha_composite(glyph, (off, off))
         if spinner is not None:
             self._draw_spinner(bg, spinner)
         bg.convert("RGB").save(path)
         return name
 
     def _draw_spinner(self, img: Image.Image, phase: int) -> None:
-        d = ImageDraw.Draw(img)
-        start = (phase * 45) % 360
-        d.arc([10, 10, ICON_SIZE - 10, ICON_SIZE - 10], start, start + 90,
-              fill=(255, 255, 255, 255), width=8)
+        """Composite an anti-aliased comet ring: a bright head with a fading tail
+        sweeping around the tile, drawn supersampled then downscaled."""
+        z = ICON_SIZE * _SS
+        ov = Image.new("RGBA", (z, z), (0, 0, 0, 0))
+        d = ImageDraw.Draw(ov)
+        inset, w = RING_INSET * _SS, RING_WIDTH * _SS
+        box = [inset, inset, z - inset, z - inset]
+        head = phase * (360 / SPINNER_FRAMES)
+        step = 4
+        for i in range(0, RING_SPAN, step):
+            alpha = int(235 * (1 - i / RING_SPAN))
+            d.arc(box, head - i - step, head - i,
+                  fill=(255, 255, 255, alpha), width=w)
+        img.alpha_composite(ov.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS))

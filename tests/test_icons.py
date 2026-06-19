@@ -105,4 +105,4 @@ def test_letter_glyph_is_large_when_font_available(tmp_path):
     with Image.open(os.path.join(str(tmp_path), name)) as src:
         lum = src.convert("L")
     white = sum(lum.histogram()[201:])    # bright (near-white letter) pixels
-    assert white > 1500                    # a big bold letter covers a real area
+    assert white > 800                     # a big bold letter (inset) covers a real area

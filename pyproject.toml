@@ -20,6 +20,9 @@ herdeck-bridge = "herdeck.bridge:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+herdeck = ["assets/*.svg"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["src"]
