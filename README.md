@@ -8,8 +8,8 @@ See blocked agents at a glance and Approve / Deny / Stop with one press.
 
 If herdr runs on the same machine as your deck, no config or token is needed:
 
-1. `pip install -e ".[deck]"` (Mac, real D200) or `pip install -e ".[dev]"`
-   (web simulator only).
+1. `pip install -e ".[deck]"` (Mac, real D200), `pip install -e ".[elgato]"`
+   (Elgato Stream Deck), or `pip install -e ".[dev]"` (web simulator only).
 2. Make sure herdr is running (socket at `~/.config/herdr/herdr.sock`).
 3. Run it:
    ```bash

@@ -28,6 +28,7 @@ Repository = "https://github.com/vaclavik-xyz/herdeck"
 [project.optional-dependencies]
 # strmdck (rc) under-declares its runtime deps, so pin them explicitly.
 deck = ["strmdck", "pillow>=10", "cairosvg", "deepdiff", "python-dotenv", "hidapi"]
+elgato = ["streamdeck", "pillow>=10"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10", "cairosvg"]
 
 [project.scripts]
