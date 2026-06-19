@@ -76,7 +76,14 @@ class ElgatoDriver(DeckDriver):
         self._dev.set_key_image(base + 1, self._native_resized(right))
 
     def on_press(self, callback: Callable[[int], None]) -> None:
-        pass
+        self._callback = callback
+        self._dev.set_key_callback(self._on_key)
+
+    def _on_key(self, deck, key: int, state: bool) -> None:
+        # Device key index == orchestrator tile index (panel keys are the last
+        # two). Forward only key-down; the app marshals to the loop (like web).
+        if state and self._callback is not None:
+            self._callback(key)
 
     def close(self) -> None:
         import contextlib
