@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 COLORS: dict[str, tuple[int, int, int]] = {
     "green": (40, 180, 70),
@@ -19,22 +19,30 @@ class TileView:
     index: int
     label: str
     color: str
-    icon: str | None = None
+    icon: str | None = None          # icon-cache filename (D200); None for fake
+    agent_type: str | None = None
+    spinner: int | None = None       # spinner frame phase for working tiles
+
+
+@dataclass
+class PanelView:
+    title: str
+    lines: list[str] = field(default_factory=list)
+    color: str = "grey"
 
 
 class DeckDriver(ABC):
     @abstractmethod
-    def render(self, tiles: list[TileView]) -> None:
-        ...
+    def render(self, tiles: list[TileView]) -> None: ...
 
     @abstractmethod
-    def on_press(self, callback: Callable[[int], None]) -> None:
-        ...
+    def render_panel(self, panel: PanelView) -> None: ...
 
     @abstractmethod
-    def slot_count(self) -> int:
-        ...
+    def on_press(self, callback: Callable[[int], None]) -> None: ...
 
     @abstractmethod
-    def close(self) -> None:
-        ...
+    def slot_count(self) -> int: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
