@@ -70,8 +70,12 @@ class WebDeck(DeckDriver):
         self._callback = callback
 
     def press(self, index: int) -> None:
-        """Inject a press (called by the HTTP handler thread; the app marshals)."""
-        if self._callback is not None:
+        """Inject a press (called by the HTTP handler thread; the app marshals).
+
+        Only buttons (0..slots-1) and the two panel cells are valid; anything
+        else (e.g. a negative index from a crafted request) is ignored.
+        """
+        if self._callback is not None and 0 <= index < self._slots + 2:
             self._callback(index)
 
     def close(self) -> None:
