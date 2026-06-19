@@ -40,9 +40,13 @@ DEFAULT_MACROS: list[Macro] = [
 ]
 
 # Agent types startable from the deck -> the argv herdr runs in a new pane.
+# Override these commands in config [start_profiles] for local CLI variants.
 DEFAULT_START_PROFILES: dict[str, list[str]] = {
     "claude": ["claude"],
     "codex": ["codex"],
+    "cursor": ["cursor-agent"],
+    "gemini": ["gemini"],
+    "opencode": ["opencode"],
 }
 
 # Built-in answer profiles used when a config omits them (and by local mode).

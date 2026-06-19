@@ -41,7 +41,10 @@ label = "/compact"
 text = "/compact"
 
 # Agent types startable from the deck's "+ New" tile -> the argv herdr runs.
-# Omit to use defaults (claude / codex). Started in the focused herdr workspace.
+# Omit to use defaults. Started in the focused herdr workspace.
 [start_profiles]
 claude = ["claude"]
 codex = ["codex"]
+cursor = ["cursor-agent"]
+gemini = ["gemini"]
+opencode = ["opencode"]
