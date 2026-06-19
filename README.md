@@ -4,6 +4,25 @@ Turn an Ulanzi Stream Controller D200 into a control panel for AI coding agents
 running under [herdr](https://github.com/ogulcancelik/herdr) on remote servers.
 See blocked agents at a glance and Approve / Deny / Stop with one press.
 
+## Quick start (local)
+
+If herdr runs on the same machine as your deck, no config or token is needed:
+
+1. `pip install -e ".[deck]"` (Mac, real D200) or `pip install -e ".[dev]"`
+   (web simulator only).
+2. Make sure herdr is running (socket at `~/.config/herdr/herdr.sock`).
+3. Run it:
+   ```bash
+   herdeck                  # drives an attached Stream Deck
+   HERDECK_DECK=web herdeck # browser simulator at http://127.0.0.1:8800
+   ```
+
+herdeck auto-detects the local herdr socket and starts an embedded loopback
+bridge for you. If no Stream Deck is attached it falls back to the web
+simulator and prints its URL. Set `HERDR_SOCKET` if herdr's socket lives
+elsewhere. For a remote deck (herdr on another host) see **Server setup**
+below — that path uses an explicit config with `[[servers]]` and a token.
+
 ## Architecture
 - `herdeck-bridge` runs on each server: connects to herdr's local Unix socket,
   maps/filters panes to agents, and exposes an authenticated WebSocket bound to
