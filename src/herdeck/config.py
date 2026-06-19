@@ -94,19 +94,15 @@ def load_config(path: str | Path) -> Config:
         if not token:
             raise ConfigError(f"env var '{env}' for server '{s['id']}' is not set")
         servers.append(ServerConfig(id=s["id"], url=s["url"], token=token))
-    if not servers:
-        raise ConfigError("no [[servers]] configured")
+    # Empty servers is allowed; the remote run path requires >=1 itself.
 
     deck = data.get("deck", {})
     grid = _parse_grid(deck.get("grid", "5x3"))
     overview_order = deck.get("overview_order", [s.id for s in servers])
 
-    profiles = {
-        name: _parse_profile(name, raw)
-        for name, raw in data.get("answer_profiles", {}).items()
-    }
-    if "default" not in profiles:
-        raise ConfigError("answer_profiles.default is required")
+    profiles = dict(DEFAULT_PROFILES)
+    for name, raw in data.get("answer_profiles", {}).items():
+        profiles[name] = _parse_profile(name, raw)
 
     # An explicit (even empty) section disables defaults; only a MISSING section
     # falls back to the built-ins.

@@ -25,6 +25,13 @@ deny = ["esc"]
 stop = ["ctrl+c"]
 """
 
+SERVERLESS = """
+[answer_profiles.codex]
+approve = ["y", "enter"]
+deny = ["n", "enter"]
+stop = ["ctrl+c"]
+"""
+
 
 def _write(tmp_path, text):
     p = tmp_path / "config.toml"
@@ -61,3 +68,20 @@ def test_profile_approve_always_defaults_to_approve(tmp_path, monkeypatch):
     assert cfg.profiles["claude"].approve_always == ["2", "enter"]
     # default profile has no approve_always -> falls back to approve
     assert cfg.profiles["default"].approve_always == ["enter"]
+
+
+def test_config_without_servers_yields_empty_list(tmp_path):
+    cfg = load_config(_write(tmp_path, SERVERLESS))
+    assert cfg.servers == []
+
+
+def test_missing_answer_profiles_fall_back_to_defaults(tmp_path):
+    cfg = load_config(_write(tmp_path, "[deck]\ngrid = \"5x3\"\n"))
+    assert cfg.profiles["default"].approve == ["enter"]
+    assert cfg.profiles["claude"].approve == ["1", "enter"]
+
+
+def test_partial_answer_profiles_merge_over_defaults(tmp_path):
+    cfg = load_config(_write(tmp_path, SERVERLESS))
+    assert cfg.profiles["codex"].approve == ["y", "enter"]
+    assert cfg.profiles["default"].approve == ["enter"]
