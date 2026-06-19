@@ -167,6 +167,70 @@ async def _ticker(app: "App", loop) -> None:
         loop.call_soon_threadsafe(app.handle_tick)
 
 
+def _mock_config() -> Config:
+    """A zero-setup config for the offline simulator (no file/token needed)."""
+    from .config import AnswerProfile, ServerConfig
+    return Config(
+        servers=[ServerConfig("mock", "ws://mock", "x")],
+        profiles={"claude": AnswerProfile(["1", "enter"], ["esc"], ["ctrl+c"], ["2", "enter"]),
+                  "codex": AnswerProfile(["y", "enter"], ["n", "enter"], ["ctrl+c"], ["y", "enter"]),
+                  "default": AnswerProfile(["enter"], ["esc"], ["ctrl+c"], ["enter"])},
+        overview_order=["mock"],
+        grid=(5, 3),
+    )
+
+
+def _mock_agents():
+    from .model import AgentKey, AgentState, Status
+    rows = [("p1", "claude", "macdoktor-crm", "feat/autopilot-auto-close", Status.WORKING),
+            ("p2", "codex", "4cyborg", "main", Status.BLOCKED),
+            ("p3", "claude", "dtt-app", "feat/vykup-redesign", Status.IDLE),
+            ("p4", "codex", "diktator", "main", Status.DONE),
+            ("p5", "claude", "herdeck", "feat/web-simulator", Status.WORKING)]
+    out = []
+    for pane, agent, repo, branch, status in rows:
+        s = AgentState(AgentKey("mock", pane), agent, repo, status)
+        s.repo, s.branch = repo, branch
+        out.append(s)
+    return out
+
+
+async def _run_mock(config: Config, deck: DeckDriver) -> None:
+    """Drive the app with synthetic, lively data — no bridge required."""
+    from .model import Status
+    loop = asyncio.get_running_loop()
+    server = config.servers[0].id
+    detection = ("Do you want to proceed?\n1. Yes\n"
+                 "2. Yes, and don't ask again\n3. No")
+
+    def send(cmd: Command) -> None:
+        if cmd.kind == "read":               # answer reads with a sample prompt
+            req = app.next_req_for(cmd)
+            loop.call_soon_threadsafe(app.handle_result, server, req,
+                                      {"text": detection, "pane_id": cmd.pane_id})
+
+    app = App(config, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn))
+    app.handle_connection(server, True)
+    agents = _mock_agents()
+    app.handle_snapshot(server, agents)
+
+    async def cycle():                       # flip a status periodically for life
+        order = [Status.WORKING, Status.BLOCKED, Status.IDLE, Status.DONE]
+        i = 0
+        while True:
+            await asyncio.sleep(4)
+            a = agents[i % len(agents)]
+            a.status = order[(order.index(a.status) + 1) % len(order)] \
+                if a.status in order else Status.WORKING
+            app.handle_event(server, a)
+            i += 1
+
+    tasks = [_guard(_ticker(app, loop)), _guard(cycle())]
+    if hasattr(deck, "run_reader"):
+        tasks.append(_guard(deck.run_reader()))
+    await asyncio.gather(*tasks)
+
+
 async def _run(config: Config, deck: DeckDriver) -> None:
     loop = asyncio.get_running_loop()
     connectors: dict[str, Connector] = {}
@@ -213,15 +277,29 @@ def main() -> None:
             level=logging.DEBUG,
             format="%(asctime)s %(levelname)s %(message)s",
         )
-    config_path = os.path.abspath(os.environ.get("HERDECK_CONFIG", "config.toml"))
-    config = load_config(config_path)   # load BEFORE the deck chdir's (R-4)
-    if os.environ.get("HERDECK_FAKE_DECK"):
-        deck: DeckDriver = FakeRenderer(config.grid[0] * config.grid[1])
+    mock = bool(os.environ.get("HERDECK_MOCK"))
+    if mock:
+        config = _mock_config()          # zero-setup: no config file or token needed
+    else:
+        config_path = os.path.abspath(os.environ.get("HERDECK_CONFIG", "config.toml"))
+        config = load_config(config_path)   # load BEFORE the deck chdir's (R-4)
+    # HERDECK_DECK selects the driver: d200 (default) | web | fake.
+    kind = os.environ.get("HERDECK_DECK") or ("fake" if os.environ.get("HERDECK_FAKE_DECK") else "d200")
+    # The last two grid cells are the status panel, not buttons (like the D200).
+    slots = config.grid[0] * config.grid[1] - 2
+    if kind == "fake":
+        deck: DeckDriver = FakeRenderer(slots)
+    elif kind == "web":
+        from .driver.web import WebDeck
+        host = os.environ.get("HERDECK_WEB_BIND", "127.0.0.1")
+        port = int(os.environ.get("HERDECK_WEB_PORT", "8800"))
+        deck = WebDeck(slots, host=host, port=port)
+        print(f"herdeck web simulator on http://{deck.host}:{deck.port}")
     else:
         from .driver.d200 import D200Driver
         deck = D200Driver()
     try:
-        asyncio.run(_run(config, deck))
+        asyncio.run(_run_mock(config, deck) if mock else _run(config, deck))
     finally:
         deck.close()
 
