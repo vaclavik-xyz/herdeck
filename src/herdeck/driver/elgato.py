@@ -52,7 +52,7 @@ class ElgatoDriver(DeckDriver):
     def _to_native(self, image):
         # Lazy import: StreamDeck is only needed on the hardware path.
         from StreamDeck.ImageHelpers import PILHelper
-        return PILHelper.to_native_key_format(self._dev, image)
+        return PILHelper.to_native_format(self._dev, image)
 
     def _native_resized(self, image):
         return self._to_native(image.resize(self._dev.key_image_format()["size"]))
