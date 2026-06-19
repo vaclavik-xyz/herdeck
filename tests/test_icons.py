@@ -101,8 +101,8 @@ def test_letter_glyph_is_large_when_font_available(tmp_path):
     if _load_big_font() is None:
         return  # no scalable font on this system; bitmap fallback is acceptable
     p = make_provider(tmp_path)
-    p.icon_for("zeta", "blue")     # unknown agent -> letter glyph
-    im = Image.open(os.path.join(str(tmp_path), "icon_zeta_blue.png")).convert("RGB")
+    name = p.icon_for("zeta", "blue")     # unknown agent -> letter glyph
+    im = Image.open(os.path.join(str(tmp_path), name)).convert("RGB")
     white = sum(1 for px in im.getdata()
                 if px[0] > 200 and px[1] > 200 and px[2] > 200)
     assert white > 1500            # a big bold letter covers a real area
