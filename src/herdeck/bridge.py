@@ -338,6 +338,25 @@ async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, 
         clients.discard(ws)
 
 
+async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
+    """Bind an embedded bridge on a loopback ephemeral port with a random,
+    in-memory token. Returns (host, port, token, (server, broadcast_task))."""
+    import secrets
+
+    token = secrets.token_urlsafe(32)
+    herdr = herdr or SocketHerdr(socket_path)
+    events = HerdrEvents(herdr, socket_path=socket_path)
+    clients: set = set()
+
+    async def handler(ws):
+        await _serve_connection(ws, herdr, "local", token, clients)
+
+    server = await websockets.serve(handler, host, 0)
+    port = server.sockets[0].getsockname()[1]
+    btask = asyncio.create_task(_broadcast(events.stream(), clients, "local"))
+    return host, port, token, (server, btask)
+
+
 async def serve(socket_path: str, host: str, port: int, server_id: str, token: str):
     herdr = SocketHerdr(socket_path)
     events = HerdrEvents(herdr, socket_path=socket_path)   # push events + slow poll

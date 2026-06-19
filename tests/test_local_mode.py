@@ -1,6 +1,11 @@
+import asyncio
+
 import pytest
 
 from herdeck.app import make_deck, resolve_mode
+from herdeck.bridge import StubHerdr, start_local_bridge
+from herdeck.config import ServerConfig
+from herdeck.connector import Connector
 from herdeck.driver.fake import FakeRenderer
 
 SOCK = "/Users/x/.config/herdr/herdr.sock"
@@ -59,3 +64,31 @@ def test_fake_kind_returns_fake_renderer():
 def test_unknown_explicit_deck_kind_raises():
     with pytest.raises(ValueError, match="unsupported deck kind"):
         make_deck("dw00", 13, d200_factory=_boom, web_factory=_Web)
+
+
+async def test_start_local_bridge_serves_snapshot_to_connector():
+    herdr = StubHerdr([
+        {"pane_id": "p1", "agent": "claude", "agent_status": "working",
+         "foreground_cwd": "/proj/api", "workspace_id": "w1"},
+    ])
+    host, port, token, (server, btask) = await start_local_bridge(
+        "/nonexistent.sock", herdr=herdr)
+    got = asyncio.Event()
+    seen = []
+    conn = Connector(
+        ServerConfig("local", f"ws://{host}:{port}", token),
+        on_snapshot=lambda sid, st: (seen.extend(st), got.set()),
+        on_event=lambda sid, s: None,
+        on_connection=lambda sid, up: None,
+    )
+    run = asyncio.create_task(conn.run())
+    try:
+        await asyncio.wait_for(got.wait(), timeout=5)
+        assert seen[0].agent_type == "claude"
+        assert seen[0].label == "api"
+    finally:
+        conn.stop()
+        btask.cancel()
+        server.close()
+        await server.wait_closed()
+        run.cancel()
