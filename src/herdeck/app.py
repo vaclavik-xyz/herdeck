@@ -284,6 +284,38 @@ async def _run(config: Config, deck: DeckDriver) -> None:
     await asyncio.gather(*tasks)
 
 
+def make_deck(kind, slots, *, d200_factory=None, web_factory=None):
+    """Build the deck driver. kind None => auto (d200, else web fallback)."""
+    import os
+
+    if web_factory is None:
+        def web_factory():
+            from .driver.web import WebDeck
+            host = os.environ.get("HERDECK_WEB_BIND", "127.0.0.1")
+            port = int(os.environ.get("HERDECK_WEB_PORT", "8800"))
+            d = WebDeck(slots, host=host, port=port)
+            print(f"herdeck web simulator on http://{d.host}:{d.port}")
+            return d
+
+    if d200_factory is None:
+        def d200_factory():
+            from .driver.d200 import D200Driver
+            return D200Driver()
+
+    if kind == "fake":
+        return FakeRenderer(slots)
+    if kind == "web":
+        return web_factory()
+    if kind == "d200":
+        return d200_factory()
+    try:
+        return d200_factory()
+    except Exception as exc:
+        print(f"No Stream Deck opened ({exc}); close Ulanzi Studio if it is "
+              f"running. Falling back to the web simulator.")
+        return web_factory()
+
+
 def main() -> None:
     import os
 
