@@ -56,3 +56,94 @@ def test_press_ignores_out_of_range_indices():
     d.press(99)            # beyond panel cells
     d.press(13)            # panel cell — valid
     assert seen == [13]
+
+
+class VaryingIcons:
+    """Icon stub whose bytes depend on the tile's visible content, so identical
+    tiles render identical bytes and changed tiles render different bytes."""
+
+    def render_tile_bytes(self, tile):
+        sig = f"{tile.index}|{tile.label}|{tile.color}|{tile.spinner}|{tile.status_text}"
+        return sig.encode()
+
+
+def make_varying_deck():
+    return WebDeck(slots=13, serve=False, icon_provider=VaryingIcons())
+
+
+def test_state_reports_per_tile_versions():
+    d = make_varying_deck()
+    d.render([TileView(0, "a", "blue"), TileView(1, "b", "green")])
+    tiles = d._state()["tiles"]
+    assert isinstance(tiles, dict)
+    assert tiles[0] >= 1 and tiles[1] >= 1
+
+
+def test_unchanged_tile_keeps_version_changed_tile_bumps():
+    d = make_varying_deck()
+    d.render([TileView(0, "a", "blue"), TileView(1, "b", "green")])
+    v0 = d._state()["tiles"][0]
+    v1 = d._state()["tiles"][1]
+    # re-render: tile 0 identical, tile 1 changed (spinner advanced)
+    d.render([TileView(0, "a", "blue"), TileView(1, "b", "green", spinner=3)])
+    assert d._state()["tiles"][0] == v0          # unchanged -> same version
+    assert d._state()["tiles"][1] > v1           # changed -> bumped
+
+
+def test_identical_full_render_does_not_bump_global_version():
+    d = make_varying_deck()
+    d.render([TileView(0, "a", "blue")])
+    v = d._state()["version"]
+    d.render([TileView(0, "a", "blue")])         # nothing changed
+    assert d._state()["version"] == v
+
+
+def test_panel_version_bumps_only_on_change():
+    d = make_varying_deck()
+    d.render_panel(PanelView("dev", ["x"], "grey"))
+    pv = d._state()["panel"]
+    assert pv >= 1
+    d.render_panel(PanelView("dev", ["x"], "grey"))   # identical content
+    assert d._state()["panel"] == pv                  # no bump
+    d.render_panel(PanelView("dev", ["y"], "grey"))   # changed content
+    assert d._state()["panel"] > pv                   # bumped
+
+
+def test_render_working_updates_only_given_tiles():
+    d = make_varying_deck()
+    d.render([TileView(0, "a", "blue"), TileView(1, "b", "green")])
+    v0 = d._state()["tiles"][0]
+    v1 = d._state()["tiles"][1]
+    d.render_working([TileView(1, "b", "green", spinner=5)])   # partial: only tile 1
+    st = d._state()
+    assert st["tiles"][0] == v0                  # untouched tile keeps its version
+    assert st["tiles"][1] > v1                   # working tile bumped
+    assert d._tile_png(1) == VaryingIcons().render_tile_bytes(
+        TileView(1, "b", "green", spinner=5))    # new bytes served
+
+
+def test_render_working_leaves_panel_untouched():
+    d = make_varying_deck()
+    d.render_panel(PanelView("dev", ["x"], "grey"))
+    pv = d._state()["panel"]
+    d.render_working([TileView(0, "a", "blue", spinner=2)])
+    assert d._state()["panel"] == pv
+
+
+def test_render_working_skips_unchanged_tile():
+    d = make_varying_deck()
+    d.render([TileView(0, "a", "blue")])
+    v0 = d._state()["tiles"][0]
+    d.render_working([TileView(0, "a", "blue")])  # identical content -> no bump
+    assert d._state()["tiles"][0] == v0
+
+
+def test_render_removing_a_tile_bumps_version_so_client_can_clear_it():
+    d = make_varying_deck()
+    d.render([TileView(0, "a", "blue"), TileView(1, "b", "green")])
+    v = d._state()["version"]
+    d.render([TileView(0, "a", "blue")])         # tile 1 omitted (tile 0 unchanged)
+    st = d._state()
+    assert st["version"] > v                      # removal trips the client's gate
+    assert 1 not in st["tiles"]                   # its version is dropped
+    assert d._tile_png(1) is None                 # its bytes are gone
