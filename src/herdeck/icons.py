@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 
 from PIL import Image, ImageDraw
@@ -8,6 +9,16 @@ from PIL import Image, ImageDraw
 from .driver.base import COLORS
 
 ICON_SIZE = 196
+# The spinner has this many distinct frames (arc steps 360/45); keep the cache
+# bounded so a long-running working tile reuses frames instead of writing forever.
+SPINNER_FRAMES = 8
+
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _safe_name(agent_type: str) -> str:
+    """Filesystem-safe token for an inbound agent type (no path traversal)."""
+    return _UNSAFE_NAME.sub("_", agent_type) or "_"
 
 # agent type -> Simple Icons slug (None => generated glyph fallback)
 DEFAULT_AGENT_SLUGS: dict[str, str | None] = {
@@ -66,7 +77,7 @@ class IconProvider:
             return self._glyph_cache[agent_type]
         img: Image.Image | None = None
         if self._overrides_dir:
-            ov = os.path.join(self._overrides_dir, f"{agent_type}.png")
+            ov = os.path.join(self._overrides_dir, f"{_safe_name(agent_type)}.png")
             if os.path.exists(ov):
                 img = Image.open(ov).convert("RGBA").resize((ICON_SIZE, ICON_SIZE))
         if img is None:
@@ -93,7 +104,10 @@ class IconProvider:
 
     def icon_for(self, agent_type: str, color: str, spinner: int | None = None) -> str:
         """Return a cached PNG filename (in cache_dir) of the mark on a status bg."""
-        key = f"{agent_type}_{color}" + (f"_s{spinner}" if spinner is not None else "")
+        if spinner is not None:
+            spinner %= SPINNER_FRAMES   # bound the cache to a fixed frame set
+        key = f"{_safe_name(agent_type)}_{color}" + (
+            f"_s{spinner}" if spinner is not None else "")
         name = f"icon_{key}.png"
         path = os.path.join(self._cache_dir, name)
         if os.path.exists(path):

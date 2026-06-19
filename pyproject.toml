@@ -11,7 +11,7 @@ dependencies = ["websockets>=14"]
 [project.optional-dependencies]
 # strmdck (rc) under-declares its runtime deps, so pin them explicitly.
 deck = ["strmdck", "pillow>=10", "cairosvg", "deepdiff", "python-dotenv", "hidapi"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10"]
 
 [project.scripts]
 herdeck = "herdeck.app:main"

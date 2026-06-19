@@ -88,6 +88,10 @@ class D200Driver(DeckDriver):
     def _set_panel_background_mode(self):
         from strmdck.devices.ulanzi_d200 import SmallWindowMode
         with contextlib.suppress(Exception):
+            # set_small_window_mode persists the mode internally; every later
+            # set_small_window_data (incl. keep_alive's) then defaults to it, so
+            # the window stays BACKGROUND instead of reverting to CLOCK/STATS.
+            self._dev.set_small_window_mode(SmallWindowMode.BACKGROUND)
             self._dev.set_small_window_data({"mode": SmallWindowMode.BACKGROUND}, force=True)
 
     def slot_count(self) -> int:
@@ -117,10 +121,11 @@ class D200Driver(DeckDriver):
             left.save(os.path.join(_ICON_DIR, "panel_left.png"))
             right.save(os.path.join(_ICON_DIR, "panel_right.png"))
             with contextlib.redirect_stdout(io.StringIO()):
+                # update_only so refreshing the panel never clears the 13 tiles.
                 self._dev.set_buttons({
                     _PANEL_LEFT_INDEX: {"name": "", "icon": "panel_left.png"},
                     _PANEL_RIGHT_INDEX: {"name": "", "icon": "panel_right.png"},
-                })
+                }, update_only=True)
         except Exception:
             pass
 

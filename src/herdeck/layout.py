@@ -77,7 +77,9 @@ def panel_overview(counts: Counts, page_index: int, page_count: int,
 
 
 def panel_detail(agent: AgentState, text: str) -> PanelView:
-    lines = [text.strip()[:80]] if text and text.strip() else []
+    # Split into real lines so embedded newlines don't reach the renderer as one
+    # blob; keep a bounded set of short lines for the small panel.
+    lines = [ln.strip()[:80] for ln in text.splitlines() if ln.strip()][:2] if text else []
     return PanelView(
         title=f"{agent.agent_type}: {agent.label}",
         lines=lines,
