@@ -19,13 +19,39 @@ def st(pane, status, agent_type="claude", label="api"):
     return AgentState(AgentKey("dev", pane), agent_type, label, status)
 
 
+# A blocked-agent prompt with numbered choices (e.g. Claude permission menu).
+PROMPT = "Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No"
+
+
 def test_tap_agent_enters_drill_and_reads():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
     cmds = o.on_press(0)
     assert cmds == [Command("read", "dev", "p1", source="detection")]
     rs = o.render()
-    assert [t.label for t in rs.tiles[:5]] == ["Approve", "Approve!", "Deny", "Stop", "Back"]
+    # Before the read returns there are no options yet — only fixed Stop/Back.
+    assert rs.tiles[11].label == "Stop" and rs.tiles[12].label == "Back"
+
+
+def test_drill_shows_parsed_options_after_read():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    rs = o.render()
+    assert rs.tiles[0].label.startswith("1 Yes")
+    assert rs.tiles[1].label.startswith("2 Yes")
+    assert rs.tiles[2].label.startswith("3 No")
+    assert rs.tiles[11].label == "Stop" and rs.tiles[12].label == "Back"
+
+
+def test_pressing_option_sends_its_number():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1"])]
+    assert o.on_press(2) == [Command("act_if_blocked", "dev", "p1", keys=["3"])]
 
 
 def test_drill_panel_shows_detail_after_read_result():
@@ -36,33 +62,28 @@ def test_drill_panel_shows_detail_after_read_result():
     assert "Allow edit?" in o.render().panel.lines[0]
 
 
-def test_approve_enabled_only_when_blocked():
+def test_no_options_when_not_blocked():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.WORKING)])
     o.on_press(0)                       # drill into a working agent
-    assert o.on_press(0) == []          # Approve disabled (not blocked)
-    assert o.on_press(2) == []          # Deny disabled
-
-
-def test_approve_keys_when_blocked():
-    o = Orchestrator(make_config(), slots=13)
-    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
-    o.on_press(0)
-    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1", "enter"])]
+    o.set_detection(PROMPT)             # even with a prompt, not blocked -> no options
+    rs = o.render()
+    assert rs.tiles[0].label == ""      # no option tiles
+    assert o.on_press(0) == []          # pressing a blank tile does nothing
 
 
 def test_stop_works_even_when_not_blocked():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.WORKING)])
     o.on_press(0)
-    assert o.on_press(3) == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
+    assert o.on_press(11) == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
 
 
 def test_back_returns_to_overview():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
     o.on_press(0)
-    assert o.on_press(4) == []
+    assert o.on_press(12) == []
     assert o.render().tiles[0].agent_type == "claude"  # overview again
 
 
@@ -75,10 +96,3 @@ def test_panel_press_pages_in_overview():
     second = [t.label for t in o.render().tiles]
     assert first != second
     assert o.render().panel.title == "page 2/2"
-
-
-def test_unknown_agent_type_uses_default_profile():
-    o = Orchestrator(make_config(), slots=13)
-    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="mystery")])
-    o.on_press(0)
-    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["enter"])]

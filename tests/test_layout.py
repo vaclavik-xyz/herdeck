@@ -70,3 +70,26 @@ def test_panel_detail_with_and_without_text():
     assert p.color == "amber"
     p2 = panel_detail(a("p1", Status.WORKING), "")
     assert p2.lines == []   # no text yet
+
+
+def test_parse_options_numbered():
+    from herdeck.layout import parse_options
+    txt = "Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No"
+    opts = parse_options(txt)
+    assert [(o.key, o.label) for o in opts] == [
+        ("1", "Yes"), ("2", "Yes, and don't ask again"), ("3", "No")]
+
+
+def test_parse_options_question_list_and_dedup():
+    from herdeck.layout import parse_options
+    txt = ("Kde?\n1. Dodavatelské doklady\n   detail line\n"
+           "2. Cenotvorba / sledování trhu\n2. duplicate ignored\n5. Type something")
+    opts = parse_options(txt)
+    assert [o.key for o in opts] == ["1", "2", "5"]
+    assert opts[0].label == "Dodavatelské doklady"
+
+
+def test_parse_options_none():
+    from herdeck.layout import parse_options
+    assert parse_options("just some text, no options") == []
+    assert parse_options("") == []

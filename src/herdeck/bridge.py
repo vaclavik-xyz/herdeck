@@ -172,8 +172,12 @@ class SocketHerdr:
         return res.get("result", {}).get("panes", [])
 
     async def get_pane(self, pane_id: str) -> dict:
-        res = await self._rpc("pane.get", {"pane_id": pane_id})
-        return res.get("result", {}).get("pane", {})
+        # herdr has no working `pane.get`; derive the pane from the (supported)
+        # pane.list so the act guard can check current status.
+        for pane in await self.list_panes():
+            if pane.get("pane_id") == pane_id:
+                return pane
+        return {}
 
     async def read_pane(self, pane_id: str, source: str) -> str:
         res = await self._rpc("pane.read", {"pane_id": pane_id, "source": source})

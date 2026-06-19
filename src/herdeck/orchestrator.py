@@ -9,7 +9,7 @@ from .model import AgentKey, AgentState, Status
 
 # Panel cells (button indices 13/14) report as a press on the panel.
 PANEL_INDICES = (13, 14)
-_DRILL_LABELS = ["Approve", "Approve!", "Deny", "Stop", "Back"]
+_OPTION_LABEL_MAX = 14
 
 
 @dataclass
@@ -106,16 +106,27 @@ class Orchestrator:
         shown, _ = layout.page(self._ordered(), self._page, self.slots)
         return [i for i, s in enumerate(shown) if s.status is Status.WORKING]
 
+    def _drill_layout(self) -> tuple[list, int, int]:
+        """Parsed options plus the fixed Stop/Back tile indices for the drill view."""
+        agent = self._agents.get(self._drill)
+        options = (layout.parse_options(self._detection)
+                   if agent is not None and agent.status is Status.BLOCKED else [])
+        stop_i, back_i = self.slots - 2, self.slots - 1
+        return options[:stop_i], stop_i, back_i
+
     def _render_drill(self) -> RenderState:
         agent = self._agents.get(self._drill)
-        blocked = agent is not None and agent.status is Status.BLOCKED
-        enabled = {0: blocked, 1: blocked, 2: blocked, 3: True, 4: True}
-        colors = {0: "green", 1: "green", 2: "red", 3: "red", 4: "grey"}
+        options, stop_i, back_i = self._drill_layout()
         tiles: list[TileView] = []
         for i in range(self.slots):
-            if i < len(_DRILL_LABELS):
-                color = colors[i] if enabled[i] else "dim"
-                tiles.append(TileView(i, _DRILL_LABELS[i], color))
+            if i < len(options):
+                opt = options[i]
+                tiles.append(TileView(i, f"{opt.key} {opt.label}"[:_OPTION_LABEL_MAX],
+                                      "blue"))
+            elif i == stop_i:
+                tiles.append(TileView(i, "Stop", "red"))
+            elif i == back_i:
+                tiles.append(TileView(i, "Back", "grey"))
             else:
                 tiles.append(TileView(i, "", "dim"))
         panel = (layout.panel_detail(agent, self._detection)
@@ -147,19 +158,17 @@ class Orchestrator:
 
     def _press_drill(self, index: int) -> list[Command]:
         key = self._drill
-        if index == 4:                       # Back
+        options, stop_i, back_i = self._drill_layout()
+        if index == back_i:                  # Back to overview
             self._drill = None
             return []
         if key not in self._agents:
             self._drill = None
             return []
-        agent = self._agents[key]
-        if index == 3:                       # Stop — always, unconditional
+        if index == stop_i:                  # Stop — always, unconditional
             return [Command("act_force", key.server_id, key.pane_id,
                             keys=self._profile_for(key).stop)]
-        if index in (0, 1, 2) and agent.status is Status.BLOCKED:
-            profile = self._profile_for(key)
-            keys = {0: profile.approve, 1: profile.approve_always,
-                    2: profile.deny}[index]
-            return [Command("act_if_blocked", key.server_id, key.pane_id, keys=keys)]
-        return []                            # disabled action or blank tile
+        if index < len(options):             # send the chosen option's number
+            return [Command("act_if_blocked", key.server_id, key.pane_id,
+                            keys=[options[index].key])]
+        return []                            # blank tile

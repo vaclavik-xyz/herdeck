@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 
 from .driver.base import PanelView
 from .model import AgentState, Status
+
+# A numbered choice line in an agent prompt, e.g. "❯ 1. Yes" or "2. Cenotvorba".
+# Leading markers (cursor caret, bullets, whitespace) are skipped before the digit.
+_OPTION_RE = re.compile(r"^[\s>❯❱*\-)(]*(\d+)[.)]\s+(\S.*?)\s*$")
 
 # lower = higher priority (shown first)
 _STATUS_PRIORITY = {
@@ -74,6 +79,32 @@ def panel_overview(counts: Counts, page_index: int, page_count: int,
                "offline" if down else "online"],
         color="red" if down else "grey",
     )
+
+
+@dataclass
+class Option:
+    key: str        # the keystroke to send (the option's number)
+    label: str      # human text of the choice
+
+
+def parse_options(text: str) -> list[Option]:
+    """Extract numbered choices from an agent prompt (permission menu, question).
+
+    Matches lines like ``1. Yes`` / ``❯ 2. Cenotvorba`` / ``3) No``. Duplicate
+    numbers keep their first occurrence; order follows appearance.
+    """
+    options: list[Option] = []
+    seen: set[str] = set()
+    for line in (text or "").splitlines():
+        m = _OPTION_RE.match(line)
+        if not m:
+            continue
+        key = m.group(1)
+        if key in seen:
+            continue
+        seen.add(key)
+        options.append(Option(key, m.group(2).strip()))
+    return options
 
 
 def panel_detail(agent: AgentState, text: str) -> PanelView:

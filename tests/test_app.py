@@ -35,9 +35,12 @@ def test_press_forwards_commands():
     app = App(make_config(), deck, send=sent.append)
     app.handle_snapshot("dev", [blocked("p1")])
     deck.simulate_press(0)        # drill + read
-    deck.simulate_press(0)        # Approve
+    req = app.next_req_for(Command("read", "dev", "p1", source="detection"))
+    app.handle_result("dev", req,
+                      {"text": "Proceed?\n1. Yes\n2. No", "pane_id": "p1"})
+    deck.simulate_press(0)        # choose option 1
     assert Command("read", "dev", "p1", source="detection") in sent
-    assert Command("act_if_blocked", "dev", "p1", keys=["1", "enter"]) in sent
+    assert Command("act_if_blocked", "dev", "p1", keys=["1"]) in sent
 
 
 def test_read_result_shows_detection_in_panel():
