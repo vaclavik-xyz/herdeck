@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 
-from .config import Config, load_config
+from .config import Config, ConfigError, load_config
 from .connector import Connector
 from .driver.base import DeckDriver
 from .driver.fake import FakeRenderer
@@ -230,6 +230,8 @@ async def _run_mock(config: Config, deck: DeckDriver) -> None:
 
 
 async def _run(config: Config, deck: DeckDriver) -> None:
+    if not config.servers:
+        raise ConfigError("no servers configured for remote run")
     loop = asyncio.get_running_loop()
     connectors: dict[str, Connector] = {}
 
