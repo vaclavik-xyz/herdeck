@@ -218,8 +218,11 @@ class IconProvider:
         if img is None and self._assets_dir:
             asset = os.path.join(self._assets_dir, f"{_safe_name(agent_type)}.svg")
             if os.path.exists(asset):
-                with open(asset, encoding="utf-8") as fh:
-                    img = self._rasterize(fh.read(), ICON_SIZE)
+                try:
+                    with open(asset, encoding="utf-8") as fh:
+                        img = self._rasterize(fh.read(), ICON_SIZE)
+                except Exception:
+                    img = None      # e.g. cairosvg missing -> fall back to a letter
         if img is None:
             slug = self._slug_map.get(agent_type)
             if slug:

@@ -46,3 +46,13 @@ def test_version_bumps_on_each_render():
     v0 = d._state()["version"]
     d.render([TileView(0, "Stop", "red")])
     assert d._state()["version"] > v0
+
+
+def test_press_ignores_out_of_range_indices():
+    d = make_deck()
+    seen = []
+    d.on_press(seen.append)
+    d.press(-1)            # crafted negative index
+    d.press(99)            # beyond panel cells
+    d.press(13)            # panel cell — valid
+    assert seen == [13]
