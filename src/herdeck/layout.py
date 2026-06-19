@@ -110,7 +110,18 @@ def parse_options(text: str) -> list[Option]:
 def panel_detail(agent: AgentState, text: str) -> PanelView:
     # Split into real lines so embedded newlines don't reach the renderer as one
     # blob; keep a bounded set of short lines for the small panel.
-    lines = [ln.strip()[:80] for ln in text.splitlines() if ln.strip()][:2] if text else []
+    raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()] if text else []
+    option_keys = {opt.key for opt in parse_options(text)}
+    lines = []
+    for line in raw_lines:
+        match = _OPTION_RE.match(line)
+        if match and match.group(1) in option_keys:
+            continue
+        lines.append(line[:80])
+        if len(lines) == 3:
+            break
+    if raw_lines and not lines:
+        lines = [raw_lines[0][:80]]
     return PanelView(
         title=f"{agent.agent_type}: {agent.label}",
         lines=lines,
