@@ -100,7 +100,7 @@ def test_back_returns_to_overview():
 
 
 def test_panel_press_pages_in_overview():
-    o = Orchestrator(make_config(), slots=2)   # tiny deck -> paging
+    o = Orchestrator(make_config(), slots=3)   # 2 agent slots + launcher -> paging
     o.apply_snapshot("dev", [st("p1", Status.IDLE), st("p2", Status.IDLE),
                              st("p3", Status.IDLE)])
     first = [t.label for t in o.render().tiles]
@@ -108,6 +108,26 @@ def test_panel_press_pages_in_overview():
     second = [t.label for t in o.render().tiles]
     assert first != second
     assert o.render().panel.title == "page 2/2"
+
+
+def test_new_tile_opens_launcher_and_starts_agent():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.IDLE)])
+    assert o.render().tiles[12].label == "+ New"       # reserved launcher tile
+    assert o.on_press(12) == []                         # opens the launcher
+    rs = o.render()
+    assert rs.tiles[0].label == "claude" and rs.tiles[1].label == "codex"
+    assert rs.tiles[12].label == "Back"
+    assert o.on_press(0) == [Command("start", "dev", text="claude", keys=["claude"])]
+    assert o.render().tiles[12].label == "+ New"        # back on overview
+
+
+def test_launcher_back_returns_to_overview():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.IDLE)])
+    o.on_press(12)                                       # open launcher
+    assert o.on_press(12) == []                          # Back
+    assert o.render().tiles[12].label == "+ New"
 
 
 def test_macros_shown_and_sent_for_non_blocked_agent():

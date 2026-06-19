@@ -148,3 +148,9 @@ def test_command_to_msg_focus():
     app = App(make_config(), FakeRenderer(13), send=lambda c: None)
     m = _command_to_msg(Command("focus", "dev", "p1"), app)
     assert m["type"] == "focus" and m["pane_id"] == "p1" and m["req"]
+
+
+def test_command_to_msg_start():
+    app = App(make_config(), FakeRenderer(13), send=lambda c: None)
+    m = _command_to_msg(Command("start", "dev", text="claude", keys=["claude"]), app)
+    assert m["type"] == "start" and m["name"] == "claude" and m["argv"] == ["claude"]

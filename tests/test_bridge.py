@@ -250,3 +250,12 @@ async def test_send_text_calls_herdr(herdr):
     msg = json.loads(out)
     assert msg["data"]["sent"] is True
     assert herdr.sent == [("w1:p1", "continue")]
+
+
+async def test_start_calls_herdr(herdr):
+    out = await handle_client_message(
+        herdr, "workbox",
+        '{"type":"start","req":"n1","name":"claude","argv":["claude"]}')
+    msg = json.loads(out)
+    assert msg["data"]["started"] is True
+    assert herdr.started == [("claude", ["claude"])]

@@ -39,3 +39,9 @@ text = "commit the changes"
 [[macros]]
 label = "/compact"
 text = "/compact"
+
+# Agent types startable from the deck's "+ New" tile -> the argv herdr runs.
+# Omit to use defaults (claude / codex). Started in the focused herdr workspace.
+[start_profiles]
+claude = ["claude"]
+codex = ["codex"]

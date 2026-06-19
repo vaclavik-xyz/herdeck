@@ -39,6 +39,12 @@ DEFAULT_MACROS: list[Macro] = [
     Macro("/compact", "/compact"),
 ]
 
+# Agent types startable from the deck -> the argv herdr runs in a new pane.
+DEFAULT_START_PROFILES: dict[str, list[str]] = {
+    "claude": ["claude"],
+    "codex": ["codex"],
+}
+
 
 @dataclass
 class Config:
@@ -47,6 +53,8 @@ class Config:
     overview_order: list[str]
     grid: tuple[int, int]
     macros: list[Macro] = field(default_factory=lambda: list(DEFAULT_MACROS))
+    start_profiles: dict[str, list[str]] = field(
+        default_factory=lambda: dict(DEFAULT_START_PROFILES))
 
 
 def _parse_grid(value: str) -> tuple[int, int]:
@@ -97,5 +105,10 @@ def load_config(path: str | Path) -> Config:
     macros = ([Macro(label=m["label"], text=m["text"]) for m in raw_macros]
               if raw_macros else list(DEFAULT_MACROS))
 
+    raw_starts = data.get("start_profiles", {})
+    start_profiles = ({k: list(v) for k, v in raw_starts.items()}
+                      if raw_starts else dict(DEFAULT_START_PROFILES))
+
     return Config(servers=servers, profiles=profiles,
-                  overview_order=overview_order, grid=grid, macros=macros)
+                  overview_order=overview_order, grid=grid, macros=macros,
+                  start_profiles=start_profiles)

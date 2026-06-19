@@ -21,6 +21,7 @@ class HerdrClient(Protocol):
     async def send_keys(self, pane_id: str, keys: list[str]) -> None: ...
     async def focus_agent(self, pane_id: str) -> None: ...
     async def send_text(self, pane_id: str, text: str) -> None: ...
+    async def start_agent(self, name: str, argv: list[str]) -> None: ...
 
 
 def _is_agent_pane(p: dict) -> bool:
@@ -57,6 +58,7 @@ class StubHerdr:
         self.detection: dict[str, str] = {}
         self.sent: list[tuple[str, list[str]]] = []
         self.focused: list[str] = []
+        self.started: list[tuple[str, list[str]]] = []
 
     async def list_panes(self) -> list[dict]:
         return self.panes
@@ -75,6 +77,9 @@ class StubHerdr:
 
     async def send_text(self, pane_id: str, text: str) -> None:
         self.sent.append((pane_id, text))
+
+    async def start_agent(self, name: str, argv: list[str]) -> None:
+        self.started.append((name, argv))
 
 
 async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) -> str:
@@ -102,6 +107,9 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     if kind == "send_text":
         await herdr.send_text(msg["pane_id"], msg["text"])
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
+    if kind == "start":
+        await herdr.start_agent(msg["name"], msg["argv"])
+        return encode({"type": "result", "req": msg["req"], "data": {"started": True}})
     raise ValueError(f"unknown client message: {kind}")
 
 
@@ -274,6 +282,10 @@ class SocketHerdr:
         await self._rpc("agent.send", {"target": pane_id, "text": text}, retry=False)
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]},
                         retry=False)
+
+    async def start_agent(self, name: str, argv: list[str]) -> None:
+        # No workspace_id -> herdr starts the agent in the focused workspace.
+        await self._rpc("agent.start", {"name": name, "argv": argv}, retry=False)
 
 
 async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, clients: set):

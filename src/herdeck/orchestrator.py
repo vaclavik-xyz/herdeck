@@ -14,7 +14,7 @@ _OPTION_LABEL_MAX = 14
 
 @dataclass
 class Command:
-    kind: str                 # list | read | focus | act_if_blocked | act_force | send_text
+    kind: str                 # list|read|focus|act_if_blocked|act_force|send_text|start
     server_id: str
     pane_id: str | None = None
     source: str | None = None
@@ -39,6 +39,11 @@ class Orchestrator:
         self._detection: str = ""
         self._page: int = 0
         self._phase: int = 0
+        self._launcher: bool = False
+
+    def _agent_slots(self) -> int:
+        """Overview tiles available for agents (the last tile is the launcher)."""
+        return max(1, self.slots - 1)
 
     # --- inbound state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
@@ -78,16 +83,21 @@ class Orchestrator:
         return "red" if s.key.server_id in self._down else layout.status_color(s.status)
 
     def render(self) -> RenderState:
+        if self._launcher:
+            return self._render_launcher()
         if self._drill is not None:
             return self._render_drill()
         return self._render_overview()
 
     def _render_overview(self) -> RenderState:
         ordered = self._ordered()
-        shown, pages = layout.page(ordered, self._page, self.slots)
+        agent_slots = self._agent_slots()
+        shown, pages = layout.page(ordered, self._page, agent_slots)
         tiles: list[TileView] = []
         for i in range(self.slots):
-            if i < len(shown):
+            if i == self.slots - 1:                 # reserved launcher tile
+                tiles.append(TileView(i, "+ New", "green"))
+            elif i < len(shown):
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
                 tiles.append(TileView(i, s.label, self._agent_color(s),
@@ -99,12 +109,25 @@ class Orchestrator:
                                       pages, self._down)
         return RenderState(tiles, panel)
 
+    def _render_launcher(self) -> RenderState:
+        types = list(self.config.start_profiles)
+        back_i = self.slots - 1
+        tiles: list[TileView] = []
+        for i in range(self.slots):
+            if i < len(types) and i < back_i:
+                tiles.append(TileView(i, types[i], "blue", agent_type=types[i]))
+            elif i == back_i:
+                tiles.append(TileView(i, "Back", "grey"))
+            else:
+                tiles.append(TileView(i, "", "dim"))
+        return RenderState(tiles, PanelView("new agent", ["pick a type"], "grey"))
+
     def tick(self) -> list[int]:
         """Advance the spinner phase; return overview tile indices that are working."""
-        if self._drill is not None:
+        if self._drill is not None or self._launcher:
             return []
         self._phase += 1
-        shown, _ = layout.page(self._ordered(), self._page, self.slots)
+        shown, _ = layout.page(self._ordered(), self._page, self._agent_slots())
         return [i for i, s in enumerate(shown) if s.status is Status.WORKING]
 
     def _drill_layout(self) -> tuple[list, int, int]:
@@ -156,6 +179,8 @@ class Orchestrator:
         return self.config.profiles.get(agent_type, self.config.profiles["default"])
 
     def on_press(self, index: int) -> list[Command]:
+        if self._launcher:
+            return self._press_launcher(index)
         if self._drill is not None:
             return self._press_drill(index)
         return self._press_overview(index)
@@ -164,8 +189,11 @@ class Orchestrator:
         if index in PANEL_INDICES:
             self._page += 1
             return []
+        if index == self.slots - 1:             # "+ New" launcher tile
+            self._launcher = True
+            return []
         ordered = self._ordered()
-        shown, _ = layout.page(ordered, self._page, self.slots)
+        shown, _ = layout.page(ordered, self._page, self._agent_slots())
         if index < len(shown):
             key = shown[index].key
             self._drill = key
@@ -173,6 +201,20 @@ class Orchestrator:
             # Focus the agent in the on-screen herdr session AND read its prompt.
             return [Command("focus", key.server_id, key.pane_id),
                     Command("read", key.server_id, key.pane_id, source="detection")]
+        return []
+
+    def _press_launcher(self, index: int) -> list[Command]:
+        types = list(self.config.start_profiles)
+        back_i = self.slots - 1
+        if index == back_i:
+            self._launcher = False
+            return []
+        if index < len(types) and index < back_i:
+            name = types[index]
+            argv = list(self.config.start_profiles[name])
+            server = self.config.overview_order[0]
+            self._launcher = False              # return to overview
+            return [Command("start", server, text=name, keys=argv)]
         return []
 
     def _press_drill(self, index: int) -> list[Command]:
