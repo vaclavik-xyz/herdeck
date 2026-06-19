@@ -5,8 +5,25 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "herdeck"
 version = "0.1.0"
+description = "Stream Deck dashboard for AI coding agents running under herdr"
+readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Filip Vaclavik" }]
+keywords = ["ai", "coding-agents", "dashboard", "herdr", "stream-deck"]
+classifiers = [
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Terminals",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX",
+]
 dependencies = ["websockets>=14"]
+
+[project.urls]
+Homepage = "https://github.com/vaclavik-xyz/herdeck"
+Repository = "https://github.com/vaclavik-xyz/herdeck"
 
 [project.optional-dependencies]
 # strmdck (rc) under-declares its runtime deps, so pin them explicitly.

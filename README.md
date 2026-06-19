@@ -121,3 +121,6 @@ optional `approve_always`) key lists. `<name>` matches herdr's detected `agent`
   (config-only changes).
 - Drill-in shows the read prompt text on a spare tile; richer prompt display is
   future work.
+
+## License
+MIT
