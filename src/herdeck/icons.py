@@ -27,8 +27,10 @@ def _safe_name(agent_type: str) -> str:
     safe = _UNSAFE_NAME.sub("_", agent_type)
     if safe == agent_type and safe:
         return safe
+    # Encoded names carry a '.' delimiter, which the passthrough branch can never
+    # produce (it only emits [A-Za-z0-9_-]); the two namespaces are thus disjoint.
     digest = hashlib.sha1(agent_type.encode()).hexdigest()[:8]
-    return f"{safe or '_'}_{digest}"
+    return f"{safe or '_'}.{digest}"
 
 # agent type -> Simple Icons slug (None => generated glyph fallback)
 DEFAULT_AGENT_SLUGS: dict[str, str | None] = {
