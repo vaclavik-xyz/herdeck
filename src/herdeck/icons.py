@@ -13,6 +13,9 @@ ICON_SIZE = 196
 # The spinner has this many distinct frames (arc steps 360/45); keep the cache
 # bounded so a long-running working tile reuses frames instead of writing forever.
 SPINNER_FRAMES = 8
+# Bump when the rendered icon output changes so stale cached PNGs from older
+# versions (e.g. pre-User-Agent fallback glyphs) are ignored, not reused.
+CACHE_VERSION = 2
 
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_-]+")
 
@@ -163,7 +166,7 @@ class IconProvider:
             spinner %= SPINNER_FRAMES   # bound the cache to a fixed frame set
         key = f"{_safe_name(agent_type)}_{color}" + (
             f"_s{spinner}" if spinner is not None else "")
-        name = f"icon_{key}.png"
+        name = f"icon_v{CACHE_VERSION}_{key}.png"
         path = os.path.join(self._cache_dir, name)
         if os.path.exists(path):
             return name
