@@ -54,19 +54,26 @@ class ElgatoDriver(DeckDriver):
         from StreamDeck.ImageHelpers import PILHelper
         return PILHelper.to_native_key_format(self._dev, image)
 
+    def _native_resized(self, image):
+        return self._to_native(image.resize(self._dev.key_image_format()["size"]))
+
     def _key_image(self, tile: TileView):
         import io
         from PIL import Image
         png = self._icon_provider().render_tile_bytes(tile)
-        image = Image.open(io.BytesIO(png)).resize(self._dev.key_image_format()["size"])
-        return self._to_native(image)
+        return self._native_resized(Image.open(io.BytesIO(png)))
 
     def render(self, tiles: list[TileView]) -> None:
         for tile in tiles:
             self._dev.set_key_image(tile.index, self._key_image(tile))
 
     def render_panel(self, panel: PanelView) -> None:
-        pass
+        from ..icons import compose_panel
+        from .d200 import split_panel
+        left, right = split_panel(compose_panel(panel))
+        base = self.slot_count()
+        self._dev.set_key_image(base, self._native_resized(left))
+        self._dev.set_key_image(base + 1, self._native_resized(right))
 
     def on_press(self, callback: Callable[[int], None]) -> None:
         pass
