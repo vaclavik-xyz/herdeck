@@ -94,3 +94,15 @@ def test_sanitized_names_do_not_collide(tmp_path):
     n1 = p.icon_for("a/b", "green")
     n2 = p.icon_for("a_b", "green")
     assert n1 != n2     # distinct raw types -> distinct cache files
+
+
+def test_letter_glyph_is_large_when_font_available(tmp_path):
+    from herdeck.icons import _load_big_font
+    if _load_big_font() is None:
+        return  # no scalable font on this system; bitmap fallback is acceptable
+    p = make_provider(tmp_path)
+    p.icon_for("zeta", "blue")     # unknown agent -> letter glyph
+    im = Image.open(os.path.join(str(tmp_path), "icon_zeta_blue.png")).convert("RGB")
+    white = sum(1 for px in im.getdata()
+                if px[0] > 200 and px[1] > 200 and px[2] > 200)
+    assert white > 1500            # a big bold letter covers a real area

@@ -45,10 +45,19 @@ DEFAULT_AGENT_SLUGS: dict[str, str | None] = {
 
 
 def _default_fetch(slug: str) -> str | None:
-    """Fetch a Simple Icons SVG (cached on disk by the caller). Network."""
+    """Fetch a white Simple Icons SVG (cached on disk by the caller). Network.
+
+    A browser-like User-Agent is required: cdn.simpleicons.org returns 403 for
+    the default urllib agent. The ``/white`` variant gives a monochrome white
+    mark that stays legible on every status background colour.
+    """
     import urllib.request
+    req = urllib.request.Request(
+        f"https://cdn.simpleicons.org/{slug}/white",
+        headers={"User-Agent": "Mozilla/5.0 (herdeck)"},
+    )
     try:
-        with urllib.request.urlopen(f"https://cdn.simpleicons.org/{slug}", timeout=5) as r:
+        with urllib.request.urlopen(req, timeout=5) as r:
             if r.status == 200:
                 return r.read().decode()
     except Exception:
@@ -61,6 +70,38 @@ def _default_rasterize(svg: str, size: int) -> Image.Image:
     png = cairosvg.svg2png(bytestring=svg.encode(), output_width=size, output_height=size)
     import io
     return Image.open(io.BytesIO(png)).convert("RGBA")
+
+
+# Candidate scalable fonts for the letter fallback (macOS, then Linux).
+_FONT_CANDIDATES = (
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/System/Library/Fonts/HelveticaNeue.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+)
+_GLYPH_FONT_SIZE = 120
+_big_font_cache: list = []  # memoised [font_or_None]
+
+
+def _load_big_font():
+    """A large scalable font for the letter fallback; None if none is available."""
+    if _big_font_cache:
+        return _big_font_cache[0]
+    from PIL import ImageFont
+    font = None
+    for path in _FONT_CANDIDATES:
+        try:
+            font = ImageFont.truetype(path, _GLYPH_FONT_SIZE)
+            break
+        except Exception:
+            continue
+    if font is None:
+        try:                       # Pillow >= 10 supports a sized default font
+            font = ImageFont.load_default(size=_GLYPH_FONT_SIZE)
+        except Exception:
+            font = None
+    _big_font_cache.append(font)
+    return font
 
 
 class IconProvider:
@@ -107,11 +148,13 @@ class IconProvider:
         img = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
         ch = (agent_type[:1] or "?").upper()
+        font = _load_big_font()
+        kw = {"font": font} if font is not None else {}
         # Center manually — the default bitmap font does not support anchor="mm".
-        bbox = d.textbbox((0, 0), ch)
+        bbox = d.textbbox((0, 0), ch, **kw)
         w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
         d.text(((ICON_SIZE - w) // 2 - bbox[0], (ICON_SIZE - h) // 2 - bbox[1]),
-               ch, fill=(255, 255, 255, 255))
+               ch, fill=(255, 255, 255, 255), **kw)
         return img
 
     def icon_for(self, agent_type: str, color: str, spinner: int | None = None) -> str:
