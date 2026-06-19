@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from herdeck.app import local_config, make_deck, resolve_mode
+from herdeck.app import _discover_config_path, local_config, make_deck, resolve_mode
 from herdeck.bridge import StubHerdr, start_local_bridge
 from herdeck.config import AnswerProfile, Config, ServerConfig
 from herdeck.connector import Connector
@@ -113,3 +113,16 @@ def test_local_config_merges_partial_profiles():
     cfg = local_config(1, "t", partial)
     assert cfg.profiles["claude"].approve == ["x"]
     assert cfg.profiles["default"].approve == ["enter"]
+
+
+def test_discover_prefers_env(monkeypatch, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text("")
+    monkeypatch.setenv("HERDECK_CONFIG", str(p))
+    assert _discover_config_path() == str(p)
+
+
+def test_discover_none_when_nothing(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERDECK_CONFIG", raising=False)
+    monkeypatch.setattr("os.path.exists", lambda p: False)
+    assert _discover_config_path() is None
