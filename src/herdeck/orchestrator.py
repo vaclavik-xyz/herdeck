@@ -37,6 +37,7 @@ class Orchestrator:
         self._drill: AgentKey | None = None
         self._detection: str = ""
         self._page: int = 0
+        self._phase: int = 0
 
     # --- inbound state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
@@ -87,14 +88,23 @@ class Orchestrator:
         for i in range(self.slots):
             if i < len(shown):
                 s = shown[i]
+                phase = self._phase if s.status is Status.WORKING else None
                 tiles.append(TileView(i, s.label, self._agent_color(s),
                                       icon=None, agent_type=s.agent_type,
-                                      spinner=None))
+                                      spinner=phase))
             else:
                 tiles.append(TileView(i, "", "dim"))
         panel = layout.panel_overview(layout.summary(ordered), self._page % pages,
                                       pages, self._down)
         return RenderState(tiles, panel)
+
+    def tick(self) -> list[int]:
+        """Advance the spinner phase; return overview tile indices that are working."""
+        if self._drill is not None:
+            return []
+        self._phase += 1
+        shown, _ = layout.page(self._ordered(), self._page, self.slots)
+        return [i for i, s in enumerate(shown) if s.status is Status.WORKING]
 
     def _render_drill(self) -> RenderState:
         agent = self._agents.get(self._drill)
