@@ -104,9 +104,21 @@ def test_panel_press_pages_in_overview():
     o.apply_snapshot("dev", [st("p1", Status.IDLE), st("p2", Status.IDLE),
                              st("p3", Status.IDLE)])
     first = [t.label for t in o.render().tiles]
-    assert o.on_press(13) == []        # panel press -> next page, no command
+    assert o.on_press(3) == []         # panel press (slots) -> next page, no command
     second = [t.label for t in o.render().tiles]
     assert first != second
+    assert o.render().panel.title == "page 2/2"
+
+
+def test_panel_indices_scale_with_slot_count():
+    o = Orchestrator(make_config(), slots=4)   # 3 agent slots + launcher -> paging
+    o.apply_snapshot("dev", [st("p1", Status.IDLE), st("p2", Status.IDLE),
+                             st("p3", Status.IDLE), st("p4", Status.IDLE)])
+    first = [t.label for t in o.render().tiles]
+    assert o.on_press(13) == []        # legacy index 13 no longer pages a 4-slot deck
+    assert [t.label for t in o.render().tiles] == first
+    assert o.on_press(4) == []         # computed panel index (slots) pages instead
+    assert [t.label for t in o.render().tiles] != first
     assert o.render().panel.title == "page 2/2"
 
 
