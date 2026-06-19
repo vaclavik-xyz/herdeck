@@ -41,6 +41,7 @@ class D200Driver(DeckDriver):
 
     KEEP_ALIVE_INTERVAL = 5.0
     BRIGHTNESS = 80
+    DEBOUNCE = 0.25          # ignore repeats of the same key within this window
     _CONTROL_USAGE_PAGE = 0x0c
 
     def __init__(self, workdir: str | None = None, icon_provider=None):
@@ -145,8 +146,17 @@ class D200Driver(DeckDriver):
             self._dev.close()
 
     async def run_reader(self) -> None:
+        import time
+        last_index = None
+        last_time = 0.0
         async for action in self._dev.read_packet():
             if action is not None and getattr(action, "pressed", False):
+                # Debounce hardware double-fire: ignore the same key repeated
+                # within DEBOUNCE seconds (distinct keys are never suppressed).
+                now = time.monotonic()
+                if action.index == last_index and now - last_time < self.DEBOUNCE:
+                    continue
+                last_index, last_time = action.index, now
                 if self._callback is not None:
                     self._callback(action.index)
 

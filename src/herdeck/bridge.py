@@ -269,8 +269,11 @@ class SocketHerdr:
         await self._rpc("agent.focus", {"target": pane_id})
 
     async def send_text(self, pane_id: str, text: str) -> None:
-        # Send a message to the agent (typed + submitted by herdr).
+        # agent.send types the text into the agent's input but does not submit it,
+        # so follow with Enter to actually send the message.
         await self._rpc("agent.send", {"target": pane_id, "text": text}, retry=False)
+        await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]},
+                        retry=False)
 
 
 async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, clients: set):
