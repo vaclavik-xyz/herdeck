@@ -266,14 +266,17 @@ class IconProvider:
         PNG and return its filename. Agent tiles (tile.repo set) get the rich
         layout; control tiles render their centred label on a colour."""
         import hashlib
+        # Bound the rotation phase so the cache reuses a fixed set of frames
+        # instead of writing a new PNG on every tick.
+        spinner = None if tile.spinner is None else tile.spinner % SPINNER_FRAMES
         sig = "|".join(str(x) for x in (
-            TILE_VERSION, tile.color, tile.label, tile.agent_type, tile.spinner,
+            TILE_VERSION, tile.color, tile.label, tile.agent_type, spinner,
             tile.repo, tile.branch, tile.status_text, tile.time_text))
         name = "tile_" + hashlib.sha1(sig.encode()).hexdigest()[:16] + ".png"
         path = os.path.join(self._cache_dir, name)
         if os.path.exists(path):
             return name
-        img = (self._compose_agent_tile(tile) if tile.repo is not None
+        img = (self._compose_agent_tile(tile, spinner) if tile.repo is not None
                else self._compose_label_tile(tile))
         img.convert("RGB").save(path)
         return name
@@ -291,14 +294,14 @@ class IconProvider:
                    t, font=f, fill=(255, 255, 255))
         return bg
 
-    def _compose_agent_tile(self, tile) -> Image.Image:
+    def _compose_agent_tile(self, tile, spinner=None) -> Image.Image:
         accent = COLORS.get(tile.color, COLORS["dim"])
         bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), TILE_BG + (255,))
         d = ImageDraw.Draw(bg)
         # logo top-left, rotated by the spinner phase while working
         logo = self._base_glyph(tile.agent_type or "default").resize((46, 46), Image.LANCZOS)
-        if tile.spinner is not None:
-            logo = logo.rotate(-tile.spinner * SPIN_DEG, resample=Image.BICUBIC)
+        if spinner is not None:
+            logo = logo.rotate(-spinner * SPIN_DEG, resample=Image.BICUBIC)
         bg.alpha_composite(logo, (12, 12))
         # status word + elapsed time, top-right
         if tile.status_text:

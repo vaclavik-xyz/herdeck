@@ -101,13 +101,17 @@ def load_config(path: str | Path) -> Config:
     if "default" not in profiles:
         raise ConfigError("answer_profiles.default is required")
 
-    raw_macros = data.get("macros", [])
-    macros = ([Macro(label=m["label"], text=m["text"]) for m in raw_macros]
-              if raw_macros else list(DEFAULT_MACROS))
+    # An explicit (even empty) section disables defaults; only a MISSING section
+    # falls back to the built-ins.
+    if "macros" in data:
+        macros = [Macro(label=m["label"], text=m["text"]) for m in data["macros"]]
+    else:
+        macros = list(DEFAULT_MACROS)
 
-    raw_starts = data.get("start_profiles", {})
-    start_profiles = ({k: list(v) for k, v in raw_starts.items()}
-                      if raw_starts else dict(DEFAULT_START_PROFILES))
+    if "start_profiles" in data:
+        start_profiles = {k: list(v) for k, v in data["start_profiles"].items()}
+    else:
+        start_profiles = dict(DEFAULT_START_PROFILES)
 
     return Config(servers=servers, profiles=profiles,
                   overview_order=overview_order, grid=grid, macros=macros,

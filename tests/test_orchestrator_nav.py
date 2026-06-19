@@ -141,3 +141,15 @@ def test_macros_shown_and_sent_for_non_blocked_agent():
     cmds = o.on_press(0)
     assert cmds == [Command("send_text", "dev", "p1", text="continue")]
     assert not o.is_drilling()
+
+
+def test_blocked_without_numbered_options_falls_back_to_profile():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection("Proceed? (y/n)")          # no numbered options to parse
+    rs = o.render()
+    assert [t.label for t in rs.tiles[:3]] == ["Approve", "Approve!", "Deny"]
+    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1",
+                                     keys=["1", "enter"])]   # claude approve seq
+    assert not o.is_drilling()

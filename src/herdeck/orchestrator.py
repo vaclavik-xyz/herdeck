@@ -170,12 +170,26 @@ class Orchestrator:
         stop_i, back_i = self.slots - 2, self.slots - 1
         actions: list[dict] = []
         if agent is not None and agent.status is Status.BLOCKED:
-            for opt in layout.parse_options(self._detection):
-                actions.append({
-                    "label": f"{opt.key} {opt.label}"[:_OPTION_LABEL_MAX],
-                    "make": (lambda key, k=opt.key: Command(
-                        "act_if_blocked", key.server_id, key.pane_id, keys=[k])),
-                })
+            options = layout.parse_options(self._detection)
+            if options:
+                for opt in options:
+                    actions.append({
+                        "label": f"{opt.key} {opt.label}"[:_OPTION_LABEL_MAX],
+                        "make": (lambda key, k=opt.key: Command(
+                            "act_if_blocked", key.server_id, key.pane_id, keys=[k])),
+                    })
+            else:
+                # No numbered options parsed (e.g. a y/n prompt): fall back to the
+                # agent's configured Approve / Approve! / Deny key sequences.
+                profile = self._profile_for(self._drill)
+                for label, keys in (("Approve", profile.approve),
+                                    ("Approve!", profile.approve_always),
+                                    ("Deny", profile.deny)):
+                    actions.append({
+                        "label": label,
+                        "make": (lambda key, ks=keys: Command(
+                            "act_if_blocked", key.server_id, key.pane_id, keys=ks)),
+                    })
         elif agent is not None:
             for m in self.config.macros:
                 actions.append({

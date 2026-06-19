@@ -12,6 +12,9 @@ from .model import AgentState
 from .orchestrator import Command, Orchestrator
 
 TICK_INTERVAL = 0.4
+# Every Nth tick, fully re-render so elapsed-time text on non-working tiles
+# (idle/blocked/done) advances even without a status change. 25 * 0.4s ≈ 10s.
+FULL_REFRESH_TICKS = 25
 
 log = logging.getLogger("herdeck")
 
@@ -30,6 +33,7 @@ class App:
         deck.on_press(self._on_press)
         self._req = 0
         self._active_read_req: str | None = None
+        self._ticks = 0
 
     def next_req_for(self, cmd: Command) -> str | None:
         if cmd.kind == "list":
@@ -91,6 +95,10 @@ class App:
 
     def handle_tick(self) -> None:
         working = self.orch.tick()
+        self._ticks += 1
+        if self._ticks % FULL_REFRESH_TICKS == 0:
+            self._refresh()          # advance elapsed time on all tiles
+            return
         if not working:
             return
         if hasattr(self.deck, "render_working"):
