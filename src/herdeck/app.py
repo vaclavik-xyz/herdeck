@@ -308,6 +308,8 @@ def make_deck(kind, slots, *, d200_factory=None, web_factory=None):
         return web_factory()
     if kind == "d200":
         return d200_factory()
+    if kind is not None:
+        raise ValueError(f"unsupported deck kind: {kind}")
     try:
         return d200_factory()
     except Exception as exc:
