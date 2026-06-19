@@ -2,7 +2,7 @@ import io
 
 from PIL import Image
 
-from herdeck.driver.base import TileView
+from herdeck.driver.base import PanelView, TileView
 from herdeck.driver.elgato import ElgatoDriver
 
 
@@ -70,3 +70,12 @@ def test_render_resizes_and_writes_native_key_images(monkeypatch):
     assert set(deck.images) == {0, 1}
     assert all(deck.images[k] for k in (0, 1))           # non-empty bytes written
     assert len(deck.images[0]) == 72 * 72 * 3            # resized to the deck key size
+
+
+def test_render_panel_writes_the_two_reserved_keys(monkeypatch):
+    deck = FakeDeck(key_count=15)                        # slot_count == 13
+    drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
+    monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
+    drv.render_panel(PanelView("overview", ["1 working"], "grey"))
+    assert set(deck.images) == {13, 14}                  # the two reserved panel keys
+    assert all(deck.images[k] for k in (13, 14))         # non-empty halves
