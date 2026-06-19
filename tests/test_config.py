@@ -1,6 +1,11 @@
+from pathlib import Path
+
 import pytest
 
-from herdeck.config import DEFAULT_PROFILES, AnswerProfile, load_config, ConfigError
+from herdeck.config import (
+    DEFAULT_PROFILES, DEFAULT_START_PROFILES, AnswerProfile, load_config,
+    ConfigError,
+)
 
 
 CONFIG = """
@@ -45,6 +50,18 @@ def test_default_profiles_cover_claude_codex_default():
     assert DEFAULT_PROFILES["claude"].approve == ["1", "enter"]
     assert DEFAULT_PROFILES["claude"].approve_always == ["2", "enter"]
     assert DEFAULT_PROFILES["default"].stop == ["ctrl+c"]
+
+
+def test_default_start_profiles_include_more_agents():
+    expected = {"claude", "codex", "cursor", "gemini", "opencode"}
+    assert expected <= set(DEFAULT_START_PROFILES)
+
+
+def test_example_start_profiles_match_defaults(monkeypatch):
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    cfg = load_config(path)
+    assert set(DEFAULT_START_PROFILES) <= set(cfg.start_profiles)
 
 
 def test_load_resolves_token_from_env(tmp_path, monkeypatch):
