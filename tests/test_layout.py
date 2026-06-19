@@ -72,6 +72,18 @@ def test_panel_detail_with_and_without_text():
     assert p2.lines == []   # no text yet
 
 
+def test_panel_detail_shows_question_not_option_lines():
+    agent = AgentState(AgentKey("s", "p"), "claude", "api", Status.BLOCKED)
+    panel = panel_detail(agent, "Do you want to proceed?\n1. Yes\n2. No")
+    assert panel.lines == ["Do you want to proceed?"]
+
+
+def test_panel_detail_all_options_falls_back_to_first_line():
+    agent = AgentState(AgentKey("s", "p"), "claude", "api", Status.BLOCKED)
+    panel = panel_detail(agent, "1. Yes\n2. No")
+    assert panel.lines and "1." in panel.lines[0]
+
+
 def test_parse_options_numbered():
     from herdeck.layout import parse_options
     txt = "Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No"
