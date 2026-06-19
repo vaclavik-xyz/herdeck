@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.herdeck.app</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/python3</string>
+    <string>-m</string>
+    <string>herdeck.app</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HERDECK_CONFIG</key><string>/Users/you/.config/herdeck/config.toml</string>
+    <key>HERDECK_WORKBOX_TOKEN</key><string>change-me</string>
+  </dict>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
