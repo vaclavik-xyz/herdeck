@@ -27,7 +27,9 @@ class WebDeck(DeckDriver):
         self._callback: Callable[[int], None] | None = None
         self._lock = threading.Lock()
         self._tiles: dict[int, bytes] = {}          # index -> PNG bytes
+        self._tile_ver: dict[int, int] = {}         # index -> last-changed version
         self._panel: bytes | None = None
+        self._panel_ver = 0
         self._version = 0
         if icon_provider is None:
             import os
@@ -48,6 +50,11 @@ class WebDeck(DeckDriver):
     def slot_count(self) -> int:
         return self._slots
 
+    def _bump(self) -> int:
+        """Assign the next monotonic version. Call while holding self._lock."""
+        self._version += 1
+        return self._version
+
     def render(self, tiles: list[TileView]) -> None:
         new: dict[int, bytes] = {}
         for t in tiles:
@@ -55,16 +62,40 @@ class WebDeck(DeckDriver):
                 continue
             new[t.index] = self._icons.render_tile_bytes(t)
         with self._lock:
+            for i, png in new.items():
+                if self._tiles.get(i) != png:          # bump only changed/new tiles
+                    self._tile_ver[i] = self._bump()
+            removed = set(self._tile_ver) - set(new)
+            for i in removed:                          # drop versions of gone tiles
+                del self._tile_ver[i]
+            if removed:                                # a pure removal must still
+                self._bump()                           # trip the client's version gate
             self._tiles = new
-            self._version += 1
+
+    def render_working(self, tiles: list[TileView]) -> None:
+        """Partial re-render of just the given (working) tiles: bumps only their
+        versions and leaves every other tile and the panel untouched, so the
+        browser refetches just the animating tiles instead of the whole deck."""
+        rendered: dict[int, bytes] = {}
+        for t in tiles:
+            if t.index >= self._slots:
+                continue
+            rendered[t.index] = self._icons.render_tile_bytes(t)
+        with self._lock:
+            for i, png in rendered.items():
+                if self._tiles.get(i) != png:
+                    self._tiles[i] = png
+                    self._tile_ver[i] = self._bump()
 
     def render_panel(self, panel: PanelView) -> None:
         from ..icons import compose_panel
         buf = io.BytesIO()
         compose_panel(panel).convert("RGB").save(buf, "PNG")
+        png = buf.getvalue()
         with self._lock:
-            self._panel = buf.getvalue()
-            self._version += 1
+            if self._panel != png:                     # bump only when it changes
+                self._panel = png
+                self._panel_ver = self._bump()
 
     def on_press(self, callback: Callable[[int], None]) -> None:
         self._callback = callback
@@ -90,7 +121,8 @@ class WebDeck(DeckDriver):
         with self._lock:
             return {"version": self._version, "slots": self._slots,
                     "has_panel": self._panel is not None,
-                    "tiles": sorted(self._tiles)}
+                    "panel": self._panel_ver,
+                    "tiles": dict(self._tile_ver)}
 
     def _tile_png(self, index: int) -> bytes | None:
         with self._lock:
@@ -178,14 +210,20 @@ const panel=document.createElement('div');panel.id='panel';
 panel.onclick=()=>fetch('/press/13',{method:'POST'});
 const pimg=document.createElement('img');panel.appendChild(pimg);
 deck.appendChild(panel);
-let last=-1;
+let lastV=-1; const tv={}; let pv=-1;
 async function poll(){
   try{
     const s=await (await fetch('/state')).json();
-    if(s.version!==last){
-      last=s.version;
-      for(let i=0;i<13;i++) cells[i].src='/tile/'+i+'?v='+s.version;
-      if(s.has_panel) pimg.src='/panel?v='+s.version;
+    if(s.version!==lastV){          // cheap gate: nothing changed at all
+      lastV=s.version;
+      const t=s.tiles||{};
+      for(let i=0;i<13;i++){        // refetch only tiles whose version advanced
+        const v=t[i];
+        if(v===undefined){          // tile gone -> clear the cell
+          if(tv[i]!==undefined){ delete tv[i]; cells[i].removeAttribute('src'); }
+        } else if(v!==tv[i]){ tv[i]=v; cells[i].src='/tile/'+i+'?v='+v; }
+      }
+      if(s.has_panel && s.panel!==pv){ pv=s.panel; pimg.src='/panel?v='+pv; }
     }
   }catch(e){}
   setTimeout(poll,300);
