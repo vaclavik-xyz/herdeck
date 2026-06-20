@@ -112,6 +112,19 @@ class Orchestrator:
     def _agent_color(self, s: AgentState) -> str:
         return "red" if s.key.server_id in self._down else layout.status_color(s.status)
 
+    def _blocked_spotlight(self) -> tuple[str, str] | None:
+        """The longest-waiting BLOCKED agent as (label, elapsed), or None."""
+        blocked = [s for s in self._agents.values() if s.status is Status.BLOCKED]
+        if not blocked:
+            return None
+
+        def started(s):
+            rec = self._since.get(s.key)
+            return rec[1] if rec else 0.0
+
+        oldest = min(blocked, key=started)
+        return (oldest.label, self._elapsed_text(oldest.key))
+
     def render(self) -> RenderState:
         if self._launcher:
             return self._render_launcher()
@@ -141,7 +154,8 @@ class Orchestrator:
             else:
                 tiles.append(TileView(i, "", "dim"))
         panel = layout.panel_overview(layout.summary(ordered), self._page % pages,
-                                      pages, self._down)
+                                      pages, self._down, len(ordered),
+                                      self._blocked_spotlight())
         return RenderState(tiles, panel)
 
     def _render_launcher(self) -> RenderState:

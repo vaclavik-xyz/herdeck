@@ -72,13 +72,22 @@ def summary(agents) -> Counts:
 
 
 def panel_overview(counts: Counts, page_index: int, page_count: int,
-                   down: set[str]) -> PanelView:
-    return PanelView(
-        title=f"page {page_index + 1}/{page_count}",
-        lines=[f"B{counts.blocked} W{counts.working} I{counts.idle}",
-               "offline" if down else "online"],
-        color="red" if down else "grey",
-    )
+                   down: set[str], total: int,
+                   spotlight: tuple[str, str] | None) -> PanelView:
+    if down:
+        title, lines, color = "OFFLINE", ["reconnecting…"], "red"
+    elif spotlight is not None:
+        label, elapsed = spotlight
+        title = "⚠ needs you"
+        lines = [label, f"blocked {elapsed}".rstrip()]
+        color = "amber"
+    else:
+        title = f"{total} agents"
+        lines = [f"W{counts.working} · I{counts.idle} · D{counts.done}", "online"]
+        color = "grey"
+    if page_count > 1 and lines:
+        lines[-1] = f"{lines[-1]} · {page_index + 1}/{page_count}"
+    return PanelView(title=title, lines=lines, color=color)
 
 
 @dataclass
