@@ -52,14 +52,39 @@ def test_status_color():
     assert status_color(Status.UNKNOWN) == "grey"
 
 
-def test_panel_overview_online_and_offline():
-    c = Counts(1, 4, 6, 0)
-    p = panel_overview(c, 0, 2, down=set())
-    assert isinstance(p, PanelView) and p.title == "page 1/2"
-    assert "B1" in p.lines[0] and "W4" in p.lines[0] and "I6" in p.lines[0]
-    assert p.lines[1] == "online" and p.color != "red"
-    p2 = panel_overview(c, 0, 2, down={"dev"})
-    assert p2.lines[1] == "offline" and p2.color == "red"
+def test_panel_overview_offline_takes_priority():
+    pv = panel_overview(Counts(1, 0, 0, 0), 0, 1, {"srv"}, 5, ("api", "2m"))
+    assert isinstance(pv, PanelView)
+    assert pv.title == "OFFLINE"
+    assert pv.color == "red"
+
+
+def test_panel_overview_blocked_spotlight():
+    pv = panel_overview(Counts(1, 3, 6, 0), 0, 1, set(), 11, ("macdoktor-crm", "4m"))
+    assert pv.title == "⚠ needs you"
+    assert pv.lines[0] == "macdoktor-crm"
+    assert pv.lines[1] == "blocked 4m"
+    assert pv.color == "amber"
+
+
+def test_panel_overview_blocked_without_elapsed():
+    pv = panel_overview(Counts(1, 0, 0, 0), 0, 1, set(), 1, ("api", ""))
+    assert pv.lines[1] == "blocked"
+
+
+def test_panel_overview_calm():
+    pv = panel_overview(Counts(0, 3, 6, 2), 0, 1, set(), 11, None)
+    assert pv.title == "11 agents"
+    assert pv.lines[0] == "W3 · I6 · D2"
+    assert pv.lines[1] == "online"
+    assert pv.color == "grey"
+
+
+def test_panel_overview_page_suffix_only_when_multipage():
+    multi = panel_overview(Counts(0, 1, 0, 0), 1, 3, set(), 5, None)
+    assert multi.lines[-1].endswith(" · 2/3")
+    single = panel_overview(Counts(0, 1, 0, 0), 0, 1, set(), 5, None)
+    assert "/" not in single.lines[-1]
 
 
 def test_panel_detail_with_and_without_text():
