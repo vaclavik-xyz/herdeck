@@ -107,7 +107,8 @@ def test_panel_press_pages_in_overview():
     assert o.on_press(3) == []         # panel press (slots) -> next page, no command
     second = [t.label for t in o.render().tiles]
     assert first != second
-    assert o.render().panel.title == "page 2/2"
+    assert o.render().panel.title == "3 agents"
+    assert o.render().panel.lines[-1].endswith(" · 2/2")
 
 
 def test_panel_indices_scale_with_slot_count():
@@ -119,7 +120,8 @@ def test_panel_indices_scale_with_slot_count():
     assert [t.label for t in o.render().tiles] == first
     assert o.on_press(4) == []         # computed panel index (slots) pages instead
     assert [t.label for t in o.render().tiles] != first
-    assert o.render().panel.title == "page 2/2"
+    assert o.render().panel.title == "4 agents"
+    assert o.render().panel.lines[-1].endswith(" · 2/2")
 
 
 def test_new_tile_opens_launcher_and_starts_agent():
@@ -174,3 +176,22 @@ def test_no_fallback_actions_before_read_completes():
     rs = o.render()
     assert rs.tiles[0].label == ""             # no actions yet (no blind approve)
     assert o.on_press(0) == []
+
+
+def test_overview_panel_spotlights_oldest_blocked():
+    from herdeck.config import AnswerProfile, Config
+    from herdeck.model import AgentKey, AgentState, Status
+    from herdeck.orchestrator import Orchestrator
+
+    cfg = Config(servers=[], profiles={"default": AnswerProfile(["enter"], ["esc"],
+                 ["ctrl+c"], ["enter"])}, overview_order=["s"], grid=(5, 3))
+    now = [0.0]
+    orch = Orchestrator(cfg, slots=13, clock=lambda: now[0])
+    now[0] = 100.0
+    orch.apply_event("s", AgentState(AgentKey("s", "p1"), "claude", "older", Status.BLOCKED))
+    now[0] = 200.0
+    orch.apply_event("s", AgentState(AgentKey("s", "p2"), "claude", "newer", Status.BLOCKED))
+    now[0] = 260.0
+    panel = orch.render().panel
+    assert panel.title == "⚠ needs you"
+    assert panel.lines[0] == "older"          # entered BLOCKED earliest

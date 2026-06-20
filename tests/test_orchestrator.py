@@ -34,8 +34,9 @@ def test_overview_panel_summary():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED), state("p2", Status.WORKING)])
     rs = o.render()
-    assert rs.panel.title.startswith("page 1/")
-    assert "B1" in rs.panel.lines[0] and "W1" in rs.panel.lines[0]
+    assert rs.panel.title == "⚠ needs you"
+    assert rs.panel.lines[0] == "api"
+    assert rs.panel.lines[1].startswith("blocked ")
 
 
 def test_disconnected_colors_red_and_panel_offline():
@@ -44,7 +45,8 @@ def test_disconnected_colors_red_and_panel_offline():
     o.set_connection("dev", False)
     rs = o.render()
     assert rs.tiles[0].color == "red"
-    assert rs.panel.lines[1] == "offline"
+    assert rs.panel.title == "OFFLINE"
+    assert rs.panel.lines == ["reconnecting…"]
 
 
 def test_empty_slots_are_dim():
