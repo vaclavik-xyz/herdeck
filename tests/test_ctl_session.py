@@ -3,8 +3,8 @@ import asyncio
 import pytest
 
 from herdeck.commands import Command
-from herdeck.config import Config, ServerConfig
-from herdeck.ctl import ConnectionLost, CtlSession
+from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
+from herdeck.ctl import ConnectionLost, CtlSession, TargetError
 from herdeck.model import AgentKey, AgentState, Status
 
 
@@ -162,4 +162,71 @@ async def test_request_after_drop_raises_immediately():
     with pytest.raises(ConnectionLost):
         await sess.request(Command("focus", "dev", "p1"), timeout=5)
     assert fc["c"].sent == []  # nothing was silently swallowed by connector.send
+    await sess.close()
+
+
+def _config_p():
+    return Config(servers=[ServerConfig("dev", "ws://x", "tok")],
+                  profiles=dict(DEFAULT_PROFILES), overview_order=[], grid=(5, 3))
+
+
+def test_resolve_target_exact_and_fuzzy():
+    sess = CtlSession(_config_p())
+    a = AgentState(AgentKey("dev", "w2:p3"), "claude", "auth", Status.IDLE, repo="herdeck")
+    sess.agents[a.key] = a
+    assert sess.resolve_target("dev:w2:p3") is a   # exact server:pane_id
+    assert sess.resolve_target("herdeck") is a      # fuzzy by repo
+    assert sess.resolve_target("w2:p3") is a         # fuzzy by pane_id
+
+
+def test_resolve_target_unknown_and_ambiguous():
+    sess = CtlSession(_config_p())
+    a1 = AgentState(AgentKey("dev", "p1"), "claude", "dup", Status.IDLE)
+    a2 = AgentState(AgentKey("dev", "p2"), "claude", "dup", Status.IDLE)
+    sess.agents[a1.key] = a1
+    sess.agents[a2.key] = a2
+    with pytest.raises(TargetError):
+        sess.resolve_target("nope")
+    with pytest.raises(TargetError):
+        sess.resolve_target("dup")  # two labels match
+
+
+@pytest.mark.asyncio
+async def test_act_approve_sent_then_settled():
+    fc = {}
+    sess = CtlSession(_config_p(),
+                      connector_factory=lambda **kw: fc.setdefault("c", FakeConnector(**kw)))
+    open_task = asyncio.create_task(sess.open(timeout=1))
+    await asyncio.sleep(0)
+    fc["c"].on_snapshot("dev", [_agent(Status.BLOCKED)])
+    await open_task
+    agent = sess.agents[AgentKey("dev", "p1")]
+    act_task = asyncio.create_task(
+        sess.act("approve", agent, force=False, always=False,
+                 settle_timeout=1, request_timeout=1))
+    await asyncio.sleep(0)
+    fc["c"].on_result(fc["c"].sent[-1]["req"], {"sent": True})
+    await asyncio.sleep(0)
+    fc["c"].on_event("dev", _agent(Status.WORKING))  # leaves blocked -> settled
+    assert await act_task == {"result": "sent", "settled": True}
+    assert fc["c"].sent[-1]["keys"] == ["1", "enter"]
+    await sess.close()
+
+
+@pytest.mark.asyncio
+async def test_act_skipped_by_guard_no_settle():
+    fc = {}
+    sess = CtlSession(_config_p(),
+                      connector_factory=lambda **kw: fc.setdefault("c", FakeConnector(**kw)))
+    open_task = asyncio.create_task(sess.open(timeout=1))
+    await asyncio.sleep(0)
+    fc["c"].on_snapshot("dev", [_agent(Status.IDLE)])
+    await open_task
+    agent = sess.agents[AgentKey("dev", "p1")]
+    act_task = asyncio.create_task(
+        sess.act("approve", agent, force=False, always=False,
+                 settle_timeout=1, request_timeout=1))
+    await asyncio.sleep(0)
+    fc["c"].on_result(fc["c"].sent[-1]["req"], {"skipped": True})
+    assert await act_task == {"result": "skipped", "settled": True}
     await sess.close()
