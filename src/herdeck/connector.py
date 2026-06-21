@@ -71,7 +71,7 @@ class Connector:
                     attempt = 0
                     connected = True
                     self._on_connection(self.server.id, True)
-                    await ws.send(encode({"type": "list"}))   # resync-on-reconnect
+                    await ws.send(encode({"type": "list"}))  # resync-on-reconnect
                     async for raw in ws:
                         try:
                             self._dispatch(raw)
@@ -85,7 +85,7 @@ class Connector:
                     self._on_connection(self.server.id, False)
             if self._stop:
                 break
-            delay = min(self._backoff_base * (2 ** attempt), self._backoff_max)
+            delay = min(self._backoff_base * (2**attempt), self._backoff_max)
             attempt += 1
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=delay)

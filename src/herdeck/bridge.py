@@ -32,8 +32,7 @@ def _is_agent_pane(p: dict) -> bool:
 
 def _worktrees_by_workspace(worktrees: list[dict]) -> dict[str, dict]:
     """Index herdr worktrees by the workspace they're open in."""
-    return {wt["open_workspace_id"]: wt
-            for wt in (worktrees or []) if wt.get("open_workspace_id")}
+    return {wt["open_workspace_id"]: wt for wt in (worktrees or []) if wt.get("open_workspace_id")}
 
 
 def _herdr_pane_to_wire(p: dict, wt_by_ws: dict[str, dict] | None = None) -> dict:
@@ -118,15 +117,15 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
         return encode({"type": "snapshot", "server_id": server_id, "panes": panes})
     if kind == "read":
         text = await herdr.read_pane(msg["pane_id"], msg.get("source", "detection"))
-        return encode({"type": "result", "req": msg["req"],
-                       "data": {"text": text, "pane_id": msg["pane_id"]}})
+        return encode(
+            {"type": "result", "req": msg["req"], "data": {"text": text, "pane_id": msg["pane_id"]}}
+        )
     if kind == "act":
         guard = msg.get("guard", True)
         if guard:
             pane = await herdr.get_pane(msg["pane_id"])
             if pane.get("agent_status") != "blocked":
-                return encode({"type": "result", "req": msg["req"],
-                               "data": {"skipped": True}})
+                return encode({"type": "result", "req": msg["req"], "data": {"skipped": True}})
         await herdr.send_keys(msg["pane_id"], msg["keys"])
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "focus":
@@ -142,10 +141,8 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
 
 
 # herdr events that change fleet membership (need a status re-subscribe after).
-_GLOBAL_EVENT_TYPES = ("pane.created", "pane.closed", "pane.exited",
-                       "pane.agent_detected")
-_FLEET_EVENT_NAMES = {"pane_created", "pane_closed", "pane_exited",
-                      "pane_agent_detected"}
+_GLOBAL_EVENT_TYPES = ("pane.created", "pane.closed", "pane.exited", "pane.agent_detected")
+_FLEET_EVENT_NAMES = {"pane_created", "pane_closed", "pane_exited", "pane_agent_detected"}
 
 
 class HerdrEvents:
@@ -158,16 +155,16 @@ class HerdrEvents:
     back to pure polling.
     """
 
-    def __init__(self, herdr: HerdrClient, socket_path: str | None = None,
-                 poll_interval: float = 5.0):
+    def __init__(
+        self, herdr: HerdrClient, socket_path: str | None = None, poll_interval: float = 5.0
+    ):
         self._herdr = herdr
         self._socket_path = socket_path
         self._interval = poll_interval
         self._wake = asyncio.Event()
 
     async def stream(self):
-        listener = (asyncio.create_task(self._listen())
-                    if self._socket_path else None)
+        listener = asyncio.create_task(self._listen()) if self._socket_path else None
         prev: list[dict] | None = None
         try:
             while True:
@@ -179,7 +176,7 @@ class HerdrEvents:
                     if cur != prev:
                         yield cur
                         prev = cur
-                try:                          # wake on a push event, else slow poll
+                try:  # wake on a push event, else slow poll
                     await asyncio.wait_for(self._wake.wait(), timeout=self._interval)
                 except TimeoutError:
                     pass
@@ -194,16 +191,25 @@ class HerdrEvents:
             writer = None
             try:
                 reader, writer = await asyncio.open_unix_connection(self._socket_path)
-                agent_panes = [p["pane_id"]
-                               for p in _wire_panes(await self._herdr.list_panes())]
+                agent_panes = [p["pane_id"] for p in _wire_panes(await self._herdr.list_panes())]
                 subs = [{"type": t} for t in _GLOBAL_EVENT_TYPES]
-                subs += [{"type": "pane.agent_status_changed", "pane_id": pid}
-                         for pid in agent_panes]
-                writer.write((json.dumps({"id": "e", "method": "events.subscribe",
-                                          "params": {"subscriptions": subs}})
-                              + "\n").encode())
+                subs += [
+                    {"type": "pane.agent_status_changed", "pane_id": pid} for pid in agent_panes
+                ]
+                writer.write(
+                    (
+                        json.dumps(
+                            {
+                                "id": "e",
+                                "method": "events.subscribe",
+                                "params": {"subscriptions": subs},
+                            }
+                        )
+                        + "\n"
+                    ).encode()
+                )
                 await writer.drain()
-                await reader.readline()       # subscription ack
+                await reader.readline()  # subscription ack
                 while True:
                     line = await reader.readline()
                     if not line:
@@ -214,7 +220,7 @@ class HerdrEvents:
                     except Exception:
                         name = None
                     if name in _FLEET_EVENT_NAMES:
-                        break                 # fleet changed -> re-subscribe panes
+                        break  # fleet changed -> re-subscribe panes
             except Exception:
                 pass
             finally:
@@ -224,7 +230,7 @@ class HerdrEvents:
                         await writer.wait_closed()
                     except Exception:
                         pass
-            await asyncio.sleep(0.3)          # brief backoff before re-subscribe
+            await asyncio.sleep(0.3)  # brief backoff before re-subscribe
 
 
 async def _broadcast(snapshot_stream, clients: set, server_id: str) -> None:
@@ -262,11 +268,14 @@ class SocketHerdr:
                 reader = writer = None
                 try:
                     reader, writer = await asyncio.open_unix_connection(self._path)
-                    writer.write((json.dumps(
-                        {"id": "b", "method": method, "params": params}) + "\n").encode())
+                    writer.write(
+                        (
+                            json.dumps({"id": "b", "method": method, "params": params}) + "\n"
+                        ).encode()
+                    )
                     await writer.drain()
                     line = await reader.readline()
-                    if not line:                       # EOF before a response
+                    if not line:  # EOF before a response
                         raise ConnectionError("herdr socket closed")
                     res = json.loads(line.decode())
                     if not isinstance(res, dict):
@@ -319,8 +328,7 @@ class SocketHerdr:
         # agent.send types the text into the agent's input but does not submit it,
         # so follow with Enter to actually send the message.
         await self._rpc("agent.send", {"target": pane_id, "text": text}, retry=False)
-        await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]},
-                        retry=False)
+        await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
 
     async def start_agent(self, name: str, argv: list[str]) -> None:
         # No workspace_id -> herdr starts the agent in the focused workspace.
@@ -371,7 +379,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
 
 async def serve(socket_path: str, host: str, port: int, server_id: str, token: str):
     herdr = SocketHerdr(socket_path)
-    events = HerdrEvents(herdr, socket_path=socket_path)   # push events + slow poll
+    events = HerdrEvents(herdr, socket_path=socket_path)  # push events + slow poll
     clients: set = set()
 
     async def handler(ws):

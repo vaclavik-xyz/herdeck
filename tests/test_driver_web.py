@@ -23,14 +23,16 @@ def make_deck():
 def test_page_has_keyboard_and_highlight_support():
     # the page is the module-level _PAGE served at "/"
     from herdeck.driver import web
+
     page = web._PAGE
-    assert "keydown" in page                 # keyboard shortcuts wired
-    assert "@media" in page                   # responsive layout present
-    assert "press" in page                    # still posts presses
+    assert "keydown" in page  # keyboard shortcuts wired
+    assert "@media" in page  # responsive layout present
+    assert "press" in page  # still posts presses
 
 
 def test_page_guards_key_repeat_and_panel_clears_highlight():
     from herdeck.driver import web
+
     page = web._PAGE
     # auto-repeat must not spam presses while a number key is held down
     assert "e.repeat" in page
@@ -41,6 +43,7 @@ def test_page_guards_key_repeat_and_panel_clears_highlight():
 
 def test_page_uses_state_slot_count_for_cells_and_panel_index():
     from herdeck.driver import web
+
     page = web._PAGE
     assert "ensureCells(s.slots)" in page
     assert "for(let i=0;i<slotCount;i++)" in page
@@ -51,6 +54,7 @@ def test_page_uses_state_slot_count_for_cells_and_panel_index():
 
 def test_page_only_highlights_after_successful_press():
     from herdeck.driver import web
+
     page = web._PAGE
     assert "if(r.status===403) location.reload()" in page
     assert "if(!r.ok) return" in page
@@ -59,6 +63,7 @@ def test_page_only_highlights_after_successful_press():
 
 def test_page_landscape_rule_sizes_deck_for_short_height():
     from herdeck.driver import web
+
     page = web._PAGE
     # phone landscape limits HEIGHT, not width: a max-height media rule must exist
     marker = "@media (max-height:"
@@ -76,9 +81,9 @@ def test_page_landscape_rule_sizes_deck_for_short_height():
             depth -= 1
             if depth == 0:
                 break
-    block = page[start:end + 1]
-    assert "vh" in block          # cells sized by viewport height, not just width
-    assert ".cell" in block       # the tiles themselves are resized
+    block = page[start : end + 1]
+    assert "vh" in block  # cells sized by viewport height, not just width
+    assert ".cell" in block  # the tiles themselves are resized
     # a short viewport may also be narrow (e.g. 320x400) where this rule overrides
     # the portrait one, so it must constrain width too or the deck overflows sideways
     assert "vw" in block
@@ -86,8 +91,20 @@ def test_page_landscape_rule_sizes_deck_for_short_height():
 
 def test_render_updates_state_and_serves_png():
     d = make_deck()
-    d.render([TileView(0, "", "amber", agent_type="claude", repo="api",
-                       branch="x", status_text="BLOCKED", time_text="1m")])
+    d.render(
+        [
+            TileView(
+                0,
+                "",
+                "amber",
+                agent_type="claude",
+                repo="api",
+                branch="x",
+                status_text="BLOCKED",
+                time_text="1m",
+            )
+        ]
+    )
     st = d._state()
     assert st["version"] >= 1 and 0 in st["tiles"]
     assert d._tile_png(0)[:4] == b"\x89PNG"
@@ -120,15 +137,14 @@ def test_press_ignores_out_of_range_indices():
     d = make_deck()
     seen = []
     d.on_press(seen.append)
-    d.press(-1)            # crafted negative index
-    d.press(99)            # beyond panel cells
-    d.press(13)            # panel cell — valid
+    d.press(-1)  # crafted negative index
+    d.press(99)  # beyond panel cells
+    d.press(13)  # panel cell — valid
     assert seen == [13]
 
 
 def test_http_press_requires_session_token():
-    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True,
-                icon_provider=StubIcons())
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
     seen = []
     d.on_press(seen.append)
     try:
@@ -158,15 +174,15 @@ def test_http_press_requires_session_token():
         ) as resp:
             assert resp.status == 200
 
-        req = urllib.request.Request(
-            url, method="POST", headers={"X-Herdeck-Token": "é"})
+        req = urllib.request.Request(url, method="POST", headers={"X-Herdeck-Token": "é"})
         with pytest.raises(urllib.error.HTTPError) as exc:
             urllib.request.urlopen(req, timeout=2)
         assert exc.value.code == 403
         assert seen == []
 
         req = urllib.request.Request(
-            url, method="POST", headers={"X-Herdeck-Token": d._press_token})
+            url, method="POST", headers={"X-Herdeck-Token": d._press_token}
+        )
         with urllib.request.urlopen(req, timeout=2) as resp:
             assert resp.status == 204
         assert seen == [0]
@@ -175,13 +191,13 @@ def test_http_press_requires_session_token():
 
 
 def test_close_releases_server_socket():
-    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True,
-                icon_provider=StubIcons())
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
     port = d.port
     d.close()
 
-    replacement = WebDeck(slots=4, host="127.0.0.1", port=port, serve=True,
-                          icon_provider=StubIcons())
+    replacement = WebDeck(
+        slots=4, host="127.0.0.1", port=port, serve=True, icon_provider=StubIcons()
+    )
     replacement.close()
 
 
@@ -213,15 +229,15 @@ def test_unchanged_tile_keeps_version_changed_tile_bumps():
     v1 = d._state()["tiles"][1]
     # re-render: tile 0 identical, tile 1 changed (spinner advanced)
     d.render([TileView(0, "a", "blue"), TileView(1, "b", "green", spinner=3)])
-    assert d._state()["tiles"][0] == v0          # unchanged -> same version
-    assert d._state()["tiles"][1] > v1           # changed -> bumped
+    assert d._state()["tiles"][0] == v0  # unchanged -> same version
+    assert d._state()["tiles"][1] > v1  # changed -> bumped
 
 
 def test_identical_full_render_does_not_bump_global_version():
     d = make_varying_deck()
     d.render([TileView(0, "a", "blue")])
     v = d._state()["version"]
-    d.render([TileView(0, "a", "blue")])         # nothing changed
+    d.render([TileView(0, "a", "blue")])  # nothing changed
     assert d._state()["version"] == v
 
 
@@ -230,10 +246,10 @@ def test_panel_version_bumps_only_on_change():
     d.render_panel(PanelView("dev", ["x"], "grey"))
     pv = d._state()["panel"]
     assert pv >= 1
-    d.render_panel(PanelView("dev", ["x"], "grey"))   # identical content
-    assert d._state()["panel"] == pv                  # no bump
-    d.render_panel(PanelView("dev", ["y"], "grey"))   # changed content
-    assert d._state()["panel"] > pv                   # bumped
+    d.render_panel(PanelView("dev", ["x"], "grey"))  # identical content
+    assert d._state()["panel"] == pv  # no bump
+    d.render_panel(PanelView("dev", ["y"], "grey"))  # changed content
+    assert d._state()["panel"] > pv  # bumped
 
 
 def test_render_working_updates_only_given_tiles():
@@ -241,12 +257,13 @@ def test_render_working_updates_only_given_tiles():
     d.render([TileView(0, "a", "blue"), TileView(1, "b", "green")])
     v0 = d._state()["tiles"][0]
     v1 = d._state()["tiles"][1]
-    d.render_working([TileView(1, "b", "green", spinner=5)])   # partial: only tile 1
+    d.render_working([TileView(1, "b", "green", spinner=5)])  # partial: only tile 1
     st = d._state()
-    assert st["tiles"][0] == v0                  # untouched tile keeps its version
-    assert st["tiles"][1] > v1                   # working tile bumped
+    assert st["tiles"][0] == v0  # untouched tile keeps its version
+    assert st["tiles"][1] > v1  # working tile bumped
     assert d._tile_png(1) == VaryingIcons().render_tile_bytes(
-        TileView(1, "b", "green", spinner=5))    # new bytes served
+        TileView(1, "b", "green", spinner=5)
+    )  # new bytes served
 
 
 def test_render_working_leaves_panel_untouched():
@@ -269,8 +286,8 @@ def test_render_removing_a_tile_bumps_version_so_client_can_clear_it():
     d = make_varying_deck()
     d.render([TileView(0, "a", "blue"), TileView(1, "b", "green")])
     v = d._state()["version"]
-    d.render([TileView(0, "a", "blue")])         # tile 1 omitted (tile 0 unchanged)
+    d.render([TileView(0, "a", "blue")])  # tile 1 omitted (tile 0 unchanged)
     st = d._state()
-    assert st["version"] > v                      # removal trips the client's gate
-    assert 1 not in st["tiles"]                   # its version is dropped
-    assert d._tile_png(1) is None                 # its bytes are gone
+    assert st["version"] > v  # removal trips the client's gate
+    assert 1 not in st["tiles"]  # its version is dropped
+    assert d._tile_png(1) is None  # its bytes are gone

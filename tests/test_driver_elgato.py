@@ -29,7 +29,7 @@ class FakeDeck:
     def __init__(self, key_count: int = 15, key_size: tuple[int, int] = (72, 72)):
         self._key_count = key_count
         self._key_size = key_size
-        self.images: dict[int, bytes] = {}     # key index -> native image bytes
+        self.images: dict[int, bytes] = {}  # key index -> native image bytes
         self.callback = None
         self.brightness = None
         self.reset_called = False
@@ -68,17 +68,17 @@ def test_render_resizes_and_writes_native_key_images(monkeypatch):
     monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
     drv.render([TileView(0, "a", "green"), TileView(1, "b", "blue")])
     assert set(deck.images) == {0, 1}
-    assert all(deck.images[k] for k in (0, 1))           # non-empty bytes written
-    assert len(deck.images[0]) == 72 * 72 * 3            # resized to the deck key size
+    assert all(deck.images[k] for k in (0, 1))  # non-empty bytes written
+    assert len(deck.images[0]) == 72 * 72 * 3  # resized to the deck key size
 
 
 def test_render_panel_writes_the_two_reserved_keys(monkeypatch):
-    deck = FakeDeck(key_count=15)                        # slot_count == 13
+    deck = FakeDeck(key_count=15)  # slot_count == 13
     drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
     monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
     drv.render_panel(PanelView("overview", ["1 working"], "grey"))
-    assert set(deck.images) == {13, 14}                  # the two reserved panel keys
-    assert all(deck.images[k] for k in (13, 14))         # non-empty halves
+    assert set(deck.images) == {13, 14}  # the two reserved panel keys
+    assert all(deck.images[k] for k in (13, 14))  # non-empty halves
 
 
 def test_key_down_forwards_index_and_key_up_is_ignored():
@@ -86,10 +86,10 @@ def test_key_down_forwards_index_and_key_up_is_ignored():
     drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
     seen: list[int] = []
     drv.on_press(seen.append)
-    assert deck.callback is not None                     # registered with the device
-    deck.callback(deck, 7, True)                         # key-down -> forward index
+    assert deck.callback is not None  # registered with the device
+    deck.callback(deck, 7, True)  # key-down -> forward index
     assert seen == [7]
-    deck.callback(deck, 7, False)                        # key-up -> ignored
+    deck.callback(deck, 7, False)  # key-up -> ignored
     assert seen == [7]
 
 
@@ -98,4 +98,4 @@ def test_render_working_only_touches_the_given_keys(monkeypatch):
     drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
     monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
     drv.render_working([TileView(2, "x", "amber"), TileView(5, "y", "amber")])
-    assert set(deck.images) == {2, 5}                    # untouched keys keep their image
+    assert set(deck.images) == {2, 5}  # untouched keys keep their image

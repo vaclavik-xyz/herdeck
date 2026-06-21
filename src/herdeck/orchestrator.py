@@ -19,12 +19,12 @@ def server_accent(server_id: str) -> str:
 
 @dataclass
 class Command:
-    kind: str                 # list|read|focus|act_if_blocked|act_force|send_text|start
+    kind: str  # list|read|focus|act_if_blocked|act_force|send_text|start
     server_id: str
     pane_id: str | None = None
     source: str | None = None
     keys: list[str] = field(default_factory=list)
-    text: str | None = None   # for send_text (macros)
+    text: str | None = None  # for send_text (macros)
 
 
 @dataclass
@@ -36,6 +36,7 @@ class RenderState:
 class Orchestrator:
     def __init__(self, config: Config, slots: int | None = None, clock=None):
         import time
+
         self.config = config
         cols, rows = config.grid
         self.slots = slots if slots is not None else cols * rows
@@ -80,8 +81,7 @@ class Orchestrator:
 
     # --- inbound state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
-        self._agents = {k: v for k, v in self._agents.items()
-                        if k.server_id != server_id}
+        self._agents = {k: v for k, v in self._agents.items() if k.server_id != server_id}
         for s in states:
             self._agents[s.key] = s
             self._touch(s)
@@ -106,8 +106,11 @@ class Orchestrator:
         return self._agents.get(key)
 
     def is_drill_pane(self, server_id: str, pane_id: str | None) -> bool:
-        return (self._drill is not None and pane_id is not None
-                and self._drill == AgentKey(server_id, pane_id))
+        return (
+            self._drill is not None
+            and pane_id is not None
+            and self._drill == AgentKey(server_id, pane_id)
+        )
 
     def is_drilling(self) -> bool:
         return self._drill is not None
@@ -146,7 +149,7 @@ class Orchestrator:
         show_server_tags = len({s.key.server_id for s in ordered}) > 1
         tiles: list[TileView] = []
         for i in range(self.slots):
-            if i == self.slots - 1:                 # reserved launcher tile
+            if i == self.slots - 1:  # reserved launcher tile
                 tiles.append(TileView(i, "+ New", "green"))
             elif i < len(shown):
                 s = shown[i]
@@ -154,20 +157,32 @@ class Orchestrator:
                 down = s.key.server_id in self._down
                 tag = s.key.server_id[:3].upper() if show_server_tags else None
                 accent = server_accent(s.key.server_id) if show_server_tags else None
-                tiles.append(TileView(
-                    i, s.label, self._agent_color(s),
-                    icon=None, agent_type=s.agent_type, spinner=phase,
-                    repo=(s.repo or s.label),
-                    branch=s.branch or "",
-                    status_text=("OFFLINE" if down else s.status.value.upper()),
-                    time_text=self._elapsed_text(s.key),
-                    server_tag=tag,
-                    server_accent=accent))
+                tiles.append(
+                    TileView(
+                        i,
+                        s.label,
+                        self._agent_color(s),
+                        icon=None,
+                        agent_type=s.agent_type,
+                        spinner=phase,
+                        repo=(s.repo or s.label),
+                        branch=s.branch or "",
+                        status_text=("OFFLINE" if down else s.status.value.upper()),
+                        time_text=self._elapsed_text(s.key),
+                        server_tag=tag,
+                        server_accent=accent,
+                    )
+                )
             else:
                 tiles.append(TileView(i, "", "dim"))
-        panel = layout.panel_overview(layout.summary(ordered), self._page % pages,
-                                      pages, self._down, len(ordered),
-                                      self._blocked_spotlight())
+        panel = layout.panel_overview(
+            layout.summary(ordered),
+            self._page % pages,
+            pages,
+            self._down,
+            len(ordered),
+            self._blocked_spotlight(),
+        )
         return RenderState(tiles, panel)
 
     def _render_launcher(self) -> RenderState:
@@ -205,32 +220,49 @@ class Orchestrator:
             options = layout.parse_options(self._detection)
             if options:
                 for opt in options:
-                    actions.append({
-                        "label": f"{opt.key} {opt.label}"[:_OPTION_LABEL_MAX],
-                        "make": (lambda key, k=opt.key: Command(
-                            "act_if_blocked", key.server_id, key.pane_id, keys=[k])),
-                    })
+                    actions.append(
+                        {
+                            "label": f"{opt.key} {opt.label}"[:_OPTION_LABEL_MAX],
+                            "make": (
+                                lambda key, k=opt.key: Command(
+                                    "act_if_blocked", key.server_id, key.pane_id, keys=[k]
+                                )
+                            ),
+                        }
+                    )
             elif self._detection.strip():
                 # Read completed but no numbered options (e.g. a y/n prompt): fall
                 # back to the agent's configured Approve / Approve! / Deny keys.
                 # (Skipped while detection is empty so we never offer blind
                 # approval before the prompt has been read.)
                 profile = self._profile_for(self._drill)
-                for label, keys in (("Approve", profile.approve),
-                                    ("Approve!", profile.approve_always),
-                                    ("Deny", profile.deny)):
-                    actions.append({
-                        "label": label,
-                        "make": (lambda key, ks=keys: Command(
-                            "act_if_blocked", key.server_id, key.pane_id, keys=ks)),
-                    })
+                for label, keys in (
+                    ("Approve", profile.approve),
+                    ("Approve!", profile.approve_always),
+                    ("Deny", profile.deny),
+                ):
+                    actions.append(
+                        {
+                            "label": label,
+                            "make": (
+                                lambda key, ks=keys: Command(
+                                    "act_if_blocked", key.server_id, key.pane_id, keys=ks
+                                )
+                            ),
+                        }
+                    )
         elif agent is not None:
             for m in self.config.macros:
-                actions.append({
-                    "label": m.label[:_OPTION_LABEL_MAX],
-                    "make": (lambda key, t=m.text: Command(
-                        "send_text", key.server_id, key.pane_id, text=t)),
-                })
+                actions.append(
+                    {
+                        "label": m.label[:_OPTION_LABEL_MAX],
+                        "make": (
+                            lambda key, t=m.text: Command(
+                                "send_text", key.server_id, key.pane_id, text=t
+                            )
+                        ),
+                    }
+                )
         return actions[:stop_i], stop_i, back_i
 
     def _render_drill(self) -> RenderState:
@@ -246,8 +278,11 @@ class Orchestrator:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
                 tiles.append(TileView(i, "", "dim"))
-        panel = (layout.panel_detail(agent, self._detection)
-                 if agent is not None else PanelView("", [], "grey"))
+        panel = (
+            layout.panel_detail(agent, self._detection)
+            if agent is not None
+            else PanelView("", [], "grey")
+        )
         return RenderState(tiles, panel)
 
     # --- presses ---
@@ -266,7 +301,7 @@ class Orchestrator:
         if index in self._panel_indices():
             self._page += 1
             return []
-        if index == self.slots - 1:             # "+ New" launcher tile
+        if index == self.slots - 1:  # "+ New" launcher tile
             self._launcher = True
             return []
         ordered = self._ordered()
@@ -276,8 +311,10 @@ class Orchestrator:
             self._drill = key
             self._detection = ""
             # Focus the agent in the on-screen herdr session AND read its prompt.
-            return [Command("focus", key.server_id, key.pane_id),
-                    Command("read", key.server_id, key.pane_id, source="detection")]
+            return [
+                Command("focus", key.server_id, key.pane_id),
+                Command("read", key.server_id, key.pane_id, source="detection"),
+            ]
         return []
 
     def _press_launcher(self, index: int) -> list[Command]:
@@ -290,26 +327,25 @@ class Orchestrator:
             name = types[index]
             argv = list(self.config.start_profiles[name])
             server = self.config.overview_order[0]
-            self._launcher = False              # return to overview
+            self._launcher = False  # return to overview
             return [Command("start", server, text=name, keys=argv)]
         return []
 
     def _press_drill(self, index: int) -> list[Command]:
         key = self._drill
         actions, stop_i, back_i = self._drill_layout()
-        if index == back_i:                  # Back to overview
+        if index == back_i:  # Back to overview
             self._drill = None
             return []
         if key not in self._agents:
             self._drill = None
             return []
-        if index == stop_i:                  # Stop — always, unconditional
-            cmd = Command("act_force", key.server_id, key.pane_id,
-                          keys=self._profile_for(key).stop)
-            self._drill = None               # return to the fleet overview
+        if index == stop_i:  # Stop — always, unconditional
+            cmd = Command("act_force", key.server_id, key.pane_id, keys=self._profile_for(key).stop)
+            self._drill = None  # return to the fleet overview
             return [cmd]
-        if index < len(actions):             # send option number or macro text
+        if index < len(actions):  # send option number or macro text
             cmd = actions[index]["make"](key)
-            self._drill = None               # return to the fleet overview
+            self._drill = None  # return to the fleet overview
             return [cmd]
-        return []                            # blank tile
+        return []  # blank tile

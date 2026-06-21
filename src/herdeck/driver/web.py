@@ -24,13 +24,19 @@ class WebDeck(DeckDriver):
     use it remotely.
     """
 
-    def __init__(self, slots: int = 13, host: str = "127.0.0.1", port: int = 8800,
-                 icon_provider=None, serve: bool = True):
+    def __init__(
+        self,
+        slots: int = 13,
+        host: str = "127.0.0.1",
+        port: int = 8800,
+        icon_provider=None,
+        serve: bool = True,
+    ):
         self._slots = slots
         self._callback: Callable[[int], None] | None = None
         self._lock = threading.Lock()
-        self._tiles: dict[int, bytes] = {}          # index -> PNG bytes
-        self._tile_ver: dict[int, int] = {}         # index -> last-changed version
+        self._tiles: dict[int, bytes] = {}  # index -> PNG bytes
+        self._tile_ver: dict[int, int] = {}  # index -> last-changed version
         self._panel: bytes | None = None
         self._panel_ver = 0
         self._version = 0
@@ -40,10 +46,11 @@ class WebDeck(DeckDriver):
             import tempfile
 
             from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
+
             cache = os.path.join(tempfile.gettempdir(), "herdeck-web-icons")
-            icon_provider = IconProvider(cache_dir=cache,
-                                         slug_map=DEFAULT_AGENT_SLUGS,
-                                         overrides_dir=None)
+            icon_provider = IconProvider(
+                cache_dir=cache, slug_map=DEFAULT_AGENT_SLUGS, overrides_dir=None
+            )
         self._icons = icon_provider
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -74,13 +81,13 @@ class WebDeck(DeckDriver):
             new[t.index] = self._icons.render_tile_bytes(t)
         with self._lock:
             for i, png in new.items():
-                if self._tiles.get(i) != png:          # bump only changed/new tiles
+                if self._tiles.get(i) != png:  # bump only changed/new tiles
                     self._tile_ver[i] = self._bump()
             removed = set(self._tile_ver) - set(new)
-            for i in removed:                          # drop versions of gone tiles
+            for i in removed:  # drop versions of gone tiles
                 del self._tile_ver[i]
-            if removed:                                # a pure removal must still
-                self._bump()                           # trip the client's version gate
+            if removed:  # a pure removal must still
+                self._bump()  # trip the client's version gate
             self._tiles = new
 
     def render_working(self, tiles: list[TileView]) -> None:
@@ -100,11 +107,12 @@ class WebDeck(DeckDriver):
 
     def render_panel(self, panel: PanelView) -> None:
         from ..icons import compose_panel
+
         buf = io.BytesIO()
         compose_panel(panel).convert("RGB").save(buf, "PNG")
         png = buf.getvalue()
         with self._lock:
-            if self._panel != png:                     # bump only when it changes
+            if self._panel != png:  # bump only when it changes
                 self._panel = png
                 self._panel_ver = self._bump()
 
@@ -140,10 +148,13 @@ class WebDeck(DeckDriver):
     # --- state snapshot for the browser ---
     def _state(self) -> dict:
         with self._lock:
-            return {"version": self._version, "slots": self._slots,
-                    "has_panel": self._panel is not None,
-                    "panel": self._panel_ver,
-                    "tiles": dict(self._tile_ver)}
+            return {
+                "version": self._version,
+                "slots": self._slots,
+                "has_panel": self._panel is not None,
+                "panel": self._panel_ver,
+                "tiles": dict(self._tile_ver),
+            }
 
     def _tile_png(self, index: int) -> bytes | None:
         with self._lock:
@@ -158,7 +169,7 @@ class WebDeck(DeckDriver):
         deck = self
 
         class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *a):           # silence default request logging
+            def log_message(self, *a):  # silence default request logging
                 pass
 
             def _send(self, code, body=b"", ctype="application/octet-stream"):
@@ -189,14 +200,12 @@ class WebDeck(DeckDriver):
                     if not self._valid_token(token):
                         self._send(403)
                         return
-                    page = _PAGE.replace("__PRESS_TOKEN_JSON__",
-                                         json.dumps(deck._press_token))
+                    page = _PAGE.replace("__PRESS_TOKEN_JSON__", json.dumps(deck._press_token))
                     self._send(200, page.encode(), "text/html; charset=utf-8")
                 elif path == "/state":
                     if not self._require_token(url):
                         return
-                    self._send(200, json.dumps(deck._state()).encode(),
-                               "application/json")
+                    self._send(200, json.dumps(deck._state()).encode(), "application/json")
                 elif path == "/panel":
                     if not self._require_token(url):
                         return
