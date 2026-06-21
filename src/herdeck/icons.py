@@ -103,6 +103,13 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 TILE_VERSION = 1
 TILE_BG = (26, 26, 30)           # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
+SERVER_CHIP_COLORS: dict[str, tuple[int, int, int]] = {
+    "teal": (24, 150, 145),
+    "violet": (135, 100, 235),
+    "orange": (220, 115, 35),
+    "pink": (215, 80, 135),
+    "lime": (125, 175, 45),
+}
 
 
 def _font(size: int):
@@ -293,9 +300,13 @@ class IconProvider:
         # Bound the rotation phase so the cache reuses a fixed set of frames
         # instead of writing a new PNG on every tick.
         spinner = None if tile.spinner is None else tile.spinner % SPINNER_FRAMES
-        sig = "|".join(str(x) for x in (
+        sig_parts = [
             TILE_VERSION, tile.color, tile.label, tile.agent_type, spinner,
-            tile.repo, tile.branch, tile.status_text, tile.time_text))
+            tile.repo, tile.branch, tile.status_text, tile.time_text,
+        ]
+        if tile.server_tag or tile.server_accent:
+            sig_parts.extend([tile.server_tag, tile.server_accent])
+        sig = "|".join(str(x) for x in sig_parts)
         name = "tile_" + hashlib.sha1(sig.encode()).hexdigest()[:16] + ".png"
         path = os.path.join(self._cache_dir, name)
         if os.path.exists(path):
@@ -352,5 +363,18 @@ class IconProvider:
             for line in _wrap(d, tile.branch, fb, ICON_SIZE - 24, 2):
                 d.text((12, y), line, font=fb, fill=(180, 180, 188))
                 y += 20
+        if tile.server_tag:
+            chip_fill = SERVER_CHIP_COLORS.get(
+                tile.server_accent or "", (95, 95, 105))
+            fc = _font(14)
+            tag = _truncate(d, tile.server_tag, fc, 48)
+            text_w = d.textlength(tag, font=fc)
+            bb = d.textbbox((0, 0), tag, font=fc)
+            x, y, pad_x, chip_h = 12, ICON_SIZE - 40, 6, 22
+            chip_w = int(text_w + pad_x * 2)
+            d.rounded_rectangle(
+                [x, y, x + chip_w, y + chip_h], radius=4, fill=chip_fill)
+            text_y = y + (chip_h - (bb[3] - bb[1])) / 2 - bb[1]
+            d.text((x + pad_x, text_y), tag, font=fc, fill=(255, 255, 255))
         d.rectangle([0, ICON_SIZE - 8, ICON_SIZE, ICON_SIZE], fill=accent)  # accent
         return bg
