@@ -27,6 +27,30 @@ Run `herdeck-doctor` to diagnose setup problems — it checks the herdr socket,
 config/mode, deck availability, and (for remote) token presence, printing a
 pass/fail checklist with hints (it never prints token values).
 
+## Controlling agents from the CLI (`herdeck-ctl`)
+
+`herdeck-ctl` drives agents from a terminal — for scripting or for a lead agent
+orchestrating others — using the same bridge and answer profiles as the deck.
+
+```bash
+herdeck-ctl ls --json                          # list agents + status
+herdeck-ctl wait --any --until blocked --json  # block until one needs input
+herdeck-ctl approve local:w1:p1                # approve a blocked agent
+herdeck-ctl focus local:w1:p1                  # bring its pane to the foreground
+herdeck-ctl send local:w1:p1 "run the tests"   # send text (submits immediately)
+```
+
+Target an agent by `server:pane_id` or a fuzzy match on its label/repo/branch.
+Common options (`--json`, `--server`, `--config`) go **after** the subcommand;
+the connect `--timeout` is global and goes **before** it
+(`herdeck-ctl --timeout 5 ls`). `wait` has its own `--timeout` (default: no
+limit) that goes after, e.g. `wait --any --until blocked --timeout 60`.
+
+Exit codes: `0` ok · `2` usage · `3` skipped (agent not blocked) · `4`
+unknown/ambiguous agent · `5` connection/config error · `124` `wait` timed out.
+Actions that clear a block (`approve`/`deny`/`stop`) wait until the agent leaves
+`blocked` before returning (tune with `--settle S` / `--no-settle`).
+
 ## Architecture
 - `herdeck-bridge` runs on each server: connects to herdr's local Unix socket,
   maps/filters panes to agents, and exposes an authenticated WebSocket bound to
