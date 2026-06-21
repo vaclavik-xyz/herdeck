@@ -2027,10 +2027,12 @@ roborev show "$sha"
 Append to `tests/test_local_mode.py`:
 
 ```python
-def test_make_deck_uses_hardware_web_bind_and_port():
+def test_make_deck_uses_hardware_web_bind_and_port(monkeypatch):
     from herdeck.config import HardwareConfig
 
     seen = {}
+    monkeypatch.delenv("HERDECK_WEB_BIND", raising=False)
+    monkeypatch.delenv("HERDECK_WEB_PORT", raising=False)
 
     def web_factory(host=None, port=None):
         seen["host"] = host
@@ -2041,6 +2043,25 @@ def test_make_deck_uses_hardware_web_bind_and_port():
     make_deck("web", 13, web_factory=web_factory, hardware=hw)
 
     assert seen == {"host": "100.1.2.3", "port": 1234}
+
+
+def test_make_deck_prefers_env_web_bind_and_port(monkeypatch):
+    from herdeck.config import HardwareConfig
+
+    seen = {}
+
+    def web_factory(host=None, port=None):
+        seen["host"] = host
+        seen["port"] = port
+        return _Web()
+
+    monkeypatch.setenv("HERDECK_WEB_BIND", "127.9.9.9")
+    monkeypatch.setenv("HERDECK_WEB_PORT", "9911")
+
+    hw = HardwareConfig(web_bind="100.1.2.3", web_port=1234)
+    make_deck("web", 13, web_factory=web_factory, hardware=hw)
+
+    assert seen == {"host": "127.9.9.9", "port": 9911}
 
 
 def test_runtime_startup_settings_prefer_env_over_local(monkeypatch):
@@ -2072,6 +2093,21 @@ def test_runtime_startup_settings_use_local_when_env_absent(monkeypatch):
     assert _resolve_deck_kind(cfg) == "web"
     assert _resolve_socket_path(cfg) == "/local.sock"
     assert _resolve_tick_interval(cfg) == 1.25
+
+
+def test_make_local_profile_switcher_preserves_bridge_server():
+    from herdeck.app import make_local_profile_switcher
+    from herdeck.config import Config
+
+    resolved = Config(servers=[], profiles={}, overview_order=[], grid=(4, 4))
+    switch = make_local_profile_switcher(lambda name: resolved, 7654, "secret")
+
+    cfg = switch("mobile")
+
+    assert cfg.servers[0].id == "local"
+    assert cfg.servers[0].url == "ws://127.0.0.1:7654"
+    assert cfg.servers[0].token == "secret"
+    assert cfg.grid == (4, 4)
 ```
 
 Append to `tests/test_driver_elgato.py`:
@@ -2093,7 +2129,7 @@ If no `fake_deck` fixture has `brightness`, update the test fake to store the va
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_local_mode.py::test_runtime_startup_settings_prefer_env_over_local tests/test_local_mode.py::test_runtime_startup_settings_use_local_when_env_absent tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
+.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_local_mode.py::test_make_deck_prefers_env_web_bind_and_port tests/test_local_mode.py::test_runtime_startup_settings_prefer_env_over_local tests/test_local_mode.py::test_runtime_startup_settings_use_local_when_env_absent tests/test_local_mode.py::test_make_local_profile_switcher_preserves_bridge_server tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
 ```
 
 Expected: FAIL because hardware settings are not accepted.
@@ -2112,8 +2148,8 @@ def make_deck(kind, slots, *, hardware=None, d200_factory=None, elgato_factory=N
 In default web factory:
 
 ```python
-host = hardware.web_bind or os.environ.get("HERDECK_WEB_BIND", "127.0.0.1")
-port = int(hardware.web_port or os.environ.get("HERDECK_WEB_PORT", "8800"))
+host = os.environ.get("HERDECK_WEB_BIND") or hardware.web_bind or "127.0.0.1"
+port = int(os.environ.get("HERDECK_WEB_PORT") or hardware.web_port or 8800)
 d = WebDeck(slots, host=host, port=port)
 ```
 
@@ -2211,6 +2247,9 @@ async def _run(
         switch_profile=switch_profile,
         update_connectors=lambda cfg: manager.update(cfg.servers),
     )
+    for server in config.servers:
+        app.orch.set_connection(server.id, False)
+    app._refresh()
     manager.update(config.servers)
     tasks = [_guard(_ticker(app, loop, tick_interval or config.hardware.tick_interval))]
     if hasattr(deck, "run_reader"):
@@ -2225,9 +2264,22 @@ async def _run(
 
 Keep the existing connector construction inside the manager factory from Task 7; do not leave a separate unmanaged `connectors` dict in `_run`.
 
-Change `_run_local` to accept and forward runtime settings:
+Change `_run_local` to accept and forward runtime settings while preserving the synthesized local bridge server on profile switches:
 
 ```python
+def make_local_profile_switcher(switch_profile, port: int, token: str):
+    if switch_profile is None:
+        return None
+
+    def switch(name: str) -> Config | None:
+        resolved = switch_profile(name)
+        if resolved is None:
+            return None
+        return local_config(port, token, resolved)
+
+    return switch
+
+
 async def _run_local(
     socket_path,
     deck,
@@ -2239,10 +2291,11 @@ async def _run_local(
     from .bridge import start_local_bridge
 
     host, port, token, _handle = await start_local_bridge(socket_path)
+    local_switch_profile = make_local_profile_switcher(switch_profile, port, token)
     await _run(
         local_config(port, token, partial),
         deck,
-        switch_profile=switch_profile,
+        switch_profile=local_switch_profile,
         tick_interval=tick_interval,
     )
 ```
@@ -2349,7 +2402,7 @@ return ElgatoDriver(brightness=hardware.brightness)
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_local_mode.py::test_runtime_startup_settings_prefer_env_over_local tests/test_local_mode.py::test_runtime_startup_settings_use_local_when_env_absent tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
+.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_local_mode.py::test_make_deck_prefers_env_web_bind_and_port tests/test_local_mode.py::test_runtime_startup_settings_prefer_env_over_local tests/test_local_mode.py::test_runtime_startup_settings_use_local_when_env_absent tests/test_local_mode.py::test_make_local_profile_switcher_preserves_bridge_server tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
 ```
 
 Expected: PASS.
