@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from herdeck.app import App, _command_to_msg, _guard, _run
-from herdeck.config import Config, ServerConfig, AnswerProfile, ConfigError
+from herdeck.config import AnswerProfile, Config, ConfigError, ServerConfig
 from herdeck.driver.fake import FakeRenderer
 from herdeck.model import AgentKey, AgentState, Status
 from herdeck.orchestrator import Command

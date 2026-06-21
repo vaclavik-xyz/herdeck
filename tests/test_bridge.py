@@ -3,8 +3,12 @@ import json
 import pytest
 
 from herdeck.bridge import (
-    handle_client_message, StubHerdr, _wire_panes, _is_agent_pane,
-    _herdr_pane_to_wire, _worktrees_by_workspace,
+    StubHerdr,
+    _herdr_pane_to_wire,
+    _is_agent_pane,
+    _wire_panes,
+    _worktrees_by_workspace,
+    handle_client_message,
 )
 
 
@@ -188,6 +192,7 @@ async def test_herdr_events_yields_full_list_on_change_and_removal():
 
 async def test_rpc_retries_reads_but_not_send_keys(monkeypatch):
     import asyncio as _asyncio
+
     from herdeck.bridge import SocketHerdr
 
     writes = []
@@ -209,12 +214,12 @@ async def test_rpc_retries_reads_but_not_send_keys(monkeypatch):
     h = SocketHerdr("/nonexistent.sock")
 
     writes.clear()
-    with pytest.raises(Exception):
+    with pytest.raises(ConnectionError):
         await h.get_pane("w1:p1")          # idempotent -> retried
     assert len(writes) == 2
 
     writes.clear()
-    with pytest.raises(Exception):
+    with pytest.raises(ConnectionError):
         await h.send_keys("w1:p1", ["1"])  # non-idempotent -> NOT retried
     assert len(writes) == 1
 
@@ -230,6 +235,7 @@ async def test_focus_calls_herdr_focus_agent(herdr):
 
 async def test_push_event_wakes_stream_before_poll():
     import asyncio
+
     from herdeck.bridge import HerdrEvents
 
     seq = [[raw_pane("w1:p1", agent="claude", status="idle")],
