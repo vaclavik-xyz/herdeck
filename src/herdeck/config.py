@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+log = logging.getLogger("herdeck.config")
 
 
 class ConfigError(Exception):
@@ -32,10 +35,18 @@ class Macro:
 
 
 @dataclass
+class TelegramConfig:
+    token_env: str     # env var holding the bot token (never the token itself)
+    chat_id: str       # target chat (not secret)
+
+
+@dataclass
 class Notifications:
     enabled: bool = False
     on: list[str] = field(default_factory=lambda: ["blocked"])
     sound: bool = True
+    backends: list[str] = field(default_factory=lambda: ["macos"])
+    telegram: TelegramConfig | None = None
 
 
 # Quick-send macros shown when drilling into a non-blocked agent.
@@ -96,6 +107,25 @@ def _parse_profile(name: str, raw: dict) -> AnswerProfile:
     )
 
 
+def parse_notifications(n: dict) -> Notifications:
+    tg_raw = n.get("telegram")
+    telegram = None
+    if isinstance(tg_raw, dict):
+        if "token_env" in tg_raw and "chat_id" in tg_raw:
+            telegram = TelegramConfig(token_env=tg_raw["token_env"],
+                                      chat_id=str(tg_raw["chat_id"]))
+        else:
+            log.warning("[notifications.telegram] needs both token_env and "
+                        "chat_id; ignoring telegram config")
+    return Notifications(
+        enabled=n.get("enabled", False),
+        on=list(n.get("on", ["blocked"])),
+        sound=n.get("sound", True),
+        backends=list(n.get("backends", ["macos"])),
+        telegram=telegram,
+    )
+
+
 def load_config(path: str | Path) -> Config:
     data = tomllib.loads(Path(path).read_text())
 
@@ -128,12 +158,7 @@ def load_config(path: str | Path) -> Config:
     else:
         start_profiles = dict(DEFAULT_START_PROFILES)
 
-    n = data.get("notifications", {})
-    notifications = Notifications(
-        enabled=n.get("enabled", False),
-        on=list(n.get("on", ["blocked"])),
-        sound=n.get("sound", True),
-    )
+    notifications = parse_notifications(data.get("notifications", {}))
 
     return Config(servers=servers, profiles=profiles,
                   overview_order=overview_order, grid=grid, macros=macros,

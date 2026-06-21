@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import urllib.parse
+import urllib.request
 from collections.abc import Callable
 
 log = logging.getLogger("herdeck.notify")
@@ -18,6 +20,45 @@ def _macos_sink(title: str, body: str, sound: bool) -> None:
         script += ' sound name "Glass"'
     subprocess.run(["osascript", "-e", script], timeout=5,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
+def _http_post(url: str, fields: dict[str, str]) -> None:
+    data = urllib.parse.urlencode(fields).encode()
+    with urllib.request.urlopen(url, data=data, timeout=5):
+        pass
+
+
+def make_telegram_sink(
+    token: str,
+    chat_id: str,
+    *,
+    post: Callable[[str, dict[str, str]], None] = _http_post,
+) -> Callable[[str, str, bool], None]:
+    """Sink that posts the alert to a Telegram chat via the Bot API."""
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+    def sink(title: str, body: str, sound: bool) -> None:
+        post(url, {
+            "chat_id": str(chat_id),
+            "text": f"{title}\n{body}",
+            "disable_notification": "false" if sound else "true",
+        })
+
+    return sink
+
+
+def composite_sink(
+    sinks: list[Callable[[str, str, bool], None]],
+) -> Callable[[str, str, bool], None]:
+    """Fan out to multiple sinks; one failing sink never stops the others."""
+    def sink(title: str, body: str, sound: bool) -> None:
+        for s in sinks:
+            try:
+                s(title, body, sound)
+            except Exception:
+                log.debug("notify sink failed", exc_info=True)
+
+    return sink
 
 
 class Notifier:

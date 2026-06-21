@@ -138,3 +138,51 @@ def test_python_m_invocation_runs_main():
     r = subprocess.run([sys.executable, "-m", "herdeck.doctor"],
                        capture_output=True, text=True, env=env)
     assert "herdeck doctor" in r.stdout
+
+
+def test_check_notifications_disabled():
+    from herdeck.config import Notifications
+    from herdeck.doctor import check_notifications
+    c = check_notifications(Notifications(enabled=False))
+    assert c.ok is True and "disabled" in c.detail.lower()
+
+
+def test_check_notifications_telegram_present_redacts():
+    from herdeck.config import Notifications, TelegramConfig
+    from herdeck.doctor import check_notifications
+    n = Notifications(enabled=True, backends=["macos", "telegram"],
+                      telegram=TelegramConfig("HERDECK_TG", "42"))
+    c = check_notifications(n, getenv=lambda k: "SECRET-TOKEN-VALUE")
+    assert c.ok is True
+    assert "token_env=present" in c.detail and "chat_id=present" in c.detail
+    assert "SECRET-TOKEN-VALUE" not in c.detail   # never leak the value
+
+
+def test_check_notifications_telegram_missing_token_fails():
+    from herdeck.config import Notifications, TelegramConfig
+    from herdeck.doctor import check_notifications
+    n = Notifications(enabled=True, backends=["telegram"],
+                      telegram=TelegramConfig("HERDECK_TG", "42"))
+    c = check_notifications(n, getenv=lambda k: None)
+    assert c.ok is False and "token_env=missing" in c.detail
+
+
+def test_check_notifications_unknown_backend_fails():
+    from herdeck.config import Notifications
+    from herdeck.doctor import check_notifications
+    c = check_notifications(Notifications(enabled=True, backends=["bogus"]))
+    assert c.ok is False and "unknown=bogus" in c.detail
+
+
+def test_check_notifications_empty_backends_fails():
+    from herdeck.config import Notifications
+    from herdeck.doctor import check_notifications
+    c = check_notifications(Notifications(enabled=True, backends=[]))
+    assert c.ok is False and "nothing will fire" in c.detail.lower()
+
+
+def test_check_notifications_macos_only_ok():
+    from herdeck.config import Notifications
+    from herdeck.doctor import check_notifications
+    c = check_notifications(Notifications(enabled=True, backends=["macos"]))
+    assert c.ok is True
