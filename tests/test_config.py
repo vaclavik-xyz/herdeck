@@ -146,3 +146,10 @@ def test_notifications_telegram_incomplete_is_skipped(tmp_path):
         "[notifications]\nenabled=true\nbackends=[\"telegram\"]\n"
         "[notifications.telegram]\nchat_id=123\n"))   # no token_env
     assert cfg.notifications.telegram is None
+
+
+def test_example_notifications_backends_default(monkeypatch):
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    cfg = load_config(path)
+    assert "macos" in cfg.notifications.backends
