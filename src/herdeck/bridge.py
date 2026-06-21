@@ -268,7 +268,19 @@ class SocketHerdr:
                     line = await reader.readline()
                     if not line:                       # EOF before a response
                         raise ConnectionError("herdr socket closed")
-                    return json.loads(line.decode())
+                    res = json.loads(line.decode())
+                    if not isinstance(res, dict):
+                        raise RuntimeError(f"herdr RPC {method} returned non-object response")
+                    if "error" in res:
+                        err = res["error"]
+                        if isinstance(err, dict):
+                            message = err.get("message", str(err))
+                        else:
+                            message = str(err)
+                        raise RuntimeError(f"herdr RPC {method} failed: {message}")
+                    if "result" not in res:
+                        raise RuntimeError(f"herdr RPC {method} missing result")
+                    return res
                 except (OSError, ConnectionError) as exc:
                     last_exc = exc
                 finally:
@@ -375,6 +387,8 @@ def main() -> None:
     port = int(os.environ.get("HERDECK_PORT", "8788"))
     server_id = os.environ.get("HERDECK_SERVER_ID", "server")
     token = os.environ["HERDECK_TOKEN"]
+    if not token.strip():
+        raise SystemExit("HERDECK_TOKEN must not be empty")
     asyncio.run(serve(socket_path, host, port, server_id, token))
 
 

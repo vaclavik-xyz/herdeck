@@ -224,6 +224,45 @@ async def test_rpc_retries_reads_but_not_send_keys(monkeypatch):
     assert len(writes) == 1
 
 
+async def test_rpc_error_envelope_raises(monkeypatch):
+    import asyncio as _asyncio
+
+    from herdeck.bridge import SocketHerdr
+
+    class FakeWriter:
+        def write(self, data): pass
+        async def drain(self): pass
+        def close(self): pass
+        async def wait_closed(self): pass
+
+    class FakeReader:
+        async def readline(self):
+            return b'{"id":"b","error":{"message":"pane not found"}}\n'
+
+    async def fake_conn(path):
+        return FakeReader(), FakeWriter()
+
+    monkeypatch.setattr(_asyncio, "open_unix_connection", fake_conn)
+
+    h = SocketHerdr("/tmp/herdr.sock")
+    with pytest.raises(RuntimeError, match="pane not found"):
+        await h.read_pane("w1:p1", "detection")
+
+
+def test_bridge_main_rejects_empty_token(monkeypatch):
+    from herdeck import bridge
+
+    async def should_not_start(*args, **kwargs):
+        raise AssertionError("serve should not start with empty token")
+
+    monkeypatch.setenv("HERDR_SOCKET", "/tmp/herdr.sock")
+    monkeypatch.setenv("HERDECK_TOKEN", "   ")
+    monkeypatch.setattr(bridge, "serve", should_not_start)
+
+    with pytest.raises(SystemExit, match="HERDECK_TOKEN must not be empty"):
+        bridge.main()
+
+
 async def test_focus_calls_herdr_focus_agent(herdr):
     out = await handle_client_message(
         herdr, "workbox",
