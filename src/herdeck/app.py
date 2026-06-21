@@ -387,6 +387,7 @@ def local_config(port, token, partial=None):
         DEFAULT_PROFILES,
         DEFAULT_START_PROFILES,
         Config,
+        Notifications,
         ServerConfig,
     )
     profiles = dict(DEFAULT_PROFILES)
@@ -400,6 +401,7 @@ def local_config(port, token, partial=None):
         macros=partial.macros if partial else list(DEFAULT_MACROS),
         start_profiles=(partial.start_profiles if partial
                         else dict(DEFAULT_START_PROFILES)),
+        notifications=partial.notifications if partial else Notifications(),
     )
 
 
