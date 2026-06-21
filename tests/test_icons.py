@@ -174,3 +174,54 @@ def test_agent_tile_with_server_tag_renders(tmp_path):
     )
 
     assert p.render_tile_bytes(base) != p.render_tile_bytes(tagged)
+
+
+def test_theme_server_accent_color_renders(tmp_path):
+    from herdeck.driver.base import TileView
+
+    p = make_provider(tmp_path)
+    tile = TileView(
+        0,
+        "",
+        "blue",
+        agent_type="claude",
+        repo="api",
+        branch="",
+        status_text="IDLE",
+        server_tag="DEV",
+        server_accent="#334455",
+    )
+    other = TileView(
+        0,
+        "",
+        "blue",
+        agent_type="claude",
+        repo="api",
+        branch="",
+        status_text="IDLE",
+        server_tag="DEV",
+        server_accent="#553344",
+    )
+
+    assert p.render_tile_bytes(tile)[:4] == b"\x89PNG"
+    assert p.render_tile_bytes(tile) != p.render_tile_bytes(other)
+
+
+def test_theme_status_color_name_renders_distinct_from_dim(tmp_path):
+    from herdeck.driver.base import TileView
+
+    p = make_provider(tmp_path)
+    pink = TileView(0, "", "pink", agent_type="claude", repo="api", status_text="IDLE")
+    dim = TileView(0, "", "dim", agent_type="claude", repo="api", status_text="IDLE")
+
+    assert p.render_tile_bytes(pink) != p.render_tile_bytes(dim)
+
+
+def test_compose_panel_uses_theme_color_background():
+    from herdeck.driver.base import PanelView
+    from herdeck.icons import compose_panel
+
+    themed = compose_panel(PanelView("needs you", [], "pink"))
+    default = compose_panel(PanelView("agents", [], "grey"))
+
+    assert themed.getpixel((0, 0)) != default.getpixel((0, 0))
