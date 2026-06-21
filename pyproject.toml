@@ -35,6 +35,7 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10", "cairosvg", "ruff", "p
 herdeck = "herdeck.app:main"
 herdeck-bridge = "herdeck.bridge:main"
 herdeck-doctor = "herdeck.doctor:main"
+herdeck-ctl = "herdeck.ctl:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

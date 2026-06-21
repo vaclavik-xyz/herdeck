@@ -34,6 +34,7 @@ class Connector:
         self._ws = None
         self._loop = None
         self._wake = None
+        self._send_lock = asyncio.Lock()
 
     def stop(self) -> None:
         self._stop = True
@@ -47,12 +48,13 @@ class Connector:
                 loop.call_soon_threadsafe(wake.set)
 
     async def send(self, msg: dict) -> None:
-        ws = self._ws
-        if ws is not None:
-            try:
-                await ws.send(encode(msg))
-            except websockets.WebSocketException:
-                pass
+        async with self._send_lock:
+            ws = self._ws
+            if ws is not None:
+                try:
+                    await ws.send(encode(msg))
+                except websockets.WebSocketException:
+                    pass
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()

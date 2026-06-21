@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from . import layout
+from .commands import Command, profile_for
 from .config import Config
 from .driver.base import PanelView, TileView
 from .model import AgentKey, AgentState, Status
@@ -15,16 +16,6 @@ SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 def server_accent(server_id: str) -> str:
     digest = hashlib.sha1(server_id.encode()).digest()
     return SERVER_ACCENTS[digest[0] % len(SERVER_ACCENTS)]
-
-
-@dataclass
-class Command:
-    kind: str  # list|read|focus|act_if_blocked|act_force|send_text|start
-    server_id: str
-    pane_id: str | None = None
-    source: str | None = None
-    keys: list[str] = field(default_factory=list)
-    text: str | None = None  # for send_text (macros)
 
 
 @dataclass
@@ -287,8 +278,7 @@ class Orchestrator:
 
     # --- presses ---
     def _profile_for(self, key: AgentKey):
-        agent_type = self._agents[key].agent_type
-        return self.config.profiles.get(agent_type, self.config.profiles["default"])
+        return profile_for(self.config, self._agents[key].agent_type)
 
     def on_press(self, index: int) -> list[Command]:
         if self._launcher:

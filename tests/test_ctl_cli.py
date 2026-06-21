@@ -1,0 +1,108 @@
+import json
+
+import pytest
+
+from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
+from herdeck.ctl import (
+    EXIT_OK,
+    EXIT_SKIPPED,
+    EXIT_TARGET,
+    EXIT_USAGE,
+    build_parser,
+    dispatch,
+)
+from herdeck.model import AgentKey, AgentState, Status
+
+
+def _config():
+    return Config(servers=[ServerConfig("dev", "ws://x", "tok")],
+                  profiles=dict(DEFAULT_PROFILES), overview_order=[], grid=(5, 3))
+
+
+class StubSession:
+    """Stands in for an opened CtlSession for dispatch-level tests."""
+    def __init__(self, agents):
+        self.config = _config()
+        self.agents = {a.key: a for a in agents}
+        self.acted = None
+
+    def resolve_target(self, spec):
+        from herdeck.ctl import CtlSession
+        return CtlSession.resolve_target(self, spec)
+
+    async def act(self, action, agent, **kw):
+        self.acted = (action, agent.key.pane_id, kw)
+        return {"result": "sent", "settled": True}
+
+    async def request(self, cmd, *, timeout):
+        self.acted = ("request", cmd.kind, cmd.pane_id)
+        return {"sent": True}
+
+    async def wait(self, predicate, *, timeout):
+        return predicate()  # already-satisfied path
+
+
+def test_parser_rejects_unknown_status():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["wait", "--any", "--until", "bogus"])
+
+
+def test_wait_has_independent_unlimited_timeout():
+    args = build_parser().parse_args(["wait", "--any", "--until", "blocked"])
+    assert args.wait_timeout is None       # wait waits forever by default (N1)
+    assert args.timeout == 10.0            # global connect/request default unchanged
+
+
+@pytest.mark.asyncio
+async def test_dispatch_wait_requires_exactly_one_selector(capsys):
+    args = build_parser().parse_args(["wait", "--until", "blocked"])  # neither agent nor --any
+    assert await dispatch(args, StubSession([])) == EXIT_USAGE  # N2
+    assert "exactly one" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_dispatch_ls_json(capsys):
+    a = AgentState(AgentKey("dev", "p1"), "claude", "auth", Status.BLOCKED, repo="herdeck")
+    args = build_parser().parse_args(["ls", "--json"])
+    rc = await dispatch(args, StubSession([a]))
+    assert rc == EXIT_OK
+    rows = json.loads(capsys.readouterr().out)
+    assert rows[0]["pane_id"] == "p1" and rows[0]["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_approve_calls_act():
+    a = AgentState(AgentKey("dev", "p1"), "claude", "auth", Status.BLOCKED)
+    args = build_parser().parse_args(["approve", "dev:p1"])
+    sess = StubSession([a])
+    assert await dispatch(args, sess) == EXIT_OK
+    assert sess.acted[0] == "approve"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_unknown_target_exit4(capsys):
+    args = build_parser().parse_args(["approve", "ghost"])
+    assert await dispatch(args, StubSession([])) == EXIT_TARGET
+    assert "no agent" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skipped_exit3(capsys):
+    a = AgentState(AgentKey("dev", "p1"), "claude", "auth", Status.IDLE)
+
+    class SkipSession(StubSession):
+        async def act(self, action, agent, **kw):
+            return {"result": "skipped", "settled": True}
+
+    args = build_parser().parse_args(["approve", "dev:p1"])
+    assert await dispatch(args, SkipSession([a])) == EXIT_SKIPPED
+
+
+@pytest.mark.asyncio
+async def test_dispatch_wait_any_returns_matched_agent(capsys):
+    a = AgentState(AgentKey("dev", "p1"), "claude", "auth", Status.BLOCKED)
+    args = build_parser().parse_args(["wait", "--any", "--until", "blocked", "--json"])
+    rc = await dispatch(args, StubSession([a]))
+    assert rc == EXIT_OK
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"agent": "dev:p1", "status": "blocked"}

@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 import websockets
@@ -214,3 +215,30 @@ def test_dispatch_rekeys_inbound_to_config_server_id():
     assert seen["sid"] == "dev"
     assert seen["states"][0].key.server_id == "dev"
     assert seen["states"][0].agent_type == "claude"
+
+
+async def test_connector_serializes_concurrent_sends_in_call_order():
+    class SlowWs:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, msg):
+            if '"focus"' in msg:
+                await asyncio.sleep(0.01)
+            self.sent.append(msg)
+
+    cfg = ServerConfig("dev", "ws://x", "t")
+    conn = Connector(
+        cfg,
+        on_snapshot=lambda sid, st: None,
+        on_event=lambda sid, s: None,
+        on_connection=lambda sid, up: None,
+    )
+    conn._ws = SlowWs()
+
+    await asyncio.gather(
+        conn.send({"type": "focus", "req": "r1", "pane_id": "p1"}),
+        conn.send({"type": "read", "req": "r2", "pane_id": "p1", "source": "detection"}),
+    )
+
+    assert [json.loads(msg)["type"] for msg in conn._ws.sent] == ["focus", "read"]
