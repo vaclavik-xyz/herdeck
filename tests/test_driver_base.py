@@ -18,5 +18,6 @@ def test_panelview_fields():
 
 def test_deckdriver_is_abstract():
     import pytest
+
     with pytest.raises(TypeError):
         DeckDriver()

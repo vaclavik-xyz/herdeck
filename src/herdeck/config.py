@@ -30,14 +30,14 @@ class AnswerProfile:
 
 @dataclass
 class Macro:
-    label: str          # short tile label
-    text: str           # text sent to the agent (via herdr agent.send)
+    label: str  # short tile label
+    text: str  # text sent to the agent (via herdr agent.send)
 
 
 @dataclass
 class TelegramConfig:
-    token_env: str     # env var holding the bot token (never the token itself)
-    chat_id: str       # target chat (not secret)
+    token_env: str  # env var holding the bot token (never the token itself)
+    chat_id: str  # target chat (not secret)
 
 
 @dataclass
@@ -83,7 +83,8 @@ class Config:
     grid: tuple[int, int]
     macros: list[Macro] = field(default_factory=lambda: list(DEFAULT_MACROS))
     start_profiles: dict[str, list[str]] = field(
-        default_factory=lambda: dict(DEFAULT_START_PROFILES))
+        default_factory=lambda: dict(DEFAULT_START_PROFILES)
+    )
     notifications: Notifications = field(default_factory=Notifications)
 
 
@@ -112,11 +113,12 @@ def parse_notifications(n: dict) -> Notifications:
     telegram = None
     if isinstance(tg_raw, dict):
         if "token_env" in tg_raw and "chat_id" in tg_raw:
-            telegram = TelegramConfig(token_env=tg_raw["token_env"],
-                                      chat_id=str(tg_raw["chat_id"]))
+            telegram = TelegramConfig(token_env=tg_raw["token_env"], chat_id=str(tg_raw["chat_id"]))
         else:
-            log.warning("[notifications.telegram] needs both token_env and "
-                        "chat_id; ignoring telegram config")
+            log.warning(
+                "[notifications.telegram] needs both token_env and "
+                "chat_id; ignoring telegram config"
+            )
     return Notifications(
         enabled=n.get("enabled", False),
         on=list(n.get("on", ["blocked"])),
@@ -160,6 +162,12 @@ def load_config(path: str | Path) -> Config:
 
     notifications = parse_notifications(data.get("notifications", {}))
 
-    return Config(servers=servers, profiles=profiles,
-                  overview_order=overview_order, grid=grid, macros=macros,
-                  start_profiles=start_profiles, notifications=notifications)
+    return Config(
+        servers=servers,
+        profiles=profiles,
+        overview_order=overview_order,
+        grid=grid,
+        macros=macros,
+        start_profiles=start_profiles,
+        notifications=notifications,
+    )

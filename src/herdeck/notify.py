@@ -18,8 +18,13 @@ def _macos_sink(title: str, body: str, sound: bool) -> None:
     script = f'display notification "{b}" with title "{t}"'
     if sound:
         script += ' sound name "Glass"'
-    subprocess.run(["osascript", "-e", script], timeout=5,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    subprocess.run(
+        ["osascript", "-e", script],
+        timeout=5,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
 
 
 def _http_post(url: str, fields: dict[str, str]) -> None:
@@ -38,11 +43,14 @@ def make_telegram_sink(
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
     def sink(title: str, body: str, sound: bool) -> None:
-        post(url, {
-            "chat_id": str(chat_id),
-            "text": f"{title}\n{body}",
-            "disable_notification": "false" if sound else "true",
-        })
+        post(
+            url,
+            {
+                "chat_id": str(chat_id),
+                "text": f"{title}\n{body}",
+                "disable_notification": "false" if sound else "true",
+            },
+        )
 
     return sink
 
@@ -51,6 +59,7 @@ def composite_sink(
     sinks: list[Callable[[str, str, bool], None]],
 ) -> Callable[[str, str, bool], None]:
     """Fan out to multiple sinks; one failing sink never stops the others."""
+
     def sink(title: str, body: str, sound: bool) -> None:
         for s in sinks:
             try:

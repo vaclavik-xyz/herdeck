@@ -16,14 +16,16 @@ def test_check_socket_missing():
 
 
 def test_check_socket_ok():
-    c = check_socket("/s.sock", exists=lambda p: True,
-                     probe=lambda path: {"result": {"panes": [1, 2]}})
+    c = check_socket(
+        "/s.sock", exists=lambda p: True, probe=lambda path: {"result": {"panes": [1, 2]}}
+    )
     assert c.ok is True and "2" in c.detail
 
 
 def test_check_socket_no_response():
-    c = check_socket("/s.sock", exists=lambda p: True,
-                     probe=lambda path: (_ for _ in ()).throw(TimeoutError()))
+    c = check_socket(
+        "/s.sock", exists=lambda p: True, probe=lambda path: (_ for _ in ()).throw(TimeoutError())
+    )
     assert c.ok is False and "respond" in c.detail.lower()
 
 
@@ -33,8 +35,9 @@ def test_check_socket_malformed():
 
 
 def test_check_socket_malformed_panes_type():
-    c = check_socket("/s.sock", exists=lambda p: True,
-                     probe=lambda path: {"result": {"panes": "not-a-list"}})
+    c = check_socket(
+        "/s.sock", exists=lambda p: True, probe=lambda path: {"result": {"panes": "not-a-list"}}
+    )
     assert c.ok is False
 
 
@@ -44,27 +47,35 @@ def test_check_socket_malformed_response_type():
 
 
 def test_check_socket_malformed_result_type():
-    c = check_socket("/s.sock", exists=lambda p: True,
-                     probe=lambda path: {"result": []})
+    c = check_socket("/s.sock", exists=lambda p: True, probe=lambda path: {"result": []})
     assert c.ok is False
 
 
 def test_check_config_none_is_local_mode():
-    c = check_config(config_path=None, has_servers=False, socket_exists=True,
-                     getenv=lambda k: None)
+    c = check_config(config_path=None, has_servers=False, socket_exists=True, getenv=lambda k: None)
     assert c.ok is True and "local" in c.detail.lower()
 
 
 def test_check_config_remote_missing_token_redacts():
-    c = check_config(config_path="/c", has_servers=True, socket_exists=False,
-                     token_envs=["HERDECK_TOKEN"], getenv=lambda k: None)
+    c = check_config(
+        config_path="/c",
+        has_servers=True,
+        socket_exists=False,
+        token_envs=["HERDECK_TOKEN"],
+        getenv=lambda k: None,
+    )
     assert c.ok is False
     assert "HERDECK_TOKEN" in c.detail and "missing" in c.detail.lower()
 
 
 def test_check_config_remote_token_present_not_leaked():
-    c = check_config(config_path="/c", has_servers=True, socket_exists=False,
-                     token_envs=["HERDECK_TOKEN"], getenv=lambda k: "supersecret")
+    c = check_config(
+        config_path="/c",
+        has_servers=True,
+        socket_exists=False,
+        token_envs=["HERDECK_TOKEN"],
+        getenv=lambda k: "supersecret",
+    )
     assert c.ok is True and "supersecret" not in c.detail
 
 
@@ -134,15 +145,18 @@ def test_python_m_invocation_runs_main():
     import os
     import subprocess
     import sys
+
     env = {**os.environ, "PYTHONPATH": "src"}
-    r = subprocess.run([sys.executable, "-m", "herdeck.doctor"],
-                       capture_output=True, text=True, env=env)
+    r = subprocess.run(
+        [sys.executable, "-m", "herdeck.doctor"], capture_output=True, text=True, env=env
+    )
     assert "herdeck doctor" in r.stdout
 
 
 def test_check_notifications_disabled():
     from herdeck.config import Notifications
     from herdeck.doctor import check_notifications
+
     c = check_notifications(Notifications(enabled=False))
     assert c.ok is True and "disabled" in c.detail.lower()
 
@@ -150,19 +164,23 @@ def test_check_notifications_disabled():
 def test_check_notifications_telegram_present_redacts():
     from herdeck.config import Notifications, TelegramConfig
     from herdeck.doctor import check_notifications
-    n = Notifications(enabled=True, backends=["macos", "telegram"],
-                      telegram=TelegramConfig("HERDECK_TG", "42"))
+
+    n = Notifications(
+        enabled=True, backends=["macos", "telegram"], telegram=TelegramConfig("HERDECK_TG", "42")
+    )
     c = check_notifications(n, getenv=lambda k: "SECRET-TOKEN-VALUE")
     assert c.ok is True
     assert "token_env=present" in c.detail and "chat_id=present" in c.detail
-    assert "SECRET-TOKEN-VALUE" not in c.detail   # never leak the value
+    assert "SECRET-TOKEN-VALUE" not in c.detail  # never leak the value
 
 
 def test_check_notifications_telegram_missing_token_fails():
     from herdeck.config import Notifications, TelegramConfig
     from herdeck.doctor import check_notifications
-    n = Notifications(enabled=True, backends=["telegram"],
-                      telegram=TelegramConfig("HERDECK_TG", "42"))
+
+    n = Notifications(
+        enabled=True, backends=["telegram"], telegram=TelegramConfig("HERDECK_TG", "42")
+    )
     c = check_notifications(n, getenv=lambda k: None)
     assert c.ok is False and "token_env=missing" in c.detail
 
@@ -170,6 +188,7 @@ def test_check_notifications_telegram_missing_token_fails():
 def test_check_notifications_unknown_backend_fails():
     from herdeck.config import Notifications
     from herdeck.doctor import check_notifications
+
     c = check_notifications(Notifications(enabled=True, backends=["bogus"]))
     assert c.ok is False and "unknown=bogus" in c.detail
 
@@ -177,6 +196,7 @@ def test_check_notifications_unknown_backend_fails():
 def test_check_notifications_empty_backends_fails():
     from herdeck.config import Notifications
     from herdeck.doctor import check_notifications
+
     c = check_notifications(Notifications(enabled=True, backends=[]))
     assert c.ok is False and "nothing will fire" in c.detail.lower()
 
@@ -184,5 +204,6 @@ def test_check_notifications_empty_backends_fails():
 def test_check_notifications_macos_only_ok():
     from herdeck.config import Notifications
     from herdeck.doctor import check_notifications
+
     c = check_notifications(Notifications(enabled=True, backends=["macos"]))
     assert c.ok is True

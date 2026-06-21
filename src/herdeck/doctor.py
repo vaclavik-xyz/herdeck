@@ -50,10 +50,7 @@ def check_config(
     getenv=os.environ.get,
 ) -> Check:
     if has_servers:
-        statuses = [
-            f"{env}=present" if getenv(env) else f"{env}=missing"
-            for env in token_envs
-        ]
+        statuses = [f"{env}=present" if getenv(env) else f"{env}=missing" for env in token_envs]
         missing = [env for env in token_envs if not getenv(env)]
         detail = f"config at {config_path}; token envs: {', '.join(statuses)}"
         return Check("configuration", not missing, detail)
@@ -105,13 +102,11 @@ def check_deck(lib_available: Callable[[str], bool]) -> Check:
     return Check(
         "deck drivers",
         False,
-        'no deck driver libraries importable; pip install ".[deck]" or ".[elgato]"; '
-        f"{note}",
+        f'no deck driver libraries importable; pip install ".[deck]" or ".[elgato]"; {note}',
     )
 
 
-def check_notifications(notifications: Notifications,
-                        getenv=os.environ.get) -> Check:
+def check_notifications(notifications: Notifications, getenv=os.environ.get) -> Check:
     if not notifications.enabled:
         return Check("notifications", True, "disabled")
     supported = {"macos", "telegram"}
@@ -127,8 +122,7 @@ def check_notifications(notifications: Notifications,
     if "telegram" in notifications.backends:
         tg = notifications.telegram
         if tg is None:
-            parts.append("telegram=no usable [notifications.telegram] "
-                         "(need token_env + chat_id)")
+            parts.append("telegram=no usable [notifications.telegram] (need token_env + chat_id)")
             ok = False
         else:
             token_present = bool(getenv(tg.token_env))
@@ -147,6 +141,7 @@ def check_notifications(notifications: Notifications,
 
 def _read_notifications(config_path: str | None) -> Notifications:
     from .config import parse_notifications
+
     if config_path is None:
         return Notifications()
     try:
@@ -190,7 +185,11 @@ def _read_config_facts(config_path: str | None) -> tuple[bool, list[str], Check 
             if isinstance(server, dict) and "token_env" in server
         ]
     except Exception as exc:
-        return False, [], Check("configuration", False, f"cannot read config at {config_path} ({exc})")
+        return (
+            False,
+            [],
+            Check("configuration", False, f"cannot read config at {config_path} ({exc})"),
+        )
 
     from .config import ConfigError, load_config
 
@@ -199,12 +198,16 @@ def _read_config_facts(config_path: str | None) -> tuple[bool, list[str], Check 
     except ConfigError as exc:
         if any(not os.environ.get(env) for env in token_envs):
             return bool(servers), token_envs, None
-        return bool(servers), token_envs, Check(
-            "configuration", False, f"invalid config at {config_path} ({exc})"
+        return (
+            bool(servers),
+            token_envs,
+            Check("configuration", False, f"invalid config at {config_path} ({exc})"),
         )
     except Exception as exc:
-        return bool(servers), token_envs, Check(
-            "configuration", False, f"invalid config at {config_path} ({exc})"
+        return (
+            bool(servers),
+            token_envs,
+            Check("configuration", False, f"invalid config at {config_path} ({exc})"),
         )
     return bool(config.servers), token_envs, None
 
@@ -213,9 +216,7 @@ def collect_checks() -> list[Check]:
     from .app import _discover_config_path
 
     config_path = _discover_config_path()
-    socket_path = os.path.expanduser(
-        os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock")
-    )
+    socket_path = os.path.expanduser(os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock"))
     socket_exists = os.path.exists(socket_path)
     has_servers, token_envs, config_error = _read_config_facts(config_path)
     socket_check = (
