@@ -104,3 +104,15 @@ def test_partial_answer_profiles_merge_over_defaults(tmp_path):
     cfg = load_config(_write(tmp_path, SERVERLESS))
     assert cfg.profiles["codex"].approve == ["y", "enter"]
     assert cfg.profiles["default"].approve == ["enter"]
+
+
+def test_notifications_default_disabled_when_absent(tmp_path):
+    cfg = load_config(_write(tmp_path, "[deck]\ngrid=\"5x3\"\n"))
+    assert cfg.notifications.enabled is False
+    assert cfg.notifications.on == ["blocked"]
+
+
+def test_notifications_parsed(tmp_path):
+    cfg = load_config(_write(tmp_path,
+        "[notifications]\nenabled=true\nsound=false\non=[\"blocked\"]\n"))
+    assert cfg.notifications.enabled is True and cfg.notifications.sound is False
