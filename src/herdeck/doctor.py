@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import os
-from collections.abc import Callable
+import sys
+import tomllib
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
+
+SOCKET_TIMEOUT = 1.0
 
 
 @dataclass
@@ -99,3 +106,88 @@ def check_deck(lib_available: Callable[[str], bool]) -> Check:
         'no deck driver libraries importable; pip install ".[deck]" or ".[elgato]"; '
         f"{note}",
     )
+
+
+def format_report(checks: Iterable[Check]) -> str:
+    lines = ["herdeck doctor"]
+    for check in checks:
+        mark = "✓" if check.ok else "✗"
+        lines.append(f"{mark} {check.name}: {check.detail}")
+    return "\n".join(lines)
+
+
+async def _socket_pane_list(path: str) -> dict:
+    from .bridge import SocketHerdr
+
+    return await SocketHerdr(path)._rpc("pane.list", {})
+
+
+def _probe_socket(path: str) -> dict:
+    return asyncio.run(asyncio.wait_for(_socket_pane_list(path), timeout=SOCKET_TIMEOUT))
+
+
+def _module_available(module: str) -> bool:
+    return importlib.util.find_spec(module) is not None
+
+
+def _read_config_facts(config_path: str | None) -> tuple[bool, list[str], Check | None]:
+    if config_path is None:
+        return False, [], None
+    try:
+        data = tomllib.loads(Path(config_path).read_text())
+        servers = data.get("servers", [])
+        token_envs = [
+            server["token_env"]
+            for server in servers
+            if isinstance(server, dict) and "token_env" in server
+        ]
+    except Exception as exc:
+        return False, [], Check("configuration", False, f"cannot read config at {config_path} ({exc})")
+
+    from .config import ConfigError, load_config
+
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        if any(not os.environ.get(env) for env in token_envs):
+            return bool(servers), token_envs, None
+        return bool(servers), token_envs, Check(
+            "configuration", False, f"invalid config at {config_path} ({exc})"
+        )
+    except Exception as exc:
+        return bool(servers), token_envs, Check(
+            "configuration", False, f"invalid config at {config_path} ({exc})"
+        )
+    return bool(config.servers), token_envs, None
+
+
+def collect_checks() -> list[Check]:
+    from .app import _discover_config_path
+
+    config_path = _discover_config_path()
+    socket_path = os.path.expanduser(
+        os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock")
+    )
+    socket_exists = os.path.exists(socket_path)
+    has_servers, token_envs, config_error = _read_config_facts(config_path)
+    socket_check = (
+        Check("herdr socket", True, "remote config present; local socket not required")
+        if has_servers
+        else check_socket(socket_path, os.path.exists, _probe_socket)
+    )
+    checks = [
+        config_error
+        if config_error is not None
+        else check_config(config_path, has_servers, socket_exists, token_envs=token_envs),
+        socket_check,
+        check_optional_deps(_module_available),
+        check_deck(_module_available),
+    ]
+    return checks
+
+
+def main() -> None:
+    checks = collect_checks()
+    print(format_report(checks))
+    if any(not check.ok for check in checks):
+        sys.exit(1)
