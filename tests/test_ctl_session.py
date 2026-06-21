@@ -138,3 +138,28 @@ async def test_settle_false_on_timeout_when_still_blocked():
     sess = CtlSession(_config())
     sess.agents[AgentKey("dev", "p1")] = _agent(Status.BLOCKED)
     assert await sess.settle(_agent(Status.BLOCKED), timeout=0.05) is False
+
+
+@pytest.mark.asyncio
+async def test_request_list_raises():
+    # N3: list has no request/response (bridge replies with a snapshot, not a result)
+    sess = CtlSession(_config())
+    with pytest.raises(ValueError):
+        await sess.request(Command("list", "dev"), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_request_after_drop_raises_immediately():
+    # N4: connection dropped BEFORE the send -> immediate ConnectionLost, not a timeout
+    fc = {}
+    sess = CtlSession(_config(),
+                      connector_factory=lambda **kw: fc.setdefault("c", FakeConnector(**kw)))
+    open_task = asyncio.create_task(sess.open(timeout=1))
+    await asyncio.sleep(0)
+    fc["c"].on_snapshot("dev", [_agent()])
+    await open_task
+    fc["c"].on_connection("dev", False)  # drop before we issue the request
+    with pytest.raises(ConnectionLost):
+        await sess.request(Command("focus", "dev", "p1"), timeout=5)
+    assert fc["c"].sent == []  # nothing was silently swallowed by connector.send
+    await sess.close()

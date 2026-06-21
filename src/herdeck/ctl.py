@@ -38,6 +38,7 @@ class CtlSession:
         self._tasks: list[asyncio.Task] = []
         self._pending: dict[str, asyncio.Future] = {}
         self._snapshots: dict[str, asyncio.Event] = {}
+        self._conn_up: dict[str, bool] = {}
         self._changed = asyncio.Event()
         self._req = 0
 
@@ -54,6 +55,7 @@ class CtlSession:
         self._changed.set()
 
     def _on_connection(self, sid: str, up: bool) -> None:
+        self._conn_up[sid] = up
         if not up:
             self._fail_pending(ConnectionLost(f"connection to {sid} lost"))
         self._changed.set()
@@ -96,6 +98,10 @@ class CtlSession:
             raise ConnectionLost("timed out waiting for first snapshot") from exc
 
     async def request(self, cmd: Command, *, timeout: float) -> dict:
+        if cmd.kind == "list":
+            raise ValueError("list has no request/response; read agents from open() snapshot")
+        if not self._conn_up.get(cmd.server_id, False):
+            raise ConnectionLost(f"{cmd.server_id} not connected")
         self._req += 1
         req = f"c{self._req}"
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
