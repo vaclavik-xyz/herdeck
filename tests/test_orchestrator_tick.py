@@ -20,8 +20,8 @@ def test_tick_advances_phase_and_reports_working_tiles():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.WORKING), st("p2", Status.IDLE)])
     working = o.tick()
-    assert working == [0]                       # only the working tile index
-    assert o.render().tiles[0].spinner == 1     # phase advanced and applied
+    assert working == [0]  # only the working tile index
+    assert o.render().tiles[0].spinner == 1  # phase advanced and applied
     o.tick()
     assert o.render().tiles[0].spinner == 2
 
@@ -35,5 +35,5 @@ def test_tick_no_working_returns_empty():
 def test_tick_noop_in_drill():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.WORKING)])
-    o.on_press(0)              # enter drill
-    assert o.tick() == []      # no spinner work while drilled in
+    o.on_press(0)  # enter drill
+    assert o.tick() == []  # no spinner work while drilled in

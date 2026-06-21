@@ -95,7 +95,7 @@ def test_config_without_servers_yields_empty_list(tmp_path):
 
 
 def test_missing_answer_profiles_fall_back_to_defaults(tmp_path):
-    cfg = load_config(_write(tmp_path, "[deck]\ngrid = \"5x3\"\n"))
+    cfg = load_config(_write(tmp_path, '[deck]\ngrid = "5x3"\n'))
     assert cfg.profiles["default"].approve == ["enter"]
     assert cfg.profiles["claude"].approve == ["1", "enter"]
 
@@ -112,39 +112,48 @@ def test_default_profiles_claude_codex_documented():
 
 
 def test_notifications_default_disabled_when_absent(tmp_path):
-    cfg = load_config(_write(tmp_path, "[deck]\ngrid=\"5x3\"\n"))
+    cfg = load_config(_write(tmp_path, '[deck]\ngrid="5x3"\n'))
     assert cfg.notifications.enabled is False
     assert cfg.notifications.on == ["blocked"]
 
 
 def test_notifications_parsed(tmp_path):
-    cfg = load_config(_write(tmp_path,
-        "[notifications]\nenabled=true\nsound=false\non=[\"blocked\", \"done\"]\n"))
+    cfg = load_config(
+        _write(tmp_path, '[notifications]\nenabled=true\nsound=false\non=["blocked", "done"]\n')
+    )
     assert cfg.notifications.enabled is True and cfg.notifications.sound is False
     assert cfg.notifications.on == ["blocked", "done"]
 
 
 def test_notifications_backends_default_macos(tmp_path):
-    cfg = load_config(_write(tmp_path, "[deck]\ngrid=\"5x3\"\n"))
+    cfg = load_config(_write(tmp_path, '[deck]\ngrid="5x3"\n'))
     assert cfg.notifications.backends == ["macos"]
     assert cfg.notifications.telegram is None
 
 
 def test_notifications_parses_telegram_and_backends(tmp_path):
-    cfg = load_config(_write(tmp_path,
-        "[notifications]\nenabled=true\nbackends=[\"macos\",\"telegram\"]\n"
-        "[notifications.telegram]\ntoken_env=\"HERDECK_TG\"\nchat_id=123\n"))
+    cfg = load_config(
+        _write(
+            tmp_path,
+            '[notifications]\nenabled=true\nbackends=["macos","telegram"]\n'
+            '[notifications.telegram]\ntoken_env="HERDECK_TG"\nchat_id=123\n',
+        )
+    )
     assert cfg.notifications.backends == ["macos", "telegram"]
     assert cfg.notifications.telegram.token_env == "HERDECK_TG"
-    assert cfg.notifications.telegram.chat_id == "123"   # coerced to str
+    assert cfg.notifications.telegram.chat_id == "123"  # coerced to str
 
 
 def test_notifications_telegram_incomplete_is_skipped(tmp_path):
     # Incomplete telegram table never fails config load (graceful skip);
     # _build_notifier / doctor surface it later.
-    cfg = load_config(_write(tmp_path,
-        "[notifications]\nenabled=true\nbackends=[\"telegram\"]\n"
-        "[notifications.telegram]\nchat_id=123\n"))   # no token_env
+    cfg = load_config(
+        _write(
+            tmp_path,
+            '[notifications]\nenabled=true\nbackends=["telegram"]\n'
+            "[notifications.telegram]\nchat_id=123\n",
+        )
+    )  # no token_env
     assert cfg.notifications.telegram is None
 
 

@@ -37,8 +37,11 @@ def order_agents(agents, overview_order: list[str]) -> list[AgentState]:
     order = {sid: i for i, sid in enumerate(overview_order)}
     return sorted(
         agents,
-        key=lambda s: (_STATUS_PRIORITY.get(s.status, 9),
-                       order.get(s.key.server_id, 999), s.key.pane_id),
+        key=lambda s: (
+            _STATUS_PRIORITY.get(s.status, 9),
+            order.get(s.key.server_id, 999),
+            s.key.pane_id,
+        ),
     )
 
 
@@ -46,7 +49,7 @@ def page(items: list, page_index: int, tile_count: int) -> tuple[list, int]:
     pages = max(1, math.ceil(len(items) / tile_count)) if items else 1
     pi = page_index % pages
     start = pi * tile_count
-    return items[start:start + tile_count], pages
+    return items[start : start + tile_count], pages
 
 
 @dataclass
@@ -71,9 +74,14 @@ def summary(agents) -> Counts:
     return c
 
 
-def panel_overview(counts: Counts, page_index: int, page_count: int,
-                   down: set[str], total: int,
-                   spotlight: tuple[str, str] | None) -> PanelView:
+def panel_overview(
+    counts: Counts,
+    page_index: int,
+    page_count: int,
+    down: set[str],
+    total: int,
+    spotlight: tuple[str, str] | None,
+) -> PanelView:
     if down:
         title, lines, color = "OFFLINE", ["reconnecting…"], "red"
     elif spotlight is not None:
@@ -92,8 +100,8 @@ def panel_overview(counts: Counts, page_index: int, page_count: int,
 
 @dataclass
 class Option:
-    key: str        # the keystroke to send (the option's number)
-    label: str      # human text of the choice
+    key: str  # the keystroke to send (the option's number)
+    label: str  # human text of the choice
 
 
 def parse_options(text: str) -> list[Option]:

@@ -30,37 +30,48 @@ class D200Driver(DeckDriver):
 
     KEEP_ALIVE_INTERVAL = 5.0
     BRIGHTNESS = 80
-    DEBOUNCE = 0.25          # ignore repeats of the same key within this window
-    _CONTROL_USAGE_PAGE = 0x0c
+    DEBOUNCE = 0.25  # ignore repeats of the same key within this window
+    _CONTROL_USAGE_PAGE = 0x0C
 
     def __init__(self, workdir: str | None = None, icon_provider=None):
         # Stable working dir so strmdck's relative .build/.cache never collide (R-4).
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
-        os.makedirs(self._workdir, exist_ok=True)
-        os.chdir(self._workdir)
-        os.makedirs(_ICON_DIR, exist_ok=True)
-        self._dev = self._open_device()
-        self._callback: Callable[[int], None] | None = None
-        if icon_provider is None:
-            from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
-            icon_provider = IconProvider(cache_dir=os.path.abspath(_ICON_DIR),
-                                         slug_map=DEFAULT_AGENT_SLUGS,
-                                         overrides_dir=os.path.abspath("icons"))
-        self._icons = icon_provider
-        with contextlib.redirect_stdout(io.StringIO()):
-            self._dev.set_brightness(self.BRIGHTNESS, force=True)
-            self._set_panel_background_mode()
+        self._previous_cwd = os.getcwd()
+        try:
+            os.makedirs(self._workdir, exist_ok=True)
+            os.chdir(self._workdir)
+            os.makedirs(_ICON_DIR, exist_ok=True)
+            self._dev = self._open_device()
+            self._callback: Callable[[int], None] | None = None
+            if icon_provider is None:
+                from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
+
+                icon_provider = IconProvider(
+                    cache_dir=os.path.abspath(_ICON_DIR),
+                    slug_map=DEFAULT_AGENT_SLUGS,
+                    overrides_dir=os.path.abspath("icons"),
+                )
+            self._icons = icon_provider
+            with contextlib.redirect_stdout(io.StringIO()):
+                self._dev.set_brightness(self.BRIGHTNESS, force=True)
+                self._set_panel_background_mode()
+        except Exception:
+            with contextlib.suppress(Exception):
+                os.chdir(self._previous_cwd)
+            raise
 
     def _open_device(self, retries: int = 5, delay: float = 1.0):
         import time
 
         import hid
         from strmdck.devices.ulanzi_d200 import UlanziD200Device
+
         vid, pid = UlanziD200Device.USB_VENDOR_ID, UlanziD200Device.USB_PRODUCT_ID
         last = None
         for _ in range(retries):
-            matches = [d for d in hid.enumerate()
-                       if (d["vendor_id"], d["product_id"]) == (vid, pid)]
+            matches = [
+                d for d in hid.enumerate() if (d["vendor_id"], d["product_id"]) == (vid, pid)
+            ]
             paths = [d["path"] for d in matches if d.get("usage_page") == self._CONTROL_USAGE_PAGE]
             paths += [d["path"] for d in matches if d.get("usage_page") != self._CONTROL_USAGE_PAGE]
             for path in paths:
@@ -78,6 +89,7 @@ class D200Driver(DeckDriver):
 
     def _set_panel_background_mode(self):
         from strmdck.devices.ulanzi_d200 import SmallWindowMode
+
         with contextlib.suppress(Exception):
             # set_small_window_mode persists the mode internally; every later
             # set_small_window_data (incl. keep_alive's) then defaults to it, so
@@ -86,7 +98,7 @@ class D200Driver(DeckDriver):
             self._dev.set_small_window_data({"mode": SmallWindowMode.BACKGROUND}, force=True)
 
     def slot_count(self) -> int:
-        return self._dev.BUTTON_COUNT      # 13
+        return self._dev.BUTTON_COUNT  # 13
 
     def _tile_buttons(self, tiles: list[TileView]) -> dict[int, dict]:
         buttons: dict[int, dict] = {}
@@ -114,10 +126,13 @@ class D200Driver(DeckDriver):
             right.save(os.path.join(_ICON_DIR, "panel_right.png"))
             with contextlib.redirect_stdout(io.StringIO()):
                 # update_only so refreshing the panel never clears the 13 tiles.
-                self._dev.set_buttons({
-                    _PANEL_LEFT_INDEX: {"name": "", "icon": "panel_left.png"},
-                    _PANEL_RIGHT_INDEX: {"name": "", "icon": "panel_right.png"},
-                }, update_only=True)
+                self._dev.set_buttons(
+                    {
+                        _PANEL_LEFT_INDEX: {"name": "", "icon": "panel_left.png"},
+                        _PANEL_RIGHT_INDEX: {"name": "", "icon": "panel_right.png"},
+                    },
+                    update_only=True,
+                )
         except Exception:
             pass
 
@@ -135,9 +150,12 @@ class D200Driver(DeckDriver):
     def close(self) -> None:
         with contextlib.suppress(Exception):
             self._dev.close()
+        with contextlib.suppress(Exception):
+            os.chdir(self._previous_cwd)
 
     async def run_reader(self) -> None:
         import time
+
         last_index = None
         last_time = 0.0
         async for action in self._dev.read_packet():
@@ -153,6 +171,7 @@ class D200Driver(DeckDriver):
 
     async def keep_alive_loop(self) -> None:
         import asyncio
+
         while True:
             with contextlib.suppress(Exception):
                 with contextlib.redirect_stdout(io.StringIO()):

@@ -49,11 +49,10 @@ def test_press_forwards_commands():
     sent = []
     app = App(make_config(), deck, send=sent.append)
     app.handle_snapshot("dev", [blocked("p1")])
-    deck.simulate_press(0)        # drill + read
+    deck.simulate_press(0)  # drill + read
     req = app.next_req_for(Command("read", "dev", "p1", source="detection"))
-    app.handle_result("dev", req,
-                      {"text": "Proceed?\n1. Yes\n2. No", "pane_id": "p1"})
-    deck.simulate_press(0)        # choose option 1
+    app.handle_result("dev", req, {"text": "Proceed?\n1. Yes\n2. No", "pane_id": "p1"})
+    deck.simulate_press(0)  # choose option 1
     assert Command("read", "dev", "p1", source="detection") in sent
     assert Command("act_if_blocked", "dev", "p1", keys=["1"]) in sent
 
@@ -71,30 +70,30 @@ def test_read_result_shows_detection_in_panel():
 def test_command_to_msg_guard_flags():
     app = App(make_config(), FakeRenderer(13), send=lambda c: None)
     m1 = _command_to_msg(Command("act_if_blocked", "dev", "p1", keys=["1"]), app)
-    assert m1 == {"type": "act", "req": m1["req"], "pane_id": "p1",
-                  "keys": ["1"], "guard": True}
+    assert m1 == {"type": "act", "req": m1["req"], "pane_id": "p1", "keys": ["1"], "guard": True}
     m2 = _command_to_msg(Command("act_force", "dev", "p1", keys=["ctrl+c"]), app)
     assert m2["type"] == "act" and m2["guard"] is False
 
 
 def test_tick_partial_renders_working_tiles():
     deck = FakeRenderer(13)
-    app = App(make_config(), deck,
-              send=lambda c: None)
-    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
-                                           Status.WORKING)])
-    deck.last = []                # clear to detect a re-render
+    app = App(make_config(), deck, send=lambda c: None)
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
+    deck.last = []  # clear to detect a re-render
     app.handle_tick()
     assert deck.last and deck.last[0].spinner == 1
 
 
 async def test_guard_swallows_exception():
     class Boom:
-        async def run(self): raise RuntimeError("x")
+        async def run(self):
+            raise RuntimeError("x")
+
     await _guard(Boom().run())
 
 
 # --- read-correlation logic retained from v1 (now asserted via the panel) ---
+
 
 def test_stale_read_result_with_old_req_is_ignored():
     deck = FakeRenderer(13)
@@ -104,17 +103,17 @@ def test_stale_read_result_with_old_req_is_ignored():
     stale = app.next_req_for(Command("read", "dev", "p1", source="detection"))
     app.next_req_for(Command("read", "dev", "p1", source="detection"))  # newer read supersedes
     app.handle_result("dev", stale, {"text": "stale", "pane_id": "p1"})
-    assert deck.last_panel.lines == []          # old req ignored
+    assert deck.last_panel.lines == []  # old req ignored
 
 
 def test_read_result_for_other_pane_is_ignored():
     deck = FakeRenderer(13)
     app = App(make_config(), deck, send=lambda c: None)
     app.handle_snapshot("dev", [blocked("p1")])
-    deck.simulate_press(0)                       # drilled into p1
+    deck.simulate_press(0)  # drilled into p1
     req = app.next_req_for(Command("read", "dev", "p2", source="detection"))
     app.handle_result("dev", req, {"text": "x", "pane_id": "p2"})
-    assert deck.last_panel.lines == []           # wrong pane
+    assert deck.last_panel.lines == []  # wrong pane
 
 
 def test_event_on_drilled_pane_invalidates_inflight_read():
@@ -123,10 +122,9 @@ def test_event_on_drilled_pane_invalidates_inflight_read():
     app.handle_snapshot("dev", [blocked("p1")])
     deck.simulate_press(0)
     req = app.next_req_for(Command("read", "dev", "p1", source="detection"))
-    app.handle_event("dev", AgentState(AgentKey("dev", "p1"), "claude", "api",
-                                       Status.WORKING))
+    app.handle_event("dev", AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING))
     app.handle_result("dev", req, {"text": "stale", "pane_id": "p1"})
-    assert deck.last_panel.lines == []           # invalidated by the event
+    assert deck.last_panel.lines == []  # invalidated by the event
 
 
 def test_snapshot_changing_drilled_pane_invalidates_read():
@@ -135,8 +133,7 @@ def test_snapshot_changing_drilled_pane_invalidates_read():
     app.handle_snapshot("dev", [blocked("p1")])
     deck.simulate_press(0)
     req = app.next_req_for(Command("read", "dev", "p1", source="detection"))
-    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
-                                           Status.WORKING)])
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
     app.handle_result("dev", req, {"text": "stale", "pane_id": "p1"})
     assert deck.last_panel.lines == []
 
@@ -148,13 +145,13 @@ def test_tick_uses_partial_render_when_available():
         def __init__(self, n):
             super().__init__(n)
             self.partial = None
+
         def render_working(self, tiles):
             self.partial = tiles
 
     deck = PartialFake(13)
     app = App(make_config(), deck, send=lambda c: None)
-    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
-                                           Status.WORKING)])
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
     app.handle_tick()
     assert deck.partial and deck.partial[0].spinner is not None
 
@@ -174,34 +171,39 @@ def test_command_to_msg_start():
 def test_newly_blocked_detects_transition_and_avoids_dup():
     from herdeck.app import newly_blocked
     from herdeck.model import AgentKey, AgentState, Status
+
     k = AgentKey("s", "p1")
     s_block = [AgentState(k, "claude", "api", Status.BLOCKED)]
     s_work = [AgentState(k, "claude", "api", Status.WORKING)]
-    to, seen = newly_blocked(set(), s_block)          # first time -> notify
+    to, seen = newly_blocked(set(), s_block)  # first time -> notify
     assert k in to and k in seen
-    to2, seen2 = newly_blocked(seen, s_block)         # same blocked -> no dup
+    to2, seen2 = newly_blocked(seen, s_block)  # same blocked -> no dup
     assert to2 == set() and seen2 == seen
-    to3, seen3 = newly_blocked(seen2, s_work)         # left blocked -> reset
+    to3, seen3 = newly_blocked(seen2, s_work)  # left blocked -> reset
     assert to3 == set() and k not in seen3
 
 
 def test_app_notifies_on_block_transition(monkeypatch):
     from herdeck.notify import Notifier
+
     calls = []
-    cfg = make_config()                 # this file's helper
+    cfg = make_config()  # this file's helper
     cfg.notifications.enabled = True
-    app = App(cfg, FakeRenderer(13), send=lambda c: None,
-              notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))))
-    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
-                                           Status.BLOCKED)])
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))),
+    )
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)])
     assert len(calls) == 1 and "api" in calls[0][1]
-    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
-                                           Status.BLOCKED)])
-    assert len(calls) == 1            # no duplicate while still blocked
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)])
+    assert len(calls) == 1  # no duplicate while still blocked
 
 
 def test_app_notify_keeps_other_servers_blocked_keys():
     from herdeck.notify import Notifier
+
     calls = []
     cfg = Config(
         servers=[ServerConfig("a", "wss://a", "t"), ServerConfig("b", "wss://b", "t")],
@@ -210,40 +212,45 @@ def test_app_notify_keeps_other_servers_blocked_keys():
         grid=(5, 3),
     )
     cfg.notifications.enabled = True
-    app = App(cfg, FakeRenderer(13), send=lambda c: None,
-              notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))))
-    app.handle_snapshot("a", [AgentState(AgentKey("a", "p1"), "claude", "api",
-                                         Status.BLOCKED)])
-    app.handle_snapshot("b", [AgentState(AgentKey("b", "p1"), "codex", "web",
-                                         Status.BLOCKED)])
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))),
+    )
+    app.handle_snapshot("a", [AgentState(AgentKey("a", "p1"), "claude", "api", Status.BLOCKED)])
+    app.handle_snapshot("b", [AgentState(AgentKey("b", "p1"), "codex", "web", Status.BLOCKED)])
     assert len(calls) == 2
     # Reconciling server "a" must not drop server "b"'s tracked blocked key
     # (else a later re-confirm would notify again).
-    app.handle_snapshot("a", [AgentState(AgentKey("a", "p1"), "claude", "api",
-                                         Status.BLOCKED)])
-    app.handle_snapshot("b", [AgentState(AgentKey("b", "p1"), "codex", "web",
-                                         Status.BLOCKED)])
-    assert len(calls) == 2            # no duplicates across servers
+    app.handle_snapshot("a", [AgentState(AgentKey("a", "p1"), "claude", "api", Status.BLOCKED)])
+    app.handle_snapshot("b", [AgentState(AgentKey("b", "p1"), "codex", "web", Status.BLOCKED)])
+    assert len(calls) == 2  # no duplicates across servers
 
 
 def test_app_does_not_notify_when_blocked_not_in_on():
     from herdeck.notify import Notifier
+
     calls = []
     cfg = make_config()
     cfg.notifications.enabled = True
-    cfg.notifications.on = []          # "blocked" not enabled -> no notifications
-    app = App(cfg, FakeRenderer(13), send=lambda c: None,
-              notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))))
-    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
-                                           Status.BLOCKED)])
+    cfg.notifications.on = []  # "blocked" not enabled -> no notifications
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))),
+    )
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)])
     assert calls == []
 
 
 def test_build_notifier_respects_config():
     from herdeck.app import _build_notifier
     from herdeck.notify import NoopNotifier, Notifier
+
     cfg = make_config()
-    assert isinstance(_build_notifier(cfg), NoopNotifier)   # disabled -> no-op
+    assert isinstance(_build_notifier(cfg), NoopNotifier)  # disabled -> no-op
     cfg.notifications.enabled = True
     n = _build_notifier(cfg)
     assert isinstance(n, Notifier) and not isinstance(n, NoopNotifier)
@@ -252,17 +259,28 @@ def test_build_notifier_respects_config():
 def test_build_notifier_fires_both_backends():
     from herdeck.app import _build_notifier
     from herdeck.config import TelegramConfig
+
     calls = []
     cfg = make_config()
     cfg.notifications.enabled = True
     cfg.notifications.backends = ["macos", "telegram"]
     cfg.notifications.telegram = TelegramConfig("HERDECK_TG", "42")
-    def rec_macos(t, b, s): calls.append(("macos", t))
-    def rec_tg(t, b, s): calls.append(("telegram", t))
-    n = _build_notifier(cfg, getenv=lambda k: "TOK",
-                        macos_sink=rec_macos,
-                        telegram_factory=lambda tok, cid: rec_tg)
+
+    def rec_macos(t, b, s):
+        calls.append(("macos", t))
+
+    def rec_tg(t, b, s):
+        calls.append(("telegram", t))
+
+    telegram_args = []
+    n = _build_notifier(
+        cfg,
+        getenv=lambda k: "TOK",
+        macos_sink=rec_macos,
+        telegram_factory=lambda tok, cid: (telegram_args.append((tok, cid)), rec_tg)[1],
+    )
     n.notify("title", "body", False)
+    assert telegram_args == [("TOK", "42")]
     assert ("macos", "title") in calls and ("telegram", "title") in calls
 
 
@@ -270,19 +288,21 @@ def test_build_notifier_skips_telegram_without_token():
     from herdeck.app import _build_notifier
     from herdeck.config import TelegramConfig
     from herdeck.notify import NoopNotifier
+
     cfg = make_config()
     cfg.notifications.enabled = True
     cfg.notifications.backends = ["telegram"]
     cfg.notifications.telegram = TelegramConfig("HERDECK_TG", "42")
-    n = _build_notifier(cfg, getenv=lambda k: None)   # token env unset
+    n = _build_notifier(cfg, getenv=lambda k: None)  # token env unset
     assert isinstance(n, NoopNotifier)
 
 
 def test_build_notifier_skips_telegram_without_config():
     from herdeck.app import _build_notifier
     from herdeck.notify import NoopNotifier
+
     cfg = make_config()
     cfg.notifications.enabled = True
-    cfg.notifications.backends = ["telegram"]   # telegram is None
+    cfg.notifications.backends = ["telegram"]  # telegram is None
     n = _build_notifier(cfg, getenv=lambda k: "TOK")
     assert isinstance(n, NoopNotifier)

@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 from .driver.base import COLORS, PanelView
 
 ICON_SIZE = 196
-PANEL_W, PANEL_H = 392, 196      # the D200 status window spans two 196px cells
+PANEL_W, PANEL_H = 392, 196  # the D200 status window spans two 196px cells
 # The spinner has this many distinct frames; keep the cache bounded so a
 # long-running working tile reuses frames instead of writing forever.
 SPINNER_FRAMES = 8
@@ -24,8 +24,8 @@ LOGO_SCALE = 0.62
 # Comet working-ring geometry, in ICON_SIZE pixels.
 RING_INSET = 12
 RING_WIDTH = 7
-RING_SPAN = 150          # degrees of comet tail
-_SS = 4                  # supersample factor for an anti-aliased ring
+RING_SPAN = 150  # degrees of comet tail
+_SS = 4  # supersample factor for an anti-aliased ring
 
 # Bundled SVG marks for agents that Simple Icons does not carry (e.g. codex →
 # the OpenAI logo). Shipped under the package's assets/ dir.
@@ -49,10 +49,11 @@ def _safe_name(agent_type: str) -> str:
     digest = hashlib.sha1(agent_type.encode()).hexdigest()[:8]
     return f"{safe or '_'}.{digest}"
 
+
 # agent type -> Simple Icons slug (None => generated glyph fallback)
 DEFAULT_AGENT_SLUGS: dict[str, str | None] = {
     "claude": "claude",
-    "codex": None,            # no Simple Icons entry -> glyph
+    "codex": None,  # no Simple Icons entry -> glyph
     "cursor": "cursor",
     "copilot": "githubcopilot",
     "gemini": "googlegemini",
@@ -69,6 +70,7 @@ def _default_fetch(slug: str) -> str | None:
     mark that stays legible on every status background colour.
     """
     import urllib.request
+
     req = urllib.request.Request(
         f"https://cdn.simpleicons.org/{slug}/white",
         headers={"User-Agent": "Mozilla/5.0 (herdeck)"},
@@ -84,8 +86,10 @@ def _default_fetch(slug: str) -> str | None:
 
 def _default_rasterize(svg: str, size: int) -> Image.Image:
     import cairosvg  # build-time only; not needed in tests
+
     png = cairosvg.svg2png(bytestring=svg.encode(), output_width=size, output_height=size)
     import io
+
     return Image.open(io.BytesIO(png)).convert("RGBA")
 
 
@@ -101,7 +105,7 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 
 # Bump when tile composition changes so stale cached tile PNGs are ignored.
 TILE_VERSION = 1
-TILE_BG = (26, 26, 30)           # dark agent-tile background
+TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 SERVER_CHIP_COLORS: dict[str, tuple[int, int, int]] = {
     "teal": (24, 150, 145),
@@ -117,6 +121,7 @@ def _font(size: int):
     if size in _font_cache:
         return _font_cache[size]
     from PIL import ImageFont
+
     font = None
     for path in _FONT_CANDIDATES:
         try:
@@ -147,13 +152,16 @@ def compose_panel(panel: PanelView) -> Image.Image:
     img = Image.new("RGB", (PANEL_W, PANEL_H), bg)
     d = ImageDraw.Draw(img)
     title_f = _font(30)
-    d.text((16, 12), _truncate(d, panel.title, title_f, PANEL_W - 32),
-           font=title_f, fill=(255, 255, 255))
+    d.text(
+        (16, 12),
+        _truncate(d, panel.title, title_f, PANEL_W - 32),
+        font=title_f,
+        fill=(255, 255, 255),
+    )
     line_f = _font(24)
     y = 60
     for line in panel.lines[:3]:
-        d.text((16, y), _truncate(d, line, line_f, PANEL_W - 32),
-               font=line_f, fill=(232, 232, 236))
+        d.text((16, y), _truncate(d, line, line_f, PANEL_W - 32), font=line_f, fill=(232, 232, 236))
         y += 40
     return img
 
@@ -196,11 +204,15 @@ class IconProvider:
     .cache/icons/_generated dir) and are referenced by bare filename.
     """
 
-    def __init__(self, cache_dir: str, slug_map: dict[str, str | None],
-                 overrides_dir: str | None = None,
-                 fetch: Callable[[str], str | None] = _default_fetch,
-                 rasterize: Callable[[str, int], Image.Image] = _default_rasterize,
-                 assets_dir: str | None = _ASSETS_DIR):
+    def __init__(
+        self,
+        cache_dir: str,
+        slug_map: dict[str, str | None],
+        overrides_dir: str | None = None,
+        fetch: Callable[[str], str | None] = _default_fetch,
+        rasterize: Callable[[str, int], Image.Image] = _default_rasterize,
+        assets_dir: str | None = _ASSETS_DIR,
+    ):
         self._cache_dir = cache_dir
         self._slug_map = slug_map
         self._overrides_dir = overrides_dir
@@ -229,7 +241,7 @@ class IconProvider:
                     with open(asset, encoding="utf-8") as fh:
                         img = self._rasterize(fh.read(), ICON_SIZE)
                 except Exception:
-                    img = None      # e.g. cairosvg missing -> fall back to a letter
+                    img = None  # e.g. cairosvg missing -> fall back to a letter
         if img is None:
             slug = self._slug_map.get(agent_type)
             if slug:
@@ -250,16 +262,19 @@ class IconProvider:
         # Center manually — the default bitmap font does not support anchor="mm".
         bbox = d.textbbox((0, 0), ch, **kw)
         w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        d.text(((ICON_SIZE - w) // 2 - bbox[0], (ICON_SIZE - h) // 2 - bbox[1]),
-               ch, fill=(255, 255, 255, 255), **kw)
+        d.text(
+            ((ICON_SIZE - w) // 2 - bbox[0], (ICON_SIZE - h) // 2 - bbox[1]),
+            ch,
+            fill=(255, 255, 255, 255),
+            **kw,
+        )
         return img
 
     def icon_for(self, agent_type: str, color: str, spinner: int | None = None) -> str:
         """Return a cached PNG filename (in cache_dir) of the mark on a status bg."""
         if spinner is not None:
-            spinner %= SPINNER_FRAMES   # bound the cache to a fixed frame set
-        key = f"{_safe_name(agent_type)}_{color}" + (
-            f"_s{spinner}" if spinner is not None else "")
+            spinner %= SPINNER_FRAMES  # bound the cache to a fixed frame set
+        key = f"{_safe_name(agent_type)}_{color}" + (f"_s{spinner}" if spinner is not None else "")
         name = f"icon_v{CACHE_VERSION}_{key}.png"
         path = os.path.join(self._cache_dir, name)
         if os.path.exists(path):
@@ -287,8 +302,7 @@ class IconProvider:
         step = 4
         for i in range(0, RING_SPAN, step):
             alpha = int(235 * (1 - i / RING_SPAN))
-            d.arc(box, head - i - step, head - i,
-                  fill=(255, 255, 255, alpha), width=w)
+            d.arc(box, head - i - step, head - i, fill=(255, 255, 255, alpha), width=w)
         img.alpha_composite(ov.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS))
 
     # --- rich tile rendering (full tile incl. text; device label left empty) ---
@@ -297,12 +311,20 @@ class IconProvider:
         PNG and return its filename. Agent tiles (tile.repo set) get the rich
         layout; control tiles render their centred label on a colour."""
         import hashlib
+
         # Bound the rotation phase so the cache reuses a fixed set of frames
         # instead of writing a new PNG on every tick.
         spinner = None if tile.spinner is None else tile.spinner % SPINNER_FRAMES
         sig_parts = [
-            TILE_VERSION, tile.color, tile.label, tile.agent_type, spinner,
-            tile.repo, tile.branch, tile.status_text, tile.time_text,
+            TILE_VERSION,
+            tile.color,
+            tile.label,
+            tile.agent_type,
+            spinner,
+            tile.repo,
+            tile.branch,
+            tile.status_text,
+            tile.time_text,
         ]
         if tile.server_tag or tile.server_accent:
             sig_parts.extend([tile.server_tag, tile.server_accent])
@@ -311,8 +333,11 @@ class IconProvider:
         path = os.path.join(self._cache_dir, name)
         if os.path.exists(path):
             return name
-        img = (self._compose_agent_tile(tile, spinner) if tile.repo is not None
-               else self._compose_label_tile(tile))
+        img = (
+            self._compose_agent_tile(tile, spinner)
+            if tile.repo is not None
+            else self._compose_label_tile(tile)
+        )
         img.convert("RGB").save(path)
         return name
 
@@ -323,16 +348,21 @@ class IconProvider:
             return fh.read()
 
     def _compose_label_tile(self, tile) -> Image.Image:
-        bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE),
-                       COLORS.get(tile.color, COLORS["dim"]) + (255,))
+        bg = Image.new(
+            "RGBA", (ICON_SIZE, ICON_SIZE), COLORS.get(tile.color, COLORS["dim"]) + (255,)
+        )
         if tile.label:
             d = ImageDraw.Draw(bg)
             f = _font(28)
             t = _truncate(d, tile.label, f, ICON_SIZE - 16)
             w = d.textlength(t, font=f)
             bb = d.textbbox((0, 0), t, font=f)
-            d.text(((ICON_SIZE - w) / 2, (ICON_SIZE - (bb[3] - bb[1])) / 2 - bb[1]),
-                   t, font=f, fill=(255, 255, 255))
+            d.text(
+                ((ICON_SIZE - w) / 2, (ICON_SIZE - (bb[3] - bb[1])) / 2 - bb[1]),
+                t,
+                font=f,
+                fill=(255, 255, 255),
+            )
         return bg
 
     def _compose_agent_tile(self, tile, spinner=None) -> Image.Image:
@@ -347,16 +377,28 @@ class IconProvider:
         # status word + elapsed time, top-right
         if tile.status_text:
             fs = _font(16)
-            d.text((ICON_SIZE - 12 - d.textlength(tile.status_text, font=fs), 13),
-                   tile.status_text, font=fs, fill=accent)
+            d.text(
+                (ICON_SIZE - 12 - d.textlength(tile.status_text, font=fs), 13),
+                tile.status_text,
+                font=fs,
+                fill=accent,
+            )
         if tile.time_text:
             ft = _font(15)
-            d.text((ICON_SIZE - 12 - d.textlength(tile.time_text, font=ft), 35),
-                   tile.time_text, font=ft, fill=(165, 165, 170))
+            d.text(
+                (ICON_SIZE - 12 - d.textlength(tile.time_text, font=ft), 35),
+                tile.time_text,
+                font=ft,
+                fill=(165, 165, 170),
+            )
         # repo (primary) + branch (secondary, wrapped)
         fr = _font(23)
-        d.text((12, 68), _truncate(d, tile.repo or "", fr, ICON_SIZE - 24),
-               font=fr, fill=(255, 255, 255))
+        d.text(
+            (12, 68),
+            _truncate(d, tile.repo or "", fr, ICON_SIZE - 24),
+            font=fr,
+            fill=(255, 255, 255),
+        )
         if tile.branch:
             fb = _font(16)
             y = 98
@@ -364,16 +406,14 @@ class IconProvider:
                 d.text((12, y), line, font=fb, fill=(180, 180, 188))
                 y += 20
         if tile.server_tag:
-            chip_fill = SERVER_CHIP_COLORS.get(
-                tile.server_accent or "", (95, 95, 105))
+            chip_fill = SERVER_CHIP_COLORS.get(tile.server_accent or "", (95, 95, 105))
             fc = _font(14)
             tag = _truncate(d, tile.server_tag, fc, 48)
             text_w = d.textlength(tag, font=fc)
             bb = d.textbbox((0, 0), tag, font=fc)
             x, y, pad_x, chip_h = 12, ICON_SIZE - 40, 6, 22
             chip_w = int(text_w + pad_x * 2)
-            d.rounded_rectangle(
-                [x, y, x + chip_w, y + chip_h], radius=4, fill=chip_fill)
+            d.rounded_rectangle([x, y, x + chip_w, y + chip_h], radius=4, fill=chip_fill)
             text_y = y + (chip_h - (bb[3] - bb[1])) / 2 - bb[1]
             d.text((x + pad_x, text_y), tag, font=fc, fill=(255, 255, 255))
         d.rectangle([0, ICON_SIZE - 8, ICON_SIZE, ICON_SIZE], fill=accent)  # accent
