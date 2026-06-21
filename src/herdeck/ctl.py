@@ -128,6 +128,9 @@ class CtlSession:
         re-check after every wake. arm(clear) -> re-check -> await ensures no
         wakeup is lost: on_event updates `agents` before set(), and in a single
         loop the callback only runs while we are parked at the await.
+
+        Assumes a single concurrent waiter (the one-shot CLI invariant); not safe
+        for parallel waiters due to the shared `_changed.clear()`.
         """
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout
