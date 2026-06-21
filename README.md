@@ -105,18 +105,30 @@ optional `approve_always`) key lists. `<name>` matches herdr's detected `agent`
 (e.g. `claude`, `codex`); unknown agents use `[answer_profiles.default]`.
 
 ## Notifications
-Get a macOS notification when an agent enters the **blocked** state, so you don't
-have to watch the deck. Off by default; enable in your config:
+Get notified when an agent enters the **blocked** state, so you don't have to
+watch the deck. Off by default; enable in your config and pick one or more
+backends:
 ```toml
 [notifications]
 enabled = true
-on = ["blocked"]   # statuses that fire a notification
+backends = ["macos", "telegram"]   # run both, or just one
+on = ["blocked"]
 sound = true
+
+# Only needed when "telegram" is a backend:
+[notifications.telegram]
+token_env = "HERDECK_TELEGRAM_TOKEN"   # bot token read from this env var
+chat_id = "123456789"
 ```
-Notifications contain only the repo/label, branch, and (in multi-server setups)
-the server id — never prompt text, command output, or tokens. They fire once per
-blocked episode (re-arming after the agent leaves `blocked`) and never block the
-UI loop.
+- **macOS** posts to Notification Center (osascript). **Telegram** delivers to
+  your phone via the Bot API over HTTPS (stdlib only, no extra dependency) —
+  useful when you drive herdeck from the phone over Tailscale.
+- Telegram setup: create a bot with @BotFather, `export HERDECK_TELEGRAM_TOKEN=<token>`
+  (never commit the token), and set your numeric `chat_id`. A missing token or
+  chat_id makes herdeck skip telegram with a warning — other backends still fire.
+- Notifications contain only the repo/label, branch, and (multi-server) server id
+  — never prompt text, command output, or tokens. They fire once per blocked
+  episode (re-arming after the agent leaves `blocked`) and never block the UI loop.
 
 ## Security
 - The bridge WebSocket is authenticated with a bearer token (constant-time
