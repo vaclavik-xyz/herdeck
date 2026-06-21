@@ -18,7 +18,6 @@ def make_deck():
 
 
 def test_page_has_keyboard_and_highlight_support():
-    d = make_deck()
     # the page is the module-level _PAGE served at "/"
     from herdeck.driver import web
     page = web._PAGE
