@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hmac
 import io
 import json
+import secrets
 import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 from .base import DeckDriver, PanelView, TileView
 
@@ -31,6 +34,7 @@ class WebDeck(DeckDriver):
         self._panel: bytes | None = None
         self._panel_ver = 0
         self._version = 0
+        self._press_token = secrets.token_urlsafe(24)
         if icon_provider is None:
             import os
             import tempfile
@@ -42,14 +46,20 @@ class WebDeck(DeckDriver):
                                          overrides_dir=None)
         self._icons = icon_provider
         self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
         if serve:
             self._server = ThreadingHTTPServer((host, port), self._handler_class())
             self.host, self.port = self._server.server_address[0], self._server.server_address[1]
-            threading.Thread(target=self._server.serve_forever, daemon=True).start()
+            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+            self._thread.start()
 
     # --- DeckDriver interface ---
     def slot_count(self) -> int:
         return self._slots
+
+    @property
+    def press_token(self) -> str:
+        return self._press_token
 
     def _bump(self) -> int:
         """Assign the next monotonic version. Call while holding self._lock."""
@@ -111,11 +121,21 @@ class WebDeck(DeckDriver):
             self._callback(index)
 
     def close(self) -> None:
-        if self._server is not None:
+        server = self._server
+        if server is not None:
             try:
-                self._server.shutdown()
+                server.shutdown()
             except Exception:
                 pass
+            try:
+                server.server_close()
+            except Exception:
+                pass
+            self._server = None
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1)
+        self._thread = None
 
     # --- state snapshot for the browser ---
     def _state(self) -> dict:
@@ -149,17 +169,42 @@ class WebDeck(DeckDriver):
                 if body:
                     self.wfile.write(body)
 
+            def _valid_token(self, token):
+                return hmac.compare_digest(token.encode(), deck._press_token.encode())
+
+            def _query_token(self, url):
+                return parse_qs(url.query).get("token", [""])[0]
+
+            def _require_token(self, url):
+                if self._valid_token(self._query_token(url)):
+                    return True
+                self._send(403)
+                return False
+
             def do_GET(self):
-                path = self.path.split("?", 1)[0]
+                url = urlsplit(self.path)
+                path = url.path
                 if path == "/":
-                    self._send(200, _PAGE.encode(), "text/html; charset=utf-8")
+                    token = self._query_token(url)
+                    if not self._valid_token(token):
+                        self._send(403)
+                        return
+                    page = _PAGE.replace("__PRESS_TOKEN_JSON__",
+                                         json.dumps(deck._press_token))
+                    self._send(200, page.encode(), "text/html; charset=utf-8")
                 elif path == "/state":
+                    if not self._require_token(url):
+                        return
                     self._send(200, json.dumps(deck._state()).encode(),
                                "application/json")
                 elif path == "/panel":
+                    if not self._require_token(url):
+                        return
                     png = deck._panel_png()
                     self._send(200, png, "image/png") if png else self._send(404)
                 elif path.startswith("/tile/"):
+                    if not self._require_token(url):
+                        return
                     try:
                         png = deck._tile_png(int(path.rsplit("/", 1)[1]))
                     except ValueError:
@@ -169,8 +214,12 @@ class WebDeck(DeckDriver):
                     self._send(404)
 
             def do_POST(self):
-                path = self.path.split("?", 1)[0]
+                path = urlsplit(self.path).path
                 if path.startswith("/press/"):
+                    token = self.headers.get("X-Herdeck-Token", "")
+                    if not self._valid_token(token):
+                        self._send(403)
+                        return
                     try:
                         deck.press(int(path.rsplit("/", 1)[1]))
                         self._send(204)
@@ -217,24 +266,41 @@ _PAGE = """<!doctype html><meta charset=utf-8>
 <div id=deck></div>
 <script>
 const deck=document.getElementById('deck');
-let cells=[]; const btns=[];
+const pressToken=__PRESS_TOKEN_JSON__;
+let cells=[]; const btns=[]; let slotCount=0;
+function auth(path){
+  return path+(path.includes('?')?'&':'?')+'token='+encodeURIComponent(pressToken);
+}
 // one press path for clicks and keys: post the press, outline the pressed cell.
-function press(i){
-  fetch('/press/'+i,{method:'POST'});
+async function press(i){
+  let r;
+  try{
+    r=await fetch('/press/'+i,{method:'POST',headers:{'X-Herdeck-Token':pressToken}});
+  }catch(e){ return; }
+  if(r.status===403) location.reload();
+  if(!r.ok) return;
   btns.forEach(b=>b.classList.remove('active'));   // clear any stale outline first
   if(btns[i]) btns[i].classList.add('active');     // panel (no button) leaves none active
 }
-// 13 buttons fill grid positions 0..12; the panel spans the last two cells.
-for(let i=0;i<13;i++){
+function addCell(i){
   const b=document.createElement('button');b.className='cell';
   b.onclick=()=>press(i);
   const img=document.createElement('img');b.appendChild(img);
   deck.appendChild(b);cells.push(img);btns.push(b);
 }
 const panel=document.createElement('div');panel.id='panel';
-panel.onclick=()=>press(13);
+panel.onclick=()=>press(slotCount);
 const pimg=document.createElement('img');panel.appendChild(pimg);
-deck.appendChild(panel);
+function ensureCells(count){
+  if(count===slotCount) return;
+  while(btns.length<count) addCell(btns.length);
+  while(btns.length>count){
+    const i=btns.length-1;
+    btns.pop().remove(); cells.pop(); delete tv[i];
+  }
+  slotCount=count;
+  deck.appendChild(panel);
+}
 // keyboard: 1..9 -> tiles 0..8, 0 -> tile 9; ignore when a modifier is held.
 document.addEventListener('keydown',e=>{
   if(e.repeat) return;                                   // don't spam presses on key-hold
@@ -245,17 +311,18 @@ document.addEventListener('keydown',e=>{
 let lastV=-1; const tv={}; let pv=-1;
 async function poll(){
   try{
-    const s=await (await fetch('/state')).json();
+    const s=await (await fetch(auth('/state'))).json();
+    ensureCells(s.slots);
     if(s.version!==lastV){          // cheap gate: nothing changed at all
       lastV=s.version;
       const t=s.tiles||{};
-      for(let i=0;i<13;i++){        // refetch only tiles whose version advanced
+      for(let i=0;i<slotCount;i++){ // refetch only tiles whose version advanced
         const v=t[i];
         if(v===undefined){          // tile gone -> clear the cell
           if(tv[i]!==undefined){ delete tv[i]; cells[i].removeAttribute('src'); }
-        } else if(v!==tv[i]){ tv[i]=v; cells[i].src='/tile/'+i+'?v='+v; }
+        } else if(v!==tv[i]){ tv[i]=v; cells[i].src=auth('/tile/'+i+'?v='+v); }
       }
-      if(s.has_panel && s.panel!==pv){ pv=s.panel; pimg.src='/panel?v='+pv; }
+      if(s.has_panel && s.panel!==pv){ pv=s.panel; pimg.src=auth('/panel?v='+pv); }
     }
   }catch(e){}
   setTimeout(poll,300);

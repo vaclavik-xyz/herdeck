@@ -89,6 +89,17 @@ def test_unknown_explicit_deck_kind_raises():
         make_deck("dw00", 13, d200_factory=_boom, web_factory=_Web)
 
 
+def test_default_web_deck_prints_tokenized_url(monkeypatch, capsys):
+    monkeypatch.setenv("HERDECK_WEB_PORT", "0")
+    deck = make_deck("web", 4)
+    try:
+        out = capsys.readouterr().out
+        assert "/?token=" in out
+        assert deck.press_token in out
+    finally:
+        deck.close()
+
+
 async def test_start_local_bridge_serves_snapshot_to_connector():
     herdr = StubHerdr([
         {"pane_id": "p1", "agent": "claude", "agent_status": "working",
