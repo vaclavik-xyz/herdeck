@@ -1002,7 +1002,14 @@ import json
 import pytest
 
 from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
-from herdeck.ctl import EXIT_OK, EXIT_SKIPPED, EXIT_TARGET, build_parser, dispatch
+from herdeck.ctl import (
+    EXIT_OK,
+    EXIT_SKIPPED,
+    EXIT_TARGET,
+    EXIT_USAGE,
+    build_parser,
+    dispatch,
+)
 from herdeck.model import AgentKey, AgentState, Status
 
 
@@ -1033,6 +1040,19 @@ class StubSession:
 def test_parser_rejects_unknown_status():
     with pytest.raises(SystemExit):
         build_parser().parse_args(["wait", "--any", "--until", "bogus"])
+
+
+def test_wait_has_independent_unlimited_timeout():
+    args = build_parser().parse_args(["wait", "--any", "--until", "blocked"])
+    assert args.wait_timeout is None       # wait waits forever by default (N1)
+    assert args.timeout == 10.0            # global connect/request default unchanged
+
+
+@pytest.mark.asyncio
+async def test_dispatch_wait_requires_exactly_one_selector(capsys):
+    args = build_parser().parse_args(["wait", "--until", "blocked"])  # neither agent nor --any
+    assert await dispatch(args, StubSession([])) == EXIT_USAGE  # N2
+    assert "exactly one" in capsys.readouterr().err
 
 
 @pytest.mark.asyncio
@@ -1111,6 +1131,11 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("agent", nargs="?")
     w.add_argument("--any", dest="any_agent", action="store_true")
     w.add_argument("--until", choices=_STATUSES, required=True)
+    # wait has its OWN timeout (default: no limit), independent of the global
+    # connect/request --timeout. A separate dest avoids the argparse subparser
+    # default clobbering args.timeout (still used for the connection in open()).
+    w.add_argument("--timeout", dest="wait_timeout", type=float, default=None,
+                   help="max seconds to wait (default: no limit)")
 
     for name in ("approve", "deny"):
         a = sub.add_parser(name, help=f"{name} a blocked agent")
@@ -1160,6 +1185,9 @@ async def dispatch(args, session) -> int:
         return EXIT_OK
 
     if args.cmd == "wait":
+        if bool(args.any_agent) == bool(args.agent):  # exactly one selector required
+            print("wait needs exactly one of <agent> or --any", file=sys.stderr)
+            return EXIT_USAGE
         target_status = Status(args.until)
         if args.any_agent:
             def pred():
@@ -1174,7 +1202,7 @@ async def dispatch(args, session) -> int:
             def pred():
                 a = session.agents.get(fixed.key)
                 return a if a and a.status is target_status else None
-        match = await session.wait(pred, timeout=args.timeout)
+        match = await session.wait(pred, timeout=args.wait_timeout)
         if match is None:
             print("wait timed out", file=sys.stderr)
             return EXIT_WAIT_TIMEOUT
@@ -1364,6 +1392,27 @@ async def test_e2e_ls_and_approve():
         btask.cancel()
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_e2e_approve_idle_is_skipped():
+    """approve on a non-blocked agent -> bridge guard skips -> result 'skipped' (exit 3)."""
+    herdr = FakeHerdr()
+    herdr._status = "idle"  # not blocked -> the bridge's act guard skips
+    host, port, token, (server, btask) = await start_local_bridge("/unused.sock", herdr=herdr)
+    try:
+        sess = CtlSession(_config(port, token))
+        await sess.open(timeout=5)
+        agent = sess.resolve_target("local:w1:p1")
+        out = await sess.act("approve", agent, force=False, always=False,
+                             settle_timeout=1, request_timeout=5)
+        assert out["result"] == "skipped"
+        assert herdr.sent == []  # no keys reached herdr
+        await sess.close()
+    finally:
+        btask.cancel()
+        server.close()
+        await server.wait_closed()
 ```
 
 (Match `FakeHerdr`'s method names to the `HerdrClient` protocol in `bridge.py:18-25` — adjust if the protocol differs from the names above; the existing `bridge.py` `FakeHerdrClient` in tests is the reference shape.)
@@ -1445,6 +1494,8 @@ When the user requests it, push `feat/herdeck-ctl` and open a PR referencing the
 - Bootstrap extraction + cycle fix (move `resolve_mode`+`local_config` to bootstrap) → Task 2. ✔
 - Target resolution `server:pane_id` + fuzzy → Task 5. ✔
 - Exit-code contract → Task 6 (`EXIT_*`). ✔
+- `wait` independent unlimited timeout (N1) + exactly-one-selector validation (N2) → Task 6. ✔
+- Guard-skip (exit 3) verified end-to-end against the real bridge → Task 7. ✔
 - `--no-submit` / spawn explicitly out of v1 → not implemented (documented as future in spec). ✔
 
 **Placeholder scan:** No `TBD`/`TODO`; every code step shows complete code. Two "match the reference shape" notes (test_app `app` fixture cleanup; e2e `FakeHerdr` method names vs `HerdrClient` protocol) point at concrete existing references, not deferred work.
