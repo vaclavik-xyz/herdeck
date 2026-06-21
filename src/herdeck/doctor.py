@@ -191,3 +191,7 @@ def main() -> None:
     print(format_report(checks))
     if any(not check.ok for check in checks):
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
