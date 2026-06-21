@@ -169,3 +169,81 @@ def test_command_to_msg_start():
     app = App(make_config(), FakeRenderer(13), send=lambda c: None)
     m = _command_to_msg(Command("start", "dev", text="claude", keys=["claude"]), app)
     assert m["type"] == "start" and m["name"] == "claude" and m["argv"] == ["claude"]
+
+
+def test_newly_blocked_detects_transition_and_avoids_dup():
+    from herdeck.app import newly_blocked
+    from herdeck.model import AgentKey, AgentState, Status
+    k = AgentKey("s", "p1")
+    s_block = [AgentState(k, "claude", "api", Status.BLOCKED)]
+    s_work = [AgentState(k, "claude", "api", Status.WORKING)]
+    to, seen = newly_blocked(set(), s_block)          # first time -> notify
+    assert k in to and k in seen
+    to2, seen2 = newly_blocked(seen, s_block)         # same blocked -> no dup
+    assert to2 == set() and seen2 == seen
+    to3, seen3 = newly_blocked(seen2, s_work)         # left blocked -> reset
+    assert to3 == set() and k not in seen3
+
+
+def test_app_notifies_on_block_transition(monkeypatch):
+    from herdeck.notify import Notifier
+    calls = []
+    cfg = make_config()                 # this file's helper
+    cfg.notifications.enabled = True
+    app = App(cfg, FakeRenderer(13), send=lambda c: None,
+              notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))))
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
+                                           Status.BLOCKED)])
+    assert len(calls) == 1 and "api" in calls[0][1]
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
+                                           Status.BLOCKED)])
+    assert len(calls) == 1            # no duplicate while still blocked
+
+
+def test_app_notify_keeps_other_servers_blocked_keys():
+    from herdeck.notify import Notifier
+    calls = []
+    cfg = Config(
+        servers=[ServerConfig("a", "wss://a", "t"), ServerConfig("b", "wss://b", "t")],
+        profiles={"default": AnswerProfile(["enter"], ["esc"], ["ctrl+c"], ["enter"])},
+        overview_order=["a", "b"],
+        grid=(5, 3),
+    )
+    cfg.notifications.enabled = True
+    app = App(cfg, FakeRenderer(13), send=lambda c: None,
+              notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))))
+    app.handle_snapshot("a", [AgentState(AgentKey("a", "p1"), "claude", "api",
+                                         Status.BLOCKED)])
+    app.handle_snapshot("b", [AgentState(AgentKey("b", "p1"), "codex", "web",
+                                         Status.BLOCKED)])
+    assert len(calls) == 2
+    # Reconciling server "a" must not drop server "b"'s tracked blocked key
+    # (else a later re-confirm would notify again).
+    app.handle_snapshot("a", [AgentState(AgentKey("a", "p1"), "claude", "api",
+                                         Status.BLOCKED)])
+    app.handle_snapshot("b", [AgentState(AgentKey("b", "p1"), "codex", "web",
+                                         Status.BLOCKED)])
+    assert len(calls) == 2            # no duplicates across servers
+
+
+def test_app_does_not_notify_when_blocked_not_in_on():
+    from herdeck.notify import Notifier
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.on = []          # "blocked" not enabled -> no notifications
+    app = App(cfg, FakeRenderer(13), send=lambda c: None,
+              notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))))
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
+                                           Status.BLOCKED)])
+    assert calls == []
+
+
+def test_build_notifier_respects_config():
+    from herdeck.app import _build_notifier
+    from herdeck.notify import NoopNotifier, Notifier
+    cfg = make_config()
+    assert isinstance(_build_notifier(cfg), NoopNotifier)   # disabled -> no-op
+    cfg.notifications.enabled = True
+    n = _build_notifier(cfg)
+    assert isinstance(n, Notifier) and not isinstance(n, NoopNotifier)
