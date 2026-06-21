@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import textwrap
 from dataclasses import dataclass
 
 from .driver.base import PanelView
@@ -10,6 +11,9 @@ from .model import AgentState, Status
 # A numbered choice line in an agent prompt, e.g. "❯ 1. Yes" or "2. Cenotvorba".
 # Leading markers (cursor caret, bullets, whitespace) are skipped before the digit.
 _OPTION_RE = re.compile(r"^[\s>❯❱*\-)(]*(\d+)[.)]\s+(\S.*?)\s*$")
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_DETAIL_LINE_WIDTH = 36
+_DETAIL_MAX_LINES = 3
 
 # lower = higher priority (shown first)
 _STATUS_PRIORITY = {
@@ -113,7 +117,7 @@ def parse_options(text: str) -> list[Option]:
     options: list[Option] = []
     seen: set[str] = set()
     for line in (text or "").splitlines():
-        m = _OPTION_RE.match(line)
+        m = _OPTION_RE.match(_ANSI_RE.sub("", line).strip())
         if not m:
             continue
         key = m.group(1)
@@ -124,21 +128,39 @@ def parse_options(text: str) -> list[Option]:
     return options
 
 
-def panel_detail(agent: AgentState, text: str) -> PanelView:
-    # Split into real lines so embedded newlines don't reach the renderer as one
-    # blob; keep a bounded set of short lines for the small panel.
-    raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()] if text else []
-    option_keys = {opt.key for opt in parse_options(text)}
-    lines = []
+def _detail_lines(text: str) -> tuple[list[str], list[str]]:
+    raw_lines = [
+        _ANSI_RE.sub("", ln).strip()
+        for ln in text.splitlines()
+        if _ANSI_RE.sub("", ln).strip()
+    ]
+    option_keys = {opt.key for opt in parse_options("\n".join(raw_lines))}
+    lines: list[str] = []
     for line in raw_lines:
         match = _OPTION_RE.match(line)
         if match and match.group(1) in option_keys:
             continue
-        lines.append(line[:80])
-        if len(lines) == 3:
-            break
+        wrapped = textwrap.wrap(
+            line,
+            width=_DETAIL_LINE_WIDTH,
+            break_long_words=True,
+            break_on_hyphens=False,
+        ) or [line[:_DETAIL_LINE_WIDTH]]
+        for wrapped_line in wrapped:
+            lines.append(wrapped_line)
+            if len(lines) == _DETAIL_MAX_LINES:
+                return raw_lines, lines
     if raw_lines and not lines:
-        lines = [raw_lines[0][:80]]
+        lines = textwrap.wrap(raw_lines[0], width=_DETAIL_LINE_WIDTH)[:_DETAIL_MAX_LINES]
+    return raw_lines, lines
+
+
+def panel_detail(agent: AgentState, text: str) -> PanelView:
+    # Split into bounded display lines so embedded newlines and long prompts do
+    # not reach the small panel as one unreadable blob.
+    raw_lines, lines = _detail_lines(text) if text else ([], [])
+    if agent.status is Status.BLOCKED and not raw_lines:
+        lines = ["reading prompt..."]
     return PanelView(
         title=f"{agent.agent_type}: {agent.label}",
         lines=lines,
