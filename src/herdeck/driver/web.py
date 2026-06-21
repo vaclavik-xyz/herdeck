@@ -211,7 +211,8 @@ let cells=[]; const btns=[];
 // one press path for clicks and keys: post the press, outline the pressed cell.
 function press(i){
   fetch('/press/'+i,{method:'POST'});
-  if(btns[i]){ btns.forEach(b=>b.classList.remove('active')); btns[i].classList.add('active'); }
+  btns.forEach(b=>b.classList.remove('active'));   // clear any stale outline first
+  if(btns[i]) btns[i].classList.add('active');     // panel (no button) leaves none active
 }
 // 13 buttons fill grid positions 0..12; the panel spans the last two cells.
 for(let i=0;i<13;i++){
@@ -226,6 +227,7 @@ const pimg=document.createElement('img');panel.appendChild(pimg);
 deck.appendChild(panel);
 // keyboard: 1..9 -> tiles 0..8, 0 -> tile 9; ignore when a modifier is held.
 document.addEventListener('keydown',e=>{
+  if(e.repeat) return;                                   // don't spam presses on key-hold
   if(e.metaKey||e.ctrlKey||e.altKey||e.shiftKey) return;
   if(e.key>='1'&&e.key<='9') press(e.key.charCodeAt(0)-49);
   else if(e.key==='0') press(9);
