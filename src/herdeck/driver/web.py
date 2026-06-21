@@ -197,11 +197,18 @@ _PAGE = """<!doctype html><meta charset=utf-8>
  #panel{grid-column:4 / 6;width:230px;height:110px;border-radius:8px;
    overflow:hidden;cursor:pointer;background:#111}
  #panel img{width:100%;height:100%;display:block}
- /* phone: shrink the 5-wide deck so it fits a narrow screen */
+ /* phone portrait: width is the constraint, so shrink the 5-wide deck */
  @media (max-width:560px){
    #deck{grid-template-columns:repeat(5,min(17vw,110px));gap:6px;padding:10px}
    .cell{width:min(17vw,110px);height:min(17vw,110px)}
    #panel{width:calc(min(17vw,110px)*2 + 6px);height:min(17vw,110px)}
+ }
+ /* phone landscape: HEIGHT is the constraint (3 rows), so size cells by viewport
+    height so the deck doesn't overflow a short viewport (e.g. 667x375) */
+ @media (max-height:430px){
+   #deck{grid-template-columns:repeat(5,min(22vh,110px));gap:6px;padding:10px}
+   .cell{width:min(22vh,110px);height:min(22vh,110px)}
+   #panel{width:calc(min(22vh,110px)*2 + 6px);height:min(22vh,110px)}
  }
 </style>
 <div id=deck></div>

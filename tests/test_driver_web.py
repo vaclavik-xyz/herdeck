@@ -37,6 +37,30 @@ def test_page_guards_key_repeat_and_panel_clears_highlight():
     assert "if(btns[i]) btns[i].classList.add('active')" in page
 
 
+def test_page_landscape_rule_sizes_deck_for_short_height():
+    from herdeck.driver import web
+    page = web._PAGE
+    # phone landscape limits HEIGHT, not width: a max-height media rule must exist
+    marker = "@media (max-height:"
+    assert marker in page
+    # extract the media block by brace-matching, then assert it sizes by viewport
+    # height (vh) so the 3-row deck fits a short landscape viewport
+    start = page.index(marker)
+    open_brace = page.index("{", start)
+    depth = 0
+    end = open_brace
+    for end in range(open_brace, len(page)):
+        if page[end] == "{":
+            depth += 1
+        elif page[end] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    block = page[start:end + 1]
+    assert "vh" in block          # cells sized by viewport height, not just width
+    assert ".cell" in block       # the tiles themselves are resized
+
+
 def test_render_updates_state_and_serves_png():
     d = make_deck()
     d.render([TileView(0, "", "amber", agent_type="claude", repo="api",
