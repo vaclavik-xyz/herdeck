@@ -11,3 +11,8 @@ def test_elgato_extra_declares_streamdeck_and_pillow():
     extra = _pyproject()["project"]["optional-dependencies"]["elgato"]
     assert any("streamdeck" in dep for dep in extra)
     assert any("pillow" in dep.lower() for dep in extra)
+
+
+def test_console_scripts_include_doctor_entrypoint():
+    scripts = _pyproject()["project"]["scripts"]
+    assert scripts["herdeck-doctor"] == "herdeck.doctor:main"

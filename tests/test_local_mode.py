@@ -104,6 +104,8 @@ async def test_start_local_bridge_serves_snapshot_to_connector():
     herdr = StubHerdr([
         {"pane_id": "p1", "agent": "claude", "agent_status": "working",
          "foreground_cwd": "/proj/api", "workspace_id": "w1"},
+    ], worktrees=[
+        {"open_workspace_id": "w1", "label": "herdeck", "branch": "feat/clawpatch"},
     ])
     host, port, token, (server, btask) = await start_local_bridge(
         "/nonexistent.sock", herdr=herdr)
@@ -120,6 +122,8 @@ async def test_start_local_bridge_serves_snapshot_to_connector():
         await asyncio.wait_for(got.wait(), timeout=5)
         assert seen[0].agent_type == "claude"
         assert seen[0].label == "api"
+        assert seen[0].repo == "herdeck"
+        assert seen[0].branch == "feat/clawpatch"
     finally:
         conn.stop()
         btask.cancel()

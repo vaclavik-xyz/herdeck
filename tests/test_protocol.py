@@ -30,6 +30,19 @@ def test_decode_snapshot_to_states():
     ]
 
 
+def test_decode_snapshot_preserves_repo_and_branch():
+    raw = (
+        '{"type":"snapshot","server_id":"workbox","panes":'
+        '[{"pane_id":"w1:p1","agent_type":"claude","label":"api",'
+        '"status":"blocked","project":"api","repo":"herdeck",'
+        '"branch":"feat/clawpatch"}]}'
+    )
+    msg = decode_inbound(raw)
+    assert isinstance(msg, Snapshot)
+    assert msg.states[0].repo == "herdeck"
+    assert msg.states[0].branch == "feat/clawpatch"
+
+
 def test_decode_event_to_state():
     raw = (
         '{"type":"event","server_id":"workbox","pane":'
