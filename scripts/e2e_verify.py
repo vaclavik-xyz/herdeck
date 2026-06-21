@@ -6,9 +6,9 @@ herdeck bridge, waits a few seconds, and prints the resulting deck tiles.
 import asyncio
 import os
 
+from herdeck.app import App
 from herdeck.config import AnswerProfile, Config, ServerConfig
 from herdeck.connector import Connector
-from herdeck.app import App
 from herdeck.driver.fake import FakeRenderer
 
 URL = os.environ.get("HERDECK_E2E_URL", "ws://127.0.0.1:8788")
@@ -28,6 +28,16 @@ def make_config():
     )
 
 
+def _verify_capture(*, tiles, frames_seen, connected):
+    if not tiles:
+        return False, "FAIL: no render (connector never produced a frame)"
+    if not connected:
+        return False, "FAIL: not connected to the bridge"
+    if frames_seen == 0:
+        return False, "FAIL: connected but the bridge sent no snapshot/event"
+    return True, f"OK: connected and rendered ({frames_seen} bridge frames)"
+
+
 async def main():
     cfg = make_config()
     deck = FakeRenderer(13)  # emulate the D200's 13 buttons
@@ -42,6 +52,7 @@ async def main():
 
     app = App(cfg, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn))
     frames = {"n": 0}
+    connection = {"up": False}
 
     def on_snap(sid, st):
         frames["n"] += 1
@@ -51,11 +62,15 @@ async def main():
         frames["n"] += 1
         loop.call_soon_threadsafe(app.handle_event, sid, s)
 
+    def on_connection(sid, up):
+        connection["up"] = up
+        loop.call_soon_threadsafe(app.handle_connection, sid, up)
+
     conn = Connector(
         cfg.servers[0],
         on_snapshot=on_snap,
         on_event=on_evt,
-        on_connection=lambda sid, up: loop.call_soon_threadsafe(app.handle_connection, sid, up),
+        on_connection=on_connection,
         on_result=lambda req, data, sid="dev": loop.call_soon_threadsafe(app.handle_result, sid, req, data),
     )
     connectors["dev"] = conn
@@ -63,6 +78,7 @@ async def main():
     await asyncio.sleep(3.5)
     tiles = list(deck.last)        # capture WHILE connected
     frames_seen = frames["n"]      # capture frame count at the same instant
+    connected = connection["up"]
     conn.stop()
     try:
         await asyncio.wait_for(task, 2.0)
@@ -74,17 +90,12 @@ async def main():
         if t.label or t.color not in ("dim",):
             print(f"  [{t.index:2}] {t.color:6} {t.label!r}")
 
-    if not tiles:
-        print("FAIL: no render (connector never produced a frame)")
+    ok, message = _verify_capture(tiles=tiles, frames_seen=frames_seen,
+                                  connected=connected)
+    if not ok:
+        print(message)
         return 1
-    link = tiles[-1]            # last tile is the connection indicator
-    if link.color != "green":
-        print("FAIL: not connected to the bridge (Link tile is not green)")
-        return 1
-    if frames_seen == 0:
-        print("FAIL: connected but the bridge sent no snapshot/event")
-        return 1
-    print(f"OK: connected and rendered ({frames_seen} bridge frames)")
+    print(message)
     return 0
 
 

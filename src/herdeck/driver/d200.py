@@ -36,20 +36,26 @@ class D200Driver(DeckDriver):
     def __init__(self, workdir: str | None = None, icon_provider=None):
         # Stable working dir so strmdck's relative .build/.cache never collide (R-4).
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
-        os.makedirs(self._workdir, exist_ok=True)
-        os.chdir(self._workdir)
-        os.makedirs(_ICON_DIR, exist_ok=True)
-        self._dev = self._open_device()
-        self._callback: Callable[[int], None] | None = None
-        if icon_provider is None:
-            from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
-            icon_provider = IconProvider(cache_dir=os.path.abspath(_ICON_DIR),
-                                         slug_map=DEFAULT_AGENT_SLUGS,
-                                         overrides_dir=os.path.abspath("icons"))
-        self._icons = icon_provider
-        with contextlib.redirect_stdout(io.StringIO()):
-            self._dev.set_brightness(self.BRIGHTNESS, force=True)
-            self._set_panel_background_mode()
+        self._previous_cwd = os.getcwd()
+        try:
+            os.makedirs(self._workdir, exist_ok=True)
+            os.chdir(self._workdir)
+            os.makedirs(_ICON_DIR, exist_ok=True)
+            self._dev = self._open_device()
+            self._callback: Callable[[int], None] | None = None
+            if icon_provider is None:
+                from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
+                icon_provider = IconProvider(cache_dir=os.path.abspath(_ICON_DIR),
+                                             slug_map=DEFAULT_AGENT_SLUGS,
+                                             overrides_dir=os.path.abspath("icons"))
+            self._icons = icon_provider
+            with contextlib.redirect_stdout(io.StringIO()):
+                self._dev.set_brightness(self.BRIGHTNESS, force=True)
+                self._set_panel_background_mode()
+        except Exception:
+            with contextlib.suppress(Exception):
+                os.chdir(self._previous_cwd)
+            raise
 
     def _open_device(self, retries: int = 5, delay: float = 1.0):
         import time
@@ -135,6 +141,8 @@ class D200Driver(DeckDriver):
     def close(self) -> None:
         with contextlib.suppress(Exception):
             self._dev.close()
+        with contextlib.suppress(Exception):
+            os.chdir(self._previous_cwd)
 
     async def run_reader(self) -> None:
         import time
