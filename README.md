@@ -23,6 +23,10 @@ simulator and prints its URL. Set `HERDR_SOCKET` if herdr's socket lives
 elsewhere. For a remote deck (herdr on another host) see **Server setup**
 below — that path uses an explicit config with `[[servers]]` and a token.
 
+Run `herdeck-doctor` to diagnose setup problems — it checks the herdr socket,
+config/mode, deck availability, and (for remote) token presence, printing a
+pass/fail checklist with hints (it never prints token values).
+
 ## Architecture
 - `herdeck-bridge` runs on each server: connects to herdr's local Unix socket,
   maps/filters panes to agents, and exposes an authenticated WebSocket bound to
@@ -99,6 +103,20 @@ idle = blue, blocked = amber, done = dim, error/disconnected = red.
 Add an `[answer_profiles.<name>]` block with `approve`/`deny`/`stop` (and
 optional `approve_always`) key lists. `<name>` matches herdr's detected `agent`
 (e.g. `claude`, `codex`); unknown agents use `[answer_profiles.default]`.
+
+## Notifications
+Get a macOS notification when an agent enters the **blocked** state, so you don't
+have to watch the deck. Off by default; enable in your config:
+```toml
+[notifications]
+enabled = true
+on = ["blocked"]   # statuses that fire a notification
+sound = true
+```
+Notifications contain only the repo/label, branch, and (in multi-server setups)
+the server id — never prompt text, command output, or tokens. They fire once per
+blocked episode (re-arming after the agent leaves `blocked`) and never block the
+UI loop.
 
 ## Security
 - The bridge WebSocket is authenticated with a bearer token (constant-time
