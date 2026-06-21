@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 
-from .commands import Command, command_to_msg
+from .commands import Command, build_action_command, command_to_msg, profile_for
 from .config import Config
 from .connector import Connector
 from .model import AgentKey, AgentState, Status
@@ -11,6 +11,14 @@ from .model import AgentKey, AgentState, Status
 
 class ConnectionLost(Exception):
     """The bridge connection dropped (or never produced a first snapshot) while waiting."""
+
+
+class TargetError(Exception):
+    """No agent (or more than one) matched a target spec."""
+
+    def __init__(self, message: str, candidates: list[AgentState]):
+        super().__init__(message)
+        self.candidates = candidates
 
 
 _GONE = object()  # sentinel: a vanished agent still counts as "left blocked"
@@ -148,6 +156,39 @@ class CtlSession:
             return (a or _GONE) if (a is None or a.status is not Status.BLOCKED) else None
 
         return await self.wait(left_blocked, timeout=timeout) is not None
+
+    def resolve_target(self, spec: str) -> AgentState:
+        """Resolve a spec to one agent: 'server:pane_id' exact, else fuzzy by
+        label/repo/branch/pane_id. Raises TargetError on no match or ambiguity."""
+        if ":" in spec:
+            sid, pid = spec.split(":", 1)
+            exact = self.agents.get(AgentKey(sid, pid))
+            if exact is not None:
+                return exact
+        matches = [
+            a for a in self.agents.values()
+            if spec in (a.label, a.repo, a.branch, a.key.pane_id)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            raise TargetError(f"no agent matching {spec!r}", list(self.agents.values()))
+        raise TargetError(f"ambiguous agent {spec!r}", matches)
+
+    async def act(self, action, agent, *, force, always, settle_timeout, request_timeout):
+        """Send a profile action; for blocked-clearing actions, settle afterwards.
+
+        Returns {"result": "sent"|"skipped", "settled": bool}.
+        """
+        profile = profile_for(self.config, agent.agent_type)
+        cmd = build_action_command(action, agent, profile, force=force, always=always)
+        data = await self.request(cmd, timeout=request_timeout)
+        if data.get("skipped"):
+            return {"result": "skipped", "settled": True}
+        settled = True
+        if settle_timeout is not None and action in ("approve", "deny", "stop"):
+            settled = await self.settle(agent, timeout=settle_timeout)
+        return {"result": "sent", "settled": settled}
 
     async def close(self) -> None:
         for conn in self._connectors.values():
