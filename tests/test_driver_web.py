@@ -89,6 +89,18 @@ def test_page_landscape_rule_sizes_deck_for_short_height():
     assert "vw" in block
 
 
+def test_page_uses_readable_desktop_scale():
+    from herdeck.driver import web
+
+    page = web._PAGE
+    assert "grid-template-columns:repeat(5,min(17vw,150px))" in page
+    assert ".cell{width:min(17vw,150px);height:min(17vw,150px);" in page
+    assert (
+        "#panel{grid-column:4 / 6;width:calc(min(17vw,150px)*2 + 10px);"
+        "height:min(17vw,150px);"
+    ) in page
+
+
 def test_render_updates_state_and_serves_png():
     d = make_deck()
     d.render(

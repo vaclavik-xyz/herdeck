@@ -116,10 +116,35 @@ def test_panel_detail_with_and_without_text():
     assert p2.lines == []  # no text yet
 
 
+def test_panel_detail_blocked_without_text_shows_loading_line():
+    p = panel_detail(a("p1", Status.BLOCKED, agent_type="claude", label="api"), "")
+    assert p.lines == ["reading prompt..."]
+
+
 def test_panel_detail_shows_question_not_option_lines():
     agent = AgentState(AgentKey("s", "p"), "claude", "api", Status.BLOCKED)
     panel = panel_detail(agent, "Do you want to proceed?\n1. Yes\n2. No")
     assert panel.lines == ["Do you want to proceed?"]
+
+
+def test_panel_detail_wraps_long_question_before_options():
+    agent = AgentState(AgentKey("s", "p"), "claude", "api", Status.BLOCKED)
+    panel = panel_detail(
+        agent,
+        "Allow this long filesystem edit request that needs more room to be readable?\n"
+        "1. Yes\n"
+        "2. No",
+    )
+    assert len(panel.lines) > 1
+    assert len(panel.lines) <= 3
+    assert all(len(line) <= 36 for line in panel.lines)
+    assert all(not line.startswith(("1.", "2.")) for line in panel.lines)
+
+
+def test_panel_detail_strips_ansi_and_still_skips_options():
+    agent = AgentState(AgentKey("s", "p"), "claude", "api", Status.BLOCKED)
+    panel = panel_detail(agent, "\x1b[33mAllow edit?\x1b[0m\n\x1b[32m1. Yes\x1b[0m\n2. No")
+    assert panel.lines == ["Allow edit?"]
 
 
 def test_panel_detail_all_options_falls_back_to_first_line():
@@ -150,6 +175,14 @@ def test_parse_options_question_list_and_dedup():
     opts = parse_options(txt)
     assert [o.key for o in opts] == ["1", "2", "5"]
     assert opts[0].label == "Dodavatelské doklady"
+
+
+def test_parse_options_strips_ansi_sequences():
+    from herdeck.layout import parse_options
+
+    txt = "Allow edit?\n\x1b[32m1. Yes\x1b[0m\n\x1b[31m2. No\x1b[0m"
+    opts = parse_options(txt)
+    assert [(o.key, o.label) for o in opts] == [("1", "Yes"), ("2", "No")]
 
 
 def test_parse_options_none():

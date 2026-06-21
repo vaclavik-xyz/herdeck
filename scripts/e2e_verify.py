@@ -48,9 +48,9 @@ async def main():
     def send(cmd):
         c = connectors.get(cmd.server_id)
         if c is not None:
-            from herdeck.app import _command_to_msg
+            from herdeck.commands import command_to_msg
 
-            asyncio.run_coroutine_threadsafe(c.send(_command_to_msg(cmd, app)), loop)
+            asyncio.run_coroutine_threadsafe(c.send(command_to_msg(cmd, app.next_req_for(cmd))), loop)
 
     app = App(cfg, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn))
     frames = {"n": 0}

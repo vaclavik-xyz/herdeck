@@ -247,12 +247,12 @@ _PAGE = """<!doctype html><meta charset=utf-8>
  body{background:#0b0b0d;margin:0;font-family:-apple-system,sans-serif;
    display:flex;align-items:center;justify-content:center;min-height:100vh}
  #deck{background:#2a2a2e;padding:18px;border-radius:18px;
-   display:grid;grid-template-columns:repeat(5,110px);gap:10px}
- .cell{width:110px;height:110px;border-radius:8px;background:#111;cursor:pointer;
+   display:grid;grid-template-columns:repeat(5,min(17vw,150px));gap:10px}
+ .cell{width:min(17vw,150px);height:min(17vw,150px);border-radius:8px;background:#111;cursor:pointer;
    overflow:hidden;border:none;padding:0}
  .cell.active{outline:3px solid #5af}
  .cell img{width:100%;height:100%;display:block}
- #panel{grid-column:4 / 6;width:230px;height:110px;border-radius:8px;
+ #panel{grid-column:4 / 6;width:calc(min(17vw,150px)*2 + 10px);height:min(17vw,150px);border-radius:8px;
    overflow:hidden;cursor:pointer;background:#111}
  #panel img{width:100%;height:100%;display:block}
  /* phone portrait: width is the constraint, so shrink the 5-wide deck */
