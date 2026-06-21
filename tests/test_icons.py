@@ -120,3 +120,15 @@ def test_render_tile_agent_and_control(tmp_path):
     n_stop = p.render_tile(TileView(0, "Stop", "red"))
     n_back = p.render_tile(TileView(0, "Back", "grey"))
     assert n_stop != n_back and n_stop != name
+
+
+def test_agent_tile_with_server_tag_renders(tmp_path):
+    from herdeck.driver.base import TileView
+    p = make_provider(tmp_path)
+    base = TileView(0, "", "blue", agent_type="claude", repo="api",
+                    branch="x", status_text="IDLE", time_text="1m")
+    tagged = TileView(0, "", "blue", agent_type="claude", repo="api",
+                      branch="x", status_text="IDLE", time_text="1m",
+                      server_tag="WBX", server_accent="teal")
+
+    assert p.render_tile_bytes(base) != p.render_tile_bytes(tagged)
