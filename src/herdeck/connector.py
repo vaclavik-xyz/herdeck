@@ -73,7 +73,10 @@ class Connector:
                     self._on_connection(self.server.id, True)
                     await ws.send(encode({"type": "list"}))   # resync-on-reconnect
                     async for raw in ws:
-                        self._dispatch(raw)
+                        try:
+                            self._dispatch(raw)
+                        except Exception as exc:
+                            self._on_error(str(exc) or type(exc).__name__)
             except (OSError, websockets.WebSocketException):
                 pass
             finally:

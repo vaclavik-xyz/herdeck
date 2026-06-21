@@ -142,6 +142,38 @@ async def test_result_frame_goes_to_on_result(ws_server):
     await asyncio.wait_for(task, timeout=2.0)
 
 
+async def test_malformed_frame_reports_error_and_reconnects(ws_server):
+    errors = []
+    cfg = ServerConfig("workbox", f"ws://127.0.0.1:{ws_server['port']}", "tok")
+    conn = Connector(cfg, on_snapshot=lambda sid, st: None,
+                     on_event=lambda sid, s: None,
+                     on_connection=lambda sid, up: None,
+                     on_error=errors.append,
+                     backoff_base=0.05)
+    task = asyncio.create_task(conn.run())
+    for _ in range(50):
+        if ws_server["connections"]:
+            break
+        await asyncio.sleep(0.02)
+    await ws_server["connections"][0].send("not-json")
+    for _ in range(50):
+        if errors:
+            break
+        await asyncio.sleep(0.02)
+    assert errors
+
+    await ws_server["connections"][0].close()
+    before = len([m for m in ws_server["received"] if '"list"' in m])
+    for _ in range(100):
+        after = len([m for m in ws_server["received"] if '"list"' in m])
+        if after > before:
+            break
+        await asyncio.sleep(0.02)
+    assert after > before
+    conn.stop()
+    await asyncio.wait_for(task, timeout=2.0)
+
+
 def test_dispatch_rekeys_inbound_to_config_server_id():
     # bridge reports its own server_id; the connector must re-stamp inbound
     # state to the configured id so command routing stays consistent.
