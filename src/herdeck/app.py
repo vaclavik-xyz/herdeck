@@ -28,6 +28,11 @@ def newly_blocked(prev, states):
     return to_notify, blocked_now
 
 
+def _build_notifier(config: Config) -> Notifier:
+    """Real OS notifier when enabled, else a no-op (the offline default)."""
+    return Notifier() if config.notifications.enabled else NoopNotifier()
+
+
 class App:
     """Glue between orchestrator (sync) and connectors (async)."""
 
@@ -300,7 +305,9 @@ async def _run(config: Config, deck: DeckDriver) -> None:
             asyncio.run_coroutine_threadsafe(
                 conn.send(_command_to_msg(cmd, app)), loop)
 
-    app = App(config, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn))
+    app = App(config, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn),
+              notifier=_build_notifier(config),
+              notify_schedule=lambda fn: loop.run_in_executor(None, fn))
     for server in config.servers:
         app.orch.set_connection(server.id, False)
     app._refresh()
