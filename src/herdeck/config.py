@@ -49,6 +49,62 @@ class Notifications:
     telegram: TelegramConfig | None = None
 
 
+DEFAULT_STATUS_COLORS: dict[str, str] = {
+    "working": "green",
+    "idle": "blue",
+    "blocked": "amber",
+    "done": "dim",
+    "unknown": "grey",
+    "offline": "red",
+}
+
+DEFAULT_SERVER_ACCENTS: list[str] = ["teal", "violet", "orange", "pink", "lime"]
+DEFAULT_TILE_FIELDS: list[str] = ["repo", "branch", "status", "time", "server"]
+DEFAULT_BOTTOM_ROW: list[str] = ["profiles", "notifications", "safety", "theme", "new_agent"]
+
+
+@dataclass
+class ThemeConfig:
+    colors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_STATUS_COLORS))
+    server_accents: list[str] = field(default_factory=lambda: list(DEFAULT_SERVER_ACCENTS))
+
+
+@dataclass
+class ViewConfig:
+    management: str = "launcher_menu"
+    bottom_row: list[str] = field(default_factory=lambda: list(DEFAULT_BOTTOM_ROW))
+    show_profile_on_panel: bool = False
+    agent_slots: str = "max"
+    tile_fields: list[str] = field(default_factory=lambda: list(DEFAULT_TILE_FIELDS))
+
+
+@dataclass
+class SafetyConfig:
+    approve_always: bool = True
+    require_confirm_for: list[str] = field(default_factory=list)
+
+
+@dataclass
+class HardwareConfig:
+    deck: str | None = None
+    herdr_socket: str | None = None
+    web_bind: str | None = None
+    web_port: int | None = None
+    icons_dir: str | None = None
+    brightness: int = 80
+    debounce: float = 0.25
+    keep_alive_interval: float = 5.0
+    tick_interval: float = 0.4
+
+
+@dataclass
+class ConfigMeta:
+    active_profile: str = "default"
+    profile_names: list[str] = field(default_factory=lambda: ["default"])
+    env_locked_profile: bool = False
+    restart_required: bool = False
+
+
 # Quick-send macros shown when drilling into a non-blocked agent.
 DEFAULT_MACROS: list[Macro] = [
     Macro("continue", "continue"),
@@ -86,6 +142,11 @@ class Config:
         default_factory=lambda: dict(DEFAULT_START_PROFILES)
     )
     notifications: Notifications = field(default_factory=Notifications)
+    theme: ThemeConfig = field(default_factory=ThemeConfig)
+    view: ViewConfig = field(default_factory=ViewConfig)
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
+    hardware: HardwareConfig = field(default_factory=HardwareConfig)
+    meta: ConfigMeta = field(default_factory=ConfigMeta)
 
 
 def _parse_grid(value: str) -> tuple[int, int]:
