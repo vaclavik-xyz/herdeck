@@ -106,6 +106,11 @@ def test_partial_answer_profiles_merge_over_defaults(tmp_path):
     assert cfg.profiles["default"].approve == ["enter"]
 
 
+def test_default_profiles_claude_codex_documented():
+    assert DEFAULT_PROFILES["claude"].approve == ["1", "enter"]
+    assert DEFAULT_PROFILES["codex"].approve == ["y", "enter"]
+
+
 def test_notifications_default_disabled_when_absent(tmp_path):
     cfg = load_config(_write(tmp_path, "[deck]\ngrid=\"5x3\"\n"))
     assert cfg.notifications.enabled is False
