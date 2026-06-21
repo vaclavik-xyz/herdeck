@@ -5,6 +5,7 @@ import logging
 import os
 from collections.abc import Callable
 
+from .commands import Command, command_to_msg
 from .config import Config, ConfigError, load_config
 from .connector import Connector
 from .driver.base import DeckDriver
@@ -17,7 +18,7 @@ from .notify import (
     composite_sink,
     make_telegram_sink,
 )
-from .orchestrator import Command, Orchestrator
+from .orchestrator import Orchestrator
 
 TICK_INTERVAL = 0.4
 # Every Nth tick, fully re-render so elapsed-time text on non-working tiles
@@ -226,29 +227,6 @@ class App:
         self._refresh()
 
 
-def _command_to_msg(cmd: Command, app: App) -> dict:
-    if cmd.kind == "list":
-        return {"type": "list"}
-    req = app.next_req_for(cmd)
-    if cmd.kind == "read":
-        return {"type": "read", "req": req, "pane_id": cmd.pane_id, "source": cmd.source}
-    if cmd.kind == "focus":
-        return {"type": "focus", "req": req, "pane_id": cmd.pane_id}
-    if cmd.kind == "send_text":
-        return {"type": "send_text", "req": req, "pane_id": cmd.pane_id, "text": cmd.text}
-    if cmd.kind == "start":
-        return {"type": "start", "req": req, "name": cmd.text, "argv": cmd.keys}
-    if cmd.kind in ("act_if_blocked", "act_force"):
-        return {
-            "type": "act",
-            "req": req,
-            "pane_id": cmd.pane_id,
-            "keys": cmd.keys,
-            "guard": cmd.kind == "act_if_blocked",
-        }
-    raise ValueError(f"unknown command kind: {cmd.kind}")
-
-
 async def _guarded(conn: Connector) -> None:
     try:
         await conn.run()
@@ -364,7 +342,7 @@ async def _run(config: Config, deck: DeckDriver) -> None:
     def send(cmd: Command) -> None:
         conn = connectors.get(cmd.server_id)
         if conn is not None:
-            asyncio.run_coroutine_threadsafe(conn.send(_command_to_msg(cmd, app)), loop)
+            asyncio.run_coroutine_threadsafe(conn.send(command_to_msg(cmd, app.next_req_for(cmd))), loop)
 
     app = App(
         config,
