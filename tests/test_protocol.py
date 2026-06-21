@@ -1,11 +1,11 @@
 from herdeck.model import AgentKey, AgentState, Status
 from herdeck.protocol import (
-    encode,
-    decode_inbound,
-    Snapshot,
+    Error,
     Event,
     Result,
-    Error,
+    Snapshot,
+    decode_inbound,
+    encode,
 )
 
 
@@ -60,7 +60,6 @@ def test_unknown_status_falls_back():
 
 
 def test_decode_error():
-    from herdeck.protocol import Error
     msg = decode_inbound('{"type":"error","message":"bad request"}')
     assert isinstance(msg, Error)
     assert msg.message == "bad request"

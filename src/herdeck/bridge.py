@@ -181,7 +181,7 @@ class HerdrEvents:
                         prev = cur
                 try:                          # wake on a push event, else slow poll
                     await asyncio.wait_for(self._wake.wait(), timeout=self._interval)
-                except (asyncio.TimeoutError, TimeoutError):
+                except TimeoutError:
                     pass
                 self._wake.clear()
         finally:

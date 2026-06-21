@@ -1,4 +1,4 @@
-from herdeck.model import Status, AgentKey, AgentState
+from herdeck.model import AgentKey, AgentState, Status
 
 
 def test_status_values():

@@ -1,4 +1,5 @@
 import io
+
 from PIL import Image
 
 from herdeck.driver.base import PanelView, TileView

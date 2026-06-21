@@ -29,7 +29,7 @@ Repository = "https://github.com/vaclavik-xyz/herdeck"
 # strmdck (rc) under-declares its runtime deps, so pin them explicitly.
 deck = ["strmdck", "pillow>=10", "cairosvg", "deepdiff", "python-dotenv", "hidapi"]
 elgato = ["streamdeck", "pillow>=10"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10", "cairosvg"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10", "cairosvg", "ruff", "pytest-cov"]
 
 [project.scripts]
 herdeck = "herdeck.app:main"
@@ -44,3 +44,13 @@ herdeck = ["assets/*.svg"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# Long lines are tolerated because rendering code and fixtures contain wide literals.
+# Keep Status as str+Enum to preserve the existing public/runtime enum contract.
+ignore = ["E501", "UP042"]
