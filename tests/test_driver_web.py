@@ -17,6 +17,52 @@ def make_deck():
     return WebDeck(slots=13, serve=False, icon_provider=StubIcons())
 
 
+def test_page_has_keyboard_and_highlight_support():
+    # the page is the module-level _PAGE served at "/"
+    from herdeck.driver import web
+    page = web._PAGE
+    assert "keydown" in page                 # keyboard shortcuts wired
+    assert "@media" in page                   # responsive layout present
+    assert "press" in page                    # still posts presses
+
+
+def test_page_guards_key_repeat_and_panel_clears_highlight():
+    from herdeck.driver import web
+    page = web._PAGE
+    # auto-repeat must not spam presses while a number key is held down
+    assert "e.repeat" in page
+    # clearing the highlight is unconditional; only the add is guarded by btns[i],
+    # so a panel press (no button) still clears any stale tile outline
+    assert "if(btns[i]) btns[i].classList.add('active')" in page
+
+
+def test_page_landscape_rule_sizes_deck_for_short_height():
+    from herdeck.driver import web
+    page = web._PAGE
+    # phone landscape limits HEIGHT, not width: a max-height media rule must exist
+    marker = "@media (max-height:"
+    assert marker in page
+    # extract the media block by brace-matching, then assert it sizes by viewport
+    # height (vh) so the 3-row deck fits a short landscape viewport
+    start = page.index(marker)
+    open_brace = page.index("{", start)
+    depth = 0
+    end = open_brace
+    for end in range(open_brace, len(page)):
+        if page[end] == "{":
+            depth += 1
+        elif page[end] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    block = page[start:end + 1]
+    assert "vh" in block          # cells sized by viewport height, not just width
+    assert ".cell" in block       # the tiles themselves are resized
+    # a short viewport may also be narrow (e.g. 320x400) where this rule overrides
+    # the portrait one, so it must constrain width too or the deck overflows sideways
+    assert "vw" in block
+
+
 def test_render_updates_state_and_serves_png():
     d = make_deck()
     d.render([TileView(0, "", "amber", agent_type="claude", repo="api",
