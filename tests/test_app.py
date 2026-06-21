@@ -2,11 +2,11 @@ import asyncio
 
 import pytest
 
-from herdeck.app import App, _command_to_msg, _guard, _run
+from herdeck.app import App, _guard, _run
+from herdeck.commands import Command, command_to_msg
 from herdeck.config import AnswerProfile, Config, ConfigError, ServerConfig
 from herdeck.driver.fake import FakeRenderer
 from herdeck.model import AgentKey, AgentState, Status
-from herdeck.orchestrator import Command
 
 
 def make_config():
@@ -68,10 +68,9 @@ def test_read_result_shows_detection_in_panel():
 
 
 def test_command_to_msg_guard_flags():
-    app = App(make_config(), FakeRenderer(13), send=lambda c: None)
-    m1 = _command_to_msg(Command("act_if_blocked", "dev", "p1", keys=["1"]), app)
-    assert m1 == {"type": "act", "req": m1["req"], "pane_id": "p1", "keys": ["1"], "guard": True}
-    m2 = _command_to_msg(Command("act_force", "dev", "p1", keys=["ctrl+c"]), app)
+    m1 = command_to_msg(Command("act_if_blocked", "dev", "p1", keys=["1"]), "r1")
+    assert m1 == {"type": "act", "req": "r1", "pane_id": "p1", "keys": ["1"], "guard": True}
+    m2 = command_to_msg(Command("act_force", "dev", "p1", keys=["ctrl+c"]), "r2")
     assert m2["type"] == "act" and m2["guard"] is False
 
 
@@ -157,14 +156,12 @@ def test_tick_uses_partial_render_when_available():
 
 
 def test_command_to_msg_focus():
-    app = App(make_config(), FakeRenderer(13), send=lambda c: None)
-    m = _command_to_msg(Command("focus", "dev", "p1"), app)
+    m = command_to_msg(Command("focus", "dev", "p1"), "r1")
     assert m["type"] == "focus" and m["pane_id"] == "p1" and m["req"]
 
 
 def test_command_to_msg_start():
-    app = App(make_config(), FakeRenderer(13), send=lambda c: None)
-    m = _command_to_msg(Command("start", "dev", text="claude", keys=["claude"]), app)
+    m = command_to_msg(Command("start", "dev", text="claude", keys=["claude"]), "r1")
     assert m["type"] == "start" and m["name"] == "claude" and m["argv"] == ["claude"]
 
 
