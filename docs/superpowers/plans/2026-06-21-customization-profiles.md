@@ -27,7 +27,7 @@
 - Modify `src/herdeck/orchestrator.py`
   - Add profile menu state.
   - Add management row support.
-  - Emit `Command("switch_profile", ...)`.
+  - Emit `Command("switch_profile", server_id="", text=profile_name)`.
   - Enforce basic safety policy for `approve_always` and `act_force`.
 - Modify `src/herdeck/app.py`
   - Add `ConnectorManager`.
@@ -789,10 +789,26 @@ launcher = _launcher(_named_block(data, "launchers", profile.get("launcher")))
 ```python
 def _theme_config(raw: dict | None) -> ThemeConfig:
     raw = raw or {}
-    ...
+    return ThemeConfig(
+        colors=dict(raw.get("colors", {})),
+        server_accents=dict(raw.get("server_accents", {})),
+        icon_theme=raw.get("icon_theme", "default"),
+        icon_overrides=dict(raw.get("icon_overrides", {})),
+    )
 ```
 
-Apply the same `raw = raw or {}` pattern to the other functions.
+Apply the same `raw = raw or {}` pattern to the other functions before reading optional keys, for example:
+
+```python
+def _view_config(raw: dict | None) -> ViewConfig:
+    raw = raw or {}
+    return ViewConfig(
+        agent_order=list(raw.get("agent_order", [])),
+        tile_fields=list(raw.get("tile_fields", DEFAULT_TILE_FIELDS)),
+        management=raw.get("management", "launcher"),
+        bottom_row=list(raw.get("bottom_row", [])),
+    )
+```
 
 4. Add `set_active_profile`:
 
@@ -930,7 +946,6 @@ def load_config(path: str | Path) -> Config:
 
 def _load_legacy_config(path: str | Path, *, data: dict | None = None) -> Config:
     data = data if data is not None else tomllib.loads(Path(path).read_text())
-    ...
 ```
 
 Move the old body into `_load_legacy_config` unchanged.
@@ -1108,15 +1123,38 @@ def _tile_field_enabled(self, name: str) -> bool:
 ```python
 fields = self.config.view.tile_fields
 show_server_tags = "server" in fields and len({s.key.server_id for s in ordered}) > 1
-...
-accent = server_accent(s.key.server_id, self.config.theme.server_accents) if show_server_tags else None
-...
-repo=(s.repo or s.label) if "repo" in fields else None,
-branch=(s.branch or "") if "branch" in fields else "",
-status_text=("OFFLINE" if down else s.status.value.upper()) if "status" in fields else None,
-time_text=self._elapsed_text(s.key) if "time" in fields else None,
-server_tag=tag,
-server_accent=accent,
+for i in range(self.slots):
+    if i in self._management_indices():
+        tiles.append(TileView(i, self._management_indices()[i], "grey"))
+    elif i < len(shown):
+        s = shown[i]
+        down = s.key.server_id in self._down
+        tag = s.key.server_id[:3].upper() if show_server_tags else None
+        accent = (
+            server_accent(s.key.server_id, self.config.theme.server_accents)
+            if show_server_tags
+            else None
+        )
+        tiles.append(
+            TileView(
+                i,
+                s.label,
+                self._agent_color(s),
+                icon=self.config.theme.icon_overrides.get(s.agent_type),
+                agent_type=s.agent_type,
+                spinner=self._phase if s.status is Status.WORKING else None,
+                repo=(s.repo or s.label) if "repo" in fields else None,
+                branch=(s.branch or "") if "branch" in fields else "",
+                status_text=(
+                    "OFFLINE" if down else s.status.value.upper()
+                )
+                if "status" in fields
+                else None,
+                time_text=self._elapsed_text(s.key) if "time" in fields else None,
+                server_tag=tag,
+                server_accent=accent,
+            )
+        )
 ```
 
 - [ ] **Step 4: Support hex server chip colors**
@@ -1341,8 +1379,12 @@ For management row, add helpers:
 def _management_indices(self) -> dict[int, str]:
     if self.config.view.management != "bottom_row":
         return {}
-    count = min(len(self.config.view.bottom_row), self.slots)
-    start = self.slots - count
+    # The D200 has 13 addressable tiles: rows 0-1 are 10 agent/control tiles,
+    # row 2 has three tile positions before the two-cell panel. Management row
+    # actions fill those bottom-row tile positions left-to-right and leave
+    # unused positions blank.
+    start = max(0, self.slots - 3)
+    count = min(len(self.config.view.bottom_row), self.slots - start)
     return {start + i: action for i, action in enumerate(self.config.view.bottom_row)}
 
 
@@ -1422,12 +1464,14 @@ def test_app_switch_profile_updates_config_and_persists():
     next_cfg.meta.profile_names = ["work", "mobile"]
     next_cfg.meta.active_profile = "mobile"
     persisted = []
+    connector_updates = []
 
     app = App(
         base,
         deck,
         send=lambda c: None,
         switch_profile=lambda name: (persisted.append(name), next_cfg)[1],
+        update_connectors=lambda cfg: connector_updates.append([s.id for s in cfg.servers]),
     )
 
     app._handle_press(12)  # + New
@@ -1436,6 +1480,7 @@ def test_app_switch_profile_updates_config_and_persists():
     app._handle_press(1)  # mobile
 
     assert persisted == ["mobile"]
+    assert connector_updates == [["dev"]]
     assert app.config.meta.active_profile == "mobile"
     assert app.orch.config.meta.active_profile == "mobile"
 
@@ -1503,12 +1548,14 @@ In `App.__init__`, add argument:
 
 ```python
 switch_profile: Callable[[str], Config | None] | None = None,
+update_connectors: Callable[[Config], None] | None = None,
 ```
 
 Store:
 
 ```python
 self._switch_profile = switch_profile
+self._update_connectors = update_connectors or (lambda cfg: None)
 self._status_panel: PanelView | None = None
 ```
 
@@ -1547,6 +1594,9 @@ def _handle_switch_profile(self, name: str) -> None:
     self.config = new_config
     self.notifier = _build_notifier(new_config)
     self.orch.update_config(new_config)
+    self._update_connectors(new_config)
+    for server in new_config.servers:
+        self.orch.set_connection(server.id, False)
     self._refresh()
 ```
 
@@ -1605,10 +1655,11 @@ Expected: PASS.
 
 Refactor `_run`:
 
-- Build `ConnectorManager` with `make_connector(server)` containing the existing `Connector(...)` construction.
+- Build `ConnectorManager` with `make_connector(server)` containing the existing `Connector` construction and its `on_snapshot`, `on_event`, `on_connection`, and `on_result` callbacks.
 - Use `manager.get(cmd.server_id)` in `send`.
 - Replace initial connector loop with `manager.update(config.servers)`.
-- Pass `switch_profile` in a later task after settings service is connected.
+- Pass `update_connectors=lambda cfg: manager.update(cfg.servers)` to the `App` constructor.
+- In a later task, also pass `switch_profile=make_profile_switcher(snapshot)`.
 
 Keep behavior identical for remote run tests.
 
@@ -1705,11 +1756,20 @@ In `src/herdeck/settings.py`, add:
 
 ```python
 def validate_settings(snapshot: SettingsSnapshot) -> list[str]:
-    try:
-        resolve_profile(snapshot)
-    except ConfigError as exc:
-        return [str(exc)]
-    return []
+    if "profiles" not in snapshot.data:
+        try:
+            resolve_profile(snapshot)
+        except ConfigError as exc:
+            return [str(exc)]
+        return []
+
+    errors: list[str] = []
+    for name in sorted(snapshot.data.get("profiles", {})):
+        try:
+            resolve_profile(snapshot, name)
+        except ConfigError as exc:
+            errors.append(f"{name}: {exc}")
+    return errors
 ```
 
 - [ ] **Step 4: Implement profile switcher factory**
@@ -1739,7 +1799,7 @@ In `main()`, where settings are loaded, keep `snapshot` and pass `switch_profile
 async def _run(config: Config, deck: DeckDriver, switch_profile=None) -> None:
 ```
 
-Pass `switch_profile` to `App(...)`.
+Pass `switch_profile` to the `App` constructor.
 
 - [ ] **Step 5: Run focused tests**
 
@@ -1915,6 +1975,37 @@ def test_make_deck_uses_hardware_web_bind_and_port():
     make_deck("web", 13, web_factory=web_factory, hardware=hw)
 
     assert seen == {"host": "100.1.2.3", "port": 1234}
+
+
+def test_runtime_startup_settings_prefer_env_over_local(monkeypatch):
+    from herdeck.app import _resolve_deck_kind, _resolve_socket_path, _resolve_tick_interval
+    from herdeck.config import Config, HardwareConfig
+
+    cfg = Config(servers=[], profiles={}, overview_order=[], grid=(5, 3))
+    cfg.hardware = HardwareConfig(deck="web", herdr_socket="/local.sock", tick_interval=1.25)
+
+    monkeypatch.setenv("HERDECK_DECK", "fake")
+    monkeypatch.setenv("HERDR_SOCKET", "/env.sock")
+
+    assert _resolve_deck_kind(cfg) == "fake"
+    assert _resolve_socket_path(cfg) == "/env.sock"
+    assert _resolve_tick_interval(cfg) == 1.25
+
+
+def test_runtime_startup_settings_use_local_when_env_absent(monkeypatch):
+    from herdeck.app import _resolve_deck_kind, _resolve_socket_path, _resolve_tick_interval
+    from herdeck.config import Config, HardwareConfig
+
+    cfg = Config(servers=[], profiles={}, overview_order=[], grid=(5, 3))
+    cfg.hardware = HardwareConfig(deck="web", herdr_socket="/local.sock", tick_interval=1.25)
+
+    monkeypatch.delenv("HERDECK_DECK", raising=False)
+    monkeypatch.delenv("HERDECK_FAKE_DECK", raising=False)
+    monkeypatch.delenv("HERDR_SOCKET", raising=False)
+
+    assert _resolve_deck_kind(cfg) == "web"
+    assert _resolve_socket_path(cfg) == "/local.sock"
+    assert _resolve_tick_interval(cfg) == 1.25
 ```
 
 Append to `tests/test_driver_elgato.py`:
@@ -1936,7 +2027,7 @@ If no `fake_deck` fixture has `brightness`, update the test fake to store the va
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
+.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_local_mode.py::test_runtime_startup_settings_prefer_env_over_local tests/test_local_mode.py::test_runtime_startup_settings_use_local_when_env_absent tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
 ```
 
 Expected: FAIL because hardware settings are not accepted.
@@ -1975,34 +2066,196 @@ In `main`, call:
 deck = make_deck(kind, slots, hardware=file_config.hardware if file_config else None)
 ```
 
+Add startup resolver helpers in `src/herdeck/app.py`:
+
+```python
+def _resolve_deck_kind(config: Config | None, *, getenv=os.environ.get):
+    env_kind = getenv("HERDECK_DECK")
+    if env_kind:
+        return env_kind
+    if getenv("HERDECK_FAKE_DECK"):
+        return "fake"
+    return config.hardware.deck if config and config.hardware.deck else None
+
+
+def _resolve_socket_path(config: Config | None, *, getenv=os.environ.get) -> str:
+    raw = getenv("HERDR_SOCKET") or (
+        config.hardware.herdr_socket if config and config.hardware.herdr_socket else None
+    )
+    return os.path.expanduser(raw or "~/.config/herdr/herdr.sock")
+
+
+def _resolve_tick_interval(config: Config | None) -> float:
+    return config.hardware.tick_interval if config else TICK_INTERVAL
+```
+
+Change `_ticker` to accept an interval:
+
+```python
+async def _ticker(app: App, loop, interval: float = TICK_INTERVAL) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        loop.call_soon_threadsafe(app.handle_tick)
+```
+
+Change `_run` to accept and use the interval:
+
+```python
+async def _run(
+    config: Config,
+    deck: DeckDriver,
+    switch_profile=None,
+    tick_interval: float | None = None,
+) -> None:
+    if not config.servers:
+        raise ConfigError("no servers configured for remote run")
+    loop = asyncio.get_running_loop()
+    tasks = []
+
+    def make_connector(server: ServerConfig) -> Connector:
+        return Connector(
+            server,
+            on_snapshot=lambda sid, st: loop.call_soon_threadsafe(app.handle_snapshot, sid, st),
+            on_event=lambda sid, s: loop.call_soon_threadsafe(app.handle_event, sid, s),
+            on_connection=lambda sid, up: loop.call_soon_threadsafe(app.handle_connection, sid, up),
+            on_result=lambda req, data, sid=server.id: loop.call_soon_threadsafe(
+                app.handle_result, sid, req, data
+            ),
+        )
+
+    def start_connector(conn: Connector) -> None:
+        tasks.append(_guarded(conn))
+
+    manager = ConnectorManager(
+        make_connector=make_connector,
+        start_connector=start_connector,
+    )
+
+    def send(cmd: Command) -> None:
+        conn = manager.get(cmd.server_id)
+        if conn is not None:
+            asyncio.run_coroutine_threadsafe(conn.send(_command_to_msg(cmd, app)), loop)
+
+    app = App(
+        config,
+        deck,
+        send,
+        schedule=lambda fn: loop.call_soon_threadsafe(fn),
+        notifier=_build_notifier(config),
+        notify_schedule=lambda fn: loop.run_in_executor(None, fn),
+        switch_profile=switch_profile,
+        update_connectors=lambda cfg: manager.update(cfg.servers),
+    )
+    manager.update(config.servers)
+    tasks.append(_guard(_ticker(app, loop, tick_interval or config.hardware.tick_interval)))
+    await asyncio.gather(*tasks)
+```
+
+Keep the existing connector construction inside the manager factory from Task 7; do not leave a separate unmanaged `connectors` dict in `_run`.
+
+In `main()`, replace direct env/default reads:
+
+```python
+snapshot = None
+switch_profile = None
+if config_path:
+    from .settings import load_settings, resolve_profile
+
+    local_config_path = _discover_local_config_path(config_path)
+    snapshot = load_settings(config_path, local_config_path)
+    file_config = resolve_profile(snapshot).config
+    switch_profile = make_profile_switcher(snapshot)
+else:
+    file_config = None
+
+socket_path = _resolve_socket_path(file_config)
+kind = _resolve_deck_kind(file_config)
+deck = make_deck(kind, slots, hardware=file_config.hardware if file_config else None)
+try:
+    if mode[0] == "mock":
+        asyncio.run(_run_mock(_mock_config(), deck))
+    elif mode[0] == "remote":
+        asyncio.run(
+            _run(
+                file_config,
+                deck,
+                switch_profile=switch_profile,
+                tick_interval=_resolve_tick_interval(file_config),
+            )
+        )
+    else:
+        asyncio.run(
+            _run_local(
+                mode[1],
+                deck,
+                file_config,
+                switch_profile=switch_profile,
+                tick_interval=_resolve_tick_interval(file_config),
+            )
+        )
+finally:
+    deck.close()
+```
+
 - [ ] **Step 4: Add brightness injection to drivers**
 
 In `src/herdeck/driver/elgato.py`, change:
 
 ```python
 def __init__(self, device=None, icon_provider=None, brightness: int = BRIGHTNESS):
-...
-deck.set_brightness(brightness)
+    self._brightness = brightness
+    self._dev = device if device is not None else self._open_device()
+    self._icons = icon_provider
+    self._callback: Callable[[int], None] | None = None
+    if device is not None:
+        self._dev.set_brightness(brightness)
+
+
+def _open_device(self):
+    deck = DeviceManager().enumerate()[0]
+    deck.open()
+    deck.reset()
+    deck.set_brightness(self._brightness)
+    return deck
 ```
 
 In `src/herdeck/driver/d200.py`, change:
 
 ```python
-def __init__(self, workdir: str | None = None, icon_provider=None, brightness: int = BRIGHTNESS, debounce: float = DEBOUNCE, keep_alive_interval: float = KEEP_ALIVE_INTERVAL):
+def __init__(
+    self,
+    workdir: str | None = None,
+    icon_provider=None,
+    brightness: int = BRIGHTNESS,
+    debounce: float = DEBOUNCE,
+    keep_alive_interval: float = KEEP_ALIVE_INTERVAL,
+):
     self.DEBOUNCE = debounce
     self.KEEP_ALIVE_INTERVAL = keep_alive_interval
-...
-self._dev.set_brightness(brightness, force=True)
+    # Keep the rest of the existing initialization flow unchanged.
+    with contextlib.redirect_stdout(io.StringIO()):
+        self._dev.set_brightness(brightness, force=True)
+        self._set_panel_background_mode()
 ```
 
-In app default factories, pass hardware values.
+In app default factories, pass hardware values:
+
+```python
+return D200Driver(
+    brightness=hardware.brightness,
+    debounce=hardware.debounce,
+    keep_alive_interval=hardware.keep_alive_interval,
+)
+
+return ElgatoDriver(brightness=hardware.brightness)
+```
 
 - [ ] **Step 5: Run focused tests**
 
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
+.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_local_mode.py::test_runtime_startup_settings_prefer_env_over_local tests/test_local_mode.py::test_runtime_startup_settings_use_local_when_env_absent tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
 ```
 
 Expected: PASS.
