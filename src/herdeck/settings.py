@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tomllib
 from dataclasses import dataclass
@@ -80,6 +81,52 @@ def resolve_profile(snapshot: SettingsSnapshot, name: str | None = None) -> Reso
     profile = _profile_chain(profiles, profile_name)
     config = _runtime_config(data, snapshot.local_data, profile_name, profile, snapshot.env_profile)
     return ResolvedSettings(config=config, local_path=snapshot.local_path)
+
+
+def set_active_profile(snapshot: SettingsSnapshot, name: str, *, persist: bool = True) -> bool:
+    profiles = snapshot.data.get("profiles", {})
+    if name not in profiles:
+        raise ConfigError(f"unknown profile '{name}'")
+    if snapshot.env_profile is not None:
+        return False
+    resolve_profile(snapshot, name)
+    if not persist:
+        return True
+    local_path = snapshot.local_path
+    if local_path is None:
+        return False
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = snapshot.local_data
+    lines = [f"active_profile = {_toml_value(name)}"]
+    for section, values in existing.items():
+        if section == "active_profile":
+            continue
+        if isinstance(values, dict):
+            lines.append("")
+            lines.append(f"[{section}]")
+            for key, value in values.items():
+                lines.append(_toml_line(key, value))
+    local_path.write_text("\n".join(lines) + "\n")
+    return True
+
+
+def _toml_line(key: str, value) -> str:
+    if isinstance(value, bool):
+        return f"{key} = {'true' if value else 'false'}"
+    if isinstance(value, int | float):
+        return f"{key} = {value}"
+    if isinstance(value, list):
+        rendered = ", ".join(_toml_value(item) for item in value)
+        return f"{key} = [{rendered}]"
+    return f"{key} = {_toml_value(value)}"
+
+
+def _toml_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    return json.dumps(str(value))
 
 
 def _active_profile_name(snapshot: SettingsSnapshot) -> str:
