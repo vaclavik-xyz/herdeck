@@ -138,6 +138,20 @@ def test_local_config_merges_partial_profiles():
     assert cfg.profiles["default"].approve == ["enter"]
 
 
+def test_local_config_preserves_notifications():
+    partial = Config(
+        servers=[],
+        profiles={},
+        overview_order=[],
+        grid=(5, 3),
+    )
+    partial.notifications.enabled = True
+    partial.notifications.sound = False
+    cfg = local_config(1, "t", partial)
+    assert cfg.notifications.enabled is True
+    assert cfg.notifications.sound is False
+
+
 def test_discover_prefers_env(monkeypatch, tmp_path):
     p = tmp_path / "c.toml"
     p.write_text("")

@@ -31,6 +31,13 @@ class Macro:
     text: str           # text sent to the agent (via herdr agent.send)
 
 
+@dataclass
+class Notifications:
+    enabled: bool = False
+    on: list[str] = field(default_factory=lambda: ["blocked"])
+    sound: bool = True
+
+
 # Quick-send macros shown when drilling into a non-blocked agent.
 DEFAULT_MACROS: list[Macro] = [
     Macro("continue", "continue"),
@@ -66,6 +73,7 @@ class Config:
     macros: list[Macro] = field(default_factory=lambda: list(DEFAULT_MACROS))
     start_profiles: dict[str, list[str]] = field(
         default_factory=lambda: dict(DEFAULT_START_PROFILES))
+    notifications: Notifications = field(default_factory=Notifications)
 
 
 def _parse_grid(value: str) -> tuple[int, int]:
@@ -120,6 +128,13 @@ def load_config(path: str | Path) -> Config:
     else:
         start_profiles = dict(DEFAULT_START_PROFILES)
 
+    n = data.get("notifications", {})
+    notifications = Notifications(
+        enabled=n.get("enabled", False),
+        on=list(n.get("on", ["blocked"])),
+        sound=n.get("sound", True),
+    )
+
     return Config(servers=servers, profiles=profiles,
                   overview_order=overview_order, grid=grid, macros=macros,
-                  start_profiles=start_profiles)
+                  start_profiles=start_profiles, notifications=notifications)

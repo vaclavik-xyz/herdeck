@@ -8,7 +8,8 @@ from .config import Config, ConfigError, load_config
 from .connector import Connector
 from .driver.base import DeckDriver
 from .driver.fake import FakeRenderer
-from .model import AgentState
+from .model import AgentState, Status
+from .notify import NoopNotifier, Notifier
 from .orchestrator import Command, Orchestrator
 
 TICK_INTERVAL = 0.4
@@ -19,16 +20,36 @@ FULL_REFRESH_TICKS = 25
 log = logging.getLogger("herdeck")
 
 
+def newly_blocked(prev, states):
+    """Keys that just entered BLOCKED (vs prev), and the updated blocked set.
+    Eligibility resets when a key leaves BLOCKED, so a re-block notifies again."""
+    blocked_now = {s.key for s in states if s.status is Status.BLOCKED}
+    to_notify = blocked_now - prev
+    return to_notify, blocked_now
+
+
+def _build_notifier(config: Config) -> Notifier:
+    """Real OS notifier when enabled, else a no-op (the offline default)."""
+    return Notifier() if config.notifications.enabled else NoopNotifier()
+
+
 class App:
     """Glue between orchestrator (sync) and connectors (async)."""
 
     def __init__(self, config: Config, deck: DeckDriver,
                  send: Callable[[Command], None],
-                 schedule: Callable[[Callable[[], None]], None] | None = None):
+                 schedule: Callable[[Callable[[], None]], None] | None = None,
+                 notifier: Notifier | None = None,
+                 notify_schedule: Callable[[Callable[[], None]], None] | None = None):
         self.config = config
         self.deck = deck
         self._send = send
         self._schedule = schedule or (lambda fn: fn())
+        self.notifier = notifier or NoopNotifier()
+        # Notifications run off the render loop so a slow sink never blocks it;
+        # the default runs synchronously (tests, mock) — the lead passes an executor.
+        self._notify_schedule = notify_schedule or (lambda fn: fn())
+        self._blocked_keys: set = set()
         self.orch = Orchestrator(config, slots=deck.slot_count())
         deck.on_press(self._on_press)
         self._req = 0
@@ -56,6 +77,31 @@ class App:
         self._active_read_req = None
         self.orch.set_detection("")
 
+    def _maybe_notify(self, states: list[AgentState], scope: set) -> None:
+        """Fire notifications for keys that just entered BLOCKED.
+
+        `scope` is the set of tracked keys these `states` are authoritative for
+        (a whole server for snapshots, a single key for events) — only that
+        scope is reconciled, so other servers' blocked keys are never dropped.
+        """
+        if not self.config.notifications.enabled:
+            return
+        if "blocked" not in self.config.notifications.on:
+            return
+        prev_here = self._blocked_keys & scope
+        to, blocked_here = newly_blocked(prev_here, states)
+        self._blocked_keys = (self._blocked_keys - scope) | blocked_here
+        multi = len(self.config.overview_order) > 1
+        for s in (x for x in states if x.key in to):
+            label = s.repo or s.label
+            parts = [p for p in (s.branch, s.key.server_id if multi else None) if p]
+            body = f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
+            self._schedule_notify(s.agent_type, body)
+
+    def _schedule_notify(self, title: str, body: str) -> None:
+        sound = self.config.notifications.sound
+        self._notify_schedule(lambda: self.notifier.notify(title, body, sound))
+
     def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         if log.isEnabledFor(logging.DEBUG):
             log.debug("snapshot %s: %s", server_id,
@@ -67,12 +113,15 @@ class App:
         if key is not None and key.server_id == server_id:
             if self.orch.get_agent(key) != before:
                 self._invalidate_read()
+        self._maybe_notify(
+            states, {k for k in self._blocked_keys if k.server_id == server_id})
         self._refresh()
 
     def handle_event(self, server_id: str, state: AgentState) -> None:
         self.orch.apply_event(server_id, state)
         if self.orch.is_drill_pane(server_id, state.key.pane_id):
             self._invalidate_read()
+        self._maybe_notify([state], {state.key})
         self._refresh()
 
     def handle_connection(self, server_id: str, up: bool) -> None:
@@ -256,7 +305,9 @@ async def _run(config: Config, deck: DeckDriver) -> None:
             asyncio.run_coroutine_threadsafe(
                 conn.send(_command_to_msg(cmd, app)), loop)
 
-    app = App(config, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn))
+    app = App(config, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn),
+              notifier=_build_notifier(config),
+              notify_schedule=lambda fn: loop.run_in_executor(None, fn))
     for server in config.servers:
         app.orch.set_connection(server.id, False)
     app._refresh()
@@ -336,6 +387,7 @@ def local_config(port, token, partial=None):
         DEFAULT_PROFILES,
         DEFAULT_START_PROFILES,
         Config,
+        Notifications,
         ServerConfig,
     )
     profiles = dict(DEFAULT_PROFILES)
@@ -349,6 +401,7 @@ def local_config(port, token, partial=None):
         macros=partial.macros if partial else list(DEFAULT_MACROS),
         start_profiles=(partial.start_profiles if partial
                         else dict(DEFAULT_START_PROFILES)),
+        notifications=partial.notifications if partial else Notifications(),
     )
 
 
