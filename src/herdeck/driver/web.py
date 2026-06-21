@@ -204,11 +204,14 @@ _PAGE = """<!doctype html><meta charset=utf-8>
    #panel{width:calc(min(17vw,110px)*2 + 6px);height:min(17vw,110px)}
  }
  /* phone landscape: HEIGHT is the constraint (3 rows), so size cells by viewport
-    height so the deck doesn't overflow a short viewport (e.g. 667x375) */
+    height — but also keep the 17vw width cap so a short AND narrow viewport
+    (e.g. 320x400, where this rule overrides the portrait one) can't overflow
+    sideways. The deck stays within both the short (e.g. 667x375) viewport's
+    height and a narrow viewport's width. */
  @media (max-height:430px){
-   #deck{grid-template-columns:repeat(5,min(22vh,110px));gap:6px;padding:10px}
-   .cell{width:min(22vh,110px);height:min(22vh,110px)}
-   #panel{width:calc(min(22vh,110px)*2 + 6px);height:min(22vh,110px)}
+   #deck{grid-template-columns:repeat(5,min(17vw,22vh,110px));gap:6px;padding:10px}
+   .cell{width:min(17vw,22vh,110px);height:min(17vw,22vh,110px)}
+   #panel{width:calc(min(17vw,22vh,110px)*2 + 6px);height:min(17vw,22vh,110px)}
  }
 </style>
 <div id=deck></div>
