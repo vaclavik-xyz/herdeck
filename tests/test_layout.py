@@ -1,4 +1,4 @@
-from herdeck.driver.base import PanelView
+from herdeck.driver.base import PanelView, TileView
 from herdeck.layout import (
     Counts,
     order_agents,
@@ -55,6 +55,12 @@ def test_status_color():
     assert status_color(Status.IDLE) == "blue"
     assert status_color(Status.DONE) == "dim"
     assert status_color(Status.UNKNOWN) == "grey"
+
+
+def test_tileview_server_fields_default_none():
+    tile = TileView(0, "x", "blue")
+
+    assert tile.server_tag is None and tile.server_accent is None
 
 
 def test_panel_overview_offline_takes_priority():
