@@ -27,6 +27,16 @@ def test_page_has_keyboard_and_highlight_support():
     assert "press" in page                    # still posts presses
 
 
+def test_page_guards_key_repeat_and_panel_clears_highlight():
+    from herdeck.driver import web
+    page = web._PAGE
+    # auto-repeat must not spam presses while a number key is held down
+    assert "e.repeat" in page
+    # clearing the highlight is unconditional; only the add is guarded by btns[i],
+    # so a panel press (no button) still clears any stale tile outline
+    assert "if(btns[i]) btns[i].classList.add('active')" in page
+
+
 def test_render_updates_state_and_serves_png():
     d = make_deck()
     d.render([TileView(0, "", "amber", agent_type="claude", repo="api",
