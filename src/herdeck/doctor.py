@@ -62,3 +62,40 @@ def check_config(
         False,
         f"config at {config_path} has no servers and no herdr socket is available",
     )
+
+
+def check_optional_deps(is_available: Callable[[str], bool]) -> Check:
+    modules = (
+        ("PIL", "PIL"),
+        ("cairosvg", "cairosvg"),
+        ("strmdck", "strmdck"),
+        ("streamdeck", "StreamDeck"),
+    )
+    statuses = [
+        f"{label}=present" if is_available(import_name) else f"{label}=missing"
+        for label, import_name in modules
+    ]
+    missing = [label for label, import_name in modules if not is_available(import_name)]
+    detail = "; ".join(statuses)
+    if missing:
+        detail += '; optional hints: pip install ".[deck]" or ".[elgato]"'
+    return Check("optional dependencies", True, detail)
+
+
+def check_deck(lib_available: Callable[[str], bool]) -> Check:
+    d200_ready = lib_available("strmdck") and lib_available("hid")
+    elgato_ready = lib_available("StreamDeck")
+    note = "device presence is not probed; Ulanzi Studio can hold the device"
+    if d200_ready or elgato_ready:
+        drivers = []
+        if d200_ready:
+            drivers.append("D200")
+        if elgato_ready:
+            drivers.append("Elgato")
+        return Check("deck drivers", True, f"importable: {', '.join(drivers)}; {note}")
+    return Check(
+        "deck drivers",
+        False,
+        'no deck driver libraries importable; pip install ".[deck]" or ".[elgato]"; '
+        f"{note}",
+    )
