@@ -81,6 +81,8 @@ class App:
         """
         if not self.config.notifications.enabled:
             return
+        if "blocked" not in self.config.notifications.on:
+            return
         prev_here = self._blocked_keys & scope
         to, blocked_here = newly_blocked(prev_here, states)
         self._blocked_keys = (self._blocked_keys - scope) | blocked_here

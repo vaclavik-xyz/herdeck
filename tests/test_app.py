@@ -224,3 +224,16 @@ def test_app_notify_keeps_other_servers_blocked_keys():
     app.handle_snapshot("b", [AgentState(AgentKey("b", "p1"), "codex", "web",
                                          Status.BLOCKED)])
     assert len(calls) == 2            # no duplicates across servers
+
+
+def test_app_does_not_notify_when_blocked_not_in_on():
+    from herdeck.notify import Notifier
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.on = []          # "blocked" not enabled -> no notifications
+    app = App(cfg, FakeRenderer(13), send=lambda c: None,
+              notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))))
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
+                                           Status.BLOCKED)])
+    assert calls == []
