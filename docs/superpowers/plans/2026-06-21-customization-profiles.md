@@ -27,7 +27,7 @@
 - Modify `src/herdeck/orchestrator.py`
   - Add profile menu state.
   - Add management row support.
-  - Emit `Command("switch_profile", server_id="", text=profile_name)`.
+  - Emit `Command("switch_profile", profile_name, text=profile_name)`.
   - Enforce basic safety policy for `approve_always` and `act_force`.
 - Modify `src/herdeck/app.py`
   - Add `ConnectorManager`.
@@ -504,7 +504,8 @@ def _server_config(raw: dict) -> ServerConfig:
     return ServerConfig(raw["id"], raw["url"], token)
 
 
-def _theme_config(raw: dict) -> ThemeConfig:
+def _theme_config(raw: dict | None) -> ThemeConfig:
+    raw = raw or {}
     theme = ThemeConfig()
     colors = raw.get("colors", {})
     if colors:
@@ -514,7 +515,8 @@ def _theme_config(raw: dict) -> ThemeConfig:
     return theme
 
 
-def _view_config(raw: dict) -> ViewConfig:
+def _view_config(raw: dict | None) -> ViewConfig:
+    raw = raw or {}
     view = ViewConfig()
     for key in ("management", "agent_slots"):
         if key in raw:
@@ -528,7 +530,8 @@ def _view_config(raw: dict) -> ViewConfig:
     return view
 
 
-def _notifications_config(raw: dict) -> Notifications:
+def _notifications_config(raw: dict | None) -> Notifications:
+    raw = raw or {}
     telegram = None
     tg_raw = raw.get("telegram")
     if isinstance(tg_raw, dict) and "token_env" in tg_raw and "chat_id" in tg_raw:
@@ -542,7 +545,8 @@ def _notifications_config(raw: dict) -> Notifications:
     )
 
 
-def _safety_config(raw: dict) -> SafetyConfig:
+def _safety_config(raw: dict | None) -> SafetyConfig:
+    raw = raw or {}
     return SafetyConfig(
         approve_always=raw.get("approve_always", True),
         require_confirm_for=list(raw.get("require_confirm_for", [])),
@@ -789,12 +793,11 @@ launcher = _launcher(_named_block(data, "launchers", profile.get("launcher")))
 ```python
 def _theme_config(raw: dict | None) -> ThemeConfig:
     raw = raw or {}
-    return ThemeConfig(
-        colors=dict(raw.get("colors", {})),
-        server_accents=dict(raw.get("server_accents", {})),
-        icon_theme=raw.get("icon_theme", "default"),
-        icon_overrides=dict(raw.get("icon_overrides", {})),
-    )
+    theme = ThemeConfig()
+    theme.colors.update({k: str(v) for k, v in raw.get("colors", {}).items()})
+    if "server_accents" in raw:
+        theme.server_accents = list(raw["server_accents"])
+    return theme
 ```
 
 Apply the same `raw = raw or {}` pattern to the other functions before reading optional keys, for example:
@@ -802,12 +805,17 @@ Apply the same `raw = raw or {}` pattern to the other functions before reading o
 ```python
 def _view_config(raw: dict | None) -> ViewConfig:
     raw = raw or {}
-    return ViewConfig(
-        agent_order=list(raw.get("agent_order", [])),
-        tile_fields=list(raw.get("tile_fields", DEFAULT_TILE_FIELDS)),
-        management=raw.get("management", "launcher"),
-        bottom_row=list(raw.get("bottom_row", [])),
-    )
+    view = ViewConfig()
+    for key in ("management", "agent_slots"):
+        if key in raw:
+            setattr(view, key, raw[key])
+    if "bottom_row" in raw:
+        view.bottom_row = list(raw["bottom_row"])
+    if "tile_fields" in raw:
+        view.tile_fields = list(raw["tile_fields"])
+    if "show_profile_on_panel" in raw:
+        view.show_profile_on_panel = bool(raw["show_profile_on_panel"])
+    return view
 ```
 
 4. Add `set_active_profile`:
@@ -1140,7 +1148,7 @@ for i in range(self.slots):
                 i,
                 s.label,
                 self._agent_color(s),
-                icon=self.config.theme.icon_overrides.get(s.agent_type),
+                icon=None,
                 agent_type=s.agent_type,
                 spinner=self._phase if s.status is Status.WORKING else None,
                 repo=(s.repo or s.label) if "repo" in fields else None,
@@ -1271,6 +1279,30 @@ def test_management_row_can_expose_profiles_and_new_agent():
     assert labels[10] == "Profiles"
     assert labels[11] == "+ New"
     assert labels[12] == ""
+
+
+def test_update_config_prunes_removed_server_state():
+    from herdeck.config import ServerConfig
+    from herdeck.model import AgentKey, AgentState
+
+    cfg = make_config()
+    cfg.servers = [
+        ServerConfig("old", "ws://old", "token"),
+        ServerConfig("dev", "ws://dev", "token"),
+    ]
+    cfg.overview_order = ["old", "dev"]
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot(
+        "old",
+        [AgentState(AgentKey("old", "p1"), "codex", "old agent", Status.IDLE)],
+    )
+
+    next_cfg = make_config()
+    next_cfg.servers = [ServerConfig("dev", "ws://dev", "token")]
+    next_cfg.overview_order = ["dev"]
+    o.update_config(next_cfg)
+
+    assert "old agent" not in [t.label for t in o.render().tiles]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1278,7 +1310,7 @@ def test_management_row_can_expose_profiles_and_new_agent():
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_orchestrator_nav.py::test_launcher_contains_profiles_entry_when_multiple_profiles_exist tests/test_orchestrator_nav.py::test_profile_menu_lists_profiles_and_switches tests/test_orchestrator_nav.py::test_management_row_can_expose_profiles_and_new_agent -v
+.venv/bin/python -m pytest tests/test_orchestrator_nav.py::test_launcher_contains_profiles_entry_when_multiple_profiles_exist tests/test_orchestrator_nav.py::test_profile_menu_lists_profiles_and_switches tests/test_orchestrator_nav.py::test_management_row_can_expose_profiles_and_new_agent tests/test_orchestrator_nav.py::test_update_config_prunes_removed_server_state -v
 ```
 
 Expected: FAIL because profile menu and management row do not exist.
@@ -1311,6 +1343,14 @@ if self._profile_menu:
 ```python
 def update_config(self, config: Config) -> None:
     self.config = config
+    allowed_servers = {s.id for s in config.servers}
+    self._agents = {
+        key: state for key, state in self._agents.items() if key.server_id in allowed_servers
+    }
+    self._since = {
+        key: value for key, value in self._since.items() if key.server_id in allowed_servers
+    }
+    self._down &= allowed_servers
     self._launcher = False
     self._profile_menu = False
     self._drill = None
@@ -1512,6 +1552,7 @@ def test_connector_manager_diffs_servers():
 
     made = []
     stopped = []
+    tasks = {}
 
     class FakeConnector:
         def __init__(self, server):
@@ -1521,15 +1562,29 @@ def test_connector_manager_diffs_servers():
         def stop(self):
             stopped.append(self.server.id)
 
+    class FakeTask:
+        def __init__(self, server_id):
+            self.server_id = server_id
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+    def start_connector(conn):
+        task = FakeTask(conn.server.id)
+        tasks[conn.server.id] = task
+        return task
+
     mgr = ConnectorManager(
         make_connector=lambda server: FakeConnector(server),
-        start_connector=lambda conn: None,
+        start_connector=start_connector,
     )
     mgr.update([ServerConfig("a", "ws://a", "t"), ServerConfig("b", "ws://b", "t")])
     mgr.update([ServerConfig("b", "ws://b", "t"), ServerConfig("c", "ws://c", "t")])
 
     assert made == ["a", "b", "c"]
     assert stopped == ["a"]
+    assert tasks["a"].cancelled is True
 ```
 
 - [ ] **Step 3: Run tests to verify they fail**
@@ -1576,9 +1631,12 @@ Update `_handle_press` loop:
 for cmd in cmds:
     if cmd.kind == "switch_profile":
         self._handle_switch_profile(cmd.text or cmd.server_id)
+        return
     else:
         self._send(cmd)
 ```
+
+The `return` is intentional: a locked profile switch renders a temporary status panel, and the normal trailing refresh would overwrite it immediately.
 
 Add:
 
@@ -1611,6 +1669,7 @@ class ConnectorManager:
         self._start_connector = start_connector
         self.connectors: dict[str, Connector] = {}
         self._fingerprints: dict[str, tuple[str, str]] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
 
     def update(self, servers: list[ServerConfig]) -> None:
         wanted = {s.id: s for s in servers}
@@ -1618,28 +1677,35 @@ class ConnectorManager:
             old = self._fingerprints[sid]
             new = wanted.get(sid)
             if new is None or (new.url, new.token) != old:
-                self.connectors[sid].stop()
-                del self.connectors[sid]
-                del self._fingerprints[sid]
+                self._stop_connector(sid)
         for sid, server in wanted.items():
             fp = (server.url, server.token)
             if sid not in self.connectors:
                 conn = self._make_connector(server)
                 self.connectors[sid] = conn
                 self._fingerprints[sid] = fp
-                self._start_connector(conn)
+                task = self._start_connector(conn)
+                if task is not None:
+                    self._tasks[sid] = task
 
     def get(self, server_id: str) -> Connector | None:
         return self.connectors.get(server_id)
 
-    def stop_all(self) -> None:
-        for conn in list(self.connectors.values()):
+    def _stop_connector(self, server_id: str) -> None:
+        conn = self.connectors.pop(server_id, None)
+        if conn is not None:
             conn.stop()
-        self.connectors.clear()
-        self._fingerprints.clear()
+        task = self._tasks.pop(server_id, None)
+        if task is not None:
+            task.cancel()
+        self._fingerprints.pop(server_id, None)
+
+    def stop_all(self) -> None:
+        for sid in list(self.connectors):
+            self._stop_connector(sid)
 ```
 
-Import `ServerConfig` from `.config` at top.
+Import `ServerConfig` from `.config` and `asyncio` at top.
 
 - [ ] **Step 6: Run focused tests**
 
@@ -2110,7 +2176,6 @@ async def _run(
     if not config.servers:
         raise ConfigError("no servers configured for remote run")
     loop = asyncio.get_running_loop()
-    tasks = []
 
     def make_connector(server: ServerConfig) -> Connector:
         return Connector(
@@ -2123,8 +2188,8 @@ async def _run(
             ),
         )
 
-    def start_connector(conn: Connector) -> None:
-        tasks.append(_guarded(conn))
+    def start_connector(conn: Connector) -> asyncio.Task:
+        return asyncio.create_task(_guarded(conn))
 
     manager = ConnectorManager(
         make_connector=make_connector,
@@ -2147,11 +2212,40 @@ async def _run(
         update_connectors=lambda cfg: manager.update(cfg.servers),
     )
     manager.update(config.servers)
-    tasks.append(_guard(_ticker(app, loop, tick_interval or config.hardware.tick_interval)))
-    await asyncio.gather(*tasks)
+    tasks = [_guard(_ticker(app, loop, tick_interval or config.hardware.tick_interval))]
+    if hasattr(deck, "run_reader"):
+        tasks.append(_guard(deck.run_reader()))
+    if hasattr(deck, "keep_alive_loop"):
+        tasks.append(_guard(deck.keep_alive_loop()))
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        manager.stop_all()
 ```
 
 Keep the existing connector construction inside the manager factory from Task 7; do not leave a separate unmanaged `connectors` dict in `_run`.
+
+Change `_run_local` to accept and forward runtime settings:
+
+```python
+async def _run_local(
+    socket_path,
+    deck,
+    partial=None,
+    *,
+    switch_profile=None,
+    tick_interval: float | None = None,
+):
+    from .bridge import start_local_bridge
+
+    host, port, token, _handle = await start_local_bridge(socket_path)
+    await _run(
+        local_config(port, token, partial),
+        deck,
+        switch_profile=switch_profile,
+        tick_interval=tick_interval,
+    )
+```
 
 In `main()`, replace direct env/default reads:
 
