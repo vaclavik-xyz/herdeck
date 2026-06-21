@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
 from . import layout
@@ -8,6 +9,12 @@ from .driver.base import PanelView, TileView
 from .model import AgentKey, AgentState, Status
 
 _OPTION_LABEL_MAX = 14
+SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
+
+
+def server_accent(server_id: str) -> str:
+    digest = hashlib.sha1(server_id.encode()).digest()
+    return SERVER_ACCENTS[digest[0] % len(SERVER_ACCENTS)]
 
 
 @dataclass
@@ -136,6 +143,7 @@ class Orchestrator:
         ordered = self._ordered()
         agent_slots = self._agent_slots()
         shown, pages = layout.page(ordered, self._page, agent_slots)
+        show_server_tags = len({s.key.server_id for s in shown}) > 1
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i == self.slots - 1:                 # reserved launcher tile
@@ -144,13 +152,17 @@ class Orchestrator:
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
                 down = s.key.server_id in self._down
+                tag = s.key.server_id[:3].upper() if show_server_tags else None
+                accent = server_accent(s.key.server_id) if show_server_tags else None
                 tiles.append(TileView(
                     i, s.label, self._agent_color(s),
                     icon=None, agent_type=s.agent_type, spinner=phase,
                     repo=(s.repo or s.label),
                     branch=s.branch or "",
                     status_text=("OFFLINE" if down else s.status.value.upper()),
-                    time_text=self._elapsed_text(s.key)))
+                    time_text=self._elapsed_text(s.key),
+                    server_tag=tag,
+                    server_accent=accent))
             else:
                 tiles.append(TileView(i, "", "dim"))
         panel = layout.panel_overview(layout.summary(ordered), self._page % pages,
