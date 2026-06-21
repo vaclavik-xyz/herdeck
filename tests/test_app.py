@@ -247,3 +247,42 @@ def test_build_notifier_respects_config():
     cfg.notifications.enabled = True
     n = _build_notifier(cfg)
     assert isinstance(n, Notifier) and not isinstance(n, NoopNotifier)
+
+
+def test_build_notifier_fires_both_backends():
+    from herdeck.app import _build_notifier
+    from herdeck.config import TelegramConfig
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.backends = ["macos", "telegram"]
+    cfg.notifications.telegram = TelegramConfig("HERDECK_TG", "42")
+    def rec_macos(t, b, s): calls.append(("macos", t))
+    def rec_tg(t, b, s): calls.append(("telegram", t))
+    n = _build_notifier(cfg, getenv=lambda k: "TOK",
+                        macos_sink=rec_macos,
+                        telegram_factory=lambda tok, cid: rec_tg)
+    n.notify("title", "body", False)
+    assert ("macos", "title") in calls and ("telegram", "title") in calls
+
+
+def test_build_notifier_skips_telegram_without_token():
+    from herdeck.app import _build_notifier
+    from herdeck.config import TelegramConfig
+    from herdeck.notify import NoopNotifier
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.backends = ["telegram"]
+    cfg.notifications.telegram = TelegramConfig("HERDECK_TG", "42")
+    n = _build_notifier(cfg, getenv=lambda k: None)   # token env unset
+    assert isinstance(n, NoopNotifier)
+
+
+def test_build_notifier_skips_telegram_without_config():
+    from herdeck.app import _build_notifier
+    from herdeck.notify import NoopNotifier
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.backends = ["telegram"]   # telegram is None
+    n = _build_notifier(cfg, getenv=lambda k: "TOK")
+    assert isinstance(n, NoopNotifier)
