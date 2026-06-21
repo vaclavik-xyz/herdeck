@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Callable
 
 from .config import Config, ConfigError, load_config
@@ -9,7 +10,13 @@ from .connector import Connector
 from .driver.base import DeckDriver
 from .driver.fake import FakeRenderer
 from .model import AgentState, Status
-from .notify import NoopNotifier, Notifier
+from .notify import (
+    NoopNotifier,
+    Notifier,
+    _macos_sink,
+    composite_sink,
+    make_telegram_sink,
+)
 from .orchestrator import Command, Orchestrator
 
 TICK_INTERVAL = 0.4
@@ -28,9 +35,30 @@ def newly_blocked(prev, states):
     return to_notify, blocked_now
 
 
-def _build_notifier(config: Config) -> Notifier:
-    """Real OS notifier when enabled, else a no-op (the offline default)."""
-    return Notifier() if config.notifications.enabled else NoopNotifier()
+def _build_notifier(config: Config, *, getenv=os.environ.get,
+                    macos_sink=_macos_sink,
+                    telegram_factory=make_telegram_sink) -> Notifier:
+    """Assemble a notifier from the configured backends (graceful skip)."""
+    n = config.notifications
+    if not n.enabled:
+        return NoopNotifier()
+    sinks = []
+    for backend in n.backends:
+        if backend == "macos":
+            sinks.append(macos_sink)
+        elif backend == "telegram":
+            tg = n.telegram
+            token = getenv(tg.token_env) if tg else None
+            if tg and token and tg.chat_id:
+                sinks.append(telegram_factory(token, tg.chat_id))
+            else:
+                log.warning("telegram notifications enabled but token/chat_id "
+                            "missing; skipping telegram backend")
+        else:
+            log.warning("unknown notification backend %r; skipping", backend)
+    if not sinks:
+        return NoopNotifier()
+    return Notifier(sink=composite_sink(sinks))
 
 
 class App:
