@@ -9,12 +9,23 @@ token_env = "HERDECK_WORKBOX_TOKEN"   # token comes from this env var
 grid = "5x3"
 overview_order = ["workbox"]
 
-# Out-of-band alerts so you don't have to watch the deck. macOS only
-# (uses osascript notifications). Omit this section to disable entirely.
+# Out-of-band alerts so you don't have to watch the deck. Omit this section to
+# disable entirely. macOS uses osascript notifications; telegram delivers to your
+# phone via a bot (token from an env var, chat_id below). Run both at once.
 [notifications]
-enabled = false        # set true to be notified when an agent needs you
-on = ["blocked"]       # transitions to alert on (currently only "blocked")
-sound = true           # play a sound with the notification
+enabled = false                    # set true to be notified when an agent needs you
+backends = ["macos"]               # any of: "macos", "telegram" (e.g. both)
+on = ["blocked"]                   # transitions to alert on (currently only "blocked")
+sound = true                       # macOS plays a sound; telegram sends non-silent
+
+# Telegram backend (only used when "telegram" is in backends above):
+#   1. Create a bot with @BotFather, copy its token.
+#   2. export HERDECK_TELEGRAM_TOKEN=<token>   (never put the token in this file)
+#   3. Put your numeric chat_id below.
+# A missing token/chat_id makes herdeck skip telegram with a warning (macOS still fires).
+# [notifications.telegram]
+# token_env = "HERDECK_TELEGRAM_TOKEN"
+# chat_id = "123456789"
 
 # Answer profiles: keystroke sequences herdeck sends to an agent's pane for the
 # Approve / Deny / Stop actions (approve_always = approve and don't ask again).

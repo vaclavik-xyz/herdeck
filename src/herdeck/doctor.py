@@ -9,6 +9,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .config import Notifications
+
 SOCKET_TIMEOUT = 1.0
 
 
@@ -108,6 +110,52 @@ def check_deck(lib_available: Callable[[str], bool]) -> Check:
     )
 
 
+def check_notifications(notifications: Notifications,
+                        getenv=os.environ.get) -> Check:
+    if not notifications.enabled:
+        return Check("notifications", True, "disabled")
+    supported = {"macos", "telegram"}
+    parts = [f"backends={','.join(notifications.backends) or '(none)'}"]
+    ok = True
+    usable = 0
+    unknown = [b for b in notifications.backends if b not in supported]
+    if unknown:
+        parts.append(f"unknown={','.join(unknown)}")
+        ok = False
+    if "macos" in notifications.backends:
+        usable += 1
+    if "telegram" in notifications.backends:
+        tg = notifications.telegram
+        if tg is None:
+            parts.append("telegram=no usable [notifications.telegram] "
+                         "(need token_env + chat_id)")
+            ok = False
+        else:
+            token_present = bool(getenv(tg.token_env))
+            chat_present = bool(tg.chat_id)
+            parts.append(f"token_env={'present' if token_present else 'missing'}")
+            parts.append(f"chat_id={'present' if chat_present else 'missing'}")
+            if token_present and chat_present:
+                usable += 1
+            else:
+                ok = False
+    if usable == 0:
+        parts.append("no usable backend (nothing will fire)")
+        ok = False
+    return Check("notifications", ok, "; ".join(parts))
+
+
+def _read_notifications(config_path: str | None) -> Notifications:
+    from .config import parse_notifications
+    if config_path is None:
+        return Notifications()
+    try:
+        data = tomllib.loads(Path(config_path).read_text())
+        return parse_notifications(data.get("notifications", {}))
+    except Exception:
+        return Notifications()
+
+
 def format_report(checks: Iterable[Check]) -> str:
     lines = ["herdeck doctor"]
     for check in checks:
@@ -182,6 +230,7 @@ def collect_checks() -> list[Check]:
         socket_check,
         check_optional_deps(_module_available),
         check_deck(_module_available),
+        check_notifications(_read_notifications(config_path)),
     ]
     return checks
 
