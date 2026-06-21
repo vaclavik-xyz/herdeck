@@ -27,6 +27,8 @@ class TileView:
     branch: str | None = None
     status_text: str | None = None   # WORKING / IDLE / BLOCKED / DONE
     time_text: str | None = None     # elapsed in current status, e.g. "3m"
+    server_tag: str | None = None
+    server_accent: str | None = None
 
 
 @dataclass
