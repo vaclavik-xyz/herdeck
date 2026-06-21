@@ -46,7 +46,9 @@ def test_user_override_takes_precedence(tmp_path):
     name = p.icon_for("claude", "green")
     # the produced icon must derive from the override (a specific pixel survives)
     with Image.open(os.path.join(str(tmp_path), name)) as im:
-        assert im.convert("RGBA").size == (196, 196)
+        img = im.convert("RGBA")
+        assert img.size == (196, 196)
+        assert img.getpixel((98, 98))[:3] == (1, 2, 3)
 
 
 def test_results_are_cached(tmp_path):
@@ -61,16 +63,13 @@ def test_results_are_cached(tmp_path):
     assert calls.count("claude") <= 1     # fetched at most once
 
 
-def test_spinner_cache_is_bounded_to_frame_set():
+def test_spinner_cache_is_bounded_to_frame_set(tmp_path):
     from herdeck.icons import SPINNER_FRAMES
 
     seen = set()
-    p = IconProvider(cache_dir="/tmp/herdeck_spin_test",
+    p = IconProvider(cache_dir=str(tmp_path / "spin"),
                      slug_map={"claude": None}, overrides_dir=None,
                      fetch=_fake_fetch, rasterize=_fake_rasterize)
-    import shutil
-    shutil.rmtree("/tmp/herdeck_spin_test", ignore_errors=True)
-    os.makedirs("/tmp/herdeck_spin_test", exist_ok=True)
     for phase in range(0, SPINNER_FRAMES * 3):
         seen.add(p.icon_for("claude", "green", spinner=phase))
     # phases cycle: at most SPINNER_FRAMES distinct files, not 3x as many
