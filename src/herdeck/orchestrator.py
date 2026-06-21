@@ -13,9 +13,10 @@ _OPTION_LABEL_MAX = 14
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 
 
-def server_accent(server_id: str) -> str:
+def server_accent(server_id: str, accents: list[str] | None = None) -> str:
+    palette = accents or list(SERVER_ACCENTS)
     digest = hashlib.sha1(server_id.encode()).digest()
-    return SERVER_ACCENTS[digest[0] % len(SERVER_ACCENTS)]
+    return palette[digest[0] % len(palette)]
 
 
 @dataclass
@@ -111,7 +112,15 @@ class Orchestrator:
         return layout.order_agents(self._agents.values(), self.config.overview_order)
 
     def _agent_color(self, s: AgentState) -> str:
-        return "red" if s.key.server_id in self._down else layout.status_color(s.status)
+        if s.key.server_id in self._down:
+            return self.config.theme.colors.get("offline", "red")
+        return self.config.theme.colors.get(s.status.value, layout.status_color(s.status))
+
+    def _tile_field_enabled(self, name: str) -> bool:
+        return name in self.config.view.tile_fields
+
+    def _management_indices(self) -> dict[int, str]:
+        return {}
 
     def _blocked_spotlight(self) -> tuple[str, str] | None:
         """The longest-waiting BLOCKED agent as (label, elapsed), or None."""
@@ -137,17 +146,25 @@ class Orchestrator:
         ordered = self._ordered()
         agent_slots = self._agent_slots()
         shown, pages = layout.page(ordered, self._page, agent_slots)
-        show_server_tags = len({s.key.server_id for s in ordered}) > 1
+        fields = self.config.view.tile_fields
+        show_server_tags = "server" in fields and len({s.key.server_id for s in ordered}) > 1
+        management = self._management_indices()
         tiles: list[TileView] = []
         for i in range(self.slots):
-            if i == self.slots - 1:  # reserved launcher tile
+            if i in management:
+                tiles.append(TileView(i, management[i], "grey"))
+            elif i == self.slots - 1:  # reserved launcher tile
                 tiles.append(TileView(i, "+ New", "green"))
             elif i < len(shown):
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
                 down = s.key.server_id in self._down
                 tag = s.key.server_id[:3].upper() if show_server_tags else None
-                accent = server_accent(s.key.server_id) if show_server_tags else None
+                accent = (
+                    server_accent(s.key.server_id, self.config.theme.server_accents)
+                    if show_server_tags
+                    else None
+                )
                 tiles.append(
                     TileView(
                         i,
@@ -156,10 +173,14 @@ class Orchestrator:
                         icon=None,
                         agent_type=s.agent_type,
                         spinner=phase,
-                        repo=(s.repo or s.label),
-                        branch=s.branch or "",
-                        status_text=("OFFLINE" if down else s.status.value.upper()),
-                        time_text=self._elapsed_text(s.key),
+                        repo=(s.repo or s.label) if "repo" in fields else "",
+                        branch=(s.branch or "") if "branch" in fields else "",
+                        status_text=(
+                            "OFFLINE" if down else s.status.value.upper()
+                        )
+                        if "status" in fields
+                        else None,
+                        time_text=self._elapsed_text(s.key) if "time" in fields else None,
                         server_tag=tag,
                         server_accent=accent,
                     )
@@ -174,6 +195,10 @@ class Orchestrator:
             len(ordered),
             self._blocked_spotlight(),
         )
+        if panel.color == "red":
+            panel.color = self.config.theme.colors.get("offline", panel.color)
+        elif panel.color == "amber":
+            panel.color = self.config.theme.colors.get("blocked", panel.color)
         return RenderState(tiles, panel)
 
     def _render_launcher(self) -> RenderState:
