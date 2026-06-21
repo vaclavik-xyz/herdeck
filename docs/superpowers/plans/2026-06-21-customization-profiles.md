@@ -5,6 +5,7 @@
 **Goal:** Implement portable Herdeck customization profiles with runtime deck switching, shareable/local config layering, configurable view/theme/macros/launcher/notifications/safety, and an app-ready settings service.
 
 **Architecture:** Keep the existing `Config` runtime contract compatible by appending defaulted customization metadata. Add a new `settings.py` resolver/service layer that turns shareable config plus `local.toml` plus environment overrides into runtime `Config`. Then extend the orchestrator and app runtime to switch profiles, update config in-place, and diff connectors without restarting.
+This plan assumes PR 18 (`herdeck-ctl`) is merged: `Command` and wire encoding live in `src/herdeck/commands.py`, startup/local bridge helpers live in `src/herdeck/bootstrap.py`, and `src/herdeck/app.py` remains the runtime glue.
 
 **Tech Stack:** Python 3.12, TOML via stdlib `tomllib`, dataclasses, existing pytest/pytest-asyncio tests, existing WebSocket `Connector`, existing D200/Elgato/web/fake deck drivers.
 
@@ -29,10 +30,16 @@
   - Add management row support.
   - Emit `Command("switch_profile", profile_name, text=profile_name)`.
   - Enforce basic safety policy for `approve_always` and `act_force`.
+- Modify `src/herdeck/commands.py`
+  - Keep `Command` as the shared command type introduced by PR 18.
+  - Document `switch_profile` as an app-local command that is never serialized by `command_to_msg`.
+- Modify `src/herdeck/bootstrap.py`
+  - Keep PR 18 startup/local-bridge ownership here.
+  - Add `local.toml` discovery, local config preservation for customization fields, and runtime-aware profile switch wrapping.
 - Modify `src/herdeck/app.py`
   - Add `ConnectorManager`.
   - Add profile switching callback and runtime config update path.
-  - Use settings resolver in `main`.
+  - Use settings resolver in `main` without moving bootstrap responsibilities back into `app.py`.
   - Preserve local zero-config and mock behavior.
 - Modify `src/herdeck/icons.py`
   - Use configurable theme colors and server accent palette through `TileView`/runtime values.
@@ -44,7 +51,7 @@
   - Document profile config, `local.toml`, profile switching, and future GUI boundary.
 - Tests:
   - Create `tests/test_settings.py`.
-  - Modify `tests/test_config.py`, `tests/test_orchestrator.py`, `tests/test_orchestrator_nav.py`, `tests/test_app.py`, `tests/test_layout.py`, `tests/test_icons.py`, `tests/test_local_mode.py`, `tests/test_driver_elgato.py`, and `tests/test_d200_panel.py`.
+  - Modify `tests/test_config.py`, `tests/test_bootstrap.py`, `tests/test_orchestrator.py`, `tests/test_orchestrator_nav.py`, `tests/test_app.py`, `tests/test_layout.py`, `tests/test_icons.py`, `tests/test_local_mode.py`, `tests/test_driver_elgato.py`, and `tests/test_d200_panel.py`.
 
 Every task below ends with:
 
@@ -881,9 +888,9 @@ roborev show "$sha"
 
 **Files:**
 - Modify: `src/herdeck/config.py`
-- Modify: `src/herdeck/app.py`
+- Modify: `src/herdeck/bootstrap.py`
 - Modify: `tests/test_config.py`
-- Modify: `tests/test_local_mode.py`
+- Modify: `tests/test_bootstrap.py`
 
 - [ ] **Step 1: Add failing integration tests**
 
@@ -904,11 +911,11 @@ def test_load_config_uses_new_profile_schema(tmp_path, monkeypatch):
     assert cfg.servers[0].token == "secret123"
 ```
 
-Append to `tests/test_local_mode.py`:
+Append to `tests/test_bootstrap.py`:
 
 ```python
 def test_discover_local_config_next_to_config(monkeypatch, tmp_path):
-    from herdeck.app import _discover_local_config_path
+    from herdeck.bootstrap import _discover_local_config_path
 
     cfg = tmp_path / "config.toml"
     cfg.write_text("")
@@ -920,7 +927,7 @@ def test_discover_local_config_next_to_config(monkeypatch, tmp_path):
 
 
 def test_discover_local_config_prefers_env(monkeypatch, tmp_path):
-    from herdeck.app import _discover_local_config_path
+    from herdeck.bootstrap import _discover_local_config_path
 
     env = tmp_path / "device.toml"
     monkeypatch.setenv("HERDECK_LOCAL_CONFIG", str(env))
@@ -933,7 +940,7 @@ def test_discover_local_config_prefers_env(monkeypatch, tmp_path):
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_config.py::test_load_config_uses_new_profile_schema tests/test_local_mode.py::test_discover_local_config_next_to_config tests/test_local_mode.py::test_discover_local_config_prefers_env -v
+.venv/bin/python -m pytest tests/test_config.py::test_load_config_uses_new_profile_schema tests/test_bootstrap.py::test_discover_local_config_next_to_config tests/test_bootstrap.py::test_discover_local_config_prefers_env -v
 ```
 
 Expected: FAIL because `load_config` ignores profiles and `_discover_local_config_path` does not exist.
@@ -960,7 +967,7 @@ Move the old body into `_load_legacy_config` unchanged.
 
 - [ ] **Step 4: Add local config discovery**
 
-In `src/herdeck/app.py`, after `_discover_config_path`, add:
+In `src/herdeck/bootstrap.py`, after `_discover_config_path`, add:
 
 ```python
 def _discover_local_config_path(config_path: str | None):
@@ -972,30 +979,14 @@ def _discover_local_config_path(config_path: str | None):
     return os.path.expanduser("~/.config/herdeck/local.toml")
 ```
 
-In `main()`, replace:
-
-```python
-file_config = load_config(config_path) if config_path else None
-```
-
-with:
-
-```python
-local_config_path = _discover_local_config_path(config_path) if not mock else None
-if config_path:
-    from .settings import load_settings, resolve_profile
-
-    file_config = resolve_profile(load_settings(config_path, local_config_path)).config
-else:
-    file_config = None
-```
+Do not change `app.main()` in this task. PR 18 made `bootstrap.py` own discovery helpers; the app wiring happens later when the settings service is connected to runtime startup.
 
 - [ ] **Step 5: Run focused tests**
 
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_config.py::test_load_config_uses_new_profile_schema tests/test_local_mode.py::test_discover_local_config_next_to_config tests/test_local_mode.py::test_discover_local_config_prefers_env -v
+.venv/bin/python -m pytest tests/test_config.py::test_load_config_uses_new_profile_schema tests/test_bootstrap.py::test_discover_local_config_next_to_config tests/test_bootstrap.py::test_discover_local_config_prefers_env -v
 ```
 
 Expected: PASS.
@@ -1005,7 +996,7 @@ Expected: PASS.
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_config.py tests/test_local_mode.py tests/test_settings.py -q
+.venv/bin/python -m pytest tests/test_config.py tests/test_bootstrap.py tests/test_settings.py -q
 ```
 
 Expected: PASS.
@@ -1013,7 +1004,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/herdeck/config.py src/herdeck/app.py tests/test_config.py tests/test_local_mode.py
+git add src/herdeck/config.py src/herdeck/bootstrap.py tests/test_config.py tests/test_bootstrap.py
 git commit -m "feat(config): load profile settings with local overrides"
 sha=$(git rev-parse HEAD)
 roborev show "$sha" || roborev review "$sha" --wait
@@ -1226,6 +1217,7 @@ roborev show "$sha"
 ### Task 6: Profile Menu and Management Row in Orchestrator
 
 **Files:**
+- Modify: `src/herdeck/commands.py`
 - Modify: `src/herdeck/orchestrator.py`
 - Test: `tests/test_orchestrator_nav.py`
 - Test: `tests/test_orchestrator.py`
@@ -1317,28 +1309,30 @@ Expected: FAIL because profile menu and management row do not exist.
 
 - [ ] **Step 3: Extend command and orchestrator state**
 
-In `src/herdeck/orchestrator.py`:
-
-1. Update comment on `Command.kind`:
+In `src/herdeck/commands.py`, update the `Command.kind` comment:
 
 ```python
 kind: str  # list|read|focus|act_if_blocked|act_force|send_text|start|switch_profile
 ```
 
-2. In `__init__`, add:
+Keep `command_to_msg()` unchanged for `switch_profile`: it should still raise `ValueError` for this kind if it reaches the wire encoder, because `App._handle_press()` intercepts it before sending to a bridge connector.
+
+In `src/herdeck/orchestrator.py`:
+
+1. In `__init__`, add:
 
 ```python
 self._profile_menu: bool = False
 ```
 
-3. Update `render`:
+2. Update `render`:
 
 ```python
 if self._profile_menu:
     return self._render_profile_menu()
 ```
 
-4. Add:
+3. Add:
 
 ```python
 def update_config(self, config: Config) -> None:
@@ -1474,7 +1468,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/herdeck/orchestrator.py tests/test_orchestrator_nav.py
+git add src/herdeck/commands.py src/herdeck/orchestrator.py tests/test_orchestrator_nav.py
 git commit -m "feat(deck): add profile menu and management row"
 sha=$(git rev-parse HEAD)
 roborev show "$sha" || roborev review "$sha" --wait
@@ -1859,13 +1853,55 @@ def make_profile_switcher(snapshot):
     return switch
 ```
 
-In `main()`, where settings are loaded, keep `snapshot` and pass `switch_profile=make_profile_switcher(snapshot)` into `_run`. To keep `_run` simple, change signature:
+Change `_run` and `_amain` signatures in `src/herdeck/app.py`:
 
 ```python
 async def _run(config: Config, deck: DeckDriver, switch_profile=None) -> None:
 ```
 
-Pass `switch_profile` to the `App` constructor.
+```python
+async def _amain(mode, file_config, deck, *, switch_profile=None) -> None:
+    config, aclose = await resolve_runtime_config(mode, file_config)
+    try:
+        await _run(config, deck, switch_profile=switch_profile)
+    finally:
+        await aclose()
+```
+
+Pass `switch_profile` to the `App` constructor inside `_run`.
+
+Update the `bootstrap` import in `src/herdeck/app.py` to include `_discover_local_config_path`:
+
+```python
+from .bootstrap import (
+    _discover_config_path,
+    _discover_local_config_path,
+    resolve_mode,
+    resolve_runtime_config,
+)
+```
+
+In `main()`, replace direct `load_config(config_path)` with settings-backed resolution while keeping PR 18 mode resolution:
+
+```python
+snapshot = None
+switch_profile = None
+if config_path:
+    from .settings import load_settings, resolve_profile
+
+    local_config_path = _discover_local_config_path(config_path)
+    snapshot = load_settings(config_path, local_config_path)
+    file_config = resolve_profile(snapshot).config
+    switch_profile = make_profile_switcher(snapshot)
+else:
+    file_config = None
+```
+
+When calling `_amain`, pass the switcher:
+
+```python
+asyncio.run(_amain(mode, file_config, deck, switch_profile=switch_profile))
+```
 
 - [ ] **Step 5: Run focused tests**
 
@@ -2016,9 +2052,11 @@ roborev show "$sha"
 
 **Files:**
 - Modify: `src/herdeck/app.py`
+- Modify: `src/herdeck/bootstrap.py`
 - Modify: `src/herdeck/driver/d200.py`
 - Modify: `src/herdeck/driver/elgato.py`
 - Test: `tests/test_local_mode.py`
+- Test: `tests/test_bootstrap.py`
 - Test: `tests/test_driver_elgato.py`
 - Test: `tests/test_d200_panel.py` or create `tests/test_driver_d200.py`
 
@@ -2093,10 +2131,13 @@ def test_runtime_startup_settings_use_local_when_env_absent(monkeypatch):
     assert _resolve_deck_kind(cfg) == "web"
     assert _resolve_socket_path(cfg) == "/local.sock"
     assert _resolve_tick_interval(cfg) == 1.25
+```
 
+Append to `tests/test_bootstrap.py`:
 
-def test_make_local_profile_switcher_preserves_bridge_server():
-    from herdeck.app import make_local_profile_switcher
+```python
+def test_make_runtime_profile_switcher_preserves_bridge_server():
+    from herdeck.bootstrap import local_config, make_runtime_profile_switcher
     from herdeck.config import Config
 
     resolved = Config(servers=[], profiles={}, overview_order=[], grid=(4, 4))
@@ -2106,7 +2147,8 @@ def test_make_local_profile_switcher_preserves_bridge_server():
     resolved.view.show_profile_on_panel = True
     resolved.safety.approve_always = False
     resolved.hardware.tick_interval = 1.25
-    switch = make_local_profile_switcher(lambda name: resolved, 7654, "secret")
+    runtime = local_config(7654, "secret", resolved)
+    switch = make_runtime_profile_switcher(runtime, lambda name: resolved)
 
     cfg = switch("mobile")
 
@@ -2141,7 +2183,7 @@ If no `fake_deck` fixture has `brightness`, update the test fake to store the va
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_local_mode.py::test_make_deck_prefers_env_web_bind_and_port tests/test_local_mode.py::test_runtime_startup_settings_prefer_env_over_local tests/test_local_mode.py::test_runtime_startup_settings_use_local_when_env_absent tests/test_local_mode.py::test_make_local_profile_switcher_preserves_bridge_server tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
+.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_local_mode.py::test_make_deck_prefers_env_web_bind_and_port tests/test_local_mode.py::test_runtime_startup_settings_prefer_env_over_local tests/test_local_mode.py::test_runtime_startup_settings_use_local_when_env_absent tests/test_bootstrap.py::test_make_runtime_profile_switcher_preserves_bridge_server tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
 ```
 
 Expected: FAIL because hardware settings are not accepted.
@@ -2203,31 +2245,17 @@ def _resolve_tick_interval(config: Config | None) -> float:
     return config.hardware.tick_interval if config else TICK_INTERVAL
 ```
 
-Change `local_config` to preserve runtime customization fields from the resolved file config while replacing the server list with the synthesized local bridge:
+In `src/herdeck/bootstrap.py`, change `local_config` to preserve runtime customization fields from the resolved file config while replacing the server list with the synthesized local bridge:
 
 ```python
-def local_config(port, token, partial=None):
-    from .config import (
-        DEFAULT_MACROS,
-        DEFAULT_PROFILES,
-        DEFAULT_START_PROFILES,
-        Config,
-        ConfigMeta,
-        HardwareConfig,
-        Notifications,
-        SafetyConfig,
-        ServerConfig,
-        ThemeConfig,
-        ViewConfig,
-    )
-
+def _local_config_for_server(server: ServerConfig, partial=None) -> Config:
     profiles = dict(DEFAULT_PROFILES)
     if partial is not None:
         profiles.update(partial.profiles)
     return Config(
-        servers=[ServerConfig("local", f"ws://127.0.0.1:{port}", token)],
+        servers=[server],
         profiles=profiles,
-        overview_order=["local"],
+        overview_order=[server.id],
         grid=partial.grid if partial else (5, 3),
         macros=partial.macros if partial else list(DEFAULT_MACROS),
         start_profiles=(partial.start_profiles if partial else dict(DEFAULT_START_PROFILES)),
@@ -2238,7 +2266,36 @@ def local_config(port, token, partial=None):
         hardware=partial.hardware if partial else HardwareConfig(),
         meta=partial.meta if partial else ConfigMeta(),
     )
+
+
+def local_config(port, token, partial=None):
+    return _local_config_for_server(
+        ServerConfig("local", f"ws://127.0.0.1:{port}", token),
+        partial,
+    )
+
+
+def make_runtime_profile_switcher(runtime_config: Config, switch_profile):
+    if switch_profile is None:
+        return None
+    local_server = (
+        runtime_config.servers[0]
+        if len(runtime_config.servers) == 1 and runtime_config.servers[0].id == "local"
+        else None
+    )
+
+    def switch(name: str) -> Config | None:
+        resolved = switch_profile(name)
+        if resolved is None:
+            return None
+        if local_server is None:
+            return resolved
+        return _local_config_for_server(local_server, resolved)
+
+    return switch
 ```
+
+Update the `src/herdeck/bootstrap.py` config imports to include `ConfigMeta`, `HardwareConfig`, `SafetyConfig`, `ThemeConfig`, and `ViewConfig`.
 
 Change `_ticker` to accept an interval:
 
@@ -2284,7 +2341,8 @@ async def _run(
     def send(cmd: Command) -> None:
         conn = manager.get(cmd.server_id)
         if conn is not None:
-            asyncio.run_coroutine_threadsafe(conn.send(_command_to_msg(cmd, app)), loop)
+            msg = command_to_msg(cmd, app.next_req_for(cmd))
+            asyncio.run_coroutine_threadsafe(conn.send(msg), loop)
 
     app = App(
         config,
@@ -2313,41 +2371,31 @@ async def _run(
 
 Keep the existing connector construction inside the manager factory from Task 7; do not leave a separate unmanaged `connectors` dict in `_run`.
 
-Change `_run_local` to accept and forward runtime settings while preserving the synthesized local bridge server on profile switches:
+Update the PR 18 `_amain` wrapper in `src/herdeck/app.py`:
 
 ```python
-def make_local_profile_switcher(switch_profile, port: int, token: str):
-    if switch_profile is None:
-        return None
-
-    def switch(name: str) -> Config | None:
-        resolved = switch_profile(name)
-        if resolved is None:
-            return None
-        return local_config(port, token, resolved)
-
-    return switch
-
-
-async def _run_local(
-    socket_path,
+async def _amain(
+    mode,
+    file_config,
     deck,
-    partial=None,
     *,
     switch_profile=None,
     tick_interval: float | None = None,
-):
-    from .bridge import start_local_bridge
-
-    host, port, token, _handle = await start_local_bridge(socket_path)
-    local_switch_profile = make_local_profile_switcher(switch_profile, port, token)
-    await _run(
-        local_config(port, token, partial),
-        deck,
-        switch_profile=local_switch_profile,
-        tick_interval=tick_interval,
-    )
+) -> None:
+    config, aclose = await resolve_runtime_config(mode, file_config)
+    runtime_switch = make_runtime_profile_switcher(config, switch_profile)
+    try:
+        await _run(
+            config,
+            deck,
+            switch_profile=runtime_switch,
+            tick_interval=tick_interval,
+        )
+    finally:
+        await aclose()
 ```
+
+Import `make_runtime_profile_switcher` from `.bootstrap` alongside `resolve_runtime_config`.
 
 In `main()`, replace direct env/default reads:
 
@@ -2370,21 +2418,12 @@ deck = make_deck(kind, slots, hardware=file_config.hardware if file_config else 
 try:
     if mode[0] == "mock":
         asyncio.run(_run_mock(_mock_config(), deck))
-    elif mode[0] == "remote":
-        asyncio.run(
-            _run(
-                file_config,
-                deck,
-                switch_profile=switch_profile,
-                tick_interval=_resolve_tick_interval(file_config),
-            )
-        )
     else:
         asyncio.run(
-            _run_local(
-                mode[1],
-                deck,
+            _amain(
+                mode,
                 file_config,
+                deck,
                 switch_profile=switch_profile,
                 tick_interval=_resolve_tick_interval(file_config),
             )
@@ -2451,7 +2490,7 @@ return ElgatoDriver(brightness=hardware.brightness)
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_local_mode.py::test_make_deck_prefers_env_web_bind_and_port tests/test_local_mode.py::test_runtime_startup_settings_prefer_env_over_local tests/test_local_mode.py::test_runtime_startup_settings_use_local_when_env_absent tests/test_local_mode.py::test_make_local_profile_switcher_preserves_bridge_server tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
+.venv/bin/python -m pytest tests/test_local_mode.py::test_make_deck_uses_hardware_web_bind_and_port tests/test_local_mode.py::test_make_deck_prefers_env_web_bind_and_port tests/test_local_mode.py::test_runtime_startup_settings_prefer_env_over_local tests/test_local_mode.py::test_runtime_startup_settings_use_local_when_env_absent tests/test_bootstrap.py::test_make_runtime_profile_switcher_preserves_bridge_server tests/test_driver_elgato.py::test_elgato_brightness_can_be_configured -v
 ```
 
 Expected: PASS.
@@ -2461,7 +2500,7 @@ Expected: PASS.
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_local_mode.py tests/test_driver_elgato.py tests/test_d200_panel.py -q
+.venv/bin/python -m pytest tests/test_local_mode.py tests/test_bootstrap.py tests/test_driver_elgato.py tests/test_d200_panel.py -q
 ```
 
 Expected: PASS.
@@ -2469,7 +2508,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/herdeck/app.py src/herdeck/driver/d200.py src/herdeck/driver/elgato.py tests/test_local_mode.py tests/test_driver_elgato.py
+git add src/herdeck/app.py src/herdeck/bootstrap.py src/herdeck/driver/d200.py src/herdeck/driver/elgato.py tests/test_local_mode.py tests/test_bootstrap.py tests/test_driver_elgato.py
 git commit -m "feat(runtime): apply local hardware settings"
 sha=$(git rev-parse HEAD)
 roborev show "$sha" || roborev review "$sha" --wait
