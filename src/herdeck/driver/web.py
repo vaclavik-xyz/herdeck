@@ -34,6 +34,7 @@ class WebDeck(DeckDriver):
         if icon_provider is None:
             import os
             import tempfile
+
             from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
             cache = os.path.join(tempfile.gettempdir(), "herdeck-web-icons")
             icon_provider = IconProvider(cache_dir=cache,

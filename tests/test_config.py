@@ -3,10 +3,12 @@ from pathlib import Path
 import pytest
 
 from herdeck.config import (
-    DEFAULT_PROFILES, DEFAULT_START_PROFILES, AnswerProfile, load_config,
+    DEFAULT_PROFILES,
+    DEFAULT_START_PROFILES,
+    AnswerProfile,
     ConfigError,
+    load_config,
 )
-
 
 CONFIG = """
 [[servers]]

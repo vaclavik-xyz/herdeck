@@ -7,7 +7,7 @@ import websockets
 
 from .config import ServerConfig
 from .model import AgentKey, AgentState
-from .protocol import decode_inbound, encode, Error, Event, Result, Snapshot
+from .protocol import Error, Event, Result, Snapshot, decode_inbound, encode
 
 
 class Connector:
@@ -86,7 +86,7 @@ class Connector:
             attempt += 1
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=delay)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     def _rekey(self, state: AgentState) -> AgentState:

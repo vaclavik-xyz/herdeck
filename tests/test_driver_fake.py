@@ -1,4 +1,4 @@
-from herdeck.driver.base import TileView, PanelView
+from herdeck.driver.base import PanelView, TileView
 from herdeck.driver.fake import FakeRenderer
 
 

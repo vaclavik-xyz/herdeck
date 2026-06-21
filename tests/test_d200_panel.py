@@ -1,4 +1,5 @@
 from PIL import Image
+
 from herdeck.driver.base import PanelView
 from herdeck.driver.d200 import compose_panel, split_panel
 
