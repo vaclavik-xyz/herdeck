@@ -17,6 +17,16 @@ def make_deck():
     return WebDeck(slots=13, serve=False, icon_provider=StubIcons())
 
 
+def test_page_has_keyboard_and_highlight_support():
+    d = make_deck()
+    # the page is the module-level _PAGE served at "/"
+    from herdeck.driver import web
+    page = web._PAGE
+    assert "keydown" in page                 # keyboard shortcuts wired
+    assert "@media" in page                   # responsive layout present
+    assert "press" in page                    # still posts presses
+
+
 def test_render_updates_state_and_serves_png():
     d = make_deck()
     d.render([TileView(0, "", "amber", agent_type="claude", repo="api",
