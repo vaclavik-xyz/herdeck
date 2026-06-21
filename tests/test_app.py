@@ -91,6 +91,16 @@ async def test_guard_swallows_exception():
     await _guard(Boom().run())
 
 
+async def test_guarded_swallows_cancelled_connector():
+    from herdeck.app import _guarded
+
+    class Cancelled:
+        async def run(self):
+            raise asyncio.CancelledError()
+
+    await _guarded(Cancelled())
+
+
 # --- read-correlation logic retained from v1 (now asserted via the panel) ---
 
 
@@ -303,3 +313,202 @@ def test_build_notifier_skips_telegram_without_config():
     cfg.notifications.backends = ["telegram"]  # telegram is None
     n = _build_notifier(cfg, getenv=lambda k: "TOK")
     assert isinstance(n, NoopNotifier)
+
+
+def test_app_intercepts_switch_profile_without_sending_to_bridge():
+    deck = FakeRenderer(13)
+    base = make_config()
+    base.meta.profile_names = ["work", "mobile"]
+    base.meta.active_profile = "work"
+    next_cfg = make_config()
+    next_cfg.meta.profile_names = ["work", "mobile"]
+    next_cfg.meta.active_profile = "mobile"
+    sent = []
+    persisted = []
+    connector_updates = []
+
+    app = App(
+        base,
+        deck,
+        send=sent.append,
+        switch_profile=lambda name: (persisted.append(name), next_cfg)[1],
+        update_connectors=lambda cfg: connector_updates.append([s.id for s in cfg.servers]),
+    )
+
+    app._handle_press(12)
+    profiles_index = [t.label for t in deck.last].index("Profiles")
+    app._handle_press(profiles_index)
+    app._handle_press(1)
+
+    assert sent == []
+    assert persisted == ["mobile"]
+    assert connector_updates == [["dev"]]
+    assert app.config.meta.active_profile == "mobile"
+    assert app.orch.config.meta.active_profile == "mobile"
+
+
+def test_app_ignores_late_snapshot_from_removed_server_after_profile_switch():
+    deck = FakeRenderer(13)
+    base = make_config()
+    base.servers = [
+        ServerConfig("old", "wss://old", "t"),
+        ServerConfig("dev", "wss://dev", "t"),
+    ]
+    base.overview_order = ["old", "dev"]
+    base.meta.profile_names = ["work", "mobile"]
+    base.meta.active_profile = "work"
+    next_cfg = make_config()
+    next_cfg.servers = [ServerConfig("dev", "wss://dev", "t")]
+    next_cfg.overview_order = ["dev"]
+    next_cfg.meta.profile_names = ["work", "mobile"]
+    next_cfg.meta.active_profile = "mobile"
+    app = App(
+        base,
+        deck,
+        send=lambda c: None,
+        switch_profile=lambda name: next_cfg,
+        update_connectors=lambda cfg: [],
+    )
+    app.handle_snapshot(
+        "old",
+        [AgentState(AgentKey("old", "p1"), "claude", "old agent", Status.IDLE)],
+    )
+
+    app._handle_switch_profile("mobile")
+    app.handle_snapshot(
+        "old",
+        [AgentState(AgentKey("old", "p2"), "claude", "late old", Status.IDLE)],
+    )
+
+    assert "late old" not in [t.label for t in deck.last]
+
+
+def test_app_clears_agents_for_restarted_server_after_profile_switch():
+    deck = FakeRenderer(13)
+    base = make_config()
+    base.servers = [ServerConfig("dev", "wss://old", "t")]
+    base.meta.profile_names = ["work", "mobile"]
+    base.meta.active_profile = "work"
+    next_cfg = make_config()
+    next_cfg.servers = [ServerConfig("dev", "wss://new", "t")]
+    next_cfg.meta.profile_names = ["work", "mobile"]
+    next_cfg.meta.active_profile = "mobile"
+    app = App(
+        base,
+        deck,
+        send=lambda c: None,
+        switch_profile=lambda name: next_cfg,
+        update_connectors=lambda cfg: {"dev"},
+    )
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "old agent", Status.IDLE)],
+    )
+
+    app._handle_switch_profile("mobile")
+
+    assert "old agent" not in [t.label for t in deck.last]
+
+
+def test_app_env_locked_profile_switch_refreshes_tiles_and_shows_panel_message():
+    deck = FakeRenderer(13)
+    cfg = make_config()
+    cfg.meta.profile_names = ["work", "mobile"]
+    cfg.meta.active_profile = "work"
+    cfg.meta.env_locked_profile = True
+
+    app = App(cfg, deck, send=lambda c: None, switch_profile=lambda name: None)
+    app._handle_press(12)
+    profiles_index = [t.label for t in deck.last].index("Profiles")
+    app._handle_press(profiles_index)
+    app._handle_press(1)
+
+    assert deck.last_panel.title == "profile locked"
+    assert deck.last[12].label == "+ New"
+
+
+def test_app_profile_switch_error_keeps_current_config_and_shows_panel():
+    deck = FakeRenderer(13)
+    cfg = make_config()
+    cfg.meta.profile_names = ["work", "mobile"]
+    cfg.meta.active_profile = "work"
+
+    def fail_switch(name):
+        raise ConfigError("unknown server 'mobile'")
+
+    app = App(cfg, deck, send=lambda c: None, switch_profile=fail_switch)
+    app._handle_press(12)
+    profiles_index = [t.label for t in deck.last].index("Profiles")
+    app._handle_press(profiles_index)
+    app._handle_press(1)
+
+    assert app.config.meta.active_profile == "work"
+    assert deck.last_panel.title == "profile failed"
+    assert "unknown server" in deck.last_panel.lines[0]
+    assert deck.last[12].label == "+ New"
+
+
+def test_connector_manager_diffs_servers():
+    from herdeck.app import ConnectorManager
+    from herdeck.config import ServerConfig
+
+    made = []
+    stopped = []
+    tasks = {}
+
+    class FakeConnector:
+        def __init__(self, server):
+            self.server = server
+            made.append(server.id)
+
+        def stop(self):
+            stopped.append(self.server.id)
+
+    class FakeTask:
+        def __init__(self, server_id):
+            self.server_id = server_id
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+    def start_connector(conn):
+        task = FakeTask(conn.server.id)
+        tasks[conn.server.id] = task
+        return task
+
+    mgr = ConnectorManager(
+        make_connector=lambda server: FakeConnector(server),
+        start_connector=start_connector,
+    )
+    mgr.update([ServerConfig("a", "ws://a", "t"), ServerConfig("b", "ws://b", "t")])
+    mgr.update([ServerConfig("b", "ws://b", "t"), ServerConfig("c", "ws://c", "t")])
+
+    assert made == ["a", "b", "c"]
+    assert stopped == ["a"]
+    assert tasks["a"].cancelled is True
+
+
+def test_make_profile_switcher_resolves_and_persists(tmp_path, monkeypatch):
+    from herdeck.app import make_profile_switcher
+    from herdeck.settings import load_settings
+    from tests.test_settings import NEW_CONFIG
+
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret")
+    config = tmp_path / "config.toml"
+    config.write_text(
+        NEW_CONFIG
+        + """
+
+[profiles.mobile]
+extends = "work"
+"""
+    )
+    local = tmp_path / "local.toml"
+    snapshot = load_settings(config, local)
+
+    switch = make_profile_switcher(snapshot)
+    cfg = switch("mobile")
+
+    assert cfg.meta.active_profile == "mobile"
+    assert 'active_profile = "mobile"' in local.read_text()

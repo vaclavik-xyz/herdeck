@@ -11,6 +11,7 @@ from .model import AgentKey, AgentState, Status
 
 _OPTION_LABEL_MAX = 14
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
+_MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
 
 
 def server_accent(server_id: str, accents: list[str] | None = None) -> str:
@@ -41,9 +42,13 @@ class Orchestrator:
         self._page: int = 0
         self._phase: int = 0
         self._launcher: bool = False
+        self._profile_menu: bool = False
+        self._profile_menu_origin: str = "overview"
 
     def _agent_slots(self) -> int:
         """Overview tiles available for agents (the last tile is the launcher)."""
+        if self.config.view.management == "bottom_row":
+            return max(1, self.slots - 3)
         return max(1, self.slots - 1)
 
     def _panel_indices(self) -> tuple[int, int]:
@@ -120,7 +125,26 @@ class Orchestrator:
         return name in self.config.view.tile_fields
 
     def _management_indices(self) -> dict[int, str]:
-        return {}
+        if self.config.view.management != "bottom_row":
+            return {}
+        start = max(0, self.slots - 3)
+        count = min(len(self.config.view.bottom_row), self.slots - start)
+        actions = [
+            action if action in _MANAGEMENT_ACTIONS else None
+            for action in self.config.view.bottom_row[:count]
+        ]
+        if count and "new_agent" in self.config.view.bottom_row and "new_agent" not in actions:
+            actions[-1] = "new_agent"
+        return {start + i: action for i, action in enumerate(actions) if action}
+
+    def _management_label(self, action: str) -> str:
+        return {
+            "profiles": "Profiles",
+            "notifications": "Notify",
+            "safety": "Safety",
+            "theme": "Theme",
+            "new_agent": "+ New",
+        }.get(action, action)
 
     def _blocked_spotlight(self) -> tuple[str, str] | None:
         """The longest-waiting BLOCKED agent as (label, elapsed), or None."""
@@ -136,6 +160,8 @@ class Orchestrator:
         return (oldest.label, self._elapsed_text(oldest.key))
 
     def render(self) -> RenderState:
+        if self._profile_menu:
+            return self._render_profile_menu()
         if self._launcher:
             return self._render_launcher()
         if self._drill is not None:
@@ -149,11 +175,12 @@ class Orchestrator:
         fields = self.config.view.tile_fields
         show_server_tags = "server" in fields and len({s.key.server_id for s in ordered}) > 1
         management = self._management_indices()
+        management_mode = self.config.view.management == "bottom_row"
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i in management:
-                tiles.append(TileView(i, management[i], "grey"))
-            elif i == self.slots - 1:  # reserved launcher tile
+                tiles.append(TileView(i, self._management_label(management[i]), "grey"))
+            elif not management_mode and i == self.slots - 1:  # reserved launcher tile
                 tiles.append(TileView(i, "+ New", "green"))
             elif i < len(shown):
                 s = shown[i]
@@ -201,13 +228,32 @@ class Orchestrator:
             panel.color = self.config.theme.colors.get("blocked", panel.color)
         return RenderState(tiles, panel)
 
-    def _render_launcher(self) -> RenderState:
-        types = list(self.config.start_profiles)
+    def _render_profile_menu(self) -> RenderState:
+        names = list(self.config.meta.profile_names)
         back_i = self.slots - 1
         tiles: list[TileView] = []
         for i in range(self.slots):
-            if i < len(types) and i < back_i:
-                tiles.append(TileView(i, types[i], "blue", agent_type=types[i]))
+            if i < len(names) and i < back_i:
+                name = names[i]
+                label = f"* {name}" if name == self.config.meta.active_profile else name
+                tiles.append(TileView(i, label[:_OPTION_LABEL_MAX], "blue"))
+            elif i == back_i:
+                tiles.append(TileView(i, "Back", "grey"))
+            else:
+                tiles.append(TileView(i, "", "dim"))
+        locked = "locked by env" if self.config.meta.env_locked_profile else "pick a profile"
+        return RenderState(tiles, PanelView("profiles", [locked], "grey"))
+
+    def _render_launcher(self) -> RenderState:
+        types = list(self.config.start_profiles)
+        entries = types + (["Profiles"] if len(self.config.meta.profile_names) > 1 else [])
+        back_i = self.slots - 1
+        tiles: list[TileView] = []
+        for i in range(self.slots):
+            if i < len(entries) and i < back_i:
+                entry = entries[i]
+                agent_type = entry if entry in self.config.start_profiles else None
+                tiles.append(TileView(i, entry, "blue", agent_type=agent_type))
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
@@ -216,7 +262,7 @@ class Orchestrator:
 
     def tick(self) -> list[int]:
         """Advance the spinner phase; return overview tile indices that are working."""
-        if self._drill is not None or self._launcher:
+        if self._drill is not None or self._launcher or self._profile_menu:
             return []
         self._phase += 1
         shown, _ = layout.page(self._ordered(), self._page, self._agent_slots())
@@ -306,6 +352,8 @@ class Orchestrator:
         return profile_for(self.config, self._agents[key].agent_type)
 
     def on_press(self, index: int) -> list[Command]:
+        if self._profile_menu:
+            return self._press_profile_menu(index)
         if self._launcher:
             return self._press_launcher(index)
         if self._drill is not None:
@@ -316,7 +364,16 @@ class Orchestrator:
         if index in self._panel_indices():
             self._page += 1
             return []
-        if index == self.slots - 1:  # "+ New" launcher tile
+        management = self._management_indices()
+        if index in management:
+            action = management[index]
+            if action == "profiles":
+                self._profile_menu = True
+                self._profile_menu_origin = "overview"
+            elif action == "new_agent":
+                self._launcher = True
+            return []
+        if self.config.view.management != "bottom_row" and index == self.slots - 1:
             self._launcher = True
             return []
         ordered = self._ordered()
@@ -334,16 +391,37 @@ class Orchestrator:
 
     def _press_launcher(self, index: int) -> list[Command]:
         types = list(self.config.start_profiles)
+        entries = types + (["Profiles"] if len(self.config.meta.profile_names) > 1 else [])
         back_i = self.slots - 1
         if index == back_i:
             self._launcher = False
             return []
-        if index < len(types) and index < back_i:
-            name = types[index]
+        if index < len(entries) and index < back_i:
+            name = entries[index]
+            if name == "Profiles":
+                self._profile_menu = True
+                self._profile_menu_origin = "launcher"
+                self._launcher = False
+                return []
             argv = list(self.config.start_profiles[name])
             server = self.config.overview_order[0]
             self._launcher = False  # return to overview
             return [Command("start", server, text=name, keys=argv)]
+        return []
+
+    def _press_profile_menu(self, index: int) -> list[Command]:
+        names = list(self.config.meta.profile_names)
+        back_i = self.slots - 1
+        if index == back_i:
+            self._profile_menu = False
+            self._launcher = self._profile_menu_origin == "launcher"
+            return []
+        if index < len(names) and index < back_i:
+            name = names[index]
+            self._profile_menu = False
+            self._profile_menu_origin = "overview"
+            self._launcher = False
+            return [Command("switch_profile", name, text=name)]
         return []
 
     def _press_drill(self, index: int) -> list[Command]:
@@ -364,3 +442,32 @@ class Orchestrator:
             self._drill = None  # return to the fleet overview
             return [cmd]
         return []  # blank tile
+
+    def update_config(self, config: Config) -> None:
+        self.config = config
+        allowed_servers = {s.id for s in config.servers}
+        self._agents = {
+            key: state for key, state in self._agents.items() if key.server_id in allowed_servers
+        }
+        self._since = {
+            key: value for key, value in self._since.items() if key.server_id in allowed_servers
+        }
+        self._down &= allowed_servers
+        self._launcher = False
+        self._profile_menu = False
+        self._profile_menu_origin = "overview"
+        self._drill = None
+        self._detection = ""
+        self._page = 0
+
+    def clear_server_state(self, server_ids) -> None:
+        server_ids = set(server_ids)
+        self._agents = {
+            key: state for key, state in self._agents.items() if key.server_id not in server_ids
+        }
+        self._since = {
+            key: value for key, value in self._since.items() if key.server_id not in server_ids
+        }
+        if self._drill is not None and self._drill.server_id in server_ids:
+            self._drill = None
+            self._detection = ""
