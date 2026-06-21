@@ -59,6 +59,9 @@ def test_page_landscape_rule_sizes_deck_for_short_height():
     block = page[start:end + 1]
     assert "vh" in block          # cells sized by viewport height, not just width
     assert ".cell" in block       # the tiles themselves are resized
+    # a short viewport may also be narrow (e.g. 320x400) where this rule overrides
+    # the portrait one, so it must constrain width too or the deck overflows sideways
+    assert "vw" in block
 
 
 def test_render_updates_state_and_serves_png():
