@@ -183,6 +183,7 @@ class WebDeck(DeckDriver):
 
 
 _PAGE = """<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
 <title>Herdeck simulator</title>
 <style>
  body{background:#0b0b0d;margin:0;font-family:-apple-system,sans-serif;
@@ -191,26 +192,44 @@ _PAGE = """<!doctype html><meta charset=utf-8>
    display:grid;grid-template-columns:repeat(5,110px);gap:10px}
  .cell{width:110px;height:110px;border-radius:8px;background:#111;cursor:pointer;
    overflow:hidden;border:none;padding:0}
+ .cell.active{outline:3px solid #5af}
  .cell img{width:100%;height:100%;display:block}
  #panel{grid-column:4 / 6;width:230px;height:110px;border-radius:8px;
    overflow:hidden;cursor:pointer;background:#111}
  #panel img{width:100%;height:100%;display:block}
+ /* phone: shrink the 5-wide deck so it fits a narrow screen */
+ @media (max-width:560px){
+   #deck{grid-template-columns:repeat(5,min(17vw,110px));gap:6px;padding:10px}
+   .cell{width:min(17vw,110px);height:min(17vw,110px)}
+   #panel{width:calc(min(17vw,110px)*2 + 6px);height:min(17vw,110px)}
+ }
 </style>
 <div id=deck></div>
 <script>
 const deck=document.getElementById('deck');
-let cells=[];
+let cells=[]; const btns=[];
+// one press path for clicks and keys: post the press, outline the pressed cell.
+function press(i){
+  fetch('/press/'+i,{method:'POST'});
+  if(btns[i]){ btns.forEach(b=>b.classList.remove('active')); btns[i].classList.add('active'); }
+}
 // 13 buttons fill grid positions 0..12; the panel spans the last two cells.
 for(let i=0;i<13;i++){
   const b=document.createElement('button');b.className='cell';
-  b.onclick=()=>fetch('/press/'+i,{method:'POST'});
+  b.onclick=()=>press(i);
   const img=document.createElement('img');b.appendChild(img);
-  deck.appendChild(b);cells.push(img);
+  deck.appendChild(b);cells.push(img);btns.push(b);
 }
 const panel=document.createElement('div');panel.id='panel';
-panel.onclick=()=>fetch('/press/13',{method:'POST'});
+panel.onclick=()=>press(13);
 const pimg=document.createElement('img');panel.appendChild(pimg);
 deck.appendChild(panel);
+// keyboard: 1..9 -> tiles 0..8, 0 -> tile 9; ignore when a modifier is held.
+document.addEventListener('keydown',e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey||e.shiftKey) return;
+  if(e.key>='1'&&e.key<='9') press(e.key.charCodeAt(0)-49);
+  else if(e.key==='0') press(9);
+});
 let lastV=-1; const tv={}; let pv=-1;
 async function poll(){
   try{
