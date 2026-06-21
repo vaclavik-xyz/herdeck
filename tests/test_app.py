@@ -237,3 +237,13 @@ def test_app_does_not_notify_when_blocked_not_in_on():
     app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api",
                                            Status.BLOCKED)])
     assert calls == []
+
+
+def test_build_notifier_respects_config():
+    from herdeck.app import _build_notifier
+    from herdeck.notify import NoopNotifier, Notifier
+    cfg = make_config()
+    assert isinstance(_build_notifier(cfg), NoopNotifier)   # disabled -> no-op
+    cfg.notifications.enabled = True
+    n = _build_notifier(cfg)
+    assert isinstance(n, Notifier) and not isinstance(n, NoopNotifier)
