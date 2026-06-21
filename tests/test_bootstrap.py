@@ -9,8 +9,30 @@ def _cfg(servers):
 
 
 def test_resolve_mode_still_importable_and_remote():
-    assert resolve_mode(mock=False, config_path="/c.toml", config_has_servers=True,
-                        socket_path="/x.sock", socket_exists=False) == ("remote", "/c.toml")
+    assert resolve_mode(
+        mock=False, config_path="/c.toml", config_has_servers=True, socket_path="/x.sock", socket_exists=False
+    ) == ("remote", "/c.toml")
+
+
+def test_discover_local_config_next_to_config(monkeypatch, tmp_path):
+    from herdeck.bootstrap import _discover_local_config_path
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("")
+    local = tmp_path / "local.toml"
+
+    monkeypatch.delenv("HERDECK_LOCAL_CONFIG", raising=False)
+
+    assert _discover_local_config_path(str(cfg)) == str(local)
+
+
+def test_discover_local_config_prefers_env(monkeypatch, tmp_path):
+    from herdeck.bootstrap import _discover_local_config_path
+
+    env = tmp_path / "device.toml"
+    monkeypatch.setenv("HERDECK_LOCAL_CONFIG", str(env))
+
+    assert _discover_local_config_path("/x/config.toml") == str(env)
 
 
 @pytest.mark.asyncio

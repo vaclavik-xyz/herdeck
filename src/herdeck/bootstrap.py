@@ -59,6 +59,15 @@ def _discover_config_path():
     return None
 
 
+def _discover_local_config_path(config_path: str | None):
+    p = os.environ.get("HERDECK_LOCAL_CONFIG")
+    if p:
+        return os.path.abspath(p)
+    if config_path:
+        return os.path.join(os.path.dirname(config_path), "local.toml")
+    return os.path.expanduser("~/.config/herdeck/local.toml")
+
+
 async def resolve_runtime_config(
     mode: tuple, file_config: Config | None
 ) -> tuple[Config, Callable[[], Awaitable[None]]]:
