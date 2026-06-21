@@ -75,6 +75,42 @@ def test_load_resolves_token_from_env(tmp_path, monkeypatch):
     assert cfg.overview_order == ["workbox"]
 
 
+def test_load_config_uses_new_profile_schema(tmp_path, monkeypatch):
+    from tests.test_settings import NEW_CONFIG
+
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = _write(tmp_path, NEW_CONFIG)
+
+    cfg = load_config(path)
+
+    assert cfg.meta.active_profile == "work"
+    assert cfg.view.show_profile_on_panel is True
+    assert cfg.notifications.enabled is True
+    assert cfg.servers[0].token == "secret123"
+
+
+def test_load_config_uses_env_local_profile_override(tmp_path, monkeypatch):
+    from tests.test_settings import NEW_CONFIG
+
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = _write(
+        tmp_path,
+        NEW_CONFIG
+        + """
+
+[profiles.mobile]
+extends = "work"
+""",
+    )
+    local = tmp_path / "device-local.toml"
+    local.write_text('active_profile = "mobile"\n')
+    monkeypatch.setenv("HERDECK_LOCAL_CONFIG", str(local))
+
+    cfg = load_config(path)
+
+    assert cfg.meta.active_profile == "mobile"
+
+
 def test_missing_token_env_raises(tmp_path, monkeypatch):
     monkeypatch.delenv("HERDECK_WORKBOX_TOKEN", raising=False)
     with pytest.raises(ConfigError):

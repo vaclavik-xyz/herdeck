@@ -191,7 +191,17 @@ def parse_notifications(n: dict) -> Notifications:
 
 def load_config(path: str | Path) -> Config:
     data = tomllib.loads(Path(path).read_text())
+    if "profiles" in data:
+        from .bootstrap import _discover_local_config_path
+        from .settings import load_settings, resolve_profile
 
+        return resolve_profile(load_settings(path, _discover_local_config_path(str(path)))).config
+
+    return _load_legacy_config(path, data=data)
+
+
+def _load_legacy_config(path: str | Path, *, data: dict | None = None) -> Config:
+    data = data if data is not None else tomllib.loads(Path(path).read_text())
     servers = []
     for s in data.get("servers", []):
         env = s["token_env"]
