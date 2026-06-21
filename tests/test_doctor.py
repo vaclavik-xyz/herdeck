@@ -1,4 +1,4 @@
-from herdeck.doctor import Check, check_socket
+from herdeck.doctor import Check, check_config, check_socket
 
 
 def test_check_socket_missing():
@@ -38,3 +38,22 @@ def test_check_socket_malformed_result_type():
     c = check_socket("/s.sock", exists=lambda p: True,
                      probe=lambda path: {"result": []})
     assert c.ok is False
+
+
+def test_check_config_none_is_local_mode():
+    c = check_config(config_path=None, has_servers=False, socket_exists=True,
+                     getenv=lambda k: None)
+    assert c.ok is True and "local" in c.detail.lower()
+
+
+def test_check_config_remote_missing_token_redacts():
+    c = check_config(config_path="/c", has_servers=True, socket_exists=False,
+                     token_envs=["HERDECK_TOKEN"], getenv=lambda k: None)
+    assert c.ok is False
+    assert "HERDECK_TOKEN" in c.detail and "missing" in c.detail.lower()
+
+
+def test_check_config_remote_token_present_not_leaked():
+    c = check_config(config_path="/c", has_servers=True, socket_exists=False,
+                     token_envs=["HERDECK_TOKEN"], getenv=lambda k: "supersecret")
+    assert c.ok is True and "supersecret" not in c.detail

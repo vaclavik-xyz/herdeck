@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -30,3 +31,34 @@ def check_socket(path: str, exists: Callable[[str], bool], probe) -> Check:
     if not isinstance(panes, list):
         return Check("herdr socket", False, "malformed response (panes is not a list)")
     return Check("herdr socket", True, f"responding, {len(panes)} panes")
+
+
+def check_config(
+    config_path: str | None,
+    has_servers: bool,
+    socket_exists: bool,
+    token_envs=(),
+    getenv=os.environ.get,
+) -> Check:
+    if has_servers:
+        statuses = [
+            f"{env}=present" if getenv(env) else f"{env}=missing"
+            for env in token_envs
+        ]
+        missing = [env for env in token_envs if not getenv(env)]
+        detail = f"config at {config_path}; token envs: {', '.join(statuses)}"
+        return Check("configuration", not missing, detail)
+    if socket_exists:
+        source = "no config" if config_path is None else f"config at {config_path}"
+        return Check("configuration", True, f"{source}; local zero-config mode")
+    if config_path is None:
+        return Check(
+            "configuration",
+            False,
+            "no config and no herdr socket (start herdr or create config.toml)",
+        )
+    return Check(
+        "configuration",
+        False,
+        f"config at {config_path} has no servers and no herdr socket is available",
+    )
