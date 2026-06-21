@@ -127,3 +127,14 @@ async def test_socket_pane_list_returns_raw_rpc(monkeypatch):
     monkeypatch.setattr(bridge, "SocketHerdr", FakeSocketHerdr)
 
     assert await _socket_pane_list("/s.sock") == {"error": {"message": "bad response"}}
+
+
+def test_python_m_invocation_runs_main():
+    """`python -m herdeck.doctor` must invoke main() (needs a __main__ guard)."""
+    import os
+    import subprocess
+    import sys
+    env = {**os.environ, "PYTHONPATH": "src"}
+    r = subprocess.run([sys.executable, "-m", "herdeck.doctor"],
+                       capture_output=True, text=True, env=env)
+    assert "herdeck doctor" in r.stdout
