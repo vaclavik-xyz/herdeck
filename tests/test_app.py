@@ -103,7 +103,7 @@ def test_stale_read_result_with_old_req_is_ignored():
     stale = app.next_req_for(Command("read", "dev", "p1", source="detection"))
     app.next_req_for(Command("read", "dev", "p1", source="detection"))  # newer read supersedes
     app.handle_result("dev", stale, {"text": "stale", "pane_id": "p1"})
-    assert deck.last_panel.lines == []  # old req ignored
+    assert deck.last_panel.lines == ["reading prompt..."]  # old req ignored
 
 
 def test_read_result_for_other_pane_is_ignored():
@@ -113,7 +113,7 @@ def test_read_result_for_other_pane_is_ignored():
     deck.simulate_press(0)  # drilled into p1
     req = app.next_req_for(Command("read", "dev", "p2", source="detection"))
     app.handle_result("dev", req, {"text": "x", "pane_id": "p2"})
-    assert deck.last_panel.lines == []  # wrong pane
+    assert deck.last_panel.lines == ["reading prompt..."]  # wrong pane
 
 
 def test_event_on_drilled_pane_invalidates_inflight_read():
