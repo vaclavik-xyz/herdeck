@@ -35,9 +35,9 @@ def test_overview_orders_blocked_first_and_colors():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.IDLE), state("p2", Status.BLOCKED)])
     rs = o.render()
-    assert rs.tiles[0].color == "amber"      # blocked first
+    assert rs.tiles[0].color == "amber"  # blocked first
     assert rs.tiles[0].agent_type == "claude"
-    assert rs.tiles[1].color == "blue"       # idle next
+    assert rs.tiles[1].color == "blue"  # idle next
     assert isinstance(rs.panel, PanelView)
 
 
@@ -80,7 +80,7 @@ def test_agent_tile_has_repo_branch_status_and_time():
     s = AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)
     s.repo, s.branch = "macdoktor-crm", "feat/x"
     o.apply_snapshot("dev", [s])
-    clk[0] = 1000.0 + 185          # 3 minutes later
+    clk[0] = 1000.0 + 185  # 3 minutes later
     t = o.render().tiles[0]
     assert t.repo == "macdoktor-crm" and t.branch == "feat/x"
     assert t.status_text == "WORKING" and t.time_text == "3m"
@@ -88,11 +88,13 @@ def test_agent_tile_has_repo_branch_status_and_time():
 
 def test_multi_server_tiles_get_server_tag():
     o = Orchestrator(make_multi_config(), slots=13)
-    o.apply_snapshot("alpha", [
-        AgentState(AgentKey("alpha", "p1"), "claude", "ra", Status.IDLE),
-    ])
-    o.apply_event("bravo", AgentState(
-        AgentKey("bravo", "p1"), "codex", "rb", Status.IDLE))
+    o.apply_snapshot(
+        "alpha",
+        [
+            AgentState(AgentKey("alpha", "p1"), "claude", "ra", Status.IDLE),
+        ],
+    )
+    o.apply_event("bravo", AgentState(AgentKey("bravo", "p1"), "codex", "rb", Status.IDLE))
 
     tiles = [tile for tile in o.render().tiles if tile.repo]
 
@@ -102,13 +104,19 @@ def test_multi_server_tiles_get_server_tag():
 
 def test_multi_server_tags_stay_visible_on_single_server_page():
     o = Orchestrator(make_multi_config(), slots=3)
-    o.apply_snapshot("alpha", [
-        AgentState(AgentKey("alpha", "p1"), "claude", "ra1", Status.IDLE),
-        AgentState(AgentKey("alpha", "p2"), "claude", "ra2", Status.IDLE),
-    ])
-    o.apply_snapshot("bravo", [
-        AgentState(AgentKey("bravo", "p1"), "codex", "rb", Status.IDLE),
-    ])
+    o.apply_snapshot(
+        "alpha",
+        [
+            AgentState(AgentKey("alpha", "p1"), "claude", "ra1", Status.IDLE),
+            AgentState(AgentKey("alpha", "p2"), "claude", "ra2", Status.IDLE),
+        ],
+    )
+    o.apply_snapshot(
+        "bravo",
+        [
+            AgentState(AgentKey("bravo", "p1"), "codex", "rb", Status.IDLE),
+        ],
+    )
 
     tiles = [tile for tile in o.render().tiles if tile.repo]
 

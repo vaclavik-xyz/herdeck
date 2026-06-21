@@ -25,8 +25,7 @@ def test_decode_snapshot_to_states():
     assert isinstance(msg, Snapshot)
     assert msg.server_id == "workbox"
     assert msg.states == [
-        AgentState(AgentKey("workbox", "w1:p1"), "claude", "api",
-                   Status.BLOCKED, "api")
+        AgentState(AgentKey("workbox", "w1:p1"), "claude", "api", Status.BLOCKED, "api")
     ]
 
 

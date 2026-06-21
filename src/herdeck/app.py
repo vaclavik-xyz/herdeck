@@ -35,9 +35,13 @@ def newly_blocked(prev, states):
     return to_notify, blocked_now
 
 
-def _build_notifier(config: Config, *, getenv=os.environ.get,
-                    macos_sink=_macos_sink,
-                    telegram_factory=make_telegram_sink) -> Notifier:
+def _build_notifier(
+    config: Config,
+    *,
+    getenv=os.environ.get,
+    macos_sink=_macos_sink,
+    telegram_factory=make_telegram_sink,
+) -> Notifier:
     """Assemble a notifier from the configured backends (graceful skip)."""
     n = config.notifications
     if not n.enabled:
@@ -52,8 +56,10 @@ def _build_notifier(config: Config, *, getenv=os.environ.get,
             if tg and token and tg.chat_id:
                 sinks.append(telegram_factory(token, tg.chat_id))
             else:
-                log.warning("telegram notifications enabled but token/chat_id "
-                            "missing; skipping telegram backend")
+                log.warning(
+                    "telegram notifications enabled but token/chat_id "
+                    "missing; skipping telegram backend"
+                )
         else:
             log.warning("unknown notification backend %r; skipping", backend)
     if not sinks:
@@ -64,11 +70,15 @@ def _build_notifier(config: Config, *, getenv=os.environ.get,
 class App:
     """Glue between orchestrator (sync) and connectors (async)."""
 
-    def __init__(self, config: Config, deck: DeckDriver,
-                 send: Callable[[Command], None],
-                 schedule: Callable[[Callable[[], None]], None] | None = None,
-                 notifier: Notifier | None = None,
-                 notify_schedule: Callable[[Callable[[], None]], None] | None = None):
+    def __init__(
+        self,
+        config: Config,
+        deck: DeckDriver,
+        send: Callable[[Command], None],
+        schedule: Callable[[Callable[[], None]], None] | None = None,
+        notifier: Notifier | None = None,
+        notify_schedule: Callable[[Callable[[], None]], None] | None = None,
+    ):
         self.config = config
         self.deck = deck
         self._send = send
@@ -132,17 +142,18 @@ class App:
 
     def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         if log.isEnabledFor(logging.DEBUG):
-            log.debug("snapshot %s: %s", server_id,
-                      [(s.key.pane_id, s.agent_type, s.label, s.status.value)
-                       for s in states])
+            log.debug(
+                "snapshot %s: %s",
+                server_id,
+                [(s.key.pane_id, s.agent_type, s.label, s.status.value) for s in states],
+            )
         key = self.orch.drill_key()
         before = self.orch.get_agent(key) if key is not None else None
         self.orch.apply_snapshot(server_id, states)
         if key is not None and key.server_id == server_id:
             if self.orch.get_agent(key) != before:
                 self._invalidate_read()
-        self._maybe_notify(
-            states, {k for k in self._blocked_keys if k.server_id == server_id})
+        self._maybe_notify(states, {k for k in self._blocked_keys if k.server_id == server_id})
         self._refresh()
 
     def handle_event(self, server_id: str, state: AgentState) -> None:
@@ -159,10 +170,16 @@ class App:
     def handle_result(self, server_id: str, req: str, data: dict) -> None:
         text = data.get("text")
         if text is not None:
-            accepted = (req == self._active_read_req
-                        and self.orch.is_drill_pane(server_id, data.get("pane_id")))
-            log.debug("result read req=%s pane=%s accepted=%s text=%r",
-                      req, data.get("pane_id"), accepted, (text or "")[:60])
+            accepted = req == self._active_read_req and self.orch.is_drill_pane(
+                server_id, data.get("pane_id")
+            )
+            log.debug(
+                "result read req=%s pane=%s accepted=%s text=%r",
+                req,
+                data.get("pane_id"),
+                accepted,
+                (text or "")[:60],
+            )
             if accepted:
                 self.orch.set_detection(text)
                 self._refresh()
@@ -174,7 +191,7 @@ class App:
         working = self.orch.tick()
         self._ticks += 1
         if self._ticks % FULL_REFRESH_TICKS == 0:
-            self._refresh()          # advance elapsed time on all tiles
+            self._refresh()  # advance elapsed time on all tiles
             return
         if not working:
             return
@@ -196,9 +213,14 @@ class App:
         if log.isEnabledFor(logging.DEBUG):
             rs = self.orch.render()
             labels = [t.label for t in rs.tiles[:6] if t.label]
-            log.debug("press idx=%s -> cmds=%s | view=%s panel=%r/%s",
-                      index, [(c.kind, c.pane_id, c.keys) for c in cmds],
-                      labels, rs.panel.title, rs.panel.lines)
+            log.debug(
+                "press idx=%s -> cmds=%s | view=%s panel=%r/%s",
+                index,
+                [(c.kind, c.pane_id, c.keys) for c in cmds],
+                labels,
+                rs.panel.title,
+                rs.panel.lines,
+            )
         for cmd in cmds:
             self._send(cmd)
         self._refresh()
@@ -209,18 +231,21 @@ def _command_to_msg(cmd: Command, app: App) -> dict:
         return {"type": "list"}
     req = app.next_req_for(cmd)
     if cmd.kind == "read":
-        return {"type": "read", "req": req, "pane_id": cmd.pane_id,
-                "source": cmd.source}
+        return {"type": "read", "req": req, "pane_id": cmd.pane_id, "source": cmd.source}
     if cmd.kind == "focus":
         return {"type": "focus", "req": req, "pane_id": cmd.pane_id}
     if cmd.kind == "send_text":
-        return {"type": "send_text", "req": req, "pane_id": cmd.pane_id,
-                "text": cmd.text}
+        return {"type": "send_text", "req": req, "pane_id": cmd.pane_id, "text": cmd.text}
     if cmd.kind == "start":
         return {"type": "start", "req": req, "name": cmd.text, "argv": cmd.keys}
     if cmd.kind in ("act_if_blocked", "act_force"):
-        return {"type": "act", "req": req, "pane_id": cmd.pane_id, "keys": cmd.keys,
-                "guard": cmd.kind == "act_if_blocked"}
+        return {
+            "type": "act",
+            "req": req,
+            "pane_id": cmd.pane_id,
+            "keys": cmd.keys,
+            "guard": cmd.kind == "act_if_blocked",
+        }
     raise ValueError(f"unknown command kind: {cmd.kind}")
 
 
@@ -244,8 +269,7 @@ async def _ticker(app: App, loop) -> None:
         loop.call_soon_threadsafe(app.handle_tick)
 
 
-def resolve_mode(*, mock, config_path, config_has_servers, socket_path,
-                 socket_exists):
+def resolve_mode(*, mock, config_path, config_has_servers, socket_path, socket_exists):
     """Decide how to run from already-gathered facts (pure; no IO)."""
     if mock:
         return ("mock",)
@@ -253,15 +277,18 @@ def resolve_mode(*, mock, config_path, config_has_servers, socket_path,
         return ("remote", config_path)
     if socket_exists:
         return ("local", socket_path)
-    return ("error",
-            f"No herdr socket at {socket_path} and no [[servers]] config. "
-            f"Is herdr running? Set HERDR_SOCKET or create a config "
-            f"(see config.example.toml).")
+    return (
+        "error",
+        f"No herdr socket at {socket_path} and no [[servers]] config. "
+        f"Is herdr running? Set HERDR_SOCKET or create a config "
+        f"(see config.example.toml).",
+    )
 
 
 def _mock_config() -> Config:
     """A zero-setup config for the offline simulator (no file/token needed)."""
     from .config import DEFAULT_PROFILES, ServerConfig
+
     return Config(
         servers=[ServerConfig("mock", "ws://mock", "x")],
         profiles=dict(DEFAULT_PROFILES),
@@ -272,11 +299,14 @@ def _mock_config() -> Config:
 
 def _mock_agents():
     from .model import AgentKey, AgentState, Status
-    rows = [("p1", "claude", "macdoktor-crm", "feat/autopilot-auto-close", Status.WORKING),
-            ("p2", "codex", "4cyborg", "main", Status.BLOCKED),
-            ("p3", "claude", "dtt-app", "feat/vykup-redesign", Status.IDLE),
-            ("p4", "codex", "diktator", "main", Status.DONE),
-            ("p5", "claude", "herdeck", "feat/web-simulator", Status.WORKING)]
+
+    rows = [
+        ("p1", "claude", "macdoktor-crm", "feat/autopilot-auto-close", Status.WORKING),
+        ("p2", "codex", "4cyborg", "main", Status.BLOCKED),
+        ("p3", "claude", "dtt-app", "feat/vykup-redesign", Status.IDLE),
+        ("p4", "codex", "diktator", "main", Status.DONE),
+        ("p5", "claude", "herdeck", "feat/web-simulator", Status.WORKING),
+    ]
     out = []
     for pane, agent, repo, branch, status in rows:
         s = AgentState(AgentKey("mock", pane), agent, repo, status)
@@ -288,30 +318,34 @@ def _mock_agents():
 async def _run_mock(config: Config, deck: DeckDriver) -> None:
     """Drive the app with synthetic, lively data — no bridge required."""
     from .model import Status
+
     loop = asyncio.get_running_loop()
     server = config.servers[0].id
-    detection = ("Do you want to proceed?\n1. Yes\n"
-                 "2. Yes, and don't ask again\n3. No")
+    detection = "Do you want to proceed?\n1. Yes\n2. Yes, and don't ask again\n3. No"
 
     def send(cmd: Command) -> None:
-        if cmd.kind == "read":               # answer reads with a sample prompt
+        if cmd.kind == "read":  # answer reads with a sample prompt
             req = app.next_req_for(cmd)
-            loop.call_soon_threadsafe(app.handle_result, server, req,
-                                      {"text": detection, "pane_id": cmd.pane_id})
+            loop.call_soon_threadsafe(
+                app.handle_result, server, req, {"text": detection, "pane_id": cmd.pane_id}
+            )
 
     app = App(config, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn))
     app.handle_connection(server, True)
     agents = _mock_agents()
     app.handle_snapshot(server, agents)
 
-    async def cycle():                       # flip a status periodically for life
+    async def cycle():  # flip a status periodically for life
         order = [Status.WORKING, Status.BLOCKED, Status.IDLE, Status.DONE]
         i = 0
         while True:
             await asyncio.sleep(4)
             a = agents[i % len(agents)]
-            a.status = order[(order.index(a.status) + 1) % len(order)] \
-                if a.status in order else Status.WORKING
+            a.status = (
+                order[(order.index(a.status) + 1) % len(order)]
+                if a.status in order
+                else Status.WORKING
+            )
             app.handle_event(server, a)
             i += 1
 
@@ -330,12 +364,16 @@ async def _run(config: Config, deck: DeckDriver) -> None:
     def send(cmd: Command) -> None:
         conn = connectors.get(cmd.server_id)
         if conn is not None:
-            asyncio.run_coroutine_threadsafe(
-                conn.send(_command_to_msg(cmd, app)), loop)
+            asyncio.run_coroutine_threadsafe(conn.send(_command_to_msg(cmd, app)), loop)
 
-    app = App(config, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn),
-              notifier=_build_notifier(config),
-              notify_schedule=lambda fn: loop.run_in_executor(None, fn))
+    app = App(
+        config,
+        deck,
+        send,
+        schedule=lambda fn: loop.call_soon_threadsafe(fn),
+        notifier=_build_notifier(config),
+        notify_schedule=lambda fn: loop.run_in_executor(None, fn),
+    )
     for server in config.servers:
         app.orch.set_connection(server.id, False)
     app._refresh()
@@ -343,14 +381,12 @@ async def _run(config: Config, deck: DeckDriver) -> None:
     for server in config.servers:
         conn = Connector(
             server,
-            on_snapshot=lambda sid, st: loop.call_soon_threadsafe(
-                app.handle_snapshot, sid, st),
-            on_event=lambda sid, s: loop.call_soon_threadsafe(
-                app.handle_event, sid, s),
-            on_connection=lambda sid, up: loop.call_soon_threadsafe(
-                app.handle_connection, sid, up),
+            on_snapshot=lambda sid, st: loop.call_soon_threadsafe(app.handle_snapshot, sid, st),
+            on_event=lambda sid, s: loop.call_soon_threadsafe(app.handle_event, sid, s),
+            on_connection=lambda sid, up: loop.call_soon_threadsafe(app.handle_connection, sid, up),
             on_result=lambda req, data, sid=server.id: loop.call_soon_threadsafe(
-                app.handle_result, sid, req, data),
+                app.handle_result, sid, req, data
+            ),
         )
         connectors[server.id] = conn
 
@@ -363,14 +399,15 @@ async def _run(config: Config, deck: DeckDriver) -> None:
     await asyncio.gather(*tasks)
 
 
-def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None,
-              web_factory=None):
+def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None, web_factory=None):
     """Build the deck driver. kind None => auto (d200, elgato, else web)."""
     import os
 
     if web_factory is None:
+
         def web_factory():
             from .driver.web import WebDeck
+
             host = os.environ.get("HERDECK_WEB_BIND", "127.0.0.1")
             port = int(os.environ.get("HERDECK_WEB_PORT", "8800"))
             d = WebDeck(slots, host=host, port=port)
@@ -378,13 +415,17 @@ def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None,
             return d
 
     if d200_factory is None:
+
         def d200_factory():
             from .driver.d200 import D200Driver
+
             return D200Driver()
 
     if elgato_factory is None:
+
         def elgato_factory():
             from .driver.elgato import ElgatoDriver
+
             return ElgatoDriver()
 
     if kind == "fake":
@@ -402,8 +443,7 @@ def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None,
         try:
             return factory()
         except Exception as exc:
-            print(f"No Stream Deck opened ({exc}); close any vendor app holding "
-                  f"the device.")
+            print(f"No Stream Deck opened ({exc}); close any vendor app holding the device.")
     print("Falling back to the web simulator.")
     return web_factory()
 
@@ -418,6 +458,7 @@ def local_config(port, token, partial=None):
         Notifications,
         ServerConfig,
     )
+
     profiles = dict(DEFAULT_PROFILES)
     if partial is not None:
         profiles.update(partial.profiles)
@@ -427,25 +468,28 @@ def local_config(port, token, partial=None):
         overview_order=["local"],
         grid=partial.grid if partial else (5, 3),
         macros=partial.macros if partial else list(DEFAULT_MACROS),
-        start_profiles=(partial.start_profiles if partial
-                        else dict(DEFAULT_START_PROFILES)),
+        start_profiles=(partial.start_profiles if partial else dict(DEFAULT_START_PROFILES)),
         notifications=partial.notifications if partial else Notifications(),
     )
 
 
 async def _run_local(socket_path, deck, partial=None):
     from .bridge import start_local_bridge
+
     host, port, token, _handle = await start_local_bridge(socket_path)
     await _run(local_config(port, token, partial), deck)
 
 
 def _discover_config_path():
     import os
+
     p = os.environ.get("HERDECK_CONFIG")
     if p:
         return os.path.abspath(p)
-    for cand in (os.path.expanduser("~/.config/herdeck/config.toml"),
-                 os.path.abspath("config.toml")):
+    for cand in (
+        os.path.expanduser("~/.config/herdeck/config.toml"),
+        os.path.abspath("config.toml"),
+    ):
         if os.path.exists(cand):
             return cand
     return None
@@ -463,12 +507,14 @@ def main() -> None:
     mock = bool(os.environ.get("HERDECK_MOCK"))
     config_path = None if mock else _discover_config_path()
     file_config = load_config(config_path) if config_path else None
-    socket_path = os.path.expanduser(
-        os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock"))
+    socket_path = os.path.expanduser(os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock"))
     mode = resolve_mode(
-        mock=mock, config_path=config_path,
+        mock=mock,
+        config_path=config_path,
         config_has_servers=bool(file_config and file_config.servers),
-        socket_path=socket_path, socket_exists=os.path.exists(socket_path))
+        socket_path=socket_path,
+        socket_exists=os.path.exists(socket_path),
+    )
     if mode[0] == "error":
         print(mode[1], file=sys.stderr)
         sys.exit(2)
@@ -476,7 +522,8 @@ def main() -> None:
     grid = file_config.grid if file_config else (5, 3)
     slots = grid[0] * grid[1] - 2
     kind = os.environ.get("HERDECK_DECK") or (
-        "fake" if os.environ.get("HERDECK_FAKE_DECK") else None)
+        "fake" if os.environ.get("HERDECK_FAKE_DECK") else None
+    )
     deck = make_deck(kind, slots)
     try:
         if mode[0] == "mock":

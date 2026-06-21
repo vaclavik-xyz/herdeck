@@ -26,6 +26,7 @@ class ElgatoDriver(DeckDriver):
         # Hardware path (lazy import so the test suite needs neither the library
         # nor a physical deck).
         from StreamDeck.DeviceManager import DeviceManager
+
         decks = DeviceManager().enumerate()
         if not decks:
             raise RuntimeError("No Elgato Stream Deck found")
@@ -44,15 +45,17 @@ class ElgatoDriver(DeckDriver):
             import tempfile
 
             from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
+
             cache = os.path.join(tempfile.gettempdir(), "herdeck-elgato-icons")
-            self._icons = IconProvider(cache_dir=cache,
-                                       slug_map=DEFAULT_AGENT_SLUGS,
-                                       overrides_dir=None)
+            self._icons = IconProvider(
+                cache_dir=cache, slug_map=DEFAULT_AGENT_SLUGS, overrides_dir=None
+            )
         return self._icons
 
     def _to_native(self, image):
         # Lazy import: StreamDeck is only needed on the hardware path.
         from StreamDeck.ImageHelpers import PILHelper
+
         return PILHelper.to_native_format(self._dev, image)
 
     def _native_resized(self, image):
@@ -62,6 +65,7 @@ class ElgatoDriver(DeckDriver):
         import io
 
         from PIL import Image
+
         png = self._icon_provider().render_tile_bytes(tile)
         return self._native_resized(Image.open(io.BytesIO(png)))
 
@@ -77,6 +81,7 @@ class ElgatoDriver(DeckDriver):
     def render_panel(self, panel: PanelView) -> None:
         from ..icons import compose_panel
         from .d200 import split_panel
+
         left, right = split_panel(compose_panel(panel))
         base = self.slot_count()
         self._dev.set_key_image(base, self._native_resized(left))
@@ -94,5 +99,6 @@ class ElgatoDriver(DeckDriver):
 
     def close(self) -> None:
         import contextlib
+
         with contextlib.suppress(Exception):
             self._dev.close()

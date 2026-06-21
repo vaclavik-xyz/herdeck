@@ -3,6 +3,7 @@
 Connects the real Connector + Orchestrator + FakeRenderer to a running
 herdeck bridge, waits a few seconds, and prints the resulting deck tiles.
 """
+
 import asyncio
 import os
 
@@ -48,6 +49,7 @@ async def main():
         c = connectors.get(cmd.server_id)
         if c is not None:
             from herdeck.app import _command_to_msg
+
             asyncio.run_coroutine_threadsafe(c.send(_command_to_msg(cmd, app)), loop)
 
     app = App(cfg, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn))
@@ -71,13 +73,15 @@ async def main():
         on_snapshot=on_snap,
         on_event=on_evt,
         on_connection=on_connection,
-        on_result=lambda req, data, sid="dev": loop.call_soon_threadsafe(app.handle_result, sid, req, data),
+        on_result=lambda req, data, sid="dev": loop.call_soon_threadsafe(
+            app.handle_result, sid, req, data
+        ),
     )
     connectors["dev"] = conn
     task = asyncio.create_task(conn.run())
     await asyncio.sleep(3.5)
-    tiles = list(deck.last)        # capture WHILE connected
-    frames_seen = frames["n"]      # capture frame count at the same instant
+    tiles = list(deck.last)  # capture WHILE connected
+    frames_seen = frames["n"]  # capture frame count at the same instant
     connected = connection["up"]
     conn.stop()
     try:
@@ -90,8 +94,7 @@ async def main():
         if t.label or t.color not in ("dim",):
             print(f"  [{t.index:2}] {t.color:6} {t.label!r}")
 
-    ok, message = _verify_capture(tiles=tiles, frames_seen=frames_seen,
-                                  connected=connected)
+    ok, message = _verify_capture(tiles=tiles, frames_seen=frames_seen, connected=connected)
     if not ok:
         print(message)
         return 1

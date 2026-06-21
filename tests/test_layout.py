@@ -16,11 +16,14 @@ def a(pane, status, agent_type="claude", label="p", server="dev"):
 
 
 def test_order_blocked_then_working_then_idle_then_done():
-    agents = [a("p1", Status.IDLE), a("p2", Status.BLOCKED),
-              a("p3", Status.DONE), a("p4", Status.WORKING)]
+    agents = [
+        a("p1", Status.IDLE),
+        a("p2", Status.BLOCKED),
+        a("p3", Status.DONE),
+        a("p4", Status.WORKING),
+    ]
     ordered = order_agents(agents, ["dev"])
-    assert [s.status for s in ordered] == [
-        Status.BLOCKED, Status.WORKING, Status.IDLE, Status.DONE]
+    assert [s.status for s in ordered] == [Status.BLOCKED, Status.WORKING, Status.IDLE, Status.DONE]
 
 
 def test_order_stable_by_pane_within_status():
@@ -38,13 +41,17 @@ def test_page_slices_and_counts():
 
 def test_page_index_wraps():
     items = list(range(5))
-    sl, pages = page(items, 3, 13)   # only 1 page -> wraps to 0
+    sl, pages = page(items, 3, 13)  # only 1 page -> wraps to 0
     assert pages == 1 and sl == items
 
 
 def test_summary_counts():
-    agents = [a("p1", Status.BLOCKED), a("p2", Status.WORKING),
-              a("p3", Status.WORKING), a("p4", Status.IDLE)]
+    agents = [
+        a("p1", Status.BLOCKED),
+        a("p2", Status.WORKING),
+        a("p3", Status.WORKING),
+        a("p4", Status.IDLE),
+    ]
     c = summary(agents)
     assert (c.blocked, c.working, c.idle, c.done) == (1, 2, 1, 0)
 
@@ -99,13 +106,14 @@ def test_panel_overview_page_suffix_only_when_multipage():
 
 
 def test_panel_detail_with_and_without_text():
-    p = panel_detail(a("p1", Status.BLOCKED, agent_type="claude", label="api"),
-                     "Allow edit to config.py?")
+    p = panel_detail(
+        a("p1", Status.BLOCKED, agent_type="claude", label="api"), "Allow edit to config.py?"
+    )
     assert "claude" in p.title and "api" in p.title
     assert p.lines and "Allow edit" in p.lines[0]
     assert p.color == "amber"
     p2 = panel_detail(a("p1", Status.WORKING), "")
-    assert p2.lines == []   # no text yet
+    assert p2.lines == []  # no text yet
 
 
 def test_panel_detail_shows_question_not_option_lines():
@@ -122,16 +130,23 @@ def test_panel_detail_all_options_falls_back_to_first_line():
 
 def test_parse_options_numbered():
     from herdeck.layout import parse_options
+
     txt = "Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No"
     opts = parse_options(txt)
     assert [(o.key, o.label) for o in opts] == [
-        ("1", "Yes"), ("2", "Yes, and don't ask again"), ("3", "No")]
+        ("1", "Yes"),
+        ("2", "Yes, and don't ask again"),
+        ("3", "No"),
+    ]
 
 
 def test_parse_options_question_list_and_dedup():
     from herdeck.layout import parse_options
-    txt = ("Kde?\n1. Dodavatelské doklady\n   detail line\n"
-           "2. Cenotvorba / sledování trhu\n2. duplicate ignored\n5. Type something")
+
+    txt = (
+        "Kde?\n1. Dodavatelské doklady\n   detail line\n"
+        "2. Cenotvorba / sledování trhu\n2. duplicate ignored\n5. Type something"
+    )
     opts = parse_options(txt)
     assert [o.key for o in opts] == ["1", "2", "5"]
     assert opts[0].label == "Dodavatelské doklady"
@@ -139,5 +154,6 @@ def test_parse_options_question_list_and_dedup():
 
 def test_parse_options_none():
     from herdeck.layout import parse_options
+
     assert parse_options("just some text, no options") == []
     assert parse_options("") == []

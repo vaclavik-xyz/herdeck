@@ -12,28 +12,37 @@ SOCK = "/Users/x/.config/herdr/herdr.sock"
 
 
 def test_mock_wins():
-    assert resolve_mode(mock=True, config_path="/c", config_has_servers=True,
-                        socket_path=SOCK, socket_exists=True) == ("mock",)
+    assert resolve_mode(
+        mock=True, config_path="/c", config_has_servers=True, socket_path=SOCK, socket_exists=True
+    ) == ("mock",)
 
 
 def test_config_with_servers_is_remote():
-    assert resolve_mode(mock=False, config_path="/c", config_has_servers=True,
-                        socket_path=SOCK, socket_exists=True) == ("remote", "/c")
+    assert resolve_mode(
+        mock=False, config_path="/c", config_has_servers=True, socket_path=SOCK, socket_exists=True
+    ) == ("remote", "/c")
 
 
 def test_socket_without_servers_is_local():
-    assert resolve_mode(mock=False, config_path=None, config_has_servers=False,
-                        socket_path=SOCK, socket_exists=True) == ("local", SOCK)
+    assert resolve_mode(
+        mock=False, config_path=None, config_has_servers=False, socket_path=SOCK, socket_exists=True
+    ) == ("local", SOCK)
 
 
 def test_serverless_config_plus_socket_is_local():
-    assert resolve_mode(mock=False, config_path="/c", config_has_servers=False,
-                        socket_path=SOCK, socket_exists=True) == ("local", SOCK)
+    assert resolve_mode(
+        mock=False, config_path="/c", config_has_servers=False, socket_path=SOCK, socket_exists=True
+    ) == ("local", SOCK)
 
 
 def test_no_socket_no_servers_is_error():
-    mode = resolve_mode(mock=False, config_path=None, config_has_servers=False,
-                        socket_path=SOCK, socket_exists=False)
+    mode = resolve_mode(
+        mock=False,
+        config_path=None,
+        config_has_servers=False,
+        socket_path=SOCK,
+        socket_exists=False,
+    )
     assert mode[0] == "error" and SOCK in mode[1]
 
 
@@ -52,8 +61,7 @@ def _boom():
 
 
 def test_auto_falls_back_to_web_when_d200_unavailable():
-    deck = make_deck(None, 13, d200_factory=_boom, elgato_factory=_boom,
-                     web_factory=_Web)
+    deck = make_deck(None, 13, d200_factory=_boom, elgato_factory=_boom, web_factory=_Web)
     assert isinstance(deck, _Web)
 
 
@@ -63,14 +71,12 @@ def test_explicit_d200_failure_propagates():
 
 
 def test_explicit_elgato_kind_uses_factory():
-    deck = make_deck("elgato", 13, d200_factory=_boom, elgato_factory=_Elgato,
-                     web_factory=_Web)
+    deck = make_deck("elgato", 13, d200_factory=_boom, elgato_factory=_Elgato, web_factory=_Web)
     assert isinstance(deck, _Elgato)
 
 
 def test_auto_tries_elgato_after_d200_and_before_web():
-    deck = make_deck(None, 13, d200_factory=_boom, elgato_factory=_Elgato,
-                     web_factory=_Web)
+    deck = make_deck(None, 13, d200_factory=_boom, elgato_factory=_Elgato, web_factory=_Web)
     assert isinstance(deck, _Elgato)
 
 
@@ -101,14 +107,21 @@ def test_default_web_deck_prints_tokenized_url(monkeypatch, capsys):
 
 
 async def test_start_local_bridge_serves_snapshot_to_connector():
-    herdr = StubHerdr([
-        {"pane_id": "p1", "agent": "claude", "agent_status": "working",
-         "foreground_cwd": "/proj/api", "workspace_id": "w1"},
-    ], worktrees=[
-        {"open_workspace_id": "w1", "label": "herdeck", "branch": "feat/clawpatch"},
-    ])
-    host, port, token, (server, btask) = await start_local_bridge(
-        "/nonexistent.sock", herdr=herdr)
+    herdr = StubHerdr(
+        [
+            {
+                "pane_id": "p1",
+                "agent": "claude",
+                "agent_status": "working",
+                "foreground_cwd": "/proj/api",
+                "workspace_id": "w1",
+            },
+        ],
+        worktrees=[
+            {"open_workspace_id": "w1", "label": "herdeck", "branch": "feat/clawpatch"},
+        ],
+    )
+    host, port, token, (server, btask) = await start_local_bridge("/nonexistent.sock", herdr=herdr)
     got = asyncio.Event()
     seen = []
     conn = Connector(
