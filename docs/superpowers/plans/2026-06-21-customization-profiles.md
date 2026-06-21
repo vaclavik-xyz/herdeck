@@ -1862,11 +1862,14 @@ async def _run(config: Config, deck: DeckDriver, switch_profile=None) -> None:
 ```python
 async def _amain(mode, file_config, deck, *, switch_profile=None) -> None:
     config, aclose = await resolve_runtime_config(mode, file_config)
+    runtime_switch = switch_profile if mode[0] == "remote" else None
     try:
-        await _run(config, deck, switch_profile=switch_profile)
+        await _run(config, deck, switch_profile=runtime_switch)
     finally:
         await aclose()
 ```
+
+This deliberately keeps local-mode profile switching locked in Task 8. Task 10 adds the runtime-aware local wrapper after `bootstrap.local_config()` preserves customization fields for the synthesized bridge server.
 
 Pass `switch_profile` to the `App` constructor inside `_run`.
 
