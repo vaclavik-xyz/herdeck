@@ -114,5 +114,6 @@ def test_notifications_default_disabled_when_absent(tmp_path):
 
 def test_notifications_parsed(tmp_path):
     cfg = load_config(_write(tmp_path,
-        "[notifications]\nenabled=true\nsound=false\non=[\"blocked\"]\n"))
+        "[notifications]\nenabled=true\nsound=false\non=[\"blocked\", \"done\"]\n"))
     assert cfg.notifications.enabled is True and cfg.notifications.sound is False
+    assert cfg.notifications.on == ["blocked", "done"]
