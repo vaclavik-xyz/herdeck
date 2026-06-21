@@ -5,6 +5,14 @@ import logging
 import os
 from collections.abc import Callable
 
+from .bootstrap import (
+    _discover_config_path,
+    resolve_mode,
+    resolve_runtime_config,
+)
+from .bootstrap import (
+    local_config as local_config,
+)
 from .commands import Command, command_to_msg
 from .config import Config, ConfigError, load_config
 from .connector import Connector
@@ -247,22 +255,6 @@ async def _ticker(app: App, loop) -> None:
         loop.call_soon_threadsafe(app.handle_tick)
 
 
-def resolve_mode(*, mock, config_path, config_has_servers, socket_path, socket_exists):
-    """Decide how to run from already-gathered facts (pure; no IO)."""
-    if mock:
-        return ("mock",)
-    if config_path is not None and config_has_servers:
-        return ("remote", config_path)
-    if socket_exists:
-        return ("local", socket_path)
-    return (
-        "error",
-        f"No herdr socket at {socket_path} and no [[servers]] config. "
-        f"Is herdr running? Set HERDR_SOCKET or create a config "
-        f"(see config.example.toml).",
-    )
-
-
 def _mock_config() -> Config:
     """A zero-setup config for the offline simulator (no file/token needed)."""
     from .config import DEFAULT_PROFILES, ServerConfig
@@ -426,51 +418,12 @@ def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None, web_factor
     return web_factory()
 
 
-def local_config(port, token, partial=None):
-    """Synthesize the config for local mode from the bound bridge port/token."""
-    from .config import (
-        DEFAULT_MACROS,
-        DEFAULT_PROFILES,
-        DEFAULT_START_PROFILES,
-        Config,
-        Notifications,
-        ServerConfig,
-    )
-
-    profiles = dict(DEFAULT_PROFILES)
-    if partial is not None:
-        profiles.update(partial.profiles)
-    return Config(
-        servers=[ServerConfig("local", f"ws://127.0.0.1:{port}", token)],
-        profiles=profiles,
-        overview_order=["local"],
-        grid=partial.grid if partial else (5, 3),
-        macros=partial.macros if partial else list(DEFAULT_MACROS),
-        start_profiles=(partial.start_profiles if partial else dict(DEFAULT_START_PROFILES)),
-        notifications=partial.notifications if partial else Notifications(),
-    )
-
-
-async def _run_local(socket_path, deck, partial=None):
-    from .bridge import start_local_bridge
-
-    host, port, token, _handle = await start_local_bridge(socket_path)
-    await _run(local_config(port, token, partial), deck)
-
-
-def _discover_config_path():
-    import os
-
-    p = os.environ.get("HERDECK_CONFIG")
-    if p:
-        return os.path.abspath(p)
-    for cand in (
-        os.path.expanduser("~/.config/herdeck/config.toml"),
-        os.path.abspath("config.toml"),
-    ):
-        if os.path.exists(cand):
-            return cand
-    return None
+async def _amain(mode, file_config, deck) -> None:
+    config, aclose = await resolve_runtime_config(mode, file_config)
+    try:
+        await _run(config, deck)
+    finally:
+        await aclose()
 
 
 def main() -> None:
@@ -506,10 +459,8 @@ def main() -> None:
     try:
         if mode[0] == "mock":
             asyncio.run(_run_mock(_mock_config(), deck))
-        elif mode[0] == "remote":
-            asyncio.run(_run(file_config, deck))
         else:
-            asyncio.run(_run_local(mode[1], deck, file_config))
+            asyncio.run(_amain(mode, file_config, deck))
     finally:
         deck.close()
 
