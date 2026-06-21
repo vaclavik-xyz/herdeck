@@ -16,6 +16,17 @@ def make_config():
     )
 
 
+def make_multi_config():
+    return Config(
+        servers=[],
+        profiles={
+            "default": AnswerProfile(["enter"], ["esc"], ["ctrl+c"], ["enter"]),
+        },
+        overview_order=["alpha", "bravo"],
+        grid=(5, 3),
+    )
+
+
 def state(pane, status, agent_type="claude", label="api"):
     return AgentState(AgentKey("dev", pane), agent_type, label, status)
 
@@ -73,3 +84,33 @@ def test_agent_tile_has_repo_branch_status_and_time():
     t = o.render().tiles[0]
     assert t.repo == "macdoktor-crm" and t.branch == "feat/x"
     assert t.status_text == "WORKING" and t.time_text == "3m"
+
+
+def test_multi_server_tiles_get_server_tag():
+    o = Orchestrator(make_multi_config(), slots=13)
+    o.apply_snapshot("alpha", [
+        AgentState(AgentKey("alpha", "p1"), "claude", "ra", Status.IDLE),
+    ])
+    o.apply_event("bravo", AgentState(
+        AgentKey("bravo", "p1"), "codex", "rb", Status.IDLE))
+
+    tiles = [tile for tile in o.render().tiles if tile.repo]
+
+    assert [tile.server_tag for tile in tiles] == ["ALP", "BRA"]
+    assert all(tile.server_accent for tile in tiles)
+
+
+def test_single_server_tiles_have_no_tag():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+
+    tiles = [tile for tile in o.render().tiles if tile.repo]
+
+    assert all(tile.server_tag is None and tile.server_accent is None for tile in tiles)
+
+
+def test_server_accent_returns_stable_palette_color():
+    from herdeck.orchestrator import SERVER_ACCENTS, server_accent
+
+    assert server_accent("alpha") == server_accent("alpha")
+    assert server_accent("alpha") in SERVER_ACCENTS
