@@ -1,5 +1,8 @@
 import io
+import urllib.error
+import urllib.request
 
+import pytest
 from PIL import Image
 
 from herdeck.driver.base import PanelView, TileView
@@ -34,6 +37,24 @@ def test_page_guards_key_repeat_and_panel_clears_highlight():
     # clearing the highlight is unconditional; only the add is guarded by btns[i],
     # so a panel press (no button) still clears any stale tile outline
     assert "if(btns[i]) btns[i].classList.add('active')" in page
+
+
+def test_page_uses_state_slot_count_for_cells_and_panel_index():
+    from herdeck.driver import web
+    page = web._PAGE
+    assert "ensureCells(s.slots)" in page
+    assert "for(let i=0;i<slotCount;i++)" in page
+    assert "press(slotCount)" in page
+    assert "for(let i=0;i<13" not in page
+    assert "press(13)" not in page
+
+
+def test_page_only_highlights_after_successful_press():
+    from herdeck.driver import web
+    page = web._PAGE
+    assert "if(r.status===403) location.reload()" in page
+    assert "if(!r.ok) return" in page
+    assert page.index("await fetch") < page.index("btns.forEach")
 
 
 def test_page_landscape_rule_sizes_deck_for_short_height():
@@ -103,6 +124,65 @@ def test_press_ignores_out_of_range_indices():
     d.press(99)            # beyond panel cells
     d.press(13)            # panel cell — valid
     assert seen == [13]
+
+
+def test_http_press_requires_session_token():
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True,
+                icon_provider=StubIcons())
+    seen = []
+    d.on_press(seen.append)
+    try:
+        url = f"http://{d.host}:{d.port}/press/0"
+        req = urllib.request.Request(url, method="POST")
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=2)
+        assert exc.value.code == 403
+        assert seen == []
+
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"http://{d.host}:{d.port}/", timeout=2)
+        assert exc.value.code == 403
+
+        with urllib.request.urlopen(
+            f"http://{d.host}:{d.port}/?token={d._press_token}", timeout=2
+        ) as resp:
+            assert d._press_token in resp.read().decode()
+
+        for path in ("/state", "/panel", "/tile/0"):
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                urllib.request.urlopen(f"http://{d.host}:{d.port}{path}", timeout=2)
+            assert exc.value.code == 403
+
+        with urllib.request.urlopen(
+            f"http://{d.host}:{d.port}/state?token={d._press_token}", timeout=2
+        ) as resp:
+            assert resp.status == 200
+
+        req = urllib.request.Request(
+            url, method="POST", headers={"X-Herdeck-Token": "é"})
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=2)
+        assert exc.value.code == 403
+        assert seen == []
+
+        req = urllib.request.Request(
+            url, method="POST", headers={"X-Herdeck-Token": d._press_token})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            assert resp.status == 204
+        assert seen == [0]
+    finally:
+        d.close()
+
+
+def test_close_releases_server_socket():
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True,
+                icon_provider=StubIcons())
+    port = d.port
+    d.close()
+
+    replacement = WebDeck(slots=4, host="127.0.0.1", port=port, serve=True,
+                          icon_provider=StubIcons())
+    replacement.close()
 
 
 class VaryingIcons:

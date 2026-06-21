@@ -374,7 +374,7 @@ def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None,
             host = os.environ.get("HERDECK_WEB_BIND", "127.0.0.1")
             port = int(os.environ.get("HERDECK_WEB_PORT", "8800"))
             d = WebDeck(slots, host=host, port=port)
-            print(f"herdeck web simulator on http://{d.host}:{d.port}")
+            print(f"herdeck web simulator on http://{d.host}:{d.port}/?token={d.press_token}")
             return d
 
     if d200_factory is None:
