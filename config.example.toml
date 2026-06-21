@@ -9,6 +9,13 @@ token_env = "HERDECK_WORKBOX_TOKEN"   # token comes from this env var
 grid = "5x3"
 overview_order = ["workbox"]
 
+# Out-of-band alerts so you don't have to watch the deck. macOS only
+# (uses osascript notifications). Omit this section to disable entirely.
+[notifications]
+enabled = false        # set true to be notified when an agent needs you
+on = ["blocked"]       # transitions to alert on (currently only "blocked")
+sound = true           # play a sound with the notification
+
 # Answer profiles: keystroke sequences herdeck sends to an agent's pane for the
 # Approve / Deny / Stop actions (approve_always = approve and don't ask again).
 # Keys are sent in order; "enter" submits, "esc"/"ctrl+c" are literal keys.
