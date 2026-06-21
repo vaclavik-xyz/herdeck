@@ -2100,6 +2100,12 @@ def test_make_local_profile_switcher_preserves_bridge_server():
     from herdeck.config import Config
 
     resolved = Config(servers=[], profiles={}, overview_order=[], grid=(4, 4))
+    resolved.meta.active_profile = "mobile"
+    resolved.meta.profile_names = ["work", "mobile"]
+    resolved.theme.colors["blocked"] = "pink"
+    resolved.view.show_profile_on_panel = True
+    resolved.safety.approve_always = False
+    resolved.hardware.tick_interval = 1.25
     switch = make_local_profile_switcher(lambda name: resolved, 7654, "secret")
 
     cfg = switch("mobile")
@@ -2108,6 +2114,12 @@ def test_make_local_profile_switcher_preserves_bridge_server():
     assert cfg.servers[0].url == "ws://127.0.0.1:7654"
     assert cfg.servers[0].token == "secret"
     assert cfg.grid == (4, 4)
+    assert cfg.meta.active_profile == "mobile"
+    assert cfg.meta.profile_names == ["work", "mobile"]
+    assert cfg.theme.colors["blocked"] == "pink"
+    assert cfg.view.show_profile_on_panel is True
+    assert cfg.safety.approve_always is False
+    assert cfg.hardware.tick_interval == 1.25
 ```
 
 Append to `tests/test_driver_elgato.py`:
@@ -2189,6 +2201,43 @@ def _resolve_socket_path(config: Config | None, *, getenv=os.environ.get) -> str
 
 def _resolve_tick_interval(config: Config | None) -> float:
     return config.hardware.tick_interval if config else TICK_INTERVAL
+```
+
+Change `local_config` to preserve runtime customization fields from the resolved file config while replacing the server list with the synthesized local bridge:
+
+```python
+def local_config(port, token, partial=None):
+    from .config import (
+        DEFAULT_MACROS,
+        DEFAULT_PROFILES,
+        DEFAULT_START_PROFILES,
+        Config,
+        ConfigMeta,
+        HardwareConfig,
+        Notifications,
+        SafetyConfig,
+        ServerConfig,
+        ThemeConfig,
+        ViewConfig,
+    )
+
+    profiles = dict(DEFAULT_PROFILES)
+    if partial is not None:
+        profiles.update(partial.profiles)
+    return Config(
+        servers=[ServerConfig("local", f"ws://127.0.0.1:{port}", token)],
+        profiles=profiles,
+        overview_order=["local"],
+        grid=partial.grid if partial else (5, 3),
+        macros=partial.macros if partial else list(DEFAULT_MACROS),
+        start_profiles=(partial.start_profiles if partial else dict(DEFAULT_START_PROFILES)),
+        notifications=partial.notifications if partial else Notifications(),
+        theme=partial.theme if partial else ThemeConfig(),
+        view=partial.view if partial else ViewConfig(),
+        safety=partial.safety if partial else SafetyConfig(),
+        hardware=partial.hardware if partial else HardwareConfig(),
+        meta=partial.meta if partial else ConfigMeta(),
+    )
 ```
 
 Change `_ticker` to accept an interval:
