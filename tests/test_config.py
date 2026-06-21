@@ -162,3 +162,25 @@ def test_example_notifications_backends_default(monkeypatch):
     path = Path(__file__).resolve().parents[1] / "config.example.toml"
     cfg = load_config(path)
     assert "macos" in cfg.notifications.backends
+
+
+def test_runtime_customization_defaults_on_config():
+    from herdeck.config import Config, HardwareConfig, SafetyConfig, ThemeConfig, ViewConfig
+
+    cfg = Config(servers=[], profiles={}, overview_order=[], grid=(5, 3))
+
+    assert isinstance(cfg.theme, ThemeConfig)
+    assert cfg.theme.colors["blocked"] == "amber"
+    assert cfg.theme.colors["offline"] == "red"
+    assert cfg.theme.server_accents[:2] == ["teal", "violet"]
+    assert isinstance(cfg.view, ViewConfig)
+    assert cfg.view.management == "launcher_menu"
+    assert cfg.view.bottom_row == ["profiles", "notifications", "safety", "theme", "new_agent"]
+    assert cfg.view.tile_fields == ["repo", "branch", "status", "time", "server"]
+    assert isinstance(cfg.safety, SafetyConfig)
+    assert cfg.safety.approve_always is True
+    assert isinstance(cfg.hardware, HardwareConfig)
+    assert cfg.hardware.brightness == 80
+    assert cfg.meta.active_profile == "default"
+    assert cfg.meta.profile_names == ["default"]
+    assert cfg.meta.env_locked_profile is False
