@@ -145,7 +145,7 @@ After the commit, wait for roborev (`roborev list` until the job shows `done`, t
 - Test: `tests/test_config.py`
 
 **Interfaces:**
-- Consumes: existing `ConfigError`, `Notifications`, `load_config`.
+- Consumes: existing `Notifications`, `load_config`; a new module logger `log`.
 - Produces:
   - `TelegramConfig(token_env: str, chat_id: str)` dataclass.
   - `Notifications` gains `backends: list[str]` (default `["macos"]`) and `telegram: TelegramConfig | None` (default `None`).
@@ -171,17 +171,19 @@ def test_notifications_parses_telegram_and_backends(tmp_path):
     assert cfg.notifications.telegram.chat_id == "123"   # coerced to str
 
 
-def test_notifications_telegram_missing_key_raises(tmp_path):
-    with pytest.raises(ConfigError, match="telegram"):
-        load_config(_write(tmp_path,
-            "[notifications]\nenabled=true\n"
-            "[notifications.telegram]\nchat_id=123\n"))   # no token_env
+def test_notifications_telegram_incomplete_is_skipped(tmp_path):
+    # Incomplete telegram table never fails config load (graceful skip);
+    # _build_notifier / doctor surface it later.
+    cfg = load_config(_write(tmp_path,
+        "[notifications]\nenabled=true\nbackends=[\"telegram\"]\n"
+        "[notifications.telegram]\nchat_id=123\n"))   # no token_env
+    assert cfg.notifications.telegram is None
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_config.py -k notifications -v`
-Expected: FAIL — `AttributeError: 'Notifications' object has no attribute 'backends'` (and the telegram tests error on missing attribute / no ConfigError).
+Expected: FAIL — `AttributeError: 'Notifications' object has no attribute 'backends'` (the new attribute does not exist yet).
 
 - [ ] **Step 3: Implement the schema + parser**
 
@@ -206,18 +208,30 @@ class Notifications:
     telegram: TelegramConfig | None = None
 ```
 
-Add the parser (place it just above `def load_config`):
+Add a module logger near the top of `src/herdeck/config.py` (after the existing
+imports, before `class ConfigError`):
+
+```python
+import logging
+
+log = logging.getLogger("herdeck.config")
+```
+
+Add the parser (place it just above `def load_config`). An incomplete telegram
+table is **ignored with a warning** (graceful skip) — config load never fails
+over a notification setting:
 
 ```python
 def parse_notifications(n: dict) -> Notifications:
     tg_raw = n.get("telegram")
     telegram = None
-    if tg_raw is not None:
-        for key in ("token_env", "chat_id"):
-            if key not in tg_raw:
-                raise ConfigError(f"notifications.telegram missing '{key}'")
-        telegram = TelegramConfig(token_env=tg_raw["token_env"],
-                                  chat_id=str(tg_raw["chat_id"]))
+    if isinstance(tg_raw, dict):
+        if "token_env" in tg_raw and "chat_id" in tg_raw:
+            telegram = TelegramConfig(token_env=tg_raw["token_env"],
+                                      chat_id=str(tg_raw["chat_id"]))
+        else:
+            log.warning("[notifications.telegram] needs both token_env and "
+                        "chat_id; ignoring telegram config")
     return Notifications(
         enabled=n.get("enabled", False),
         on=list(n.get("on", ["blocked"])),
@@ -438,7 +452,8 @@ def check_notifications(notifications, getenv=os.environ.get) -> Check:
     if "telegram" in notifications.backends:
         tg = notifications.telegram
         if tg is None:
-            parts.append("telegram=enabled but no [notifications.telegram]")
+            parts.append("telegram=no usable [notifications.telegram] "
+                         "(need token_env + chat_id)")
             ok = False
         else:
             token_present = bool(getenv(tg.token_env))
@@ -541,9 +556,10 @@ sound = true                       # macOS plays a sound; telegram sends non-sil
 
 - [ ] **Step 4: Update `README.md` Notifications section**
 
-Replace the body of the `## Notifications` section with:
+Replace the body of the `## Notifications` section with (outer fence is four
+backticks so the nested TOML block renders correctly):
 
-```markdown
+````markdown
 Get notified when an agent enters the **blocked** state, so you don't have to
 watch the deck. Off by default; enable in your config and pick one or more
 backends:
@@ -568,7 +584,7 @@ chat_id = "123456789"
 - Notifications contain only the repo/label, branch, and (multi-server) server id
   — never prompt text, command output, or tokens. They fire once per blocked
   episode (re-arming after the agent leaves `blocked`) and never block the UI loop.
-```
+````
 
 - [ ] **Step 5: Run the full suite + commit**
 

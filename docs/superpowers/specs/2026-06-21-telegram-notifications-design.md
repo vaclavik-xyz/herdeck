@@ -83,11 +83,12 @@ chat_id = "123456789"                  # target chat (not a secret)
   telegram: TelegramConfig | None = None
   ```
 - `load_config` parses `backends` (default `["macos"]`) and, when present, a
-  `[notifications.telegram]` table into `TelegramConfig` (both `token_env` and
-  `chat_id` required there; missing key → `ConfigError`). The token value itself
-  is **not** resolved at load time — it is resolved lazily when the notifier is
-  built, so a missing env var degrades gracefully rather than failing config
-  load.
+  `[notifications.telegram]` table into `TelegramConfig`. If the table is present
+  but missing `token_env` or `chat_id`, it is **ignored with a logged warning**
+  (`telegram = None`) — config load never fails over a notification setting
+  (graceful skip). The token value itself is **not** resolved at load time — it
+  is resolved lazily when the notifier is built, so a missing env var also
+  degrades gracefully.
 
 ### `app._build_notifier`
 
@@ -166,7 +167,8 @@ logged or sent in message bodies.
   - explicit `backends = ["macos", "telegram"]` parses through.
   - `[notifications.telegram]` parses into `TelegramConfig(token_env, chat_id)`;
     absent table → `telegram is None`.
-  - `[notifications.telegram]` missing `token_env` or `chat_id` → `ConfigError`.
+  - `[notifications.telegram]` missing `token_env` or `chat_id` → `telegram is
+    None` (warned, not raised — graceful skip).
 - `tests/test_app.py` (`_build_notifier`):
   - `enabled=False` → `NoopNotifier`.
   - `backends=["macos","telegram"]`, telegram config set, fake `getenv` returns
