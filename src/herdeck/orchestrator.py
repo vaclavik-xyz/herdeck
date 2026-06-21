@@ -143,7 +143,7 @@ class Orchestrator:
         ordered = self._ordered()
         agent_slots = self._agent_slots()
         shown, pages = layout.page(ordered, self._page, agent_slots)
-        show_server_tags = len({s.key.server_id for s in shown}) > 1
+        show_server_tags = len({s.key.server_id for s in ordered}) > 1
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i == self.slots - 1:                 # reserved launcher tile

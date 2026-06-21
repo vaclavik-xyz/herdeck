@@ -100,6 +100,22 @@ def test_multi_server_tiles_get_server_tag():
     assert all(tile.server_accent for tile in tiles)
 
 
+def test_multi_server_tags_stay_visible_on_single_server_page():
+    o = Orchestrator(make_multi_config(), slots=3)
+    o.apply_snapshot("alpha", [
+        AgentState(AgentKey("alpha", "p1"), "claude", "ra1", Status.IDLE),
+        AgentState(AgentKey("alpha", "p2"), "claude", "ra2", Status.IDLE),
+    ])
+    o.apply_snapshot("bravo", [
+        AgentState(AgentKey("bravo", "p1"), "codex", "rb", Status.IDLE),
+    ])
+
+    tiles = [tile for tile in o.render().tiles if tile.repo]
+
+    assert [tile.server_tag for tile in tiles] == ["ALP", "ALP"]
+    assert all(tile.server_accent for tile in tiles)
+
+
 def test_single_server_tiles_have_no_tag():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
