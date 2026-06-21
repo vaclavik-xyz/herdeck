@@ -1,4 +1,4 @@
-from herdeck.driver.base import TileView, PanelView, COLORS, DeckDriver
+from herdeck.driver.base import COLORS, DeckDriver, PanelView, TileView
 
 
 def test_colors_cover_all_semantic_states():

@@ -127,7 +127,7 @@ class App:
         self._refresh()
 
 
-def _command_to_msg(cmd: Command, app: "App") -> dict:
+def _command_to_msg(cmd: Command, app: App) -> dict:
     if cmd.kind == "list":
         return {"type": "list"}
     req = app.next_req_for(cmd)
@@ -161,7 +161,7 @@ async def _guard(coro) -> None:
         pass
 
 
-async def _ticker(app: "App", loop) -> None:
+async def _ticker(app: App, loop) -> None:
     while True:
         await asyncio.sleep(TICK_INTERVAL)
         loop.call_soon_threadsafe(app.handle_tick)
@@ -331,8 +331,13 @@ def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None,
 
 def local_config(port, token, partial=None):
     """Synthesize the config for local mode from the bound bridge port/token."""
-    from .config import (Config, DEFAULT_MACROS, DEFAULT_PROFILES,
-                         DEFAULT_START_PROFILES, ServerConfig)
+    from .config import (
+        DEFAULT_MACROS,
+        DEFAULT_PROFILES,
+        DEFAULT_START_PROFILES,
+        Config,
+        ServerConfig,
+    )
     profiles = dict(DEFAULT_PROFILES)
     if partial is not None:
         profiles.update(partial.profiles)

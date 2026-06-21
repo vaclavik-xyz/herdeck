@@ -42,6 +42,7 @@ class ElgatoDriver(DeckDriver):
         if self._icons is None:
             import os
             import tempfile
+
             from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
             cache = os.path.join(tempfile.gettempdir(), "herdeck-elgato-icons")
             self._icons = IconProvider(cache_dir=cache,
@@ -59,6 +60,7 @@ class ElgatoDriver(DeckDriver):
 
     def _key_image(self, tile: TileView):
         import io
+
         from PIL import Image
         png = self._icon_provider().render_tile_bytes(tile)
         return self._native_resized(Image.open(io.BytesIO(png)))

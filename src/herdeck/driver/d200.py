@@ -42,7 +42,7 @@ class D200Driver(DeckDriver):
         self._dev = self._open_device()
         self._callback: Callable[[int], None] | None = None
         if icon_provider is None:
-            from ..icons import IconProvider, DEFAULT_AGENT_SLUGS
+            from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
             icon_provider = IconProvider(cache_dir=os.path.abspath(_ICON_DIR),
                                          slug_map=DEFAULT_AGENT_SLUGS,
                                          overrides_dir=os.path.abspath("icons"))
@@ -53,6 +53,7 @@ class D200Driver(DeckDriver):
 
     def _open_device(self, retries: int = 5, delay: float = 1.0):
         import time
+
         import hid
         from strmdck.devices.ulanzi_d200 import UlanziD200Device
         vid, pid = UlanziD200Device.USB_VENDOR_ID, UlanziD200Device.USB_PRODUCT_ID

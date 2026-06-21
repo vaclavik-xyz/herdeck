@@ -1,7 +1,12 @@
 from herdeck.driver.base import PanelView
 from herdeck.layout import (
-    order_agents, page, summary, Counts, status_color,
-    panel_overview, panel_detail,
+    Counts,
+    order_agents,
+    page,
+    panel_detail,
+    panel_overview,
+    status_color,
+    summary,
 )
 from herdeck.model import AgentKey, AgentState, Status
 

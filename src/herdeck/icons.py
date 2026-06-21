@@ -131,7 +131,7 @@ def _load_big_font():
     return _font(_GLYPH_FONT_SIZE)
 
 
-def compose_panel(panel: PanelView) -> "Image.Image":
+def compose_panel(panel: PanelView) -> Image.Image:
     """Render a PanelView to a 392x196 image with large, readable text.
 
     Shared by the D200 driver (split into two cells) and the web simulator.
@@ -307,7 +307,6 @@ class IconProvider:
 
     def render_tile_bytes(self, tile) -> bytes:
         """Render a tile and return its PNG bytes (for the web simulator)."""
-        import io
         name = self.render_tile(tile)
         with open(os.path.join(self._cache_dir, name), "rb") as fh:
             return fh.read()
