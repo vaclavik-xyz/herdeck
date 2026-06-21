@@ -6,11 +6,14 @@ from collections.abc import Callable
 from .commands import Command, command_to_msg
 from .config import Config
 from .connector import Connector
-from .model import AgentKey, AgentState
+from .model import AgentKey, AgentState, Status
 
 
 class ConnectionLost(Exception):
     """The bridge connection dropped (or never produced a first snapshot) while waiting."""
+
+
+_GONE = object()  # sentinel: a vanished agent still counts as "left blocked"
 
 
 class CtlSession:
@@ -103,6 +106,42 @@ class CtlSession:
         except TimeoutError as exc:
             self._pending.pop(req, None)
             raise ConnectionLost("timed out waiting for result") from exc
+
+    async def wait(self, predicate, *, timeout):
+        """Level-triggered: check current state first, then block on changes.
+
+        `_changed` is shared across all status changes (foreign agents too), so
+        re-check after every wake. arm(clear) -> re-check -> await ensures no
+        wakeup is lost: on_event updates `agents` before set(), and in a single
+        loop the callback only runs while we are parked at the await.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+        while True:
+            match = predicate()
+            if match:
+                return match
+            self._changed.clear()
+            match = predicate()
+            if match:
+                return match
+            remaining = None if deadline is None else deadline - loop.time()
+            if remaining is not None and remaining <= 0:
+                return None
+            try:
+                await asyncio.wait_for(self._changed.wait(), timeout=remaining)
+            except TimeoutError:
+                return None
+
+    async def settle(self, agent, *, timeout):
+        """Wait until `agent` leaves BLOCKED. True if it did, False on timeout."""
+        key = agent.key
+
+        def left_blocked():
+            a = self.agents.get(key)
+            return (a or _GONE) if (a is None or a.status is not Status.BLOCKED) else None
+
+        return await self.wait(left_blocked, timeout=timeout) is not None
 
     async def close(self) -> None:
         for conn in self._connectors.values():
