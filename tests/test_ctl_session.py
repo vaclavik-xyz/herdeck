@@ -83,3 +83,58 @@ async def test_request_fails_on_connection_drop():
     with pytest.raises(ConnectionLost):
         await req_task
     await sess.close()
+
+
+@pytest.mark.asyncio
+async def test_wait_returns_immediately_when_already_satisfied():
+    sess = CtlSession(_config())
+    sess.agents[AgentKey("dev", "p1")] = _agent(Status.BLOCKED)
+
+    def pred():
+        a = sess.agents.get(AgentKey("dev", "p1"))
+        return a if a and a.status is Status.BLOCKED else None
+
+    assert await sess.wait(pred, timeout=1) is not None
+
+
+@pytest.mark.asyncio
+async def test_wait_wakes_on_event_and_ignores_foreign_changes():
+    sess = CtlSession(_config())
+    target = AgentKey("dev", "p1")
+
+    def pred():
+        a = sess.agents.get(target)
+        return a if a and a.status is Status.BLOCKED else None
+
+    wait_task = asyncio.create_task(sess.wait(pred, timeout=1))
+    await asyncio.sleep(0)
+    # foreign agent change must NOT satisfy the wait
+    sess._on_event("dev", AgentState(AgentKey("dev", "p2"), "claude", "x", Status.BLOCKED))
+    await asyncio.sleep(0)
+    assert not wait_task.done()
+    # target blocks -> wait returns it
+    sess._on_event("dev", _agent(Status.BLOCKED))
+    assert (await wait_task).key == target
+
+
+@pytest.mark.asyncio
+async def test_wait_times_out_cleanly_to_none():
+    sess = CtlSession(_config())
+    assert await sess.wait(lambda: None, timeout=0.05) is None
+
+
+@pytest.mark.asyncio
+async def test_settle_true_when_agent_leaves_blocked():
+    sess = CtlSession(_config())
+    sess.agents[AgentKey("dev", "p1")] = _agent(Status.BLOCKED)
+    settle_task = asyncio.create_task(sess.settle(_agent(Status.BLOCKED), timeout=1))
+    await asyncio.sleep(0)
+    sess._on_event("dev", _agent(Status.WORKING))
+    assert await settle_task is True
+
+
+@pytest.mark.asyncio
+async def test_settle_false_on_timeout_when_still_blocked():
+    sess = CtlSession(_config())
+    sess.agents[AgentKey("dev", "p1")] = _agent(Status.BLOCKED)
+    assert await sess.settle(_agent(Status.BLOCKED), timeout=0.05) is False
