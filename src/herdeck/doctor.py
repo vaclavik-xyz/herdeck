@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import os
+import sys
+import tomllib
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from pathlib import Path
+
+SOCKET_TIMEOUT = 1.0
+
+
+@dataclass
+class Check:
+    name: str
+    ok: bool
+    detail: str
+
+
+def check_socket(path: str, exists: Callable[[str], bool], probe) -> Check:
+    """probe(path) -> herdr pane.list response dict, or raises on failure."""
+    if not exists(path):
+        return Check("herdr socket", False, f"not found at {path} (is herdr running?)")
+    try:
+        resp = probe(path)
+    except Exception as exc:
+        return Check("herdr socket", False, f"socket did not respond ({exc})")
+    if not isinstance(resp, dict):
+        return Check("herdr socket", False, "malformed response (not a dict)")
+    result = resp.get("result")
+    if not isinstance(result, dict):
+        return Check("herdr socket", False, "malformed response (result is not a dict)")
+    panes = result.get("panes")
+    if panes is None:
+        return Check("herdr socket", False, "malformed response (no panes)")
+    if not isinstance(panes, list):
+        return Check("herdr socket", False, "malformed response (panes is not a list)")
+    return Check("herdr socket", True, f"responding, {len(panes)} panes")
+
+
+def check_config(
+    config_path: str | None,
+    has_servers: bool,
+    socket_exists: bool,
+    token_envs=(),
+    getenv=os.environ.get,
+) -> Check:
+    if has_servers:
+        statuses = [
+            f"{env}=present" if getenv(env) else f"{env}=missing"
+            for env in token_envs
+        ]
+        missing = [env for env in token_envs if not getenv(env)]
+        detail = f"config at {config_path}; token envs: {', '.join(statuses)}"
+        return Check("configuration", not missing, detail)
+    if socket_exists:
+        source = "no config" if config_path is None else f"config at {config_path}"
+        return Check("configuration", True, f"{source}; local zero-config mode")
+    if config_path is None:
+        return Check(
+            "configuration",
+            False,
+            "no config and no herdr socket (start herdr or create config.toml)",
+        )
+    return Check(
+        "configuration",
+        False,
+        f"config at {config_path} has no servers and no herdr socket is available",
+    )
+
+
+def check_optional_deps(is_available: Callable[[str], bool]) -> Check:
+    modules = (
+        ("PIL", "PIL"),
+        ("cairosvg", "cairosvg"),
+        ("strmdck", "strmdck"),
+        ("streamdeck", "StreamDeck"),
+    )
+    statuses = [
+        f"{label}=present" if is_available(import_name) else f"{label}=missing"
+        for label, import_name in modules
+    ]
+    missing = [label for label, import_name in modules if not is_available(import_name)]
+    detail = "; ".join(statuses)
+    if missing:
+        detail += '; optional hints: pip install ".[deck]" or ".[elgato]"'
+    return Check("optional dependencies", True, detail)
+
+
+def check_deck(lib_available: Callable[[str], bool]) -> Check:
+    d200_ready = lib_available("strmdck") and lib_available("hid")
+    elgato_ready = lib_available("StreamDeck")
+    note = "device presence is not probed; Ulanzi Studio can hold the device"
+    if d200_ready or elgato_ready:
+        drivers = []
+        if d200_ready:
+            drivers.append("D200")
+        if elgato_ready:
+            drivers.append("Elgato")
+        return Check("deck drivers", True, f"importable: {', '.join(drivers)}; {note}")
+    return Check(
+        "deck drivers",
+        False,
+        'no deck driver libraries importable; pip install ".[deck]" or ".[elgato]"; '
+        f"{note}",
+    )
+
+
+def format_report(checks: Iterable[Check]) -> str:
+    lines = ["herdeck doctor"]
+    for check in checks:
+        mark = "✓" if check.ok else "✗"
+        lines.append(f"{mark} {check.name}: {check.detail}")
+    return "\n".join(lines)
+
+
+async def _socket_pane_list(path: str) -> dict:
+    from .bridge import SocketHerdr
+
+    return await SocketHerdr(path)._rpc("pane.list", {})
+
+
+def _probe_socket(path: str) -> dict:
+    return asyncio.run(asyncio.wait_for(_socket_pane_list(path), timeout=SOCKET_TIMEOUT))
+
+
+def _module_available(module: str) -> bool:
+    return importlib.util.find_spec(module) is not None
+
+
+def _read_config_facts(config_path: str | None) -> tuple[bool, list[str], Check | None]:
+    if config_path is None:
+        return False, [], None
+    try:
+        data = tomllib.loads(Path(config_path).read_text())
+        servers = data.get("servers", [])
+        token_envs = [
+            server["token_env"]
+            for server in servers
+            if isinstance(server, dict) and "token_env" in server
+        ]
+    except Exception as exc:
+        return False, [], Check("configuration", False, f"cannot read config at {config_path} ({exc})")
+
+    from .config import ConfigError, load_config
+
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        if any(not os.environ.get(env) for env in token_envs):
+            return bool(servers), token_envs, None
+        return bool(servers), token_envs, Check(
+            "configuration", False, f"invalid config at {config_path} ({exc})"
+        )
+    except Exception as exc:
+        return bool(servers), token_envs, Check(
+            "configuration", False, f"invalid config at {config_path} ({exc})"
+        )
+    return bool(config.servers), token_envs, None
+
+
+def collect_checks() -> list[Check]:
+    from .app import _discover_config_path
+
+    config_path = _discover_config_path()
+    socket_path = os.path.expanduser(
+        os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock")
+    )
+    socket_exists = os.path.exists(socket_path)
+    has_servers, token_envs, config_error = _read_config_facts(config_path)
+    socket_check = (
+        Check("herdr socket", True, "remote config present; local socket not required")
+        if has_servers
+        else check_socket(socket_path, os.path.exists, _probe_socket)
+    )
+    checks = [
+        config_error
+        if config_error is not None
+        else check_config(config_path, has_servers, socket_exists, token_envs=token_envs),
+        socket_check,
+        check_optional_deps(_module_available),
+        check_deck(_module_available),
+    ]
+    return checks
+
+
+def main() -> None:
+    checks = collect_checks()
+    print(format_report(checks))
+    if any(not check.ok for check in checks):
+        sys.exit(1)
