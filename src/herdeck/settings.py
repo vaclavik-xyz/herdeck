@@ -110,6 +110,27 @@ def set_active_profile(snapshot: SettingsSnapshot, name: str, *, persist: bool =
     return True
 
 
+def validate_settings(snapshot: SettingsSnapshot) -> list[str]:
+    if "profiles" not in snapshot.data:
+        try:
+            resolve_profile(snapshot)
+        except ConfigError as exc:
+            return [str(exc)]
+        return []
+
+    errors: list[str] = []
+    try:
+        resolve_profile(snapshot)
+    except ConfigError as exc:
+        errors.append(f"active: {exc}")
+    for name in sorted(snapshot.data.get("profiles", {})):
+        try:
+            resolve_profile(snapshot, name)
+        except ConfigError as exc:
+            errors.append(f"{name}: {exc}")
+    return errors
+
+
 def _toml_line(key: str, value) -> str:
     if isinstance(value, bool):
         return f"{key} = {'true' if value else 'false'}"
