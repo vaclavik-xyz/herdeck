@@ -1,3 +1,4 @@
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,49 @@ def test_example_start_profiles_match_defaults(monkeypatch):
     assert set(DEFAULT_START_PROFILES) <= set(cfg.start_profiles)
 
 
+def test_example_config_uses_profile_schema(monkeypatch):
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    cfg = load_config(path)
+
+    assert cfg.meta.active_profile == "work"
+    assert {"base", "work", "mobile"} <= set(cfg.meta.profile_names)
+    assert set(DEFAULT_START_PROFILES) <= set(cfg.start_profiles)
+    assert cfg.view.management in {"launcher_menu", "bottom_row"}
+    assert cfg.view.show_profile_on_panel is True
+    assert "blocked" in cfg.theme.colors
+
+
+def test_example_management_row_documents_supported_actions_only():
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    data = tomllib.loads(path.read_text())
+
+    assert set(data["views"]["management"]["bottom_row"]) <= {"profiles", "new_agent"}
+
+
+def test_readme_scopes_answer_profile_overrides_to_legacy_configs():
+    path = Path(__file__).resolve().parents[1] / "README.md"
+    section = path.read_text().split("## Adding an agent type", 1)[1].split("\n## ", 1)[0]
+
+    assert "legacy configs only" in section
+
+
+def test_readme_uses_profile_schema_for_notifications():
+    path = Path(__file__).resolve().parents[1] / "README.md"
+    section = path.read_text().split("## Notifications", 1)[1].split("\n## ", 1)[0]
+
+    assert "[notification_profiles.normal]" in section
+    assert 'notifications = "normal"' in section
+
+
+def test_readme_launcher_example_uses_valid_toml_shape():
+    path = Path(__file__).resolve().parents[1] / "README.md"
+    section = path.read_text().split("## Adding an agent type", 1)[1].split("\n## ", 1)[0]
+
+    assert "[launchers.default] myagent" not in section
+    assert "[launchers.default]" in section
+
+
 def test_load_resolves_token_from_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
     cfg = load_config(_write(tmp_path, CONFIG))
@@ -73,6 +117,42 @@ def test_load_resolves_token_from_env(tmp_path, monkeypatch):
     assert cfg.servers[0].token == "secret123"
     assert cfg.grid == (5, 3)
     assert cfg.overview_order == ["workbox"]
+
+
+def test_load_config_uses_new_profile_schema(tmp_path, monkeypatch):
+    from tests.test_settings import NEW_CONFIG
+
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = _write(tmp_path, NEW_CONFIG)
+
+    cfg = load_config(path)
+
+    assert cfg.meta.active_profile == "work"
+    assert cfg.view.show_profile_on_panel is True
+    assert cfg.notifications.enabled is True
+    assert cfg.servers[0].token == "secret123"
+
+
+def test_load_config_uses_env_local_profile_override(tmp_path, monkeypatch):
+    from tests.test_settings import NEW_CONFIG
+
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = _write(
+        tmp_path,
+        NEW_CONFIG
+        + """
+
+[profiles.mobile]
+extends = "work"
+""",
+    )
+    local = tmp_path / "device-local.toml"
+    local.write_text('active_profile = "mobile"\n')
+    monkeypatch.setenv("HERDECK_LOCAL_CONFIG", str(local))
+
+    cfg = load_config(path)
+
+    assert cfg.meta.active_profile == "mobile"
 
 
 def test_missing_token_env_raises(tmp_path, monkeypatch):
@@ -162,3 +242,25 @@ def test_example_notifications_backends_default(monkeypatch):
     path = Path(__file__).resolve().parents[1] / "config.example.toml"
     cfg = load_config(path)
     assert "macos" in cfg.notifications.backends
+
+
+def test_runtime_customization_defaults_on_config():
+    from herdeck.config import Config, HardwareConfig, SafetyConfig, ThemeConfig, ViewConfig
+
+    cfg = Config(servers=[], profiles={}, overview_order=[], grid=(5, 3))
+
+    assert isinstance(cfg.theme, ThemeConfig)
+    assert cfg.theme.colors["blocked"] == "amber"
+    assert cfg.theme.colors["offline"] == "red"
+    assert cfg.theme.server_accents[:2] == ["teal", "violet"]
+    assert isinstance(cfg.view, ViewConfig)
+    assert cfg.view.management == "launcher_menu"
+    assert cfg.view.bottom_row == ["profiles", "notifications", "safety", "theme", "new_agent"]
+    assert cfg.view.tile_fields == ["repo", "branch", "status", "time", "server"]
+    assert isinstance(cfg.safety, SafetyConfig)
+    assert cfg.safety.approve_always is True
+    assert isinstance(cfg.hardware, HardwareConfig)
+    assert cfg.hardware.brightness == 80
+    assert cfg.meta.active_profile == "default"
+    assert cfg.meta.profile_names == ["default"]
+    assert cfg.meta.env_locked_profile is False

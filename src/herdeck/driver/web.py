@@ -30,6 +30,7 @@ class WebDeck(DeckDriver):
         host: str = "127.0.0.1",
         port: int = 8800,
         icon_provider=None,
+        icons_dir: str | None = None,
         serve: bool = True,
     ):
         self._slots = slots
@@ -48,8 +49,11 @@ class WebDeck(DeckDriver):
             from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
 
             cache = os.path.join(tempfile.gettempdir(), "herdeck-web-icons")
+            overrides = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
             icon_provider = IconProvider(
-                cache_dir=cache, slug_map=DEFAULT_AGENT_SLUGS, overrides_dir=None
+                cache_dir=cache,
+                slug_map=DEFAULT_AGENT_SLUGS,
+                overrides_dir=overrides,
             )
         self._icons = icon_provider
         self._server: ThreadingHTTPServer | None = None
@@ -167,12 +171,16 @@ class WebDeck(DeckDriver):
     # --- HTTP ---
     def _handler_class(self):
         deck = self
+        forbidden = (
+            b"herdeck simulator: missing or invalid access token.\n"
+            b"Open the full URL including the ?token=... part shown in herdeck's startup log.\n"
+        )
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *a):  # silence default request logging
                 pass
 
-            def _send(self, code, body=b"", ctype="application/octet-stream"):
+            def _send(self, code, body=b"", ctype="text/plain; charset=utf-8"):
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
@@ -189,7 +197,7 @@ class WebDeck(DeckDriver):
             def _require_token(self, url):
                 if self._valid_token(self._query_token(url)):
                     return True
-                self._send(403)
+                self._send(403, forbidden)
                 return False
 
             def do_GET(self):
@@ -198,7 +206,7 @@ class WebDeck(DeckDriver):
                 if path == "/":
                     token = self._query_token(url)
                     if not self._valid_token(token):
-                        self._send(403)
+                        self._send(403, forbidden)
                         return
                     page = _PAGE.replace("__PRESS_TOKEN_JSON__", json.dumps(deck._press_token))
                     self._send(200, page.encode(), "text/html; charset=utf-8")
@@ -227,7 +235,7 @@ class WebDeck(DeckDriver):
                 if path.startswith("/press/"):
                     token = self.headers.get("X-Herdeck-Token", "")
                     if not self._valid_token(token):
-                        self._send(403)
+                        self._send(403, forbidden)
                         return
                     try:
                         deck.press(int(path.rsplit("/", 1)[1]))

@@ -7,6 +7,8 @@ from collections.abc import Callable
 
 from .bootstrap import (
     _discover_config_path,
+    _discover_local_config_path,
+    make_runtime_profile_switcher,
     resolve_mode,
     resolve_runtime_config,
 )
@@ -14,9 +16,9 @@ from .bootstrap import (
     local_config as local_config,
 )
 from .commands import Command, command_to_msg
-from .config import Config, ConfigError, load_config
+from .config import Config, ConfigError, ServerConfig
 from .connector import Connector
-from .driver.base import DeckDriver
+from .driver.base import DeckDriver, PanelView
 from .driver.fake import FakeRenderer
 from .model import AgentState, Status
 from .notify import (
@@ -87,11 +89,15 @@ class App:
         schedule: Callable[[Callable[[], None]], None] | None = None,
         notifier: Notifier | None = None,
         notify_schedule: Callable[[Callable[[], None]], None] | None = None,
+        switch_profile: Callable[[str], Config | None] | None = None,
+        update_connectors: Callable[[Config], object] | None = None,
     ):
         self.config = config
         self.deck = deck
         self._send = send
         self._schedule = schedule or (lambda fn: fn())
+        self._switch_profile = switch_profile
+        self._update_connectors = update_connectors or (lambda cfg: None)
         self.notifier = notifier or NoopNotifier()
         # Notifications run off the render loop so a slow sink never blocks it;
         # the default runs synchronously (tests, mock) — the lead passes an executor.
@@ -102,6 +108,7 @@ class App:
         self._req = 0
         self._active_read_req: str | None = None
         self._ticks = 0
+        self._status_panel: PanelView | None = None
 
     def next_req_for(self, cmd: Command) -> str | None:
         if cmd.kind == "list":
@@ -119,6 +126,16 @@ class App:
             self.deck.render_panel(rs.panel)
         except Exception:
             pass  # a render failure must never freeze the loop
+
+    def _set_status_panel(self, title: str, lines: list[str], color: str = "grey") -> None:
+        self._status_panel = PanelView(title, lines, color)
+        try:
+            self.deck.render_panel(self._status_panel)
+        except Exception:
+            pass
+
+    def _server_allowed(self, server_id: str) -> bool:
+        return any(server.id == server_id for server in self.config.servers)
 
     def _invalidate_read(self) -> None:
         self._active_read_req = None
@@ -150,6 +167,8 @@ class App:
         self._notify_schedule(lambda: self.notifier.notify(title, body, sound))
 
     def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        if not self._server_allowed(server_id):
+            return
         if log.isEnabledFor(logging.DEBUG):
             log.debug(
                 "snapshot %s: %s",
@@ -166,6 +185,8 @@ class App:
         self._refresh()
 
     def handle_event(self, server_id: str, state: AgentState) -> None:
+        if not self._server_allowed(server_id):
+            return
         self.orch.apply_event(server_id, state)
         if self.orch.is_drill_pane(server_id, state.key.pane_id):
             self._invalidate_read()
@@ -173,10 +194,14 @@ class App:
         self._refresh()
 
     def handle_connection(self, server_id: str, up: bool) -> None:
+        if not self._server_allowed(server_id):
+            return
         self.orch.set_connection(server_id, up)
         self._refresh()
 
     def handle_result(self, server_id: str, req: str, data: dict) -> None:
+        if not self._server_allowed(server_id):
+            return
         text = data.get("text")
         if text is not None:
             accepted = req == self._active_read_req and self.orch.is_drill_pane(
@@ -231,13 +256,46 @@ class App:
                 rs.panel.lines,
             )
         for cmd in cmds:
+            if cmd.kind == "switch_profile":
+                self._handle_switch_profile(cmd.text or cmd.server_id)
+                return
             self._send(cmd)
+        self._refresh()
+
+    def _handle_switch_profile(self, name: str) -> None:
+        if self.config.meta.env_locked_profile or self._switch_profile is None:
+            self._refresh()
+            self._set_status_panel("profile locked", [self.config.meta.active_profile], "amber")
+            return
+        try:
+            new_config = self._switch_profile(name)
+        except ConfigError as exc:
+            self._refresh()
+            self._set_status_panel("profile failed", [str(exc)[:60]], "amber")
+            return
+        if new_config is None:
+            self._refresh()
+            self._set_status_panel("profile locked", [self.config.meta.active_profile], "amber")
+            return
+        self.config = new_config
+        self.notifier = _build_notifier(new_config)
+        self.orch.update_config(new_config)
+        allowed_servers = {s.id for s in new_config.servers}
+        self._blocked_keys = {k for k in self._blocked_keys if k.server_id in allowed_servers}
+        restarted = set(self._update_connectors(new_config) or [])
+        if restarted:
+            self.orch.clear_server_state(restarted)
+            self._blocked_keys = {k for k in self._blocked_keys if k.server_id not in restarted}
+        for server_id in restarted:
+            self.orch.set_connection(server_id, False)
         self._refresh()
 
 
 async def _guarded(conn: Connector) -> None:
     try:
         await conn.run()
+    except asyncio.CancelledError:
+        pass
     except Exception:
         pass
 
@@ -249,10 +307,23 @@ async def _guard(coro) -> None:
         pass
 
 
-async def _ticker(app: App, loop) -> None:
+async def _ticker(app: App, loop, interval: float = TICK_INTERVAL) -> None:
     while True:
-        await asyncio.sleep(TICK_INTERVAL)
+        await asyncio.sleep(interval)
         loop.call_soon_threadsafe(app.handle_tick)
+
+
+def make_profile_switcher(snapshot):
+    from .settings import load_settings, resolve_profile, set_active_profile
+
+    def switch(name: str) -> Config | None:
+        changed = set_active_profile(snapshot, name)
+        if not changed:
+            return None
+        refreshed = load_settings(snapshot.config_path, snapshot.local_path)
+        return resolve_profile(refreshed).config
+
+    return switch
 
 
 def _mock_config() -> Config:
@@ -325,31 +396,73 @@ async def _run_mock(config: Config, deck: DeckDriver) -> None:
     await asyncio.gather(*tasks)
 
 
-async def _run(config: Config, deck: DeckDriver) -> None:
+class ConnectorManager:
+    def __init__(self, *, make_connector, start_connector):
+        self._make_connector = make_connector
+        self._start_connector = start_connector
+        self.connectors: dict[str, Connector] = {}
+        self._fingerprints: dict[str, tuple[str, str]] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
+
+    def update(self, servers: list[ServerConfig]) -> set[str]:
+        wanted = {s.id: s for s in servers}
+        restarted: set[str] = set()
+        for sid in list(self.connectors):
+            old = self._fingerprints[sid]
+            new = wanted.get(sid)
+            if new is None or (new.url, new.token) != old:
+                self._stop_connector(sid)
+                if new is not None:
+                    restarted.add(sid)
+        for sid, server in wanted.items():
+            fp = (server.url, server.token)
+            if sid not in self.connectors:
+                conn = self._make_connector(server)
+                self.connectors[sid] = conn
+                self._fingerprints[sid] = fp
+                task = self._start_connector(conn)
+                if task is not None:
+                    self._tasks[sid] = task
+                restarted.add(sid)
+        return restarted
+
+    def get(self, server_id: str) -> Connector | None:
+        return self.connectors.get(server_id)
+
+    def tasks(self) -> list[asyncio.Task]:
+        return list(self._tasks.values())
+
+    def _stop_connector(self, server_id: str) -> None:
+        conn = self.connectors.pop(server_id, None)
+        if conn is not None:
+            conn.stop()
+        task = self._tasks.pop(server_id, None)
+        if task is not None:
+            task.cancel()
+        self._fingerprints.pop(server_id, None)
+
+    def stop_all(self) -> None:
+        for sid in list(self.connectors):
+            self._stop_connector(sid)
+
+
+async def _run(
+    config: Config,
+    deck: DeckDriver,
+    switch_profile=None,
+    tick_interval: float | None = None,
+) -> None:
     if not config.servers:
         raise ConfigError("no servers configured for remote run")
     loop = asyncio.get_running_loop()
-    connectors: dict[str, Connector] = {}
 
     def send(cmd: Command) -> None:
-        conn = connectors.get(cmd.server_id)
+        conn = manager.get(cmd.server_id)
         if conn is not None:
             asyncio.run_coroutine_threadsafe(conn.send(command_to_msg(cmd, app.next_req_for(cmd))), loop)
 
-    app = App(
-        config,
-        deck,
-        send,
-        schedule=lambda fn: loop.call_soon_threadsafe(fn),
-        notifier=_build_notifier(config),
-        notify_schedule=lambda fn: loop.run_in_executor(None, fn),
-    )
-    for server in config.servers:
-        app.orch.set_connection(server.id, False)
-    app._refresh()
-
-    for server in config.servers:
-        conn = Connector(
+    def make_connector(server: ServerConfig) -> Connector:
+        return Connector(
             server,
             on_snapshot=lambda sid, st: loop.call_soon_threadsafe(app.handle_snapshot, sid, st),
             on_event=lambda sid, s: loop.call_soon_threadsafe(app.handle_event, sid, s),
@@ -358,29 +471,91 @@ async def _run(config: Config, deck: DeckDriver) -> None:
                 app.handle_result, sid, req, data
             ),
         )
-        connectors[server.id] = conn
 
-    tasks = [_guarded(c) for c in connectors.values()]
-    tasks.append(_guard(_ticker(app, loop)))
+    def start_connector(conn: Connector) -> asyncio.Task:
+        return asyncio.create_task(_guarded(conn))
+
+    manager = ConnectorManager(make_connector=make_connector, start_connector=start_connector)
+
+    app = App(
+        config,
+        deck,
+        send,
+        schedule=lambda fn: loop.call_soon_threadsafe(fn),
+        notifier=_build_notifier(config),
+        notify_schedule=lambda fn: loop.run_in_executor(None, fn),
+        switch_profile=switch_profile,
+        update_connectors=lambda cfg: manager.update(cfg.servers),
+    )
+    for server in config.servers:
+        app.orch.set_connection(server.id, False)
+    app._refresh()
+
+    manager.update(config.servers)
+    tasks = manager.tasks()
+    tasks.append(_guard(_ticker(app, loop, tick_interval or config.hardware.tick_interval)))
     if hasattr(deck, "run_reader"):
         tasks.append(_guard(deck.run_reader()))
     if hasattr(deck, "keep_alive_loop"):
         tasks.append(_guard(deck.keep_alive_loop()))
-    await asyncio.gather(*tasks)
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        manager.stop_all()
 
 
-def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None, web_factory=None):
+def _resolve_deck_kind(config: Config | None, *, getenv=os.environ.get):
+    env_kind = getenv("HERDECK_DECK")
+    if env_kind:
+        return env_kind
+    if getenv("HERDECK_FAKE_DECK"):
+        return "fake"
+    return config.hardware.deck if config and config.hardware.deck else None
+
+
+def _resolve_socket_path(config: Config | None, *, getenv=os.environ.get) -> str:
+    raw = getenv("HERDR_SOCKET") or (
+        config.hardware.herdr_socket if config and config.hardware.herdr_socket else None
+    )
+    return os.path.expanduser(raw or "~/.config/herdr/herdr.sock")
+
+
+def _resolve_tick_interval(config: Config | None) -> float:
+    return config.hardware.tick_interval if config else TICK_INTERVAL
+
+
+def make_deck(
+    kind,
+    slots,
+    *,
+    hardware=None,
+    d200_factory=None,
+    elgato_factory=None,
+    web_factory=None,
+):
     """Build the deck driver. kind None => auto (d200, elgato, else web)."""
     import os
 
+    from .config import HardwareConfig
+
+    hardware = hardware or HardwareConfig()
+
+    def _call_web_factory():
+        host = os.environ.get("HERDECK_WEB_BIND") or hardware.web_bind or "127.0.0.1"
+        env_port = os.environ.get("HERDECK_WEB_PORT")
+        raw_port = env_port if env_port is not None else hardware.web_port
+        port = int(raw_port if raw_port is not None else 8800)
+        try:
+            return web_factory(host=host, port=port)
+        except TypeError:
+            return web_factory()
+
     if web_factory is None:
 
-        def web_factory():
+        def web_factory(host=None, port=None):
             from .driver.web import WebDeck
 
-            host = os.environ.get("HERDECK_WEB_BIND", "127.0.0.1")
-            port = int(os.environ.get("HERDECK_WEB_PORT", "8800"))
-            d = WebDeck(slots, host=host, port=port)
+            d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir)
             print(f"herdeck web simulator on http://{d.host}:{d.port}/?token={d.press_token}")
             return d
 
@@ -389,19 +564,24 @@ def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None, web_factor
         def d200_factory():
             from .driver.d200 import D200Driver
 
-            return D200Driver()
+            return D200Driver(
+                brightness=hardware.brightness,
+                debounce=hardware.debounce,
+                keep_alive_interval=hardware.keep_alive_interval,
+                icons_dir=hardware.icons_dir,
+            )
 
     if elgato_factory is None:
 
         def elgato_factory():
             from .driver.elgato import ElgatoDriver
 
-            return ElgatoDriver()
+            return ElgatoDriver(brightness=hardware.brightness, icons_dir=hardware.icons_dir)
 
     if kind == "fake":
         return FakeRenderer(slots)
     if kind == "web":
-        return web_factory()
+        return _call_web_factory()
     if kind == "d200":
         return d200_factory()
     if kind == "elgato":
@@ -415,13 +595,30 @@ def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None, web_factor
         except Exception as exc:
             print(f"No Stream Deck opened ({exc}); close any vendor app holding the device.")
     print("Falling back to the web simulator.")
-    return web_factory()
+    return _call_web_factory()
 
 
-async def _amain(mode, file_config, deck) -> None:
+async def _amain(
+    mode,
+    file_config,
+    deck,
+    *,
+    switch_profile=None,
+    tick_interval: float | None = None,
+) -> None:
     config, aclose = await resolve_runtime_config(mode, file_config)
+    runtime_switch = make_runtime_profile_switcher(
+        config,
+        switch_profile,
+        local_bridge=mode[0] == "local",
+    )
     try:
-        await _run(config, deck)
+        await _run(
+            config,
+            deck,
+            switch_profile=runtime_switch,
+            tick_interval=tick_interval,
+        )
     finally:
         await aclose()
 
@@ -437,8 +634,18 @@ def main() -> None:
         )
     mock = bool(os.environ.get("HERDECK_MOCK"))
     config_path = None if mock else _discover_config_path()
-    file_config = load_config(config_path) if config_path else None
-    socket_path = os.path.expanduser(os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock"))
+    snapshot = None
+    switch_profile = None
+    if config_path:
+        from .settings import load_settings, resolve_profile
+
+        local_config_path = _discover_local_config_path(config_path)
+        snapshot = load_settings(config_path, local_config_path)
+        file_config = resolve_profile(snapshot).config
+        switch_profile = make_profile_switcher(snapshot)
+    else:
+        file_config = None
+    socket_path = _resolve_socket_path(file_config)
     mode = resolve_mode(
         mock=mock,
         config_path=config_path,
@@ -452,15 +659,21 @@ def main() -> None:
 
     grid = file_config.grid if file_config else (5, 3)
     slots = grid[0] * grid[1] - 2
-    kind = os.environ.get("HERDECK_DECK") or (
-        "fake" if os.environ.get("HERDECK_FAKE_DECK") else None
-    )
-    deck = make_deck(kind, slots)
+    kind = _resolve_deck_kind(file_config)
+    deck = make_deck(kind, slots, hardware=file_config.hardware if file_config else None)
     try:
         if mode[0] == "mock":
             asyncio.run(_run_mock(_mock_config(), deck))
         else:
-            asyncio.run(_amain(mode, file_config, deck))
+            asyncio.run(
+                _amain(
+                    mode,
+                    file_config,
+                    deck,
+                    switch_profile=switch_profile,
+                    tick_interval=_resolve_tick_interval(file_config),
+                )
+            )
     finally:
         deck.close()
 

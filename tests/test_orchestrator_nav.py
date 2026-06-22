@@ -184,6 +184,156 @@ def test_no_fallback_actions_before_read_completes():
     assert o.on_press(0) == []
 
 
+def test_safety_can_hide_approve_always_action():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.approve_always = False
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection("Proceed? (y/n)")
+
+    labels = [t.label for t in o.render().tiles[:3]]
+
+    assert labels == ["Approve", "Deny", ""]
+
+
+def test_safety_can_hide_parsed_approve_always_option():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.approve_always = False
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    labels = [t.label for t in o.render().tiles[:3]]
+
+    assert all(not label.startswith("2 ") for label in labels)
+
+
+def test_safety_can_hide_parsed_approve_always_by_label():
+    cfg = make_config()
+    cfg.profiles["codex"] = AnswerProfile(["y", "enter"], ["n", "enter"], ["ctrl+c"], ["y", "enter"])
+    cfg.safety.approve_always = False
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="codex")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    labels = [t.label for t in o.render().tiles[:3]]
+
+    assert all(not label.startswith("2 ") for label in labels)
+
+
+def test_safety_confirmation_blocks_force_stop_until_second_press():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["act_force"]
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)
+
+    first = o.on_press(11)
+    second = o.on_press(11)
+
+    assert first == []
+    assert second == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
+
+
+def test_safety_confirmation_blocks_approve_always_until_second_press():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection("Proceed? (y/n)")
+
+    first = o.on_press(1)
+    second = o.on_press(1)
+
+    assert first == []
+    assert second == [Command("act_if_blocked", "dev", "p1", keys=["2", "enter"])]
+
+
+def test_safety_confirmation_blocks_parsed_approve_always_until_second_press():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    first = o.on_press(1)
+    second = o.on_press(1)
+
+    assert first == []
+    assert second == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+
+
+def test_safety_confirmation_blocks_label_based_approve_always_until_second_press():
+    cfg = make_config()
+    cfg.profiles["codex"] = AnswerProfile(["y", "enter"], ["n", "enter"], ["ctrl+c"], ["y", "enter"])
+    cfg.safety.require_confirm_for = ["approve_always"]
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="codex")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    first = o.on_press(1)
+    second = o.on_press(1)
+
+    assert first == []
+    assert second == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+
+
+def test_safety_confirmation_resets_when_detection_changes():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    assert o.on_press(1) == []
+    o.set_detection("Proceed?\n1. Yes\n2. Yes, always\n3. No")
+
+    assert o.on_press(1) == []
+    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+
+
+def test_safety_keeps_approve_when_approve_always_shares_key():
+    cfg = make_config()
+    cfg.profiles["claude"] = AnswerProfile(["1"], ["3"], ["ctrl+c"], ["1"])
+    cfg.safety.approve_always = False
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    assert o.render().tiles[0].label.startswith("1 Yes")
+    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1"])]
+
+
+def test_safety_confirmation_survives_unchanged_snapshot():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    state = st("p1", Status.BLOCKED, agent_type="claude")
+    o.apply_snapshot("dev", [state])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    assert o.on_press(1) == []
+    o.apply_snapshot("dev", [state])
+
+    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+
+
+def test_safety_confirmation_survives_unchanged_event():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    state = st("p1", Status.BLOCKED, agent_type="claude")
+    o.apply_snapshot("dev", [state])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    assert o.on_press(1) == []
+    o.apply_event("dev", state)
+
+    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+
+
 def test_overview_panel_spotlights_oldest_blocked():
     from herdeck.config import AnswerProfile, Config
     from herdeck.model import AgentKey, AgentState, Status
@@ -205,3 +355,126 @@ def test_overview_panel_spotlights_oldest_blocked():
     panel = orch.render().panel
     assert panel.title == "⚠ needs you"
     assert panel.lines[0] == "older"  # entered BLOCKED earliest
+
+
+def test_launcher_contains_profiles_entry_when_multiple_profiles_exist():
+    cfg = make_config()
+    cfg.meta.profile_names = ["work", "mobile"]
+    cfg.meta.active_profile = "work"
+    o = Orchestrator(cfg, slots=13)
+
+    o.on_press(12)  # + New
+    labels = [t.label for t in o.render().tiles if t.label]
+
+    assert "Profiles" in labels
+
+
+def test_profile_menu_lists_profiles_and_switches():
+    cfg = make_config()
+    cfg.meta.profile_names = ["work", "mobile"]
+    cfg.meta.active_profile = "work"
+    o = Orchestrator(cfg, slots=13)
+
+    o.on_press(12)  # + New
+    profiles_index = [t.label for t in o.render().tiles].index("Profiles")
+    assert o.on_press(profiles_index) == []
+    rs = o.render()
+    assert rs.panel.title == "profiles"
+    assert rs.tiles[0].label == "* work"
+    assert rs.tiles[1].label == "mobile"
+
+    assert o.on_press(1) == [Command("switch_profile", "mobile", text="mobile")]
+    assert o.render().tiles[12].label == "+ New"
+
+
+def test_management_row_can_expose_profiles_and_new_agent():
+    cfg = make_config()
+    cfg.meta.profile_names = ["work", "mobile"]
+    cfg.meta.active_profile = "work"
+    cfg.view.management = "bottom_row"
+    cfg.view.bottom_row = ["profiles", "new_agent"]
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [st(f"p{i}", Status.IDLE, label=f"a{i}") for i in range(1, 13)])
+
+    labels = [t.label for t in o.render().tiles]
+
+    assert labels[10] == "Profiles"
+    assert labels[11] == "+ New"
+    assert labels[12] == ""
+
+
+def test_profile_menu_back_from_management_row_returns_to_overview():
+    cfg = make_config()
+    cfg.meta.profile_names = ["work", "mobile"]
+    cfg.view.management = "bottom_row"
+    cfg.view.bottom_row = ["profiles"]
+    o = Orchestrator(cfg, slots=13)
+
+    assert o.on_press(10) == []
+    assert o.render().panel.title == "profiles"
+    assert o.on_press(12) == []
+
+    rs = o.render()
+    assert rs.panel.title == "0 agents"
+    assert rs.tiles[10].label == "Profiles"
+
+
+def test_management_row_does_not_capture_panel_keys_when_actions_overflow():
+    cfg = make_config()
+    cfg.meta.profile_names = ["work", "mobile"]
+    cfg.view.management = "bottom_row"
+    cfg.view.bottom_row = ["profiles", "notifications", "safety", "theme", "new_agent"]
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [st(f"p{i}", Status.IDLE, label=f"a{i}") for i in range(1, 21)])
+
+    assert o.render().panel.lines[-1].endswith(" · 1/2")
+    assert o.on_press(13) == []
+    assert o.render().panel.lines[-1].endswith(" · 2/2")
+
+
+def test_management_row_keeps_new_agent_visible_when_actions_overflow():
+    cfg = make_config()
+    cfg.view.management = "bottom_row"
+    cfg.view.bottom_row = ["profiles", "notifications", "safety", "theme", "new_agent"]
+    o = Orchestrator(cfg, slots=13)
+
+    labels = [t.label for t in o.render().tiles]
+
+    assert labels[12] == "+ New"
+
+
+def test_management_row_hides_unhandled_actions():
+    cfg = make_config()
+    cfg.view.management = "bottom_row"
+    cfg.view.bottom_row = ["profiles", "notifications", "safety", "theme", "new_agent"]
+    o = Orchestrator(cfg, slots=13)
+
+    labels = [t.label for t in o.render().tiles]
+
+    assert "Notify" not in labels
+    assert "Safety" not in labels
+    assert "Theme" not in labels
+
+
+def test_update_config_prunes_removed_server_state():
+    from herdeck.config import ServerConfig
+    from herdeck.model import AgentKey, AgentState
+
+    cfg = make_config()
+    cfg.servers = [
+        ServerConfig("old", "ws://old", "token"),
+        ServerConfig("dev", "ws://dev", "token"),
+    ]
+    cfg.overview_order = ["old", "dev"]
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot(
+        "old",
+        [AgentState(AgentKey("old", "p1"), "codex", "old agent", Status.IDLE)],
+    )
+
+    next_cfg = make_config()
+    next_cfg.servers = [ServerConfig("dev", "ws://dev", "token")]
+    next_cfg.overview_order = ["dev"]
+    o.update_config(next_cfg)
+
+    assert "old agent" not in [t.label for t in o.render().tiles]

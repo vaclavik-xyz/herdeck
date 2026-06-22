@@ -8,7 +8,7 @@ from .model import AgentState
 
 @dataclass
 class Command:
-    kind: str  # list|read|focus|act_if_blocked|act_force|send_text|start
+    kind: str  # list|read|focus|act_if_blocked|act_force|send_text|start|switch_profile
     server_id: str
     pane_id: str | None = None
     source: str | None = None

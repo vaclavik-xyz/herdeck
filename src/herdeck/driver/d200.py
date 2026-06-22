@@ -33,8 +33,19 @@ class D200Driver(DeckDriver):
     DEBOUNCE = 0.25  # ignore repeats of the same key within this window
     _CONTROL_USAGE_PAGE = 0x0C
 
-    def __init__(self, workdir: str | None = None, icon_provider=None):
+    def __init__(
+        self,
+        workdir: str | None = None,
+        icon_provider=None,
+        brightness: int = BRIGHTNESS,
+        debounce: float = DEBOUNCE,
+        keep_alive_interval: float = KEEP_ALIVE_INTERVAL,
+        icons_dir: str | None = None,
+    ):
         # Stable working dir so strmdck's relative .build/.cache never collide (R-4).
+        self.DEBOUNCE = debounce
+        self.KEEP_ALIVE_INTERVAL = keep_alive_interval
+        self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
         self._previous_cwd = os.getcwd()
         try:
@@ -49,11 +60,11 @@ class D200Driver(DeckDriver):
                 icon_provider = IconProvider(
                     cache_dir=os.path.abspath(_ICON_DIR),
                     slug_map=DEFAULT_AGENT_SLUGS,
-                    overrides_dir=os.path.abspath("icons"),
+                    overrides_dir=self._icons_dir or os.path.abspath("icons"),
                 )
             self._icons = icon_provider
             with contextlib.redirect_stdout(io.StringIO()):
-                self._dev.set_brightness(self.BRIGHTNESS, force=True)
+                self._dev.set_brightness(brightness, force=True)
                 self._set_panel_background_mode()
         except Exception:
             with contextlib.suppress(Exception):
