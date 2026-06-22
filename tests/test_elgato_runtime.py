@@ -149,3 +149,73 @@ def test_default_session_passes_icons_dir_override(tmp_path):
     cfg.hardware = HardwareConfig(icons_dir=str(tmp_path / "icons"))
     sess = _default_session(cfg)
     assert sess._icons._overrides_dir == str(tmp_path / "icons")  # honors custom icon dir
+
+
+def _copy_assets_and_bake(tmp_path):
+    """Stage a baked assets dir (svg + content-keyed png) like the build does."""
+    import os
+    import shutil
+
+    import pytest
+
+    pytest.importorskip("cairosvg")
+
+    from herdeck.elgato import frozen
+
+    src = "src/herdeck/assets"
+    staged = tmp_path / "herdeck_assets"
+    staged.mkdir()
+    for name in os.listdir(src):
+        if name.endswith(".svg"):
+            shutil.copy(os.path.join(src, name), staged / name)
+    frozen.prerasterize_assets(str(staged), str(staged), frozen.BAKE_SIZE)
+    return str(staged)
+
+
+def test_frozen_session_uses_png_rasterizer(tmp_path):
+    import os
+
+    from herdeck.elgato.runtime import _frozen_session
+
+    baked = _copy_assets_and_bake(tmp_path)
+    sess = _frozen_session(_cfg(), baked)
+    icons = sess._icons
+    # PNG-loading rasterizer + bundled assets dir + offline fetch.
+    assert icons._assets_dir == baked
+    assert icons._fetch("claude") is None  # no network when frozen
+    # The bundled-asset agent (codex.svg -> baked PNG) renders without cairosvg.
+    name = icons.icon_for("codex", "green")
+    assert os.path.exists(os.path.join(icons._cache_dir, name))
+
+
+def test_session_for_runtime_dispatches_on_frozen(monkeypatch, tmp_path):
+    import sys
+
+    from herdeck.elgato import runtime
+
+    baked = _copy_assets_and_bake(tmp_path)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(runtime, "_baked_assets_dir", lambda: baked)
+    sess = runtime._session_for_runtime(_cfg())
+    assert sess._icons._assets_dir == baked  # frozen branch taken
+
+
+def test_session_for_runtime_uses_default_when_not_frozen(monkeypatch):
+    import sys
+
+    from herdeck.elgato import runtime
+    from herdeck.icons import _ASSETS_DIR, _default_fetch
+
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    sess = runtime._session_for_runtime(_cfg())
+    # Dev path unchanged: package assets dir + real network fetch.
+    assert sess._icons._assets_dir == _ASSETS_DIR
+    assert sess._icons._fetch is _default_fetch
+
+
+def test_serve_elgato_default_make_session_is_runtime_dispatcher():
+    import inspect
+
+    from herdeck.elgato.runtime import _session_for_runtime, serve_elgato
+
+    assert inspect.signature(serve_elgato).parameters["make_session"].default is _session_for_runtime
