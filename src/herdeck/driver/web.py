@@ -30,6 +30,7 @@ class WebDeck(DeckDriver):
         host: str = "127.0.0.1",
         port: int = 8800,
         icon_provider=None,
+        icons_dir: str | None = None,
         serve: bool = True,
     ):
         self._slots = slots
@@ -48,8 +49,11 @@ class WebDeck(DeckDriver):
             from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
 
             cache = os.path.join(tempfile.gettempdir(), "herdeck-web-icons")
+            overrides = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
             icon_provider = IconProvider(
-                cache_dir=cache, slug_map=DEFAULT_AGENT_SLUGS, overrides_dir=None
+                cache_dir=cache,
+                slug_map=DEFAULT_AGENT_SLUGS,
+                overrides_dir=overrides,
             )
         self._icons = icon_provider
         self._server: ThreadingHTTPServer | None = None

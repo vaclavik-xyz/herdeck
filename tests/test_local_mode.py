@@ -90,6 +90,147 @@ def test_fake_kind_returns_fake_renderer():
     assert isinstance(deck, FakeRenderer)
 
 
+def test_fake_deck_ignores_invalid_web_port(monkeypatch):
+    monkeypatch.setenv("HERDECK_WEB_PORT", "not-a-port")
+
+    deck = make_deck("fake", 13, d200_factory=_boom, web_factory=_Web)
+
+    assert isinstance(deck, FakeRenderer)
+
+
+def test_make_deck_uses_hardware_web_bind_and_port(monkeypatch):
+    from herdeck.config import HardwareConfig
+
+    seen = {}
+    monkeypatch.delenv("HERDECK_WEB_BIND", raising=False)
+    monkeypatch.delenv("HERDECK_WEB_PORT", raising=False)
+
+    def web_factory(host=None, port=None):
+        seen["host"] = host
+        seen["port"] = port
+        return _Web()
+
+    hw = HardwareConfig(web_bind="100.1.2.3", web_port=1234)
+    make_deck("web", 13, web_factory=web_factory, hardware=hw)
+
+    assert seen == {"host": "100.1.2.3", "port": 1234}
+
+
+def test_make_deck_preserves_hardware_web_port_zero(monkeypatch):
+    from herdeck.config import HardwareConfig
+
+    seen = {}
+    monkeypatch.delenv("HERDECK_WEB_PORT", raising=False)
+
+    def web_factory(host=None, port=None):
+        seen["port"] = port
+        return _Web()
+
+    make_deck("web", 13, web_factory=web_factory, hardware=HardwareConfig(web_port=0))
+
+    assert seen == {"port": 0}
+
+
+def test_make_deck_wires_icons_dir_to_web_driver(monkeypatch):
+    from herdeck.config import HardwareConfig
+
+    seen = {}
+
+    class WebDeck:
+        def __init__(self, slots, host=None, port=None, icons_dir=None):
+            seen["slots"] = slots
+            seen["host"] = host
+            seen["port"] = port
+            seen["icons_dir"] = icons_dir
+            self.host = host
+            self.port = port
+            self.press_token = "token"
+
+    monkeypatch.setattr("herdeck.driver.web.WebDeck", WebDeck)
+
+    make_deck("web", 13, hardware=HardwareConfig(icons_dir="~/herdeck-icons"))
+
+    assert seen == {
+        "slots": 13,
+        "host": "127.0.0.1",
+        "port": 8800,
+        "icons_dir": "~/herdeck-icons",
+    }
+
+
+def test_make_deck_wires_icons_dir_to_hardware_drivers(monkeypatch):
+    from herdeck.config import HardwareConfig
+
+    seen = {}
+
+    class D200Driver:
+        def __init__(self, *, icons_dir=None, **kwargs):
+            seen["d200"] = icons_dir
+
+    class ElgatoDriver:
+        def __init__(self, *, icons_dir=None, **kwargs):
+            seen["elgato"] = icons_dir
+
+    monkeypatch.setattr("herdeck.driver.d200.D200Driver", D200Driver)
+    monkeypatch.setattr("herdeck.driver.elgato.ElgatoDriver", ElgatoDriver)
+    hw = HardwareConfig(icons_dir="~/herdeck-icons")
+
+    make_deck("d200", 13, hardware=hw)
+    make_deck("elgato", 13, hardware=hw)
+
+    assert seen == {"d200": "~/herdeck-icons", "elgato": "~/herdeck-icons"}
+
+
+def test_make_deck_prefers_env_web_bind_and_port(monkeypatch):
+    from herdeck.config import HardwareConfig
+
+    seen = {}
+
+    def web_factory(host=None, port=None):
+        seen["host"] = host
+        seen["port"] = port
+        return _Web()
+
+    monkeypatch.setenv("HERDECK_WEB_BIND", "127.9.9.9")
+    monkeypatch.setenv("HERDECK_WEB_PORT", "9911")
+
+    hw = HardwareConfig(web_bind="100.1.2.3", web_port=1234)
+    make_deck("web", 13, web_factory=web_factory, hardware=hw)
+
+    assert seen == {"host": "127.9.9.9", "port": 9911}
+
+
+def test_runtime_startup_settings_prefer_env_over_local(monkeypatch):
+    from herdeck.app import _resolve_deck_kind, _resolve_socket_path, _resolve_tick_interval
+    from herdeck.config import Config, HardwareConfig
+
+    cfg = Config(servers=[], profiles={}, overview_order=[], grid=(5, 3))
+    cfg.hardware = HardwareConfig(deck="web", herdr_socket="/local.sock", tick_interval=1.25)
+
+    monkeypatch.setenv("HERDECK_DECK", "fake")
+    monkeypatch.setenv("HERDR_SOCKET", "/env.sock")
+
+    assert _resolve_deck_kind(cfg) == "fake"
+    assert _resolve_socket_path(cfg) == "/env.sock"
+    assert _resolve_tick_interval(cfg) == 1.25
+
+
+def test_runtime_startup_settings_use_local_when_env_absent(monkeypatch):
+    from herdeck.app import _resolve_deck_kind, _resolve_socket_path, _resolve_tick_interval
+    from herdeck.config import Config, HardwareConfig
+
+    cfg = Config(servers=[], profiles={}, overview_order=[], grid=(5, 3))
+    cfg.hardware = HardwareConfig(deck="web", herdr_socket="/local.sock", tick_interval=1.25)
+
+    monkeypatch.delenv("HERDECK_DECK", raising=False)
+    monkeypatch.delenv("HERDECK_FAKE_DECK", raising=False)
+    monkeypatch.delenv("HERDR_SOCKET", raising=False)
+
+    assert _resolve_deck_kind(cfg) == "web"
+    assert _resolve_socket_path(cfg) == "/local.sock"
+    assert _resolve_tick_interval(cfg) == 1.25
+
+
 def test_unknown_explicit_deck_kind_raises():
     with pytest.raises(ValueError, match="unsupported deck kind"):
         make_deck("dw00", 13, d200_factory=_boom, web_factory=_Web)

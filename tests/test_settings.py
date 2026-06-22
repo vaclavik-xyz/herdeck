@@ -103,6 +103,39 @@ def test_list_profiles_returns_default_for_legacy_config(tmp_path, monkeypatch):
     ]
 
 
+def test_legacy_config_merges_local_hardware_settings(tmp_path):
+    config = write(tmp_path / "config.toml", '[deck]\ngrid = "5x3"\n')
+    local = write(
+        tmp_path / "local.toml",
+        """
+[local]
+deck = "web"
+herdr_socket = "/tmp/herdr.sock"
+web_bind = "100.1.2.3"
+web_port = 1234
+icons_dir = "/tmp/icons"
+
+[hardware]
+brightness = 35
+debounce = 0.1
+keep_alive_interval = 2.5
+tick_interval = 1.25
+""",
+    )
+
+    cfg = resolve_profile(load_settings(config, local)).config
+
+    assert cfg.hardware.deck == "web"
+    assert cfg.hardware.herdr_socket == "/tmp/herdr.sock"
+    assert cfg.hardware.web_bind == "100.1.2.3"
+    assert cfg.hardware.web_port == 1234
+    assert cfg.hardware.icons_dir == "/tmp/icons"
+    assert cfg.hardware.brightness == 35
+    assert cfg.hardware.debounce == 0.1
+    assert cfg.hardware.keep_alive_interval == 2.5
+    assert cfg.hardware.tick_interval == 1.25
+
+
 def test_missing_token_still_fails_without_secret_value(tmp_path, monkeypatch):
     monkeypatch.delenv("HERDECK_WORKBOX_TOKEN", raising=False)
     config = write(tmp_path / "config.toml", NEW_CONFIG)
