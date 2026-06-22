@@ -225,3 +225,17 @@ def test_armed_stop_key_renders_confirm_state():
     sess.select(AgentKey("dev", "p1"))
     sess._arm()
     assert b"STOP?" in sess.render_all()["t"].image_png  # armed shows the confirm prompt
+
+
+def test_arm_cleared_on_disconnect_and_not_resurrected_by_reconnect():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("t", "stop", (2, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    sess.select(AgentKey("dev", "p1"))
+    sess._arm()
+    assert sess.is_armed() is True
+    sess.set_connection("dev", False)  # server drops while armed
+    assert sess.is_armed() is False  # offline target disarms (stop is disabled offline)
+    assert b"STOP?" not in sess.render_all()["t"].image_png  # tile no longer confirms
+    sess.set_connection("dev", True)  # quick reconnect
+    assert sess.is_armed() is False  # stale confirm must not resurrect
