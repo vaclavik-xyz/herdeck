@@ -28,20 +28,40 @@ class ElgatoSession:
         self._slot_order: list[str] = []  # slot instance_ids in reading order
         self._slot_coords: dict[str, tuple[int, int]] = {}
         self._manual: AgentKey | None = None
+        self._action_keys: list[tuple[str, str]] = []   # (instance_id, type)
+        self._detection: dict[AgentKey, str] = {}
+        self._block_gen: dict[AgentKey, int] = {}  # +1 each time an agent enters BLOCKED
+        self._pending_act: AgentKey | None = None  # an act is in flight for this agent
 
     # --- inbound agent state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        self._bump_block_gen(states)
         self._agents = {k: v for k, v in self._agents.items() if k.server_id != server_id}
         for s in states:
             self._agents[s.key] = s
+        if self._pending_act is not None and self._pending_act.server_id == server_id:
+            self._pending_act = None
         self._release()
+        self._prune_detection()
 
     def apply_event(self, server_id: str, state: AgentState) -> None:
+        self._bump_block_gen([state])
         self._agents[state.key] = state
+        if state.key == self._pending_act:
+            self._pending_act = None
         self._release()
+        self._prune_detection()
 
     def set_connection(self, server_id: str, up: bool) -> None:
-        self._down.discard(server_id) if up else self._down.add(server_id)
+        if up:
+            self._down.discard(server_id)
+        else:
+            self._down.add(server_id)
+            # Drop cached prompts for the dropped server so a stale prompt cannot
+            # re-enable Approve/Deny after reconnect; the proactive read re-populates.
+            self._detection = {
+                k: v for k, v in self._detection.items() if k.server_id != server_id
+            }
 
     # --- selection ---
     def select(self, key: AgentKey | None) -> None:
@@ -53,6 +73,85 @@ class ElgatoSession:
         self._manual = None
         blocked = [k for k, s in self._agents.items() if s.status is Status.BLOCKED]
         return blocked[0] if len(blocked) == 1 else None
+
+    # --- action keys / detection ---
+    def set_action_keys(self, instances: list[tuple[str, str, tuple[int, int]]]) -> None:
+        self._action_keys = [(iid, kind) for iid, kind, _ in instances]
+
+    def set_detection(self, key: AgentKey, text: str) -> None:
+        # Only trust a prompt read for an agent that is present and currently blocked.
+        agent = self._agents.get(key)
+        if agent is not None and agent.status is Status.BLOCKED:
+            self._detection[key] = text
+
+    def _prune_detection(self) -> None:
+        # Drop cached prompts whose agent vanished or is no longer blocked, so stale
+        # prompt text can never re-enable Approve/Deny for a changed/recreated agent.
+        self._detection = {
+            k: v
+            for k, v in self._detection.items()
+            if k in self._agents and self._agents[k].status is Status.BLOCKED
+        }
+
+    def block_generation(self, key: AgentKey) -> int:
+        return self._block_gen.get(key, 0)
+
+    def blocked_without_detection(self) -> list[AgentKey]:
+        # Blocked agents on an ONLINE server whose prompt has not been read yet — the
+        # runtime issues a proactive read for each so Approve can enable without a
+        # slot press. Offline servers are skipped: reading a dead connector would just
+        # leave a pending read that suppresses the real read after reconnect.
+        return [
+            k for k, s in self._agents.items()
+            if s.status is Status.BLOCKED
+            and k.server_id not in self._down
+            and k not in self._detection
+        ]
+
+    def _bump_block_gen(self, incoming: list[AgentState]) -> None:
+        # A fresh BLOCKED episode increments the generation so the runtime read
+        # correlator can reject a read that was issued for an earlier episode.
+        for s in incoming:
+            prev = self._agents.get(s.key)
+            if s.status is Status.BLOCKED and (prev is None or prev.status is not Status.BLOCKED):
+                self._block_gen[s.key] = self._block_gen.get(s.key, 0) + 1
+
+    def _target(self) -> AgentState | None:
+        key = self.selected()
+        return self._agents.get(key) if key is not None else None
+
+    def action_enabled(self, kind: str) -> bool:
+        if kind == "pager":
+            return True
+        target = self._target()
+        if target is None or target.key.server_id in self._down:
+            return False
+        if kind == "stop":
+            return True
+        if kind in ("approve", "deny"):
+            if target.status is not Status.BLOCKED:
+                return False
+            text = self._detection.get(target.key)
+            if not text:
+                return False
+            return not layout.parse_options(text)
+        return False
+
+    def _action_tile(self, instance_id: str, kind: str) -> TileView:
+        enabled = self.action_enabled(kind)
+        target = self._target()
+        labels = {"approve": "Approve", "deny": "Deny", "stop": "Stop", "pager": "Next"}
+        ident = (target.repo or target.label) if (target is not None and kind != "pager") else ""
+        color = {"approve": "green", "deny": "amber", "stop": "red", "pager": "blue"}[kind]
+        if kind != "pager" and target is not None and target.key == self._pending_act:
+            return TileView(0, labels[kind], "dim", repo=ident or None, status_text="PENDING")
+        return TileView(
+            0,
+            labels[kind],
+            color if enabled else "dim",
+            repo=ident or None,
+            status_text=labels[kind].upper(),
+        )
 
     # --- layout ---
     def set_slots(self, instances: list[tuple[str, tuple[int, int]]]) -> None:
@@ -101,4 +200,6 @@ class ElgatoSession:
         for ordinal, iid in enumerate(self._slot_order):
             tile = self._slot_tile(ordinal)
             out[iid] = KeyRender(self._icons.render_tile_bytes(tile))
+        for iid, kind in self._action_keys:
+            out[iid] = KeyRender(self._icons.render_tile_bytes(self._action_tile(iid, kind)))
         return out
