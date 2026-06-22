@@ -100,6 +100,19 @@ describe("BackendProcess", () => {
     bp.stop();
   });
 
+  it("start() is idempotent — a second call does not spawn a duplicate backend", () => {
+    const child = fakeChild();
+    const spawn = vi.fn(() => child);
+    const bp = new BackendProcess({
+      resolveCommand: () => ({ command: "herdeck", args: [] }),
+      spawn: spawn as any, randomToken: () => "t", tmpDir: "/tmp",
+    });
+    bp.start();
+    bp.start(); // duplicate call must not spawn a second backend on the same socket/token
+    expect(spawn).toHaveBeenCalledTimes(1);
+    bp.stop();
+  });
+
   it("dev mode connects to a known socket with the shared token instead of spawning", () => {
     const spawn = vi.fn();
     const bp = new BackendProcess({
