@@ -86,7 +86,13 @@ class ElgatoSession:
         )
 
     def _reconcile_arm(self) -> None:
-        if self._armed_for is not None and self._armed_for != self.selected():
+        # Drop a stale arm when the effective target changes/vanishes, OR when the
+        # armed target's server goes offline (Stop is disabled offline, so a lingering
+        # arm would render a phantom STOP? and a quick reconnect could fire it).
+        if self._armed_for is not None and (
+            self._armed_for != self.selected()
+            or self._armed_for.server_id in self._down
+        ):
             self._armed_for = None
 
     def tick(self) -> None:
