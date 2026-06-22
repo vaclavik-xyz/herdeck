@@ -1,3 +1,4 @@
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,49 @@ def test_example_start_profiles_match_defaults(monkeypatch):
     path = Path(__file__).resolve().parents[1] / "config.example.toml"
     cfg = load_config(path)
     assert set(DEFAULT_START_PROFILES) <= set(cfg.start_profiles)
+
+
+def test_example_config_uses_profile_schema(monkeypatch):
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    cfg = load_config(path)
+
+    assert cfg.meta.active_profile == "work"
+    assert {"base", "work", "mobile"} <= set(cfg.meta.profile_names)
+    assert set(DEFAULT_START_PROFILES) <= set(cfg.start_profiles)
+    assert cfg.view.management in {"launcher_menu", "bottom_row"}
+    assert cfg.view.show_profile_on_panel is True
+    assert "blocked" in cfg.theme.colors
+
+
+def test_example_management_row_documents_supported_actions_only():
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    data = tomllib.loads(path.read_text())
+
+    assert set(data["views"]["management"]["bottom_row"]) <= {"profiles", "new_agent"}
+
+
+def test_readme_scopes_answer_profile_overrides_to_legacy_configs():
+    path = Path(__file__).resolve().parents[1] / "README.md"
+    section = path.read_text().split("## Adding an agent type", 1)[1].split("\n## ", 1)[0]
+
+    assert "legacy configs only" in section
+
+
+def test_readme_uses_profile_schema_for_notifications():
+    path = Path(__file__).resolve().parents[1] / "README.md"
+    section = path.read_text().split("## Notifications", 1)[1].split("\n## ", 1)[0]
+
+    assert "[notification_profiles.normal]" in section
+    assert 'notifications = "normal"' in section
+
+
+def test_readme_launcher_example_uses_valid_toml_shape():
+    path = Path(__file__).resolve().parents[1] / "README.md"
+    section = path.read_text().split("## Adding an agent type", 1)[1].split("\n## ", 1)[0]
+
+    assert "[launchers.default] myagent" not in section
+    assert "[launchers.default]" in section
 
 
 def test_load_resolves_token_from_env(tmp_path, monkeypatch):

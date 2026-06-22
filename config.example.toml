@@ -1,78 +1,87 @@
+active_profile = "work"
+
 [[servers]]
 id = "workbox"
-url = "ws://100.x.y.z:8788"          # server's Tailscale IP (WireGuard-encrypted)
-token_env = "HERDECK_WORKBOX_TOKEN"   # token comes from this env var
+url = "ws://100.x.y.z:8788"        # server Tailscale IP (WireGuard-encrypted)
+token_env = "HERDECK_WORKBOX_TOKEN" # token comes from this env var, never this file
 
-[deck]
-# Physical layout hint; the real button count comes from the deck driver
-# (the Ulanzi D200 exposes 13 buttons). Only used as a fallback (e.g. fake deck).
-grid = "5x3"
-overview_order = ["workbox"]
+[profiles.base]
+servers = ["workbox"]
+theme = "default"
+view = "dense"
+notifications = "normal"
+safety = "standard"
+macros = "default"
+launcher = "default"
 
-# Out-of-band alerts so you don't have to watch the deck. Omit this section to
-# disable entirely. macOS uses osascript notifications; telegram delivers to your
-# phone via a bot (token from an env var, chat_id below). Run both at once.
-[notifications]
-enabled = false                    # set true to be notified when an agent needs you
-backends = ["macos"]               # any of: "macos", "telegram" (e.g. both)
-on = ["blocked"]                   # transitions to alert on (currently only "blocked")
-sound = true                       # macOS plays a sound; telegram sends non-silent
+[profiles.work]
+extends = "base"
 
-# Telegram backend (only used when "telegram" is in backends above):
-#   1. Create a bot with @BotFather, copy its token.
-#   2. export HERDECK_TELEGRAM_TOKEN=<token>   (never put the token in this file)
-#   3. Put your numeric chat_id below.
-# A missing token/chat_id makes herdeck skip telegram with a warning (macOS still fires).
-# [notifications.telegram]
-# token_env = "HERDECK_TELEGRAM_TOKEN"
-# chat_id = "123456789"
+[profiles.mobile]
+extends = "work"
+view = "management"
+notifications = "phone"
 
-# Answer profiles: keystroke sequences herdeck sends to an agent's pane for the
-# Approve / Deny / Stop actions (approve_always = approve and don't ask again).
-# Keys are sent in order; "enter" submits, "esc"/"ctrl+c" are literal keys.
-#
-# Verified against live prompts: claude, codex. The built-in defaults for these
-# match the sections below, so you only need a section here to OVERRIDE them.
-#
-# NOT yet verified: cursor, gemini. No answer profile ships for them — confirm
-# the real keystrokes against a live prompt before relying on auto-answers, then
-# add an [answer_profiles.<agent>] section (same shape as below) to enable them.
-#
-# The "default" profile is the fallback for any agent type without its own.
-[answer_profiles.claude]
-approve = ["1", "enter"]
-approve_always = ["2", "enter"]
-deny = ["esc"]
-stop = ["ctrl+c"]
+[themes.default.colors]
+working = "green"
+idle = "blue"
+blocked = "amber"
+done = "dim"
+unknown = "grey"
+offline = "red"
 
-[answer_profiles.codex]
-approve = ["y", "enter"]
-deny = ["n", "enter"]
-stop = ["ctrl+c"]
+[views.dense]
+management = "launcher_menu"
+show_profile_on_panel = true
+agent_slots = "max"
+tile_fields = ["repo", "branch", "status", "time", "server"]
 
-[answer_profiles.default]
-approve = ["enter"]
-deny = ["esc"]
-stop = ["ctrl+c"]
+[views.management]
+management = "bottom_row"
+bottom_row = ["profiles", "new_agent"]
+show_profile_on_panel = true
+agent_slots = "max"
+tile_fields = ["repo", "branch", "status", "time", "server"]
 
-# Quick-send macros (shown when drilling into a non-blocked agent).
-# Omit this section to use the built-in defaults (continue / run tests / commit / /compact).
-[[macros]]
+[notification_profiles.normal]
+enabled = false
+backends = ["macos"]
+on = ["blocked"]
+sound = true
+
+[notification_profiles.phone]
+enabled = false
+backends = ["telegram"]
+on = ["blocked"]
+sound = false
+
+# Telegram backend is only used by profiles that reference "phone".
+# Export the bot token, do not paste it here.
+[notification_profiles.phone.telegram]
+token_env = "HERDECK_TELEGRAM_TOKEN"
+chat_id = "123456789"
+
+[safety.standard]
+approve_always = true
+require_confirm_for = []
+
+[[macro_sets.default]]
 label = "continue"
 text = "continue"
-[[macros]]
+
+[[macro_sets.default]]
 label = "run tests"
 text = "run the tests"
-[[macros]]
+
+[[macro_sets.default]]
 label = "commit"
 text = "commit the changes"
-[[macros]]
+
+[[macro_sets.default]]
 label = "/compact"
 text = "/compact"
 
-# Agent types startable from the deck's "+ New" tile -> the argv herdr runs.
-# Omit to use defaults. Started in the focused herdr workspace.
-[start_profiles]
+[launchers.default]
 claude = ["claude"]
 codex = ["codex"]
 cursor = ["cursor-agent"]

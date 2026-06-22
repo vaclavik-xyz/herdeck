@@ -91,6 +91,35 @@ herdr's socket lives at `~/.config/herdr/herdr.sock` (macOS & Linux).
 4. Run: `HERDECK_CONFIG=~/.config/herdeck/config.toml python -m herdeck.app`
    (or load `deploy/com.herdeck.app.plist` to autostart at login).
 
+## Profiles and customization
+
+Herdeck supports a shareable `config.toml` and a device-local `local.toml`.
+The shareable file defines profiles and reusable blocks for theme, view,
+launcher, macros, notifications, and safety. The local file stores the active
+profile and device-specific settings such as deck type, socket path, web bind,
+icon overrides, and hardware tuning.
+
+Switch profiles from the deck through `+ New` -> `Profiles`, or set
+`HERDECK_PROFILE=mobile` to lock a process to a profile. Use `local.toml` for
+values you do not want to share between devices:
+
+```toml
+active_profile = "mobile"
+
+[local]
+deck = "web"
+herdr_socket = "~/.config/herdr/herdr.sock"
+web_bind = "127.0.0.1"
+web_port = 8800
+icons_dir = "~/herdeck-icons"
+
+[hardware]
+brightness = 80
+debounce = 0.25
+keep_alive_interval = 5.0
+tick_interval = 0.4
+```
+
 ## Development without hardware
 
 **Browser simulator (recommended).** `HERDECK_DECK=web` runs a pixel-faithful
@@ -124,26 +153,40 @@ and **Link** (connection status). State is encoded by color: working = green,
 idle = blue, blocked = amber, done = dim, error/disconnected = red.
 
 ## Adding an agent type
-Add an `[answer_profiles.<name>]` block with `approve`/`deny`/`stop` (and
-optional `approve_always`) key lists. `<name>` matches herdr's detected `agent`
-(e.g. `claude`, `codex`); unknown agents use `[answer_profiles.default]`.
+Add it to the launcher block used by your profile:
+
+```toml
+[launchers.default]
+myagent = ["myagent", "--flag"]
+```
+
+New profile-schema configs currently use the built-in answer profiles for approval key sequences.
+Custom `[answer_profiles.<name>]` overrides are supported in legacy configs only;
+profile-schema support for custom answer profiles is a future compatibility step.
 
 ## Notifications
 Get notified when an agent enters the **blocked** state, so you don't have to
-watch the deck. Off by default; enable in your config and pick one or more
-backends:
+watch the deck. In profile-schema configs, attach a notification profile to the
+profile that should use it:
+
 ```toml
-[notifications]
+[profiles.work]
+notifications = "normal"
+
+[notification_profiles.normal]
 enabled = true
 backends = ["macos", "telegram"]   # run both, or just one
 on = ["blocked"]
 sound = true
 
 # Only needed when "telegram" is a backend:
-[notifications.telegram]
+[notification_profiles.normal.telegram]
 token_env = "HERDECK_TELEGRAM_TOKEN"   # bot token read from this env var
 chat_id = "123456789"
 ```
+
+Legacy configs use the root `[notifications]` table with the same fields.
+
 - **macOS** posts to Notification Center (osascript). **Telegram** delivers to
   your phone via the Bot API over HTTPS (stdlib only, no extra dependency) —
   useful when you drive herdeck from the phone over Tailscale.
