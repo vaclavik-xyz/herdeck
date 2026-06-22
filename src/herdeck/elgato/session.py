@@ -35,6 +35,7 @@ class ElgatoSession:
         self._pending_act: AgentKey | None = None  # an act is in flight for this agent
         self._armed_for: AgentKey | None = None
         self._armed_at: float = 0.0
+        self._last_bytes: dict[str, bytes] = {}
 
     # --- inbound agent state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
@@ -294,3 +295,12 @@ class ElgatoSession:
         for iid, kind in self._action_keys:
             out[iid] = KeyRender(self._icons.render_tile_bytes(self._action_tile(iid, kind)))
         return out
+
+    def take_render_diff(self) -> dict[str, KeyRender]:
+        current = self.render_all()
+        diff: dict[str, KeyRender] = {}
+        for iid, render in current.items():
+            if self._last_bytes.get(iid) != render.image_png:
+                diff[iid] = render
+        self._last_bytes = {iid: r.image_png for iid, r in current.items()}
+        return diff
