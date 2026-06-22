@@ -521,7 +521,7 @@ roborev show "$sha"
   - `class BackendProcess` constructed with `new BackendProcess(opts)` where `opts`:
     - `resolveCommand(): { command: string; args: string[] }` — how to launch herdeck (the entry wires it to `resolveHerdeckCommand` fed by the PI setting). Injected so tests are deterministic.
     - `devSocket?: string` — if set, **connect** to this socket instead of spawning (dev mode); `socketPath` returns it and `start()` is a no-op.
-    - `devToken?: string` — in dev mode, the token the **already-running** external backend was started with (so `hello` authenticates). Required in dev mode; the entry passes `process.env.HERDECK_ELGATO_TOKEN`.
+    - `devToken?: string` — in dev mode, the token the **already-running** external backend was started with (so `hello` authenticates). **Required when `devSocket` is set — the constructor throws if it is missing** (else the shell would silently send a wrong token). The entry passes `process.env.HERDECK_ELGATO_TOKEN`.
     - `spawn?` (default `child_process.spawn`), `randomToken?` (default 16 random bytes hex), `tmpDir?` (default `os.tmpdir()`), `setTimer?` (default `setTimeout`), `maxBackoffMs?` (default `30000`), `baseBackoffMs?` (default `500`).
     - State: `get socketPath(): string`, `get token(): string`, `get spawned(): boolean` (false in dev mode). In spawn mode `token` is the generated one-shot secret; in dev mode it is `devToken`.
     - `start(): void` — spawns the backend (unless dev mode) with env `HERDECK_ELGATO_SOCK`, `HERDECK_ELGATO_TOKEN`, `HERDECK_DECK=elgato-plugin`; on child exit, respawns with bounded exponential backoff.
@@ -615,6 +615,14 @@ describe("BackendProcess", () => {
     expect(bp.socketPath).toBe("/tmp/dev.sock");
     expect(bp.token).toBe("shared-token"); // matches the external backend so hello authenticates
   });
+
+  it("dev mode without a token fails fast (would otherwise silently mis-authenticate)", () => {
+    expect(() => new BackendProcess({
+      resolveCommand: () => ({ command: "herdeck", args: [] }),
+      devSocket: "/tmp/dev.sock",
+      spawn: vi.fn() as any,
+    })).toThrow(/token/i);
+  });
 });
 ```
 
@@ -664,6 +672,11 @@ export class BackendProcess {
   readonly token: string;
 
   constructor(options: BackendOptions) {
+    if (options.devSocket && !options.devToken) {
+      throw new Error(
+        "dev mode (HERDECK_ELGATO_DEV_SOCK) requires HERDECK_ELGATO_TOKEN — the shell must share the external backend's token to authenticate",
+      );
+    }
     this.opts = {
       resolveCommand: options.resolveCommand,
       devSocket: options.devSocket,
@@ -675,9 +688,9 @@ export class BackendProcess {
       maxBackoffMs: options.maxBackoffMs ?? 30000,
     };
     this.backoff = this.opts.baseBackoffMs;
-    // Dev mode: reuse the token the external backend was launched with (so hello
-    // authenticates). Spawn mode: a fresh one-shot secret we hand to the child.
-    this.token = options.devSocket ? (options.devToken ?? this.opts.randomToken()) : this.opts.randomToken();
+    // Dev mode: reuse the token the external backend was launched with (guaranteed
+    // present by the guard above). Spawn mode: a fresh one-shot secret we hand the child.
+    this.token = options.devSocket ? (options.devToken as string) : this.opts.randomToken();
     this.socketPath = this.opts.devSocket
       ?? path.join(this.opts.tmpDir, `herdeck-elgato-${process.pid}-${this.token.slice(0, 8)}.sock`);
   }
@@ -1343,11 +1356,17 @@ streamDeck.actions.registerAction(makeActionKey(registry, adapter, ACTION_UUIDS.
 
 streamDeck.connect();
 
-// Global settings (written by the Property Inspector) carry the herdeck binary path —
-// the Stream Deck app's PATH usually lacks the user's venv, so this is the real config.
-const settings = await streamDeck.settings.getGlobalSettings<{ herdeckPath?: string }>();
+// The Property Inspector writes the herdeck binary path to GLOBAL settings (its field
+// uses the `global` attribute). The Stream Deck app's PATH usually lacks the user's
+// venv, so this is the real config. `resolveCommand` reads a mutable `herdeckPath`, and
+// onDidReceiveGlobalSettings updates it live — so when a user first sets the path the
+// supervisor's next backoff-respawn picks it up automatically (no plugin restart).
+let herdeckPath = (await streamDeck.settings.getGlobalSettings<{ herdeckPath?: string }>()).herdeckPath;
+streamDeck.settings.onDidReceiveGlobalSettings<{ herdeckPath?: string }>((ev) => {
+  herdeckPath = ev.settings.herdeckPath;
+});
 const backend = new BackendProcess({
-  resolveCommand: () => resolveHerdeckCommand({ configuredPath: settings.herdeckPath, envBin: process.env.HERDECK_BIN }),
+  resolveCommand: () => resolveHerdeckCommand({ configuredPath: herdeckPath, envBin: process.env.HERDECK_BIN }),
   devSocket: process.env.HERDECK_ELGATO_DEV_SOCK,
   devToken: process.env.HERDECK_ELGATO_TOKEN,
 });
@@ -1530,7 +1549,10 @@ Create `streamdeck/xyz.vaclavik.herdeck.sdPlugin/ui/herdeck.html`:
   <head><meta charset="utf-8" /></head>
   <body>
     <sdpi-item label="herdeck binary">
-      <sdpi-textfield setting="herdeckPath" placeholder="herdeck (or absolute path)"></sdpi-textfield>
+      <!-- `global` routes this to the plugin's GLOBAL settings — the scope plugin.ts
+           reads via getGlobalSettings()/onDidReceiveGlobalSettings. Without it the value
+           would land in per-action settings and never reach command resolution. -->
+      <sdpi-textfield setting="herdeckPath" global placeholder="herdeck (or absolute path)"></sdpi-textfield>
     </sdpi-item>
     <script src="https://sdpi-components.dev/releases/v4/sdpi-components.js"></script>
   </body>
@@ -1623,7 +1645,7 @@ Expected: type-check clean, bundle built.
   - Optimistic highlight on keyDown / authoritative render from brain: Tasks 5, 7 (keyDown forwarded; SDK native press feedback is the highlight; brain image is authoritative; no TS-invented frame that could stick).
   - Render → setImage (base64 → data URL), only-on-change handled by brain: Task 5.
   - IPC reconnect (backend alive → brain re-pushes full render; backend killed → reset + `starting…`): Tasks 2 (reusable client + buffer reset + reconnect test), 6 (close → `backend down`), 7 (`plugin.ts` reconnect-on-close).
-  - Property Inspector `herdeckPath` actually consumed by command resolution; dev-mode socket **and** shared token: Tasks 3 (`resolveHerdeckCommand`, `devToken`), 7 (`plugin.ts` reads global settings), 8 (PI).
+  - Property Inspector `herdeckPath` end-to-end: PI writes GLOBAL settings (`global` attr, Task 8) → `plugin.ts` reads `getGlobalSettings` + live `onDidReceiveGlobalSettings` so the next backoff-respawn uses a freshly-set path (Task 7) → `resolveHerdeckCommand` consumes it (Task 3). Dev-mode socket **and** shared token, with fail-fast when the token is missing: Task 3 (`devToken`).
   - Packaging into `.streamDeckPlugin` + frozen backend: explicitly **out of scope** (follow-up) — README + manifest note.
   - Testing without hardware: every core module unit-tested with fakes; SDK glue type-checked + delegation core unit-tested; no E2E: all tasks.
 - **Out of scope (correctly absent):** multi-option prompt rendering, send-text/launch/profile-switch, `.streamDeckPlugin` packaging, frozen PyInstaller backend, touchscreen/dials, real icon art, **Windows support** (needs a non-Unix-socket transport — follow-up).
