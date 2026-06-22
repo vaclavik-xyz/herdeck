@@ -77,6 +77,26 @@ def test_read_correlator_is_keyed_per_server_not_pane():
     assert corr.result(kb, "r2", "B prompt") is True  # server a's read never clobbers b
 
 
+def test_read_correlator_keeps_pending_on_blank_read_to_avoid_reread_spin():
+    from herdeck.elgato.runtime import ReadCorrelator
+    from herdeck.elgato.session import ElgatoSession
+    from herdeck.model import AgentKey, AgentState, Status
+
+    sess = ElgatoSession(_cfg(), _icons())
+    k = AgentKey("dev", "p1")
+    sess.apply_snapshot("dev", [AgentState(k, "claude", "api", Status.BLOCKED)])
+    corr = ReadCorrelator(sess)
+    corr.issued(k, "r1")
+    # A blank prompt read is not a real prompt: not accepted, and pending is KEPT so
+    # _proactive_reads() (which skips agents with a pending read) won't spin re-reading.
+    assert corr.result(k, "r1", "   ") is False
+    assert corr.has_pending(k) is True
+    assert k in sess.blocked_without_detection()  # still needs a real read, just not now
+    # A later real read still lands once a fresh issued() overwrites the pending marker.
+    corr.issued(k, "r2")
+    assert corr.result(k, "r2", "Proceed? (y/n)") is True
+
+
 def test_read_correlator_clear_server_drops_pending():
     from herdeck.elgato.runtime import ReadCorrelator
     from herdeck.elgato.session import ElgatoSession

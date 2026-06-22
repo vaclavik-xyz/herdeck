@@ -40,10 +40,13 @@ class ReadCorrelator:
         return p is not None and p[1] == self._session.block_generation(key)
 
     def result(self, key: AgentKey, req_id: str, text: str) -> bool:
+        # Match the issuing request AND the agent's current block generation, then store.
+        # Clear the pending marker ONLY if a real prompt was stored; a blank read keeps
+        # pending so the proactive reader skips this agent instead of spinning re-reads.
         if self._pending.get(key) == (req_id, self._session.block_generation(key)):
-            self._session.set_detection(key, text)
-            del self._pending[key]
-            return True
+            if self._session.set_detection(key, text):
+                del self._pending[key]
+                return True
         return False
 
     def clear_server(self, server_id: str) -> None:

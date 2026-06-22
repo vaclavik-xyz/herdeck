@@ -112,13 +112,17 @@ class ElgatoSession:
     def set_action_keys(self, instances: list[tuple[str, str, tuple[int, int]]]) -> None:
         self._action_keys = [(iid, kind) for iid, kind, _ in instances]
 
-    def set_detection(self, key: AgentKey, text: str) -> None:
+    def set_detection(self, key: AgentKey, text: str) -> bool:
         # Only trust a prompt read for an agent that is present and currently blocked.
         # A blank read is not a prompt: storing it would mark the agent "read" and
         # silence the proactive re-read, leaving Approve stuck disabled forever.
+        # Returns whether the prompt was stored, so the read correlator can keep a
+        # pending marker on a blank read instead of immediately re-reading (spin).
         agent = self._agents.get(key)
         if agent is not None and agent.status is Status.BLOCKED and text.strip():
             self._detection[key] = text
+            return True
+        return False
 
     def _prune_detection(self) -> None:
         # Drop cached prompts whose agent vanished or is no longer blocked, so stale
