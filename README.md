@@ -156,10 +156,14 @@ idle = blue, blocked = amber, done = dim, error/disconnected = red.
 herdeck can also drive a native **Elgato Stream Deck** as a plugin. A thin
 TypeScript shell (a separate follow-up plan) owns the deck over Elgato's SDK and
 spawns this Python backend — the same herdeck core — as its "brain". Select it
-with the deck kind `elgato-plugin`:
+with the deck kind `elgato-plugin`. Normally the TS shell sets the socket/token
+(see the discovery contract below) and spawns the backend; to run it by hand:
 
 ```bash
-HERDECK_DECK=elgato-plugin python -m herdeck.app
+HERDECK_DECK=elgato-plugin \
+  HERDECK_ELGATO_SOCK=/tmp/herdeck-elgato.sock \
+  HERDECK_ELGATO_TOKEN="$(openssl rand -hex 16)" \
+  python -m herdeck.app
 ```
 
 Unlike the D200/web front-ends, `elgato-plugin` does **not** use the grid
