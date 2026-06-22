@@ -47,3 +47,14 @@ def test_empty_slot_renders_blank():
     sess.apply_snapshot("dev", [state("p1", Status.IDLE)])
     rendered = sess.render_all()
     assert b"|dim|" in rendered["s1"].image_png  # ordinal 1 unleased -> blank/dim
+
+
+def test_render_honors_theme_color_overrides():
+    cfg = make_config()
+    cfg.theme.colors = {**cfg.theme.colors, "working": "lime", "offline": "black"}
+    sess = ElgatoSession(cfg, FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING, "alpha")])
+    assert b"lime" in sess.render_all()["s0"].image_png  # custom status color
+    sess.set_connection("dev", False)
+    assert b"black" in sess.render_all()["s0"].image_png  # custom offline color
