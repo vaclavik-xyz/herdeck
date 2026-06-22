@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Name": "herdeck",
+  "Version": "0.1.0.0",
+  "Author": "Filip Vaclavik",
+  "Description": "Control AI coding agents under herdr from your Stream Deck.",
+  "Category": "herdr",
+  "Icon": "imgs/plugin/category",
+  "UUID": "xyz.vaclavik.herdeck",
+  "SDKVersion": 2,
+  "PropertyInspectorPath": "ui/herdeck.html",
+  "CodePath": "bin/plugin.js",
+  "Nodejs": { "Version": "20", "Debug": "enabled" },
+  "Software": { "MinimumVersion": "6.5" },
+  "OS": [
+    { "Platform": "mac", "MinimumVersion": "12" }
+  ],
+  "Actions": [
+    {
+      "Name": "Agent Slot",
+      "UUID": "xyz.vaclavik.herdeck.slot",
+      "Icon": "imgs/actions/slot",
+      "Tooltip": "Shows a live herdr agent; press to select + focus it.",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/actions/slot", "TitleAlignment": "bottom" }]
+    },
+    {
+      "Name": "Approve",
+      "UUID": "xyz.vaclavik.herdeck.approve",
+      "Icon": "imgs/actions/approve",
+      "Tooltip": "Approve the selected blocked agent (binary prompts only).",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/actions/approve" }]
+    },
+    {
+      "Name": "Deny",
+      "UUID": "xyz.vaclavik.herdeck.deny",
+      "Icon": "imgs/actions/deny",
+      "Tooltip": "Deny the selected blocked agent (binary prompts only).",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/actions/deny" }]
+    },
+    {
+      "Name": "Stop",
+      "UUID": "xyz.vaclavik.herdeck.stop",
+      "Icon": "imgs/actions/stop",
+      "Tooltip": "Force-stop the selected agent (arm, then confirm).",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/actions/stop" }]
+    },
+    {
+      "Name": "Pager",
+      "UUID": "xyz.vaclavik.herdeck.pager",
+      "Icon": "imgs/actions/pager",
+      "Tooltip": "Cycle selection through agents that need attention.",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/actions/pager" }]
+    }
+  ]
+}
