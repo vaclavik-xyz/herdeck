@@ -319,3 +319,37 @@ view = "missing"
         set_active_profile(snapshot, "bad")
 
     assert not local.exists()
+
+
+def test_validate_settings_reports_missing_references(tmp_path):
+    from herdeck.settings import validate_settings
+
+    config = write(
+        tmp_path / "config.toml",
+        """
+active_profile = "work"
+[profiles.work]
+theme = "missing"
+""",
+    )
+
+    errors = validate_settings(load_settings(config))
+
+    assert any("unknown theme 'missing'" in err for err in errors)
+
+
+def test_validate_settings_reports_unknown_active_profile(tmp_path):
+    from herdeck.settings import validate_settings
+
+    config = write(
+        tmp_path / "config.toml",
+        """
+active_profile = "work"
+[profiles.work]
+""",
+    )
+    local = write(tmp_path / "local.toml", 'active_profile = "missing"\n')
+
+    errors = validate_settings(load_settings(config, local))
+
+    assert any("unknown profile 'missing'" in err for err in errors)
