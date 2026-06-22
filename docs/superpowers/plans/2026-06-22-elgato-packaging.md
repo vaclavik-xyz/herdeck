@@ -631,13 +631,17 @@ describe("PyInstaller spec", () => {
     expect(spec).toContain("COLLECT("); // onedir (COLLECT), not a onefile EXE-only build
   });
 
-  it("excludes cairosvg + native chain AND the lazy driver stack the elgato path never hits", () => {
+  it("excludes the cairo chain + the lazy native HID driver stack, but NOT core deps", () => {
     const excludes = spec.slice(spec.indexOf("excludes"), spec.indexOf("excludes") + 200);
-    for (const mod of ["cairosvg", "cffi", "cairocffi", "StreamDeck", "hid", "serial"]) {
+    for (const mod of ["cairosvg", "cffi", "cairocffi", "StreamDeck", "hid"]) {
       expect(excludes).toContain(mod);
     }
-    // websockets belongs to the (lazy, unreached) web driver — it must NOT be a hidden import.
-    expect(spec).not.toMatch(/hiddenimports\s*=\s*\[[^\]]*websockets/s);
+    // websockets is a CORE dep (connector.py → Connector, used on the elgato path) — it must
+    // never be excluded, and is pinned in hiddenimports as a safety net. serial/pyserial is
+    // not a repo dependency at all, so it is not listed.
+    expect(excludes).not.toContain("websockets");
+    expect(excludes).not.toContain("serial");
+    expect(spec).toMatch(/hiddenimports\s*=\s*\[[^\]]*websockets/s);
   });
 
   it("bundles the assets dir as herdeck_assets data", () => {
@@ -682,22 +686,24 @@ a = Analysis(
     pathex=[os.path.join(ROOT, "src")],
     binaries=[],
     datas=[(os.path.join(ROOT, "src", "herdeck", "assets"), "herdeck_assets")],
-    # Only the elgato submodules serve_elgato actually reaches. (No "websockets": that is a
-    # web-driver dep, and the web/d200/elgato-hw drivers are imported lazily inside make_deck,
-    # which the elgato path — _amain_elgato — returns before ever calling. Add to this list
-    # ONLY if the manual smoke run shows PyInstaller missed a real serve_elgato-graph import.)
+    # The elgato submodules serve_elgato reaches, plus websockets pinned explicitly. websockets
+    # is a CORE dep: connector.py imports it at module top level (ELGATO uses Connector to reach
+    # each server via websockets.connect), so the frozen backend needs it — it auto-bundles via
+    # that import, but is listed here as a safety net. Add more ONLY if the manual smoke run
+    # shows PyInstaller missed a real serve_elgato-graph import.
     hiddenimports=[
         "herdeck.elgato.runtime",
         "herdeck.elgato.frozen",
         "herdeck.elgato.session",
         "herdeck.elgato.ipc",
+        "websockets",
     ],
-    # cairosvg (+ its native cffi/cairocffi chain) is build-time only — the frozen session
-    # uses the Pillow PNG rasterizer. Also exclude the native driver stack that only the
-    # lazy, unreached make_deck importers pull (StreamDeck/hidapi, pyserial → `serial`,
-    # web-driver `websockets`) so the bundle stays slim — no libusb/hidapi/pyserial.
+    # cairosvg (+ its native cffi/cairocffi chain) is build-time only — the frozen session uses
+    # the Pillow PNG rasterizer. Also exclude the native HID driver stack (StreamDeck + hid →
+    # hidapi/libusb) that only the lazy, unreached make_deck importers pull, so the bundle stays
+    # slim. Do NOT exclude websockets (core Connector dep). pyserial/serial is not a repo dep.
     # NEVER exclude anything in the serve_elgato import graph.
-    excludes=["cairosvg", "cffi", "cairocffi", "tkinter", "StreamDeck", "hid", "serial", "websockets"],
+    excludes=["cairosvg", "cffi", "cairocffi", "tkinter", "StreamDeck", "hid"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
