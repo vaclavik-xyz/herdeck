@@ -13,6 +13,7 @@
 These are the binding facts of the **merged** backend (`src/herdeck/elgato/ipc.py`, `protocol.py`). The TS wire format must match them byte-for-byte; copy values verbatim.
 
 - **Transport:** newline-delimited **compact** JSON over a Unix domain socket. Python uses `json.dumps(separators=(",",":"))` + `"\n"`; JS `JSON.stringify` already emits no spaces, so `JSON.stringify(obj) + "\n"` matches.
+- **Platform: macOS-only in v1.** The merged backend binds the socket with `asyncio.start_unix_server` (Unix-only), so the manifest advertises **mac only**. A Windows transport (named pipe or loopback TCP with equivalent token auth) is a follow-up, not v1.
 - **`PROTOCOL_VERSION = 1`.**
 - **TS → brain messages** (exact `type` strings + field names):
   - `{"type":"hello","protocol_version":1,"token":<str>,"device":<str?>,"size":<obj?>}` — backend checks **only** `protocol_version` (snake_case) and `token`; `device`/`size` are accepted and ignored.
@@ -515,14 +516,17 @@ roborev show "$sha"
 - Test: `streamdeck/tests/backend-process.test.ts`
 
 **Interfaces:**
-- Produces: `class BackendProcess` constructed with `new BackendProcess(opts)` where `opts`:
-  - `resolveCommand(): { command: string; args: string[] }` — how to launch herdeck (explicit PI path → `herdeck` on PATH → known venv). Injected so tests are deterministic.
-  - `devSocket?: string` — if set, **connect** to this socket instead of spawning (dev mode); `socketPath` returns it and `start()` is a no-op.
-  - `spawn?` (default `child_process.spawn`), `randomToken?` (default 16 random bytes hex), `tmpDir?` (default `os.tmpdir()`), `setTimer?` (default `setTimeout`), `maxBackoffMs?` (default `30000`), `baseBackoffMs?` (default `500`).
-  - State: `get socketPath(): string`, `get token(): string`, `get spawned(): boolean` (false in dev mode).
-  - `start(): void` — spawns the backend (unless dev mode) with env `HERDECK_ELGATO_SOCK`, `HERDECK_ELGATO_TOKEN`, `HERDECK_DECK=elgato-plugin`; on child exit, respawns with bounded exponential backoff.
-  - `stop(): void` — stop supervising and kill the child.
-  - `onState(cb: (state: "starting" | "down") => void)` — `starting` on each (re)spawn, `down` while waiting to respawn after an exit.
+- Produces:
+  - `resolveHerdeckCommand(opts: { configuredPath?: string; envBin?: string }): { command: string; args: string[] }` — pure command resolver: **PI-configured path** (`configuredPath`) → `HERDECK_BIN` env (`envBin`) → `herdeck` on PATH. The PI path is the one users actually rely on (the Stream Deck app's `PATH` usually lacks the user's venv), so it must take precedence. Unit-tested.
+  - `class BackendProcess` constructed with `new BackendProcess(opts)` where `opts`:
+    - `resolveCommand(): { command: string; args: string[] }` — how to launch herdeck (the entry wires it to `resolveHerdeckCommand` fed by the PI setting). Injected so tests are deterministic.
+    - `devSocket?: string` — if set, **connect** to this socket instead of spawning (dev mode); `socketPath` returns it and `start()` is a no-op.
+    - `devToken?: string` — in dev mode, the token the **already-running** external backend was started with (so `hello` authenticates). Required in dev mode; the entry passes `process.env.HERDECK_ELGATO_TOKEN`.
+    - `spawn?` (default `child_process.spawn`), `randomToken?` (default 16 random bytes hex), `tmpDir?` (default `os.tmpdir()`), `setTimer?` (default `setTimeout`), `maxBackoffMs?` (default `30000`), `baseBackoffMs?` (default `500`).
+    - State: `get socketPath(): string`, `get token(): string`, `get spawned(): boolean` (false in dev mode). In spawn mode `token` is the generated one-shot secret; in dev mode it is `devToken`.
+    - `start(): void` — spawns the backend (unless dev mode) with env `HERDECK_ELGATO_SOCK`, `HERDECK_ELGATO_TOKEN`, `HERDECK_DECK=elgato-plugin`; on child exit, respawns with bounded exponential backoff.
+    - `stop(): void` — stop supervising and kill the child.
+    - `onState(cb: (state: "starting" | "down") => void)` — `starting` on each (re)spawn, `down` while waiting to respawn after an exit.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -531,13 +535,21 @@ Create `streamdeck/tests/backend-process.test.ts`:
 ```typescript
 import { describe, it, expect, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { BackendProcess } from "../src/backend-process.js";
+import { BackendProcess, resolveHerdeckCommand } from "../src/backend-process.js";
 
 function fakeChild() {
   const child: any = new EventEmitter();
   child.kill = vi.fn();
   return child;
 }
+
+describe("resolveHerdeckCommand", () => {
+  it("prefers the PI-configured path, then HERDECK_BIN, then PATH", () => {
+    expect(resolveHerdeckCommand({ configuredPath: "/opt/h", envBin: "/usr/bin/herdeck" })).toEqual({ command: "/opt/h", args: [] });
+    expect(resolveHerdeckCommand({ envBin: "/usr/bin/herdeck" })).toEqual({ command: "/usr/bin/herdeck", args: [] });
+    expect(resolveHerdeckCommand({})).toEqual({ command: "herdeck", args: [] });
+  });
+});
 
 describe("BackendProcess", () => {
   it("spawns herdeck with the env contract and a generated socket+token", () => {
@@ -589,17 +601,19 @@ describe("BackendProcess", () => {
     expect(children[2].kill).toHaveBeenCalled();
   });
 
-  it("dev mode connects to a known socket instead of spawning", () => {
+  it("dev mode connects to a known socket with the shared token instead of spawning", () => {
     const spawn = vi.fn();
     const bp = new BackendProcess({
       resolveCommand: () => ({ command: "herdeck", args: [] }),
       devSocket: "/tmp/dev.sock",
+      devToken: "shared-token",
       spawn: spawn as any,
     });
     bp.start();
     expect(spawn).not.toHaveBeenCalled();
     expect(bp.spawned).toBe(false);
     expect(bp.socketPath).toBe("/tmp/dev.sock");
+    expect(bp.token).toBe("shared-token"); // matches the external backend so hello authenticates
   });
 });
 ```
@@ -621,9 +635,17 @@ import path from "node:path";
 
 type SpawnFn = (command: string, args: string[], options: any) => { kill: (sig?: string) => void; on: (ev: string, cb: (...a: any[]) => void) => void };
 
+export function resolveHerdeckCommand(opts: { configuredPath?: string; envBin?: string }): { command: string; args: string[] } {
+  // PI-configured path wins (the Stream Deck app's PATH usually lacks the user's venv),
+  // then HERDECK_BIN, then `herdeck` on PATH. Frozen-binary path is a packaging follow-up.
+  const command = opts.configuredPath || opts.envBin || "herdeck";
+  return { command, args: [] };
+}
+
 export interface BackendOptions {
   resolveCommand: () => { command: string; args: string[] };
   devSocket?: string;
+  devToken?: string;
   spawn?: SpawnFn;
   randomToken?: () => string;
   tmpDir?: string;
@@ -633,7 +655,7 @@ export interface BackendOptions {
 }
 
 export class BackendProcess {
-  private readonly opts: Required<Omit<BackendOptions, "devSocket">> & { devSocket?: string };
+  private readonly opts: Required<Omit<BackendOptions, "devSocket" | "devToken">> & { devSocket?: string };
   private child: { kill: (sig?: string) => void; on: (ev: string, cb: (...a: any[]) => void) => void } | null = null;
   private stopped = false;
   private backoff: number;
@@ -653,7 +675,9 @@ export class BackendProcess {
       maxBackoffMs: options.maxBackoffMs ?? 30000,
     };
     this.backoff = this.opts.baseBackoffMs;
-    this.token = this.opts.randomToken();
+    // Dev mode: reuse the token the external backend was launched with (so hello
+    // authenticates). Spawn mode: a fresh one-shot secret we hand to the child.
+    this.token = options.devSocket ? (options.devToken ?? this.opts.randomToken()) : this.opts.randomToken();
     this.socketPath = this.opts.devSocket
       ?? path.join(this.opts.tmpDir, `herdeck-elgato-${process.pid}-${this.token.slice(0, 8)}.sock`);
   }
@@ -1300,31 +1324,34 @@ Create `streamdeck/src/plugin.ts`:
 
 ```typescript
 import streamDeck from "@elgato/streamdeck";
-import { BackendProcess } from "./backend-process.js";
+import { BackendProcess, resolveHerdeckCommand } from "./backend-process.js";
 import { IpcClient } from "./ipc-client.js";
 import { KeyRegistry } from "./registry.js";
 import { Adapter } from "./adapter.js";
 import { ACTION_UUIDS } from "./actions/core.js";
 import { makeSlotAction, makeActionKey } from "./actions/sdk-actions.js";
 
-function resolveCommand(): { command: string; args: string[] } {
-  // PI-configured path > `herdeck` on PATH. (Frozen-binary path is a packaging follow-up.)
-  const configured = process.env.HERDECK_BIN;
-  return configured ? { command: configured, args: [] } : { command: "herdeck", args: [] };
-}
-
 const registry = new KeyRegistry();
-const backend = new BackendProcess({ resolveCommand, devSocket: process.env.HERDECK_ELGATO_DEV_SOCK });
 const ipc = new IpcClient();
 const adapter = new Adapter(ipc, registry);
-
-backend.onState((s) => adapter.setBackendState(s));
 
 streamDeck.actions.registerAction(makeSlotAction(registry, adapter));
 streamDeck.actions.registerAction(makeActionKey(registry, adapter, ACTION_UUIDS.approve, "approve"));
 streamDeck.actions.registerAction(makeActionKey(registry, adapter, ACTION_UUIDS.deny, "deny"));
 streamDeck.actions.registerAction(makeActionKey(registry, adapter, ACTION_UUIDS.stop, "stop"));
 streamDeck.actions.registerAction(makeActionKey(registry, adapter, ACTION_UUIDS.pager, "pager"));
+
+streamDeck.connect();
+
+// Global settings (written by the Property Inspector) carry the herdeck binary path —
+// the Stream Deck app's PATH usually lacks the user's venv, so this is the real config.
+const settings = await streamDeck.settings.getGlobalSettings<{ herdeckPath?: string }>();
+const backend = new BackendProcess({
+  resolveCommand: () => resolveHerdeckCommand({ configuredPath: settings.herdeckPath, envBin: process.env.HERDECK_BIN }),
+  devSocket: process.env.HERDECK_ELGATO_DEV_SOCK,
+  devToken: process.env.HERDECK_ELGATO_TOKEN,
+});
+backend.onState((s) => adapter.setBackendState(s));
 
 let shuttingDown = false;
 
@@ -1344,7 +1371,6 @@ ipc.onClose(() => {
   if (!shuttingDown) void connect();
 });
 
-streamDeck.connect();
 backend.start();
 adapter.setBackendState("starting");
 void connect();
@@ -1400,11 +1426,12 @@ const manifest = JSON.parse(
 );
 
 describe("manifest.json", () => {
-  it("declares the herdeck plugin with a Node code path", () => {
+  it("declares the herdeck plugin with a Node code path, mac-only (Unix socket transport)", () => {
     expect(manifest.UUID).toBe("xyz.vaclavik.herdeck");
     expect(manifest.CodePath).toBe("bin/plugin.js");
     expect(manifest.Nodejs?.Version).toBeTruthy();
     expect(manifest.SDKVersion).toBe(2);
+    expect(manifest.OS.map((o: any) => o.Platform)).toEqual(["mac"]); // Windows needs a non-Unix-socket transport (follow-up)
   });
 
   it("declares all five herdr actions, Keypad-only, under the herdr category", () => {
@@ -1448,8 +1475,7 @@ Create `streamdeck/xyz.vaclavik.herdeck.sdPlugin/manifest.json`:
   "Nodejs": { "Version": "20", "Debug": "enabled" },
   "Software": { "MinimumVersion": "6.5" },
   "OS": [
-    { "Platform": "mac", "MinimumVersion": "12" },
-    { "Platform": "windows", "MinimumVersion": "10" }
+    { "Platform": "mac", "MinimumVersion": "12" }
   ],
   "Actions": [
     {
@@ -1597,10 +1623,10 @@ Expected: type-check clean, bundle built.
   - Optimistic highlight on keyDown / authoritative render from brain: Tasks 5, 7 (keyDown forwarded; SDK native press feedback is the highlight; brain image is authoritative; no TS-invented frame that could stick).
   - Render → setImage (base64 → data URL), only-on-change handled by brain: Task 5.
   - IPC reconnect (backend alive → brain re-pushes full render; backend killed → reset + `starting…`): Tasks 2 (reusable client + buffer reset + reconnect test), 6 (close → `backend down`), 7 (`plugin.ts` reconnect-on-close).
-  - Property Inspector for herdeck path; dev-mode socket: Tasks 3, 8.
+  - Property Inspector `herdeckPath` actually consumed by command resolution; dev-mode socket **and** shared token: Tasks 3 (`resolveHerdeckCommand`, `devToken`), 7 (`plugin.ts` reads global settings), 8 (PI).
   - Packaging into `.streamDeckPlugin` + frozen backend: explicitly **out of scope** (follow-up) — README + manifest note.
   - Testing without hardware: every core module unit-tested with fakes; SDK glue type-checked + delegation core unit-tested; no E2E: all tasks.
-- **Out of scope (correctly absent):** multi-option prompt rendering, send-text/launch/profile-switch, `.streamDeckPlugin` packaging, frozen PyInstaller backend, touchscreen/dials, real icon art.
+- **Out of scope (correctly absent):** multi-option prompt rendering, send-text/launch/profile-switch, `.streamDeckPlugin` packaging, frozen PyInstaller backend, touchscreen/dials, real icon art, **Windows support** (needs a non-Unix-socket transport — follow-up).
 - **Type/contract consistency:**
   - `instanceId`/`coord.{col,row}`/`protocol_version`/`action_keys` field names — Task 1 builders, asserted byte-exact; consumed unchanged in Tasks 2, 5, 7.
   - `ActionKind = "approve"|"deny"|"stop"|"pager"` — Task 1, used in 4, 7, 8.
