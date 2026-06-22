@@ -22,3 +22,8 @@ def test_decode_accepts_str_and_bytes_without_newline():
 def test_decode_rejects_garbage():
     with pytest.raises(ProtocolError):
         decode(b"not json")
+
+
+def test_decode_rejects_invalid_utf8():
+    with pytest.raises(ProtocolError):
+        decode(b"\xff\xfe")
