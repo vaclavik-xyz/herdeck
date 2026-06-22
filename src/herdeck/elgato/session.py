@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 
 from .. import layout
+from ..commands import Command, build_action_command, profile_for
 from ..config import Config
 from ..driver.base import TileView
 from ..model import AgentKey, AgentState, Status
@@ -188,6 +189,60 @@ class ElgatoSession:
             repo=ident or None,
             status_text=labels[kind].upper(),
         )
+
+    # --- press handling ---
+    def _slot_instance_key(self, instance_id: str) -> AgentKey | None:
+        if instance_id not in self._slot_order:
+            return None
+        ordinal = self._slot_order.index(instance_id)
+        return self._leases.assignment().get(ordinal)
+
+    def _action_kind(self, instance_id: str) -> str | None:
+        for iid, kind in self._action_keys:
+            if iid == instance_id:
+                return kind
+        return None
+
+    def key_up(self, instance_id: str) -> list[Command]:
+        key = self._slot_instance_key(instance_id)
+        if key is not None:
+            self.select(key)
+            return [
+                Command("focus", key.server_id, key.pane_id),
+                Command("read", key.server_id, key.pane_id, source="detection"),
+            ]
+        kind = self._action_kind(instance_id)
+        if kind == "pager":
+            self._page_blocked()
+            return []
+        if kind is None or not self.action_enabled(kind):
+            return []
+        target = self._target()
+        if self._pending_act == target.key:
+            return []  # an act is already in flight for this agent — never double-send
+        profile = profile_for(self.config, target.agent_type)
+        if kind in ("approve", "deny"):
+            self._pending_act = target.key  # show pending until the next state update
+            return [build_action_command(kind, target, profile, force=False, always=False)]
+        if kind == "stop":
+            if not self.is_armed():
+                self._arm()
+                return []
+            self._armed_for = None
+            self._pending_act = target.key
+            return [build_action_command("stop", target, profile, force=True, always=False)]
+        return []
+
+    def _page_blocked(self) -> None:
+        blocked = sorted(
+            (k for k, s in self._agents.items() if s.status is Status.BLOCKED),
+            key=lambda k: (self._server_rank(k.server_id), k.pane_id),
+        )
+        if not blocked:
+            return
+        cur = self.selected()
+        idx = blocked.index(cur) + 1 if cur in blocked else 0
+        self.select(blocked[idx % len(blocked)])
 
     # --- layout ---
     def set_slots(self, instances: list[tuple[str, tuple[int, int]]]) -> None:
