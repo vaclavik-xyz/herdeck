@@ -53,22 +53,26 @@ def make_png_rasterizer(baked_dir: str) -> Callable[[str, int], Image.Image]:
 def prerasterize_assets(src_dir: str, out_dir: str, size: int = BAKE_SIZE) -> list[str]:
     """Build-time: rasterize each ``*.svg`` in ``src_dir`` to a content-keyed PNG.
 
-    Uses cairosvg (build-time only; excluded from the frozen bundle). Iterating
-    only ``*.svg`` means baking into the source assets dir (``out_dir == src_dir``)
-    is safe and idempotent — already-written PNGs are skipped.
+    Uses cairosvg (build-time only; excluded from the frozen bundle). Returns the
+    baked PNG filenames (the bundle's glyph manifest). A PNG that already exists is
+    left untouched — no re-encode, no mtime churn — so iterating only ``*.svg`` makes
+    baking into the source assets dir (``out_dir == src_dir``) safe and idempotent.
     """
     import io
 
     import cairosvg  # build-time only — never bundled (see the .spec excludes)
 
     os.makedirs(out_dir, exist_ok=True)
-    written: list[str] = []
+    baked: list[str] = []
     for entry in sorted(os.listdir(src_dir)):
         if not entry.endswith(".svg"):
             continue
         with open(os.path.join(src_dir, entry), encoding="utf-8") as fh:
             svg = fh.read()
-        png = cairosvg.svg2png(bytestring=svg.encode(), output_width=size, output_height=size)
-        Image.open(io.BytesIO(png)).convert("RGBA").save(os.path.join(out_dir, glyph_png_name(svg)))
-        written.append(glyph_png_name(svg))
-    return written
+        name = glyph_png_name(svg)
+        dst = os.path.join(out_dir, name)
+        if not os.path.exists(dst):
+            png = cairosvg.svg2png(bytestring=svg.encode(), output_width=size, output_height=size)
+            Image.open(io.BytesIO(png)).convert("RGBA").save(dst)
+        baked.append(name)
+    return baked
