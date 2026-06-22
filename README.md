@@ -173,8 +173,9 @@ reflow, status drives color not order), tracks a single global selection (a lone
 blocked agent auto-selects), and speaks a small JSON line protocol to the shell
 over a local Unix socket.
 
-**Discovery contract.** The shell creates the socket and a token, then hands both
-to the backend through the environment:
+**Discovery contract.** The shell picks a socket path and generates a one-shot
+token, then hands both to the backend through the environment; the backend
+creates and binds that socket and listens for the shell's connection:
 
 - `HERDECK_ELGATO_SOCK` — path to the Unix socket the backend listens on.
 - `HERDECK_ELGATO_TOKEN` — shared secret the shell sends in its `hello`; the
