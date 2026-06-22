@@ -1,4 +1,5 @@
 import io
+import os
 import urllib.error
 import urllib.request
 
@@ -18,6 +19,14 @@ class StubIcons:
 
 def make_deck():
     return WebDeck(slots=13, serve=False, icon_provider=StubIcons())
+
+
+def test_web_deck_icons_dir_configures_override_provider(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    deck = WebDeck(slots=13, serve=False, icons_dir="~/herdeck-icons")
+
+    assert deck._icons._overrides_dir == os.path.join(str(tmp_path), "herdeck-icons")
 
 
 def test_page_has_keyboard_and_highlight_support():

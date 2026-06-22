@@ -17,10 +17,20 @@ class ElgatoDriver(DeckDriver):
     when it is None a real deck is enumerated and opened.
     """
 
-    def __init__(self, device=None, icon_provider=None):
+    def __init__(
+        self,
+        device=None,
+        icon_provider=None,
+        brightness: int = BRIGHTNESS,
+        icons_dir: str | None = None,
+    ):
+        self._brightness = brightness
+        self._icons_dir = icons_dir
         self._dev = device if device is not None else self._open_device()
         self._icons = icon_provider
         self._callback: Callable[[int], None] | None = None
+        if device is not None:
+            self._dev.set_brightness(brightness)
 
     def _open_device(self):
         # Hardware path (lazy import so the test suite needs neither the library
@@ -33,7 +43,7 @@ class ElgatoDriver(DeckDriver):
         deck = decks[0]
         deck.open()
         deck.reset()
-        deck.set_brightness(BRIGHTNESS)
+        deck.set_brightness(self._brightness)
         return deck
 
     def slot_count(self) -> int:
@@ -47,8 +57,13 @@ class ElgatoDriver(DeckDriver):
             from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
 
             cache = os.path.join(tempfile.gettempdir(), "herdeck-elgato-icons")
+            overrides = (
+                os.path.abspath(os.path.expanduser(self._icons_dir)) if self._icons_dir else None
+            )
             self._icons = IconProvider(
-                cache_dir=cache, slug_map=DEFAULT_AGENT_SLUGS, overrides_dir=None
+                cache_dir=cache,
+                slug_map=DEFAULT_AGENT_SLUGS,
+                overrides_dir=overrides,
             )
         return self._icons
 

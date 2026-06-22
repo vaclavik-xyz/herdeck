@@ -8,6 +8,7 @@ from collections.abc import Callable
 from .bootstrap import (
     _discover_config_path,
     _discover_local_config_path,
+    make_runtime_profile_switcher,
     resolve_mode,
     resolve_runtime_config,
 )
@@ -306,9 +307,9 @@ async def _guard(coro) -> None:
         pass
 
 
-async def _ticker(app: App, loop) -> None:
+async def _ticker(app: App, loop, interval: float = TICK_INTERVAL) -> None:
     while True:
-        await asyncio.sleep(TICK_INTERVAL)
+        await asyncio.sleep(interval)
         loop.call_soon_threadsafe(app.handle_tick)
 
 
@@ -445,7 +446,12 @@ class ConnectorManager:
             self._stop_connector(sid)
 
 
-async def _run(config: Config, deck: DeckDriver, switch_profile=None) -> None:
+async def _run(
+    config: Config,
+    deck: DeckDriver,
+    switch_profile=None,
+    tick_interval: float | None = None,
+) -> None:
     if not config.servers:
         raise ConfigError("no servers configured for remote run")
     loop = asyncio.get_running_loop()
@@ -487,7 +493,7 @@ async def _run(config: Config, deck: DeckDriver, switch_profile=None) -> None:
 
     manager.update(config.servers)
     tasks = manager.tasks()
-    tasks.append(_guard(_ticker(app, loop)))
+    tasks.append(_guard(_ticker(app, loop, tick_interval or config.hardware.tick_interval)))
     if hasattr(deck, "run_reader"):
         tasks.append(_guard(deck.run_reader()))
     if hasattr(deck, "keep_alive_loop"):
@@ -498,18 +504,58 @@ async def _run(config: Config, deck: DeckDriver, switch_profile=None) -> None:
         manager.stop_all()
 
 
-def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None, web_factory=None):
+def _resolve_deck_kind(config: Config | None, *, getenv=os.environ.get):
+    env_kind = getenv("HERDECK_DECK")
+    if env_kind:
+        return env_kind
+    if getenv("HERDECK_FAKE_DECK"):
+        return "fake"
+    return config.hardware.deck if config and config.hardware.deck else None
+
+
+def _resolve_socket_path(config: Config | None, *, getenv=os.environ.get) -> str:
+    raw = getenv("HERDR_SOCKET") or (
+        config.hardware.herdr_socket if config and config.hardware.herdr_socket else None
+    )
+    return os.path.expanduser(raw or "~/.config/herdr/herdr.sock")
+
+
+def _resolve_tick_interval(config: Config | None) -> float:
+    return config.hardware.tick_interval if config else TICK_INTERVAL
+
+
+def make_deck(
+    kind,
+    slots,
+    *,
+    hardware=None,
+    d200_factory=None,
+    elgato_factory=None,
+    web_factory=None,
+):
     """Build the deck driver. kind None => auto (d200, elgato, else web)."""
     import os
 
+    from .config import HardwareConfig
+
+    hardware = hardware or HardwareConfig()
+
+    def _call_web_factory():
+        host = os.environ.get("HERDECK_WEB_BIND") or hardware.web_bind or "127.0.0.1"
+        env_port = os.environ.get("HERDECK_WEB_PORT")
+        raw_port = env_port if env_port is not None else hardware.web_port
+        port = int(raw_port if raw_port is not None else 8800)
+        try:
+            return web_factory(host=host, port=port)
+        except TypeError:
+            return web_factory()
+
     if web_factory is None:
 
-        def web_factory():
+        def web_factory(host=None, port=None):
             from .driver.web import WebDeck
 
-            host = os.environ.get("HERDECK_WEB_BIND", "127.0.0.1")
-            port = int(os.environ.get("HERDECK_WEB_PORT", "8800"))
-            d = WebDeck(slots, host=host, port=port)
+            d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir)
             print(f"herdeck web simulator on http://{d.host}:{d.port}/?token={d.press_token}")
             return d
 
@@ -518,19 +564,24 @@ def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None, web_factor
         def d200_factory():
             from .driver.d200 import D200Driver
 
-            return D200Driver()
+            return D200Driver(
+                brightness=hardware.brightness,
+                debounce=hardware.debounce,
+                keep_alive_interval=hardware.keep_alive_interval,
+                icons_dir=hardware.icons_dir,
+            )
 
     if elgato_factory is None:
 
         def elgato_factory():
             from .driver.elgato import ElgatoDriver
 
-            return ElgatoDriver()
+            return ElgatoDriver(brightness=hardware.brightness, icons_dir=hardware.icons_dir)
 
     if kind == "fake":
         return FakeRenderer(slots)
     if kind == "web":
-        return web_factory()
+        return _call_web_factory()
     if kind == "d200":
         return d200_factory()
     if kind == "elgato":
@@ -544,14 +595,30 @@ def make_deck(kind, slots, *, d200_factory=None, elgato_factory=None, web_factor
         except Exception as exc:
             print(f"No Stream Deck opened ({exc}); close any vendor app holding the device.")
     print("Falling back to the web simulator.")
-    return web_factory()
+    return _call_web_factory()
 
 
-async def _amain(mode, file_config, deck, *, switch_profile=None) -> None:
+async def _amain(
+    mode,
+    file_config,
+    deck,
+    *,
+    switch_profile=None,
+    tick_interval: float | None = None,
+) -> None:
     config, aclose = await resolve_runtime_config(mode, file_config)
-    runtime_switch = switch_profile if mode[0] == "remote" else None
+    runtime_switch = make_runtime_profile_switcher(
+        config,
+        switch_profile,
+        local_bridge=mode[0] == "local",
+    )
     try:
-        await _run(config, deck, switch_profile=runtime_switch)
+        await _run(
+            config,
+            deck,
+            switch_profile=runtime_switch,
+            tick_interval=tick_interval,
+        )
     finally:
         await aclose()
 
@@ -567,6 +634,7 @@ def main() -> None:
         )
     mock = bool(os.environ.get("HERDECK_MOCK"))
     config_path = None if mock else _discover_config_path()
+    snapshot = None
     switch_profile = None
     if config_path:
         from .settings import load_settings, resolve_profile
@@ -577,7 +645,7 @@ def main() -> None:
         switch_profile = make_profile_switcher(snapshot)
     else:
         file_config = None
-    socket_path = os.path.expanduser(os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock"))
+    socket_path = _resolve_socket_path(file_config)
     mode = resolve_mode(
         mock=mock,
         config_path=config_path,
@@ -591,15 +659,21 @@ def main() -> None:
 
     grid = file_config.grid if file_config else (5, 3)
     slots = grid[0] * grid[1] - 2
-    kind = os.environ.get("HERDECK_DECK") or (
-        "fake" if os.environ.get("HERDECK_FAKE_DECK") else None
-    )
-    deck = make_deck(kind, slots)
+    kind = _resolve_deck_kind(file_config)
+    deck = make_deck(kind, slots, hardware=file_config.hardware if file_config else None)
     try:
         if mode[0] == "mock":
             asyncio.run(_run_mock(_mock_config(), deck))
         else:
-            asyncio.run(_amain(mode, file_config, deck, switch_profile=switch_profile))
+            asyncio.run(
+                _amain(
+                    mode,
+                    file_config,
+                    deck,
+                    switch_profile=switch_profile,
+                    tick_interval=_resolve_tick_interval(file_config),
+                )
+            )
     finally:
         deck.close()
 

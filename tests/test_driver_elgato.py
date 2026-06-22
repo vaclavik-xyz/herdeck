@@ -1,4 +1,5 @@
 import io
+import os
 
 from PIL import Image
 
@@ -99,3 +100,20 @@ def test_render_working_only_touches_the_given_keys(monkeypatch):
     monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
     drv.render_working([TileView(2, "x", "amber"), TileView(5, "y", "amber")])
     assert set(deck.images) == {2, 5}  # untouched keys keep their image
+
+
+def test_elgato_brightness_can_be_configured():
+    deck = FakeDeck()
+    drv = ElgatoDriver(device=deck, brightness=35)
+
+    assert deck.brightness == 35
+    drv.close()
+
+
+def test_elgato_icons_dir_configures_override_provider(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    drv = ElgatoDriver(device=FakeDeck(), icons_dir="~/herdeck-icons")
+
+    icons = drv._icon_provider()
+
+    assert icons._overrides_dir == os.path.join(str(tmp_path), "herdeck-icons")

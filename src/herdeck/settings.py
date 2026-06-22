@@ -324,6 +324,7 @@ def _resolve_legacy(snapshot: SettingsSnapshot) -> Config:
     from .config import load_config
 
     cfg = load_config(snapshot.config_path)
+    cfg.hardware = _hardware_config(snapshot.local_data)
     cfg.meta.active_profile = "default"
     cfg.meta.profile_names = ["default"]
     cfg.meta.env_locked_profile = snapshot.env_profile is not None
