@@ -1,13 +1,59 @@
 <!DOCTYPE html>
 <html>
-  <head><meta charset="utf-8" /></head>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: -apple-system, system-ui, sans-serif; font-size: 9pt; margin: 12px; color: #d8d8d8; background: #2d2d2d; }
+      label { display: block; margin-bottom: 4px; font-weight: 600; }
+      input { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #3d3d3d; color: #fff; border: 1px solid #555; border-radius: 3px; }
+      .hint { color: #888; margin-top: 6px; }
+      code { background: #1f1f1f; padding: 1px 4px; border-radius: 2px; }
+    </style>
+  </head>
   <body>
-    <sdpi-item label="herdeck binary">
-      <!-- `global` routes this to the plugin's GLOBAL settings — the scope plugin.ts
-           reads via getGlobalSettings()/onDidReceiveGlobalSettings. Without it the value
-           would land in per-action settings and never reach command resolution. -->
-      <sdpi-textfield setting="herdeckPath" global placeholder="herdeck (or absolute path)"></sdpi-textfield>
-    </sdpi-item>
-    <script src="https://sdpi-components.dev/releases/v4/sdpi-components.js"></script>
+    <label for="herdeckPath">herdeck binary</label>
+    <input id="herdeckPath" type="text" placeholder="herdeck (or absolute path)" autocomplete="off" />
+    <div class="hint">Path to the herdeck executable. Leave blank to use <code>herdeck</code> on PATH.</div>
+
+    <!--
+      Offline-first Property Inspector: no CDN / external script. It talks to the Stream
+      Deck app's LOCAL registration websocket (loopback 127.0.0.1) and reads/writes the
+      plugin's GLOBAL settings (the scope plugin.ts consumes via getGlobalSettings /
+      onDidReceiveGlobalSettings). herdeck's ethos is offline-first; a blocked/absent CDN
+      must never stop a user from configuring the (critical) herdeck path.
+    -->
+    <script>
+      let websocket = null;
+      let piUuid = null;
+      const input = document.getElementById("herdeckPath");
+
+      // The Stream Deck app calls this global entry point with the registration args.
+      function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent /*, inInfo, inActionInfo */) {
+        piUuid = inUUID;
+        websocket = new WebSocket("ws://127.0.0.1:" + inPort);
+        websocket.onopen = function () {
+          websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+          websocket.send(JSON.stringify({ event: "getGlobalSettings", context: inUUID }));
+        };
+        websocket.onmessage = function (evt) {
+          let msg;
+          try { msg = JSON.parse(evt.data); } catch (e) { return; }
+          if (msg && msg.event === "didReceiveGlobalSettings") {
+            const settings = (msg.payload && msg.payload.settings) || {};
+            input.value = settings.herdeckPath || "";
+          }
+        };
+      }
+
+      function saveHerdeckPath() {
+        if (!websocket || websocket.readyState !== 1 || !piUuid) return;
+        websocket.send(JSON.stringify({
+          event: "setGlobalSettings",
+          context: piUuid,
+          payload: { herdeckPath: input.value.trim() },
+        }));
+      }
+      input.addEventListener("change", saveHerdeckPath);
+    </script>
   </body>
 </html>
