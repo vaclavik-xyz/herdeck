@@ -164,3 +164,64 @@ def test_whitespace_only_prompt_neither_enables_nor_counts_as_read():
     assert sess.action_enabled("approve") is False  # blank is not a real prompt
     # blank must NOT satisfy the read, or the proactive read would stop firing forever
     assert sess.blocked_without_detection() == [AgentKey("dev", "p1")]
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_arm_times_out():
+    clk = FakeClock()
+    sess = ElgatoSession(make_config(), FakeIcons(), clock=clk, arm_timeout=3.0)
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    sess.select(AgentKey("dev", "p1"))
+    sess._arm()  # internal: first Stop press arms (Task 7 wires the press)
+    assert sess.is_armed() is True
+    clk.now = 3.5
+    sess.tick()
+    assert sess.is_armed() is False
+
+
+def test_changing_selection_disarms():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING), state("p2", Status.WORKING)])
+    sess.select(AgentKey("dev", "p1"))
+    sess._arm()
+    assert sess.is_armed() is True
+    sess.select(AgentKey("dev", "p2"))
+    assert sess.is_armed() is False
+
+
+def test_is_armed_expires_without_explicit_tick():
+    clk = FakeClock()
+    sess = ElgatoSession(make_config(), FakeIcons(), clock=clk, arm_timeout=3.0)
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    sess.select(AgentKey("dev", "p1"))
+    sess._arm()
+    clk.now = 4.0
+    assert sess.is_armed() is False  # lazy expiry, no tick() called
+
+
+def test_arm_cleared_when_target_vanishes_and_does_not_resurrect():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    sess.select(AgentKey("dev", "p1"))
+    sess._arm()
+    assert sess.is_armed() is True
+    sess.apply_snapshot("dev", [])  # p1 gone -> reconcile clears the arm
+    assert sess.is_armed() is False
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])  # same key reappears
+    assert sess.is_armed() is False  # stale arm must not resurrect
+
+
+def test_armed_stop_key_renders_confirm_state():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("t", "stop", (2, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    sess.select(AgentKey("dev", "p1"))
+    sess._arm()
+    assert b"STOP?" in sess.render_all()["t"].image_png  # armed shows the confirm prompt
