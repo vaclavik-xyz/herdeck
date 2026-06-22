@@ -239,3 +239,82 @@ def test_arm_cleared_on_disconnect_and_not_resurrected_by_reconnect():
     assert b"STOP?" not in sess.render_all()["t"].image_png  # tile no longer confirms
     sess.set_connection("dev", True)  # quick reconnect
     assert sess.is_armed() is False  # stale confirm must not resurrect
+
+
+from herdeck.commands import Command  # noqa: E402
+
+
+def test_pressing_slot_selects_and_reads():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    cmds = sess.key_up("s0")
+    assert cmds == [
+        Command("focus", "dev", "p1"),
+        Command("read", "dev", "p1", source="detection"),
+    ]
+    assert sess.selected() == AgentKey("dev", "p1")
+
+
+def test_approve_emits_guarded_act_if_blocked():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("a", "approve", (0, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    sess.set_detection(AgentKey("dev", "p1"), "y/n")
+    cmds = sess.key_up("a")
+    assert cmds == [Command("act_if_blocked", "dev", "p1", keys=["1", "enter"])]
+
+
+def test_stop_requires_arm_then_confirm():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("t", "stop", (2, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    sess.select(AgentKey("dev", "p1"))
+    assert sess.key_up("t") == []          # first press arms
+    assert sess.is_armed() is True
+    assert sess.key_up("t") == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
+    assert sess.is_armed() is False         # fired -> disarmed
+
+
+def test_pager_advances_selection_through_blocked():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("p", "pager", (3, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED), state("p2", Status.BLOCKED)])
+    assert sess.selected() is None  # two blocked, no auto
+    sess.key_up("p")
+    first = sess.selected()
+    sess.key_up("p")
+    assert sess.selected() != first  # cycled to the other blocked agent
+
+
+def test_stop_confirm_after_timeout_rearms_instead_of_firing():
+    clk = FakeClock()
+    sess = ElgatoSession(make_config(), FakeIcons(), clock=clk, arm_timeout=3.0)
+    sess.set_action_keys([("t", "stop", (2, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    sess.select(AgentKey("dev", "p1"))
+    assert sess.key_up("t") == []  # first press arms
+    clk.now = 4.0                  # confirm window expired, no manual tick()
+    assert sess.key_up("t") == []  # must re-arm, NOT fire act_force
+    assert sess.is_armed() is True
+
+
+def test_repeated_approve_while_pending_does_not_double_send():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("a", "approve", (0, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    sess.set_detection(AgentKey("dev", "p1"), "y/n")
+    first = sess.key_up("a")
+    second = sess.key_up("a")  # pressed again before any state update
+    assert len(first) == 1 and second == []  # no duplicate act_if_blocked
+
+
+def test_pending_act_clears_on_next_snapshot():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("a", "approve", (0, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    sess.set_detection(AgentKey("dev", "p1"), "y/n")
+    sess.key_up("a")              # emits act, sets pending
+    assert sess.key_up("a") == []  # suppressed while pending
+    sess.apply_snapshot("dev", [state("p1", Status.IDLE)])  # the act's re-list result
+    assert sess._pending_act is None  # pending cleared, key not stuck
