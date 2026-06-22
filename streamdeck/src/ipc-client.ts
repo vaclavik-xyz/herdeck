@@ -71,9 +71,15 @@ export class IpcClient {
   private attach(stream: Duplex) {
     this.stream = stream;
     this.buffer = ""; // fresh buffer per connection so a reconnect never inherits a partial frame
-    stream.on("data", (chunk: Buffer) => this.onData(chunk));
+    // Guard every handler against a superseded connection: once a newer connection has
+    // attached, a stale stream's late data/close must not corrupt the buffer or wrongly
+    // mark the live client disconnected (which would silently drop subsequent sends).
+    stream.on("data", (chunk: Buffer) => {
+      if (this.stream === stream) this.onData(chunk);
+    });
     stream.on("error", () => {});
     stream.on("close", () => {
+      if (this.stream !== stream) return;
       this.stream = null;
       this.closeCbs.forEach((cb) => cb());
     });
