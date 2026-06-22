@@ -59,3 +59,45 @@ def test_png_rasterizer_never_imports_cairosvg(tmp_path, monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", guard)
     frozen.make_png_rasterizer(str(tmp_path))(svg, ICON_SIZE)
+
+
+def test_prerasterize_writes_content_keyed_pngs(tmp_path):
+    import pytest
+
+    pytest.importorskip("cairosvg")  # build-time dep; present in the dev extra
+
+    src = tmp_path / "assets"
+    src.mkdir()
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
+        '<rect width="10" height="10" fill="#fff"/></svg>'
+    )
+    (src / "codex.svg").write_text(svg, encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    written = frozen.prerasterize_assets(str(src), str(out), frozen.BAKE_SIZE)
+
+    expected = frozen.glyph_png_name(svg)
+    assert written == [expected]
+    baked = out / expected
+    assert baked.exists()
+    with Image.open(baked) as im:
+        assert im.size == (frozen.BAKE_SIZE, frozen.BAKE_SIZE)
+    # The runtime loader round-trips against what the baker wrote.
+    assert frozen.make_png_rasterizer(str(out))(svg, frozen.BAKE_SIZE).size == (
+        frozen.BAKE_SIZE,
+        frozen.BAKE_SIZE,
+    )
+
+
+def test_prerasterize_into_same_dir_is_idempotent(tmp_path):
+    import pytest
+
+    pytest.importorskip("cairosvg")
+    src = tmp_path / "assets"
+    src.mkdir()
+    (src / "x.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
+    first = frozen.prerasterize_assets(str(src), str(src), frozen.BAKE_SIZE)
+    second = frozen.prerasterize_assets(str(src), str(src), frozen.BAKE_SIZE)
+    assert first == second  # re-running over the same dir is stable
