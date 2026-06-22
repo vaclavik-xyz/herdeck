@@ -9,13 +9,19 @@ export interface Surface {
 
 export class Adapter {
   private ready = false;
+  private backendState: "starting" | "down" | "ready" = "starting";
   private surfaces = new Map<string, Surface>();
   private lastImage = new Map<string, string>();
 
   constructor(private readonly ipc: IpcClient, private readonly registry: KeyRegistry) {
     this.ipc.onReady(() => {
       this.ready = true;
+      this.setBackendState("ready");
       this.pushSnapshots();
+    });
+    this.ipc.onClose(() => {
+      this.ready = false;
+      this.setBackendState("down");
     });
     this.ipc.onRender((keys) => this.applyRender(keys));
     this.registry.onChange(() => {
@@ -23,7 +29,24 @@ export class Adapter {
     });
   }
 
-  registerSurface(instanceId: string, surface: Surface) { this.surfaces.set(instanceId, surface); }
+  registerSurface(instanceId: string, surface: Surface) {
+    this.surfaces.set(instanceId, surface);
+    const title = this.placeholderTitle();
+    if (title !== null) surface.setTitle(title);
+  }
+
+  setBackendState(state: "starting" | "down" | "ready") {
+    this.backendState = state;
+    const title = state === "ready" ? "" : this.placeholderTitle();
+    if (title !== null) this.surfaces.forEach((s) => s.setTitle(title));
+  }
+
+  private placeholderTitle(): string | null {
+    if (this.backendState === "starting") return "starting…";
+    if (this.backendState === "down") return "backend down";
+    return null; // ready: authoritative renders own the key
+  }
+
   unregisterSurface(instanceId: string) { this.surfaces.delete(instanceId); this.lastImage.delete(instanceId); }
 
   handleKeyDown(instanceId: string) { this.ipc.sendKeyDown(instanceId); }
