@@ -116,6 +116,15 @@ SERVER_CHIP_COLORS: dict[str, tuple[int, int, int]] = {
 }
 
 
+def _rgb_color(name: str, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+    if isinstance(name, str) and name.startswith("#") and len(name) == 7:
+        try:
+            return tuple(int(name[i : i + 2], 16) for i in (1, 3, 5))
+        except ValueError:
+            return fallback
+    return SERVER_CHIP_COLORS.get(name, fallback)
+
+
 def _font(size: int):
     """A scalable font at the given size; None only if nothing is available."""
     if size in _font_cache:
@@ -143,12 +152,23 @@ def _load_big_font():
     return _font(_GLYPH_FONT_SIZE)
 
 
+def _panel_bg(color: str) -> tuple[int, int, int]:
+    if color == "amber":
+        return (40, 30, 12)
+    if color == "grey":
+        return (30, 30, 34)
+    rgb = COLORS.get(color)
+    if rgb is None:
+        return (30, 30, 34)
+    return tuple(max(12, int(channel * 0.28)) for channel in rgb)
+
+
 def compose_panel(panel: PanelView) -> Image.Image:
     """Render a PanelView to a 392x196 image with large, readable text.
 
     Shared by the D200 driver (split into two cells) and the web simulator.
     """
-    bg = (40, 30, 12) if panel.color == "amber" else (30, 30, 34)
+    bg = _panel_bg(panel.color)
     img = Image.new("RGB", (PANEL_W, PANEL_H), bg)
     d = ImageDraw.Draw(img)
     title_f = _font(30)
@@ -406,7 +426,7 @@ class IconProvider:
                 d.text((12, y), line, font=fb, fill=(180, 180, 188))
                 y += 20
         if tile.server_tag:
-            chip_fill = SERVER_CHIP_COLORS.get(tile.server_accent or "", (95, 95, 105))
+            chip_fill = _rgb_color(tile.server_accent or "", (95, 95, 105))
             fc = _font(14)
             tag = _truncate(d, tile.server_tag, fc, 48)
             text_w = d.textlength(tag, font=fc)

@@ -1,4 +1,5 @@
 import io
+import os
 import urllib.error
 import urllib.request
 
@@ -18,6 +19,14 @@ class StubIcons:
 
 def make_deck():
     return WebDeck(slots=13, serve=False, icon_provider=StubIcons())
+
+
+def test_web_deck_icons_dir_configures_override_provider(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    deck = WebDeck(slots=13, serve=False, icons_dir="~/herdeck-icons")
+
+    assert deck._icons._overrides_dir == os.path.join(str(tmp_path), "herdeck-icons")
 
 
 def test_page_has_keyboard_and_highlight_support():
@@ -198,6 +207,21 @@ def test_http_press_requires_session_token():
         with urllib.request.urlopen(req, timeout=2) as resp:
             assert resp.status == 204
         assert seen == [0]
+    finally:
+        d.close()
+
+
+def test_error_responses_are_browser_friendly_not_downloads():
+    # A request without a valid token must return viewable text, never
+    # application/octet-stream — Safari offers to download octet-stream bodies.
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"http://{d.host}:{d.port}/", timeout=2)
+        err = exc.value
+        assert err.code == 403
+        assert err.headers.get("Content-Type", "").startswith("text/plain")
+        assert "token" in err.read().decode().lower()
     finally:
         d.close()
 

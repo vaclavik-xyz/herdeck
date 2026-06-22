@@ -138,3 +138,45 @@ def test_server_accent_returns_stable_palette_color():
 
     assert server_accent("alpha") == server_accent("alpha")
     assert server_accent("alpha") in SERVER_ACCENTS
+
+
+def test_theme_status_colors_apply_to_agent_tiles():
+    cfg = make_config()
+    cfg.theme.colors["blocked"] = "pink"
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+
+    assert o.render().tiles[0].color == "pink"
+
+
+def test_theme_status_colors_apply_to_overview_panel():
+    cfg = make_config()
+    cfg.theme.colors["blocked"] = "pink"
+    cfg.theme.colors["offline"] = "violet"
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+
+    assert o.render().panel.color == "pink"
+
+    o.set_connection("dev", False)
+
+    assert o.render().panel.color == "violet"
+
+
+def test_tile_fields_can_hide_branch_status_time_and_server_tag():
+    cfg = make_multi_config()
+    cfg.view.tile_fields = ["repo"]
+    o = Orchestrator(cfg, slots=13)
+    s = AgentState(AgentKey("alpha", "p1"), "claude", "api", Status.IDLE)
+    s.repo = "repo"
+    s.branch = "feat/x"
+    o.apply_snapshot("alpha", [s])
+    o.apply_event("bravo", AgentState(AgentKey("bravo", "p1"), "codex", "rb", Status.IDLE))
+
+    tile = o.render().tiles[0]
+
+    assert tile.repo == "repo"
+    assert tile.branch == ""
+    assert tile.status_text is None
+    assert tile.time_text is None
+    assert tile.server_tag is None
