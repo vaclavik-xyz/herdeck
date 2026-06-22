@@ -6,8 +6,6 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "experimentalDecorators": true,
-    "useDefineForClassFields": false,
     "outDir": "bin",
     "rootDir": "src"
   },
