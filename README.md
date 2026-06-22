@@ -200,8 +200,43 @@ socket path + one-shot token via `HERDECK_ELGATO_SOCK`/`HERDECK_ELGATO_TOKEN` an
 `HERDECK_DECK=elgato-plugin`), forwards key presses, and renders the PNGs the
 backend hands back — no logic of its own. Build it with `cd streamdeck && npm install
 && npm run build`; the bundle is `streamdeck/xyz.vaclavik.herdeck.sdPlugin/`.
-Packaging it into a double-clickable `.streamDeckPlugin` and shipping a frozen
-backend are packaging follow-ups.
+
+### Packaging the plugin (local, unsigned, arm64)
+
+`npm run package` builds a double-clickable `xyz.vaclavik.herdeck.streamDeckPlugin`
+with a **frozen backend bundled inside**, so it installs and runs on a Mac with no
+Python and no `herdeck` install. This milestone targets the local dev machine:
+**arm64-only, unsigned/ad-hoc** (no code signing or notarization — Gatekeeper may
+warn on other machines).
+
+**Prereqs:** an arm64 Mac, the Python build deps (`pip install -e .[packaging]` into
+your venv — PyInstaller 6 + the build-time SVG rasterizer cairosvg + the frozen
+runtime deps), and the Node deps (`cd streamdeck && npm install`). cairosvg needs
+libcairo present at build time (e.g. `brew install cairo`); it is **not** bundled.
+
+**Build:**
+
+```bash
+pip install -e .[packaging]      # once, into the venv the build uses
+cd streamdeck && npm run package # pre-rasterize → freeze → npm build → zip
+```
+
+`scripts/build-plugin.sh` runs four steps: pre-rasterize `src/herdeck/assets/*.svg`
+→ PNG (so the frozen runtime is Pillow-only, never cairosvg); freeze the backend
+with PyInstaller (onedir) into `…sdPlugin/backend/herdeck-backend/herdeck-backend`;
+`npm run build` the TS shell; then package the `.sdPlugin` into a `.streamDeckPlugin`
+with Elgato's `DistributionTool` if it is on `PATH`, else a plain `zip` (the format
+is a zip of the bundle dir). All build outputs are gitignored.
+
+**Install:** double-click the `.streamDeckPlugin` (or drag it onto the Stream Deck
+app). The bundled backend is discovered automatically — no Python required.
+
+**Backend discovery precedence** (`resolveHerdeckCommand`): the **PI-configured
+path** → `HERDECK_BIN` → the **bundled** `backend/herdeck-backend/herdeck-backend`
+(only when it exists) → `herdeck` on `PATH`. So a packaged install uses the bundled
+frozen backend with zero config, while a dev checkout (no `backend/`) transparently
+falls through to a venv/PATH `herdeck`, and an explicit PI path or `HERDECK_BIN`
+always wins.
 
 ## Adding an agent type
 Add it to the launcher block used by your profile:
@@ -269,8 +304,10 @@ Legacy configs use the root `[notifications]` table with the same fields.
   (config-only changes).
 - Drill-in shows the read prompt text on a spare tile; richer prompt display is
   future work.
-- The Elgato plugin's TypeScript shell and `.streamDeckPlugin` packaging are a
-  separate follow-up plan; only the Python backend ships today.
+- The Elgato plugin ships end-to-end: Python backend, TypeScript shell, and a
+  local `npm run package` that bundles a frozen backend into an installable
+  `.streamDeckPlugin` (arm64, unsigned). Remaining: code signing/notarization,
+  universal2/Intel, real (non-placeholder) icon art, and on-hardware verification.
 
 ## License
 MIT
