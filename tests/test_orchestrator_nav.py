@@ -184,6 +184,156 @@ def test_no_fallback_actions_before_read_completes():
     assert o.on_press(0) == []
 
 
+def test_safety_can_hide_approve_always_action():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.approve_always = False
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection("Proceed? (y/n)")
+
+    labels = [t.label for t in o.render().tiles[:3]]
+
+    assert labels == ["Approve", "Deny", ""]
+
+
+def test_safety_can_hide_parsed_approve_always_option():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.approve_always = False
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    labels = [t.label for t in o.render().tiles[:3]]
+
+    assert all(not label.startswith("2 ") for label in labels)
+
+
+def test_safety_can_hide_parsed_approve_always_by_label():
+    cfg = make_config()
+    cfg.profiles["codex"] = AnswerProfile(["y", "enter"], ["n", "enter"], ["ctrl+c"], ["y", "enter"])
+    cfg.safety.approve_always = False
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="codex")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    labels = [t.label for t in o.render().tiles[:3]]
+
+    assert all(not label.startswith("2 ") for label in labels)
+
+
+def test_safety_confirmation_blocks_force_stop_until_second_press():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["act_force"]
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)
+
+    first = o.on_press(11)
+    second = o.on_press(11)
+
+    assert first == []
+    assert second == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
+
+
+def test_safety_confirmation_blocks_approve_always_until_second_press():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection("Proceed? (y/n)")
+
+    first = o.on_press(1)
+    second = o.on_press(1)
+
+    assert first == []
+    assert second == [Command("act_if_blocked", "dev", "p1", keys=["2", "enter"])]
+
+
+def test_safety_confirmation_blocks_parsed_approve_always_until_second_press():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    first = o.on_press(1)
+    second = o.on_press(1)
+
+    assert first == []
+    assert second == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+
+
+def test_safety_confirmation_blocks_label_based_approve_always_until_second_press():
+    cfg = make_config()
+    cfg.profiles["codex"] = AnswerProfile(["y", "enter"], ["n", "enter"], ["ctrl+c"], ["y", "enter"])
+    cfg.safety.require_confirm_for = ["approve_always"]
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="codex")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    first = o.on_press(1)
+    second = o.on_press(1)
+
+    assert first == []
+    assert second == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+
+
+def test_safety_confirmation_resets_when_detection_changes():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    assert o.on_press(1) == []
+    o.set_detection("Proceed?\n1. Yes\n2. Yes, always\n3. No")
+
+    assert o.on_press(1) == []
+    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+
+
+def test_safety_keeps_approve_when_approve_always_shares_key():
+    cfg = make_config()
+    cfg.profiles["claude"] = AnswerProfile(["1"], ["3"], ["ctrl+c"], ["1"])
+    cfg.safety.approve_always = False
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    assert o.render().tiles[0].label.startswith("1 Yes")
+    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1"])]
+
+
+def test_safety_confirmation_survives_unchanged_snapshot():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    state = st("p1", Status.BLOCKED, agent_type="claude")
+    o.apply_snapshot("dev", [state])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    assert o.on_press(1) == []
+    o.apply_snapshot("dev", [state])
+
+    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+
+
+def test_safety_confirmation_survives_unchanged_event():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    state = st("p1", Status.BLOCKED, agent_type="claude")
+    o.apply_snapshot("dev", [state])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    assert o.on_press(1) == []
+    o.apply_event("dev", state)
+
+    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+
+
 def test_overview_panel_spotlights_oldest_blocked():
     from herdeck.config import AnswerProfile, Config
     from herdeck.model import AgentKey, AgentState, Status

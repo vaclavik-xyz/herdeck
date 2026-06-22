@@ -12,12 +12,18 @@ from .model import AgentKey, AgentState, Status
 _OPTION_LABEL_MAX = 14
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 _MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
+_APPROVE_ALWAYS_HINTS = ("always", "don't ask", "dont ask", "do not ask")
 
 
 def server_accent(server_id: str, accents: list[str] | None = None) -> str:
     palette = accents or list(SERVER_ACCENTS)
     digest = hashlib.sha1(server_id.encode()).digest()
     return palette[digest[0] % len(palette)]
+
+
+def _looks_like_approve_always(label: str) -> bool:
+    normalized = label.lower().replace("\u2019", "'")
+    return any(hint in normalized for hint in _APPROVE_ALWAYS_HINTS)
 
 
 @dataclass
@@ -44,6 +50,7 @@ class Orchestrator:
         self._launcher: bool = False
         self._profile_menu: bool = False
         self._profile_menu_origin: str = "overview"
+        self._pending_confirm: tuple[str, AgentKey] | None = None
 
     def _agent_slots(self) -> int:
         """Overview tiles available for agents (the last tile is the launcher)."""
@@ -78,14 +85,24 @@ class Orchestrator:
 
     # --- inbound state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        drilled_before = (
+            self._agents.get(self._drill)
+            if self._drill is not None and self._drill.server_id == server_id
+            else None
+        )
         self._agents = {k: v for k, v in self._agents.items() if k.server_id != server_id}
         for s in states:
             self._agents[s.key] = s
             self._touch(s)
         live = set(self._agents)
         self._since = {k: v for k, v in self._since.items() if k in live}
+        if self._drill is not None and self._drill.server_id == server_id:
+            if self._agents.get(self._drill) != drilled_before:
+                self._pending_confirm = None
 
     def apply_event(self, server_id: str, state: AgentState) -> None:
+        if self._drill == state.key and self._agents.get(state.key) != state:
+            self._pending_confirm = None
         self._agents[state.key] = state
         self._touch(state)
 
@@ -93,6 +110,8 @@ class Orchestrator:
         self._down.discard(server_id) if up else self._down.add(server_id)
 
     def set_detection(self, text: str) -> None:
+        if text != self._detection:
+            self._pending_confirm = None
         self._detection = text
 
     # --- drill helpers (used by app for read correlation) ---
@@ -281,9 +300,14 @@ class Orchestrator:
         if agent is not None and agent.status is Status.BLOCKED:
             options = layout.parse_options(self._detection)
             if options:
+                profile = self._profile_for(self._drill)
                 for opt in options:
+                    action_id = self._option_action_id(opt.key, opt.label, profile)
+                    if action_id == "approve_always" and not self.config.safety.approve_always:
+                        continue
                     actions.append(
                         {
+                            "id": action_id,
                             "label": f"{opt.key} {opt.label}"[:_OPTION_LABEL_MAX],
                             "make": (
                                 lambda key, k=opt.key: Command(
@@ -298,13 +322,14 @@ class Orchestrator:
                 # (Skipped while detection is empty so we never offer blind
                 # approval before the prompt has been read.)
                 profile = self._profile_for(self._drill)
-                for label, keys in (
-                    ("Approve", profile.approve),
-                    ("Approve!", profile.approve_always),
-                    ("Deny", profile.deny),
-                ):
+                fallback = [("approve", "Approve", profile.approve)]
+                if self.config.safety.approve_always:
+                    fallback.append(("approve_always", "Approve!", profile.approve_always))
+                fallback.append(("deny", "Deny", profile.deny))
+                for action_id, label, keys in fallback:
                     actions.append(
                         {
+                            "id": action_id,
                             "label": label,
                             "make": (
                                 lambda key, ks=keys: Command(
@@ -351,6 +376,17 @@ class Orchestrator:
     def _profile_for(self, key: AgentKey):
         return profile_for(self.config, self._agents[key].agent_type)
 
+    def _option_action_id(self, option_key: str, option_label: str, profile) -> str | None:
+        if _looks_like_approve_always(option_label):
+            return "approve_always"
+        if profile.approve and option_key == profile.approve[0]:
+            return "approve"
+        if profile.approve_always and option_key == profile.approve_always[0]:
+            return "approve_always"
+        if profile.deny and option_key == profile.deny[0]:
+            return "deny"
+        return None
+
     def on_press(self, index: int) -> list[Command]:
         if self._profile_menu:
             return self._press_profile_menu(index)
@@ -372,9 +408,11 @@ class Orchestrator:
                 self._profile_menu_origin = "overview"
             elif action == "new_agent":
                 self._launcher = True
+            self._pending_confirm = None
             return []
         if self.config.view.management != "bottom_row" and index == self.slots - 1:
             self._launcher = True
+            self._pending_confirm = None
             return []
         ordered = self._ordered()
         shown, _ = layout.page(ordered, self._page, self._agent_slots())
@@ -382,6 +420,7 @@ class Orchestrator:
             key = shown[index].key
             self._drill = key
             self._detection = ""
+            self._pending_confirm = None
             # Focus the agent in the on-screen herdr session AND read its prompt.
             return [
                 Command("focus", key.server_id, key.pane_id),
@@ -429,15 +468,33 @@ class Orchestrator:
         actions, stop_i, back_i = self._drill_layout()
         if index == back_i:  # Back to overview
             self._drill = None
+            self._pending_confirm = None
             return []
         if key not in self._agents:
             self._drill = None
+            self._pending_confirm = None
             return []
         if index == stop_i:  # Stop — always, unconditional
+            action = "act_force"
+            if (
+                action in self.config.safety.require_confirm_for
+                and self._pending_confirm != (action, key)
+            ):
+                self._pending_confirm = (action, key)
+                return []
+            self._pending_confirm = None
             cmd = Command("act_force", key.server_id, key.pane_id, keys=self._profile_for(key).stop)
             self._drill = None  # return to the fleet overview
             return [cmd]
         if index < len(actions):  # send option number or macro text
+            action_id = actions[index].get("id")
+            if (
+                action_id in self.config.safety.require_confirm_for
+                and self._pending_confirm != (action_id, key)
+            ):
+                self._pending_confirm = (action_id, key)
+                return []
+            self._pending_confirm = None
             cmd = actions[index]["make"](key)
             self._drill = None  # return to the fleet overview
             return [cmd]
@@ -459,6 +516,7 @@ class Orchestrator:
         self._drill = None
         self._detection = ""
         self._page = 0
+        self._pending_confirm = None
 
     def clear_server_state(self, server_ids) -> None:
         server_ids = set(server_ids)
@@ -471,3 +529,4 @@ class Orchestrator:
         if self._drill is not None and self._drill.server_id in server_ids:
             self._drill = None
             self._detection = ""
+            self._pending_confirm = None
