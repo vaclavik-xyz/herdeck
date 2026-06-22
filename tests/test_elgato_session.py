@@ -58,3 +58,27 @@ def test_render_honors_theme_color_overrides():
     assert b"lime" in sess.render_all()["s0"].image_png  # custom status color
     sess.set_connection("dev", False)
     assert b"black" in sess.render_all()["s0"].image_png  # custom offline color
+
+
+def test_single_blocked_agent_is_auto_selected():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s0", (0, 0)), ("s1", (1, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING), state("p2", Status.BLOCKED)])
+    assert sess.selected() == AgentKey("dev", "p2")
+
+
+def test_manual_selection_beats_auto_and_clears_when_agent_vanishes():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING), state("p2", Status.BLOCKED)])
+    sess.select(AgentKey("dev", "p1"))
+    assert sess.selected() == AgentKey("dev", "p1")  # manual beats auto
+    sess.apply_snapshot("dev", [state("p2", Status.BLOCKED)])  # p1 gone
+    assert sess.selected() == AgentKey("dev", "p2")  # falls back to auto
+
+
+def test_two_blocked_agents_do_not_auto_select():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED), state("p2", Status.BLOCKED)])
+    assert sess.selected() is None

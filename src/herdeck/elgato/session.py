@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from .. import layout
 from ..config import Config
 from ..driver.base import TileView
-from ..model import AgentKey, AgentState
+from ..model import AgentKey, AgentState, Status
 from .slots import SlotLeases
 
 
@@ -27,6 +27,7 @@ class ElgatoSession:
         self._leases = SlotLeases()
         self._slot_order: list[str] = []  # slot instance_ids in reading order
         self._slot_coords: dict[str, tuple[int, int]] = {}
+        self._manual: AgentKey | None = None
 
     # --- inbound agent state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
@@ -41,6 +42,17 @@ class ElgatoSession:
 
     def set_connection(self, server_id: str, up: bool) -> None:
         self._down.discard(server_id) if up else self._down.add(server_id)
+
+    # --- selection ---
+    def select(self, key: AgentKey | None) -> None:
+        self._manual = key
+
+    def selected(self) -> AgentKey | None:
+        if self._manual is not None and self._manual in self._agents:
+            return self._manual
+        self._manual = None
+        blocked = [k for k, s in self._agents.items() if s.status is Status.BLOCKED]
+        return blocked[0] if len(blocked) == 1 else None
 
     # --- layout ---
     def set_slots(self, instances: list[tuple[str, tuple[int, int]]]) -> None:
@@ -70,12 +82,15 @@ class ElgatoSession:
             return TileView(ordinal, "", "dim")
         s = self._agents[key]
         down = s.key.server_id in self._down
+        repo = s.repo or s.label
+        if key == self.selected():
+            repo = f"* {repo}"
         return TileView(
             ordinal,
             s.label,
             self._color(s),
             agent_type=s.agent_type,
-            repo=s.repo or s.label,
+            repo=repo,
             branch=s.branch or "",
             status_text="OFFLINE" if down else s.status.value.upper(),
         )
