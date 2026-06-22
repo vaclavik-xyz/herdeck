@@ -211,6 +211,21 @@ def test_http_press_requires_session_token():
         d.close()
 
 
+def test_error_responses_are_browser_friendly_not_downloads():
+    # A request without a valid token must return viewable text, never
+    # application/octet-stream — Safari offers to download octet-stream bodies.
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"http://{d.host}:{d.port}/", timeout=2)
+        err = exc.value
+        assert err.code == 403
+        assert err.headers.get("Content-Type", "").startswith("text/plain")
+        assert "token" in err.read().decode().lower()
+    finally:
+        d.close()
+
+
 def test_close_releases_server_socket():
     d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
     port = d.port
