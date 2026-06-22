@@ -133,3 +133,40 @@ async def test_bye_closes_connection_and_clears_writer():
     pipe.feed(encode({"type": "bye"}))  # graceful close without an EOF
     await asyncio.wait_for(server.handle(pipe, pipe), timeout=1)
     assert server._writer is None  # bye returned from handle() and cleared the writer
+
+
+@pytest.mark.asyncio
+async def test_superseded_connection_cannot_mutate_session():
+    sess = make_session()
+    sess.set_slots([("s0", (0, 0))])
+    sess.apply_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
+    got = []
+    server = IpcServer(sess, token="secret", on_commands=got.append)
+    old = Pipe()
+    old.feed(encode({"type": "hello", "protocol_version": PROTOCOL_VERSION, "token": "secret"}))
+    old_task = asyncio.create_task(server.handle(old, old))
+    await asyncio.sleep(0)  # old authenticates and becomes the active writer
+    assert server._writer is old
+    server._writer = Pipe()  # a newer client supersedes old
+    old.feed(encode({"type": "keyUp", "instanceId": "s0"}))
+    old.feed(b"")
+    await asyncio.wait_for(old_task, timeout=1)
+    assert got == []  # superseded connection's keyUp was rejected, not executed
+
+
+@pytest.mark.asyncio
+async def test_push_diff_drops_dead_writer_and_does_not_raise():
+    sess = make_session()
+    sess.set_slots([("s0", (0, 0))])
+    sess.apply_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
+    server = IpcServer(sess, token="secret", on_commands=lambda c: None)
+
+    class DeadPipe(Pipe):
+        async def drain(self):
+            raise ConnectionResetError("peer gone")
+
+    server._writer = DeadPipe()
+    sess.take_render_diff()  # prime baseline
+    sess.apply_event("dev", AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED))
+    await server.push_diff()  # must swallow the write error, not propagate to the runtime
+    assert server._writer is None  # dead connection dropped so the next hello re-renders fully

@@ -43,11 +43,18 @@ class IpcServer:
             if msg.get("protocol_version") != PROTOCOL_VERSION or not self._valid(msg.get("token", "")):
                 await self._send(writer, {"type": "error", "reason": "auth or version mismatch"})
                 return None
+            if self._writer is not None and self._writer is not writer:
+                self._writer.close()  # single-client: a new auth supersedes the old connection
             self._writer = writer  # register the active connection ONLY after auth
             await self._send(writer, {"type": "ready"})
             await self._push(writer, self._session.render_all())
             self._session.take_render_diff()  # prime diff baseline
             return True
+
+        # Authed. Reject a writer that a newer authenticated connection has superseded,
+        # so a stale client can never mutate the session or fire keyUp commands.
+        if writer is not self._writer:
+            return None
 
         if kind == "slots":
             self._session.set_slots([(s["instanceId"], (s["coord"]["col"], s["coord"]["row"]))
@@ -74,8 +81,17 @@ class IpcServer:
     async def push_diff(self) -> None:
         """Server-initiated render push, called by the runtime after herdr state
         changes so the deck updates without a key press."""
-        if self._writer is not None:
-            await self._push(self._writer, self._session.take_render_diff())
+        writer = self._writer
+        if writer is None:
+            return
+        try:
+            await self._push(writer, self._session.take_render_diff())
+        except OSError:
+            # The peer is gone: drop the dead connection instead of propagating into
+            # the runtime's state-change loop. The next hello re-renders in full, so
+            # the diff baseline advanced above does not strand any update.
+            if self._writer is writer:
+                self._writer = None
 
     async def _push(self, writer, renders: dict[str, KeyRender]) -> None:
         if not renders:
