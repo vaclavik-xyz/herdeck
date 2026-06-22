@@ -28,6 +28,7 @@ export class BackendProcess {
   private readonly opts: Required<Omit<BackendOptions, "devSocket" | "devToken">> & { devSocket?: string };
   private child: { kill: (sig?: string) => void; on: (ev: string, cb: (...a: any[]) => void) => void } | null = null;
   private stopped = false;
+  private started = false;
   private backoff: number;
   private stateCbs: Array<(s: "starting" | "down") => void> = [];
   readonly socketPath: string;
@@ -64,6 +65,9 @@ export class BackendProcess {
 
   start(): void {
     if (this.opts.devSocket) return; // dev mode: an external backend already owns the socket
+    if (this.started) return; // idempotent: the supervise loop is already running — a second
+    // start() must not spawn a duplicate backend that would rebind the same socket and orphan.
+    this.started = true;
     this.spawnOnce();
   }
 
@@ -90,7 +94,7 @@ export class BackendProcess {
     const onTerminal = () => {
       if (settled) return;
       settled = true;
-      this.child = null;
+      if (this.child === child) this.child = null; // never clobber a newer child's reference
       if (this.stopped) return;
       this.emitState("down");
       const delay = this.backoff;
