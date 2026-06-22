@@ -82,3 +82,75 @@ def test_two_blocked_agents_do_not_auto_select():
     sess.set_slots([("s0", (0, 0))])
     sess.apply_snapshot("dev", [state("p1", Status.BLOCKED), state("p2", Status.BLOCKED)])
     assert sess.selected() is None
+
+
+from herdeck.layout import parse_options  # noqa: F401, E402  (ensures dependency exists)
+
+
+def test_approve_disabled_until_prompt_read_then_enabled_for_binary():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    sess.set_action_keys([("a", "approve", (0, 2)), ("d", "deny", (1, 2)), ("t", "stop", (2, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED)])  # auto-selected, prompt unread
+
+    assert sess.action_enabled("approve") is False  # unread
+    sess.set_detection(AgentKey("dev", "p1"), "Proceed? (y/n)")
+    assert sess.action_enabled("approve") is True
+    assert sess.action_enabled("deny") is True
+    assert sess.action_enabled("stop") is True  # selected + online
+
+
+def test_approve_disabled_for_multi_option_prompt():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("a", "approve", (0, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    sess.set_detection(AgentKey("dev", "p1"), "Pick:\n1. Yes\n2. No\n3. Maybe")
+    assert sess.action_enabled("approve") is False  # multi-option -> deck cannot answer
+
+
+def test_stop_disabled_when_server_offline():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("t", "stop", (2, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    sess.select(AgentKey("dev", "p1"))
+    assert sess.action_enabled("stop") is True
+    sess.set_connection("dev", False)
+    assert sess.action_enabled("stop") is False
+
+
+def test_action_key_render_shows_target_identity():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("a", "approve", (0, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED, "myrepo")])
+    sess.set_detection(AgentKey("dev", "p1"), "y/n")
+    assert b"myrepo" in sess.render_all()["a"].image_png
+
+
+def test_stale_prompt_does_not_re_enable_approve_after_status_change():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("a", "approve", (0, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    sess.set_detection(AgentKey("dev", "p1"), "y/n")
+    assert sess.action_enabled("approve") is True
+    sess.apply_event("dev", state("p1", Status.WORKING))  # left blocked -> prune
+    sess.apply_event("dev", state("p1", Status.BLOCKED))  # re-blocked, prompt unread
+    assert sess.action_enabled("approve") is False  # stale "y/n" must not re-enable it
+
+
+def test_detection_cleared_on_disconnect_so_reconnect_needs_fresh_read():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("a", "approve", (0, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    sess.set_detection(AgentKey("dev", "p1"), "y/n")
+    assert sess.action_enabled("approve") is True
+    sess.set_connection("dev", False)  # server drops
+    sess.set_connection("dev", True)   # ...and reconnects
+    assert sess.action_enabled("approve") is False  # stale prompt gone; awaits a fresh read
+
+
+def test_blocked_without_detection_skips_offline_servers():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    assert sess.blocked_without_detection() == [AgentKey("dev", "p1")]
+    sess.set_connection("dev", False)
+    assert sess.blocked_without_detection() == []  # no proactive read for a dead server
