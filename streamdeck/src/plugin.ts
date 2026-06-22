@@ -5,6 +5,7 @@ import { KeyRegistry } from "./registry.js";
 import { Adapter } from "./adapter.js";
 import { ACTION_UUIDS } from "./actions/core.js";
 import { makeSlotAction, makeActionKey } from "./actions/sdk-actions.js";
+import { superviseConnection } from "./connection.js";
 
 type GlobalSettings = { herdeckPath?: string };
 
@@ -38,23 +39,26 @@ void streamDeck.connect().then(async () => {
   });
   backend.onState((s) => adapter.setBackendState(s));
 
-  async function connect(): Promise<void> {
+  const connectOnce = async () => {
     try {
       await ipc.connectWithRetry(backend.socketPath, { attempts: 120, delayMs: 250 });
       ipc.sendHello(backend.token);
     } catch (err) {
-      streamDeck.logger.error(`IPC connect failed: ${err}`);
+      streamDeck.logger.error(`IPC connect failed (will retry on next backend start): ${err}`);
     }
-  }
+  };
 
-  // Reconnect after an IPC blip or a backend respawn (the brain re-pushes a full render
-  // on a fresh hello, so nothing is lost). The Adapter's onClose handler already flips the
-  // keys to the "backend down" placeholder meanwhile. v1 never closes the socket on
-  // purpose, so every close is a genuine drop that warrants a reconnect; connect()s are
-  // sequential (onClose only fires for a previously-attached stream), so they never stack.
-  ipc.onClose(() => void connect());
+  // Re-attempt the IPC connection on every backend (re)start AND on socket close, with a
+  // single attempt in flight. This self-heals the first-run flow: a backend that initially
+  // can't spawn (herdeck unresolved) never binds a socket, so the first attempt fails and
+  // onClose never fires — but once the user sets the PI path the backend respawns and the
+  // "starting" trigger reconnects. Registered BEFORE start() so no "starting" is missed.
+  superviseConnection({
+    connectOnce,
+    onBackendStarting: (cb) => backend.onState((s) => { if (s === "starting") cb(); }),
+    onIpcClose: (cb) => ipc.onClose(cb),
+  });
 
   backend.start();
-  adapter.setBackendState("starting");
-  void connect();
+  adapter.setBackendState("starting"); // dev mode never emits "starting"; show it explicitly
 });
