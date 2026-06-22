@@ -320,6 +320,18 @@ def test_pending_act_clears_on_next_snapshot():
     assert sess._pending_act is None  # pending cleared, key not stuck
 
 
+def test_offline_clears_pending_act_so_key_stops_showing_pending():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("a", "approve", (0, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    sess.set_detection(AgentKey("dev", "p1"), "y/n")
+    sess.key_up("a")  # emits act_if_blocked, marks p1 pending
+    assert sess._pending_act == AgentKey("dev", "p1")
+    sess.set_connection("dev", False)  # server drops before any result arrives
+    assert sess._pending_act is None  # not stuck PENDING for the whole outage
+    assert b"PENDING" not in sess.render_all()["a"].image_png
+
+
 def test_render_diff_returns_only_changed_instances():
     sess = ElgatoSession(make_config(), FakeIcons())
     sess.set_slots([("s0", (0, 0)), ("s1", (1, 0))])
