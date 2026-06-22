@@ -59,6 +59,19 @@ void streamDeck.connect().then(async () => {
     onIpcClose: (cb) => ipc.onClose(cb),
   });
 
+  // Best-effort graceful teardown: when the Stream Deck app stops the plugin it sends
+  // SIGTERM/SIGINT to the process group, so the spawned backend would be torn down with us
+  // anyway — but on the catchable signals we stop it explicitly and send `bye` so the
+  // socket closes cleanly rather than relying on EOF. (SIGKILL is uncatchable; that path
+  // still relies on the backend handling EOF, which it does.)
+  for (const sig of ["SIGTERM", "SIGINT"] as const) {
+    process.on(sig, () => {
+      backend.stop();
+      ipc.close();
+      process.exit(0);
+    });
+  }
+
   backend.start();
   adapter.setBackendState("starting"); // dev mode never emits "starting"; show it explicitly
 });

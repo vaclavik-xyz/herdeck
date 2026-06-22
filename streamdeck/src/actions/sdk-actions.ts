@@ -16,7 +16,11 @@ export function makeSlotAction(reg: KeyRegistry, adapter: Adapter) {
   @action({ UUID: "xyz.vaclavik.herdeck.slot" })
   class AgentSlotAction extends SingletonAction {
     override onWillAppear(ev: WillAppearEvent) {
-      onSlotAppear(reg, adapter, ev.action.id, coordToWire(ev.action.coordinates!), surfaceOf(ev));
+      // Coordinates are undefined when the key lives in a Multi-Action (not on the grid).
+      // Skip registration instead of throwing in coordToWire — the brain's slot/action
+      // model is coordinate-derived, so an off-grid instance simply isn't tracked.
+      if (!ev.action.coordinates) return;
+      onSlotAppear(reg, adapter, ev.action.id, coordToWire(ev.action.coordinates), surfaceOf(ev));
     }
     override onWillDisappear(ev: WillDisappearEvent) { onSlotDisappear(reg, adapter, ev.action.id); }
     override onKeyDown(ev: KeyDownEvent) { adapter.handleKeyDown(ev.action.id); }
@@ -29,7 +33,9 @@ export function makeActionKey(reg: KeyRegistry, adapter: Adapter, uuid: string, 
   @action({ UUID: uuid })
   class HerdrActionKey extends SingletonAction {
     override onWillAppear(ev: WillAppearEvent) {
-      onActionAppear(reg, adapter, ev.action.id, type, coordToWire(ev.action.coordinates!), surfaceOf(ev));
+      // See AgentSlotAction: a Multi-Action instance has no coordinates; skip it.
+      if (!ev.action.coordinates) return;
+      onActionAppear(reg, adapter, ev.action.id, type, coordToWire(ev.action.coordinates), surfaceOf(ev));
     }
     override onWillDisappear(ev: WillDisappearEvent) { onActionDisappear(reg, adapter, ev.action.id); }
     override onKeyDown(ev: KeyDownEvent) { adapter.handleKeyDown(ev.action.id); }
