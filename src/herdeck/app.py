@@ -623,6 +623,16 @@ async def _amain(
         await aclose()
 
 
+async def _amain_elgato(mode, file_config, socket_path, token) -> None:
+    from .elgato.runtime import serve_elgato
+
+    config, aclose = await resolve_runtime_config(mode, file_config)
+    try:
+        await serve_elgato(config, socket_path=socket_path, token=token)
+    finally:
+        await aclose()
+
+
 def main() -> None:
     import os
     import sys
@@ -660,6 +670,14 @@ def main() -> None:
     grid = file_config.grid if file_config else (5, 3)
     slots = grid[0] * grid[1] - 2
     kind = _resolve_deck_kind(file_config)
+    if kind == "elgato-plugin":
+        # The Elgato plugin is its own IPC front-end over the core; it does NOT use
+        # the grid Orchestrator/DeckDriver path, so route it before building a deck.
+        from .elgato.runtime import discover_ipc
+
+        sock, token = discover_ipc()
+        asyncio.run(_amain_elgato(mode, file_config, sock, token))
+        return
     deck = make_deck(kind, slots, hardware=file_config.hardware if file_config else None)
     try:
         if mode[0] == "mock":
