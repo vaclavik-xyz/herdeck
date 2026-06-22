@@ -68,6 +68,11 @@ class ElgatoSession:
             self._detection = {
                 k: v for k, v in self._detection.items() if k.server_id != server_id
             }
+            # Clear an in-flight act marker for the dropped server, else its action key
+            # renders PENDING for the entire outage — no result will arrive to clear it
+            # until reconnect+snapshot.
+            if self._pending_act is not None and self._pending_act.server_id == server_id:
+                self._pending_act = None
         self._reconcile_arm()
 
     # --- selection ---
