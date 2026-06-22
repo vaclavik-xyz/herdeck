@@ -32,6 +32,8 @@ class ElgatoSession:
         self._detection: dict[AgentKey, str] = {}
         self._block_gen: dict[AgentKey, int] = {}  # +1 each time an agent enters BLOCKED
         self._pending_act: AgentKey | None = None  # an act is in flight for this agent
+        self._armed_for: AgentKey | None = None
+        self._armed_at: float = 0.0
 
     # --- inbound agent state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
@@ -43,6 +45,7 @@ class ElgatoSession:
             self._pending_act = None
         self._release()
         self._prune_detection()
+        self._reconcile_arm()
 
     def apply_event(self, server_id: str, state: AgentState) -> None:
         self._bump_block_gen([state])
@@ -51,6 +54,7 @@ class ElgatoSession:
             self._pending_act = None
         self._release()
         self._prune_detection()
+        self._reconcile_arm()
 
     def set_connection(self, server_id: str, up: bool) -> None:
         if up:
@@ -62,10 +66,32 @@ class ElgatoSession:
             self._detection = {
                 k: v for k, v in self._detection.items() if k.server_id != server_id
             }
+        self._reconcile_arm()
 
     # --- selection ---
     def select(self, key: AgentKey | None) -> None:
         self._manual = key
+        self._reconcile_arm()
+
+    # --- stop arm-then-confirm ---
+    def _arm(self) -> None:
+        self._armed_for = self.selected()
+        self._armed_at = self._clock()
+
+    def is_armed(self) -> bool:
+        return (
+            self._armed_for is not None
+            and self._armed_for == self.selected()
+            and (self._clock() - self._armed_at) <= self._arm_timeout
+        )
+
+    def _reconcile_arm(self) -> None:
+        if self._armed_for is not None and self._armed_for != self.selected():
+            self._armed_for = None
+
+    def tick(self) -> None:
+        if self._armed_for is not None and self._clock() - self._armed_at > self._arm_timeout:
+            self._armed_for = None
 
     def selected(self) -> AgentKey | None:
         if self._manual is not None and self._manual in self._agents:
@@ -145,6 +171,8 @@ class ElgatoSession:
         labels = {"approve": "Approve", "deny": "Deny", "stop": "Stop", "pager": "Next"}
         ident = (target.repo or target.label) if (target is not None and kind != "pager") else ""
         color = {"approve": "green", "deny": "amber", "stop": "red", "pager": "blue"}[kind]
+        if kind == "stop" and self.is_armed():
+            return TileView(0, "Stop", "red", repo=ident or None, status_text="STOP?")
         if kind != "pager" and target is not None and target.key == self._pending_act:
             return TileView(0, labels[kind], "dim", repo=ident or None, status_text="PENDING")
         return TileView(
