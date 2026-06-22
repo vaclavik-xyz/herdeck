@@ -524,7 +524,7 @@ roborev show "$sha"
     - `devToken?: string` — in dev mode, the token the **already-running** external backend was started with (so `hello` authenticates). **Required when `devSocket` is set — the constructor throws if it is missing** (else the shell would silently send a wrong token). The entry passes `process.env.HERDECK_ELGATO_TOKEN`.
     - `spawn?` (default `child_process.spawn`), `randomToken?` (default 16 random bytes hex), `tmpDir?` (default `os.tmpdir()`), `setTimer?` (default `setTimeout`), `maxBackoffMs?` (default `30000`), `baseBackoffMs?` (default `500`).
     - State: `get socketPath(): string`, `get token(): string`, `get spawned(): boolean` (false in dev mode). In spawn mode `token` is the generated one-shot secret; in dev mode it is `devToken`.
-    - `start(): void` — spawns the backend (unless dev mode) with env `HERDECK_ELGATO_SOCK`, `HERDECK_ELGATO_TOKEN`, `HERDECK_DECK=elgato-plugin`; on child exit, respawns with bounded exponential backoff.
+    - `start(): void` — spawns the backend (unless dev mode) with env `HERDECK_ELGATO_SOCK`, `HERDECK_ELGATO_TOKEN`, `HERDECK_DECK=elgato-plugin`; respawns with bounded exponential backoff on **any** terminal child signal — `error` (spawn failure / ENOENT), `exit`, or `close` — de-duplicated so one failure schedules one respawn. Handling `error` is essential: an ENOENT spawn (herdeck not yet on PATH) emits `error` and no `exit`, and without a running backoff loop a later PI-path change would never take effect.
     - `stop(): void` — stop supervising and kill the child.
     - `onState(cb: (state: "starting" | "down") => void)` — `starting` on each (re)spawn, `down` while waiting to respawn after an exit.
 
@@ -599,6 +599,40 @@ describe("BackendProcess", () => {
     expect(states).toEqual(["starting", "down", "starting", "down", "starting"]);
     bp.stop();
     expect(children[2].kill).toHaveBeenCalled();
+  });
+
+  it("respawns when spawn fails with an 'error' event (ENOENT) and no 'exit' fires", () => {
+    const children = [fakeChild(), fakeChild()];
+    let i = 0;
+    const spawn = vi.fn(() => children[i++]);
+    const setTimer = (cb: () => void) => { cb(); return 0; };
+    const states: string[] = [];
+    const bp = new BackendProcess({
+      resolveCommand: () => ({ command: "herdeck", args: [] }),
+      spawn: spawn as any, randomToken: () => "t", tmpDir: "/tmp", setTimer,
+    });
+    bp.onState((s) => states.push(s));
+    bp.start();                                              // spawn #1 (starting)
+    children[0].emit("error", new Error("spawn herdeck ENOENT")); // error, NOT exit
+    expect(spawn).toHaveBeenCalledTimes(2);                 // respawned despite no 'exit'
+    expect(states).toEqual(["starting", "down", "starting"]);
+    bp.stop();
+  });
+
+  it("a single failure schedules exactly one respawn even if error+close both fire", () => {
+    const children = [fakeChild(), fakeChild()];
+    let i = 0;
+    const spawn = vi.fn(() => children[i++]);
+    const setTimer = (cb: () => void) => { cb(); return 0; };
+    const bp = new BackendProcess({
+      resolveCommand: () => ({ command: "herdeck", args: [] }),
+      spawn: spawn as any, randomToken: () => "t", tmpDir: "/tmp", setTimer,
+    });
+    bp.start();
+    children[0].emit("error", new Error("ENOENT"));
+    children[0].emit("close", 1); // a second terminal signal for the SAME child
+    expect(spawn).toHaveBeenCalledTimes(2); // not 3 — the settled guard de-dupes
+    bp.stop();
   });
 
   it("dev mode connects to a known socket with the shared token instead of spawning", () => {
@@ -719,14 +753,25 @@ export class BackendProcess {
       stdio: "inherit",
     });
     this.child = child;
-    child.on("exit", () => {
+    // First terminal signal wins. Critically, a spawn that fails (ENOENT — herdeck not
+    // on PATH, the first-run state before the user sets the PI path) emits "error" and
+    // NOT "exit", so listening only for "exit" would leave the supervisor permanently
+    // dead and never pick up a later PI path. Treat error/exit/close uniformly, guarded
+    // so one failure schedules exactly one respawn.
+    let settled = false;
+    const onTerminal = () => {
+      if (settled) return;
+      settled = true;
       this.child = null;
       if (this.stopped) return;
       this.emitState("down");
       const delay = this.backoff;
       this.backoff = Math.min(this.backoff * 2, this.opts.maxBackoffMs);
       this.opts.setTimer(() => this.spawnOnce(), delay);
-    });
+    };
+    child.on("error", onTerminal); // spawn failure (e.g. ENOENT) — emitted instead of "exit"
+    child.on("exit", onTerminal);
+    child.on("close", onTerminal); // safety net
   }
 
   stop(): void {
