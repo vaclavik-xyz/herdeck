@@ -80,8 +80,10 @@ class ElgatoSession:
 
     def set_detection(self, key: AgentKey, text: str) -> None:
         # Only trust a prompt read for an agent that is present and currently blocked.
+        # A blank read is not a prompt: storing it would mark the agent "read" and
+        # silence the proactive re-read, leaving Approve stuck disabled forever.
         agent = self._agents.get(key)
-        if agent is not None and agent.status is Status.BLOCKED:
+        if agent is not None and agent.status is Status.BLOCKED and text.strip():
             self._detection[key] = text
 
     def _prune_detection(self) -> None:
@@ -132,7 +134,7 @@ class ElgatoSession:
             if target.status is not Status.BLOCKED:
                 return False
             text = self._detection.get(target.key)
-            if not text:
+            if not text or not text.strip():
                 return False
             return not layout.parse_options(text)
         return False

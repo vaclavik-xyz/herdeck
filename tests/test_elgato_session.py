@@ -154,3 +154,13 @@ def test_blocked_without_detection_skips_offline_servers():
     assert sess.blocked_without_detection() == [AgentKey("dev", "p1")]
     sess.set_connection("dev", False)
     assert sess.blocked_without_detection() == []  # no proactive read for a dead server
+
+
+def test_whitespace_only_prompt_neither_enables_nor_counts_as_read():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_action_keys([("a", "approve", (0, 2))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    sess.set_detection(AgentKey("dev", "p1"), "   \n  ")
+    assert sess.action_enabled("approve") is False  # blank is not a real prompt
+    # blank must NOT satisfy the read, or the proactive read would stop firing forever
+    assert sess.blocked_without_detection() == [AgentKey("dev", "p1")]
