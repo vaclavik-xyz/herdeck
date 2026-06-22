@@ -152,6 +152,42 @@ first N−3 slots; the last three are **Next** (jump to next blocked), **Refresh
 and **Link** (connection status). State is encoded by color: working = green,
 idle = blue, blocked = amber, done = dim, error/disconnected = red.
 
+## Stream Deck (Elgato) plugin backend
+herdeck can also drive a native **Elgato Stream Deck** as a plugin. A thin
+TypeScript shell (a separate follow-up plan) owns the deck over Elgato's SDK and
+spawns this Python backend — the same herdeck core — as its "brain". Select it
+with the deck kind `elgato-plugin`:
+
+```bash
+HERDECK_DECK=elgato-plugin python -m herdeck.app
+```
+
+Unlike the D200/web front-ends, `elgato-plugin` does **not** use the grid
+orchestrator. It is a separate front-end over the core: it maps live herdr agents
+onto the keys you have placed on the deck (sticky slot leases — keys never
+reflow, status drives color not order), tracks a single global selection (a lone
+blocked agent auto-selects), and speaks a small JSON line protocol to the shell
+over a local Unix socket.
+
+**Discovery contract.** The shell creates the socket and a token, then hands both
+to the backend through the environment:
+
+- `HERDECK_ELGATO_SOCK` — path to the Unix socket the backend listens on.
+- `HERDECK_ELGATO_TOKEN` — shared secret the shell sends in its `hello`; the
+  backend rejects any connection whose token (constant-time compared) or protocol
+  version mismatches. Both variables must be set or the backend exits.
+
+**Action scope.** Approve/Deny are **binary only** — enabled solely when the
+selected agent is blocked, online, its prompt has been read, and the prompt is a
+yes/no with no numbered options. A multi-option prompt disables Approve/Deny on
+the deck; press the agent's slot to focus its terminal and answer in the TUI.
+Stop is always two-step (arm, then confirm within a few seconds) and sends a
+forced interrupt regardless of the safety profile. Non-idempotent sends are never
+retried.
+
+The TypeScript shell and `.streamDeckPlugin` packaging live in a separate
+follow-up plan; this backend is fully usable and unit-tested on its own.
+
 ## Adding an agent type
 Add it to the launcher block used by your profile:
 
@@ -218,6 +254,8 @@ Legacy configs use the root `[notifications]` table with the same fields.
   (config-only changes).
 - Drill-in shows the read prompt text on a spare tile; richer prompt display is
   future work.
+- The Elgato plugin's TypeScript shell and `.streamDeckPlugin` packaging are a
+  separate follow-up plan; only the Python backend ships today.
 
 ## License
 MIT
