@@ -28,30 +28,52 @@ class ReadCorrelator:
     and re-entered BLOCKED, and keys by AgentKey so two servers' identical pane ids
     never cross-wire."""
 
-    def __init__(self, session: ElgatoSession) -> None:
+    def __init__(self, session: ElgatoSession, *, blank_cooldown: float = 2.0) -> None:
         self._session = session
         self._pending: dict[AgentKey, tuple[str, int]] = {}
+        self._cooldown: dict[AgentKey, tuple[int, float]] = {}  # key -> (gen, retry_after_ts)
+        self._blank_cooldown = blank_cooldown
 
     def issued(self, key: AgentKey, req_id: str) -> None:
         self._pending[key] = (req_id, self._session.block_generation(key))
+        self._cooldown.pop(key, None)  # a fresh read supersedes any blank-read backoff
 
     def has_pending(self, key: AgentKey) -> bool:
         p = self._pending.get(key)
         return p is not None and p[1] == self._session.block_generation(key)
 
+    def in_cooldown(self, key: AgentKey) -> bool:
+        # True while a blank read's backoff window is open for the current block
+        # generation — the proactive reader skips the key until it elapses, so a
+        # persistently-blank read polls on a timer instead of spinning.
+        c = self._cooldown.get(key)
+        return (
+            c is not None
+            and c[0] == self._session.block_generation(key)
+            and self._session.now() < c[1]
+        )
+
     def result(self, key: AgentKey, req_id: str, text: str) -> bool:
         # Match the issuing request AND the agent's current block generation, then store.
-        # Clear the pending marker ONLY if a real prompt was stored; a blank read keeps
-        # pending so the proactive reader skips this agent instead of spinning re-reads.
         if self._pending.get(key) == (req_id, self._session.block_generation(key)):
+            del self._pending[key]
             if self._session.set_detection(key, text):
-                del self._pending[key]
+                self._cooldown.pop(key, None)
                 return True
+            # A blank read is not a real prompt: open a backoff window instead of
+            # re-reading immediately (spin) or pinning the agent forever (stuck). The
+            # ticker retries once the window elapses; a re-block (gen change) retries
+            # sooner.
+            self._cooldown[key] = (
+                self._session.block_generation(key),
+                self._session.now() + self._blank_cooldown,
+            )
         return False
 
     def clear_server(self, server_id: str) -> None:
-        # Drop pending reads for a server on disconnect so reconnect re-reads.
+        # Drop pending reads + backoff for a server on disconnect so reconnect re-reads.
         self._pending = {k: v for k, v in self._pending.items() if k.server_id != server_id}
+        self._cooldown = {k: v for k, v in self._cooldown.items() if k.server_id != server_id}
 
 
 def build_command_sender(send: Callable[[Command], None]) -> Callable[[list[Command]], None]:
@@ -108,7 +130,7 @@ async def serve_elgato(config: Config, *, socket_path: str, token: str, make_ses
 
     def _proactive_reads() -> None:
         for key in session.blocked_without_detection():
-            if not correlator.has_pending(key):
+            if not correlator.has_pending(key) and not correlator.in_cooldown(key):
                 send(Command("read", key.server_id, key.pane_id, source="detection"))
 
     def _apply(fn, *args) -> None:
@@ -149,10 +171,12 @@ async def serve_elgato(config: Config, *, socket_path: str, token: str, make_ses
 
     async def _ticker() -> None:
         # Enforces the Stop arm timeout and reverts the armed key visual even when
-        # no other event arrives.
+        # no other event arrives, and retries any blocked agent whose proactive read
+        # came back blank once its backoff window has elapsed.
         while True:
             await asyncio.sleep(0.5)
             session.tick()
+            _proactive_reads()
             await server.push_diff()
 
     if os.path.lexists(socket_path):

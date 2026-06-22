@@ -101,6 +101,11 @@ class ElgatoSession:
         if self._armed_for is not None and self._clock() - self._armed_at > self._arm_timeout:
             self._armed_for = None
 
+    def now(self) -> float:
+        """Current time on the session's injectable clock (shared by the read
+        correlator's blank-read backoff so both use the same time base)."""
+        return self._clock()
+
     def selected(self) -> AgentKey | None:
         if self._manual is not None and self._manual in self._agents:
             return self._manual

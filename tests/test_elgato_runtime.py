@@ -77,24 +77,53 @@ def test_read_correlator_is_keyed_per_server_not_pane():
     assert corr.result(kb, "r2", "B prompt") is True  # server a's read never clobbers b
 
 
-def test_read_correlator_keeps_pending_on_blank_read_to_avoid_reread_spin():
+class _Clk:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_blank_read_backs_off_then_allows_retry_after_window():
     from herdeck.elgato.runtime import ReadCorrelator
     from herdeck.elgato.session import ElgatoSession
     from herdeck.model import AgentKey, AgentState, Status
 
-    sess = ElgatoSession(_cfg(), _icons())
+    clk = _Clk()
+    sess = ElgatoSession(_cfg(), _icons(), clock=clk)
     k = AgentKey("dev", "p1")
     sess.apply_snapshot("dev", [AgentState(k, "claude", "api", Status.BLOCKED)])
-    corr = ReadCorrelator(sess)
+    corr = ReadCorrelator(sess, blank_cooldown=2.0)
     corr.issued(k, "r1")
-    # A blank prompt read is not a real prompt: not accepted, and pending is KEPT so
-    # _proactive_reads() (which skips agents with a pending read) won't spin re-reading.
+    # A blank read is not a real prompt: rejected, in-flight pending cleared,
+    # but a cooldown opens so _proactive_reads() does NOT immediately re-read (no spin).
     assert corr.result(k, "r1", "   ") is False
-    assert corr.has_pending(k) is True
-    assert k in sess.blocked_without_detection()  # still needs a real read, just not now
-    # A later real read still lands once a fresh issued() overwrites the pending marker.
-    corr.issued(k, "r2")
-    assert corr.result(k, "r2", "Proceed? (y/n)") is True
+    assert corr.has_pending(k) is False
+    assert corr.in_cooldown(k) is True
+    assert k in sess.blocked_without_detection()  # still needs a real read
+    # Within the window the proactive reader skips it; after it elapses, retry is allowed
+    # (so the agent is NOT stuck disabled forever — the ticker re-reads).
+    clk.now = 2.5
+    assert corr.in_cooldown(k) is False
+
+
+def test_blank_read_cooldown_is_reset_by_reblock():
+    from herdeck.elgato.runtime import ReadCorrelator
+    from herdeck.elgato.session import ElgatoSession
+    from herdeck.model import AgentKey, AgentState, Status
+
+    clk = _Clk()
+    sess = ElgatoSession(_cfg(), _icons(), clock=clk)
+    k = AgentKey("dev", "p1")
+    sess.apply_snapshot("dev", [AgentState(k, "claude", "api", Status.BLOCKED)])  # gen 1
+    corr = ReadCorrelator(sess, blank_cooldown=10.0)
+    corr.issued(k, "r1")
+    corr.result(k, "r1", "")  # blank -> cooldown for gen 1
+    assert corr.in_cooldown(k) is True
+    sess.apply_event("dev", AgentState(k, "claude", "api", Status.WORKING))
+    sess.apply_event("dev", AgentState(k, "claude", "api", Status.BLOCKED))  # gen 2
+    assert corr.in_cooldown(k) is False  # a fresh block episode retries immediately
 
 
 def test_read_correlator_clear_server_drops_pending():
