@@ -3,17 +3,11 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from .. import layout
 from ..config import Config
 from ..driver.base import TileView
-from ..model import AgentKey, AgentState, Status
+from ..model import AgentKey, AgentState
 from .slots import SlotLeases
-
-_STATUS_COLOR = {
-    Status.WORKING: "green",
-    Status.IDLE: "blue",
-    Status.BLOCKED: "amber",
-    Status.DONE: "dim",
-}
 
 
 @dataclass
@@ -67,8 +61,8 @@ class ElgatoSession:
 
     def _color(self, s: AgentState) -> str:
         if s.key.server_id in self._down:
-            return "red"
-        return _STATUS_COLOR.get(s.status, "grey")
+            return self.config.theme.colors.get("offline", "red")
+        return self.config.theme.colors.get(s.status.value, layout.status_color(s.status))
 
     def _slot_tile(self, ordinal: int) -> TileView:
         key = self._leases.assignment().get(ordinal)
