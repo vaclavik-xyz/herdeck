@@ -23,11 +23,13 @@ These bind every task. Exact values copied from `docs/superpowers/specs/2026-06-
 - **Keep the existing 403-test Python suite green** and the TS suite green. Run Python tests with `.venv/bin/python -m pytest`; TS tests with `npm test` in `streamdeck/`.
 - Commits: conventional-commit format, **no `Co-Authored-By`**.
 
-### ⚑ Decisions flagged for orchestrator redline (resolve before/at Task start)
+### ⚑ Orchestrator redline decisions (RESOLVED)
 
-1. **onedir exe is one level deeper than the spec prose.** PyInstaller onedir produces `<distpath>/<name>/<name>` (folder named after the app, exe inside). With `--distpath …sdPlugin/backend` and `name=herdeck-backend` the exe lands at `…sdPlugin/backend/herdeck-backend/herdeck-backend`, not `…sdPlugin/backend/herdeck-backend`. This plan resolves the TS bundled path to the real layout (`../backend/herdeck-backend/herdeck-backend`). The spec's `backend/` gitignore is preserved.
-2. **Font bundling (Task 4) is cuttable.** The target is a local arm64 Mac where the system fonts in `_FONT_CANDIDATES` exist even when frozen, so glyph text already renders. The spec lists font bundling under part 1 + Risks; Task 4 honors it (commits DejaVuSans-Bold.ttf + a 3-line `add_font_search_path` hook). If the orchestrator wants to defer it, drop Task 4 — nothing else depends on it.
-3. **The "build" test is a static gate, not a PyInstaller run.** Per the spec ("Full PyInstaller run is local/manual (not in CI)"), Tasks 6–7 assert the `.spec`/script *content and wiring* (excludes, datas, arch, step order, output paths). The actual freeze + on-device install is the **manual gate** in Task 8.
+1. **onedir exe is one level deeper than the spec prose — ACCEPTED as written.** PyInstaller onedir produces `<distpath>/<name>/<name>` (folder named after the app, exe inside). With `--distpath …sdPlugin/backend` and `name=herdeck-backend` the exe lands at `…sdPlugin/backend/herdeck-backend/herdeck-backend`. TS resolves the bundled path to this real layout (`../backend/herdeck-backend/herdeck-backend`). The spec's `backend/` gitignore is preserved.
+2. **Font bundling — CUT.** Task 4 is dropped. `_FONT_CANDIDATES` in `icons.py` already lists macOS system fonts (`/System/Library/Fonts/Supplemental/Arial Bold.ttf`, `HelveticaNeue.ttc`) which are present even in a frozen run (PyInstaller does not sandbox the filesystem), plus the `ImageFont.load_default` fallback. On the target local arm64 Mac, labels + letter glyphs render without a bundled TTF. No `add_font_search_path`, no DejaVu TTF, no `pyproject` package-data change, no font-related change to `_frozen_session`.
+3. **The "build" test is a static gate, not a PyInstaller run — ACCEPTED.** Per the spec ("Full PyInstaller run is local/manual (not in CI)"), Tasks 6–7 assert the `.spec`/script *content and wiring* (excludes, datas, arch, step order, output paths). The actual freeze + on-device install is the **manual gate** in Task 8.
+
+**Task order:** 1, 2, 3, ~~4~~ (CUT), 5, 6, 7, 8.
 
 ---
 
@@ -44,7 +46,6 @@ These bind every task. Exact values copied from `docs/superpowers/specs/2026-06-
 
 **Modified:**
 - `src/herdeck/elgato/runtime.py` — add `_frozen_session` + a `_session_for_runtime` dispatcher; make it `serve_elgato`'s default `make_session`.
-- `src/herdeck/icons.py` — add `add_font_search_path()` + extra-font-dir lookup in `_font()` (Task 4 only).
 - `streamdeck/src/backend-process.ts` — bundled-binary precedence + `bundledBackendPath(importMetaUrl)`.
 - `streamdeck/src/plugin.ts` — pass the resolved bundled path into `resolveHerdeckCommand`.
 - `streamdeck/package.json` — add `"package"` script.
@@ -462,134 +463,15 @@ git commit -m "feat: pick frozen vs dev session builder by sys.frozen"
 
 ---
 
-## Task 4: Bundle a TTF font for the frozen letter glyph  *(⚑ cuttable — see flag 2)*
+## Task 4: ~~Bundle a TTF font for the frozen letter glyph~~ — **CUT**
 
-**Files:**
-- Create: `src/herdeck/assets/fonts/DejaVuSans-Bold.ttf` (committed; DejaVu license permits redistribution)
-- Modify: `src/herdeck/icons.py`, `src/herdeck/elgato/runtime.py`, `pyproject.toml`
-- Test: `tests/test_icons.py`, `tests/test_elgato_runtime.py`
-
-**Interfaces:**
-- Produces: `herdeck.icons.add_font_search_path(path: str) -> None` — registers an extra directory whose `*.ttf`/`*.ttc` files `_font()` will try first; clears the font cache. `_frozen_session` calls `add_font_search_path(os.path.join(baked_dir, "fonts"))`.
-
-- [ ] **Step 1: Write the failing test**
-
-```python
-# append to tests/test_icons.py
-def test_add_font_search_path_is_used_by_font(tmp_path, monkeypatch):
-    import herdeck.icons as icons
-
-    # A registered dir's TTF is preferred; _font() returns a real TrueType.
-    fonts = tmp_path / "fonts"
-    fonts.mkdir()
-    # Copy the committed bundled font so the test exercises a real .ttf load.
-    import shutil
-
-    shutil.copy("src/herdeck/assets/fonts/DejaVuSans-Bold.ttf", fonts / "DejaVuSans-Bold.ttf")
-    monkeypatch.setattr(icons, "_EXTRA_FONT_DIRS", [])
-    monkeypatch.setattr(icons, "_font_cache", {})
-    icons.add_font_search_path(str(fonts))
-    from PIL import ImageFont
-
-    assert isinstance(icons._font(40), ImageFont.FreeTypeFont)
-```
-
-```python
-# append to tests/test_elgato_runtime.py
-def test_frozen_session_registers_bundled_font(tmp_path, monkeypatch):
-    import herdeck.icons as icons
-    from herdeck.elgato.runtime import _frozen_session
-
-    baked = _copy_assets_and_bake(tmp_path)
-    (tmp_path / "herdeck_assets" / "fonts").mkdir()
-    registered = []
-    monkeypatch.setattr(icons, "add_font_search_path", lambda p: registered.append(p))
-    _frozen_session(_cfg(), baked)
-    assert registered == [os.path.join(baked, "fonts")]
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `.venv/bin/python -m pytest tests/test_icons.py::test_add_font_search_path_is_used_by_font tests/test_elgato_runtime.py::test_frozen_session_registers_bundled_font -v`
-Expected: FAIL — `AttributeError: module 'herdeck.icons' has no attribute 'add_font_search_path'` (and the font file does not exist yet).
-
-- [ ] **Step 3: Write minimal implementation**
-
-Add the font file (download DejaVuSans-Bold.ttf from the DejaVu Fonts release and place it at `src/herdeck/assets/fonts/DejaVuSans-Bold.ttf`).
-
-```python
-# src/herdeck/icons.py — extra font search dirs (registered at runtime when frozen)
-_EXTRA_FONT_DIRS: list[str] = []
-
-
-def add_font_search_path(path: str) -> None:
-    """Register a directory whose TTF/TTC fonts _font() should try first.
-
-    Used by the frozen session to prefer the bundled font over system fonts.
-    """
-    if path not in _EXTRA_FONT_DIRS:
-        _EXTRA_FONT_DIRS.insert(0, path)
-        _font_cache.clear()
-```
-
-Then make `_font()` consult the extra dirs before `_FONT_CANDIDATES`:
-
-```python
-def _font(size: int):
-    """A scalable font at the given size; None only if nothing is available."""
-    if size in _font_cache:
-        return _font_cache[size]
-    from PIL import ImageFont
-
-    font = None
-    extra = [
-        os.path.join(d, f)
-        for d in _EXTRA_FONT_DIRS
-        if os.path.isdir(d)
-        for f in sorted(os.listdir(d))
-        if f.endswith((".ttf", ".ttc"))
-    ]
-    for path in (*extra, *_FONT_CANDIDATES):
-        try:
-            font = ImageFont.truetype(path, size)
-            break
-        except Exception:
-            continue
-    if font is None:
-        try:
-            font = ImageFont.load_default(size=size)
-        except Exception:
-            font = None
-    _font_cache[size] = font
-    return font
-```
-
-In `_frozen_session` (runtime.py), register the bundled font dir before building icons:
-
-```python
-    from ..icons import add_font_search_path
-
-    add_font_search_path(os.path.join(baked_dir, "fonts"))
-```
-
-Add the font to `pyproject.toml` package-data so the dev install ships it:
-
-```toml
-[tool.setuptools.package-data]
-herdeck = ["assets/*.svg", "assets/fonts/*.ttf"]
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `.venv/bin/python -m pytest tests/test_icons.py tests/test_elgato_runtime.py -v`
-Expected: PASS (new tests green, all prior icon/runtime tests still green).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/herdeck/assets/fonts/DejaVuSans-Bold.ttf src/herdeck/icons.py src/herdeck/elgato/runtime.py pyproject.toml tests/test_icons.py tests/test_elgato_runtime.py
-git commit -m "feat: bundle a TTF font for the frozen letter glyph"
-```
+**Orchestrator decision (redline 2): dropped.** `_FONT_CANDIDATES` in `icons.py` already
+lists macOS system fonts (`/System/Library/Fonts/Supplemental/Arial Bold.ttf`,
+`HelveticaNeue.ttc`), which remain readable in a frozen run (PyInstaller does not sandbox
+the filesystem), and there is an `ImageFont.load_default` fallback. On the target local
+arm64 Mac, panel labels + letter glyphs render without a bundled TTF, so no font is
+bundled: no `add_font_search_path`, no DejaVu TTF, no `pyproject` package-data change, no
+font-related change to `_frozen_session` (it stays exactly as built in Task 3).
 
 ---
 
@@ -749,11 +631,13 @@ describe("PyInstaller spec", () => {
     expect(spec).toContain("COLLECT("); // onedir (COLLECT), not a onefile EXE-only build
   });
 
-  it("excludes cairosvg and its native chain so libcairo is never bundled", () => {
-    for (const mod of ["cairosvg", "cffi", "cairocffi"]) {
-      expect(spec).toContain(mod);
+  it("excludes cairosvg + native chain AND the lazy driver stack the elgato path never hits", () => {
+    const excludes = spec.slice(spec.indexOf("excludes"), spec.indexOf("excludes") + 200);
+    for (const mod of ["cairosvg", "cffi", "cairocffi", "StreamDeck", "hid", "serial"]) {
+      expect(excludes).toContain(mod);
     }
-    expect(spec).toMatch(/excludes\s*=/);
+    // websockets belongs to the (lazy, unreached) web driver — it must NOT be a hidden import.
+    expect(spec).not.toMatch(/hiddenimports\s*=\s*\[[^\]]*websockets/s);
   });
 
   it("bundles the assets dir as herdeck_assets data", () => {
@@ -798,17 +682,22 @@ a = Analysis(
     pathex=[os.path.join(ROOT, "src")],
     binaries=[],
     datas=[(os.path.join(ROOT, "src", "herdeck", "assets"), "herdeck_assets")],
+    # Only the elgato submodules serve_elgato actually reaches. (No "websockets": that is a
+    # web-driver dep, and the web/d200/elgato-hw drivers are imported lazily inside make_deck,
+    # which the elgato path — _amain_elgato — returns before ever calling. Add to this list
+    # ONLY if the manual smoke run shows PyInstaller missed a real serve_elgato-graph import.)
     hiddenimports=[
         "herdeck.elgato.runtime",
         "herdeck.elgato.frozen",
         "herdeck.elgato.session",
         "herdeck.elgato.ipc",
-        "websockets",
     ],
-    # cairosvg (and its native cffi/cairocffi chain) is build-time only — the frozen
-    # session uses the Pillow PNG rasterizer. Excluding it stops static analysis of the
-    # lazy `import cairosvg` from dragging in libcairo/pango.
-    excludes=["cairosvg", "cffi", "cairocffi", "tkinter"],
+    # cairosvg (+ its native cffi/cairocffi chain) is build-time only — the frozen session
+    # uses the Pillow PNG rasterizer. Also exclude the native driver stack that only the
+    # lazy, unreached make_deck importers pull (StreamDeck/hidapi, pyserial → `serial`,
+    # web-driver `websockets`) so the bundle stays slim — no libusb/hidapi/pyserial.
+    # NEVER exclude anything in the serve_elgato import graph.
+    excludes=["cairosvg", "cffi", "cairocffi", "tkinter", "StreamDeck", "hid", "serial", "websockets"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -1019,10 +908,10 @@ git commit -m "docs: document local packaging of the Elgato plugin"
 
 ## Self-Review (author's pass against the spec)
 
-- **Spec part 1 (frozen icon rendering):** Tasks 1–3 (loader, baker, frozen session) + Task 4 (font). cairosvg excluded in Task 6's `.spec`; offline fetch in Task 3. ✓
+- **Spec part 1 (frozen icon rendering):** Tasks 1–3 (loader, baker, frozen session). cairosvg excluded in Task 6's `.spec`; offline fetch in Task 3. Font bundling (was Task 4) CUT — system fonts suffice on the target Mac. ✓
 - **Spec part 2 (bundled discovery):** Task 5 — new precedence, existence check, `import.meta.url` resolution. ✓
 - **Spec part 3 (build pipeline):** Tasks 6 (`.spec` + entry) + 7 (`build-plugin.sh`, npm script, gitignore). ✓
 - **Testing section:** frozen-session/PNG-rasterizer/no-cairosvg (Tasks 1–3), TS precedence + path resolution (Task 5), build static gate (Tasks 6–7), manual install gate (Task 8). ✓
-- **Risks:** font availability (Task 4), hidden imports (Task 6 `hiddenimports` + Task 8 manual verify), plugin-dir resolution from `import.meta.url` (Task 5), bundle size (accepted). ✓
-- **Type/name consistency:** `glyph_png_name`, `make_png_rasterizer`, `prerasterize_assets`, `baked_assets_dir`, `_frozen_session`, `_session_for_runtime`, `resolveHerdeckCommand`, `bundledBackendPath`, `add_font_search_path` — referenced consistently across tasks. ✓
+- **Risks:** font availability (resolved by CUT decision — system fonts), hidden imports (Task 6 `hiddenimports` + Task 8 manual verify; driver stack excluded), plugin-dir resolution from `import.meta.url` (Task 5), bundle size (accepted, slimmed by excluding the native driver stack). ✓
+- **Type/name consistency:** `glyph_png_name`, `make_png_rasterizer`, `prerasterize_assets`, `baked_assets_dir`, `_frozen_session`, `_session_for_runtime`, `resolveHerdeckCommand`, `bundledBackendPath` — referenced consistently across tasks. ✓
 - **Open redlines for the orchestrator:** the three flags at the top (onedir exe depth, cuttable font task, static-vs-real build test).
