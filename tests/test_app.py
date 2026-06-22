@@ -410,6 +410,33 @@ def test_app_clears_agents_for_restarted_server_after_profile_switch():
     assert "old agent" not in [t.label for t in deck.last]
 
 
+def test_app_profile_switch_preserves_online_state_for_unchanged_server():
+    deck = FakeRenderer(13)
+    base = make_config()
+    base.meta.profile_names = ["work", "mobile"]
+    base.meta.active_profile = "work"
+    next_cfg = make_config()
+    next_cfg.meta.profile_names = ["work", "mobile"]
+    next_cfg.meta.active_profile = "mobile"
+    app = App(
+        base,
+        deck,
+        send=lambda c: None,
+        switch_profile=lambda name: next_cfg,
+        update_connectors=lambda cfg: set(),
+    )
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.IDLE)],
+    )
+    app.handle_connection("dev", True)
+
+    app._handle_switch_profile("mobile")
+
+    assert deck.last[0].label == "api"
+    assert deck.last[0].status_text == "IDLE"
+
+
 def test_app_env_locked_profile_switch_refreshes_tiles_and_shows_panel_message():
     deck = FakeRenderer(13)
     cfg = make_config()
@@ -481,11 +508,13 @@ def test_connector_manager_diffs_servers():
         make_connector=lambda server: FakeConnector(server),
         start_connector=start_connector,
     )
-    mgr.update([ServerConfig("a", "ws://a", "t"), ServerConfig("b", "ws://b", "t")])
-    mgr.update([ServerConfig("b", "ws://b", "t"), ServerConfig("c", "ws://c", "t")])
+    first = mgr.update([ServerConfig("a", "ws://a", "t"), ServerConfig("b", "ws://b", "t")])
+    second = mgr.update([ServerConfig("b", "ws://b", "t"), ServerConfig("c", "ws://c", "t")])
 
     assert made == ["a", "b", "c"]
     assert stopped == ["a"]
+    assert first == {"a", "b"}
+    assert second == {"c"}
     assert tasks["a"].cancelled is True
 
 
