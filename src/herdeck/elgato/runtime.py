@@ -10,6 +10,9 @@ from ..config import Config, ConfigError
 from ..connector import Connector
 from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
 from ..model import AgentKey
+from .frozen import baked_assets_dir as _baked_assets_dir
+from .frozen import is_frozen as _is_frozen
+from .frozen import make_png_rasterizer as _make_png_rasterizer
 from .ipc import IpcServer
 from .session import ElgatoSession
 
@@ -96,7 +99,36 @@ def _default_session(config: Config) -> ElgatoSession:
     return ElgatoSession(config, icons)
 
 
-async def serve_elgato(config: Config, *, socket_path: str, token: str, make_session=_default_session) -> None:
+def _frozen_session(config: Config, baked_dir: str) -> ElgatoSession:
+    """Session for a frozen bundle: Pillow-only PNG rasterizer, bundled assets,
+    no network glyph fetch."""
+    import tempfile
+
+    cache = os.path.join(tempfile.gettempdir(), "herdeck-elgato-icons")
+    overrides = (
+        os.path.abspath(os.path.expanduser(config.hardware.icons_dir))
+        if config.hardware.icons_dir
+        else None
+    )
+    icons = IconProvider(
+        cache_dir=cache,
+        slug_map=DEFAULT_AGENT_SLUGS,
+        overrides_dir=overrides,
+        fetch=lambda slug: None,  # offline-first: no Simple Icons fetch when frozen
+        rasterize=_make_png_rasterizer(baked_dir),
+        assets_dir=baked_dir,
+    )
+    return ElgatoSession(config, icons)
+
+
+def _session_for_runtime(config: Config) -> ElgatoSession:
+    """Pick the session builder by runtime: frozen bundle vs dev/test."""
+    if _is_frozen():
+        return _frozen_session(config, _baked_assets_dir())
+    return _default_session(config)
+
+
+async def serve_elgato(config: Config, *, socket_path: str, token: str, make_session=_session_for_runtime) -> None:
     if not config.servers:
         raise ConfigError("no servers configured for elgato-plugin run")
     loop = asyncio.get_running_loop()

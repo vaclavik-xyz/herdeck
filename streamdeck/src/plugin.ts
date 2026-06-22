@@ -1,5 +1,5 @@
 import streamDeck from "@elgato/streamdeck";
-import { BackendProcess, resolveHerdeckCommand } from "./backend-process.js";
+import { BackendProcess, resolveHerdeckCommand, bundledBackendPath } from "./backend-process.js";
 import { IpcClient } from "./ipc-client.js";
 import { KeyRegistry } from "./registry.js";
 import { Adapter } from "./adapter.js";
@@ -32,8 +32,15 @@ void streamDeck.connect().then(async () => {
     herdeckPath = ev.settings.herdeckPath;
   });
 
+  // The bundled frozen backend (if this is a packaged install) lives next to plugin.js.
+  const bundled = bundledBackendPath(import.meta.url);
   const backend = new BackendProcess({
-    resolveCommand: () => resolveHerdeckCommand({ configuredPath: herdeckPath, envBin: process.env.HERDECK_BIN }),
+    resolveCommand: () =>
+      resolveHerdeckCommand({
+        configuredPath: herdeckPath,
+        envBin: process.env.HERDECK_BIN,
+        bundledPath: bundled,
+      }),
     devSocket: process.env.HERDECK_ELGATO_DEV_SOCK,
     devToken: process.env.HERDECK_ELGATO_TOKEN,
   });

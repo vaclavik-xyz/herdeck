@@ -6,3 +6,7 @@ __pycache__/
 *.pyc
 .build/
 .cache/
+
+# Elgato packaging build artifacts
+src/herdeck/assets/*.png
+build/

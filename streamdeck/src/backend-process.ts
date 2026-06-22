@@ -1,15 +1,35 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import crypto from "node:crypto";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 type SpawnFn = (command: string, args: string[], options: any) => { kill: (sig?: string) => void; on: (ev: string, cb: (...a: any[]) => void) => void };
 
-export function resolveHerdeckCommand(opts: { configuredPath?: string; envBin?: string }): { command: string; args: string[] } {
+export function resolveHerdeckCommand(opts: {
+  configuredPath?: string;
+  envBin?: string;
+  bundledPath?: string;
+  exists?: (p: string) => boolean;
+}): { command: string; args: string[] } {
   // PI-configured path wins (the Stream Deck app's PATH usually lacks the user's venv),
-  // then HERDECK_BIN, then `herdeck` on PATH. Frozen-binary path is a packaging follow-up.
-  const command = opts.configuredPath || opts.envBin || "herdeck";
+  // then HERDECK_BIN, then the bundled frozen backend — but only when it actually exists, so
+  // a dev checkout without a built backend/ falls through — then `herdeck` on PATH.
+  const exists = opts.exists ?? existsSync;
+  const command =
+    opts.configuredPath ||
+    opts.envBin ||
+    (opts.bundledPath && exists(opts.bundledPath) ? opts.bundledPath : undefined) ||
+    "herdeck";
   return { command, args: [] };
+}
+
+export function bundledBackendPath(importMetaUrl: string): string {
+  // plugin.js runs from …sdPlugin/bin/; the PyInstaller onedir folder sits at
+  // …sdPlugin/backend/herdeck-backend/ with the executable inside it.
+  const binDir = path.dirname(fileURLToPath(importMetaUrl));
+  return path.join(binDir, "..", "backend", "herdeck-backend", "herdeck-backend");
 }
 
 export interface BackendOptions {

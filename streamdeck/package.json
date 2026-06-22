@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "build": "rollup -c"
+    "build": "rollup -c",
+    "package": "bash scripts/build-plugin.sh"
   },
   "dependencies": {
     "@elgato/streamdeck": "^2.0.0"
