@@ -190,8 +190,18 @@ Stop is always two-step (arm, then confirm within a few seconds) and sends a
 forced interrupt regardless of the safety profile. Non-idempotent sends are never
 retried.
 
-The TypeScript shell and `.streamDeckPlugin` packaging live in a separate
-follow-up plan; this backend is fully usable and unit-tested on its own.
+This backend is fully usable and unit-tested on its own.
+
+### Plugin shell (TypeScript)
+
+The native plugin's TypeScript shell lives in `streamdeck/` and is built with the
+`@elgato/streamdeck` SDK. It spawns and supervises the Python backend (passing the
+socket path + one-shot token via `HERDECK_ELGATO_SOCK`/`HERDECK_ELGATO_TOKEN` and
+`HERDECK_DECK=elgato-plugin`), forwards key presses, and renders the PNGs the
+backend hands back — no logic of its own. Build it with `cd streamdeck && npm install
+&& npm run build`; the bundle is `streamdeck/xyz.vaclavik.herdeck.sdPlugin/`.
+Packaging it into a double-clickable `.streamDeckPlugin` and shipping a frozen
+backend are packaging follow-ups.
 
 ## Adding an agent type
 Add it to the launcher block used by your profile:
