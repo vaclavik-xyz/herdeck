@@ -318,3 +318,18 @@ def test_pending_act_clears_on_next_snapshot():
     assert sess.key_up("a") == []  # suppressed while pending
     sess.apply_snapshot("dev", [state("p1", Status.IDLE)])  # the act's re-list result
     assert sess._pending_act is None  # pending cleared, key not stuck
+
+
+def test_render_diff_returns_only_changed_instances():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s0", (0, 0)), ("s1", (1, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING, "a"), state("p2", Status.IDLE, "b")])
+
+    first = sess.take_render_diff()
+    assert set(first) == {"s0", "s1"}  # first call: everything
+
+    assert sess.take_render_diff() == {}  # nothing changed
+
+    sess.apply_event("dev", state("p1", Status.BLOCKED, "a"))  # p1 changed only
+    diff = sess.take_render_diff()
+    assert set(diff) == {"s0"}
