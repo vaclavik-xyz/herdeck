@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const spec = read("../herdeck-backend.spec");
 const entry = read("../scripts/herdeck-backend-entry.py");
+const pyproject = read("../../pyproject.toml");
 
 /** Capture the contents of a `key = [ ... ]` list literal (flat list of strings). */
 function listLiteral(src: string, key: string): string {
@@ -54,5 +55,13 @@ describe("freeze entry script", () => {
   it("invokes herdeck.app.main", () => {
     expect(entry).toContain("from herdeck.app import main");
     expect(entry).toMatch(/main\(\)/);
+  });
+});
+
+describe("packaging build dependency", () => {
+  it("declares pyinstaller in a packaging extra so a clean env can reproduce the build", () => {
+    const m = pyproject.match(/packaging\s*=\s*\[([^\]]*)\]/);
+    expect(m, "pyproject.toml must define a `packaging` optional-dependency").not.toBeNull();
+    expect(m![1]).toMatch(/pyinstaller/);
   });
 });
