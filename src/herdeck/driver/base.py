@@ -25,6 +25,7 @@ class TileView:
     label: str
     color: str
     icon: str | None = None  # icon-cache filename (D200); None for fake
+    subtext: str | None = None  # small wrapped text under a big label (drill choice text)
     agent_type: str | None = None
     spinner: int | None = None  # rotation phase for working tiles
     # Rich agent-tile content (None on control tiles, which render `label` only):

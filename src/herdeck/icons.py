@@ -339,6 +339,7 @@ class IconProvider:
             TILE_VERSION,
             tile.color,
             tile.label,
+            tile.subtext,
             tile.agent_type,
             spinner,
             tile.repo,
@@ -371,7 +372,20 @@ class IconProvider:
         bg = Image.new(
             "RGBA", (ICON_SIZE, ICON_SIZE), COLORS.get(tile.color, COLORS["dim"]) + (255,)
         )
-        if tile.label:
+        if tile.subtext:
+            # Drill choice tile: big number (label) up top, small wrapped choice
+            # text underneath — readable instead of a truncated "1 Yes…" line.
+            d = ImageDraw.Draw(bg)
+            nf = _font(58)
+            nw = d.textlength(tile.label, font=nf)
+            d.text(((ICON_SIZE - nw) / 2, 16), tile.label, font=nf, fill=(255, 255, 255))
+            sf = _font(22)
+            y = 92
+            for line in _wrap(d, tile.subtext, sf, ICON_SIZE - 16, 3):
+                lw = d.textlength(line, font=sf)
+                d.text(((ICON_SIZE - lw) / 2, y), line, font=sf, fill=(235, 235, 240))
+                y += 26
+        elif tile.label:
             d = ImageDraw.Draw(bg)
             f = _font(28)
             t = _truncate(d, tile.label, f, ICON_SIZE - 16)

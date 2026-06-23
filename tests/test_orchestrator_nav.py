@@ -39,9 +39,9 @@ def test_drill_shows_parsed_options_after_read():
     o.on_press(0)
     o.set_detection(PROMPT)
     rs = o.render()
-    assert rs.tiles[0].label.startswith("1 Yes")
-    assert rs.tiles[1].label.startswith("2 Yes")
-    assert rs.tiles[2].label.startswith("3 No")
+    assert rs.tiles[0].label == "1" and rs.tiles[0].subtext == "Yes"
+    assert rs.tiles[1].label == "2" and rs.tiles[1].subtext == "Yes, and don't ask again"
+    assert rs.tiles[2].label == "3" and rs.tiles[2].subtext == "No"
     assert rs.tiles[11].label == "Stop" and rs.tiles[12].label == "Back"
 
 
@@ -61,6 +61,33 @@ def test_pressing_option_one_sends_its_number():
     o.on_press(0)
     o.set_detection(PROMPT)
     assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1"])]
+
+
+def test_drill_option_tiles_carry_number_as_label_and_text_as_subtext():
+    # The tile shows the choice NUMBER big (label) and the choice TEXT small
+    # underneath (subtext, wraps) instead of a truncated "1 Yes…" single line.
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    rs = o.render()
+    assert rs.tiles[0].label == "1"
+    assert rs.tiles[0].subtext == "Yes"
+    assert rs.tiles[1].label == "2"
+    assert rs.tiles[1].subtext == "Yes, and don't ask again"
+    assert rs.tiles[2].label == "3"
+    assert rs.tiles[2].subtext == "No"
+
+
+def test_drill_approve_deny_fallback_tiles_have_no_subtext():
+    # The y/n fallback (Approve/Deny) keeps its short word label, no subtext.
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection("Allow this edit?")  # read completed, no numbered options
+    rs = o.render()
+    assert rs.tiles[0].label == "Approve"
+    assert rs.tiles[0].subtext is None
 
 
 def test_drill_panel_shows_detail_after_read_result():
@@ -302,7 +329,7 @@ def test_safety_keeps_approve_when_approve_always_shares_key():
     o.on_press(0)
     o.set_detection(PROMPT)
 
-    assert o.render().tiles[0].label.startswith("1 Yes")
+    assert o.render().tiles[0].label == "1"
     assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1"])]
 
 
