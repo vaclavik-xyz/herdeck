@@ -8,8 +8,10 @@
 // with the helpers below.
 
 /** What the WebView is told about the sidecar (the Rust `DiscoveryView`). The
- *  access token is intentionally NOT here — the shell proxies sidecar access
- *  through the `check_health` command, so JS never holds it. */
+ *  access token is intentionally NOT here — the shell proxies ALL sidecar access
+ *  (`check_health`, `deck_state`, `deck_tile`, `deck_panel`, `deck_press`)
+ *  Rust-side, injecting the token there, so JS never holds it. Discovery is just
+ *  the readiness signal plus `source`/url info for the UI. */
 export interface Discovery {
   url: string;
   host: string;
