@@ -32,6 +32,15 @@ class StateSource(ABC):
         """A non-secret server id for ``/health`` (never a token); None in mock."""
         return None
 
+    def attach(self, orch: Orchestrator) -> None:  # noqa: B027 - optional hook, no-op by default
+        """Receive the render orchestrator the DeckApp built (live press path).
+
+        No-op by default; the mock translates presses locally without it.
+        """
+
+    def close(self) -> None:  # noqa: B027 - optional hook, no-op by default
+        """Release any background resources (live connector). No-op by default."""
+
     @abstractmethod
     def apply_to(self, orch: Orchestrator) -> None:
         """Push the current agent state into the orchestrator."""
