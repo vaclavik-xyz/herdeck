@@ -1,0 +1,30 @@
+[package]
+name = "herdeck-desktop"
+version = "0.1.0"
+description = "herdeck desktop app — floating Tauri shell (phase 1)"
+authors = ["Filip Vaclavik"]
+edition = "2021"
+rust-version = "1.77"
+
+# A lib target (in addition to the bin) so the sidecar-supervisor logic is
+# importable by integration tests under tests/.
+[lib]
+name = "herdeck_desktop_lib"
+crate-type = ["lib"]
+
+[[bin]]
+name = "herdeck-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
