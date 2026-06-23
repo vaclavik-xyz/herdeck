@@ -13,3 +13,6 @@ build/
 
 # Brainstorming visual companion (mockups, session state)
 .superpowers/
+
+# herdr-agent-company run dirs (manifest, inbox, evidence)
+.scratch/
