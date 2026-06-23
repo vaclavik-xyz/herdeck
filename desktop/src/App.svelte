@@ -3,14 +3,18 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import DeckView from "./lib/DeckView.svelte";
-  import { asDiscovery, sidecarTransport, type Discovery } from "./lib/sidecar";
+  import { asDiscovery, type Discovery } from "./lib/sidecar";
+  import { commandTransport } from "./lib/deckClient";
 
   let discovery = $state<Discovery | null>(null);
 
-  // The DeckView talks to the sidecar directly with the url + token the shell
-  // reports (built once here, reused — see sidecar.ts). Null until both are
-  // available; DeckView then shows its offline state.
-  const transport = $derived(sidecarTransport(discovery));
+  // Once the sidecar has reported in, the deck reaches it through the token-free
+  // Tauri proxy commands (deck_state/tile/panel/press) — the Rust shell injects
+  // the access token, so it never lives in JS. Null until ready, when DeckView
+  // shows its offline state.
+  const transport = $derived(
+    discovery ? commandTransport((cmd, args) => invoke(cmd, args)) : null,
+  );
 
   // Ask the Rust shell for the sidecar discovery. The shell stores the latest
   // discovery and emits a "discovery" event whenever the supervised sidecar

@@ -30,10 +30,14 @@ struct AppState {
     discovery: Arc<Mutex<Option<Discovery>>>,
 }
 
+/// Default timeout for the Rust-side sidecar proxy calls.
+const SIDECAR_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// What the WebView is told about the sidecar. The access **token is deliberately
-/// omitted**: this slice reaches the sidecar via the Rust `check_health` proxy,
-/// so the token never needs to live in JS. (A later direct-fetch DeckView can
-/// expose it then, if it must.)
+/// omitted**: the frontend never talks to the sidecar directly. It invokes the
+/// token-free `check_health` / `deck_state` / `deck_tile` / `deck_panel` /
+/// `deck_press` commands below, which inject the token Rust-side, so it never
+/// lives in JS. `DiscoveryView` is just the readiness signal + `source`/url info.
 #[derive(Debug, Clone, serde::Serialize)]
 struct DiscoveryView {
     url: String,
@@ -65,27 +69,71 @@ fn get_discovery(state: tauri::State<'_, AppState>) -> Option<DiscoveryView> {
         .map(DiscoveryView::from)
 }
 
+/// The current discovery, or an error until the supervised sidecar has reported
+/// in. Shared by every proxy command so the token-pull lives in one place.
+fn current_discovery(state: &tauri::State<'_, AppState>) -> Result<Discovery, String> {
+    state
+        .discovery
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "sidecar not ready".to_string())
+}
+
 /// Probe the sidecar's token-authed `GET /health` and return its JSON. Done
 /// Rust-side (not via WebView `fetch`) so it isn't blocked by CORS, and so the
 /// access token never has to live in JS. `Err` if the sidecar isn't ready yet
 /// or is unreachable.
 #[tauri::command]
 fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let discovery = state
-        .discovery
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| "sidecar not ready".to_string())?;
-    let path = format!("/health?token={}", discovery.token);
+    let d = current_discovery(&state)?;
     let body = http::http_get(
-        &discovery.host,
-        discovery.port,
-        &path,
-        Duration::from_secs(3),
+        &d.host,
+        d.port,
+        &format!("/health?token={}", d.token),
+        SIDECAR_TIMEOUT,
     )?;
     serde_json::from_str::<serde_json::Value>(&body)
         .map_err(|e| format!("invalid /health JSON from sidecar: {e}"))
+}
+
+/// Proxy `GET /state` (token injected Rust-side) → its JSON. This is the deck's
+/// poll endpoint; the WebView never sees the token.
+#[tauri::command]
+fn deck_state(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let d = current_discovery(&state)?;
+    let body = http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT)?;
+    serde_json::from_str::<serde_json::Value>(&body)
+        .map_err(|e| format!("invalid /state JSON from sidecar: {e}"))
+}
+
+/// Proxy `GET /tile/{index}` → a `data:image/png;base64,…` URL (or `None` if the
+/// tile is absent), so the WebView `<img>` renders it without touching the token.
+#[tauri::command]
+fn deck_tile(state: tauri::State<'_, AppState>, index: u32) -> Result<Option<String>, String> {
+    let d = current_discovery(&state)?;
+    http::fetch_image(
+        &d.host,
+        d.port,
+        &format!("/tile/{index}"),
+        &d.token,
+        SIDECAR_TIMEOUT,
+    )
+}
+
+/// Proxy `GET /panel` → a `data:` PNG URL (or `None` if there is no panel yet).
+#[tauri::command]
+fn deck_panel(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+    let d = current_discovery(&state)?;
+    http::fetch_image(&d.host, d.port, "/panel", &d.token, SIDECAR_TIMEOUT)
+}
+
+/// Proxy `POST /press/{index}` (token in the `X-Herdeck-Token` header) → the
+/// sidecar's HTTP status code (204 ok, 403 bad token, 400 bad index).
+#[tauri::command]
+fn deck_press(state: tauri::State<'_, AppState>, index: u32) -> Result<u16, String> {
+    let d = current_discovery(&state)?;
+    http::send_press(&d.host, d.port, index, &d.token, SIDECAR_TIMEOUT)
 }
 
 /// How the sidecar is obtained: either an externally-managed one (dev override
@@ -109,7 +157,7 @@ fn repo_root_from_manifest() -> PathBuf {
 /// Best-effort `http://host:port/...` split (informational fields for the
 /// external-override path; the WebView only needs url+token).
 fn parse_host_port(url: &str) -> (String, u16) {
-    let after_scheme = url.splitn(2, "://").nth(1).unwrap_or(url);
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
     match authority.rsplit_once(':') {
         Some((h, p)) => (h.to_string(), p.parse::<u16>().unwrap_or(0)),
@@ -237,7 +285,14 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(state)
-        .invoke_handler(tauri::generate_handler![get_discovery, check_health])
+        .invoke_handler(tauri::generate_handler![
+            get_discovery,
+            check_health,
+            deck_state,
+            deck_tile,
+            deck_panel,
+            deck_press
+        ])
         .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
                 place_floating(&window);

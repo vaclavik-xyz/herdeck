@@ -101,26 +101,31 @@ export function summaryLabel(s: DeckSummary): string {
   return parts.join(" · ");
 }
 
-/** Stateful version gate + per-tile diff, ported from web.py's poll(): holds the
- *  last seen overall version, per-tile versions and panel version, and on each
- *  snapshot returns only the work that actually changed. */
+/** Stateful version gate + per-tile diff, ported from web.py's poll() but made
+ *  *transactional* for the async (proxy) transport: `plan()` decides what needs
+ *  fetching WITHOUT committing, and the caller commits each tile/panel version
+ *  only once its image has actually loaded. A version is marked "synced" (so the
+ *  cheap gate can skip it next time) only when the whole step succeeded — so a
+ *  transient image fetch failure is retried on the next poll instead of being
+ *  silently lost (web.py got this for free: its `<img>` retried the GET itself). */
 export class DeckDiffer {
-  private lastV = -1;
-  private tv: Record<number, number> = {};
-  private pv = -1;
+  private syncedV = -1; // state.version whose images are all loaded
+  private tv: Record<number, number> = {}; // committed (loaded) tile versions
+  private pv = -1; // committed (loaded) panel version
 
-  /** Reset tracking so the next reconcile refetches everything (e.g. after a
+  /** Reset tracking so the next plan refetches everything (e.g. after a
    *  reconnect, where the sidecar may have restarted its version counter). */
   reset(): void {
-    this.lastV = -1;
+    this.syncedV = -1;
     this.tv = {};
     this.pv = -1;
   }
 
-  reconcile(state: DeckState): DeckDiff {
+  /** What still needs fetching for `state`, WITHOUT committing anything. Returns
+   *  an empty diff when the version is already fully synced (the cheap gate). */
+  plan(state: DeckState): DeckDiff {
     const diff: DeckDiff = { refetch: [], clear: [], panel: null };
-    if (state.version === this.lastV) return diff; // cheap gate: nothing changed
-    this.lastV = state.version;
+    if (state.version === this.syncedV) return diff; // nothing changed at all
 
     const next = state.tiles;
     const indices = new Set<number>();
@@ -129,20 +134,36 @@ export class DeckDiffer {
     for (const i of indices) {
       const v = next[i];
       if (v === undefined) {
-        if (this.tv[i] !== undefined) {
-          delete this.tv[i];
-          diff.clear.push(i);
-        }
+        if (this.tv[i] !== undefined) diff.clear.push(i);
       } else if (v !== this.tv[i]) {
-        this.tv[i] = v;
         diff.refetch.push({ index: i, version: v });
       }
     }
     if (state.hasPanel && state.panel !== this.pv) {
-      this.pv = state.panel;
-      diff.panel = { version: this.pv };
+      diff.panel = { version: state.panel };
     }
     return diff;
+  }
+
+  /** Record that tile `index`'s image for `version` is now loaded. */
+  commitTile(index: number, version: number): void {
+    this.tv[index] = version;
+  }
+
+  /** Forget a tile that disappeared from `/state`. */
+  dropTile(index: number): void {
+    delete this.tv[index];
+  }
+
+  /** Record that the panel image for `version` is now loaded. */
+  commitPanel(version: number): void {
+    this.pv = version;
+  }
+
+  /** Arm the cheap gate for `version`. Call only once every changed image in the
+   *  step has loaded, so a partial step is re-planned (and retried) next poll. */
+  markSynced(version: number): void {
+    this.syncedV = version;
   }
 }
 
@@ -155,58 +176,46 @@ export interface PressResult {
 }
 
 /** How DeckView talks to the sidecar. Injectable so the view (and stepDeck) are
- *  testable with a fake, and so the real transport (direct loopback fetch with
- *  the access token) lives in one place. */
+ *  testable with a fake, and so the real transport lives in one place. Image
+ *  fetches are async because the production transport proxies them through Tauri
+ *  commands (the Rust shell injects the access token and dodges CORS), returning
+ *  ready-to-use `data:` URLs rather than direct (cross-origin, token-bearing)
+ *  sidecar URLs. */
 export interface DeckTransport {
   /** Raw `GET /state` JSON (unparsed — stepDeck runs it through parseState). */
   fetchState(): Promise<unknown>;
-  /** `<img src>` for tile `index` at `version` (token-authed, cache-busted). */
-  tileSrc(index: number, version: number): string;
-  /** `<img src>` for the panel at `version`. */
-  panelSrc(version: number): string;
+  /** `<img src>` for tile `index` at `version`, or null when absent (404). */
+  tileImage(index: number, version: number): Promise<string | null>;
+  /** `<img src>` for the panel at `version`, or null when absent. */
+  panelImage(version: number): Promise<string | null>;
   /** `POST /press/{index}`. */
   press(index: number): Promise<PressResult>;
 }
 
-/** Append the access token to a GET url as a query param (web.py `auth()`). */
-function withToken(url: string, token: string): string {
-  return url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
-}
+/** The Tauri `invoke` shape, injected so deckClient stays framework-free (no
+ *  `@tauri-apps/api` import) and the transport is unit-testable with a fake. */
+export type InvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 
-/** Direct loopback fetch to the sidecar, authed with the one-time access token
- *  exactly as web.py does — `?token=` on GETs, `X-Herdeck-Token` header on the
- *  press POST. `base` is the sidecar origin (e.g. "http://127.0.0.1:51234"),
- *  with no trailing slash.
- *
- *  CROSS-SLICE NOTE: web.py serves its page FROM the sidecar, so its fetch is
- *  same-origin. In the Tauri WebView the page origin differs from the loopback
- *  sidecar, so this direct path is cross-origin and the sidecar (slice 1) sends
- *  no CORS headers — it will be blocked until either the sidecar adds CORS for
- *  the WebView origin (src/herdeck/deckapp) OR this is swapped for a transport
- *  that proxies `/state`,`/tile`,`/panel`,`/press` through Tauri commands
- *  (desktop/src-tauri, the shell's preferred design). Both are outside slice 2's
- *  owned paths; until one lands the deck renders its offline state. The
- *  DeckTransport seam means that follow-up is a drop-in, with no DeckView change. */
-export function directFetchTransport(base: string, token: string): DeckTransport {
-  const origin = base.replace(/\/$/, "");
+/** The production transport: every sidecar call goes through a token-free Tauri
+ *  command (`deck_state` / `deck_tile` / `deck_panel` / `deck_press`). The Rust
+ *  shell injects the access token and performs the request Rust-side, so the
+ *  token never lives in JS and there is no cross-origin/CORS problem. Tiles and
+ *  the panel come back as `data:image/png;base64,…` URLs the `<img>` renders. */
+export function commandTransport(invoke: InvokeFn): DeckTransport {
   return {
-    async fetchState() {
-      const r = await fetch(withToken(origin + "/state", token));
-      if (!r.ok) throw new Error(`state ${r.status}`);
-      return r.json();
+    fetchState: () => invoke("deck_state"),
+    async tileImage(index) {
+      const src = await invoke("deck_tile", { index });
+      return typeof src === "string" && src ? src : null;
     },
-    tileSrc(index, version) {
-      return withToken(`${origin}/tile/${index}?v=${version}`, token);
-    },
-    panelSrc(version) {
-      return withToken(`${origin}/panel?v=${version}`, token);
+    async panelImage() {
+      const src = await invoke("deck_panel");
+      return typeof src === "string" && src ? src : null;
     },
     async press(index) {
-      const r = await fetch(`${origin}/press/${index}`, {
-        method: "POST",
-        headers: { "X-Herdeck-Token": token },
-      });
-      return { ok: r.ok, status: r.status, forbidden: r.status === 403 };
+      const status = await invoke("deck_press", { index });
+      const code = typeof status === "number" ? status : 0;
+      return { ok: code >= 200 && code < 300, status: code, forbidden: code === 403 };
     },
   };
 }
@@ -236,10 +245,11 @@ export function initialView(slots = 13): DeckViewModel {
 }
 
 /** One poll step: fetch + parse `/state`, run the diff, and fold the changed
- *  tile/panel srcs into a fresh view model. A fetch/parse failure yields an
- *  offline model that keeps the last-known tiles (so the grid doesn't flash).
- *  Pure given its inputs (the differ carries the version tracking), so the whole
- *  poll behavior is unit-testable without a DOM or timers. */
+ *  tile/panel images into a fresh view model. A fetch/parse failure yields an
+ *  offline model that keeps the last-known tiles (so the grid doesn't flash);
+ *  a per-tile image failure keeps that tile's previous src. Pure given its
+ *  inputs (the differ carries the version tracking), so the whole poll behavior
+ *  is unit-testable without a DOM or timers. */
 export async function stepDeck(
   transport: DeckTransport,
   differ: DeckDiffer,
@@ -254,14 +264,40 @@ export async function stepDeck(
   const state = parseState(raw);
   if (!state) return { ...prev, online: false };
 
-  const diff = differ.reconcile(state);
+  const diff = differ.plan(state);
   const tiles = { ...prev.tiles };
-  for (const { index, version } of diff.refetch) {
-    tiles[index] = transport.tileSrc(index, version);
+  let allLoaded = true;
+  // Refetch the changed tiles concurrently. Commit a tile's version only once its
+  // image resolves (a data URL, or a definitive "none"); on a fetch error keep
+  // the old src AND leave the version uncommitted so the next poll retries it.
+  await Promise.all(
+    diff.refetch.map(async ({ index, version }) => {
+      try {
+        const src = await transport.tileImage(index, version);
+        if (src) tiles[index] = src;
+        else delete tiles[index];
+        differ.commitTile(index, version);
+      } catch {
+        allLoaded = false; // leave previous src; retried next poll
+      }
+    }),
+  );
+  for (const index of diff.clear) {
+    delete tiles[index];
+    differ.dropTile(index);
   }
-  for (const index of diff.clear) delete tiles[index];
   let panel = prev.panel;
-  if (diff.panel) panel = transport.panelSrc(diff.panel.version);
+  if (diff.panel) {
+    try {
+      panel = await transport.panelImage(diff.panel.version);
+      differ.commitPanel(diff.panel.version);
+    } catch {
+      allLoaded = false; // keep previous panel; retried next poll
+    }
+  }
+  // Arm the cheap gate only when the whole step loaded; otherwise the next poll
+  // (same /state.version) re-plans and retries just the failed image(s).
+  if (allLoaded) differ.markSynced(state.version);
 
   return {
     online: true,

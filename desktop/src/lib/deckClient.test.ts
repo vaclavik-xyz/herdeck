@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   parseState,
   summaryLabel,
   emptySummary,
   DeckDiffer,
-  directFetchTransport,
+  commandTransport,
   stepDeck,
   initialView,
   type DeckState,
@@ -72,7 +72,7 @@ describe("summaryLabel", () => {
   });
 });
 
-describe("DeckDiffer — version gate + per-tile diff (the web.py poll port)", () => {
+describe("DeckDiffer — transactional version gate + per-tile diff", () => {
   let differ: DeckDiffer;
   beforeEach(() => {
     differ = new DeckDiffer();
@@ -90,102 +90,126 @@ describe("DeckDiffer — version gate + per-tile diff (the web.py poll port)", (
     ...over,
   });
 
-  it("refetches all initial tiles and the panel on the first snapshot", () => {
-    const d = differ.reconcile(st({ version: 1, tiles: { 0: 1, 1: 1, 2: 1 }, panel: 0 }));
+  // Simulate a fully-successful step: commit every planned image and arm the gate.
+  const sync = (state: DeckState) => {
+    const d = differ.plan(state);
+    for (const { index, version } of d.refetch) differ.commitTile(index, version);
+    for (const index of d.clear) differ.dropTile(index);
+    if (d.panel) differ.commitPanel(d.panel.version);
+    differ.markSynced(state.version);
+    return d;
+  };
+
+  it("plans all initial tiles and the panel on the first snapshot", () => {
+    const d = differ.plan(st({ version: 1, tiles: { 0: 1, 1: 1, 2: 1 }, panel: 0 }));
     expect(d.refetch.map((r) => r.index).sort()).toEqual([0, 1, 2]);
     expect(d.panel).toEqual({ version: 0 });
     expect(d.clear).toEqual([]);
   });
 
-  it("does NOTHING when the overall version is unchanged (cheap gate)", () => {
-    differ.reconcile(st({ version: 5, tiles: { 0: 1, 1: 1 } }));
+  it("plans NOTHING once a version is fully synced (cheap gate)", () => {
+    sync(st({ version: 5, tiles: { 0: 1, 1: 1 }, panel: 0 }));
     // even if tile versions would differ, an unchanged overall version short-circuits
-    const d = differ.reconcile(st({ version: 5, tiles: { 0: 9, 1: 9 } }));
+    const d = differ.plan(st({ version: 5, tiles: { 0: 9, 1: 9 }, panel: 3 }));
     expect(d).toEqual({ refetch: [], clear: [], panel: null });
   });
 
-  it("refetches ONLY the tile whose version advanced", () => {
-    differ.reconcile(st({ version: 1, tiles: { 0: 1, 1: 1, 2: 1 } }));
-    const d = differ.reconcile(st({ version: 2, tiles: { 0: 1, 1: 2, 2: 1 } }));
+  it("plans ONLY the tile whose version advanced after a sync", () => {
+    sync(st({ version: 1, tiles: { 0: 1, 1: 1, 2: 1 }, panel: 0 }));
+    const d = differ.plan(st({ version: 2, tiles: { 0: 1, 1: 2, 2: 1 }, panel: 0 }));
     expect(d.refetch).toEqual([{ index: 1, version: 2 }]);
     expect(d.clear).toEqual([]);
     expect(d.panel).toBeNull(); // panel version unchanged -> not refetched
   });
 
-  it("clears a tile that disappears from /state", () => {
-    differ.reconcile(st({ version: 1, tiles: { 0: 1, 1: 1, 2: 1 } }));
-    const d = differ.reconcile(st({ version: 2, tiles: { 0: 1, 2: 1 } }));
+  it("plans a clear for a tile that disappears from /state", () => {
+    sync(st({ version: 1, tiles: { 0: 1, 1: 1, 2: 1 }, panel: 0 }));
+    const d = differ.plan(st({ version: 2, tiles: { 0: 1, 2: 1 }, panel: 0 }));
     expect(d.clear).toEqual([1]);
     expect(d.refetch).toEqual([]);
   });
 
-  it("refetches the panel only when its version advances", () => {
-    differ.reconcile(st({ version: 1, panel: 0, tiles: {} }));
-    const same = differ.reconcile(st({ version: 2, panel: 0, tiles: {} }));
-    expect(same.panel).toBeNull();
-    const moved = differ.reconcile(st({ version: 3, panel: 1, tiles: {} }));
-    expect(moved.panel).toEqual({ version: 1 });
+  it("plans the panel only when its version advances", () => {
+    sync(st({ version: 1, panel: 0, tiles: {} }));
+    expect(differ.plan(st({ version: 2, panel: 0, tiles: {} })).panel).toBeNull();
+    expect(differ.plan(st({ version: 3, panel: 1, tiles: {} })).panel).toEqual({ version: 1 });
   });
 
   it("ignores the panel when has_panel is false", () => {
-    const d = differ.reconcile(st({ version: 1, hasPanel: false, panel: 7, tiles: {} }));
+    const d = differ.plan(st({ version: 1, hasPanel: false, panel: 7, tiles: {} }));
     expect(d.panel).toBeNull();
   });
 
-  it("reset() forces a full refetch on the next snapshot (reconnect)", () => {
-    differ.reconcile(st({ version: 9, tiles: { 0: 1 } }));
+  it("keeps re-planning the SAME version until it is marked synced (failure retry)", () => {
+    // a plan that is never committed/marked must be re-asked on the next plan
+    const a = differ.plan(st({ version: 4, hasPanel: false, tiles: { 0: 1 } }));
+    expect(a.refetch).toEqual([{ index: 0, version: 1 }]);
+    const b = differ.plan(st({ version: 4, hasPanel: false, tiles: { 0: 1 } }));
+    expect(b.refetch).toEqual([{ index: 0, version: 1 }]); // still pending -> retried
+  });
+
+  it("reset() forces a full re-plan on the next snapshot (reconnect)", () => {
+    sync(st({ version: 9, tiles: { 0: 1 }, panel: 0 }));
     differ.reset();
-    const d = differ.reconcile(st({ version: 1, tiles: { 0: 1 } }));
+    const d = differ.plan(st({ version: 1, tiles: { 0: 1 }, panel: 0 }));
     expect(d.refetch).toEqual([{ index: 0, version: 1 }]);
   });
 });
 
-describe("directFetchTransport — token auth, ported from web.py auth()/press()", () => {
-  const fetchMock = vi.fn();
-  beforeEach(() => {
-    fetchMock.mockReset();
-    vi.stubGlobal("fetch", fetchMock);
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
+describe("commandTransport — talks to the token-free Tauri proxy commands", () => {
+  // A fake `invoke` that records calls and dispatches to per-command handlers.
+  function fakeInvoke(handlers: Record<string, (args?: Record<string, unknown>) => unknown>) {
+    const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
+    const invoke = async (cmd: string, args?: Record<string, unknown>) => {
+      calls.push({ cmd, args });
+      const h = handlers[cmd];
+      if (!h) throw new Error(`no handler for ${cmd}`);
+      return h(args);
+    };
+    return { invoke, calls };
+  }
+
+  it("fetchState invokes deck_state and returns its JSON", async () => {
+    const { invoke, calls } = fakeInvoke({ deck_state: () => ({ version: 4 }) });
+    const t = commandTransport(invoke);
+    expect(await t.fetchState()).toEqual({ version: 4 });
+    expect(calls).toEqual([{ cmd: "deck_state", args: undefined }]);
   });
 
-  it("GET /state carries the token as a query param and returns parsed JSON", async () => {
-    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ version: 3 }) });
-    const t = directFetchTransport("http://127.0.0.1:51234/", "tok 1");
-    const body = await t.fetchState();
-    expect(body).toEqual({ version: 3 });
-    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:51234/state?token=tok%201");
-  });
-
-  it("fetchState throws on a non-ok status (offline tick)", async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 403, json: async () => ({}) });
-    const t = directFetchTransport("http://127.0.0.1:51234", "tok");
-    await expect(t.fetchState()).rejects.toThrow();
-  });
-
-  it("tileSrc / panelSrc append the cache-buster and the token", () => {
-    const t = directFetchTransport("http://127.0.0.1:9", "t&k");
-    expect(t.tileSrc(2, 7)).toBe("http://127.0.0.1:9/tile/2?v=7&token=t%26k");
-    expect(t.panelSrc(4)).toBe("http://127.0.0.1:9/panel?v=4&token=t%26k");
-  });
-
-  it("press POSTs to /press/{i} with the X-Herdeck-Token header", async () => {
-    fetchMock.mockResolvedValue({ ok: true, status: 204 });
-    const t = directFetchTransport("http://127.0.0.1:9", "secret");
-    const r = await t.press(5);
-    expect(r).toEqual({ ok: true, status: 204, forbidden: false });
-    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:9/press/5", {
-      method: "POST",
-      headers: { "X-Herdeck-Token": "secret" },
+  it("tileImage invokes deck_tile with the index and passes the data URL through", async () => {
+    const { invoke, calls } = fakeInvoke({
+      deck_tile: (args) => `data:image/png;base64,T${args?.index}`,
     });
+    const t = commandTransport(invoke);
+    expect(await t.tileImage(5, 9)).toBe("data:image/png;base64,T5");
+    expect(calls).toEqual([{ cmd: "deck_tile", args: { index: 5 } }]);
   });
 
-  it("press flags a 403 so the shell can re-pull discovery", async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 403 });
-    const t = directFetchTransport("http://127.0.0.1:9", "secret");
-    const r = await t.press(0);
-    expect(r).toEqual({ ok: false, status: 403, forbidden: true });
+  it("panelImage invokes deck_panel and passes the data URL through", async () => {
+    const { invoke, calls } = fakeInvoke({ deck_panel: () => "data:image/png;base64,P" });
+    const t = commandTransport(invoke);
+    expect(await t.panelImage(2)).toBe("data:image/png;base64,P");
+    expect(calls).toEqual([{ cmd: "deck_panel", args: undefined }]);
+  });
+
+  it("tileImage / panelImage return null when the command yields no image (404)", async () => {
+    const { invoke } = fakeInvoke({ deck_tile: () => null, deck_panel: () => null });
+    const t = commandTransport(invoke);
+    expect(await t.tileImage(0, 1)).toBeNull();
+    expect(await t.panelImage(1)).toBeNull();
+  });
+
+  it("press invokes deck_press with the index and maps the status code", async () => {
+    const { invoke, calls } = fakeInvoke({ deck_press: () => 204 });
+    const t = commandTransport(invoke);
+    expect(await t.press(7)).toEqual({ ok: true, status: 204, forbidden: false });
+    expect(calls).toEqual([{ cmd: "deck_press", args: { index: 7 } }]);
+  });
+
+  it("press flags a 403 status (bad/stale token)", async () => {
+    const { invoke } = fakeInvoke({ deck_press: () => 403 });
+    const t = commandTransport(invoke);
+    expect(await t.press(0)).toEqual({ ok: false, status: 403, forbidden: true });
   });
 });
 
@@ -201,8 +225,8 @@ describe("stepDeck — folds a poll into the render model", () => {
         if (s instanceof Error) throw s;
         return s;
       },
-      tileSrc: (index, version) => `tile-${index}-v${version}`,
-      panelSrc: (version) => `panel-v${version}`,
+      tileImage: async (index, version) => `tile-${index}-v${version}`,
+      panelImage: async (version) => `panel-v${version}`,
       async press(index) {
         this.pressed.push(index);
         return { ok: true, status: 204, forbidden: false };
@@ -255,5 +279,33 @@ describe("stepDeck — folds a poll into the render model", () => {
     const t = fakeTransport([{ garbage: true }]);
     const view = await stepDeck(t, new DeckDiffer(), initialView());
     expect(view.online).toBe(false);
+  });
+
+  it("retries a tile on the next poll (SAME version) after its image fetch fails", async () => {
+    // The version doesn't change between polls; the tile must still be retried
+    // because the failed fetch left it unsynced (no permanent staleness).
+    let failTile = true;
+    let i = 0;
+    const states = [
+      rawState({ version: 1, tiles: { "0": 1 }, panel: 0 }),
+      rawState({ version: 1, tiles: { "0": 1 }, panel: 0 }),
+    ];
+    const t: DeckTransport = {
+      fetchState: async () => states[Math.min(i++, states.length - 1)],
+      tileImage: async (index, version) => {
+        if (failTile) throw new Error("invoke failed");
+        return `tile-${index}-v${version}`;
+      },
+      panelImage: async (version) => `panel-v${version}`,
+      press: async () => ({ ok: true, status: 204, forbidden: false }),
+    };
+    const differ = new DeckDiffer();
+    let view = await stepDeck(t, differ, initialView());
+    expect(view.tiles).toEqual({}); // tile 0 failed to load this poll
+    failTile = false;
+    view = await stepDeck(t, differ, view);
+    // same /state.version, but the unsynced tile is retried and now loads
+    expect(view.tiles).toEqual({ 0: "tile-0-v1" });
+    expect(view.online).toBe(true);
   });
 });
