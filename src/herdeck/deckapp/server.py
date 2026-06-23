@@ -67,9 +67,10 @@ class DeckApp:
         self._panel_ver = 0
         self._version = 0
 
-        # Hand the source the render orchestrator so a live press can drive
-        # Orchestrator.on_press against the very deck being rendered (no-op for mock).
-        self._source.attach(self._orch)
+        # Hand the source the render orchestrator (plus this lock and refresh) so a
+        # live source can drive on_press/read-results against the very deck being
+        # rendered and re-render on bridge updates (all no-ops for the mock).
+        self._source.attach(self._orch, lock=self._lock, refresh=self.refresh)
 
         self.refresh()  # render the initial deck so /state is non-empty at once
 

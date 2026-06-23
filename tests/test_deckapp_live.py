@@ -205,6 +205,91 @@ def test_press_is_noop_without_a_runner():
     src.press(0)  # no runner -> silently ignored, no crash
 
 
+# --- live updates re-render the deck (no manual poll) -----------------------
+
+
+def test_snapshot_callback_refreshes_deck_without_manual_refresh():
+    app, src, server, _ = make_live()
+    v0 = app._state()["version"]
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    # No manual app.refresh(): the live callback must re-render the DeckApp itself,
+    # otherwise /state keeps serving stale tile versions.
+    st = app._state()
+    assert st["version"] > v0
+    assert st["summary"]["agents"] == 1
+    assert st["connected"] is True
+
+
+def test_event_callback_refreshes_deck_without_manual_refresh():
+    app, src, server, _ = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    v1 = app._state()["version"]
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))
+    st = app._state()
+    assert st["version"] > v1
+    assert st["summary"]["blocked"] == 1
+
+
+def test_connection_drop_callback_refreshes_deck():
+    app, src, server, _ = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    assert app._state()["connected"] is True
+    src._on_connection(server.id, False)  # no manual refresh
+    assert app._state()["connected"] is False
+
+
+# --- read result -> detection enables the blocked-approve drill --------------
+
+
+def test_read_result_enables_approve_on_blocked_agent():
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    app.press(0)  # drill into the blocked agent -> focus + read
+    read = [m for m in runner.sent if m["type"] == "read"][-1]
+    runner.sent.clear()
+    # the bridge answers the read with the prompt text
+    src._on_result(read["req"], {"text": "1. Approve\n2. Deny", "pane_id": "p0"})
+    app.press(0)  # the first option is now actionable
+    assert len(runner.sent) == 1
+    msg = runner.sent[0]
+    assert msg["type"] == "act"
+    assert msg["pane_id"] == "p0"
+    assert msg["keys"] == ["1"]
+    assert msg["guard"] is True  # act_if_blocked -> guarded send
+
+
+def test_stale_read_result_is_ignored():
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    app.press(0)  # drill -> focus + read
+    runner.sent.clear()
+    # a result for a request we never issued must not populate detection
+    src._on_result("r999", {"text": "1. Approve", "pane_id": "p0"})
+    app.press(0)  # no options -> blank tile -> nothing sent
+    assert runner.sent == []
+
+
+# --- non-bridge commands (switch_profile) must not crash the press ------------
+
+
+def test_press_skips_local_only_commands(monkeypatch):
+    from herdeck.commands import Command
+
+    app, src, server, runner = make_live()
+    monkeypatch.setattr(
+        src._orch,
+        "on_press",
+        lambda i: [Command("focus", server.id, "p0"), Command("switch_profile", "x", text="x")],
+    )
+    src.press(0)  # switch_profile is local-only -> skipped, not sent, no crash
+    assert [m["type"] for m in runner.sent] == ["focus"]
+
+
 # --- offline handling -------------------------------------------------------
 
 

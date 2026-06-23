@@ -2,15 +2,20 @@
 
 It reuses the core wholesale: a ``herdeck.connector.Connector`` runs the WebSocket
 client (connect, resync-on-reconnect, backoff), and ``Orchestrator`` does the
-render + press translation. This module only buffers the connector's callbacks and
-turns a press into ``Command`` wire messages.
+render + press translation. This module only buffers the connector's callbacks,
+re-renders the deck when they fire, and turns a press into ``Command`` wire
+messages.
 
-Threading: the connector callbacks (``_on_snapshot``/``_on_event``/
-``_on_connection``) run on the connector's asyncio loop thread and only touch this
-source's small buffer under ``self._lock``. The DeckApp's render/press path (which
-calls ``apply_to``/``press``) runs on HTTP threads under the DeckApp's lock and
-reads that buffer under ``self._lock`` — so the orchestrator is never mutated from
-the connector thread, and the two locks are always taken DeckApp-then-source.
+Threading: the connector callbacks run on the connector's asyncio loop thread.
+They update this source's small buffer under ``self._lock``, then ask the DeckApp
+to re-render via the ``refresh`` callback (which takes the DeckApp's lock). The
+DeckApp's render/press path runs on HTTP threads, also under the DeckApp's lock.
+Locks are always taken DeckApp-then-source, so there is no inversion: the
+orchestrator is only ever mutated while the DeckApp lock is held.
+
+Scope (phase 1): a single Connector to a single server (``config.servers[0]``),
+mirroring the design spec ("builds a Connector from the resolved ServerConfig").
+Multi-server fan-out is deferred — see ``_single_server_config``.
 
 Secret hygiene: the bridge token lives only inside the ``Connector`` (Authorization
 header). It is never stored on the source's public surface — only the non-secret
@@ -32,19 +37,27 @@ from .source import StateSource
 
 
 def _single_server_config(config: Config, server: ServerConfig) -> Config:
-    """Narrow the resolved config to the one server this source connects to, so
-    the deck (overview order, tiles) is consistent with the single Connector."""
+    """Narrow the resolved config to the one server this source connects to.
+
+    Phase 1 runs a single Connector (per the design spec), so the deck shows only
+    that server — narrowing keeps the overview order, tiles and command routing
+    consistent with it instead of leaving phantom, never-populated servers. A
+    multi-server deck (one connector per server) is a later phase.
+    """
     return dataclasses.replace(config, servers=[server], overview_order=[server.id])
 
 
 class LiveSource(StateSource):
     """A StateSource fed by a real bridge through ``Connector``.
 
-    The connector callbacks buffer the latest fleet state; ``apply_to`` replays it
-    into the render orchestrator via ``apply_snapshot``/``set_connection`` (the same
-    path the mock uses). A press is translated by ``Orchestrator.on_press`` into
-    ``Command``s and handed to the runner's fire-and-forget ``send`` — non-idempotent
-    sends are never retried (the Connector/bridge own that guarantee).
+    The connector callbacks buffer the latest fleet state and re-render the deck;
+    ``apply_to`` replays the buffer into the render orchestrator via
+    ``apply_snapshot``/``set_connection`` (the same path the mock uses). A press is
+    translated by ``Orchestrator.on_press`` into ``Command``s and handed to the
+    runner's fire-and-forget ``send`` — non-idempotent sends are never retried (the
+    Connector/bridge own that guarantee). A ``read`` result is matched back to its
+    request and fed to ``set_detection`` so the blocked-agent approve/deny options
+    appear.
     """
 
     source_name = "live"
@@ -56,7 +69,10 @@ class LiveSource(StateSource):
         self._agents: dict[AgentKey, AgentState] = {}
         self._connected = False
         self._req = 0
+        self._active_read_req: str | None = None
         self._orch: Orchestrator | None = None
+        self._deck_lock = None
+        self._refresh_cb = None
         self._runner = None
 
     # --- StateSource surface ---
@@ -73,9 +89,16 @@ class LiveSource(StateSource):
     def server_id(self) -> str:
         return self._server.id  # non-secret id only; the token never leaves Connector
 
-    def attach(self, orch: Orchestrator) -> None:
-        """Receive the render orchestrator (so a press can drive on_press)."""
+    def attach(self, orch: Orchestrator, *, lock=None, refresh=None) -> None:
+        """Receive the render orchestrator, its lock, and a refresh callback.
+
+        The orchestrator drives a press (``on_press``) and a read result
+        (``set_detection``); the lock guards mutating it from the connector thread;
+        ``refresh`` re-renders the deck so live updates bump tile versions.
+        """
         self._orch = orch
+        self._deck_lock = lock
+        self._refresh_cb = refresh
 
     def attach_runner(self, runner) -> None:
         """Receive the connector runner (provides fire-and-forget ``send``)."""
@@ -94,7 +117,13 @@ class LiveSource(StateSource):
         if orch is None or runner is None:
             return
         for cmd in orch.on_press(index):
-            runner.send(command_to_msg(cmd, self._next_req(cmd)))
+            try:
+                msg = command_to_msg(cmd, self._next_req(cmd))
+            except ValueError:
+                # Local-only commands (e.g. switch_profile) are not bridge messages;
+                # phase 1 does not reload config from the deck, so they are ignored.
+                continue
+            runner.send(msg)
 
     def summary(self) -> dict:
         from .. import layout
@@ -119,22 +148,59 @@ class LiveSource(StateSource):
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         with self._lock:
             self._agents = {s.key: s for s in states}
+        self._render()
 
     def _on_event(self, server_id: str, state: AgentState) -> None:
         with self._lock:
             self._agents[state.key] = state
+        self._render()
 
     def _on_connection(self, server_id: str, up: bool) -> None:
         with self._lock:
             self._connected = up
+        self._render()
+
+    def _on_result(self, req: str, data: dict) -> None:
+        # Mirrors App.handle_result: only an accepted read (matching the request we
+        # issued, for the pane still drilled) feeds the prompt text into detection.
+        text = data.get("text")
+        if text is None:
+            return  # non-read results carry no prompt; nothing to surface in phase 1
+        with self._lock:
+            accepted = req is not None and req == self._active_read_req
+        if not accepted:
+            return
+        orch, lock = self._orch, self._deck_lock
+        if orch is None or lock is None:
+            return
+        applied = False
+        with lock:
+            if orch.is_drill_pane(self._server.id, data.get("pane_id")):
+                orch.set_detection(text)
+                applied = True
+        if applied:
+            self._render()
+
+    def _render(self) -> None:
+        """Re-render the deck after a live update so /state bumps tile versions.
+
+        No-op until the DeckApp has attached (the connector may emit before then).
+        """
+        refresh = self._refresh_cb
+        if refresh is not None:
+            refresh()
 
     def _next_req(self, cmd) -> str | None:
         # Mirrors App.next_req_for: `list` carries no req; everything else gets a
-        # fresh sequential id (serialized by the DeckApp lock that wraps press).
+        # fresh sequential id. A `read` id is remembered so its result can be matched.
         if cmd.kind == "list":
             return None
-        self._req += 1
-        return f"r{self._req}"
+        with self._lock:
+            self._req += 1
+            req = f"r{self._req}"
+            if cmd.kind == "read":
+                self._active_read_req = req
+        return req
 
 
 class ConnectorRunner:
@@ -198,6 +264,7 @@ def build_live_source(
         on_snapshot=source._on_snapshot,
         on_event=source._on_event,
         on_connection=source._on_connection,
+        on_result=source._on_result,
     )
     runner = runner_factory(connector)
     source.attach_runner(runner)
