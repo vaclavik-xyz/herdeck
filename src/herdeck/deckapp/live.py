@@ -72,7 +72,7 @@ class LiveSource(StateSource):
         self._active_read_req: str | None = None
         self._orch: Orchestrator | None = None
         self._deck_lock = None
-        self._refresh_cb = None
+        self._refresh_locked_cb = None
         self._runner = None
 
     # --- StateSource surface ---
@@ -89,16 +89,19 @@ class LiveSource(StateSource):
     def server_id(self) -> str:
         return self._server.id  # non-secret id only; the token never leaves Connector
 
-    def attach(self, orch: Orchestrator, *, lock=None, refresh=None) -> None:
-        """Receive the render orchestrator, its lock, and a refresh callback.
+    def attach(self, orch: Orchestrator, *, lock=None, refresh_locked=None) -> None:
+        """Receive the render orchestrator, its lock, and a lock-free render.
 
         The orchestrator drives a press (``on_press``) and a read result
-        (``set_detection``); the lock guards mutating it from the connector thread;
-        ``refresh`` re-renders the deck so live updates bump tile versions.
+        (``set_detection``). ``lock`` is the DeckApp's lock — every live transition
+        (buffer swap + invalidation + render) is run while holding it, so a press
+        (which also holds it) can never observe a half-applied update.
+        ``refresh_locked`` is the DeckApp's lock-free render, called inside that held
+        lock to bump tile versions.
         """
         self._orch = orch
         self._deck_lock = lock
-        self._refresh_cb = refresh
+        self._refresh_locked_cb = refresh_locked
 
     def attach_runner(self, runner) -> None:
         """Receive the connector runner (provides fire-and-forget ``send``)."""
@@ -147,25 +150,37 @@ class LiveSource(StateSource):
     # --- connector callbacks (run on the connector's loop thread) ---
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         new_by_key = {s.key: s for s in states}
-        with self._lock:
-            self._agents = dict(new_by_key)
-        # Drop a pending read if the drilled pane's state changed (App.handle_snapshot):
-        # an old prompt's options must not stay actionable across a state change.
-        self._invalidate_if_drill_changed(server_id, new_by_key)
-        self._render()
+
+        def mutate():
+            with self._lock:
+                self._agents = dict(new_by_key)
+            # Drop a pending read if the drilled pane's state changed
+            # (App.handle_snapshot): an old prompt's options must not stay
+            # actionable across a state change.
+            self._invalidate_if_drill_changed(server_id, new_by_key)
+            return True
+
+        self._apply(mutate)
 
     def _on_event(self, server_id: str, state: AgentState) -> None:
-        with self._lock:
-            self._agents[state.key] = state
-        # Any event for the drilled pane invalidates the read (App.handle_event):
-        # the prompt may have changed, so stale approve/deny options must clear.
-        self._invalidate_if_drill_pane(server_id, state.key.pane_id)
-        self._render()
+        def mutate():
+            with self._lock:
+                self._agents[state.key] = state
+            # Any event for the drilled pane invalidates the read
+            # (App.handle_event): the prompt may have changed, so stale approve/deny
+            # options must clear.
+            self._invalidate_if_drill_pane(server_id, state.key.pane_id)
+            return True
+
+        self._apply(mutate)
 
     def _on_connection(self, server_id: str, up: bool) -> None:
-        with self._lock:
-            self._connected = up
-        self._render()
+        def mutate():
+            with self._lock:
+                self._connected = up
+            return True
+
+        self._apply(mutate)
 
     def _on_result(self, req: str, data: dict) -> None:
         # Mirrors App.handle_result.
@@ -177,62 +192,68 @@ class LiveSource(StateSource):
             if runner is not None:
                 runner.send(command_to_msg(Command("list", self._server.id), None))
             return
-        # A read result: surface the prompt only if it matches the request we issued
-        # and the pane is still drilled.
-        with self._lock:
-            accepted = req is not None and req == self._active_read_req
-        if not accepted:
-            return
-        orch, lock = self._orch, self._deck_lock
-        if orch is None or lock is None:
-            return
-        applied = False
-        with lock:
-            if orch.is_drill_pane(self._server.id, data.get("pane_id")):
-                orch.set_detection(text)
-                applied = True
-        if applied:
-            self._render()
+        # A read result: surface the prompt only if it still matches the request we
+        # issued and the pane is still drilled (re-checked under the deck lock so a
+        # concurrent invalidation wins).
+        pane_id = data.get("pane_id")
 
-    # --- read invalidation (deck lock guards orch access from this thread) ---
+        def mutate():
+            orch = self._orch
+            if orch is None:
+                return False
+            with self._lock:
+                accepted = req is not None and req == self._active_read_req
+            if accepted and orch.is_drill_pane(self._server.id, pane_id):
+                orch.set_detection(text)
+                return True
+            return False
+
+        self._apply(mutate)
+
+    def _apply(self, mutate) -> None:
+        """Run a state transition (and render it) atomically w.r.t. presses.
+
+        ``mutate`` runs while the DeckApp lock is held — the same lock ``press``
+        takes — so a press never sees a half-applied bridge update. It returns True
+        when a re-render is warranted; the render also happens under that held lock
+        (via the DeckApp's lock-free ``_refresh_locked``) so /state bumps tile
+        versions for changed cells. Before the DeckApp attaches, just run the
+        mutation (no orchestrator/render yet).
+        """
+        lock = self._deck_lock
+        if lock is None:
+            mutate()
+            return
+        with lock:
+            changed = mutate()
+            if changed and self._refresh_locked_cb is not None:
+                self._refresh_locked_cb()
+
+    # --- read invalidation (callers hold the deck lock) ---
     def _invalidate_if_drill_changed(self, server_id: str, new_by_key: dict) -> None:
         """Clear detection if a snapshot changed the drilled pane's state."""
-        orch, lock = self._orch, self._deck_lock
-        if orch is None or lock is None:
+        orch = self._orch
+        if orch is None:
             return
-        invalidate = False
-        with lock:
-            drill = orch.drill_key()
-            if drill is not None and drill.server_id == server_id:
-                if orch.get_agent(drill) != new_by_key.get(drill):
-                    orch.set_detection("")
-                    invalidate = True
-        if invalidate:
+        drill = orch.drill_key()
+        if (
+            drill is not None
+            and drill.server_id == server_id
+            and orch.get_agent(drill) != new_by_key.get(drill)
+        ):
+            orch.set_detection("")
             with self._lock:
                 self._active_read_req = None
 
     def _invalidate_if_drill_pane(self, server_id: str, pane_id) -> None:
         """Clear detection if an event targets the drilled pane."""
-        orch, lock = self._orch, self._deck_lock
-        if orch is None or lock is None:
+        orch = self._orch
+        if orch is None:
             return
-        invalidate = False
-        with lock:
-            if orch.is_drill_pane(server_id, pane_id):
-                orch.set_detection("")
-                invalidate = True
-        if invalidate:
+        if orch.is_drill_pane(server_id, pane_id):
+            orch.set_detection("")
             with self._lock:
                 self._active_read_req = None
-
-    def _render(self) -> None:
-        """Re-render the deck after a live update so /state bumps tile versions.
-
-        No-op until the DeckApp has attached (the connector may emit before then).
-        """
-        refresh = self._refresh_cb
-        if refresh is not None:
-            refresh()
 
     def _next_req(self, cmd) -> str | None:
         # Mirrors App.next_req_for: `list` carries no req; everything else gets a

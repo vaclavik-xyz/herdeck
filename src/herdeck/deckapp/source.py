@@ -33,10 +33,11 @@ class StateSource(ABC):
         return None
 
     def attach(  # noqa: B027 - optional hook, no-op by default
-        self, orch: Orchestrator, *, lock=None, refresh=None
+        self, orch: Orchestrator, *, lock=None, refresh_locked=None
     ) -> None:
-        """Receive the render orchestrator (plus the DeckApp's lock and a refresh
-        callback) so a live source can drive presses/read results and re-render.
+        """Receive the render orchestrator (plus the DeckApp's lock and its lock-free
+        render) so a live source can drive presses/read results and apply bridge
+        updates atomically under that lock.
 
         No-op by default; the mock translates presses locally without it.
         """

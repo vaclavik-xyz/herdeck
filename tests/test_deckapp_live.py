@@ -330,6 +330,38 @@ def test_snapshot_not_changing_drilled_pane_keeps_detection():
     assert runner.sent[0]["keys"] == ["1"]
 
 
+def test_snapshot_transition_is_atomic_under_deck_lock():
+    # A live update must apply its buffer swap, invalidation and render as ONE
+    # transition under the DeckApp lock, so a press (which holds the same lock)
+    # cannot observe a half-applied update (new state buffered, prompt not yet
+    # invalidated) and act on a stale prompt.
+    import threading
+
+    app, src, server, _ = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+
+    started, done = threading.Event(), threading.Event()
+
+    def deliver():
+        started.set()
+        src._on_snapshot(server.id, [agent(server.id, "p1", Status.WORKING)])
+        done.set()
+
+    with app._lock:  # stand in for a press/state holding the deck lock
+        t = threading.Thread(target=deliver)
+        t.start()
+        started.wait(1)
+        assert not done.wait(0.3)  # the whole transition blocks, not just the render
+        with src._lock:
+            buffered = set(src._agents)
+        assert buffered == {AgentKey(server.id, "p0")}  # buffer swap is gated too
+    t.join(2)
+    assert done.is_set()
+    with src._lock:
+        assert set(src._agents) == {AgentKey(server.id, "p1")}
+
+
 # --- non-bridge commands (switch_profile) must not crash the press ------------
 
 
