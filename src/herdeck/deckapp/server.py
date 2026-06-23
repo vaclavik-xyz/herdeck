@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import io
 import json
+import os
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -66,6 +67,12 @@ class DeckApp:
         self._panel_ver = 0
         self._version = 0
 
+        # Hand the source the render orchestrator (plus this lock and the lock-free
+        # render) so a live source can drive on_press/read-results against the very
+        # deck being rendered and apply each bridge update atomically under this lock
+        # (all no-ops for the mock).
+        self._source.attach(self._orch, lock=self._lock, refresh_locked=self._refresh_locked)
+
         self.refresh()  # render the initial deck so /state is non-empty at once
 
         self._server: ThreadingHTTPServer | None = None
@@ -81,6 +88,10 @@ class DeckApp:
     @property
     def token(self) -> str:
         return self._token
+
+    @property
+    def source_name(self) -> str:
+        return self._source.source_name
 
     def _bump(self) -> int:
         """Assign the next monotonic version. Call while holding self._lock."""
@@ -132,6 +143,10 @@ class DeckApp:
                 self._refresh_locked()
 
     def close(self) -> None:
+        try:
+            self._source.close()  # stop the live connector/loop (no-op for mock)
+        except Exception:
+            pass
         server = self._server
         if server is not None:
             try:
@@ -280,4 +295,82 @@ def create_mock_app(
 
     return DeckApp(
         MockSource(), host=host, port=port, icon_provider=icon_provider, serve=serve
+    )
+
+
+def select_live():
+    """Decide live vs mock from the on-disk config + bridge-token presence.
+
+    Returns ``(config, server)`` to drive a LiveSource, or ``None`` to fall back to
+    the deterministic mock. Mock wins when ``HERDECK_MOCK`` is set, when no config
+    file is discovered, or when the resolved server has no bridge token — the token
+    lives in env/keychain (``ServerConfig.token``), never in the config file, so a
+    missing one means we cannot connect and should show the mock + hint.
+    """
+    if os.environ.get("HERDECK_MOCK"):
+        return None
+    from ..bootstrap import _discover_config_path, _discover_local_config_path
+    from ..config import ConfigError
+    from ..settings import load_settings, resolve_profile
+
+    path = _discover_config_path()
+    if not path:
+        return None
+    try:
+        snapshot = load_settings(path, _discover_local_config_path(path))
+        config = resolve_profile(snapshot).config
+    except (ConfigError, OSError):
+        # A config that needs a token whose env var is unset raises ConfigError;
+        # treat any unreadable/invalid config as "no live target" -> mock.
+        return None
+    if not config.servers:
+        return None
+    server = config.servers[0]
+    if not server.token:
+        return None
+    return (config, server)
+
+
+def create_live_app(
+    config,
+    server,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 0,
+    icon_provider=None,
+    serve: bool = True,
+    connector_factory=None,
+) -> DeckApp:
+    """Build a serving DeckApp backed by a LiveSource (real bridge via Connector).
+
+    Uses a real wall clock so elapsed-time tile text advances (the mock pins it for
+    determinism). ``connector_factory`` is injectable for tests (no real bridge).
+    """
+    import time
+
+    from .live import build_live_source
+
+    kwargs = {} if connector_factory is None else {"connector_factory": connector_factory}
+    source = build_live_source(config, server, **kwargs)
+    return DeckApp(
+        source,
+        host=host,
+        port=port,
+        icon_provider=icon_provider,
+        serve=serve,
+        clock=time.monotonic,
+    )
+
+
+def create_app(
+    *, host: str = "127.0.0.1", port: int = 0, icon_provider=None, serve: bool = True
+) -> DeckApp:
+    """Build the sidecar with the right source: live when a server + token are
+    configured, otherwise the deterministic mock."""
+    selected = select_live()
+    if selected is None:
+        return create_mock_app(host=host, port=port, icon_provider=icon_provider, serve=serve)
+    config, server = selected
+    return create_live_app(
+        config, server, host=host, port=port, icon_provider=icon_provider, serve=serve
     )
