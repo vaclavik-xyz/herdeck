@@ -10,3 +10,6 @@ __pycache__/
 # Elgato packaging build artifacts
 src/herdeck/assets/*.png
 build/
+
+# Brainstorming visual companion (mockups, session state)
+.superpowers/
