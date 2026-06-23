@@ -28,7 +28,7 @@ import asyncio
 import dataclasses
 import threading
 
-from ..commands import command_to_msg
+from ..commands import Command, command_to_msg
 from ..config import Config, ServerConfig
 from ..connector import Connector
 from ..model import AgentKey, AgentState
@@ -146,13 +146,20 @@ class LiveSource(StateSource):
 
     # --- connector callbacks (run on the connector's loop thread) ---
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        new_by_key = {s.key: s for s in states}
         with self._lock:
-            self._agents = {s.key: s for s in states}
+            self._agents = dict(new_by_key)
+        # Drop a pending read if the drilled pane's state changed (App.handle_snapshot):
+        # an old prompt's options must not stay actionable across a state change.
+        self._invalidate_if_drill_changed(server_id, new_by_key)
         self._render()
 
     def _on_event(self, server_id: str, state: AgentState) -> None:
         with self._lock:
             self._agents[state.key] = state
+        # Any event for the drilled pane invalidates the read (App.handle_event):
+        # the prompt may have changed, so stale approve/deny options must clear.
+        self._invalidate_if_drill_pane(server_id, state.key.pane_id)
         self._render()
 
     def _on_connection(self, server_id: str, up: bool) -> None:
@@ -161,11 +168,17 @@ class LiveSource(StateSource):
         self._render()
 
     def _on_result(self, req: str, data: dict) -> None:
-        # Mirrors App.handle_result: only an accepted read (matching the request we
-        # issued, for the pane still drilled) feeds the prompt text into detection.
+        # Mirrors App.handle_result.
         text = data.get("text")
         if text is None:
-            return  # non-read results carry no prompt; nothing to surface in phase 1
+            # An act/send/start ack: resync this server with a fresh list so a
+            # skipped guarded action (pane no longer blocked) can't linger as stale.
+            runner = self._runner
+            if runner is not None:
+                runner.send(command_to_msg(Command("list", self._server.id), None))
+            return
+        # A read result: surface the prompt only if it matches the request we issued
+        # and the pane is still drilled.
         with self._lock:
             accepted = req is not None and req == self._active_read_req
         if not accepted:
@@ -180,6 +193,37 @@ class LiveSource(StateSource):
                 applied = True
         if applied:
             self._render()
+
+    # --- read invalidation (deck lock guards orch access from this thread) ---
+    def _invalidate_if_drill_changed(self, server_id: str, new_by_key: dict) -> None:
+        """Clear detection if a snapshot changed the drilled pane's state."""
+        orch, lock = self._orch, self._deck_lock
+        if orch is None or lock is None:
+            return
+        invalidate = False
+        with lock:
+            drill = orch.drill_key()
+            if drill is not None and drill.server_id == server_id:
+                if orch.get_agent(drill) != new_by_key.get(drill):
+                    orch.set_detection("")
+                    invalidate = True
+        if invalidate:
+            with self._lock:
+                self._active_read_req = None
+
+    def _invalidate_if_drill_pane(self, server_id: str, pane_id) -> None:
+        """Clear detection if an event targets the drilled pane."""
+        orch, lock = self._orch, self._deck_lock
+        if orch is None or lock is None:
+            return
+        invalidate = False
+        with lock:
+            if orch.is_drill_pane(server_id, pane_id):
+                orch.set_detection("")
+                invalidate = True
+        if invalidate:
+            with self._lock:
+                self._active_read_req = None
 
     def _render(self) -> None:
         """Re-render the deck after a live update so /state bumps tile versions.

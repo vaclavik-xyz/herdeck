@@ -274,6 +274,62 @@ def test_stale_read_result_is_ignored():
     assert runner.sent == []
 
 
+# --- result-driven relist + stale-prompt invalidation (mirrors App) ---------
+
+
+def test_non_read_result_triggers_relist():
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    runner.sent.clear()
+    src._on_result("r5", {"ok": True})  # no "text" -> an act/send ack
+    assert runner.sent == [{"type": "list"}]  # resync this server, like App
+
+
+def _drill_with_detection(app, src, server, runner):
+    app.press(0)  # drill into p0 -> focus + read
+    read = [m for m in runner.sent if m["type"] == "read"][-1]
+    src._on_result(read["req"], {"text": "1. Approve\n2. Deny", "pane_id": "p0"})
+    runner.sent.clear()
+
+
+def test_event_on_drilled_pane_invalidates_detection():
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    _drill_with_detection(app, src, server, runner)
+    # the pane re-blocks (possibly a different prompt) -> stale options must clear
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED, label="changed"))
+    app.press(0)  # no actionable option remains
+    assert runner.sent == []
+
+
+def test_snapshot_changing_drilled_pane_invalidates_detection():
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    _drill_with_detection(app, src, server, runner)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED, label="changed")])
+    app.press(0)
+    assert runner.sent == []
+
+
+def test_snapshot_not_changing_drilled_pane_keeps_detection():
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    _drill_with_detection(app, src, server, runner)
+    # an unrelated agent appears; the drilled pane is unchanged -> options stay live
+    src._on_snapshot(
+        server.id,
+        [agent(server.id, "p0", Status.BLOCKED), agent(server.id, "p1", Status.WORKING)],
+    )
+    app.press(0)
+    assert len(runner.sent) == 1
+    assert runner.sent[0]["type"] == "act"
+    assert runner.sent[0]["keys"] == ["1"]
+
+
 # --- non-bridge commands (switch_profile) must not crash the press ------------
 
 
