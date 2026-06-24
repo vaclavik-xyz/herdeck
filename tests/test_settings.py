@@ -296,6 +296,14 @@ servers = ["nonexistent"]
     assert not local.exists()
 
 
+def test_set_active_profile_default_validates_base_builds(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOK", raising=False)  # base server token unset -> base won't resolve
+    snap = load_settings(_write(tmp_path, OVERLAY_CONFIG))
+    with pytest.raises(ConfigError):
+        set_active_profile(snap, "default")
+    assert not (tmp_path / "local.toml").exists()  # nothing persisted
+
+
 def test_validate_settings_reports_missing_references(tmp_path, monkeypatch):
     config = write(
         tmp_path / "config.toml",
@@ -472,3 +480,14 @@ def test_build_config_profile_overrides_grid_and_answer_profiles(monkeypatch):
     assert cfg.grid == (4, 3)
     assert cfg.profiles["claude"].approve == ["y"]
     assert cfg.profiles["claude"].deny == ["esc"]  # kept from base (field merge)
+
+
+def test_build_config_rejects_unknown_overview_order_server(monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    data = {
+        "servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
+        "deck": {"overview_order": ["local", "ghost"]},
+    }
+    merged, selection = _merged_sections(data, "default")
+    with pytest.raises(ConfigError, match="unknown server 'ghost'"):
+        _build_config(data, merged, selection, {}, profile_name="default", env_profile=None)

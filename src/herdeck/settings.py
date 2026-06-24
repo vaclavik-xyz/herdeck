@@ -87,8 +87,7 @@ def set_active_profile(snapshot: SettingsSnapshot, name: str, *, persist: bool =
         raise ConfigError(f"unknown profile '{name}'")
     if snapshot.env_profile is not None:
         return False
-    if name != "default":
-        resolve_profile(snapshot, name)  # validate it builds
+    resolve_profile(snapshot, name)  # validate it builds (incl. the base for "default")
     if not persist:
         return True
     local_path = snapshot.local_path
