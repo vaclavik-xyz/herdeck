@@ -19,6 +19,11 @@ from .source import StateSource
 # declaring it as a packaged dependency of the desktop sidecar (in pyproject)
 # belongs to the packaging slice and is outside this slice's owned paths.
 
+# Sentinel returned by _json_body() when the request body is not a valid JSON
+# object (parse error or wrong type). Using a distinct singleton means callers
+# can safely distinguish it from None, False, or any other falsy value.
+_BAD_BODY = object()
+
 # Body returned for any unauthenticated request: plain text (never
 # octet-stream, which browsers offer to download) and free of any token.
 _FORBIDDEN = (
@@ -293,13 +298,25 @@ class DeckApp:
                     self._send(404)
 
             def _json_body(self):
+                """Parse the request body as a JSON object (dict).
+
+                Returns the parsed dict on success; sends 400 and returns
+                ``_BAD_BODY`` if the body is not valid JSON or is not a
+                JSON object (i.e. not a dict). Callers must check
+                ``if body is _BAD_BODY: return``.
+                An empty/absent body is treated as ``{}`` (empty object).
+                """
                 length = int(self.headers.get("Content-Length", 0))
                 raw = self.rfile.read(length) if length else b""
                 try:
-                    return json.loads(raw or b"{}")
+                    result = json.loads(raw or b"{}")
                 except (json.JSONDecodeError, ValueError):
                     self._send(400)
-                    return None
+                    return _BAD_BODY
+                if not isinstance(result, dict):
+                    self._send(400)
+                    return _BAD_BODY
+                return result
 
             def do_POST(self):
                 path = urlsplit(self.path).path
@@ -319,13 +336,13 @@ class DeckApp:
                         return
                     if path == "/config/validate":
                         body = self._json_body()
-                        if body is None:
+                        if body is _BAD_BODY:
                             return
                         errors = app._config_service.validate(body)
                         self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
                     elif path == "/config":
                         body = self._json_body()
-                        if body is None:
+                        if body is _BAD_BODY:
                             return
                         errors = app._config_service.write(body)
                         if not errors:
@@ -333,13 +350,13 @@ class DeckApp:
                         self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
                     elif path == "/profiles/active":
                         body = self._json_body()
-                        if body is None:
+                        if body is _BAD_BODY:
                             return
                         changed = app._config_service.set_active(body.get("name"))
                         self._send(200, json.dumps({"changed": changed}).encode(), "application/json")
                     elif path == "/secret":
                         b = self._json_body()
-                        if b is None:
+                        if b is _BAD_BODY:
                             return
                         token_env = b.get("token_env")
                         value = b.get("value")

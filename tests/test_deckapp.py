@@ -587,3 +587,23 @@ def test_post_config_malformed_json_returns_400():
         assert exc.value.code == 400
     finally:
         app.close()
+
+
+def test_post_config_non_object_json_returns_400():
+    """POST /config with a valid but non-object JSON body (array/string/null) -> 400."""
+    stub = _StubConfigService()
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=stub)
+    try:
+        for payload in (b"[]", b'"hello"', b"null", b"42"):
+            req = urllib.request.Request(
+                f"http://{app.host}:{app.port}/config",
+                data=payload,
+                method="POST",
+            )
+            req.add_header("X-Herdeck-Token", app.token)
+            req.add_header("Content-Type", "application/json")
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                urllib.request.urlopen(req, timeout=2)
+            assert exc.value.code == 400, f"expected 400 for payload {payload!r}"
+    finally:
+        app.close()
