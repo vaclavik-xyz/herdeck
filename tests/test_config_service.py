@@ -17,6 +17,7 @@ class _FakeKeyring:
     def delete_password(self, service, name):
         del self.store[(service, name)]
 
+
 CONFIG = """
 [[servers]]
 id = "local"
