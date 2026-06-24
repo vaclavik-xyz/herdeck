@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+import tomli_w
 from pathlib import Path
 
 from .. import secrets as secret_store
@@ -81,6 +82,27 @@ class ConfigService:
 
     def validate(self, data: dict) -> list[str]:
         return validate_settings(self._snapshot_for(data))
+
+    HEADER = "# Managed by herdeck-config — generated; manual comments are not preserved\n"
+
+    def write(self, data: dict) -> list[str]:
+        structural = [e for e in self.validate(data) if "is not set" not in e]
+        if structural:
+            return structural
+        toml_data = dict(data.get("base", {}))
+        profiles = data.get("profiles") or {}
+        if profiles:
+            toml_data["profiles"] = profiles
+        self._atomic_write(self._config_path, self.HEADER + tomli_w.dumps(toml_data))
+        local = data.get("local") or {}
+        self._atomic_write(self._local_path, tomli_w.dumps(local) if local else "")
+        return []
+
+    def _atomic_write(self, path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(text)
+        os.replace(tmp, path)
 
     def _secret_flags(self, base: dict, profiles: dict) -> dict:
         names = self._collect_token_envs(base)

@@ -114,3 +114,45 @@ def test_validate_clean_config_has_no_errors(tmp_path, monkeypatch):
         "local": {},
     }
     assert svc.validate(data) == []
+
+
+import tomllib as _tomllib
+
+
+def test_write_round_trips_and_omits_secret_values(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "real")
+    svc = _svc(tmp_path)
+    data = {
+        "base": {
+            "servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
+            "deck": {"grid": "4x3"},
+        },
+        "profiles": {"mobile": {"view": {"management": "bottom_row"}}},
+        "local": {"active_profile": "mobile"},
+    }
+    assert svc.write(data) == []
+    text = (tmp_path / "config.toml").read_text()
+    assert text.startswith("# Managed by herdeck-config")
+    assert "real" not in text  # secret value never written
+    parsed = _tomllib.loads(text)
+    assert parsed["deck"] == {"grid": "4x3"}
+    assert parsed["profiles"]["mobile"]["view"] == {"management": "bottom_row"}
+    assert _tomllib.loads((tmp_path / "local.toml").read_text())["active_profile"] == "mobile"
+
+
+def test_write_blocks_on_structural_error_but_not_missing_secret(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOK", raising=False)  # secret missing -> NOT a write blocker
+    svc = _svc(tmp_path)
+    ok_data = {
+        "base": {"servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}]},
+        "profiles": {},
+        "local": {},
+    }
+    assert svc.write(ok_data) == []  # missing secret does not block the write
+    bad_data = {
+        "base": {"servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}]},
+        "profiles": {"a": {"extends": "b"}, "b": {"extends": "a"}},  # cycle = structural
+        "local": {},
+    }
+    errors = svc.write(bad_data)
+    assert errors and any("cycle" in e for e in errors)
