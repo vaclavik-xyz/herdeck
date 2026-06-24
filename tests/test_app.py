@@ -598,3 +598,43 @@ servers = ["local"]
 
     assert cfg.meta.active_profile == "mobile"
     assert 'active_profile = "mobile"' in local.read_text()
+
+
+def test_reload_from_disk_applies_new_config():
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    new_cfg = app.config
+    grids = []
+    app._apply_config = lambda c: grids.append(c.grid)
+    app._config_reloader = lambda: new_cfg
+    app.reload_from_disk()
+    assert grids == [new_cfg.grid]
+
+
+def test_reload_from_disk_without_reloader_is_noop():
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app._config_reloader = None
+    app.reload_from_disk()  # must not raise
+
+
+def test_reload_from_disk_malformed_file_shows_panel(tmp_path):
+    from herdeck.app import make_config_reloader
+    from herdeck.settings import load_settings
+    from tests.test_settings import OVERLAY_CONFIG
+
+    config = tmp_path / "config.toml"
+    config.write_text(OVERLAY_CONFIG)
+    local = tmp_path / "local.toml"
+    snapshot = load_settings(config, local)
+
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app._config_reloader = make_config_reloader(snapshot)
+
+    old_config = app.config
+    config.write_text("this = is not [valid toml")  # mid-edit / truncated write
+    app.reload_from_disk()  # must not raise OSError/TOMLDecodeError
+
+    assert app.config is old_config  # current config kept
+    assert deck.last_panel is not None and deck.last_panel.title == "reload failed"

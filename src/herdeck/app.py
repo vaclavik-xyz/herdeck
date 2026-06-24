@@ -92,6 +92,7 @@ class App:
         notify_schedule: Callable[[Callable[[], None]], None] | None = None,
         switch_profile: Callable[[str], Config | None] | None = None,
         update_connectors: Callable[[Config], object] | None = None,
+        config_reloader: Callable[[], Config] | None = None,
     ):
         self.config = config
         self.deck = deck
@@ -99,6 +100,7 @@ class App:
         self._schedule = schedule or (lambda fn: fn())
         self._switch_profile = switch_profile
         self._update_connectors = update_connectors or (lambda cfg: None)
+        self._config_reloader = config_reloader
         self.notifier = notifier or NoopNotifier()
         # Notifications run off the render loop so a slow sink never blocks it;
         # the default runs synchronously (tests, mock) — the lead passes an executor.
@@ -288,6 +290,9 @@ class App:
             self._refresh()
             self._set_status_panel("profile locked", [self.config.meta.active_profile], "amber")
             return
+        self._apply_config(new_config)
+
+    def _apply_config(self, new_config: Config) -> None:
         self.config = new_config
         self.notifier = _build_notifier(new_config)
         self.orch.update_config(new_config)
@@ -300,6 +305,17 @@ class App:
         for server_id in restarted:
             self.orch.set_connection(server_id, False)
         self._refresh()
+
+    def reload_from_disk(self) -> None:
+        if self._config_reloader is None:
+            return
+        try:
+            new_config = self._config_reloader()
+        except ConfigError as exc:
+            self._refresh()
+            self._set_status_panel("reload failed", [str(exc)[:60]], "amber")
+            return
+        self._apply_config(new_config)
 
 
 async def _guarded(conn: Connector) -> None:
@@ -335,6 +351,24 @@ def make_profile_switcher(snapshot):
         return resolve_profile(refreshed).config
 
     return switch
+
+
+def make_config_reloader(snapshot):
+    import tomllib
+
+    from .settings import load_settings, resolve_profile
+
+    def reload_() -> Config:
+        # An edit-in-progress can leave the file partially written; wrap the IO/parse
+        # errors as ConfigError so reload_from_disk surfaces the "reload failed" panel
+        # and keeps the current config instead of letting them escape the watcher callback.
+        try:
+            refreshed = load_settings(snapshot.config_path, snapshot.local_path)
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            raise ConfigError(f"could not read config: {exc}") from exc
+        return resolve_profile(refreshed).config
+
+    return reload_
 
 
 def _mock_config() -> Config:
@@ -462,6 +496,8 @@ async def _run(
     deck: DeckDriver,
     switch_profile=None,
     tick_interval: float | None = None,
+    config_reloader=None,
+    config_paths=None,
 ) -> None:
     if not config.servers:
         raise ConfigError("no servers configured for remote run")
@@ -499,10 +535,18 @@ async def _run(
         notify_schedule=lambda fn: loop.run_in_executor(None, fn),
         switch_profile=switch_profile,
         update_connectors=lambda cfg: manager.update(cfg.servers),
+        config_reloader=config_reloader,
     )
     for server in config.servers:
         app.orch.set_connection(server.id, False)
     app._refresh()
+
+    watcher = None
+    if config_reloader is not None and config_paths:
+        from .deckapp.watcher import ConfigWatcher
+
+        watcher = ConfigWatcher(config_paths, lambda: loop.call_soon_threadsafe(app.reload_from_disk))
+        watcher.start()
 
     manager.update(config.servers)
     tasks = manager.tasks()
@@ -514,6 +558,8 @@ async def _run(
     try:
         await asyncio.gather(*tasks)
     finally:
+        if watcher is not None:
+            watcher.close()
         manager.stop_all()
 
 
@@ -618,6 +664,8 @@ async def _amain(
     *,
     switch_profile=None,
     tick_interval: float | None = None,
+    config_reloader=None,
+    config_paths=None,
 ) -> None:
     config, aclose = await resolve_runtime_config(mode, file_config)
     runtime_switch = make_runtime_profile_switcher(
@@ -631,6 +679,8 @@ async def _amain(
             deck,
             switch_profile=runtime_switch,
             tick_interval=tick_interval,
+            config_reloader=config_reloader if mode[0] == "remote" else None,
+            config_paths=config_paths if mode[0] == "remote" else None,
         )
     finally:
         await aclose()
@@ -659,6 +709,8 @@ def main() -> None:
     config_path = None if mock else _discover_config_path()
     snapshot = None
     switch_profile = None
+    config_reloader = None
+    config_paths = None
     if config_path:
         from .settings import load_settings, resolve_profile
 
@@ -666,6 +718,8 @@ def main() -> None:
         snapshot = load_settings(config_path, local_config_path)
         file_config = resolve_profile(snapshot).config
         switch_profile = make_profile_switcher(snapshot)
+        config_reloader = make_config_reloader(snapshot)
+        config_paths = [snapshot.config_path, snapshot.local_path]
     else:
         file_config = None
     socket_path = _resolve_socket_path(file_config)
@@ -703,6 +757,8 @@ def main() -> None:
                     deck,
                     switch_profile=switch_profile,
                     tick_interval=_resolve_tick_interval(file_config),
+                    config_reloader=config_reloader,
+                    config_paths=config_paths,
                 )
             )
     finally:
