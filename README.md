@@ -239,39 +239,38 @@ falls through to a venv/PATH `herdeck`, and an explicit PI path or `HERDECK_BIN`
 always wins.
 
 ## Adding an agent type
-Add it to the launcher block used by your profile:
+Add it to the `[start_profiles]` section (base config) or override it per profile:
 
 ```toml
-[launchers.default]
+[start_profiles]
 myagent = ["myagent", "--flag"]
 ```
 
-New profile-schema configs currently use the built-in answer profiles for approval key sequences.
-Custom `[answer_profiles.<name>]` overrides are supported in legacy configs only;
-profile-schema support for custom answer profiles is a future compatibility step.
+Custom `[answer_profiles.<name>]` sections can be defined in the base config and overridden per-profile via `[profiles.<name>.answer_profiles.<type>]`; a profile can only override a type that the base defines.
 
 ## Notifications
 Get notified when an agent enters the **blocked** state, so you don't have to
-watch the deck. In profile-schema configs, attach a notification profile to the
-profile that should use it:
+watch the deck. Configure notifications inline in the base config or as a profile
+overlay:
 
 ```toml
-[profiles.work]
-notifications = "normal"
-
-[notification_profiles.normal]
+[notifications]
 enabled = true
 backends = ["macos", "telegram"]   # run both, or just one
 on = ["blocked"]
 sound = true
 
 # Only needed when "telegram" is a backend:
-[notification_profiles.normal.telegram]
+[notifications.telegram]
 token_env = "HERDECK_TELEGRAM_TOKEN"   # bot token read from this env var
 chat_id = "123456789"
+
+# Override per profile:
+[profiles.work.notifications]
+backends = ["macos"]
 ```
 
-Legacy configs use the root `[notifications]` table with the same fields.
+Legacy flat configs use the root `[notifications]` table with the same fields.
 
 - **macOS** posts to Notification Center (osascript). **Telegram** delivers to
   your phone via the Bot API over HTTPS (stdlib only, no extra dependency) —

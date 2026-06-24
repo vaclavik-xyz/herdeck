@@ -21,6 +21,8 @@ from .config import (
     TelegramConfig,
     ThemeConfig,
     ViewConfig,
+    _parse_grid,
+    _parse_profile,
 )
 
 
@@ -61,35 +63,31 @@ def load_settings(
 
 def list_profiles(snapshot: SettingsSnapshot) -> list[dict]:
     locked = snapshot.env_profile is not None
-    if "profiles" not in snapshot.data:
-        return [{"name": "default", "active": True, "locked": locked}]
     active = _active_profile_name(snapshot)
-    return [
-        {"name": name, "active": name == active, "locked": locked}
-        for name in sorted(snapshot.data.get("profiles", {}))
-    ]
+    names = ["default"] + sorted(snapshot.data.get("profiles", {}))
+    return [{"name": n, "active": n == active, "locked": locked} for n in names]
 
 
 def resolve_profile(snapshot: SettingsSnapshot, name: str | None = None) -> ResolvedSettings:
-    data = snapshot.data
-    if "profiles" not in data:
-        return ResolvedSettings(_resolve_legacy(snapshot), snapshot.local_path)
-    profile_name = name or _active_profile_name(snapshot)
-    profiles = data.get("profiles", {})
-    if profile_name not in profiles:
-        raise ConfigError(f"unknown profile '{profile_name}'")
-    profile = _profile_chain(profiles, profile_name)
-    config = _runtime_config(data, snapshot.local_data, profile_name, profile, snapshot.env_profile)
+    active = name or _active_profile_name(snapshot)
+    merged, selection = _merged_sections(snapshot.data, active)
+    config = _build_config(
+        snapshot.data,
+        merged,
+        selection,
+        snapshot.local_data,
+        profile_name=active,
+        env_profile=snapshot.env_profile,
+    )
     return ResolvedSettings(config=config, local_path=snapshot.local_path)
 
 
 def set_active_profile(snapshot: SettingsSnapshot, name: str, *, persist: bool = True) -> bool:
-    profiles = snapshot.data.get("profiles", {})
-    if name not in profiles:
+    if name != "default" and name not in snapshot.data.get("profiles", {}):
         raise ConfigError(f"unknown profile '{name}'")
     if snapshot.env_profile is not None:
         return False
-    resolve_profile(snapshot, name)
+    resolve_profile(snapshot, name)  # validate it builds (incl. the base for "default")
     if not persist:
         return True
     local_path = snapshot.local_path
@@ -111,19 +109,16 @@ def set_active_profile(snapshot: SettingsSnapshot, name: str, *, persist: bool =
 
 
 def validate_settings(snapshot: SettingsSnapshot) -> list[str]:
-    if "profiles" not in snapshot.data:
-        try:
-            resolve_profile(snapshot)
-        except ConfigError as exc:
-            return [str(exc)]
-        return []
-
     errors: list[str] = []
+    if "default" in snapshot.data.get("profiles", {}):
+        errors.append("profile 'default' is reserved (it is the base config)")
     try:
         resolve_profile(snapshot)
     except ConfigError as exc:
         errors.append(f"active: {exc}")
     for name in sorted(snapshot.data.get("profiles", {})):
+        if name == "default":
+            continue
         try:
             resolve_profile(snapshot, name)
         except ConfigError as exc:
@@ -159,80 +154,20 @@ def _active_profile_name(snapshot: SettingsSnapshot) -> str:
     )
 
 
-def _profile_chain(profiles: dict, name: str) -> dict:
+def _profile_overlays(profiles: dict, name: str) -> list[dict]:
+    """Overlay dicts from the base-most parent down to `name` (inclusive)."""
     chain: list[str] = []
-    merged: dict = {}
-    cur = name
-    while cur:
-        if cur in chain:
+    seen: set[str] = set()
+    cur: str | None = name
+    while cur and cur != "default":
+        if cur in seen:
             raise ConfigError("profile inheritance cycle: " + " -> ".join(chain + [cur]))
         if cur not in profiles:
             raise ConfigError(f"unknown profile '{cur}'")
+        seen.add(cur)
         chain.append(cur)
-        raw = dict(profiles[cur])
-        parent = raw.pop("extends", None)
-        merged = {**raw, **merged}
-        cur = parent
-    return merged
-
-
-def _runtime_config(
-    data: dict,
-    local_data: dict,
-    profile_name: str,
-    profile: dict,
-    env_profile: str | None,
-) -> Config:
-    servers_by_id = {s["id"]: s for s in data.get("servers", [])}
-    selected_server_ids = list(profile.get("servers", servers_by_id))
-    servers = []
-    for sid in selected_server_ids:
-        if sid not in servers_by_id:
-            raise ConfigError(f"unknown server '{sid}'")
-        servers.append(_server_config(servers_by_id[sid]))
-
-    theme = _theme_config(_named_block(data, "themes", profile.get("theme")))
-    view = _view_config(_named_block(data, "views", profile.get("view")))
-    notifications = _notifications_config(
-        _named_block(data, "notification_profiles", profile.get("notifications"))
-    )
-    safety = _safety_config(_named_block(data, "safety", profile.get("safety")))
-    macros = _macro_set(_named_block(data, "macro_sets", profile.get("macros")))
-    launcher = _launcher(_named_block(data, "launchers", profile.get("launcher")))
-    hardware = _hardware_config(local_data)
-
-    return Config(
-        servers=servers,
-        profiles=dict(DEFAULT_PROFILES),
-        overview_order=selected_server_ids,
-        grid=(5, 3),
-        macros=macros,
-        start_profiles=launcher,
-        notifications=notifications,
-        theme=theme,
-        view=view,
-        safety=safety,
-        hardware=hardware,
-        meta=ConfigMeta(
-            active_profile=profile_name,
-            profile_names=sorted(data.get("profiles", {})),
-            env_locked_profile=env_profile is not None,
-        ),
-    )
-
-
-def _named_block(data: dict, group: str, name: str | None) -> dict | list | None:
-    if name is None:
-        return None
-    blocks = data.get(group, {})
-    if name not in blocks:
-        label = {
-            "macro_sets": "macro set",
-            "notification_profiles": "notification profile",
-            "safety": "safety",
-        }.get(group, group[:-1] if group.endswith("s") else group)
-        raise ConfigError(f"unknown {label} '{name}'")
-    return blocks[name]
+        cur = profiles[cur].get("extends")
+    return [profiles[n] for n in reversed(chain)]
 
 
 def _server_config(raw: dict) -> ServerConfig:
@@ -320,12 +255,86 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
     )
 
 
-def _resolve_legacy(snapshot: SettingsSnapshot) -> Config:
-    from .config import load_config
+_OVERLAY_SECTIONS = (
+    "deck",
+    "answer_profiles",
+    "macros",
+    "start_profiles",
+    "notifications",
+    "theme",
+    "view",
+    "safety",
+)
 
-    cfg = load_config(snapshot.config_path)
-    cfg.hardware = _hardware_config(snapshot.local_data)
-    cfg.meta.active_profile = "default"
-    cfg.meta.profile_names = ["default"]
-    cfg.meta.env_locked_profile = snapshot.env_profile is not None
-    return cfg
+
+def _merged_sections(data: dict, profile_name: str | None) -> tuple[dict, list[str] | None]:
+    merged = {sec: data.get(sec) for sec in _OVERLAY_SECTIONS}
+    selection: list[str] | None = None
+    if profile_name and profile_name != "default":
+        for overlay in _profile_overlays(data.get("profiles", {}), profile_name):
+            for sec in _OVERLAY_SECTIONS:
+                if sec in overlay:
+                    merged[sec] = _merge_section(merged.get(sec), overlay[sec])
+            if "servers" in overlay:
+                selection = list(overlay["servers"])
+    return merged, selection
+
+
+def _merge_section(base, overlay):
+    """Overlay a config section onto a base: tables merge field-by-field
+    (recursively), scalars and lists replace wholesale."""
+    if isinstance(base, dict) and isinstance(overlay, dict):
+        out = dict(base)
+        for key, value in overlay.items():
+            out[key] = _merge_section(out.get(key), value)
+        return out
+    return overlay
+
+
+def _build_config(
+    data: dict,
+    merged: dict,
+    selection: list[str] | None,
+    local_data: dict,
+    *,
+    profile_name: str,
+    env_profile: str | None,
+) -> Config:
+    servers_by_id = {s["id"]: s for s in data.get("servers", [])}
+    if selection is None:
+        deck_sel = merged.get("deck") or {}
+        if "overview_order" in deck_sel:
+            selection = list(deck_sel["overview_order"])
+        else:
+            selection = list(servers_by_id)
+    servers = []
+    for sid in selection:
+        if sid not in servers_by_id:
+            raise ConfigError(f"unknown server '{sid}'")
+        servers.append(_server_config(servers_by_id[sid]))
+
+    deck = merged.get("deck") or {}
+    grid = _parse_grid(deck.get("grid", "5x3"))
+
+    answer_profiles = dict(DEFAULT_PROFILES)
+    for name, raw in (merged.get("answer_profiles") or {}).items():
+        answer_profiles[name] = _parse_profile(name, raw)
+
+    return Config(
+        servers=servers,
+        profiles=answer_profiles,
+        overview_order=selection,
+        grid=grid,
+        macros=_macro_set(merged.get("macros")),
+        start_profiles=_launcher(merged.get("start_profiles")),
+        notifications=_notifications_config(merged.get("notifications")),
+        theme=_theme_config(merged.get("theme")),
+        view=_view_config(merged.get("view")),
+        safety=_safety_config(merged.get("safety")),
+        hardware=_hardware_config(local_data),
+        meta=ConfigMeta(
+            active_profile=profile_name,
+            profile_names=["default"] + sorted(data.get("profiles", {})),
+            env_locked_profile=env_profile is not None,
+        ),
+    )

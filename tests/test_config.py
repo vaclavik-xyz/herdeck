@@ -84,30 +84,30 @@ def test_example_management_row_documents_supported_actions_only():
     path = Path(__file__).resolve().parents[1] / "config.example.toml"
     data = tomllib.loads(path.read_text())
 
-    assert set(data["views"]["management"]["bottom_row"]) <= {"profiles", "new_agent"}
+    assert set(data["profiles"]["mobile"]["view"]["bottom_row"]) <= {"profiles", "new_agent"}
 
 
-def test_readme_scopes_answer_profile_overrides_to_legacy_configs():
+def test_readme_describes_answer_profile_overrides_in_unified_model():
     path = Path(__file__).resolve().parents[1] / "README.md"
     section = path.read_text().split("## Adding an agent type", 1)[1].split("\n## ", 1)[0]
 
-    assert "legacy configs only" in section
+    assert "profiles.<name>.answer_profiles" in section
 
 
 def test_readme_uses_profile_schema_for_notifications():
     path = Path(__file__).resolve().parents[1] / "README.md"
     section = path.read_text().split("## Notifications", 1)[1].split("\n## ", 1)[0]
 
-    assert "[notification_profiles.normal]" in section
-    assert 'notifications = "normal"' in section
+    assert "[profiles.work.notifications]" in section
+    assert "backends" in section
 
 
 def test_readme_launcher_example_uses_valid_toml_shape():
     path = Path(__file__).resolve().parents[1] / "README.md"
     section = path.read_text().split("## Adding an agent type", 1)[1].split("\n## ", 1)[0]
 
-    assert "[launchers.default] myagent" not in section
-    assert "[launchers.default]" in section
+    assert "[start_profiles] myagent" not in section
+    assert "[start_profiles]" in section
 
 
 def test_load_resolves_token_from_env(tmp_path, monkeypatch):
@@ -119,11 +119,31 @@ def test_load_resolves_token_from_env(tmp_path, monkeypatch):
     assert cfg.overview_order == ["workbox"]
 
 
-def test_load_config_uses_new_profile_schema(tmp_path, monkeypatch):
-    from tests.test_settings import NEW_CONFIG
+_OVERLAY_CONFIG = """
+active_profile = "work"
 
+[[servers]]
+id = "workbox"
+url = "ws://x"
+token_env = "HERDECK_WORKBOX_TOKEN"
+
+[view]
+show_profile_on_panel = true
+
+[notifications]
+enabled = true
+backends = ["macos"]
+on = ["blocked"]
+sound = false
+
+[profiles.work]
+servers = ["workbox"]
+"""
+
+
+def test_load_config_uses_overlay_profile_schema(tmp_path, monkeypatch):
     monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
-    path = _write(tmp_path, NEW_CONFIG)
+    path = _write(tmp_path, _OVERLAY_CONFIG)
 
     cfg = load_config(path)
 
@@ -134,14 +154,11 @@ def test_load_config_uses_new_profile_schema(tmp_path, monkeypatch):
 
 
 def test_load_config_uses_env_local_profile_override(tmp_path, monkeypatch):
-    from tests.test_settings import NEW_CONFIG
-
     monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
     path = _write(
         tmp_path,
-        NEW_CONFIG
+        _OVERLAY_CONFIG
         + """
-
 [profiles.mobile]
 extends = "work"
 """,

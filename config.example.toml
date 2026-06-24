@@ -5,24 +5,14 @@ id = "workbox"
 url = "ws://100.x.y.z:8788"        # server Tailscale IP (WireGuard-encrypted)
 token_env = "HERDECK_WORKBOX_TOKEN" # token comes from this env var, never this file
 
-[profiles.base]
-servers = ["workbox"]
-theme = "default"
-view = "dense"
-notifications = "normal"
-safety = "standard"
-macros = "default"
-launcher = "default"
+# ---------------------------------------------------------------------------
+# Base configuration — applies to all profiles (the "default" base)
+# ---------------------------------------------------------------------------
 
-[profiles.work]
-extends = "base"
+[deck]
+grid = "5x3"
 
-[profiles.mobile]
-extends = "work"
-view = "management"
-notifications = "phone"
-
-[themes.default.colors]
+[theme.colors]
 working = "green"
 idle = "blue"
 blocked = "amber"
@@ -30,60 +20,72 @@ done = "dim"
 unknown = "grey"
 offline = "red"
 
-[views.dense]
+[view]
 management = "launcher_menu"
 show_profile_on_panel = true
 agent_slots = "max"
 tile_fields = ["repo", "branch", "status", "time", "server"]
 
-[views.management]
+[notifications]
+enabled = false
+backends = ["macos"]
+on = ["blocked"]
+sound = true
+
+[safety]
+approve_always = true
+require_confirm_for = []
+
+[[macros]]
+label = "continue"
+text = "continue"
+
+[[macros]]
+label = "run tests"
+text = "run the tests"
+
+[[macros]]
+label = "commit"
+text = "commit the changes"
+
+[[macros]]
+label = "/compact"
+text = "/compact"
+
+[start_profiles]
+claude = ["claude"]
+codex = ["codex"]
+cursor = ["cursor-agent"]
+gemini = ["gemini"]
+opencode = ["opencode"]
+
+# ---------------------------------------------------------------------------
+# Profiles — each section overlays the base above (tables merge, scalars replace)
+# ---------------------------------------------------------------------------
+
+[profiles.base]
+servers = ["workbox"]
+
+[profiles.work]
+extends = "base"
+
+[profiles.mobile]
+extends = "work"
+
+[profiles.mobile.view]
 management = "bottom_row"
 bottom_row = ["profiles", "new_agent"]
 show_profile_on_panel = true
 agent_slots = "max"
 tile_fields = ["repo", "branch", "status", "time", "server"]
 
-[notification_profiles.normal]
-enabled = false
-backends = ["macos"]
-on = ["blocked"]
-sound = true
-
-[notification_profiles.phone]
+[profiles.mobile.notifications]
 enabled = false
 backends = ["telegram"]
 on = ["blocked"]
 sound = false
 
-# Telegram backend is only used by profiles that reference "phone".
-# Export the bot token, do not paste it here.
-[notification_profiles.phone.telegram]
+# Telegram backend: export the bot token, never paste it here.
+[profiles.mobile.notifications.telegram]
 token_env = "HERDECK_TELEGRAM_TOKEN"
 chat_id = "123456789"
-
-[safety.standard]
-approve_always = true
-require_confirm_for = []
-
-[[macro_sets.default]]
-label = "continue"
-text = "continue"
-
-[[macro_sets.default]]
-label = "run tests"
-text = "run the tests"
-
-[[macro_sets.default]]
-label = "commit"
-text = "commit the changes"
-
-[[macro_sets.default]]
-label = "/compact"
-text = "/compact"
-
-[launchers.default]
-claude = ["claude"]
-codex = ["codex"]
-cursor = ["cursor-agent"]
-gemini = ["gemini"]
-opencode = ["opencode"]

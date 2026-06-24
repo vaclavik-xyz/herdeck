@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -190,55 +188,7 @@ def parse_notifications(n: dict) -> Notifications:
 
 
 def load_config(path: str | Path) -> Config:
-    data = tomllib.loads(Path(path).read_text())
-    if "profiles" in data:
-        from .bootstrap import _discover_local_config_path
-        from .settings import load_settings, resolve_profile
+    from .bootstrap import _discover_local_config_path
+    from .settings import load_settings, resolve_profile
 
-        return resolve_profile(load_settings(path, _discover_local_config_path(str(path)))).config
-
-    return _load_legacy_config(path, data=data)
-
-
-def _load_legacy_config(path: str | Path, *, data: dict | None = None) -> Config:
-    data = data if data is not None else tomllib.loads(Path(path).read_text())
-    servers = []
-    for s in data.get("servers", []):
-        env = s["token_env"]
-        token = os.environ.get(env)
-        if not token:
-            raise ConfigError(f"env var '{env}' for server '{s['id']}' is not set")
-        servers.append(ServerConfig(id=s["id"], url=s["url"], token=token))
-    # Empty servers is allowed; the remote run path requires >=1 itself.
-
-    deck = data.get("deck", {})
-    grid = _parse_grid(deck.get("grid", "5x3"))
-    overview_order = deck.get("overview_order", [s.id for s in servers])
-
-    profiles = dict(DEFAULT_PROFILES)
-    for name, raw in data.get("answer_profiles", {}).items():
-        profiles[name] = _parse_profile(name, raw)
-
-    # An explicit (even empty) section disables defaults; only a MISSING section
-    # falls back to the built-ins.
-    if "macros" in data:
-        macros = [Macro(label=m["label"], text=m["text"]) for m in data["macros"]]
-    else:
-        macros = list(DEFAULT_MACROS)
-
-    if "start_profiles" in data:
-        start_profiles = {k: list(v) for k, v in data["start_profiles"].items()}
-    else:
-        start_profiles = dict(DEFAULT_START_PROFILES)
-
-    notifications = parse_notifications(data.get("notifications", {}))
-
-    return Config(
-        servers=servers,
-        profiles=profiles,
-        overview_order=overview_order,
-        grid=grid,
-        macros=macros,
-        start_profiles=start_profiles,
-        notifications=notifications,
-    )
+    return resolve_profile(load_settings(path, _discover_local_config_path(str(path)))).config
