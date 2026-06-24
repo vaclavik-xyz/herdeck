@@ -30,9 +30,9 @@ class ConfigService:
     def read(self) -> dict:
         if not self._config_path.exists():
             return {"base": {}, "profiles": {}, "local": {}, "secrets": {}}
-        data = tomllib.loads(self._config_path.read_text())
+        data = tomllib.loads(self._config_path.read_text(encoding="utf-8"))
         local = (
-            tomllib.loads(self._local_path.read_text())
+            tomllib.loads(self._local_path.read_text(encoding="utf-8"))
             if self._local_path.exists()
             else {}
         )
@@ -54,8 +54,9 @@ class ConfigService:
             out = []
         if isinstance(obj, dict):
             for key, value in obj.items():
-                if key == "token_env" and isinstance(value, str) and value not in out:
-                    out.append(value)
+                if key == "token_env" and isinstance(value, str):
+                    if value not in out:
+                        out.append(value)
                 else:
                     ConfigService._collect_token_envs(value, out)
         elif isinstance(obj, list):

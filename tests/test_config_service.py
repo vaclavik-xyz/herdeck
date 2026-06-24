@@ -76,6 +76,7 @@ def test_read_redacts_secrets_to_presence_flags(tmp_path, monkeypatch):
 
 
 def test_read_surfaces_profile_only_secret(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOK", raising=False)
     monkeypatch.delenv("PTG", raising=False)
     monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
     text = (
