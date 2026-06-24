@@ -1,5 +1,21 @@
-import herdeck.secrets as secrets
+import herdeck.secrets as secret_store
 from herdeck.deckapp.config_service import ConfigService
+
+
+class _FakeKeyring:
+    """In-memory keyring stub — prevents flaky reads from the real OS keychain."""
+
+    def __init__(self):
+        self.store = {}
+
+    def get_password(self, service, name):
+        return self.store.get((service, name))
+
+    def set_password(self, service, name, value):
+        self.store[(service, name)] = value
+
+    def delete_password(self, service, name):
+        del self.store[(service, name)]
 
 CONFIG = """
 [[servers]]
@@ -36,6 +52,7 @@ def _svc(tmp_path, text=CONFIG, local=None):
 def test_read_returns_base_profiles_local(tmp_path, monkeypatch):
     monkeypatch.delenv("TOK", raising=False)
     monkeypatch.delenv("TG", raising=False)
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
     svc = _svc(tmp_path, local='active_profile = "mobile"\n[hardware]\nbrightness = 70\n')
     data = svc.read()
     assert data["base"]["deck"] == {"grid": "5x3"}
@@ -48,6 +65,7 @@ def test_read_returns_base_profiles_local(tmp_path, monkeypatch):
 def test_read_redacts_secrets_to_presence_flags(tmp_path, monkeypatch):
     monkeypatch.setenv("TOK", "real")
     monkeypatch.delenv("TG", raising=False)
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
     svc = _svc(tmp_path)
     data = svc.read()
     # No secret VALUE appears anywhere in the payload.
@@ -58,6 +76,7 @@ def test_read_redacts_secrets_to_presence_flags(tmp_path, monkeypatch):
 
 def test_read_surfaces_profile_only_secret(tmp_path, monkeypatch):
     monkeypatch.delenv("PTG", raising=False)
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
     text = (
         '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n'
         "[profiles.work.notifications.telegram]\n"
