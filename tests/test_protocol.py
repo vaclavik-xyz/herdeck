@@ -75,3 +75,25 @@ def test_decode_error():
     msg = decode_inbound('{"type":"error","message":"bad request"}')
     assert isinstance(msg, Error)
     assert msg.message == "bad request"
+
+
+def test_decode_snapshot_preserves_workspace_and_tab():
+    raw = (
+        '{"type":"snapshot","server_id":"workbox","panes":'
+        '[{"pane_id":"w2:p1","agent_type":"claude","label":"herdeck",'
+        '"status":"working","project":"herdeck","repo":"herdeck",'
+        '"branch":"main","workspace":"herdeck","tab":"2"}]}'
+    )
+    msg = decode_inbound(raw)
+    assert msg.states[0].workspace == "herdeck"
+    assert msg.states[0].tab == "2"
+
+
+def test_decode_snapshot_defaults_workspace_and_tab_to_empty():
+    raw = (
+        '{"type":"snapshot","server_id":"workbox","panes":'
+        '[{"pane_id":"w1:p1","agent_type":"claude","label":"api","status":"idle"}]}'
+    )
+    msg = decode_inbound(raw)
+    assert msg.states[0].workspace == ""
+    assert msg.states[0].tab == ""
