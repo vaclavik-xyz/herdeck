@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Default capability for the floating deck window (core APIs: events for discovery, window controls).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

@@ -1,0 +1,9 @@
+# frontend
+node_modules/
+build/
+dist/
+*.tsbuildinfo
+
+# rust / tauri
+src-tauri/target/
+src-tauri/gen/
