@@ -9,6 +9,7 @@ from PIL import Image
 
 from ..icons import compose_panel
 from .base import DeckDriver, PanelView, TileView
+from .render_pump import RenderPump
 
 PANEL_W = 392
 _CELL = 196
@@ -48,6 +49,7 @@ class D200Driver(DeckDriver):
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
         self._previous_cwd = os.getcwd()
+        self._pump: RenderPump | None = None
         try:
             os.makedirs(self._workdir, exist_ok=True)
             os.chdir(self._workdir)
@@ -66,6 +68,14 @@ class D200Driver(DeckDriver):
             with contextlib.redirect_stdout(io.StringIO()):
                 self._dev.set_brightness(brightness, force=True)
                 self._set_panel_background_mode()
+            # All device writes run on this single worker thread so blocking USB I/O
+            # never stalls the event loop (which would let presses pile up and replay).
+            self._pump = RenderPump(
+                paint=self._paint,
+                keep_alive=self._keep_alive_write,
+                keep_alive_interval=self.KEEP_ALIVE_INTERVAL,
+            )
+            self._pump.start()
         except Exception:
             with contextlib.suppress(Exception):
                 os.chdir(self._previous_cwd)
@@ -123,13 +133,40 @@ class D200Driver(DeckDriver):
         return buttons
 
     def render(self, tiles: list[TileView]) -> None:
+        self._submit("tiles", list(tiles))
+
+    def render_panel(self, panel: PanelView) -> None:
+        self._submit("panel", panel)
+
+    def render_working(self, tiles: list[TileView]) -> None:
+        """Partial re-render of just the working tiles (spinner)."""
+        self._submit("working", list(tiles))
+
+    def _submit(self, channel: str, payload) -> None:
+        # Hand the latest frame to the render worker and return — the blocking USB
+        # write happens off the event loop. Falls back to inline paint if the worker
+        # isn't up (before start / after close), so behavior degrades gracefully.
+        if self._pump is not None:
+            self._pump.submit(channel, payload)
+        else:
+            self._paint(channel, payload)
+
+    def _paint(self, channel: str, payload) -> None:
+        if channel == "tiles":
+            self._write_tiles(payload)
+        elif channel == "panel":
+            self._write_panel(payload)
+        elif channel == "working":
+            self._write_working(payload)
+
+    def _write_tiles(self, tiles: list[TileView]) -> None:
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 self._dev.set_buttons(self._tile_buttons(tiles))
         except Exception:
-            pass  # never freeze the loop
+            pass  # a failed write must never stall the worker
 
-    def render_panel(self, panel: PanelView) -> None:
+    def _write_panel(self, panel: PanelView) -> None:
         try:
             left, right = split_panel(compose_panel(panel))
             os.makedirs(_ICON_DIR, exist_ok=True)
@@ -147,18 +184,26 @@ class D200Driver(DeckDriver):
         except Exception:
             pass
 
-    def render_working(self, tiles: list[TileView]) -> None:
-        """Partial re-render of just the working tiles (spinner)."""
+    def _write_working(self, tiles: list[TileView]) -> None:
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 self._dev.set_buttons(self._tile_buttons(tiles), update_only=True)
         except Exception:
             pass
 
+    def _keep_alive_write(self) -> None:
+        with contextlib.suppress(Exception):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self._dev.keep_alive()
+
     def on_press(self, callback: Callable[[int], None]) -> None:
         self._callback = callback
 
     def close(self) -> None:
+        if self._pump is not None:
+            with contextlib.suppress(Exception):
+                self._pump.close()
+            self._pump = None
         with contextlib.suppress(Exception):
             self._dev.close()
         with contextlib.suppress(Exception):
@@ -179,12 +224,3 @@ class D200Driver(DeckDriver):
                 last_index, last_time = action.index, now
                 if self._callback is not None:
                     self._callback(action.index)
-
-    async def keep_alive_loop(self) -> None:
-        import asyncio
-
-        while True:
-            with contextlib.suppress(Exception):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    self._dev.keep_alive()
-            await asyncio.sleep(self.KEEP_ALIVE_INTERVAL)
