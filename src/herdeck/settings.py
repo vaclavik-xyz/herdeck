@@ -347,6 +347,31 @@ def _resolve_legacy(snapshot: SettingsSnapshot) -> Config:
     return cfg
 
 
+_OVERLAY_SECTIONS = (
+    "deck",
+    "answer_profiles",
+    "macros",
+    "start_profiles",
+    "notifications",
+    "theme",
+    "view",
+    "safety",
+)
+
+
+def _merged_sections(data: dict, profile_name: str | None) -> tuple[dict, list[str] | None]:
+    merged = {sec: data.get(sec) for sec in _OVERLAY_SECTIONS}
+    selection: list[str] | None = None
+    if profile_name and profile_name != "default":
+        for overlay in _profile_overlays(data.get("profiles", {}), profile_name):
+            for sec in _OVERLAY_SECTIONS:
+                if sec in overlay:
+                    merged[sec] = _merge_section(merged.get(sec), overlay[sec])
+            if "servers" in overlay:
+                selection = list(overlay["servers"])
+    return merged, selection
+
+
 def _merge_section(base, overlay):
     """Overlay a config section onto a base: tables merge field-by-field
     (recursively), scalars and lists replace wholesale."""

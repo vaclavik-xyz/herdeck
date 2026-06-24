@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from herdeck.config import ConfigError
-from herdeck.settings import list_profiles, load_settings, resolve_profile, _profile_overlays
+from herdeck.settings import list_profiles, load_settings, resolve_profile, _profile_overlays, _merged_sections
 
 NEW_CONFIG = """
 active_profile = "work"
@@ -439,3 +439,27 @@ def test_profile_overlays_cycle_raises_with_chain():
     profiles = {"a": {"extends": "b"}, "b": {"extends": "a"}}
     with pytest.raises(ConfigError, match="inheritance cycle"):
         _profile_overlays(profiles, "a")
+
+
+def test_merged_sections_base_only_when_default():
+    data = {"view": {"management": "launcher_menu"}, "deck": {"grid": "5x3"}}
+    merged, selection = _merged_sections(data, "default")
+    assert merged["view"] == {"management": "launcher_menu"}
+    assert merged["deck"] == {"grid": "5x3"}
+    assert selection is None
+
+
+def test_merged_sections_applies_profile_overlay():
+    data = {
+        "view": {"management": "launcher_menu", "tile_fields": ["repo"]},
+        "profiles": {"mobile": {"view": {"management": "bottom_row"}}},
+    }
+    merged, selection = _merged_sections(data, "mobile")
+    assert merged["view"] == {"management": "bottom_row", "tile_fields": ["repo"]}
+    assert selection is None
+
+
+def test_merged_sections_captures_server_selection_from_profile():
+    data = {"profiles": {"mobile": {"servers": ["local"]}}}
+    _merged, selection = _merged_sections(data, "mobile")
+    assert selection == ["local"]
