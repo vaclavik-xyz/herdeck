@@ -1,0 +1,72 @@
+"""GUI-facing config service: read/validate/write the unified TOML config plus
+profile and keychain-secret management. A thin layer over `settings`/`config` —
+no config resolution logic is reimplemented here.
+"""
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+
+from .. import secrets as secret_store
+
+
+class ConfigService:
+    BASE_SECTIONS = (
+        "servers",
+        "deck",
+        "answer_profiles",
+        "macros",
+        "start_profiles",
+        "notifications",
+        "theme",
+        "view",
+        "safety",
+    )
+
+    def __init__(self, config_path, local_path):
+        self._config_path = Path(config_path)
+        self._local_path = Path(local_path)
+
+    def read(self) -> dict:
+        if not self._config_path.exists():
+            return {"base": {}, "profiles": {}, "local": {}, "secrets": {}}
+        data = tomllib.loads(self._config_path.read_text())
+        local = (
+            tomllib.loads(self._local_path.read_text())
+            if self._local_path.exists()
+            else {}
+        )
+        base = {sec: data[sec] for sec in self.BASE_SECTIONS if sec in data}
+        profiles = data.get("profiles", {})
+        return {
+            "base": base,
+            "profiles": profiles,
+            "local": local,
+            "secrets": self._secret_flags(base, profiles),
+        }
+
+    @staticmethod
+    def _collect_token_envs(obj, out=None) -> list[str]:
+        """Every `token_env` value anywhere in a nested dict/list, in first-seen
+        order. Covers server defs, base notifications, AND profile overlays
+        (e.g. `[profiles.x.notifications.telegram].token_env`)."""
+        if out is None:
+            out = []
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if key == "token_env" and isinstance(value, str) and value not in out:
+                    out.append(value)
+                else:
+                    ConfigService._collect_token_envs(value, out)
+        elif isinstance(obj, list):
+            for item in obj:
+                ConfigService._collect_token_envs(item, out)
+        return out
+
+    def _secret_flags(self, base: dict, profiles: dict) -> dict:
+        names = self._collect_token_envs(base)
+        self._collect_token_envs(profiles, names)
+        return {
+            name: {"set": secret_store.has_secret(name), "source": secret_store.secret_source(name)}
+            for name in names
+        }
