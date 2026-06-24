@@ -1,7 +1,9 @@
 import os
 import tomllib as _tomllib
 
+import pytest
 import herdeck.secrets as secret_store
+from herdeck.config import ConfigError
 from herdeck.deckapp.config_service import ConfigService
 
 
@@ -167,7 +169,6 @@ def test_atomic_write_cleans_temp_on_failure(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "replace", _fail_replace)
 
-    import pytest
     with pytest.raises(OSError, match="injected replace failure"):
         svc._atomic_write(cfg_path, "hello = 1\n")
 
@@ -175,3 +176,37 @@ def test_atomic_write_cleans_temp_on_failure(tmp_path, monkeypatch):
     assert not (tmp_path / "config.toml.tmp").exists()
     # Destination must not have been created
     assert not cfg_path.exists()
+
+
+def test_set_active_persists_and_respects_env_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "real")
+    monkeypatch.delenv("HERDECK_PROFILE", raising=False)
+    svc = _svc(tmp_path)
+    assert svc.set_active("mobile") is True
+    assert 'active_profile = "mobile"' in (tmp_path / "local.toml").read_text()
+    monkeypatch.setenv("HERDECK_PROFILE", "mobile")
+    assert svc.set_active("default") is False  # env-locked
+
+
+def test_create_and_delete_profile_return_new_data(tmp_path):
+    svc = _svc(tmp_path)
+    data = {"base": {}, "profiles": {"mobile": {}}, "local": {}}
+    created = svc.create_profile(data, "work")
+    assert created["profiles"]["work"] == {}
+    assert "work" not in data["profiles"]  # original untouched
+    with pytest.raises(ConfigError, match="default"):
+        svc.create_profile(created, "default")
+    removed = svc.delete_profile(created, "work")
+    assert "work" not in removed["profiles"]
+    with pytest.raises(ConfigError, match="unknown profile 'ghost'"):
+        svc.delete_profile(created, "ghost")
+
+
+def test_set_and_clear_secret_delegate_to_store(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(secret_store, "set_secret", lambda n, v: calls.append(("set", n, v)))
+    monkeypatch.setattr(secret_store, "clear_secret", lambda n: calls.append(("clear", n)))
+    svc = _svc(tmp_path)
+    svc.set_secret("TOK", "v")
+    svc.clear_secret("TOK")
+    assert calls == [("set", "TOK", "v"), ("clear", "TOK")]

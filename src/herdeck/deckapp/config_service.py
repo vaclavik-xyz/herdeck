@@ -4,13 +4,15 @@ no config resolution logic is reimplemented here.
 """
 from __future__ import annotations
 
+import copy
 import os
 import tomllib
 import tomli_w
 from pathlib import Path
 
 from .. import secrets as secret_store
-from ..settings import SettingsSnapshot, validate_settings
+from ..config import ConfigError
+from ..settings import SettingsSnapshot, load_settings, set_active_profile, validate_settings
 
 
 class ConfigService:
@@ -115,3 +117,31 @@ class ConfigService:
             name: {"set": secret_store.has_secret(name), "source": secret_store.secret_source(name)}
             for name in names
         }
+
+    def set_active(self, name: str) -> bool:
+        snapshot = load_settings(self._config_path, self._local_path)
+        return set_active_profile(snapshot, name)
+
+    def create_profile(self, data: dict, name: str) -> dict:
+        if name == "default":
+            raise ConfigError("profile 'default' is reserved (it is the base config)")
+        profiles = data.get("profiles") or {}
+        if name in profiles:
+            raise ConfigError(f"profile '{name}' already exists")
+        out = copy.deepcopy(data)
+        out.setdefault("profiles", {})[name] = {}
+        return out
+
+    def delete_profile(self, data: dict, name: str) -> dict:
+        profiles = data.get("profiles") or {}
+        if name not in profiles:
+            raise ConfigError(f"unknown profile '{name}'")
+        out = copy.deepcopy(data)
+        del out["profiles"][name]
+        return out
+
+    def set_secret(self, name: str, value: str) -> None:
+        secret_store.set_secret(name, value)
+
+    def clear_secret(self, name: str) -> None:
+        secret_store.clear_secret(name)
