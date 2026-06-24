@@ -157,6 +157,32 @@ def test_doctor_check_config_sees_keychain_only_token(monkeypatch):
     monkeypatch.delenv("TOK", raising=False)
     chk = check_config("/cfg.toml", True, True, token_envs=("TOK",))
     assert chk.ok is True and "TOK=present" in chk.detail  # keychain token reported present
+
+
+def test_doctor_check_notifications_sees_keychain_telegram(monkeypatch):
+    from herdeck.config import Notifications, TelegramConfig
+    from herdeck.doctor import check_notifications
+
+    fake = FakeKeyring()
+    fake.set_password("herdeck", "TGTOK", "v")
+    monkeypatch.setattr(secrets, "_keyring", lambda: fake)
+    monkeypatch.delenv("TGTOK", raising=False)
+    n = Notifications(enabled=True, backends=["telegram"], telegram=TelegramConfig("TGTOK", "1"))
+    assert "token_env=present" in check_notifications(n).detail
+
+
+def test_doctor_read_config_facts_keychain_server_token_not_missing(tmp_path, monkeypatch):
+    from herdeck.doctor import _read_config_facts
+
+    fake = FakeKeyring()
+    fake.set_password("herdeck", "TOK", "v")
+    monkeypatch.setattr(secrets, "_keyring", lambda: fake)
+    monkeypatch.delenv("TOK", raising=False)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n')
+    has_servers, token_envs, err = _read_config_facts(str(cfg))
+    assert has_servers is True and token_envs == ["TOK"]
+    assert err is None  # keychain-only token -> load_config succeeds -> no diagnostic error
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -287,7 +313,7 @@ Then install so `keyring` is importable: `python -m pip install -e '.[dev]' -q`.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_secrets.py -q`
-Expected: PASS (6 passed — 4 secret-store + telegram-via-secrets + doctor-keychain).
+Expected: PASS (8 passed — 4 secret-store + telegram-via-secrets + 3 doctor token lookups: check_config, check_notifications, _read_config_facts).
 
 - [ ] **Step 5: Run the full suite (no regressions from the `_server_config` change)**
 
