@@ -365,3 +365,112 @@ def test_error_body_is_browser_friendly_text():
         assert app.token not in exc.value.read().decode()
     finally:
         app.close()
+
+
+# --- config HTTP routes (Task 6) --------------------------------------------
+
+
+import json as _json
+
+
+def _post(app, path, body, token=None):
+    req = urllib.request.Request(
+        f"http://{app.host}:{app.port}{path}",
+        data=_json.dumps(body).encode(),
+        method="POST",
+    )
+    req.add_header("X-Herdeck-Token", token if token is not None else app.token)
+    return urllib.request.urlopen(req)
+
+
+class _FakeSource:
+    """A StateSource with a chosen grid, for testing swap_source mechanics."""
+
+    source_name = "mock"
+    connected = True
+    server_id = None
+
+    def __init__(self, grid):
+        from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
+
+        self._cfg = Config(
+            servers=[ServerConfig("m", "ws://m", "x")],
+            profiles=dict(DEFAULT_PROFILES),
+            overview_order=["m"],
+            grid=grid,
+        )
+
+    @property
+    def config(self):
+        return self._cfg
+
+    def attach(self, orch, **kw):
+        pass
+
+    def apply_to(self, orch):
+        pass
+
+    def press(self, index):
+        pass
+
+    def summary(self):
+        return {"agents": 0, "blocked": 0, "working": 0, "idle": 0, "done": 0}
+
+    def close(self):
+        pass
+
+
+def test_swap_source_rebuilds_orchestrator_on_grid_change():
+    from herdeck.deckapp.server import DeckApp
+
+    app = DeckApp(_FakeSource((5, 3)), serve=False)
+    assert app._slots == 5 * 3 - 2
+    app.swap_source(_FakeSource((4, 3)))
+    assert app._slots == 4 * 3 - 2  # orchestrator + slots rebuilt from the new config
+
+
+def test_config_get_requires_token_and_returns_redacted(tmp_path, monkeypatch):
+    from herdeck.deckapp.config_service import ConfigService
+
+    monkeypatch.setenv("TOK", "real")
+    (tmp_path / "config.toml").write_text(
+        '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n'
+    )
+    svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
+    app = create_mock_app(port=0, config_service=svc)
+    try:
+        # Wrong token -> 403
+        bad = urllib.request.Request(f"http://{app.host}:{app.port}/config?token=nope")
+        try:
+            urllib.request.urlopen(bad)
+            assert False, "expected 403"
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+        # Right token -> redacted config
+        ok = urllib.request.urlopen(f"http://{app.host}:{app.port}/config?token={app.token}")
+        data = _json.loads(ok.read())
+        assert data["base"]["deck"] == {"grid": "5x3"}
+        assert data["secrets"]["TOK"]["set"] is True
+        assert "real" not in ok.headers.get("X-Debug", "")  # value never leaks
+    finally:
+        app.close()
+
+
+def test_config_post_writes_and_triggers_reload(tmp_path, monkeypatch):
+    from herdeck.deckapp.config_service import ConfigService
+
+    monkeypatch.setenv("TOK", "real")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n')
+    svc = ConfigService(cfg, tmp_path / "local.toml")
+    reloaded = []
+    app = create_mock_app(port=0, config_service=svc, reloader=lambda: reloaded.append(1))
+    try:
+        body = {"base": {"servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
+                         "deck": {"grid": "4x3"}}, "profiles": {}, "local": {}}
+        resp = _post(app, "/config", body, token=app.token)
+        assert _json.loads(resp.read())["errors"] == []
+        assert reloaded == [1]
+        assert 'grid = "4x3"' in cfg.read_text()
+    finally:
+        app.close()
