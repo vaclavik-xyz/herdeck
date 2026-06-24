@@ -101,8 +101,12 @@ class ConfigService:
     def _atomic_write(self, path: Path, text: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(text)
-        os.replace(tmp, path)
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def _secret_flags(self, base: dict, profiles: dict) -> dict:
         names = self._collect_token_envs(base)

@@ -1,3 +1,6 @@
+import os
+import tomllib as _tomllib
+
 import herdeck.secrets as secret_store
 from herdeck.deckapp.config_service import ConfigService
 
@@ -116,9 +119,6 @@ def test_validate_clean_config_has_no_errors(tmp_path, monkeypatch):
     assert svc.validate(data) == []
 
 
-import tomllib as _tomllib
-
-
 def test_write_round_trips_and_omits_secret_values(tmp_path, monkeypatch):
     monkeypatch.setenv("TOK", "real")
     svc = _svc(tmp_path)
@@ -132,7 +132,7 @@ def test_write_round_trips_and_omits_secret_values(tmp_path, monkeypatch):
     }
     assert svc.write(data) == []
     text = (tmp_path / "config.toml").read_text()
-    assert text.startswith("# Managed by herdeck-config")
+    assert text.startswith(ConfigService.HEADER)
     assert "real" not in text  # secret value never written
     parsed = _tomllib.loads(text)
     assert parsed["deck"] == {"grid": "4x3"}
@@ -156,3 +156,22 @@ def test_write_blocks_on_structural_error_but_not_missing_secret(tmp_path, monke
     }
     errors = svc.write(bad_data)
     assert errors and any("cycle" in e for e in errors)
+
+
+def test_atomic_write_cleans_temp_on_failure(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.toml"
+    svc = ConfigService(cfg_path, tmp_path / "local.toml")
+
+    def _fail_replace(src, dst):
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(os, "replace", _fail_replace)
+
+    import pytest
+    with pytest.raises(OSError, match="injected replace failure"):
+        svc._atomic_write(cfg_path, "hello = 1\n")
+
+    # Temp file must not linger
+    assert not (tmp_path / "config.toml.tmp").exists()
+    # Destination must not have been created
+    assert not cfg_path.exists()
