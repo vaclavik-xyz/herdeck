@@ -101,6 +101,62 @@ def test_keep_alive_fires_when_idle():
         pump.close()
 
 
+def test_keep_alive_fires_even_during_continuous_rendering():
+    # handle_tick submits render_working faster than the keep-alive interval; the
+    # device must still get its keep-alive on schedule, not be starved by activity.
+    beats = []
+    pump = RenderPump(
+        paint=lambda ch, p: None,
+        keep_alive=lambda: beats.append(1),
+        keep_alive_interval=0.05,
+    )
+    pump.start()
+    stop = threading.Event()
+
+    def spam():
+        while not stop.is_set():
+            pump.submit("working", "w")
+            time.sleep(0.01)
+
+    spammer = threading.Thread(target=spam)
+    spammer.start()
+    try:
+        assert _wait_until(lambda: len(beats) >= 2, timeout=2.0)
+    finally:
+        stop.set()
+        spammer.join()
+        pump.close()
+
+
+def test_full_tiles_render_not_clobbered_by_stale_working_in_same_batch():
+    # When a full "tiles" render and a "working" partial coalesce into one batch,
+    # the stale partial must not be painted over the fresh full render.
+    seen = []
+    started = threading.Event()
+    release = threading.Event()
+
+    def paint(ch, p):
+        seen.append((ch, p))
+        if p == "hold":
+            started.set()
+            release.wait(2.0)
+
+    pump = RenderPump(paint=paint)
+    pump.start()
+    try:
+        pump.submit("tiles", "hold")
+        assert started.wait(2.0)  # worker stuck on the first paint
+        pump.submit("working", "stale_spinner")  # older partial...
+        pump.submit("tiles", "fresh_full")  # ...superseded by this full render
+        release.set()
+        assert _wait_until(lambda: ("tiles", "fresh_full") in seen)
+    finally:
+        release.set()
+        pump.close()
+    after_fresh = seen[seen.index(("tiles", "fresh_full")) :]
+    assert ("working", "stale_spinner") not in after_fresh
+
+
 def test_paint_exception_does_not_kill_worker():
     seen = []
 
