@@ -306,29 +306,27 @@ class DeckApp:
                         self._send(204)
                     except ValueError:
                         self._send(400)
-                elif path == "/config/validate":
+                elif path in ("/config/validate", "/config", "/profiles/active", "/secret"):
                     if not self._require_header_token():
                         return
-                    errors = app._config_service.validate(self._json_body())
-                    self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
-                elif path == "/config":
-                    if not self._require_header_token():
+                    if app._config_service is None:
+                        self._send(404)
                         return
-                    errors = app._config_service.write(self._json_body())
-                    if not errors:
-                        app.reload()
-                    self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
-                elif path == "/profiles/active":
-                    if not self._require_header_token():
-                        return
-                    changed = app._config_service.set_active(self._json_body().get("name"))
-                    self._send(200, json.dumps({"changed": changed}).encode(), "application/json")
-                elif path == "/secret":
-                    if not self._require_header_token():
-                        return
-                    b = self._json_body()
-                    app._config_service.set_secret(b["token_env"], b["value"])
-                    self._send(204)
+                    if path == "/config/validate":
+                        errors = app._config_service.validate(self._json_body())
+                        self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
+                    elif path == "/config":
+                        errors = app._config_service.write(self._json_body())
+                        if not errors:
+                            app.reload()
+                        self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
+                    elif path == "/profiles/active":
+                        changed = app._config_service.set_active(self._json_body().get("name"))
+                        self._send(200, json.dumps({"changed": changed}).encode(), "application/json")
+                    elif path == "/secret":
+                        b = self._json_body()
+                        app._config_service.set_secret(b["token_env"], b["value"])
+                        self._send(204)
                 else:
                     self._send(404)
 
@@ -336,6 +334,9 @@ class DeckApp:
                 path = urlsplit(self.path).path
                 if path.startswith("/secret/"):
                     if not self._require_header_token():
+                        return
+                    if app._config_service is None:
+                        self._send(404)
                         return
                     app._config_service.clear_secret(path.rsplit("/", 1)[1])
                     self._send(204)

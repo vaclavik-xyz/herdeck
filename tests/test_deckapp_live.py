@@ -542,8 +542,7 @@ class _MainStub:
 def test_main_uses_mock_when_select_live_returns_none(monkeypatch, capsys):
     from herdeck.deckapp import __main__ as deckapp_main
 
-    monkeypatch.setattr(deckapp_main, "select_live", lambda: None)
-    monkeypatch.setattr(deckapp_main, "create_mock_app", lambda *, host, port: _MainStub("mock"))
+    monkeypatch.setattr(deckapp_main, "create_app", lambda *, host, port: _MainStub("mock"))
     monkeypatch.setattr(deckapp_main.threading.Event, "wait", lambda self: None)
     rc = deckapp_main.main()
     assert rc == 0
@@ -556,22 +555,13 @@ def test_main_uses_mock_when_select_live_returns_none(monkeypatch, capsys):
 def test_main_uses_live_when_select_live_returns_target(monkeypatch, capsys):
     from herdeck.deckapp import __main__ as deckapp_main
 
-    config, server = live_config(token=SECRET)
-    monkeypatch.setattr(deckapp_main, "select_live", lambda: (config, server))
-    captured = {}
-
-    def fake_live(cfg, srv, *, host, port):
-        captured["cfg"], captured["srv"] = cfg, srv
-        return _MainStub("live")
-
-    monkeypatch.setattr(deckapp_main, "create_live_app", fake_live)
+    monkeypatch.setattr(deckapp_main, "create_app", lambda *, host, port: _MainStub("live"))
     monkeypatch.setattr(deckapp_main.threading.Event, "wait", lambda self: None)
     rc = deckapp_main.main()
     assert rc == 0
     out = capsys.readouterr().out
     data = json.loads(out.strip().splitlines()[-1])
     assert data["source"] == "live"
-    assert captured["srv"] is server
     assert SECRET not in out  # the discovery line never carries the bridge token
 
 

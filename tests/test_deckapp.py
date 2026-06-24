@@ -342,13 +342,14 @@ def test_main_binds_ipv4_loopback_only(monkeypatch):
         class _Stub:
             def __init__(self):
                 self.host, self.port, self.token = host, 5555, "tok"
+                self.source_name = "mock"
 
             def close(self):
                 pass
 
         return _Stub()
 
-    monkeypatch.setattr(deckapp_main, "create_mock_app", fake_create)
+    monkeypatch.setattr(deckapp_main, "create_app", fake_create)
     # stop the blocking wait immediately
     monkeypatch.setattr(deckapp_main.threading.Event, "wait", lambda self: None)
     rc = deckapp_main.main()
