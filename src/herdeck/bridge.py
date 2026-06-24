@@ -23,6 +23,8 @@ class HerdrClient(Protocol):
     async def send_text(self, pane_id: str, text: str) -> None: ...
     async def start_agent(self, name: str, argv: list[str]) -> None: ...
     async def worktrees(self) -> list[dict]: ...
+    async def workspaces(self) -> list[dict]: ...
+    async def tabs(self) -> list[dict]: ...
 
 
 def _is_agent_pane(p: dict) -> bool:
@@ -35,12 +37,29 @@ def _worktrees_by_workspace(worktrees: list[dict]) -> dict[str, dict]:
     return {wt["open_workspace_id"]: wt for wt in (worktrees or []) if wt.get("open_workspace_id")}
 
 
-def _herdr_pane_to_wire(p: dict, wt_by_ws: dict[str, dict] | None = None) -> dict:
+def _workspaces_by_id(workspaces: list[dict]) -> dict[str, str]:
+    """Index herdr workspaces (workspace.list) as {workspace_id: label}."""
+    return {w["workspace_id"]: w.get("label", "") for w in (workspaces or []) if w.get("workspace_id")}
+
+
+def _tabs_by_id(tabs: list[dict]) -> dict[str, str]:
+    """Index herdr tabs (tab.list) as {tab_id: label}."""
+    return {t["tab_id"]: t.get("label", "") for t in (tabs or []) if t.get("tab_id")}
+
+
+def _herdr_pane_to_wire(
+    p: dict,
+    wt_by_ws: dict[str, dict] | None = None,
+    ws_by_id: dict[str, str] | None = None,
+    tab_by_id: dict[str, str] | None = None,
+) -> dict:
     """Map a raw herdr pane to herdeck's wire pane schema.
 
     herdr uses `agent` / `agent_status` and has no human label. We derive repo +
     branch from the pane's open worktree (herdr `worktree.list`), falling back to
-    the working-directory basename when no worktree info is available.
+    the working-directory basename when no worktree info is available. The
+    workspace/tab labels come from `workspace.list` / `tab.list`; a missing lookup
+    or empty label stays empty (the raw id is never used as tile text).
     """
     cwd = p.get("foreground_cwd") or p.get("cwd") or ""
     label = os.path.basename(cwd.rstrip("/")) or p.get("workspace_id", "")
@@ -55,30 +74,55 @@ def _herdr_pane_to_wire(p: dict, wt_by_ws: dict[str, dict] | None = None) -> dic
         "project": label,
         "repo": repo,
         "branch": branch,
+        "workspace": (ws_by_id or {}).get(p.get("workspace_id", ""), ""),
+        "tab": (tab_by_id or {}).get(p.get("tab_id", ""), ""),
     }
 
 
-def _wire_panes(raw: list[dict], worktrees: list[dict] | None = None) -> list[dict]:
+def _wire_panes(
+    raw: list[dict],
+    worktrees: list[dict] | None = None,
+    workspaces: list[dict] | None = None,
+    tabs: list[dict] | None = None,
+) -> list[dict]:
     wt_by_ws = _worktrees_by_workspace(worktrees or [])
-    return [_herdr_pane_to_wire(p, wt_by_ws) for p in raw if _is_agent_pane(p)]
+    ws_by_id = _workspaces_by_id(workspaces or [])
+    tab_by_id = _tabs_by_id(tabs or [])
+    return [_herdr_pane_to_wire(p, wt_by_ws, ws_by_id, tab_by_id) for p in raw if _is_agent_pane(p)]
 
 
 async def _wired_snapshot(herdr: HerdrClient) -> list[dict]:
-    """Fetch panes + worktrees from herdr and build the wire snapshot."""
+    """Fetch panes + worktrees + workspaces + tabs from herdr and build the wire snapshot."""
     raw = await herdr.list_panes()
     try:
         worktrees = await herdr.worktrees()
     except Exception:
         worktrees = []
-    return _wire_panes(raw, worktrees)
+    try:
+        workspaces = await herdr.workspaces()
+    except Exception:
+        workspaces = []
+    try:
+        tabs = await herdr.tabs()
+    except Exception:
+        tabs = []
+    return _wire_panes(raw, worktrees, workspaces, tabs)
 
 
 class StubHerdr:
     """In-memory herdr (raw herdr pane shape) for tests."""
 
-    def __init__(self, panes: list[dict], worktrees: list[dict] | None = None):
+    def __init__(
+        self,
+        panes: list[dict],
+        worktrees: list[dict] | None = None,
+        workspaces: list[dict] | None = None,
+        tabs: list[dict] | None = None,
+    ):
         self.panes = panes
         self._worktrees = worktrees or []
+        self._workspaces = workspaces or []
+        self._tabs = tabs or []
         self.detection: dict[str, str] = {}
         self.sent: list[tuple[str, list[str]]] = []
         self.focused: list[str] = []
@@ -89,6 +133,12 @@ class StubHerdr:
 
     async def worktrees(self) -> list[dict]:
         return self._worktrees
+
+    async def workspaces(self) -> list[dict]:
+        return self._workspaces
+
+    async def tabs(self) -> list[dict]:
+        return self._tabs
 
     async def get_pane(self, pane_id: str) -> dict:
         return next(p for p in self.panes if p["pane_id"] == pane_id)
@@ -337,6 +387,14 @@ class SocketHerdr:
     async def worktrees(self) -> list[dict]:
         res = await self._rpc("worktree.list", {})
         return res.get("result", {}).get("worktrees", [])
+
+    async def workspaces(self) -> list[dict]:
+        res = await self._rpc("workspace.list", {})
+        return res.get("result", {}).get("workspaces", [])
+
+    async def tabs(self) -> list[dict]:
+        res = await self._rpc("tab.list", {})
+        return res.get("result", {}).get("tabs", [])
 
 
 async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, clients: set):

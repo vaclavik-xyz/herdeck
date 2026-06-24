@@ -180,3 +180,34 @@ def test_tile_fields_can_hide_branch_status_time_and_server_tag():
     assert tile.status_text is None
     assert tile.time_text is None
     assert tile.server_tag is None
+
+
+def test_overview_renders_configured_tile_lines():
+    cfg = make_config()
+    cfg.view.tile_primary = ["workspace"]
+    cfg.view.tile_secondary = ["tab", "branch"]
+    o = Orchestrator(cfg, slots=13)
+    # distinct repo vs workspace so a stale "render repo as primary" impl fails
+    s = AgentState(AgentKey("dev", "w2:p1"), "claude", "herdeck", Status.WORKING)
+    s.repo, s.branch, s.workspace, s.tab = "api", "main", "herdeck", "2"
+    o.apply_snapshot("dev", [s])
+
+    tile = o.render().tiles[0]
+
+    assert tile.repo == "herdeck"        # primary = workspace, NOT repo "api"
+    assert tile.branch == "▸2 · main"    # secondary = tab + branch
+
+
+def test_overview_tile_lines_fall_back_to_tile_fields():
+    # No new keys set; tile_fields=["repo"] must still hide branch (today's behavior).
+    cfg = make_multi_config()
+    cfg.view.tile_fields = ["repo"]
+    o = Orchestrator(cfg, slots=13)
+    s = AgentState(AgentKey("alpha", "p1"), "claude", "api", Status.IDLE)
+    s.repo, s.branch = "repo", "feat/x"
+    o.apply_snapshot("alpha", [s])
+
+    tile = o.render().tiles[0]
+
+    assert tile.repo == "repo"
+    assert tile.branch == ""

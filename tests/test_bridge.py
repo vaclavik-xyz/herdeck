@@ -6,7 +6,9 @@ from herdeck.bridge import (
     StubHerdr,
     _herdr_pane_to_wire,
     _is_agent_pane,
+    _tabs_by_id,
     _wire_panes,
+    _workspaces_by_id,
     _worktrees_by_workspace,
     handle_client_message,
 )
@@ -46,6 +48,8 @@ def test_herdr_pane_to_wire_maps_fields():
         "project": "web",
         "repo": "web",
         "branch": "",
+        "workspace": "",
+        "tab": "",
     }
 
 
@@ -374,3 +378,50 @@ async def test_start_calls_herdr(herdr):
     msg = json.loads(out)
     assert msg["data"]["started"] is True
     assert herdr.started == [("claude", ["claude"])]
+
+
+def test_herdr_pane_to_wire_adds_workspace_and_tab_labels():
+    raw = raw_pane(agent="claude", status="working")
+    raw["workspace_id"] = "w2"
+    raw["tab_id"] = "w2:t3"
+    ws_by_id = _workspaces_by_id([{"workspace_id": "w2", "label": "herdeck"}])
+    tab_by_id = _tabs_by_id([{"tab_id": "w2:t3", "label": "2"}])
+    w = _herdr_pane_to_wire(raw, None, ws_by_id, tab_by_id)
+    assert w["workspace"] == "herdeck"
+    assert w["tab"] == "2"
+
+
+def test_herdr_pane_to_wire_blank_workspace_tab_when_lookup_missing():
+    raw = raw_pane(agent="claude", status="idle")
+    raw["workspace_id"] = "w9"
+    raw["tab_id"] = "w9:t1"
+    w = _herdr_pane_to_wire(raw, None, {}, {})
+    # never fall back to the raw id
+    assert w["workspace"] == ""
+    assert w["tab"] == ""
+
+
+def test_workspaces_and_tabs_by_id_index_label():
+    assert _workspaces_by_id([{"workspace_id": "w2", "label": "herdeck"}]) == {"w2": "herdeck"}
+    assert _tabs_by_id([{"tab_id": "w2:t1", "label": "1"}]) == {"w2:t1": "1"}
+    # entries without an id are skipped
+    assert _workspaces_by_id([{"label": "x"}]) == {}
+    assert _tabs_by_id([{"label": "x"}]) == {}
+
+
+async def test_list_snapshot_includes_workspace_and_tab():
+    panes = [{
+        "pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1",
+        "cwd": "/Users/admin/projects/herdeck",
+        "foreground_cwd": "/Users/admin/projects/herdeck",
+        "agent": "claude", "agent_status": "blocked",
+    }]
+    herdr = StubHerdr(
+        panes=panes,
+        workspaces=[{"workspace_id": "w2", "label": "herdeck"}],
+        tabs=[{"tab_id": "w2:t1", "label": "1"}],
+    )
+    out = await handle_client_message(herdr, "local", '{"type":"list"}')
+    p = json.loads(out)["panes"][0]
+    assert p["workspace"] == "herdeck"
+    assert p["tab"] == "1"

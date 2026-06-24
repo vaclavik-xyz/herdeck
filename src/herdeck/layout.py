@@ -37,6 +37,44 @@ def status_color(status: Status) -> str:
     return STATUS_COLOR.get(status, "grey")
 
 
+def compose_line(state: AgentState, tokens: list[str]) -> str:
+    """Render an agent-tile text line from a token list.
+
+    Tokens map to AgentState values; empty values are dropped and the rest are
+    joined with " · ". `tab` is shown only when present, prefixed with ▸.
+    """
+    parts: list[str] = []
+    for token in tokens:
+        if token == "repo":
+            value = state.repo or state.label
+        elif token == "branch":
+            value = state.branch
+        elif token == "workspace":
+            value = state.workspace
+        elif token == "tab":
+            value = f"▸{state.tab}" if state.tab else ""
+        elif token == "agent":
+            value = state.agent_type
+        else:
+            value = ""
+        if value:
+            parts.append(value)
+    return " · ".join(parts)
+
+
+def resolve_tile_lines(
+    view, fallback_primary: list[str], fallback_secondary: list[str]
+) -> tuple[list[str], list[str]]:
+    """Resolve (primary, secondary) token lists.
+
+    Per key: an explicit config value (including an empty list) wins; an absent
+    key (None) uses the render path's fallback.
+    """
+    primary = view.tile_primary if view.tile_primary is not None else fallback_primary
+    secondary = view.tile_secondary if view.tile_secondary is not None else fallback_secondary
+    return primary, secondary
+
+
 def order_agents(agents, overview_order: list[str]) -> list[AgentState]:
     order = {sid: i for i, sid in enumerate(overview_order)}
     return sorted(

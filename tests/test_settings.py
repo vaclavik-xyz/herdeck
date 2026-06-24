@@ -7,6 +7,7 @@ from herdeck.settings import (
     _build_config,
     _merged_sections,
     _profile_overlays,
+    _view_config,
     list_profiles,
     load_settings,
     resolve_profile,
@@ -491,3 +492,40 @@ def test_build_config_rejects_unknown_overview_order_server(monkeypatch):
     merged, selection = _merged_sections(data, "default")
     with pytest.raises(ConfigError, match="unknown server 'ghost'"):
         _build_config(data, merged, selection, {}, profile_name="default", env_profile=None)
+
+
+# ---------------------------------------------------------------------------
+# tile_primary / tile_secondary parsing and validation
+# ---------------------------------------------------------------------------
+
+
+def test_view_config_parses_tile_lines():
+    view = _view_config({"tile_primary": ["workspace"], "tile_secondary": ["tab", "branch"]})
+    assert view.tile_primary == ["workspace"]
+    assert view.tile_secondary == ["tab", "branch"]
+
+
+def test_view_config_defaults_tile_lines_to_none():
+    view = _view_config({})
+    assert view.tile_primary is None
+    assert view.tile_secondary is None
+
+
+def test_view_config_keeps_explicit_empty_list():
+    view = _view_config({"tile_primary": []})
+    assert view.tile_primary == []
+    assert view.tile_secondary is None
+
+
+def test_view_config_rejects_unknown_tile_token():
+    with pytest.raises(ConfigError, match="unknown tile token 'bogus'"):
+        _view_config({"tile_secondary": ["branch", "bogus"]})
+
+
+def test_profile_view_overlay_merges_tile_primary():
+    data = {
+        "view": {"tile_fields": ["repo"]},
+        "profiles": {"solo": {"view": {"tile_primary": ["workspace"]}}},
+    }
+    merged, _ = _merged_sections(data, "solo")
+    assert merged["view"] == {"tile_fields": ["repo"], "tile_primary": ["workspace"]}

@@ -1,14 +1,79 @@
+from herdeck.config import TILE_LINE_TOKENS, ViewConfig
 from herdeck.driver.base import PanelView, TileView
 from herdeck.layout import (
     Counts,
+    compose_line,
     order_agents,
     page,
     panel_detail,
     panel_overview,
+    resolve_tile_lines,
     status_color,
     summary,
 )
 from herdeck.model import AgentKey, AgentState, Status
+
+
+def _astate(repo="herdeck", branch="main", workspace="herdeck", tab="2", label="herdeck", agent="claude"):
+    s = AgentState(AgentKey("dev", "w2:p1"), agent, label, Status.WORKING)
+    s.repo, s.branch, s.workspace, s.tab = repo, branch, workspace, tab
+    return s
+
+
+def test_compose_line_joins_tokens_with_separator():
+    assert compose_line(_astate(), ["tab", "branch"]) == "▸2 · main"
+
+
+def test_compose_line_omits_empty_values():
+    s = _astate(branch="")
+    assert compose_line(s, ["repo", "branch"]) == "herdeck"
+
+
+def test_compose_line_tab_only_when_present():
+    assert compose_line(_astate(tab=""), ["tab", "branch"]) == "main"
+    assert compose_line(_astate(tab="3"), ["tab"]) == "▸3"
+
+
+def test_compose_line_repo_falls_back_to_label():
+    s = _astate(repo="", label="api")
+    assert compose_line(s, ["repo"]) == "api"
+
+
+def test_compose_line_empty_when_all_values_empty():
+    s = _astate(workspace="", tab="")
+    assert compose_line(s, ["workspace", "tab"]) == ""
+
+
+def test_compose_line_handles_every_valid_token():
+    s = _astate()
+    for tok in TILE_LINE_TOKENS:
+        # every valid token must map to a non-empty value for a populated state,
+        # so a renamed token that compose_line no longer handles is caught here
+        assert compose_line(s, [tok]) != ""
+
+
+def test_resolve_tile_lines_uses_fallback_when_none():
+    view = ViewConfig()  # tile_primary/secondary default None
+    primary, secondary = resolve_tile_lines(view, ["repo"], ["branch"])
+    assert primary == ["repo"]
+    assert secondary == ["branch"]
+
+
+def test_resolve_tile_lines_explicit_wins_per_key_including_empty():
+    view = ViewConfig()
+    view.tile_primary = ["workspace"]
+    view.tile_secondary = []  # explicit off
+    primary, secondary = resolve_tile_lines(view, ["repo"], ["branch"])
+    assert primary == ["workspace"]  # explicit wins
+    assert secondary == []           # explicit [] wins over fallback
+
+
+def test_resolve_tile_lines_partial_override_one_key():
+    view = ViewConfig()
+    view.tile_primary = ["workspace"]  # secondary stays None -> fallback
+    primary, secondary = resolve_tile_lines(view, ["repo"], ["branch"])
+    assert primary == ["workspace"]
+    assert secondary == ["branch"]
 
 
 def a(pane, status, agent_type="claude", label="p", server="dev"):

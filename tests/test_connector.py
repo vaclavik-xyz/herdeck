@@ -217,6 +217,27 @@ def test_dispatch_rekeys_inbound_to_config_server_id():
     assert seen["states"][0].agent_type == "claude"
 
 
+def test_dispatch_rekey_preserves_workspace_and_tab():
+    cfg = ServerConfig("dev", "ws://x", "t")
+    seen = {}
+    conn = Connector(
+        cfg,
+        on_snapshot=lambda sid, st: seen.update(states=st),
+        on_event=lambda sid, s: None,
+        on_connection=lambda sid, up: None,
+    )
+    raw = (
+        '{"type":"snapshot","server_id":"some-bridge-id","panes":'
+        '[{"pane_id":"w2:p1","agent_type":"claude","label":"herdeck",'
+        '"status":"working","project":"herdeck","repo":"herdeck",'
+        '"branch":"main","workspace":"herdeck","tab":"2"}]}'
+    )
+    conn._dispatch(raw)
+    assert seen["states"][0].key.server_id == "dev"   # rekeyed to configured id
+    assert seen["states"][0].workspace == "herdeck"   # carried through rekey
+    assert seen["states"][0].tab == "2"
+
+
 async def test_connector_serializes_concurrent_sends_in_call_order():
     class SlowWs:
         def __init__(self):
