@@ -160,7 +160,7 @@ def _profile_overlays(profiles: dict, name: str) -> list[dict]:
     chain: list[str] = []
     seen: set[str] = set()
     cur: str | None = name
-    while cur:
+    while cur and cur != "default":
         if cur in seen:
             raise ConfigError("profile inheritance cycle: " + " -> ".join(chain + [cur]))
         if cur not in profiles:
@@ -304,7 +304,10 @@ def _build_config(
     servers_by_id = {s["id"]: s for s in data.get("servers", [])}
     if selection is None:
         deck_sel = merged.get("deck") or {}
-        selection = list(deck_sel.get("overview_order") or servers_by_id)
+        if "overview_order" in deck_sel:
+            selection = list(deck_sel["overview_order"])
+        else:
+            selection = list(servers_by_id)
     servers = []
     for sid in selection:
         if sid not in servers_by_id:

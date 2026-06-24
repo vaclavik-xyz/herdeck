@@ -246,7 +246,7 @@ Add it to the `[start_profiles]` section (base config) or override it per profil
 myagent = ["myagent", "--flag"]
 ```
 
-Custom `[answer_profiles.<name>]` overrides are supported in legacy configs only.
+Custom `[answer_profiles.<name>]` sections can be defined in the base config and overridden per-profile via `[profiles.<name>.answer_profiles.<type>]`; a profile can only override a type that the base defines.
 
 ## Notifications
 Get notified when an agent enters the **blocked** state, so you don't have to

@@ -5,12 +5,12 @@ import pytest
 from herdeck.config import ConfigError
 from herdeck.settings import (
     _build_config,
-    _merge_section,
     _merged_sections,
     _profile_overlays,
     list_profiles,
     load_settings,
     resolve_profile,
+    validate_settings,
 )
 
 # ---------------------------------------------------------------------------
@@ -177,8 +177,7 @@ servers = ["local"]
 def test_env_profile_locks_profile_selection(tmp_path, monkeypatch):
     monkeypatch.setenv("TOK", "secret")
     monkeypatch.setenv("HERDECK_PROFILE", "mobile")
-    snap = load_settings(_write(tmp_path, OVERLAY_CONFIG))
-    local = write(tmp_path / "local.toml", 'active_profile = "default"\n')
+    write(tmp_path / "local.toml", 'active_profile = "default"\n')
     snap2 = load_settings(_write(tmp_path, OVERLAY_CONFIG), tmp_path / "local.toml")
 
     cfg = resolve_profile(snap2).config
@@ -278,9 +277,7 @@ servers = ["nonexistent"]
     assert not local.exists()
 
 
-def test_validate_settings_reports_missing_references(tmp_path):
-    from herdeck.settings import validate_settings
-
+def test_validate_settings_reports_missing_references(tmp_path, monkeypatch):
     config = write(
         tmp_path / "config.toml",
         """
@@ -295,20 +292,13 @@ servers = ["missing"]
 """,
     )
 
-    import os
-
-    os.environ["TOK"] = "secret"
-    try:
-        errors = validate_settings(load_settings(config))
-    finally:
-        del os.environ["TOK"]
+    monkeypatch.setenv("TOK", "secret")
+    errors = validate_settings(load_settings(config))
 
     assert any("unknown server 'missing'" in err for err in errors)
 
 
 def test_validate_settings_reports_unknown_active_profile(tmp_path):
-    from herdeck.settings import validate_settings
-
     config = write(
         tmp_path / "config.toml",
         """
@@ -352,9 +342,7 @@ def test_merge_section_recurses_into_nested_tables():
 
     base = {"colors": {"blocked": "amber", "idle": "blue"}}
     overlay = {"colors": {"blocked": "red"}}
-    assert _merge_section(base, overlay) == {
-        "colors": {"blocked": "red", "idle": "blue"}
-    }
+    assert _merge_section(base, overlay) == {"colors": {"blocked": "red", "idle": "blue"}}
 
 
 def test_profile_overlays_orders_parents_before_child():
@@ -419,9 +407,7 @@ def test_build_config_reads_flat_base_including_theme_view_safety():
 
     os.environ["TOK"] = "secret"
     try:
-        cfg = _build_config(
-            data, merged, selection, {}, profile_name="default", env_profile=None
-        )
+        cfg = _build_config(data, merged, selection, {}, profile_name="default", env_profile=None)
     finally:
         del os.environ["TOK"]
     assert cfg.grid == (4, 3)
@@ -430,6 +416,23 @@ def test_build_config_reads_flat_base_including_theme_view_safety():
     assert cfg.safety.approve_always is False
     assert [s.id for s in cfg.servers] == ["local"]
     assert cfg.overview_order == ["local"]
+
+
+def test_profile_overlays_extends_default_terminates_at_base():
+    profiles = {"mobile": {"extends": "default", "view": {"management": "bottom_row"}}}
+    assert _profile_overlays(profiles, "mobile") == [profiles["mobile"]]
+
+
+def test_build_config_respects_explicit_empty_overview_order(monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    data = {
+        "servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
+        "deck": {"overview_order": []},
+    }
+    merged, selection = _merged_sections(data, "default")
+    cfg = _build_config(data, merged, selection, {}, profile_name="default", env_profile=None)
+    assert cfg.overview_order == []
+    assert cfg.servers == []
 
 
 def test_build_config_profile_overrides_grid_and_answer_profiles(monkeypatch):
@@ -450,9 +453,3 @@ def test_build_config_profile_overrides_grid_and_answer_profiles(monkeypatch):
     assert cfg.grid == (4, 3)
     assert cfg.profiles["claude"].approve == ["y"]
     assert cfg.profiles["claude"].deny == ["esc"]  # kept from base (field merge)
-
-
-# ---------------------------------------------------------------------------
-# Import the validate_settings function at top level for convenience
-# ---------------------------------------------------------------------------
-from herdeck.settings import validate_settings  # noqa: E402

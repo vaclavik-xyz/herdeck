@@ -87,11 +87,11 @@ def test_example_management_row_documents_supported_actions_only():
     assert set(data["profiles"]["mobile"]["view"]["bottom_row"]) <= {"profiles", "new_agent"}
 
 
-def test_readme_scopes_answer_profile_overrides_to_legacy_configs():
+def test_readme_describes_answer_profile_overrides_in_unified_model():
     path = Path(__file__).resolve().parents[1] / "README.md"
     section = path.read_text().split("## Adding an agent type", 1)[1].split("\n## ", 1)[0]
 
-    assert "legacy configs only" in section
+    assert "profiles.<name>.answer_profiles" in section
 
 
 def test_readme_uses_profile_schema_for_notifications():
