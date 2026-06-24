@@ -176,6 +176,22 @@ def _profile_chain(profiles: dict, name: str) -> dict:
     return merged
 
 
+def _profile_overlays(profiles: dict, name: str) -> list[dict]:
+    """Overlay dicts from the base-most parent down to `name` (inclusive)."""
+    chain: list[str] = []
+    seen: set[str] = set()
+    cur: str | None = name
+    while cur:
+        if cur in seen:
+            raise ConfigError("profile inheritance cycle: " + " -> ".join(chain + [cur]))
+        if cur not in profiles:
+            raise ConfigError(f"unknown profile '{cur}'")
+        seen.add(cur)
+        chain.append(cur)
+        cur = profiles[cur].get("extends")
+    return [profiles[n] for n in reversed(chain)]
+
+
 def _runtime_config(
     data: dict,
     local_data: dict,

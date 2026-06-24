@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from herdeck.config import ConfigError
-from herdeck.settings import list_profiles, load_settings, resolve_profile
+from herdeck.settings import list_profiles, load_settings, resolve_profile, _profile_overlays
 
 NEW_CONFIG = """
 active_profile = "work"
@@ -414,3 +414,28 @@ def test_merge_section_recurses_into_nested_tables():
     assert _merge_section(base, overlay) == {
         "colors": {"blocked": "red", "idle": "blue"}
     }
+
+
+def test_profile_overlays_orders_parents_before_child():
+    profiles = {
+        "base": {"view": {"management": "launcher_menu"}},
+        "work": {"extends": "base", "view": {"management": "bottom_row"}},
+    }
+    chain = _profile_overlays(profiles, "work")
+    assert chain == [profiles["base"], profiles["work"]]
+
+
+def test_profile_overlays_single_profile_without_extends():
+    profiles = {"mobile": {"servers": ["local"]}}
+    assert _profile_overlays(profiles, "mobile") == [profiles["mobile"]]
+
+
+def test_profile_overlays_unknown_name_raises():
+    with pytest.raises(ConfigError, match="unknown profile 'ghost'"):
+        _profile_overlays({}, "ghost")
+
+
+def test_profile_overlays_cycle_raises_with_chain():
+    profiles = {"a": {"extends": "b"}, "b": {"extends": "a"}}
+    with pytest.raises(ConfigError, match="inheritance cycle"):
+        _profile_overlays(profiles, "a")
