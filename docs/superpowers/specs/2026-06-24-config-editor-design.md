@@ -35,11 +35,15 @@ scope. Teď je jeden model (plochá báze + `[profiles.X]` overlaye), takže edi
    existující `switch_profile`-reload cestu. **Bez IPC** (varianta C zamítnuta — její
    jediná výhoda, cross-machine push, v téhle topologii nefunguje bez config sync, který
    je mimo scope).
-3. **Secrets = keychain + jádro ho čte, env-first.** Editor ukládá hodnotu tokenu do OS
-   keychainu (`keyring`, service `"herdeck"`) pod názvem `token_env`; `config._server_config`
-   se naučí číst keychain s **env-first** fallbackem (`os.environ.get` → `keyring.get_password`).
-   Existující dev/CI env flow (`HERDECK_TOKEN`) zůstává beze změny a může přebít. TOML
-   nese vždy jen `token_env` název, nikdy hodnotu.
+3. **Secrets = keychain + jeden sdílený resolver, env-first.** Editor ukládá hodnotu tokenu
+   do OS keychainu (`keyring`, service `"herdeck"`) pod názvem `token_env`. **Všichni**
+   konzumenti tokenů čtou přes **jeden** sdílený resolver `secrets.get_secret(name)` s
+   **env-first** fallbackem (`os.environ.get` → `keyring.get_password`): jak
+   `settings._server_config` (server tokeny), tak `app._build_notifier` (telegram token,
+   dnes čte přímo `os.environ.get`). Bez toho by token uložený editorem do keychainu byl
+   reportován jako „set", ale runtime by ho ignoroval. Existující dev/CI env flow
+   (`HERDECK_TOKEN`) zůstává beze změny a může přebít. TOML nese vždy jen `token_env` název,
+   nikdy hodnotu.
 4. **Onboarding = minimální v Phase 2.** Bez configu editor ukáže prázdný formulář s
    defaulty + inline „přidej první server"; první Apply zapíše čerstvý `config.toml`. Plný
    first-run wizard je Phase 3.
@@ -71,7 +75,7 @@ Tauri shell (Rust)
 | Python | `src/herdeck/deckapp/config_service.py` (nový) | `ConfigService`: read (redacted) / validate / write (atomic) / profil ops / keychain ops. Čistá, bez HTTP. |
 | Python | `src/herdeck/deckapp/server.py` (rozšíření) | config HTTP routes delegující na `ConfigService`; po zápisu spustí in-app reload. |
 | Python | `src/herdeck/deckapp/watcher.py` (nový) | `ConfigWatcher`: vlákno, sleduje mtime config/local.toml, volá reload callback. |
-| Python | `src/herdeck/secrets.py` (nový) + `settings.py` `_server_config` (malá změna) | token: `os.environ.get` (env-first) → `keyring.get_password("herdeck", token_env)` fallback, přes sdílený `secrets` modul. |
+| Python | `src/herdeck/secrets.py` (nový) + `settings.py` `_server_config` + `app.py` `_build_notifier` (malé změny) | token: `os.environ.get` (env-first) → `keyring.get_password("herdeck", token_env)` fallback, přes sdílený `secrets.get_secret` — používají ho server tokeny i telegram token. |
 | Python | `src/herdeck/app.py` (rozšíření) | napojení `ConfigWatcher` na existující reload entrypoint (hot-reload B pro samostatný deck). |
 | Rust | `desktop/src-tauri/tauri.conf.json`, `src/lib.rs` | 2. okno „config"; proxy cmds `config_get/validate/write/set_active/secret_set/secret_clear` (token injektuje Rust). |
 | Frontend | `desktop/src/lib/configClient.ts` (nový) | typovaný klient (mirror `deckClient.ts`), čistá logika bez Tauri. |

@@ -33,7 +33,7 @@
 - `src/herdeck/deckapp/config_service.py` — **new.** `ConfigService`: `read`, `validate`, `write`, `set_active`, `create_profile`, `delete_profile`.
 - `src/herdeck/deckapp/watcher.py` — **new.** `ConfigWatcher`: a daemon thread that polls config/local mtimes and fires a callback on change (debounced).
 - `src/herdeck/deckapp/server.py` — **modify** `DeckApp` to hold a `ConfigService`, add config HTTP routes, add `reload()`, and accept a config-reload trigger.
-- `src/herdeck/app.py` — **modify**: extract `App._apply_config`, add `App.reload_from_disk`, add `make_config_reloader`, and wire a `ConfigWatcher` in `main()`.
+- `src/herdeck/app.py` — **modify**: route `_build_notifier`'s telegram token through `secrets.get_secret` (Task 1); extract `App._apply_config`, add `App.reload_from_disk` + `make_config_reloader`, and wire a `ConfigWatcher` inside `_run` (Task 8).
 - `pyproject.toml` — **modify**: add `keyring` (Task 1) and `tomli-w` (Task 4) to the `deck` and `dev` dependency groups.
 - Tests: `tests/test_secrets.py`, `tests/test_config_service.py`, `tests/test_config_watcher.py`, additions to `tests/test_deckapp.py` and `tests/test_app.py`.
 
@@ -44,12 +44,14 @@
 **Files:**
 - Create: `src/herdeck/secrets.py`
 - Modify: `src/herdeck/settings.py` (`_server_config`, ~lines 238-243)
+- Modify: `src/herdeck/app.py` (`_build_notifier`, ~lines 49-72 — telegram token consumer)
 - Modify: `pyproject.toml` (add `keyring` to `deck` and `dev` groups)
 - Test: `tests/test_secrets.py`
 
 **Interfaces:**
 - Produces: `secrets.SERVICE = "herdeck"`; `secrets.get_secret(name: str) -> str | None` (env-first, keyring fallback, None if neither); `secrets.set_secret(name: str, value: str) -> None`; `secrets.clear_secret(name: str) -> None`; `secrets.has_secret(name: str) -> bool`; `secrets.secret_source(name: str) -> str | None` (`"env"` | `"keychain"` | `None`).
 - `settings._server_config` now calls `secrets.get_secret(env)` instead of `os.environ.get(env)`.
+- `app._build_notifier`'s `getenv` keyword defaults to `secrets.get_secret` (was `os.environ.get`), so the telegram token resolves env-first/keychain like server tokens. Every token consumer goes through the one resolver — without this a keychain-only telegram token would be reported "set" but ignored at runtime.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -116,6 +118,32 @@ def test_missing_keyring_backend_degrades_to_env_only(monkeypatch):
     monkeypatch.delenv("TOK", raising=False)
     assert secrets.get_secret("TOK") is None  # never raises
     assert secrets.has_secret("TOK") is False
+
+
+def test_build_notifier_resolves_telegram_token_via_secrets(monkeypatch):
+    from herdeck.app import _build_notifier
+    from herdeck.config import Config, Notifications, TelegramConfig
+
+    fake = FakeKeyring()
+    fake.set_password("herdeck", "TGTOK", "bot-token")
+    monkeypatch.setattr(secrets, "_keyring", lambda: fake)
+    monkeypatch.delenv("TGTOK", raising=False)  # env miss -> keychain fallback
+
+    captured = []
+    cfg = Config(
+        servers=[],
+        profiles={},
+        overview_order=[],
+        grid=(5, 3),
+        notifications=Notifications(
+            enabled=True,
+            on=["blocked"],
+            backends=["telegram"],
+            telegram=TelegramConfig(token_env="TGTOK", chat_id="1"),
+        ),
+    )
+    _build_notifier(cfg, telegram_factory=lambda tok, chat: captured.append((tok, chat)))
+    assert captured == [("bot-token", "1")]  # telegram token resolved via keychain
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -205,6 +233,20 @@ def _server_config(raw: dict) -> ServerConfig:
         raise ConfigError(f"env var '{env}' for server '{raw['id']}' is not set")
     return ServerConfig(raw["id"], raw["url"], token)
 ```
+
+Modify `src/herdeck/app.py`: route the telegram token consumer through the shared resolver. Add the import near the top (`from .secrets import get_secret`) and change the `_build_notifier` default keyword:
+
+```python
+def _build_notifier(
+    config: Config,
+    *,
+    getenv=get_secret,  # was os.environ.get — env-first/keychain via the shared resolver
+    macos_sink=_macos_sink,
+    telegram_factory=make_telegram_sink,
+) -> Notifier:
+```
+
+(The body is unchanged — it already calls `getenv(tg.token_env)`. `App._handle_switch_profile` and `_run` call `_build_notifier(config)` with no `getenv`, so they pick up the new default. Tests that pass an explicit `getenv` still override it.)
 
 Modify `pyproject.toml`: add `"keyring"` to both the `deck` and `dev` optional-dependency lists, e.g.:
 
@@ -307,6 +349,17 @@ def test_read_redacts_secrets_to_presence_flags(tmp_path, monkeypatch):
     assert data["secrets"]["TG"] == {"set": False, "source": None}
 
 
+def test_read_surfaces_profile_only_secret(tmp_path, monkeypatch):
+    monkeypatch.delenv("PTG", raising=False)
+    text = (
+        '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n'
+        "[profiles.work.notifications.telegram]\n"
+        'token_env="PTG"\nchat_id="9"\n'
+    )
+    svc = _svc(tmp_path, text=text)
+    assert "PTG" in svc.read()["secrets"]  # profile-overlay token_env is surfaced
+
+
 def test_read_missing_config_is_empty_for_onboarding(tmp_path):
     svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
     assert svc.read() == {"base": {}, "profiles": {}, "local": {}, "secrets": {}}
@@ -366,18 +419,30 @@ class ConfigService:
             "base": base,
             "profiles": profiles,
             "local": local,
-            "secrets": self._secret_flags(base),
+            "secrets": self._secret_flags(base, profiles),
         }
 
-    def _secret_flags(self, base: dict) -> dict:
-        names: list[str] = []
-        for server in base.get("servers", []):
-            env = server.get("token_env")
-            if env and env not in names:
-                names.append(env)
-        tg = base.get("notifications", {}).get("telegram", {})
-        if isinstance(tg, dict) and tg.get("token_env") and tg["token_env"] not in names:
-            names.append(tg["token_env"])
+    @staticmethod
+    def _collect_token_envs(obj, out=None) -> list[str]:
+        """Every `token_env` value anywhere in a nested dict/list, in first-seen
+        order. Covers server defs, base notifications, AND profile overlays
+        (e.g. `[profiles.x.notifications.telegram].token_env`)."""
+        if out is None:
+            out = []
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if key == "token_env" and isinstance(value, str) and value not in out:
+                    out.append(value)
+                else:
+                    ConfigService._collect_token_envs(value, out)
+        elif isinstance(obj, list):
+            for item in obj:
+                ConfigService._collect_token_envs(item, out)
+        return out
+
+    def _secret_flags(self, base: dict, profiles: dict) -> dict:
+        names = self._collect_token_envs(base)
+        self._collect_token_envs(profiles, names)
         return {
             name: {"set": secret_store.has_secret(name), "source": secret_store.secret_source(name)}
             for name in names
@@ -722,15 +787,19 @@ git commit -m "feat(config-service): profile create/delete/set_active + secret s
 - Test: `tests/test_deckapp.py`
 
 **Interfaces:**
-- Consumes: `ConfigService`, the existing `DeckApp` HTTP handler (`do_GET`/`do_POST`, `_require_query_token`/`_require_header_token`, `_send`).
-- Produces: `DeckApp.__init__` gains an optional `config_service: ConfigService | None = None` and an optional `reloader: Callable[[], None] | None = None`; `DeckApp.reload()` rebuilds the source + re-renders. New routes:
+- Consumes: `ConfigService`, `StateSource`, `Orchestrator`, `select_live`/`build_live_source`/`MockSource`, the existing `DeckApp` HTTP handler (`do_GET`/`do_POST`, `_require_query_token`/`_require_header_token`, `_send`).
+- Produces:
+  - `DeckApp.__init__` stores `self._clock = clock or (lambda: 0.0)`, and gains optional `config_service: ConfigService | None = None` and `reloader: Callable[[], None] | None = None`.
+  - `DeckApp.swap_source(new_source: StateSource) -> None` — the REAL reload mechanics: under `self._lock`, replace `self._source`, recompute `self._slots` from `new_source.config.grid`, rebuild `self._orch = Orchestrator(new_source.config, slots=self._slots, clock=self._clock)`, `new_source.attach(...)`, `_refresh_locked()`; then close the old source. This is what makes an edited config actually appear on the deck/preview.
+  - `DeckApp.reload() -> None` — calls `self._reloader()` if set (injectable for tests; in the real sidecar it is the disk-re-select reloader below).
+  - New routes:
   - `GET /config` → `config_service.read()` JSON (query-token).
   - `POST /config/validate` → body JSON `{base,profiles,local}` → `{"errors": [...]}` (header-token).
   - `POST /config` → on `write()` empty → `{"errors": []}` + `reload()`; else `{"errors": [...]}` (header-token).
   - `POST /profiles/active` → body `{"name": ...}` → `{"changed": bool}` (header-token).
   - `POST /secret` → body `{"token_env","value"}` → 204 (header-token).
   - `DELETE /secret/{token_env}` → 204 (header-token).
-- `create_app`/`create_live_app`/`create_mock_app` pass a `ConfigService` built from the discovered config + local paths (a `reload()` no-op-safe default).
+- `create_app` builds a default `ConfigService` (discovered config + local paths) AND a real default reloader `lambda: app.swap_source(_select_source())`, where `_select_source()` re-runs `select_live()` (live source from the re-read on-disk config, else `MockSource`). `create_mock_app`/`create_live_app` accept `config_service`/`reloader` kwargs (default `None`) so tests inject stubs. With no reloader, `reload()` is a safe no-op.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -752,6 +821,52 @@ def _post(app, path, body, token=None):
     )
     req.add_header("X-Herdeck-Token", token if token is not None else app.token)
     return urllib.request.urlopen(req)
+
+
+class _FakeSource:
+    """A StateSource with a chosen grid, for testing swap_source mechanics."""
+
+    source_name = "mock"
+    connected = True
+    server_id = None
+
+    def __init__(self, grid):
+        from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
+
+        self._cfg = Config(
+            servers=[ServerConfig("m", "ws://m", "x")],
+            profiles=dict(DEFAULT_PROFILES),
+            overview_order=["m"],
+            grid=grid,
+        )
+
+    @property
+    def config(self):
+        return self._cfg
+
+    def attach(self, orch, **kw):
+        pass
+
+    def apply_to(self, orch):
+        pass
+
+    def press(self, index):
+        pass
+
+    def summary(self):
+        return {"agents": 0, "blocked": 0, "working": 0, "idle": 0, "done": 0}
+
+    def close(self):
+        pass
+
+
+def test_swap_source_rebuilds_orchestrator_on_grid_change():
+    from herdeck.deckapp.server import DeckApp
+
+    app = DeckApp(_FakeSource((5, 3)), serve=False)
+    assert app._slots == 5 * 3 - 2
+    app.swap_source(_FakeSource((4, 3)))
+    assert app._slots == 4 * 3 - 2  # orchestrator + slots rebuilt from the new config
 
 
 def test_config_get_requires_token_and_returns_redacted(tmp_path, monkeypatch):
@@ -799,20 +914,55 @@ def test_config_post_writes_and_triggers_reload(tmp_path, monkeypatch):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_deckapp.py -k "config_get or config_post" -q`
-Expected: FAIL — `create_mock_app() got an unexpected keyword argument 'config_service'`.
+Run: `python -m pytest tests/test_deckapp.py -k "config_get or config_post or swap_source" -q`
+Expected: FAIL — `create_mock_app() got an unexpected keyword argument 'config_service'` / `DeckApp` has no `swap_source`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `server.py`, extend `DeckApp.__init__` signature with `config_service=None` and `reloader=None`, store them (`self._config_service = config_service`; `self._reloader = reloader`). Add:
+In `server.py`, extend `DeckApp.__init__` signature with `config_service=None` and `reloader=None`, store them (`self._config_service = config_service`; `self._reloader = reloader`), and store the clock so reloads can rebuild the orchestrator: add `self._clock = clock or (lambda: 0.0)` (the `__init__` already computes `clock or (lambda: 0.0)` inline at the `Orchestrator(...)` call — store it once and reuse it there too). Add the real reload mechanics + the injectable trigger:
 
 ```python
+    def swap_source(self, new_source) -> None:
+        """Replace the state source and rebuild the orchestrator from its config
+        (grid/slots may have changed), then re-render. The single lock serializes
+        this against in-flight HTTP reads/presses."""
+        with self._lock:
+            old = self._source
+            self._source = new_source
+            cols, rows = new_source.config.grid
+            self._slots = cols * rows - 2
+            self._orch = Orchestrator(new_source.config, slots=self._slots, clock=self._clock)
+            new_source.attach(self._orch, lock=self._lock, refresh_locked=self._refresh_locked)
+            self._refresh_locked()
+        try:
+            old.close()
+        except Exception:
+            pass
+
     def reload(self) -> None:
-        """Re-pick the source from the (possibly changed) on-disk config and
-        re-render, so the deck/preview reflects an edited config in place."""
+        """Apply an edited on-disk config in place. The real sidecar injects a
+        reloader (via create_app) that re-selects the source and swap_source()s
+        it; tests may inject a stub. No reloader -> safe no-op."""
         if self._reloader is not None:
             self._reloader()
 ```
+
+In `create_app`, after building the serving app with a default `ConfigService`, also inject the real reloader (re-select the source from the just-re-read on-disk config and swap it in):
+
+```python
+def _select_source():
+    selected = select_live()  # re-reads config.toml; live target or None
+    if selected is None:
+        from .mock import MockSource
+
+        return MockSource()
+    config, server = selected
+    from .live import build_live_source
+
+    return build_live_source(config, server)
+```
+
+and in `create_app` set `app._reloader = lambda: app.swap_source(_select_source())` before returning `app`. (`select_live` is already defined in this module.)
 
 In the handler's `do_GET`, add before the final `else`:
 
@@ -889,8 +1039,8 @@ def _default_config_service():
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python -m pytest tests/test_deckapp.py -k "config_get or config_post" -q`
-Expected: PASS (2 passed).
+Run: `python -m pytest tests/test_deckapp.py -k "config_get or config_post or swap_source" -q`
+Expected: PASS (3 passed).
 
 - [ ] **Step 5: Run the deckapp suite (no regressions to existing deck routes)**
 
@@ -1129,21 +1279,46 @@ def make_config_reloader(snapshot):
     return reload_
 ```
 
-In `main()`, where the file-backed `App` is built (the `switch_profile = make_profile_switcher(snapshot)` path, ~lines 660-705), also build `config_reloader = make_config_reloader(snapshot)`, pass it to the `App`, and start a `ConfigWatcher` over `[snapshot.config_path, snapshot.local_path]` whose callback marshals the reload onto the event loop the same way the ticker does:
+The watcher must be created where `app` and `loop` exist — that is **inside `_run`**, not `main()` (which has neither). Thread the reloader and the watched paths from `main()` through `_amain()` into `_run()`:
+
+1. Add two keyword params to `_run` (`async def _run(config, deck, switch_profile=None, tick_interval=None, config_reloader=None, config_paths=None)`), pass `config_reloader=config_reloader` into the `App(...)` construction inside `_run`, and after `app._refresh()` start the watcher; close it in the existing `finally`:
 
 ```python
+    app = App(
+        config,
+        deck,
+        send,
+        schedule=lambda fn: loop.call_soon_threadsafe(fn),
+        notifier=_build_notifier(config),
+        notify_schedule=lambda fn: loop.run_in_executor(None, fn),
+        switch_profile=switch_profile,
+        update_connectors=lambda cfg: manager.update(cfg.servers),
+        config_reloader=config_reloader,
+    )
+    for server in config.servers:
+        app.orch.set_connection(server.id, False)
+    app._refresh()
+
+    watcher = None
+    if config_reloader is not None and config_paths:
         from .deckapp.watcher import ConfigWatcher
 
-        config_reloader = make_config_reloader(snapshot)
-        # ... pass config_reloader=config_reloader into the App(...) construction ...
         watcher = ConfigWatcher(
-            [snapshot.config_path, snapshot.local_path],
-            lambda: loop.call_soon_threadsafe(app.reload_from_disk),
+            config_paths, lambda: loop.call_soon_threadsafe(app.reload_from_disk)
         )
         watcher.start()
+    ...
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        if watcher is not None:
+            watcher.close()
+        manager.stop_all()
 ```
 
-(Use the same `loop` variable the existing `_ticker`/`call_soon_threadsafe` wiring uses; close `watcher` alongside the existing shutdown path.)
+2. Add matching `config_reloader=None, config_paths=None` params to `_amain` and forward them on its `await _run(...)` call.
+
+3. In `main()`, where `snapshot`/`switch_profile = make_profile_switcher(snapshot)` are built (~lines 660-667), also build `config_reloader = make_config_reloader(snapshot)` and `config_paths = [snapshot.config_path, snapshot.local_path]`, and pass both into the `_amain(...)` call (the `asyncio.run(_amain(...))` path, ~line 698).
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1169,10 +1344,11 @@ git commit -m "feat(app): standalone-deck config hot-reload via ConfigWatcher (r
 **1. Spec coverage:**
 - ConfigService read/validate/write → Tasks 2–4. ✓
 - Profile management (list via read/`profile_names`; set_active; create/delete) → Task 5. ✓
-- Keychain secrets (set/clear/has/source, env-first) + core `_server_config` reads it → Task 1 + Task 5. ✓
+- Keychain secrets (set/clear/has/source, env-first) + **all** token consumers read via the shared resolver: `_server_config` (server tokens) + `_build_notifier` (telegram) → Task 1; editor secret ops → Task 5. ✓
+- Secret presence scan covers base AND profile overlays (recursive `_collect_token_envs`) → Task 2. ✓
 - HTTP routes (config get/validate/write, profiles/active, secret) with token-auth → Task 6. ✓
-- In-app reload (A) → Task 6 (`reload`) + Task 7 (watcher drives it). ✓
-- File-watch hot-reload (B) for standalone deck → Task 8. ✓
+- In-app reload (A) = REAL: `DeckApp.swap_source` rebuilds source+orchestrator under the lock; `create_app` injects the disk-re-select reloader; routes + watcher call `reload()` → Task 6 + Task 7. ✓
+- File-watch hot-reload (B) for standalone deck, watcher created inside `_run` (where `app`/`loop` live), `config_reloader`/`config_paths` threaded main→`_amain`→`_run` → Task 8. ✓
 - Atomic `tomli-w` write + header + secret never in TOML/HTTP → Task 4 + Task 6 tests. ✓
 - Onboarding (missing config → empty read) → Task 2. ✓
 - Deps `keyring`/`tomli-w` → Task 1 / Task 4. ✓
