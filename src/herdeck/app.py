@@ -29,6 +29,7 @@ from .notify import (
     make_telegram_sink,
 )
 from .orchestrator import Orchestrator
+from .secrets import get_secret
 
 TICK_INTERVAL = 0.4
 # Every Nth tick, fully re-render so elapsed-time text on non-working tiles
@@ -49,7 +50,7 @@ def newly_blocked(prev, states):
 def _build_notifier(
     config: Config,
     *,
-    getenv=os.environ.get,
+    getenv=get_secret,  # was os.environ.get — env-first/keychain via the shared resolver
     macos_sink=_macos_sink,
     telegram_factory=make_telegram_sink,
 ) -> Notifier:

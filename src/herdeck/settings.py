@@ -171,8 +171,10 @@ def _profile_overlays(profiles: dict, name: str) -> list[dict]:
 
 
 def _server_config(raw: dict) -> ServerConfig:
+    from .secrets import get_secret
+
     env = raw["token_env"]
-    token = os.environ.get(env)
+    token = get_secret(env)
     if not token:
         raise ConfigError(f"env var '{env}' for server '{raw['id']}' is not set")
     return ServerConfig(raw["id"], raw["url"], token)
