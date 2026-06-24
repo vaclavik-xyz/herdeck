@@ -521,16 +521,15 @@ def test_connector_manager_diffs_servers():
 def test_make_profile_switcher_resolves_and_persists(tmp_path, monkeypatch):
     from herdeck.app import make_profile_switcher
     from herdeck.settings import load_settings
-    from tests.test_settings import NEW_CONFIG
+    from tests.test_settings import OVERLAY_CONFIG
 
-    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret")
+    monkeypatch.setenv("TOK", "secret")
     config = tmp_path / "config.toml"
     config.write_text(
-        NEW_CONFIG
+        OVERLAY_CONFIG
         + """
-
-[profiles.mobile]
-extends = "work"
+[profiles.work]
+servers = ["local"]
 """
     )
     local = tmp_path / "local.toml"

@@ -63,25 +63,22 @@ def load_settings(
 
 def list_profiles(snapshot: SettingsSnapshot) -> list[dict]:
     locked = snapshot.env_profile is not None
-    if "profiles" not in snapshot.data:
-        return [{"name": "default", "active": True, "locked": locked}]
     active = _active_profile_name(snapshot)
-    return [
-        {"name": name, "active": name == active, "locked": locked}
-        for name in sorted(snapshot.data.get("profiles", {}))
-    ]
+    names = ["default"] + sorted(snapshot.data.get("profiles", {}))
+    return [{"name": n, "active": n == active, "locked": locked} for n in names]
 
 
 def resolve_profile(snapshot: SettingsSnapshot, name: str | None = None) -> ResolvedSettings:
-    data = snapshot.data
-    if "profiles" not in data:
-        return ResolvedSettings(_resolve_legacy(snapshot), snapshot.local_path)
-    profile_name = name or _active_profile_name(snapshot)
-    profiles = data.get("profiles", {})
-    if profile_name not in profiles:
-        raise ConfigError(f"unknown profile '{profile_name}'")
-    profile = _profile_chain(profiles, profile_name)
-    config = _runtime_config(data, snapshot.local_data, profile_name, profile, snapshot.env_profile)
+    active = name or _active_profile_name(snapshot)
+    merged, selection = _merged_sections(snapshot.data, active)
+    config = _build_config(
+        snapshot.data,
+        merged,
+        selection,
+        snapshot.local_data,
+        profile_name=active,
+        env_profile=snapshot.env_profile,
+    )
     return ResolvedSettings(config=config, local_path=snapshot.local_path)
 
 
@@ -113,19 +110,16 @@ def set_active_profile(snapshot: SettingsSnapshot, name: str, *, persist: bool =
 
 
 def validate_settings(snapshot: SettingsSnapshot) -> list[str]:
-    if "profiles" not in snapshot.data:
-        try:
-            resolve_profile(snapshot)
-        except ConfigError as exc:
-            return [str(exc)]
-        return []
-
     errors: list[str] = []
+    if "default" in snapshot.data.get("profiles", {}):
+        errors.append("profile 'default' is reserved (it is the base config)")
     try:
         resolve_profile(snapshot)
     except ConfigError as exc:
         errors.append(f"active: {exc}")
     for name in sorted(snapshot.data.get("profiles", {})):
+        if name == "default":
+            continue
         try:
             resolve_profile(snapshot, name)
         except ConfigError as exc:
@@ -161,23 +155,6 @@ def _active_profile_name(snapshot: SettingsSnapshot) -> str:
     )
 
 
-def _profile_chain(profiles: dict, name: str) -> dict:
-    chain: list[str] = []
-    merged: dict = {}
-    cur = name
-    while cur:
-        if cur in chain:
-            raise ConfigError("profile inheritance cycle: " + " -> ".join(chain + [cur]))
-        if cur not in profiles:
-            raise ConfigError(f"unknown profile '{cur}'")
-        chain.append(cur)
-        raw = dict(profiles[cur])
-        parent = raw.pop("extends", None)
-        merged = {**raw, **merged}
-        cur = parent
-    return merged
-
-
 def _profile_overlays(profiles: dict, name: str) -> list[dict]:
     """Overlay dicts from the base-most parent down to `name` (inclusive)."""
     chain: list[str] = []
@@ -192,65 +169,6 @@ def _profile_overlays(profiles: dict, name: str) -> list[dict]:
         chain.append(cur)
         cur = profiles[cur].get("extends")
     return [profiles[n] for n in reversed(chain)]
-
-
-def _runtime_config(
-    data: dict,
-    local_data: dict,
-    profile_name: str,
-    profile: dict,
-    env_profile: str | None,
-) -> Config:
-    servers_by_id = {s["id"]: s for s in data.get("servers", [])}
-    selected_server_ids = list(profile.get("servers", servers_by_id))
-    servers = []
-    for sid in selected_server_ids:
-        if sid not in servers_by_id:
-            raise ConfigError(f"unknown server '{sid}'")
-        servers.append(_server_config(servers_by_id[sid]))
-
-    theme = _theme_config(_named_block(data, "themes", profile.get("theme")))
-    view = _view_config(_named_block(data, "views", profile.get("view")))
-    notifications = _notifications_config(
-        _named_block(data, "notification_profiles", profile.get("notifications"))
-    )
-    safety = _safety_config(_named_block(data, "safety", profile.get("safety")))
-    macros = _macro_set(_named_block(data, "macro_sets", profile.get("macros")))
-    launcher = _launcher(_named_block(data, "launchers", profile.get("launcher")))
-    hardware = _hardware_config(local_data)
-
-    return Config(
-        servers=servers,
-        profiles=dict(DEFAULT_PROFILES),
-        overview_order=selected_server_ids,
-        grid=(5, 3),
-        macros=macros,
-        start_profiles=launcher,
-        notifications=notifications,
-        theme=theme,
-        view=view,
-        safety=safety,
-        hardware=hardware,
-        meta=ConfigMeta(
-            active_profile=profile_name,
-            profile_names=sorted(data.get("profiles", {})),
-            env_locked_profile=env_profile is not None,
-        ),
-    )
-
-
-def _named_block(data: dict, group: str, name: str | None) -> dict | list | None:
-    if name is None:
-        return None
-    blocks = data.get(group, {})
-    if name not in blocks:
-        label = {
-            "macro_sets": "macro set",
-            "notification_profiles": "notification profile",
-            "safety": "safety",
-        }.get(group, group[:-1] if group.endswith("s") else group)
-        raise ConfigError(f"unknown {label} '{name}'")
-    return blocks[name]
 
 
 def _server_config(raw: dict) -> ServerConfig:
@@ -336,17 +254,6 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
         keep_alive_interval=hw.get("keep_alive_interval", 5.0),
         tick_interval=hw.get("tick_interval", 0.4),
     )
-
-
-def _resolve_legacy(snapshot: SettingsSnapshot) -> Config:
-    from .config import load_config
-
-    cfg = load_config(snapshot.config_path)
-    cfg.hardware = _hardware_config(snapshot.local_data)
-    cfg.meta.active_profile = "default"
-    cfg.meta.profile_names = ["default"]
-    cfg.meta.env_locked_profile = snapshot.env_profile is not None
-    return cfg
 
 
 _OVERLAY_SECTIONS = (
