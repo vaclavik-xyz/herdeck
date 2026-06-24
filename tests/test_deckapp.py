@@ -475,3 +475,115 @@ def test_config_post_writes_and_triggers_reload(tmp_path, monkeypatch):
         assert 'grid = "4x3"' in cfg.read_text()
     finally:
         app.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 6 review-hardening tests (Fix 1 + Fix 2 + DELETE)
+# ---------------------------------------------------------------------------
+
+
+class _StubConfigService:
+    """Minimal recording stub for config-service interactions in tests.
+
+    Tracks calls to clear_secret and set_secret; never touches disk.
+    """
+
+    def __init__(self):
+        self.cleared = []
+        self.secrets_set = []
+
+    def read(self):
+        return {"base": {}, "profiles": {}, "secrets": {}}
+
+    def validate(self, body):
+        return []
+
+    def write(self, body):
+        return []
+
+    def set_active(self, name):
+        return False
+
+    def clear_secret(self, token_env):
+        self.cleared.append(token_env)
+
+    def set_secret(self, token_env, value):
+        self.secrets_set.append((token_env, value))
+
+
+def test_delete_secret_route_clears():
+    """DELETE /secret/<TOKEN_ENV> should 204 + call clear_secret; wrong token -> 403."""
+    stub = _StubConfigService()
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=stub)
+    try:
+        base = f"http://{app.host}:{app.port}/secret/MYTOK"
+
+        # wrong token -> 403, no clear recorded
+        req_bad = urllib.request.Request(
+            base, method="DELETE", headers={"X-Herdeck-Token": "wrong"}
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req_bad, timeout=2)
+        assert exc.value.code == 403
+        assert stub.cleared == []
+
+        # missing token -> 403, still no clear
+        req_none = urllib.request.Request(base, method="DELETE")
+        with pytest.raises(urllib.error.HTTPError) as exc2:
+            urllib.request.urlopen(req_none, timeout=2)
+        assert exc2.value.code == 403
+        assert stub.cleared == []
+
+        # correct token -> 204 and clear recorded
+        req_ok = urllib.request.Request(
+            base, method="DELETE", headers={"X-Herdeck-Token": app.token}
+        )
+        with urllib.request.urlopen(req_ok, timeout=2) as r:
+            assert r.status == 204
+        assert stub.cleared == ["MYTOK"]
+    finally:
+        app.close()
+
+
+def test_config_routes_404_without_service():
+    """When no config_service is provided, GET /config and POST /config -> 404."""
+    app = create_mock_app(port=0, icon_provider=StubIcons())  # no config_service
+    try:
+        # GET /config -> 404
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(
+                f"http://{app.host}:{app.port}/config?token={app.token}", timeout=2
+            )
+        assert exc.value.code == 404
+
+        # POST /config -> 404
+        req = urllib.request.Request(
+            f"http://{app.host}:{app.port}/config",
+            data=_json.dumps({"base": {}, "profiles": {}, "local": {}}).encode(),
+            method="POST",
+        )
+        req.add_header("X-Herdeck-Token", app.token)
+        with pytest.raises(urllib.error.HTTPError) as exc2:
+            urllib.request.urlopen(req, timeout=2)
+        assert exc2.value.code == 404
+    finally:
+        app.close()
+
+
+def test_post_config_malformed_json_returns_400():
+    """POST /config with an invalid JSON body must return 400, not 500."""
+    stub = _StubConfigService()
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=stub)
+    try:
+        req = urllib.request.Request(
+            f"http://{app.host}:{app.port}/config",
+            data=b"{not json",
+            method="POST",
+        )
+        req.add_header("X-Herdeck-Token", app.token)
+        req.add_header("Content-Type", "application/json")
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=2)
+        assert exc.value.code == 400
+    finally:
+        app.close()

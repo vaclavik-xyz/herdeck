@@ -294,7 +294,12 @@ class DeckApp:
 
             def _json_body(self):
                 length = int(self.headers.get("Content-Length", 0))
-                return json.loads(self.rfile.read(length) or b"{}")
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    return json.loads(raw or b"{}")
+                except (json.JSONDecodeError, ValueError):
+                    self._send(400)
+                    return None
 
             def do_POST(self):
                 path = urlsplit(self.path).path
@@ -313,19 +318,35 @@ class DeckApp:
                         self._send(404)
                         return
                     if path == "/config/validate":
-                        errors = app._config_service.validate(self._json_body())
+                        body = self._json_body()
+                        if body is None:
+                            return
+                        errors = app._config_service.validate(body)
                         self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
                     elif path == "/config":
-                        errors = app._config_service.write(self._json_body())
+                        body = self._json_body()
+                        if body is None:
+                            return
+                        errors = app._config_service.write(body)
                         if not errors:
                             app.reload()
                         self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
                     elif path == "/profiles/active":
-                        changed = app._config_service.set_active(self._json_body().get("name"))
+                        body = self._json_body()
+                        if body is None:
+                            return
+                        changed = app._config_service.set_active(body.get("name"))
                         self._send(200, json.dumps({"changed": changed}).encode(), "application/json")
                     elif path == "/secret":
                         b = self._json_body()
-                        app._config_service.set_secret(b["token_env"], b["value"])
+                        if b is None:
+                            return
+                        token_env = b.get("token_env")
+                        value = b.get("value")
+                        if not token_env or not value:
+                            self._send(400)
+                            return
+                        app._config_service.set_secret(token_env, value)
                         self._send(204)
                 else:
                     self._send(404)
