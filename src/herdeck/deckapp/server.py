@@ -154,6 +154,12 @@ class DeckApp:
                 self._refresh_locked()
 
     def close(self) -> None:
+        watcher = getattr(self, "_watcher", None)
+        if watcher is not None:
+            try:
+                watcher.close()
+            except Exception:
+                pass
         try:
             self._source.close()  # stop the live connector/loop (no-op for mock)
         except Exception:
@@ -492,12 +498,24 @@ def create_live_app(
     )
 
 
-def _default_config_service():
+def _default_config_paths():
+    """Return ``(config_path, local_path)`` for the on-disk config files.
+
+    Both are ``str`` paths (local may be ``None`` when absent). Factored out so
+    both ``_default_config_service()`` and the ``ConfigWatcher`` in
+    ``create_app`` watch the exact same files the editor reads and writes.
+    """
     from ..bootstrap import _discover_config_path, _discover_local_config_path
-    from .config_service import ConfigService
 
     path = _discover_config_path() or os.path.expanduser("~/.config/herdeck/config.toml")
-    return ConfigService(path, _discover_local_config_path(path))
+    return path, _discover_local_config_path(path)
+
+
+def _default_config_service():
+    from .config_service import ConfigService
+
+    path, local = _default_config_paths()
+    return ConfigService(path, local)
 
 
 def _select_source():
@@ -524,7 +542,15 @@ def create_app(
 ) -> DeckApp:
     """Build the sidecar with the right source: live when a server + token are
     configured, otherwise the deterministic mock. Wires up a default ConfigService
-    and a disk-re-select reloader so the GUI can edit + reload in place."""
+    and a disk-re-select reloader so the GUI can edit + reload in place.
+
+    Also starts a ``ConfigWatcher`` over the same paths the ConfigService reads so
+    that an external edit to the config files triggers an in-app reload automatically.
+    The watcher is stopped when ``DeckApp.close()`` is called.
+    """
+    from .watcher import ConfigWatcher
+
+    cfg_path, local_path = _default_config_paths()
     svc = config_service if config_service is not None else _default_config_service()
     selected = select_live()
     if selected is None:
@@ -546,4 +572,10 @@ def create_app(
         app._reloader = lambda: app.swap_source(_select_source())
     else:
         app._reloader = reloader
+
+    # Watch the config files; fire the reloader when any changes on disk.
+    # Filter out None (local path is absent when no local override exists).
+    watch_paths = [p for p in (cfg_path, local_path) if p is not None]
+    app._watcher = ConfigWatcher(watch_paths, app.reload, interval=1.0)
+    app._watcher.start()
     return app
