@@ -141,6 +141,18 @@ class App:
         self._active_read_req = None
         self.orch.set_detection("")
 
+    def _invalidate_read_if_unblocked(self, key) -> None:
+        """Drop the drilled prompt only when the agent actually leaves BLOCKED.
+
+        The prompt (and an in-flight read) stays valid as long as the agent
+        remains blocked. Wiping on every cosmetic change instead made routine
+        fleet snapshots reject the in-flight read (prompt never showed; "click
+        3×") or clear an already-shown prompt ("shows then disappears").
+        """
+        agent = self.orch.get_agent(key)
+        if agent is None or agent.status is not Status.BLOCKED:
+            self._invalidate_read()
+
     def _maybe_notify(self, states: list[AgentState], scope: set) -> None:
         """Fire notifications for keys that just entered BLOCKED.
 
@@ -176,11 +188,9 @@ class App:
                 [(s.key.pane_id, s.agent_type, s.label, s.status.value) for s in states],
             )
         key = self.orch.drill_key()
-        before = self.orch.get_agent(key) if key is not None else None
         self.orch.apply_snapshot(server_id, states)
         if key is not None and key.server_id == server_id:
-            if self.orch.get_agent(key) != before:
-                self._invalidate_read()
+            self._invalidate_read_if_unblocked(key)
         self._maybe_notify(states, {k for k in self._blocked_keys if k.server_id == server_id})
         self._refresh()
 
@@ -189,7 +199,7 @@ class App:
             return
         self.orch.apply_event(server_id, state)
         if self.orch.is_drill_pane(server_id, state.key.pane_id):
-            self._invalidate_read()
+            self._invalidate_read_if_unblocked(state.key)
         self._maybe_notify([state], {state.key})
         self._refresh()
 
@@ -459,7 +469,9 @@ async def _run(
     def send(cmd: Command) -> None:
         conn = manager.get(cmd.server_id)
         if conn is not None:
-            asyncio.run_coroutine_threadsafe(conn.send(command_to_msg(cmd, app.next_req_for(cmd))), loop)
+            asyncio.run_coroutine_threadsafe(
+                conn.send(command_to_msg(cmd, app.next_req_for(cmd))), loop
+            )
 
     def make_connector(server: ServerConfig) -> Connector:
         return Connector(
