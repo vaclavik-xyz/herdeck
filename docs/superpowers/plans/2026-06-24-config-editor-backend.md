@@ -171,7 +171,11 @@ def test_doctor_check_notifications_sees_keychain_telegram(monkeypatch):
     assert "token_env=present" in check_notifications(n).detail
 
 
-def test_doctor_read_config_facts_keychain_server_token_not_missing(tmp_path, monkeypatch):
+def test_doctor_read_config_facts_keychain_token_unmasks_real_error(tmp_path, monkeypatch):
+    # A genuine RED test for the os.environ.get -> get_secret change at line ~199:
+    # keychain-only token AND a non-token ConfigError (bad grid). The OLD code sees
+    # the env var missing and suppresses the real error (err None); the FIXED code sees
+    # the keychain token present and surfaces the invalid-config error.
     from herdeck.doctor import _read_config_facts
 
     fake = FakeKeyring()
@@ -179,10 +183,10 @@ def test_doctor_read_config_facts_keychain_server_token_not_missing(tmp_path, mo
     monkeypatch.setattr(secrets, "_keyring", lambda: fake)
     monkeypatch.delenv("TOK", raising=False)
     cfg = tmp_path / "config.toml"
-    cfg.write_text('[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n')
+    cfg.write_text('[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="bad"\n')
     has_servers, token_envs, err = _read_config_facts(str(cfg))
-    assert has_servers is True and token_envs == ["TOK"]
-    assert err is None  # keychain-only token -> load_config succeeds -> no diagnostic error
+    assert token_envs == ["TOK"]
+    assert err is not None and "invalid config" in err.detail  # real error not masked
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
