@@ -21,6 +21,8 @@ from .config import (
     TelegramConfig,
     ThemeConfig,
     ViewConfig,
+    _parse_grid,
+    _parse_profile,
 )
 
 
@@ -381,3 +383,49 @@ def _merge_section(base, overlay):
             out[key] = _merge_section(out.get(key), value)
         return out
     return overlay
+
+
+def _build_config(
+    data: dict,
+    merged: dict,
+    selection: list[str] | None,
+    local_data: dict,
+    *,
+    profile_name: str,
+    env_profile: str | None,
+) -> Config:
+    servers_by_id = {s["id"]: s for s in data.get("servers", [])}
+    if selection is None:
+        deck_sel = merged.get("deck") or {}
+        selection = list(deck_sel.get("overview_order") or servers_by_id)
+    servers = []
+    for sid in selection:
+        if sid not in servers_by_id:
+            raise ConfigError(f"unknown server '{sid}'")
+        servers.append(_server_config(servers_by_id[sid]))
+
+    deck = merged.get("deck") or {}
+    grid = _parse_grid(deck.get("grid", "5x3"))
+
+    answer_profiles = dict(DEFAULT_PROFILES)
+    for name, raw in (merged.get("answer_profiles") or {}).items():
+        answer_profiles[name] = _parse_profile(name, raw)
+
+    return Config(
+        servers=servers,
+        profiles=answer_profiles,
+        overview_order=selection,
+        grid=grid,
+        macros=_macro_set(merged.get("macros")),
+        start_profiles=_launcher(merged.get("start_profiles")),
+        notifications=_notifications_config(merged.get("notifications")),
+        theme=_theme_config(merged.get("theme")),
+        view=_view_config(merged.get("view")),
+        safety=_safety_config(merged.get("safety")),
+        hardware=_hardware_config(local_data),
+        meta=ConfigMeta(
+            active_profile=profile_name,
+            profile_names=["default"] + sorted(data.get("profiles", {})),
+            env_locked_profile=env_profile is not None,
+        ),
+    )

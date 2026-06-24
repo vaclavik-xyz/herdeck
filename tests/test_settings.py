@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from herdeck.config import ConfigError
-from herdeck.settings import list_profiles, load_settings, resolve_profile, _profile_overlays, _merged_sections
+from herdeck.settings import list_profiles, load_settings, resolve_profile, _profile_overlays, _merged_sections, _build_config
 
 NEW_CONFIG = """
 active_profile = "work"
@@ -463,3 +463,49 @@ def test_merged_sections_captures_server_selection_from_profile():
     data = {"profiles": {"mobile": {"servers": ["local"]}}}
     _merged, selection = _merged_sections(data, "mobile")
     assert selection == ["local"]
+
+
+def test_build_config_reads_flat_base_including_theme_view_safety():
+    data = {
+        "servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
+        "deck": {"grid": "4x3"},
+        "theme": {"colors": {"blocked": "red"}},
+        "view": {"management": "bottom_row"},
+        "safety": {"approve_always": False},
+    }
+    merged, selection = _merged_sections(data, "default")
+    import os
+
+    os.environ["TOK"] = "secret"
+    try:
+        cfg = _build_config(
+            data, merged, selection, {}, profile_name="default", env_profile=None
+        )
+    finally:
+        del os.environ["TOK"]
+    assert cfg.grid == (4, 3)
+    assert cfg.theme.colors["blocked"] == "red"
+    assert cfg.view.management == "bottom_row"
+    assert cfg.safety.approve_always is False
+    assert [s.id for s in cfg.servers] == ["local"]
+    assert cfg.overview_order == ["local"]
+
+
+def test_build_config_profile_overrides_grid_and_answer_profiles(monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    data = {
+        "servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
+        "deck": {"grid": "5x3"},
+        "answer_profiles": {"claude": {"approve": ["1"], "deny": ["esc"], "stop": ["ctrl+c"]}},
+        "profiles": {
+            "mobile": {
+                "deck": {"grid": "4x3"},
+                "answer_profiles": {"claude": {"approve": ["y"]}},
+            }
+        },
+    }
+    merged, selection = _merged_sections(data, "mobile")
+    cfg = _build_config(data, merged, selection, {}, profile_name="mobile", env_profile=None)
+    assert cfg.grid == (4, 3)
+    assert cfg.profiles["claude"].approve == ["y"]
+    assert cfg.profiles["claude"].deny == ["esc"]  # kept from base (field merge)
