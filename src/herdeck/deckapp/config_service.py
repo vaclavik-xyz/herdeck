@@ -7,8 +7,9 @@ from __future__ import annotations
 import copy
 import os
 import tomllib
-import tomli_w
 from pathlib import Path
+
+import tomli_w
 
 from .. import secrets as secret_store
 from ..config import ConfigError
