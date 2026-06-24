@@ -308,7 +308,8 @@ class Orchestrator:
                     actions.append(
                         {
                             "id": action_id,
-                            "label": f"{opt.key} {opt.label}"[:_OPTION_LABEL_MAX],
+                            "label": opt.key,
+                            "subtext": opt.label,
                             "make": (
                                 lambda key, k=opt.key: Command(
                                     "act_if_blocked", key.server_id, key.pane_id, keys=[k]
@@ -358,7 +359,7 @@ class Orchestrator:
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i < len(actions):
-                tiles.append(TileView(i, actions[i]["label"], "blue"))
+                tiles.append(TileView(i, actions[i]["label"], "blue", subtext=actions[i].get("subtext")))
             elif i == stop_i:
                 tiles.append(TileView(i, "Stop", "red"))
             elif i == back_i:

@@ -1,10 +1,93 @@
 import os
+import threading
+import time
 
 import pytest
 from PIL import Image
 
-from herdeck.driver.base import PanelView
+from herdeck.driver.base import PanelView, TileView
 from herdeck.driver.d200 import D200Driver, compose_panel, split_panel
+
+
+def _wait_until(pred, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(0.005)
+    return False
+
+
+class _FakeDev:
+    BUTTON_COUNT = 13
+
+    def __init__(self, block=None):
+        self.calls = []
+        self.kept_alive = 0
+        self.closed = False
+        self._block = block
+
+    def set_brightness(self, value, force=False):
+        pass
+
+    def set_buttons(self, buttons, update_only=False):
+        if self._block is not None:
+            self._block.wait(1.0)
+        self.calls.append((dict(buttons), update_only))
+
+    def keep_alive(self):
+        self.kept_alive += 1
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeIcons:
+    def render_tile(self, tile):
+        return f"icon_{tile.index}.png"
+
+
+def _make_driver(tmp_path, dev):
+    class _Driver(D200Driver):
+        def _open_device(self, retries=5, delay=1.0):
+            return dev
+
+        def _set_panel_background_mode(self):
+            pass
+
+    return _Driver(workdir=str(tmp_path), icon_provider=_FakeIcons())
+
+
+def test_d200_render_is_offloaded_and_non_blocking(tmp_path):
+    # The device write blocks; render() must return at once (offloaded to the worker),
+    # then the write lands on the worker thread.
+    block = threading.Event()
+    dev = _FakeDev(block=block)
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        t0 = time.monotonic()
+        driver.render([TileView(0, "x", "blue")])
+        assert time.monotonic() - t0 < 0.2  # did NOT wait for the blocking USB write
+        block.set()
+        assert _wait_until(lambda: dev.calls)  # the write eventually happened
+    finally:
+        block.set()
+        driver.close()
+        os.chdir(before)
+
+
+def test_d200_close_stops_worker_and_closes_device(tmp_path):
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    pump_thread = driver._pump._thread
+    try:
+        driver.close()
+        assert dev.closed
+        assert not pump_thread.is_alive()
+    finally:
+        os.chdir(before)
 
 
 def test_compose_panel_size():

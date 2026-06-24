@@ -225,3 +225,14 @@ def test_compose_panel_uses_theme_color_background():
     default = compose_panel(PanelView("agents", [], "grey"))
 
     assert themed.getpixel((0, 0)) != default.getpixel((0, 0))
+
+
+def test_drill_option_subtext_is_drawn_under_label(tmp_path):
+    # A drill choice tile renders the big number (label) AND the small choice
+    # text (subtext) under it, so the subtext must change the rendered bytes.
+    from herdeck.driver.base import TileView
+
+    p = make_provider(tmp_path)
+    plain = p.render_tile_bytes(TileView(0, "1", "blue"))
+    with_sub = p.render_tile_bytes(TileView(0, "1", "blue", subtext="Yes, proceed and apply"))
+    assert plain != with_sub

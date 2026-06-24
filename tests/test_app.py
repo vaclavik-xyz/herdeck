@@ -147,6 +147,64 @@ def test_snapshot_changing_drilled_pane_invalidates_read():
     assert deck.last_panel.lines == []
 
 
+def test_inflight_read_survives_event_that_keeps_pane_blocked():
+    # The event path (remote mode) must also preserve an in-flight read while the
+    # drilled agent stays blocked — same guarantee as the snapshot path.
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app.handle_snapshot("dev", [blocked("p1")])
+    deck.simulate_press(0)  # drill p1, issue read
+    req = app.next_req_for(Command("read", "dev", "p1", source="detection"))
+    app.handle_event("dev", AgentState(AgentKey("dev", "p1"), "claude", "api·busy", Status.BLOCKED))
+    app.handle_result("dev", req, {"text": "Proceed?\n1. Yes\n2. No", "pane_id": "p1"})
+    assert deck.last[0].label == "1" and deck.last[0].subtext == "Yes"
+
+
+def test_detection_survives_event_that_keeps_pane_blocked():
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app.handle_snapshot("dev", [blocked("p1")])
+    deck.simulate_press(0)
+    req = app.next_req_for(Command("read", "dev", "p1", source="detection"))
+    app.handle_result("dev", req, {"text": "Proceed?\n1. Yes\n2. No", "pane_id": "p1"})
+    assert deck.last[0].label == "1"  # options visible
+    app.handle_event("dev", AgentState(AgentKey("dev", "p1"), "claude", "api·busy", Status.BLOCKED))
+    assert deck.last[0].label == "1" and deck.last[0].subtext == "Yes"
+
+
+def test_inflight_read_survives_snapshot_that_keeps_pane_blocked():
+    # A routine fleet snapshot (fired by any agent's status change) that re-touches
+    # the still-blocked drilled agent must NOT reject the in-flight read — otherwise
+    # the prompt never shows and the user has to drill in repeatedly.
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app.handle_snapshot("dev", [blocked("p1")])
+    deck.simulate_press(0)  # drill p1, issue read
+    req = app.next_req_for(Command("read", "dev", "p1", source="detection"))
+    # p1 is still blocked; only a cosmetic field changed (e.g. herdr re-derived label)
+    app.handle_snapshot(
+        "dev", [AgentState(AgentKey("dev", "p1"), "claude", "api·busy", Status.BLOCKED)]
+    )
+    app.handle_result("dev", req, {"text": "Proceed?\n1. Yes\n2. No", "pane_id": "p1"})
+    assert deck.last[0].label == "1" and deck.last[0].subtext == "Yes"
+
+
+def test_detection_survives_snapshot_that_keeps_pane_blocked():
+    # Once shown, the prompt options must not vanish on the next fleet snapshot
+    # while the agent is still blocked ("show then disappear" flicker).
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app.handle_snapshot("dev", [blocked("p1")])
+    deck.simulate_press(0)
+    req = app.next_req_for(Command("read", "dev", "p1", source="detection"))
+    app.handle_result("dev", req, {"text": "Proceed?\n1. Yes\n2. No", "pane_id": "p1"})
+    assert deck.last[0].label == "1"  # options visible
+    app.handle_snapshot(
+        "dev", [AgentState(AgentKey("dev", "p1"), "claude", "api·busy", Status.BLOCKED)]
+    )
+    assert deck.last[0].label == "1" and deck.last[0].subtext == "Yes"
+
+
 def test_tick_uses_partial_render_when_available():
     from herdeck.driver.fake import FakeRenderer
 
