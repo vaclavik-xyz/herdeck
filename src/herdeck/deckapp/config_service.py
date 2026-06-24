@@ -4,10 +4,12 @@ no config resolution logic is reimplemented here.
 """
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
 from .. import secrets as secret_store
+from ..settings import SettingsSnapshot, validate_settings
 
 
 class ConfigService:
@@ -63,6 +65,22 @@ class ConfigService:
             for item in obj:
                 ConfigService._collect_token_envs(item, out)
         return out
+
+    def _snapshot_for(self, data: dict) -> SettingsSnapshot:
+        toml_data = dict(data.get("base", {}))
+        profiles = data.get("profiles") or {}
+        if profiles:
+            toml_data["profiles"] = profiles
+        return SettingsSnapshot(
+            config_path=self._config_path,
+            local_path=self._local_path,
+            data=toml_data,
+            local_data=data.get("local", {}) or {},
+            env_profile=os.environ.get("HERDECK_PROFILE"),
+        )
+
+    def validate(self, data: dict) -> list[str]:
+        return validate_settings(self._snapshot_for(data))
 
     def _secret_flags(self, base: dict, profiles: dict) -> dict:
         names = self._collect_token_envs(base)

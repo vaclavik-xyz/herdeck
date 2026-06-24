@@ -91,3 +91,26 @@ def test_read_surfaces_profile_only_secret(tmp_path, monkeypatch):
 def test_read_missing_config_is_empty_for_onboarding(tmp_path):
     svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
     assert svc.read() == {"base": {}, "profiles": {}, "local": {}, "secrets": {}}
+
+
+def test_validate_flags_unknown_server_in_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "real")
+    svc = _svc(tmp_path)
+    data = {
+        "base": {"servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}]},
+        "profiles": {"mobile": {"servers": ["ghost"]}},
+        "local": {},
+    }
+    errors = svc.validate(data)
+    assert any("unknown server 'ghost'" in e for e in errors)
+
+
+def test_validate_clean_config_has_no_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "real")
+    svc = _svc(tmp_path)
+    data = {
+        "base": {"servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}]},
+        "profiles": {},
+        "local": {},
+    }
+    assert svc.validate(data) == []
