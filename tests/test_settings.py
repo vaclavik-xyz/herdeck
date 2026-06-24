@@ -386,3 +386,31 @@ active_profile = "work"
     errors = validate_settings(load_settings(config, local))
 
     assert any("unknown profile 'missing'" in err for err in errors)
+
+
+def test_merge_section_merges_tables_field_by_field():
+    from herdeck.settings import _merge_section
+
+    base = {"management": "launcher_menu", "tile_fields": ["repo"]}
+    overlay = {"management": "bottom_row"}
+    assert _merge_section(base, overlay) == {
+        "management": "bottom_row",
+        "tile_fields": ["repo"],
+    }
+
+
+def test_merge_section_replaces_lists_and_scalars():
+    from herdeck.settings import _merge_section
+
+    assert _merge_section(["a", "b"], ["c"]) == ["c"]
+    assert _merge_section("5x3", "4x3") == "4x3"
+
+
+def test_merge_section_recurses_into_nested_tables():
+    from herdeck.settings import _merge_section
+
+    base = {"colors": {"blocked": "amber", "idle": "blue"}}
+    overlay = {"colors": {"blocked": "red"}}
+    assert _merge_section(base, overlay) == {
+        "colors": {"blocked": "red", "idle": "blue"}
+    }

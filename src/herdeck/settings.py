@@ -329,3 +329,14 @@ def _resolve_legacy(snapshot: SettingsSnapshot) -> Config:
     cfg.meta.profile_names = ["default"]
     cfg.meta.env_locked_profile = snapshot.env_profile is not None
     return cfg
+
+
+def _merge_section(base, overlay):
+    """Overlay a config section onto a base: tables merge field-by-field
+    (recursively), scalars and lists replace wholesale."""
+    if isinstance(base, dict) and isinstance(overlay, dict):
+        out = dict(base)
+        for key, value in overlay.items():
+            out[key] = _merge_section(out.get(key), value)
+        return out
+    return overlay
