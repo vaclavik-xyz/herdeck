@@ -47,8 +47,9 @@ def test_compose_line_empty_when_all_values_empty():
 def test_compose_line_handles_every_valid_token():
     s = _astate()
     for tok in TILE_LINE_TOKENS:
-        # must not raise and must return a string
-        assert isinstance(compose_line(s, [tok]), str)
+        # every valid token must map to a non-empty value for a populated state,
+        # so a renamed token that compose_line no longer handles is caught here
+        assert compose_line(s, [tok]) != ""
 
 
 def test_resolve_tile_lines_uses_fallback_when_none():

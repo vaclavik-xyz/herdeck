@@ -62,7 +62,9 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
     return " · ".join(parts)
 
 
-def resolve_tile_lines(view, fallback_primary: list[str], fallback_secondary: list[str]):
+def resolve_tile_lines(
+    view, fallback_primary: list[str], fallback_secondary: list[str]
+) -> tuple[list[str], list[str]]:
     """Resolve (primary, secondary) token lists.
 
     Per key: an explicit config value (including an empty list) wins; an absent

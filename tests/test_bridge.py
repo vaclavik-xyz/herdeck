@@ -406,6 +406,7 @@ def test_workspaces_and_tabs_by_id_index_label():
     assert _tabs_by_id([{"tab_id": "w2:t1", "label": "1"}]) == {"w2:t1": "1"}
     # entries without an id are skipped
     assert _workspaces_by_id([{"label": "x"}]) == {}
+    assert _tabs_by_id([{"label": "x"}]) == {}
 
 
 async def test_list_snapshot_includes_workspace_and_tab():
