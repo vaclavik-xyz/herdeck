@@ -10,6 +10,7 @@ from herdeck.settings import (
     list_profiles,
     load_settings,
     resolve_profile,
+    set_active_profile,
     validate_settings,
 )
 
@@ -254,6 +255,24 @@ servers = ["local"]
     assert changed is True
     assert reread.local_data["active_profile"] == profile_name
     assert reread.local_data["local"]["deck"] == 'desk "one"'
+
+
+def test_set_active_profile_accepts_default_and_persists(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    config_p = _write(tmp_path, OVERLAY_CONFIG)
+    (tmp_path / "local.toml").write_text('active_profile = "mobile"\n[local]\ndeck = "d200"\n')
+    snap = load_settings(config_p)
+    assert set_active_profile(snap, "default") is True
+    local_text = (tmp_path / "local.toml").read_text()
+    assert 'active_profile = "default"' in local_text
+    assert 'deck = "d200"' in local_text  # other local sections preserved
+
+
+def test_set_active_profile_rejects_unknown(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    snap = load_settings(_write(tmp_path, OVERLAY_CONFIG))
+    with pytest.raises(ConfigError, match="unknown profile 'ghost'"):
+        set_active_profile(snap, "ghost")
 
 
 def test_set_active_profile_refuses_to_persist_invalid_profile(tmp_path, monkeypatch):

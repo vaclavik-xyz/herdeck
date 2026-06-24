@@ -83,12 +83,12 @@ def resolve_profile(snapshot: SettingsSnapshot, name: str | None = None) -> Reso
 
 
 def set_active_profile(snapshot: SettingsSnapshot, name: str, *, persist: bool = True) -> bool:
-    profiles = snapshot.data.get("profiles", {})
-    if name not in profiles:
+    if name != "default" and name not in snapshot.data.get("profiles", {}):
         raise ConfigError(f"unknown profile '{name}'")
     if snapshot.env_profile is not None:
         return False
-    resolve_profile(snapshot, name)
+    if name != "default":
+        resolve_profile(snapshot, name)  # validate it builds
     if not persist:
         return True
     local_path = snapshot.local_path
