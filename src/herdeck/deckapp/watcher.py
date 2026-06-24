@@ -47,4 +47,5 @@ class ConfigWatcher:
 
     def close(self, timeout: float = 2.0) -> None:
         self._stop.set()
-        self._thread.join(timeout)
+        if self._thread.is_alive():
+            self._thread.join(timeout)
