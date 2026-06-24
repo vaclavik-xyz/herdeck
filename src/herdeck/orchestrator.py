@@ -192,6 +192,11 @@ class Orchestrator:
         agent_slots = self._agent_slots()
         shown, pages = layout.page(ordered, self._page, agent_slots)
         fields = self.config.view.tile_fields
+        fb_primary = ["repo"] if "repo" in fields else []
+        fb_secondary = ["branch"] if "branch" in fields else []
+        primary_tokens, secondary_tokens = layout.resolve_tile_lines(
+            self.config.view, fb_primary, fb_secondary
+        )
         show_server_tags = "server" in fields and len({s.key.server_id for s in ordered}) > 1
         management = self._management_indices()
         management_mode = self.config.view.management == "bottom_row"
@@ -219,8 +224,8 @@ class Orchestrator:
                         icon=None,
                         agent_type=s.agent_type,
                         spinner=phase,
-                        repo=(s.repo or s.label) if "repo" in fields else "",
-                        branch=(s.branch or "") if "branch" in fields else "",
+                        repo=layout.compose_line(s, primary_tokens),
+                        branch=layout.compose_line(s, secondary_tokens),
                         status_text=(
                             "OFFLINE" if down else s.status.value.upper()
                         )
