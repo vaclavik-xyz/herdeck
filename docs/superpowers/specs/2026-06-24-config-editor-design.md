@@ -39,9 +39,11 @@ scope. Teď je jeden model (plochá báze + `[profiles.X]` overlaye), takže edi
    do OS keychainu (`keyring`, service `"herdeck"`) pod názvem `token_env`. **Všichni**
    konzumenti tokenů čtou přes **jeden** sdílený resolver `secrets.get_secret(name)` s
    **env-first** fallbackem (`os.environ.get` → `keyring.get_password`): jak
-   `settings._server_config` (server tokeny), tak `app._build_notifier` (telegram token,
-   dnes čte přímo `os.environ.get`). Bez toho by token uložený editorem do keychainu byl
-   reportován jako „set", ale runtime by ho ignoroval. Existující dev/CI env flow
+   `settings._server_config` (server tokeny), `app._build_notifier` (telegram token) i
+   `doctor` (`check_config`/`check_notifications`/`_read_config_facts` — token-presence
+   diagnostika; dnes čtou přímo `os.environ.get`). Bez toho by token uložený editorem do
+   keychainu runtime fungoval, ale `herdeck-doctor` by ho hlásil jako chybějící (a u
+   notifications by ho i runtime ignoroval). Existující dev/CI env flow
    (`HERDECK_TOKEN`) zůstává beze změny a může přebít. TOML nese vždy jen `token_env` název,
    nikdy hodnotu.
 4. **Onboarding = minimální v Phase 2.** Bez configu editor ukáže prázdný formulář s
@@ -220,6 +222,10 @@ druhá in-memory render cesta. Live preview *neuložených* editů (`/config/pre
 - Plný onboarding wizard — Phase 3.
 - Live preview neuložených editů (`/config/preview`) — pozdější vylepšení.
 - Cross-machine config sync / IPC reload (varianta C).
+- File-watch hot-reload (B) v **local/mock módu** samostatného herdecku — jen remote mód.
+  V local módu `resolve_runtime_config` syntetizuje lokální bridge server/token, který by
+  re-aplikace surového file configu odstranila; local/mock deck nabere edity při restartu.
+  (Sidecar in-app reload A tím netrpí — jede přes bridge/mock, ne přes lokální herdr socket.)
 - Windows build; jemná direct-manipulace na decku; signing/distribuce (Phase 3).
 
 ## Otevřené otázky (k vyřešení v plánu / implementaci)

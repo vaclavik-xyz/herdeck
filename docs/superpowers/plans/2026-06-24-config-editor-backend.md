@@ -45,6 +45,7 @@
 - Create: `src/herdeck/secrets.py`
 - Modify: `src/herdeck/settings.py` (`_server_config`, ~lines 238-243)
 - Modify: `src/herdeck/app.py` (`_build_notifier`, ~lines 49-72 — telegram token consumer)
+- Modify: `src/herdeck/doctor.py` (`check_config` ~line 49, `check_notifications` ~line 109, `_read_config_facts` ~line 199 — token-presence diagnostics)
 - Modify: `pyproject.toml` (add `keyring` to `deck` and `dev` groups)
 - Test: `tests/test_secrets.py`
 
@@ -52,6 +53,7 @@
 - Produces: `secrets.SERVICE = "herdeck"`; `secrets.get_secret(name: str) -> str | None` (env-first, keyring fallback, None if neither); `secrets.set_secret(name: str, value: str) -> None`; `secrets.clear_secret(name: str) -> None`; `secrets.has_secret(name: str) -> bool`; `secrets.secret_source(name: str) -> str | None` (`"env"` | `"keychain"` | `None`).
 - `settings._server_config` now calls `secrets.get_secret(env)` instead of `os.environ.get(env)`.
 - `app._build_notifier`'s `getenv` keyword defaults to `secrets.get_secret` (was `os.environ.get`), so the telegram token resolves env-first/keychain like server tokens. Every token consumer goes through the one resolver — without this a keychain-only telegram token would be reported "set" but ignored at runtime.
+- `doctor.check_config`'s and `doctor.check_notifications`'s `getenv` keyword defaults change from `os.environ.get` to `secrets.get_secret`, and `doctor._read_config_facts` uses `secrets.get_secret(env)` instead of the bare `os.environ.get(env)` at its presence check — so `herdeck-doctor` reports a keychain-only token as present, matching runtime.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -144,6 +146,17 @@ def test_build_notifier_resolves_telegram_token_via_secrets(monkeypatch):
     )
     _build_notifier(cfg, telegram_factory=lambda tok, chat: captured.append((tok, chat)))
     assert captured == [("bot-token", "1")]  # telegram token resolved via keychain
+
+
+def test_doctor_check_config_sees_keychain_only_token(monkeypatch):
+    from herdeck.doctor import check_config
+
+    fake = FakeKeyring()
+    fake.set_password("herdeck", "TOK", "v")
+    monkeypatch.setattr(secrets, "_keyring", lambda: fake)
+    monkeypatch.delenv("TOK", raising=False)
+    chk = check_config("/cfg.toml", True, True, token_envs=("TOK",))
+    assert chk.ok is True and "TOK=present" in chk.detail  # keychain token reported present
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -248,6 +261,20 @@ def _build_notifier(
 
 (The body is unchanged — it already calls `getenv(tg.token_env)`. `App._handle_switch_profile` and `_run` call `_build_notifier(config)` with no `getenv`, so they pick up the new default. Tests that pass an explicit `getenv` still override it.)
 
+Modify `src/herdeck/doctor.py` so diagnostics agree with runtime: add `from .secrets import get_secret` and change the `getenv` defaults of `check_config` (~line 49) and `check_notifications` (~line 109) from `os.environ.get` to `get_secret`; in `_read_config_facts` (~line 199) replace the bare `os.environ.get(env)` presence check with `get_secret(env)`:
+
+```python
+def check_config(config_path, has_servers, socket_exists, token_envs=(), getenv=get_secret):
+    ...
+
+def check_notifications(notifications, getenv=get_secret) -> Check:
+    ...
+
+# in _read_config_facts, the presence check:
+        if any(not get_secret(env) for env in token_envs):
+            return bool(servers), token_envs, None
+```
+
 Modify `pyproject.toml`: add `"keyring"` to both the `deck` and `dev` optional-dependency lists, e.g.:
 
 ```toml
@@ -260,7 +287,7 @@ Then install so `keyring` is importable: `python -m pip install -e '.[dev]' -q`.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_secrets.py -q`
-Expected: PASS (4 passed).
+Expected: PASS (6 passed — 4 secret-store + telegram-via-secrets + doctor-keychain).
 
 - [ ] **Step 5: Run the full suite (no regressions from the `_server_config` change)**
 
@@ -1316,9 +1343,20 @@ The watcher must be created where `app` and `loop` exist — that is **inside `_
         manager.stop_all()
 ```
 
-2. Add matching `config_reloader=None, config_paths=None` params to `_amain` and forward them on its `await _run(...)` call.
+2. Add matching `config_reloader=None, config_paths=None` params to `_amain`. `_amain` already receives `mode`; forward the reloader to `_run` **only in remote mode**, because in local mode `resolve_runtime_config(mode, file_config)` synthesizes the local-bridge server/token and re-applying the raw file config would drop it:
 
-3. In `main()`, where `snapshot`/`switch_profile = make_profile_switcher(snapshot)` are built (~lines 660-667), also build `config_reloader = make_config_reloader(snapshot)` and `config_paths = [snapshot.config_path, snapshot.local_path]`, and pass both into the `_amain(...)` call (the `asyncio.run(_amain(...))` path, ~line 698).
+```python
+    # inside _amain, after resolve_runtime_config(...):
+    await _run(
+        config,
+        deck,
+        switch_profile=switch_profile,
+        config_reloader=config_reloader if mode[0] == "remote" else None,
+        config_paths=config_paths if mode[0] == "remote" else None,
+    )
+```
+
+3. In `main()`, where `snapshot`/`switch_profile = make_profile_switcher(snapshot)` are built (~lines 660-667), also build `config_reloader = make_config_reloader(snapshot)` and `config_paths = [snapshot.config_path, snapshot.local_path]`, and pass both into the `_amain(...)` call (~line 698). `_amain` gates them on remote mode (step 2), so local/mock standalone decks simply do not hot-reload (they pick up edits on restart) — see Non-goals.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1344,11 +1382,11 @@ git commit -m "feat(app): standalone-deck config hot-reload via ConfigWatcher (r
 **1. Spec coverage:**
 - ConfigService read/validate/write → Tasks 2–4. ✓
 - Profile management (list via read/`profile_names`; set_active; create/delete) → Task 5. ✓
-- Keychain secrets (set/clear/has/source, env-first) + **all** token consumers read via the shared resolver: `_server_config` (server tokens) + `_build_notifier` (telegram) → Task 1; editor secret ops → Task 5. ✓
+- Keychain secrets (set/clear/has/source, env-first) + **all** token consumers read via the shared resolver: `_server_config` (server tokens) + `_build_notifier` (telegram) + `doctor` (check_config/check_notifications/_read_config_facts) → Task 1; editor secret ops → Task 5. ✓
 - Secret presence scan covers base AND profile overlays (recursive `_collect_token_envs`) → Task 2. ✓
 - HTTP routes (config get/validate/write, profiles/active, secret) with token-auth → Task 6. ✓
 - In-app reload (A) = REAL: `DeckApp.swap_source` rebuilds source+orchestrator under the lock; `create_app` injects the disk-re-select reloader; routes + watcher call `reload()` → Task 6 + Task 7. ✓
-- File-watch hot-reload (B) for standalone deck, watcher created inside `_run` (where `app`/`loop` live), `config_reloader`/`config_paths` threaded main→`_amain`→`_run` → Task 8. ✓
+- File-watch hot-reload (B) for standalone deck, watcher created inside `_run` (where `app`/`loop` live), `config_reloader`/`config_paths` threaded main→`_amain`→`_run`, **gated to remote mode** in `_amain` (local mode would drop the synthesized local-bridge server; local/mock reload on restart — see spec Non-goals) → Task 8. ✓
 - Atomic `tomli-w` write + header + secret never in TOML/HTTP → Task 4 + Task 6 tests. ✓
 - Onboarding (missing config → empty read) → Task 2. ✓
 - Deps `keyring`/`tomli-w` → Task 1 / Task 4. ✓
