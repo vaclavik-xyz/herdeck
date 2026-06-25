@@ -9,6 +9,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from ..config import ConfigError
 from ..orchestrator import Orchestrator
 from .source import StateSource
 
@@ -312,7 +313,11 @@ class DeckApp:
                 ``if body is _BAD_BODY: return``.
                 An empty/absent body is treated as ``{}`` (empty object).
                 """
-                length = int(self.headers.get("Content-Length", 0))
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                except (TypeError, ValueError):
+                    self._send(400)
+                    return _BAD_BODY
                 raw = self.rfile.read(length) if length else b""
                 try:
                     result = json.loads(raw or b"{}")
@@ -358,7 +363,15 @@ class DeckApp:
                         body = self._json_body()
                         if body is _BAD_BODY:
                             return
-                        changed = app._config_service.set_active(body.get("name"))
+                        name = body.get("name")
+                        if not name:
+                            self._send(400)
+                            return
+                        try:
+                            changed = app._config_service.set_active(name)
+                        except ConfigError:
+                            self._send(400)
+                            return
                         self._send(200, json.dumps({"changed": changed}).encode(), "application/json")
                     elif path == "/secret":
                         b = self._json_body()

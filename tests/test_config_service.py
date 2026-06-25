@@ -202,6 +202,23 @@ def test_create_and_delete_profile_return_new_data(tmp_path):
         svc.delete_profile(created, "ghost")
 
 
+def test_write_blocked_by_structural_error_even_with_missing_secret(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOK", raising=False)  # secret missing
+    # Use a fresh ConfigService with no pre-existing config.toml on disk.
+    svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
+    data = {
+        "base": {
+            "servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
+            "deck": {"grid": "totally-bad-grid"},  # structural error
+        },
+        "profiles": {},
+        "local": {},
+    }
+    errors = svc.write(data)
+    assert errors  # the bad grid must block the write despite the missing secret
+    assert not (tmp_path / "config.toml").exists()  # nothing written
+
+
 def test_set_and_clear_secret_delegate_to_store(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(secret_store, "set_secret", lambda n, v: calls.append(("set", n, v)))

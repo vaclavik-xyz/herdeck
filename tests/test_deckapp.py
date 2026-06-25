@@ -589,6 +589,30 @@ def test_post_config_malformed_json_returns_400():
         app.close()
 
 
+def test_profiles_active_unknown_name_returns_400(tmp_path, monkeypatch):
+    """POST /profiles/active with an unknown or absent name must return 400 (not connection reset)."""
+    from herdeck.deckapp.config_service import ConfigService
+
+    monkeypatch.setenv("TOK", "real")
+    (tmp_path / "config.toml").write_text(
+        '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n'
+    )
+    svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=svc)
+    try:
+        # unknown profile name -> 400
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _post(app, "/profiles/active", {"name": "ghost"}, token=app.token)
+        assert exc.value.code == 400
+
+        # missing name key -> 400
+        with pytest.raises(urllib.error.HTTPError) as exc2:
+            _post(app, "/profiles/active", {}, token=app.token)
+        assert exc2.value.code == 400
+    finally:
+        app.close()
+
+
 def test_post_config_non_object_json_returns_400():
     """POST /config with a valid but non-object JSON body (array/string/null) -> 400."""
     stub = _StubConfigService()

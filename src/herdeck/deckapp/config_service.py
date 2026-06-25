@@ -89,7 +89,7 @@ class ConfigService:
     HEADER = "# Managed by herdeck-config — generated; manual comments are not preserved\n"
 
     def write(self, data: dict) -> list[str]:
-        structural = [e for e in self.validate(data) if "is not set" not in e]
+        structural = self._structural_errors(data)
         if structural:
             return structural
         toml_data = dict(data.get("base", {}))
@@ -100,6 +100,26 @@ class ConfigService:
         local = data.get("local") or {}
         self._atomic_write(self._local_path, tomli_w.dumps(local) if local else "")
         return []
+
+    def _structural_errors(self, data: dict) -> list[str]:
+        """Validate `data` for STRUCTURAL errors only. A missing secret must not
+        block a write (onboarding), but it must not mask real structural errors
+        either: settings resolves tokens before grid/profile checks and aborts on
+        the first unset one. So we make every referenced token_env resolve as
+        present (env-first) for the validation pass; any remaining error is then
+        purely structural."""
+        names = self._collect_token_envs(data.get("base", {}))
+        self._collect_token_envs(data.get("profiles", {}) or {}, names)
+        added = []
+        try:
+            for n in names:
+                if not os.environ.get(n):
+                    os.environ[n] = "x"  # placeholder; never written to TOML
+                    added.append(n)
+            return self.validate(data)
+        finally:
+            for n in added:
+                os.environ.pop(n, None)
 
     def _atomic_write(self, path: Path, text: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
