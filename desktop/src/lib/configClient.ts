@@ -197,6 +197,59 @@ export function updateServer(
   return withServers(payload, servers);
 }
 
+/** Editor root: the base config, or the machine-local config (`local.toml`). */
+export type ConfigRoot = "base" | "local";
+
+function asDict(v: unknown): Record<string, unknown> {
+  return v != null && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+
+/** Read `payload[root][section][key]`, or undefined when any level is absent. */
+export function getAt(
+  payload: ConfigPayload,
+  root: ConfigRoot,
+  section: string,
+  key: string,
+): unknown {
+  return asDict(asDict(payload[root])[section])[key];
+}
+
+/** NEW payload with `payload[root][section][key] = value`. Input untouched;
+ *  intermediate root/section objects are created as needed. */
+export function setAt(
+  payload: ConfigPayload,
+  root: ConfigRoot,
+  section: string,
+  key: string,
+  value: unknown,
+): ConfigPayload {
+  const rootObj = clone(asDict(payload[root]));
+  const sec = { ...asDict(rootObj[section]) };
+  sec[key] = value;
+  rootObj[section] = sec;
+  return { ...payload, [root]: rootObj };
+}
+
+/** NEW payload with `payload[root][section][key]` deleted. The (possibly now
+ *  empty) section dict is left in place. Input untouched. */
+export function removeAt(
+  payload: ConfigPayload,
+  root: ConfigRoot,
+  section: string,
+  key: string,
+): ConfigPayload {
+  const rootObj = clone(asDict(payload[root]));
+  const existing = rootObj[section];
+  if (existing != null && typeof existing === "object" && !Array.isArray(existing)) {
+    const sec = { ...(existing as Record<string, unknown>) };
+    delete sec[key];
+    rootObj[section] = sec;
+  }
+  return { ...payload, [root]: rootObj };
+}
+
 export function commandTransport(invoke: InvokeFn): ConfigTransport {
   const asCode = (v: unknown) => (typeof v === "number" ? v : 0);
   return {

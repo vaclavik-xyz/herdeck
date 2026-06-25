@@ -194,3 +194,53 @@ describe("server mutations", () => {
     expect(serversOf(next)[0]).toEqual({ id: "", url: "", token_env: "" });
   });
 });
+
+import { getAt, setAt, removeAt } from "./configClient";
+
+describe("getAt / setAt / removeAt", () => {
+  it("getAt reads a nested base value or undefined", () => {
+    const p = parseConfig({ base: { view: { management: "bottom_row" } } })!;
+    expect(getAt(p, "base", "view", "management")).toBe("bottom_row");
+    expect(getAt(p, "base", "view", "missing")).toBeUndefined();
+    expect(getAt(p, "base", "deck", "grid")).toBeUndefined();
+  });
+
+  it("getAt reads the local hardware table", () => {
+    const p = parseConfig({ local: { hardware: { brightness: 70 } } })!;
+    expect(getAt(p, "local", "hardware", "brightness")).toBe(70);
+  });
+
+  it("setAt writes a new payload without touching the input", () => {
+    const p = parseConfig({ base: { view: { management: "launcher_menu" } } })!;
+    const next = setAt(p, "base", "view", "management", "bottom_row");
+    expect(getAt(next, "base", "view", "management")).toBe("bottom_row");
+    expect(getAt(p, "base", "view", "management")).toBe("launcher_menu"); // input untouched
+  });
+
+  it("setAt creates missing section + root objects", () => {
+    const p = parseConfig({})!;
+    const next = setAt(p, "local", "hardware", "brightness", 50);
+    expect(getAt(next, "local", "hardware", "brightness")).toBe(50);
+    expect(getAt(p, "local", "hardware", "brightness")).toBeUndefined();
+  });
+
+  it("setAt stores arrays and objects by value", () => {
+    const p = parseConfig({})!;
+    const next = setAt(p, "base", "view", "tile_fields", ["repo", "branch"]);
+    expect(getAt(next, "base", "view", "tile_fields")).toEqual(["repo", "branch"]);
+  });
+
+  it("removeAt deletes the key on a copy", () => {
+    const p = parseConfig({ base: { deck: { grid: "5x3", overview_order: ["a"] } } })!;
+    const next = removeAt(p, "base", "deck", "grid");
+    expect(getAt(next, "base", "deck", "grid")).toBeUndefined();
+    expect(getAt(next, "base", "deck", "overview_order")).toEqual(["a"]); // sibling kept
+    expect(getAt(p, "base", "deck", "grid")).toBe("5x3"); // input untouched
+  });
+
+  it("removeAt on an absent key is a harmless copy", () => {
+    const p = parseConfig({ base: { deck: { grid: "5x3" } } })!;
+    const next = removeAt(p, "base", "view", "management");
+    expect(getAt(next, "base", "deck", "grid")).toBe("5x3");
+  });
+});
