@@ -119,7 +119,8 @@ export function setOverride(
 }
 
 /** New profiles map with the overlay `section.key` removed; an emptied section
- *  (and an emptied profile body) is pruned so write() omits it. Input untouched. */
+ *  is pruned so write() omits it. The (now-empty) profile entry is KEPT —
+ *  deleting a profile is a separate explicit operation. Input untouched. */
 export function clearOverride(
   profiles: Record<string, Record<string, unknown>>,
   name: string,
