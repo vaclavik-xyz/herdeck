@@ -101,8 +101,9 @@ heterogenní). Widgety:
 ## Sekce (sidebar)
 
 Všech 10, editovatelných (uživatel zvolil kompletní editor): **Servers** (id/url/token_env, add/remove)
-· **Deck** (grid, hardware) · **View** (management, tile_primary/secondary token listy, overview_order)
-· **Theme** · **Macros** (KV) · **Start profiles** (KV/list) · **Notifications** (enabled/on/backends +
+· **Deck** (grid, `overview_order` list, hardware) · **View** (`management`, `agent_slots`,
+`tile_primary`/`tile_secondary` token listy) · **Theme** · **Macros** (KV) · **Start profiles**
+(KV/list) · **Notifications** (enabled/on/backends +
 telegram token_env/chat_id) · **Safety** · **Answer profiles** (KV map profilů: approve/deny/stop/...) ·
 **Profiles** (seznam pojmenovaných profilů, `extends`, výběr `servers`, create/delete přes
 `create_profile`/`delete_profile`).
