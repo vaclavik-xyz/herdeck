@@ -19,44 +19,46 @@
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
 
   // Per-row stable keys. Plain (non-$state) — only serversWithKeys (the $derived)
-  // needs to be reactive. rowKeys is its private bookkeeping.
+  // needs to be reactive; rowKeys is its private bookkeeping.
   let nextKey = 0;
   let rowKeys: number[] = serversOf(payload).map(() => nextKey++);
-  // expectedLen tracks the server count after local mutations so the derived can
-  // detect an external payload replacement (Discard/Apply) and reset all keys.
-  let expectedLen = rowKeys.length;
+  // Track the last payload we assigned ourselves so the derived can tell when an
+  // external payload replacement (Discard / Apply) has arrived.
+  let localPayload: ConfigPayload = payload;
 
   const serversWithKeys = $derived.by<Array<{ s: ServerRecord; key: number }>>(() => {
     const ss = serversOf(payload);
-    if (ss.length !== expectedLen) {
-      // External reload (Discard / Apply): reset all keys so no stale state bleeds
-      // between rows. TokenSecretField instances are fully remounted.
+    if (payload !== localPayload) {
+      // External reload: reset all keys so no stale TokenSecretField state bleeds.
       rowKeys = ss.map(() => nextKey++);
-      expectedLen = ss.length;
+      localPayload = payload;
     }
     return ss.map((s, i) => ({ s, key: rowKeys[i] }));
   });
 
+  function assign(next: ConfigPayload): void {
+    localPayload = next; // mark as locally produced before triggering derived
+    payload = next;
+  }
+
   function set(i: number, field: "id" | "url" | "token_env", v: string): void {
-    payload = updateServer(payload, i, field, v);
+    assign(updateServer(payload, i, field, v));
     onChange();
   }
   function add(): void {
     rowKeys = [...rowKeys, nextKey++]; // stable key for the new tail row
-    expectedLen = rowKeys.length;      // mark length as locally expected
-    payload = addServer(payload);
+    assign(addServer(payload));
     onChange();
   }
   function remove(i: number): void {
     rowKeys = rowKeys.filter((_, k) => k !== i); // drop key at index i
-    expectedLen = rowKeys.length;                  // mark length as locally expected
-    payload = removeServer(payload, i);
+    assign(removeServer(payload, i));
     onChange();
   }
   async function setSecret(name: string, value: string): Promise<void> {
     const code = await cfg.setSecret(name, value); // 204 on success
     if (code === 204) {
-      payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: true, source: "keychain" } } };
+      assign({ ...payload, secrets: { ...payload.secrets, [name]: { set: true, source: "keychain" } } });
     } else {
       onError(`uložení tokenu '${name}' selhalo (HTTP ${code})`);
     }
@@ -64,7 +66,7 @@
   async function clearSecret(name: string): Promise<void> {
     const code = await cfg.clearSecret(name); // 204 on success
     if (code === 204) {
-      payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: false, source: null } } };
+      assign({ ...payload, secrets: { ...payload.secrets, [name]: { set: false, source: null } } });
     } else {
       onError(`smazání tokenu '${name}' selhalo (HTTP ${code})`);
     }
