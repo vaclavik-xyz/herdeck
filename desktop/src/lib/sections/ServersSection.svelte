@@ -18,22 +18,26 @@
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
 
-  // keyGen: a stable closure-captured counter used by the derived below.
-  // This lets us generate unique monotone keys without $effect timing issues.
-  let keyGen = 0;
+  // Per-row keys that survive index shifts. Initialized eagerly (synchronously)
+  // so the keyed {#each} never sees undefined keys even on first render.
+  // Mutations (add/remove) maintain the array; external reloads (Discard/Apply)
+  // are reconciled by the derived below which fills fresh keys when lengths diverge.
+  let nextKey = serversOf(payload).length; // start counter past the initial batch
+  let rowKeys = $state<number[]>(serversOf(payload).map((_, i) => i));
 
-  // serversWithKeys is re-derived on every servers change. It expands/contracts
-  // the keys array synchronously so the keyed {#each} never sees undefined keys.
-  // We hold the prior key array in a captured variable so stable rows keep their key.
-  let prevKeys: number[] = [];
+  // Guard against external payload reloads (Discard/Apply) changing server count.
+  // We derive a reconciled list that always has exactly servers.length valid keys.
   const serversWithKeys = $derived.by<Array<{ s: ServerRecord; key: number }>>(() => {
     const ss = serversOf(payload);
-    const next: number[] = [];
-    for (let i = 0; i < ss.length; i++) {
-      next.push(prevKeys[i] !== undefined ? prevKeys[i] : keyGen++);
+    // Grow: append fresh keys for new rows beyond what rowKeys tracks.
+    while (rowKeys.length < ss.length) {
+      rowKeys.push(nextKey++);
     }
-    prevKeys = next;
-    return ss.map((s, i) => ({ s, key: next[i] }));
+    // Shrink: drop excess keys.
+    if (rowKeys.length > ss.length) {
+      rowKeys = rowKeys.slice(0, ss.length);
+    }
+    return ss.map((s, i) => ({ s, key: rowKeys[i] }));
   });
 
   function set(i: number, field: "id" | "url" | "token_env", v: string): void {
@@ -42,10 +46,12 @@
   }
   function add(): void {
     payload = addServer(payload);
+    rowKeys = [...rowKeys, nextKey++]; // key for the new tail row
     onChange();
   }
   function remove(i: number): void {
     payload = removeServer(payload, i);
+    rowKeys = rowKeys.filter((_, k) => k !== i); // drop key at index i
     onChange();
   }
   async function setSecret(name: string, value: string): Promise<void> {
