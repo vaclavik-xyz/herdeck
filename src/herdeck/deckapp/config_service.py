@@ -34,21 +34,47 @@ class ConfigService:
         self._local_path = Path(local_path)
 
     def read(self) -> dict:
-        if not self._config_path.exists():
-            return {"base": {}, "profiles": {}, "local": {}, "secrets": {}}
-        data = tomllib.loads(self._config_path.read_text(encoding="utf-8"))
+        env_profile = os.environ.get("HERDECK_PROFILE")
+        # Load local.toml unconditionally so a local-only setup (no config.toml)
+        # still keeps its hardware overrides.
         local = (
             tomllib.loads(self._local_path.read_text(encoding="utf-8"))
             if self._local_path.exists()
             else {}
         )
-        base = {sec: data[sec] for sec in self.BASE_SECTIONS if sec in data}
-        profiles = data.get("profiles", {})
+        if self._config_path.exists():
+            data = tomllib.loads(self._config_path.read_text(encoding="utf-8"))
+            base = {sec: data[sec] for sec in self.BASE_SECTIONS if sec in data}
+            # Carry a legacy top-level `active_profile` (the unified format also allows it
+            # in config.toml) inside `base` so it round-trips through write() — otherwise
+            # editing any section and Applying would drop it and revert the effective
+            # profile. Inert to the section editors (no section is named "active_profile").
+            if "active_profile" in data:
+                base["active_profile"] = data["active_profile"]
+            profiles = data.get("profiles", {})
+        else:
+            data, base, profiles = {}, {}, {}
+        # Drop a DANGLING local active_profile — one that names a profile which does not
+        # exist (e.g. config.toml is gone, or the profile was never defined). Otherwise the
+        # editor round-trips an unresolvable selection and the first Apply is rejected as
+        # "unknown profile", with no way to fix it in řez 4a (the switcher stays disabled).
+        # "default" is always valid; other local keys (e.g. hardware) are kept.
+        sel = local.get("active_profile")
+        if sel is not None and sel != "default" and sel not in profiles:
+            local = {k: v for k, v in local.items() if k != "active_profile"}
+        active = (
+            env_profile
+            or local.get("active_profile")
+            or data.get("active_profile")
+            or "default"
+        )
         return {
             "base": base,
             "profiles": profiles,
             "local": local,
             "secrets": self._secret_flags(base, profiles),
+            "env_locked": env_profile is not None,
+            "active_profile": active,
         }
 
     @staticmethod

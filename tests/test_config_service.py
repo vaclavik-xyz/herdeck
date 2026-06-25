@@ -94,9 +94,89 @@ def test_read_surfaces_profile_only_secret(tmp_path, monkeypatch):
     assert "PTG" in svc.read()["secrets"]  # profile-overlay token_env is surfaced
 
 
-def test_read_missing_config_is_empty_for_onboarding(tmp_path):
+def test_read_missing_config_is_empty_for_onboarding(tmp_path, monkeypatch):
+    monkeypatch.delenv("HERDECK_PROFILE", raising=False)
     svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
-    assert svc.read() == {"base": {}, "profiles": {}, "local": {}, "secrets": {}}
+    assert svc.read() == {
+        "base": {},
+        "profiles": {},
+        "local": {},
+        "secrets": {},
+        "env_locked": False,
+        "active_profile": "default",
+    }
+
+
+def test_read_reports_env_locked_and_active_profile(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOK", raising=False)
+    monkeypatch.delenv("TG", raising=False)
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    monkeypatch.setenv("HERDECK_PROFILE", "mobile")
+    svc = _svc(tmp_path, local='active_profile = "work"\n')
+    data = svc.read()
+    assert data["env_locked"] is True
+    assert data["active_profile"] == "mobile"  # env wins over local
+
+
+def test_read_active_profile_falls_back_to_local_then_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOK", raising=False)
+    monkeypatch.delenv("TG", raising=False)
+    monkeypatch.delenv("HERDECK_PROFILE", raising=False)
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    # "mobile" exists in the _svc config profiles, so it is a valid (non-dangling) selection.
+    svc = _svc(tmp_path, local='active_profile = "mobile"\n')
+    data = svc.read()
+    assert data["env_locked"] is False
+    assert data["active_profile"] == "mobile"
+
+
+def test_read_active_profile_defaults_when_unset(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOK", raising=False)
+    monkeypatch.delenv("TG", raising=False)
+    monkeypatch.delenv("HERDECK_PROFILE", raising=False)
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    svc = _svc(tmp_path)  # no local.toml
+    data = svc.read()
+    assert data["env_locked"] is False
+    assert data["active_profile"] == "default"
+
+
+def test_read_no_config_drops_dangling_active_profile_keeps_hardware(tmp_path, monkeypatch):
+    monkeypatch.delenv("HERDECK_PROFILE", raising=False)
+    # config.toml absent → no profiles exist, so a stale local active_profile ("work") is a
+    # dangling reference that would block the first Apply. It is dropped (effective profile
+    # falls back to default), but the rest of local (hardware) survives.
+    (tmp_path / "local.toml").write_text('active_profile = "work"\n[hardware]\nbrightness = 55\n')
+    svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
+    data = svc.read()
+    assert data["base"] == {}
+    assert data["profiles"] == {}
+    assert data["secrets"] == {}
+    assert data["env_locked"] is False
+    assert data["active_profile"] == "default"  # dangling "work" normalized away
+    assert "active_profile" not in data["local"]  # not round-tripped into write
+    assert data["local"]["hardware"]["brightness"] == 55  # hardware preserved
+
+
+def test_read_write_round_trip_preserves_top_level_active_profile(tmp_path, monkeypatch):
+    # A legacy top-level active_profile in config.toml must survive an edit+write, not be
+    # dropped (which would silently revert the effective profile to default).
+    monkeypatch.setenv("TOK", "real")
+    monkeypatch.delenv("HERDECK_PROFILE", raising=False)
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    (tmp_path / "config.toml").write_text(
+        'active_profile = "work"\n'
+        '[[servers]]\nid = "local"\nurl = "ws://x"\ntoken_env = "TOK"\n'
+        '[deck]\ngrid = "5x3"\n'
+        '[profiles.work]\nservers = ["local"]\n'  # the active profile must resolve
+    )
+    svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
+    data = svc.read()
+    assert data["base"]["active_profile"] == "work"  # carried in base for round-trip
+    errors = svc.write({"base": data["base"], "profiles": data["profiles"], "local": data["local"]})
+    assert errors == []
+    again = svc.read()
+    assert again["base"]["active_profile"] == "work"  # survived the write
 
 
 def test_validate_flags_unknown_server_in_profile(tmp_path, monkeypatch):
