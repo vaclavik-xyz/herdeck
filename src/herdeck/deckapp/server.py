@@ -9,6 +9,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from ..config import ConfigError
 from ..orchestrator import Orchestrator
 from .source import StateSource
 
@@ -18,6 +19,11 @@ from .source import StateSource
 # that has not pulled the rendering stack. Pillow is required to actually render;
 # declaring it as a packaged dependency of the desktop sidecar (in pyproject)
 # belongs to the packaging slice and is outside this slice's owned paths.
+
+# Sentinel returned by _json_body() when the request body is not a valid JSON
+# object (parse error or wrong type). Using a distinct singleton means callers
+# can safely distinguish it from None, False, or any other falsy value.
+_BAD_BODY = object()
 
 # Body returned for any unauthenticated request: plain text (never
 # octet-stream, which browsers offer to download) and free of any token.
@@ -47,6 +53,8 @@ class DeckApp:
         token: str | None = None,
         serve: bool = True,
         clock=None,
+        config_service=None,
+        reloader=None,
     ):
         self._source = source
         config = source.config
@@ -54,11 +62,15 @@ class DeckApp:
         # Match the established deck geometry: the two status-window cells are not
         # addressable tiles, so slots = grid - 2 (e.g. 13 for a 5x3 grid).
         self._slots = slots if slots is not None else cols * rows - 2
+        # Store the clock so swap_source can rebuild the orchestrator with the same clock.
+        self._clock = clock or (lambda: 0.0)
         # A fixed clock keeps the mock fully deterministic (stable elapsed text,
         # so repeated /state polls do not churn tile versions).
-        self._orch = Orchestrator(config, slots=self._slots, clock=clock or (lambda: 0.0))
+        self._orch = Orchestrator(config, slots=self._slots, clock=self._clock)
         self._icons = icon_provider if icon_provider is not None else _default_icons()
         self._token = token or secrets.token_urlsafe(24)
+        self._config_service = config_service
+        self._reloader = reloader
 
         self._lock = threading.Lock()
         self._tiles: dict[int, bytes] = {}
@@ -143,6 +155,12 @@ class DeckApp:
                 self._refresh_locked()
 
     def close(self) -> None:
+        watcher = getattr(self, "_watcher", None)
+        if watcher is not None:
+            try:
+                watcher.close()
+            except Exception:
+                pass
         try:
             self._source.close()  # stop the live connector/loop (no-op for mock)
         except Exception:
@@ -162,6 +180,30 @@ class DeckApp:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1)
         self._thread = None
+
+    def swap_source(self, new_source) -> None:
+        """Replace the state source and rebuild the orchestrator from its config
+        (grid/slots may have changed), then re-render. The single lock serializes
+        this against in-flight HTTP reads/presses."""
+        with self._lock:
+            old = self._source
+            self._source = new_source
+            cols, rows = new_source.config.grid
+            self._slots = cols * rows - 2
+            self._orch = Orchestrator(new_source.config, slots=self._slots, clock=self._clock)
+            new_source.attach(self._orch, lock=self._lock, refresh_locked=self._refresh_locked)
+            self._refresh_locked()
+        try:
+            old.close()
+        except Exception:
+            pass
+
+    def reload(self) -> None:
+        """Apply an edited on-disk config in place. The real sidecar injects a
+        reloader (via create_app) that re-selects the source and swap_source()s
+        it; tests may inject a stub. No reloader -> safe no-op."""
+        if self._reloader is not None:
+            self._reloader()
 
     # --- state snapshots ---
     def _state(self) -> dict:
@@ -251,8 +293,41 @@ class DeckApp:
                     except ValueError:
                         png = None
                     self._send(200, png, "image/png") if png else self._send(404)
+                elif path == "/config":
+                    if not self._require_query_token(url):
+                        return
+                    if app._config_service is None:
+                        self._send(404)
+                        return
+                    self._send(200, json.dumps(app._config_service.read()).encode(),
+                               "application/json")
                 else:
                     self._send(404)
+
+            def _json_body(self):
+                """Parse the request body as a JSON object (dict).
+
+                Returns the parsed dict on success; sends 400 and returns
+                ``_BAD_BODY`` if the body is not valid JSON or is not a
+                JSON object (i.e. not a dict). Callers must check
+                ``if body is _BAD_BODY: return``.
+                An empty/absent body is treated as ``{}`` (empty object).
+                """
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                except (TypeError, ValueError):
+                    self._send(400)
+                    return _BAD_BODY
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    result = json.loads(raw or b"{}")
+                except (json.JSONDecodeError, ValueError):
+                    self._send(400)
+                    return _BAD_BODY
+                if not isinstance(result, dict):
+                    self._send(400)
+                    return _BAD_BODY
+                return result
 
             def do_POST(self):
                 path = urlsplit(self.path).path
@@ -264,6 +339,64 @@ class DeckApp:
                         self._send(204)
                     except ValueError:
                         self._send(400)
+                elif path in ("/config/validate", "/config", "/profiles/active", "/secret"):
+                    if not self._require_header_token():
+                        return
+                    if app._config_service is None:
+                        self._send(404)
+                        return
+                    if path == "/config/validate":
+                        body = self._json_body()
+                        if body is _BAD_BODY:
+                            return
+                        errors = app._config_service.validate(body)
+                        self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
+                    elif path == "/config":
+                        body = self._json_body()
+                        if body is _BAD_BODY:
+                            return
+                        errors = app._config_service.write(body)
+                        if not errors:
+                            app.reload()
+                        self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
+                    elif path == "/profiles/active":
+                        body = self._json_body()
+                        if body is _BAD_BODY:
+                            return
+                        name = body.get("name")
+                        if not isinstance(name, str) or not name.strip():
+                            self._send(400)
+                            return
+                        try:
+                            changed = app._config_service.set_active(name)
+                        except ConfigError:
+                            self._send(400)
+                            return
+                        self._send(200, json.dumps({"changed": changed}).encode(), "application/json")
+                    elif path == "/secret":
+                        b = self._json_body()
+                        if b is _BAD_BODY:
+                            return
+                        token_env = b.get("token_env")
+                        value = b.get("value")
+                        if not token_env or not value:
+                            self._send(400)
+                            return
+                        app._config_service.set_secret(token_env, value)
+                        self._send(204)
+                else:
+                    self._send(404)
+
+            def do_DELETE(self):
+                path = urlsplit(self.path).path
+                if path.startswith("/secret/"):
+                    if not self._require_header_token():
+                        return
+                    if app._config_service is None:
+                        self._send(404)
+                        return
+                    app._config_service.clear_secret(path.rsplit("/", 1)[1])
+                    self._send(204)
                 else:
                     self._send(404)
 
@@ -288,13 +421,25 @@ def _default_icons():
 
 
 def create_mock_app(
-    *, host: str = "127.0.0.1", port: int = 0, icon_provider=None, serve: bool = True
+    *,
+    host: str = "127.0.0.1",
+    port: int = 0,
+    icon_provider=None,
+    serve: bool = True,
+    config_service=None,
+    reloader=None,
 ) -> DeckApp:
     """Build a serving DeckApp backed by the deterministic MockSource."""
     from .mock import MockSource
 
     return DeckApp(
-        MockSource(), host=host, port=port, icon_provider=icon_provider, serve=serve
+        MockSource(),
+        host=host,
+        port=port,
+        icon_provider=icon_provider,
+        serve=serve,
+        config_service=config_service,
+        reloader=reloader,
     )
 
 
@@ -340,6 +485,8 @@ def create_live_app(
     icon_provider=None,
     serve: bool = True,
     connector_factory=None,
+    config_service=None,
+    reloader=None,
 ) -> DeckApp:
     """Build a serving DeckApp backed by a LiveSource (real bridge via Connector).
 
@@ -359,18 +506,89 @@ def create_live_app(
         icon_provider=icon_provider,
         serve=serve,
         clock=time.monotonic,
+        config_service=config_service,
+        reloader=reloader,
     )
+
+
+def _default_config_paths():
+    """Return ``(config_path, local_path)`` for the on-disk config files.
+
+    Both are ``str`` paths (local may be ``None`` when absent). Factored out so
+    both ``_default_config_service()`` and the ``ConfigWatcher`` in
+    ``create_app`` watch the exact same files the editor reads and writes.
+    """
+    from ..bootstrap import _discover_config_path, _discover_local_config_path
+
+    path = _discover_config_path() or os.path.expanduser("~/.config/herdeck/config.toml")
+    return path, _discover_local_config_path(path)
+
+
+def _default_config_service():
+    from .config_service import ConfigService
+
+    path, local = _default_config_paths()
+    return ConfigService(path, local)
+
+
+def _select_source():
+    """Re-read the on-disk config and build the appropriate source (live or mock)."""
+    selected = select_live()
+    if selected is None:
+        from .mock import MockSource
+
+        return MockSource()
+    config, server = selected
+    from .live import build_live_source
+
+    return build_live_source(config, server)
 
 
 def create_app(
-    *, host: str = "127.0.0.1", port: int = 0, icon_provider=None, serve: bool = True
+    *,
+    host: str = "127.0.0.1",
+    port: int = 0,
+    icon_provider=None,
+    serve: bool = True,
+    config_service=None,
+    reloader=None,
 ) -> DeckApp:
     """Build the sidecar with the right source: live when a server + token are
-    configured, otherwise the deterministic mock."""
+    configured, otherwise the deterministic mock. Wires up a default ConfigService
+    and a disk-re-select reloader so the GUI can edit + reload in place.
+
+    Also starts a ``ConfigWatcher`` over the same paths the ConfigService reads so
+    that an external edit to the config files triggers an in-app reload automatically.
+    The watcher is stopped when ``DeckApp.close()`` is called.
+    """
+    from .watcher import ConfigWatcher
+
+    cfg_path, local_path = _default_config_paths()
+    svc = config_service if config_service is not None else _default_config_service()
     selected = select_live()
     if selected is None:
-        return create_mock_app(host=host, port=port, icon_provider=icon_provider, serve=serve)
-    config, server = selected
-    return create_live_app(
-        config, server, host=host, port=port, icon_provider=icon_provider, serve=serve
-    )
+        app = create_mock_app(
+            host=host, port=port, icon_provider=icon_provider, serve=serve, config_service=svc
+        )
+    else:
+        config, server = selected
+        app = create_live_app(
+            config,
+            server,
+            host=host,
+            port=port,
+            icon_provider=icon_provider,
+            serve=serve,
+            config_service=svc,
+        )
+    if reloader is None:
+        app._reloader = lambda: app.swap_source(_select_source())
+    else:
+        app._reloader = reloader
+
+    # Watch the config files; fire the reloader when any changes on disk.
+    # Filter out None (local path is absent when no local override exists).
+    watch_paths = [p for p in (cfg_path, local_path) if p is not None]
+    app._watcher = ConfigWatcher(watch_paths, app.reload, interval=1.0)
+    app._watcher.start()
+    return app

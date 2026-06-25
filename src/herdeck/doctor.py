@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Notifications
+from .secrets import get_secret
 
 SOCKET_TIMEOUT = 1.0
 
@@ -47,7 +48,7 @@ def check_config(
     has_servers: bool,
     socket_exists: bool,
     token_envs=(),
-    getenv=os.environ.get,
+    getenv=get_secret,
 ) -> Check:
     if has_servers:
         statuses = [f"{env}=present" if getenv(env) else f"{env}=missing" for env in token_envs]
@@ -106,7 +107,7 @@ def check_deck(lib_available: Callable[[str], bool]) -> Check:
     )
 
 
-def check_notifications(notifications: Notifications, getenv=os.environ.get) -> Check:
+def check_notifications(notifications: Notifications, getenv=get_secret) -> Check:
     if not notifications.enabled:
         return Check("notifications", True, "disabled")
     supported = {"macos", "telegram"}
@@ -196,7 +197,7 @@ def _read_config_facts(config_path: str | None) -> tuple[bool, list[str], Check 
     try:
         config = load_config(config_path)
     except ConfigError as exc:
-        if any(not os.environ.get(env) for env in token_envs):
+        if any(not get_secret(env) for env in token_envs):
             return bool(servers), token_envs, None
         return (
             bool(servers),

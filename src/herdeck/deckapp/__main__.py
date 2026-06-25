@@ -18,7 +18,7 @@ import os
 import sys
 import threading
 
-from .server import create_live_app, create_mock_app, select_live
+from .server import create_app
 
 
 def main() -> int:
@@ -28,14 +28,8 @@ def main() -> int:
     # would either widen exposure or mismatch the IPv4 server / bracket-less URL.
     host = "127.0.0.1"
 
-    selected = select_live()
-    if selected is None:
-        app = create_mock_app(host=host, port=port)
-        source = "mock"
-    else:
-        config, server = selected
-        app = create_live_app(config, server, host=host, port=port)
-        source = "live"
+    app = create_app(host=host, port=port)
+    source = app.source_name
     discovery = {
         "url": f"http://{app.host}:{app.port}",
         "host": app.host,

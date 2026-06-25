@@ -342,13 +342,14 @@ def test_main_binds_ipv4_loopback_only(monkeypatch):
         class _Stub:
             def __init__(self):
                 self.host, self.port, self.token = host, 5555, "tok"
+                self.source_name = "mock"
 
             def close(self):
                 pass
 
         return _Stub()
 
-    monkeypatch.setattr(deckapp_main, "create_mock_app", fake_create)
+    monkeypatch.setattr(deckapp_main, "create_app", fake_create)
     # stop the blocking wait immediately
     monkeypatch.setattr(deckapp_main.threading.Event, "wait", lambda self: None)
     rc = deckapp_main.main()
@@ -363,5 +364,289 @@ def test_error_body_is_browser_friendly_text():
             _get(app, "/state")
         assert exc.value.headers.get("Content-Type", "").startswith("text/plain")
         assert app.token not in exc.value.read().decode()
+    finally:
+        app.close()
+
+
+# --- config HTTP routes (Task 6) --------------------------------------------
+
+
+import json as _json
+
+
+def _post(app, path, body, token=None):
+    req = urllib.request.Request(
+        f"http://{app.host}:{app.port}{path}",
+        data=_json.dumps(body).encode(),
+        method="POST",
+    )
+    req.add_header("X-Herdeck-Token", token if token is not None else app.token)
+    return urllib.request.urlopen(req)
+
+
+class _FakeSource:
+    """A StateSource with a chosen grid, for testing swap_source mechanics."""
+
+    source_name = "mock"
+    connected = True
+    server_id = None
+
+    def __init__(self, grid):
+        from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
+
+        self._cfg = Config(
+            servers=[ServerConfig("m", "ws://m", "x")],
+            profiles=dict(DEFAULT_PROFILES),
+            overview_order=["m"],
+            grid=grid,
+        )
+
+    @property
+    def config(self):
+        return self._cfg
+
+    def attach(self, orch, **kw):
+        pass
+
+    def apply_to(self, orch):
+        pass
+
+    def press(self, index):
+        pass
+
+    def summary(self):
+        return {"agents": 0, "blocked": 0, "working": 0, "idle": 0, "done": 0}
+
+    def close(self):
+        pass
+
+
+def test_swap_source_rebuilds_orchestrator_on_grid_change():
+    from herdeck.deckapp.server import DeckApp
+
+    app = DeckApp(_FakeSource((5, 3)), serve=False)
+    assert app._slots == 5 * 3 - 2
+    app.swap_source(_FakeSource((4, 3)))
+    assert app._slots == 4 * 3 - 2  # orchestrator + slots rebuilt from the new config
+
+
+def test_config_get_requires_token_and_returns_redacted(tmp_path, monkeypatch):
+    from herdeck.deckapp.config_service import ConfigService
+
+    monkeypatch.setenv("TOK", "real")
+    (tmp_path / "config.toml").write_text(
+        '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n'
+    )
+    svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
+    app = create_mock_app(port=0, config_service=svc)
+    try:
+        # Wrong token -> 403
+        bad = urllib.request.Request(f"http://{app.host}:{app.port}/config?token=nope")
+        try:
+            urllib.request.urlopen(bad)
+            assert False, "expected 403"
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+        # Right token -> redacted config
+        ok = urllib.request.urlopen(f"http://{app.host}:{app.port}/config?token={app.token}")
+        data = _json.loads(ok.read())
+        assert data["base"]["deck"] == {"grid": "5x3"}
+        assert data["secrets"]["TOK"]["set"] is True
+        assert "real" not in ok.headers.get("X-Debug", "")  # value never leaks
+    finally:
+        app.close()
+
+
+def test_config_post_writes_and_triggers_reload(tmp_path, monkeypatch):
+    from herdeck.deckapp.config_service import ConfigService
+
+    monkeypatch.setenv("TOK", "real")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n')
+    svc = ConfigService(cfg, tmp_path / "local.toml")
+    reloaded = []
+    app = create_mock_app(port=0, config_service=svc, reloader=lambda: reloaded.append(1))
+    try:
+        body = {"base": {"servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
+                         "deck": {"grid": "4x3"}}, "profiles": {}, "local": {}}
+        resp = _post(app, "/config", body, token=app.token)
+        assert _json.loads(resp.read())["errors"] == []
+        assert reloaded == [1]
+        assert 'grid = "4x3"' in cfg.read_text()
+    finally:
+        app.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 6 review-hardening tests (Fix 1 + Fix 2 + DELETE)
+# ---------------------------------------------------------------------------
+
+
+class _StubConfigService:
+    """Minimal recording stub for config-service interactions in tests.
+
+    Tracks calls to clear_secret and set_secret; never touches disk.
+    """
+
+    def __init__(self):
+        self.cleared = []
+        self.secrets_set = []
+
+    def read(self):
+        return {"base": {}, "profiles": {}, "secrets": {}}
+
+    def validate(self, body):
+        return []
+
+    def write(self, body):
+        return []
+
+    def set_active(self, name):
+        return False
+
+    def clear_secret(self, token_env):
+        self.cleared.append(token_env)
+
+    def set_secret(self, token_env, value):
+        self.secrets_set.append((token_env, value))
+
+
+def test_delete_secret_route_clears():
+    """DELETE /secret/<TOKEN_ENV> should 204 + call clear_secret; wrong token -> 403."""
+    stub = _StubConfigService()
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=stub)
+    try:
+        base = f"http://{app.host}:{app.port}/secret/MYTOK"
+
+        # wrong token -> 403, no clear recorded
+        req_bad = urllib.request.Request(
+            base, method="DELETE", headers={"X-Herdeck-Token": "wrong"}
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req_bad, timeout=2)
+        assert exc.value.code == 403
+        assert stub.cleared == []
+
+        # missing token -> 403, still no clear
+        req_none = urllib.request.Request(base, method="DELETE")
+        with pytest.raises(urllib.error.HTTPError) as exc2:
+            urllib.request.urlopen(req_none, timeout=2)
+        assert exc2.value.code == 403
+        assert stub.cleared == []
+
+        # correct token -> 204 and clear recorded
+        req_ok = urllib.request.Request(
+            base, method="DELETE", headers={"X-Herdeck-Token": app.token}
+        )
+        with urllib.request.urlopen(req_ok, timeout=2) as r:
+            assert r.status == 204
+        assert stub.cleared == ["MYTOK"]
+    finally:
+        app.close()
+
+
+def test_config_routes_404_without_service():
+    """When no config_service is provided, GET /config and POST /config -> 404."""
+    app = create_mock_app(port=0, icon_provider=StubIcons())  # no config_service
+    try:
+        # GET /config -> 404
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(
+                f"http://{app.host}:{app.port}/config?token={app.token}", timeout=2
+            )
+        assert exc.value.code == 404
+
+        # POST /config -> 404
+        req = urllib.request.Request(
+            f"http://{app.host}:{app.port}/config",
+            data=_json.dumps({"base": {}, "profiles": {}, "local": {}}).encode(),
+            method="POST",
+        )
+        req.add_header("X-Herdeck-Token", app.token)
+        with pytest.raises(urllib.error.HTTPError) as exc2:
+            urllib.request.urlopen(req, timeout=2)
+        assert exc2.value.code == 404
+    finally:
+        app.close()
+
+
+def test_post_config_malformed_json_returns_400():
+    """POST /config with an invalid JSON body must return 400, not 500."""
+    stub = _StubConfigService()
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=stub)
+    try:
+        req = urllib.request.Request(
+            f"http://{app.host}:{app.port}/config",
+            data=b"{not json",
+            method="POST",
+        )
+        req.add_header("X-Herdeck-Token", app.token)
+        req.add_header("Content-Type", "application/json")
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=2)
+        assert exc.value.code == 400
+    finally:
+        app.close()
+
+
+def test_profiles_active_unknown_name_returns_400(tmp_path, monkeypatch):
+    """POST /profiles/active with an unknown or absent name must return 400 (not connection reset)."""
+    from herdeck.deckapp.config_service import ConfigService
+
+    monkeypatch.setenv("TOK", "real")
+    (tmp_path / "config.toml").write_text(
+        '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n'
+    )
+    svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=svc)
+    try:
+        # unknown profile name -> 400
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _post(app, "/profiles/active", {"name": "ghost"}, token=app.token)
+        assert exc.value.code == 400
+
+        # missing name key -> 400
+        with pytest.raises(urllib.error.HTTPError) as exc2:
+            _post(app, "/profiles/active", {}, token=app.token)
+        assert exc2.value.code == 400
+    finally:
+        app.close()
+
+
+def test_profiles_active_non_string_name_returns_400(tmp_path, monkeypatch):
+    """POST /profiles/active with a non-string name (e.g. list, int) must return 400."""
+    from herdeck.deckapp.config_service import ConfigService
+
+    monkeypatch.setenv("TOK", "real")
+    (tmp_path / "config.toml").write_text(
+        '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n'
+    )
+    svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=svc)
+    try:
+        for bad_name in (["ghost"], 42, True, "   "):
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                _post(app, "/profiles/active", {"name": bad_name}, token=app.token)
+            assert exc.value.code == 400, f"expected 400 for name={bad_name!r}"
+    finally:
+        app.close()
+
+
+def test_post_config_non_object_json_returns_400():
+    """POST /config with a valid but non-object JSON body (array/string/null) -> 400."""
+    stub = _StubConfigService()
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=stub)
+    try:
+        for payload in (b"[]", b'"hello"', b"null", b"42"):
+            req = urllib.request.Request(
+                f"http://{app.host}:{app.port}/config",
+                data=payload,
+                method="POST",
+            )
+            req.add_header("X-Herdeck-Token", app.token)
+            req.add_header("Content-Type", "application/json")
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                urllib.request.urlopen(req, timeout=2)
+            assert exc.value.code == 400, f"expected 400 for payload {payload!r}"
     finally:
         app.close()

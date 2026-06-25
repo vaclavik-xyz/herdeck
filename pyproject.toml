@@ -27,14 +27,14 @@ Repository = "https://github.com/vaclavik-xyz/herdeck"
 
 [project.optional-dependencies]
 # strmdck (rc) under-declares its runtime deps, so pin them explicitly.
-deck = ["strmdck", "pillow>=10", "cairosvg", "deepdiff", "python-dotenv", "hidapi"]
+deck = ["strmdck", "pillow>=10", "cairosvg", "deepdiff", "python-dotenv", "hidapi", "keyring", "tomli-w"]
 elgato = ["streamdeck", "pillow>=10"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10", "cairosvg", "ruff", "pytest-cov"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10", "cairosvg", "ruff", "pytest-cov", "keyring", "tomli-w"]
 # Frozen-backend packaging (Elgato plugin): PyInstaller 6 (onedir layout), the build-time
 # SVG rasterizer (cairosvg), and the frozen elgato-path runtime deps that must be importable
 # so PyInstaller can trace them (pillow, websockets). `pip install -e .[packaging]` makes the
 # build-plugin.sh pipeline reproducible in a clean env.
-packaging = ["pyinstaller>=6", "cairosvg", "pillow>=10", "websockets>=14"]
+packaging = ["pyinstaller>=6", "cairosvg", "pillow>=10", "websockets>=14", "keyring"]
 
 [project.scripts]
 herdeck = "herdeck.app:main"
