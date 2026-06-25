@@ -18,16 +18,29 @@
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
   const servers = $derived(serversOf(payload));
 
+  // Stable per-row keys independent of editable values.
+  let nextKey = $state(0);
+  let rowKeys = $state<number[]>([]);
+
+  // Initialise keys once when the component first resolves the server list.
+  $effect(() => {
+    if (rowKeys.length === 0 && servers.length > 0) {
+      rowKeys = servers.map(() => nextKey++);
+    }
+  });
+
   function set(i: number, field: "id" | "url" | "token_env", v: string): void {
     payload = updateServer(payload, i, field, v);
     onChange();
   }
   function add(): void {
     payload = addServer(payload);
+    rowKeys = [...rowKeys, nextKey++];
     onChange();
   }
   function remove(i: number): void {
     payload = removeServer(payload, i);
+    rowKeys = rowKeys.filter((_, k) => k !== i);
     onChange();
   }
   async function setSecret(name: string, value: string): Promise<void> {
@@ -49,7 +62,7 @@
 </script>
 
 <h2>Servers</h2>
-{#each servers as s, i (`${s.id}|${s.url}|${s.token_env}`)}
+{#each servers as s, i (rowKeys[i] ?? i)}
   <fieldset>
     <legend>{s.id || "(nový server)"} <button type="button" onclick={() => remove(i)}>×</button></legend>
     <TextField label="id" value={s.id} oninput={(v) => set(i, "id", v)} />
