@@ -19,6 +19,15 @@
   let entering = $state(false);
   let secretValue = $state("");
 
+  // Reset any in-progress secret entry when the token identity changes — e.g. a row
+  // removal/shift or an external reload reuses this field for a DIFFERENT server, so
+  // the half-typed value must not be submittable to the wrong token. Tracks `value`.
+  $effect(() => {
+    value; // dependency: the token_env this field is bound to
+    entering = false;
+    secretValue = "";
+  });
+
   function submit(): void {
     if (secretValue) onset(secretValue);
     secretValue = "";
