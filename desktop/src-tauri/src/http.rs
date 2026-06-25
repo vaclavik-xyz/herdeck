@@ -179,6 +179,100 @@ pub fn http_post(
     Ok(code)
 }
 
+/// Build an HTTP/1.0 POST with a JSON body and one extra header (the
+/// `X-Herdeck-Token` auth header). Content-Type/-Length frame the body; the
+/// sidecar reads exactly Content-Length bytes.
+pub fn build_post_json_request(
+    host: &str,
+    path_and_query: &str,
+    header_name: &str,
+    header_value: &str,
+    body: &str,
+) -> String {
+    format!(
+        "POST {path_and_query} HTTP/1.0\r\n\
+         Host: {host}\r\n\
+         {header_name}: {header_value}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\r\n\
+         {body}",
+        len = body.as_bytes().len()
+    )
+}
+
+/// POST a JSON body with one extra header, returning `(status, body)` for ALL
+/// status codes — the caller reads `{errors}` on 200 and distinguishes 400 (a
+/// malformed body the sidecar rejected). `Err` is reserved for connect/read
+/// failures, matching `http_post`/`http_get`.
+pub fn http_post_json(
+    host: &str,
+    port: u16,
+    path_and_query: &str,
+    header: (&str, &str),
+    body: &str,
+    timeout: Duration,
+) -> Result<(u16, String), String> {
+    let addr = format!("{host}:{port}");
+    let mut stream = TcpStream::connect(&addr).map_err(|e| format!("connect {addr}: {e}"))?;
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let req = build_post_json_request(host, path_and_query, header.0, header.1, body);
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("write to sidecar: {e}"))?;
+
+    let mut raw = String::new();
+    stream
+        .read_to_string(&mut raw)
+        .map_err(|e| format!("read from sidecar: {e}"))?;
+    parse_http_response(&raw)
+}
+
+/// Build an HTTP/1.0 DELETE with one extra header and an empty body.
+pub fn build_delete_request(
+    host: &str,
+    path_and_query: &str,
+    header_name: &str,
+    header_value: &str,
+) -> String {
+    format!(
+        "DELETE {path_and_query} HTTP/1.0\r\n\
+         Host: {host}\r\n\
+         {header_name}: {header_value}\r\n\
+         Content-Length: 0\r\n\
+         Connection: close\r\n\r\n"
+    )
+}
+
+/// DELETE `path_and_query` with one extra header, returning the HTTP status
+/// code (204 ok, 403 bad token). `Err` only on connect/read failure.
+pub fn http_delete(
+    host: &str,
+    port: u16,
+    path_and_query: &str,
+    header: (&str, &str),
+    timeout: Duration,
+) -> Result<u16, String> {
+    let addr = format!("{host}:{port}");
+    let mut stream = TcpStream::connect(&addr).map_err(|e| format!("connect {addr}: {e}"))?;
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let req = build_delete_request(host, path_and_query, header.0, header.1);
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("write to sidecar: {e}"))?;
+
+    let mut raw = String::new();
+    stream
+        .read_to_string(&mut raw)
+        .map_err(|e| format!("read from sidecar: {e}"))?;
+    let (code, _body) = parse_http_response(&raw)?;
+    Ok(code)
+}
+
 /// Standard base64 (with padding). Inline to avoid a new crate dependency; used
 /// to frame proxied PNG bytes as a `data:` URL the WebView `<img>` can render.
 pub fn base64_encode(input: &[u8]) -> String {
@@ -299,6 +393,25 @@ mod tests {
     fn build_post_request_carries_header_and_zero_length() {
         let req = build_post_request("127.0.0.1", "/press/3", "X-Herdeck-Token", "tok");
         assert!(req.starts_with("POST /press/3 HTTP/1.0\r\n"));
+        assert!(req.contains("X-Herdeck-Token: tok\r\n"));
+        assert!(req.contains("Content-Length: 0\r\n"));
+        assert!(req.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn build_post_json_request_carries_body_headers_and_length() {
+        let req = build_post_json_request("127.0.0.1", "/config", "X-Herdeck-Token", "tok", "{\"a\":1}");
+        assert!(req.starts_with("POST /config HTTP/1.0\r\n"));
+        assert!(req.contains("X-Herdeck-Token: tok\r\n"));
+        assert!(req.contains("Content-Type: application/json\r\n"));
+        assert!(req.contains("Content-Length: 7\r\n")); // {"a":1} is 7 bytes
+        assert!(req.ends_with("\r\n\r\n{\"a\":1}"));
+    }
+
+    #[test]
+    fn build_delete_request_carries_token_header_and_zero_length() {
+        let req = build_delete_request("127.0.0.1", "/secret/TOK", "X-Herdeck-Token", "tok");
+        assert!(req.starts_with("DELETE /secret/TOK HTTP/1.0\r\n"));
         assert!(req.contains("X-Herdeck-Token: tok\r\n"));
         assert!(req.contains("Content-Length: 0\r\n"));
         assert!(req.ends_with("\r\n\r\n"));

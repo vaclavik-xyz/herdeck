@@ -26,6 +26,21 @@
         "visible": true,
         "shadow": true,
         "skipTaskbar": false
+      },
+      {
+        "label": "config",
+        "title": "herdeck — Config",
+        "width": 900,
+        "height": 680,
+        "minWidth": 640,
+        "minHeight": 480,
+        "resizable": true,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "transparent": false,
+        "visible": false,
+        "shadow": true,
+        "skipTaskbar": false
       }
     ],
     "security": {
