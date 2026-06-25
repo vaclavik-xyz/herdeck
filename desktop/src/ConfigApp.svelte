@@ -68,9 +68,12 @@
 
   onMount(() => {
     let alive = true;
+    let unlisten: (() => void) | null = null;
     void listen<Discovery>("discovery", (ev) => {
       const d = asDiscovery(ev.payload);
       if (d) discovery = d;
+    }).then((fn) => {
+      unlisten = fn;
     });
     void (async () => {
       while (alive && !discovery) {
@@ -86,6 +89,7 @@
     })();
     return () => {
       alive = false;
+      unlisten?.();
     };
   });
 </script>
