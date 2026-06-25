@@ -22,10 +22,16 @@
   let nextKey = $state(0);
   let rowKeys = $state<number[]>([]);
 
-  // Initialise keys once when the component first resolves the server list.
+  // Keep rowKeys in sync with servers so external reloads (Discard/Apply) never
+  // leave rowKeys shorter than servers (which would cause ?? i fallback collisions).
+  // When servers grows, append fresh counter values; when it shrinks, truncate.
   $effect(() => {
-    if (rowKeys.length === 0 && servers.length > 0) {
-      rowKeys = servers.map(() => nextKey++);
+    const len = servers.length;
+    if (rowKeys.length < len) {
+      const fill = Array.from({ length: len - rowKeys.length }, () => nextKey++);
+      rowKeys = [...rowKeys, ...fill];
+    } else if (rowKeys.length > len) {
+      rowKeys = rowKeys.slice(0, len);
     }
   });
 
@@ -62,7 +68,7 @@
 </script>
 
 <h2>Servers</h2>
-{#each servers as s, i (rowKeys[i] ?? i)}
+{#each servers as s, i (rowKeys[i])}
   <fieldset>
     <legend>{s.id || "(nový server)"} <button type="button" onclick={() => remove(i)}>×</button></legend>
     <TextField label="id" value={s.id} oninput={(v) => set(i, "id", v)} />
