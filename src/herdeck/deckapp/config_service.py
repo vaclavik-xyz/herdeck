@@ -107,19 +107,27 @@ class ConfigService:
         either: settings resolves tokens before grid/profile checks and aborts on
         the first unset one. So we make every referenced token_env resolve as
         present (env-first) for the validation pass; any remaining error is then
-        purely structural."""
+        purely structural.
+
+        The original environment values (including absent keys) are saved and
+        exactly restored in ``finally``, so other threads that read the same env
+        vars see the shortest possible window of placeholder values.
+        """
         names = self._collect_token_envs(data.get("base", {}))
         self._collect_token_envs(data.get("profiles", {}) or {}, names)
-        added = []
+        saved: dict[str, str | None] = {}
         try:
             for n in names:
                 if not os.environ.get(n):
+                    saved[n] = os.environ.get(n)  # None if absent, "" if empty
                     os.environ[n] = "x"  # placeholder; never written to TOML
-                    added.append(n)
             return self.validate(data)
         finally:
-            for n in added:
-                os.environ.pop(n, None)
+            for n, original in saved.items():
+                if original is None:
+                    os.environ.pop(n, None)
+                else:
+                    os.environ[n] = original
 
     def _atomic_write(self, path: Path, text: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

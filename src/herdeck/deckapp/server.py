@@ -364,7 +364,7 @@ class DeckApp:
                         if body is _BAD_BODY:
                             return
                         name = body.get("name")
-                        if not name:
+                        if not isinstance(name, str) or not name.strip():
                             self._send(400)
                             return
                         try:

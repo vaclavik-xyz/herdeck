@@ -613,6 +613,25 @@ def test_profiles_active_unknown_name_returns_400(tmp_path, monkeypatch):
         app.close()
 
 
+def test_profiles_active_non_string_name_returns_400(tmp_path, monkeypatch):
+    """POST /profiles/active with a non-string name (e.g. list, int) must return 400."""
+    from herdeck.deckapp.config_service import ConfigService
+
+    monkeypatch.setenv("TOK", "real")
+    (tmp_path / "config.toml").write_text(
+        '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n'
+    )
+    svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=svc)
+    try:
+        for bad_name in (["ghost"], 42, True, "   "):
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                _post(app, "/profiles/active", {"name": bad_name}, token=app.token)
+            assert exc.value.code == 400, f"expected 400 for name={bad_name!r}"
+    finally:
+        app.close()
+
+
 def test_post_config_non_object_json_returns_400():
     """POST /config with a valid but non-object JSON body (array/string/null) -> 400."""
     stub = _StubConfigService()
