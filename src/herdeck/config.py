@@ -58,6 +58,7 @@ DEFAULT_STATUS_COLORS: dict[str, str] = {
 
 DEFAULT_SERVER_ACCENTS: list[str] = ["teal", "violet", "orange", "pink", "lime"]
 DEFAULT_TILE_FIELDS: list[str] = ["repo", "branch", "status", "time", "server"]
+TILE_LINE_TOKENS: tuple[str, ...] = ("repo", "branch", "workspace", "tab", "agent")
 DEFAULT_BOTTOM_ROW: list[str] = ["profiles", "notifications", "safety", "theme", "new_agent"]
 
 
@@ -74,6 +75,11 @@ class ViewConfig:
     show_profile_on_panel: bool = False
     agent_slots: str = "max"
     tile_fields: list[str] = field(default_factory=lambda: list(DEFAULT_TILE_FIELDS))
+    # None = key absent (each render path supplies its own fallback);
+    # [] = explicitly empty (that text line is off). A non-empty list is a
+    # token list rendered by layout.compose_line.
+    tile_primary: list[str] | None = None
+    tile_secondary: list[str] | None = None
 
 
 @dataclass

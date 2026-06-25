@@ -287,16 +287,26 @@ class ElgatoSession:
             return TileView(ordinal, "", "dim")
         s = self._agents[key]
         down = s.key.server_id in self._down
-        repo = s.repo or s.label
+        # Elgato never honored tile_fields -> fixed repo/branch fallback.
+        primary_tokens, secondary_tokens = layout.resolve_tile_lines(
+            self.config.view, ["repo"], ["branch"]
+        )
+        primary = layout.compose_line(s, primary_tokens)
+        secondary = layout.compose_line(s, secondary_tokens)
         if key == self.selected():
-            repo = f"* {repo}"
+            # Mark the first non-empty line so the act target stays identifiable
+            # without turning an explicitly-empty line into a bare "* ".
+            if primary:
+                primary = f"* {primary}"
+            elif secondary:
+                secondary = f"* {secondary}"
         return TileView(
             ordinal,
             s.label,
             self._color(s),
             agent_type=s.agent_type,
-            repo=repo,
-            branch=s.branch or "",
+            repo=primary,
+            branch=secondary,
             status_text="OFFLINE" if down else s.status.value.upper(),
         )
 

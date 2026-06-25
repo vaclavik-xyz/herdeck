@@ -10,6 +10,7 @@ from .config import (
     DEFAULT_MACROS,
     DEFAULT_PROFILES,
     DEFAULT_START_PROFILES,
+    TILE_LINE_TOKENS,
     Config,
     ConfigError,
     ConfigMeta,
@@ -201,6 +202,13 @@ def _view_config(raw: dict | None) -> ViewConfig:
         view.bottom_row = list(raw["bottom_row"])
     if "tile_fields" in raw:
         view.tile_fields = list(raw["tile_fields"])
+    for key in ("tile_primary", "tile_secondary"):
+        if key in raw:
+            tokens = list(raw[key])
+            for tok in tokens:
+                if tok not in TILE_LINE_TOKENS:
+                    raise ConfigError(f"unknown tile token '{tok}' in view.{key}")
+            setattr(view, key, tokens)
     if "show_profile_on_panel" in raw:
         view.show_profile_on_panel = bool(raw["show_profile_on_panel"])
     return view

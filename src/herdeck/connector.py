@@ -111,6 +111,8 @@ class Connector:
             project=state.project,
             repo=state.repo,
             branch=state.branch,
+            workspace=state.workspace,
+            tab=state.tab,
         )
 
     def _dispatch(self, raw: str) -> None:

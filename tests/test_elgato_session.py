@@ -345,3 +345,81 @@ def test_render_diff_returns_only_changed_instances():
     sess.apply_event("dev", state("p1", Status.BLOCKED, "a"))  # p1 changed only
     diff = sess.take_render_diff()
     assert set(diff) == {"s0"}
+
+
+def test_slot_tile_renders_configured_lines():
+    cfg = make_config()
+    cfg.view.tile_primary = ["workspace"]
+    cfg.view.tile_secondary = ["tab", "branch"]
+    sess = ElgatoSession(cfg, FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    s = AgentState(AgentKey("dev", "w2:p1"), "claude", "herdeck", Status.WORKING)
+    # distinct repo vs workspace so a stale "render repo as primary" impl fails
+    s.repo, s.branch, s.workspace, s.tab = "api", "main", "herdeck", "2"
+    sess.apply_snapshot("dev", [s])
+
+    tile = sess._slot_tile(0)
+
+    assert tile.repo == "herdeck"        # primary = workspace, NOT repo "api"
+    assert tile.branch == "▸2 · main"    # secondary = tab + branch
+
+
+def test_slot_tile_fallback_is_fixed_repo_branch_ignoring_tile_fields():
+    # Elgato path never honored tile_fields: even tile_fields=["repo"] keeps branch.
+    cfg = make_config()
+    cfg.view.tile_fields = ["repo"]
+    sess = ElgatoSession(cfg, FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    s = state("p1", Status.WORKING, "api")
+    s.branch = "feat/x"
+    sess.apply_snapshot("dev", [s])
+
+    tile = sess._slot_tile(0)
+
+    assert tile.repo == "api"
+    assert tile.branch == "feat/x"
+
+
+def test_slot_tile_keeps_selected_marker_on_primary():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED, "api")])  # single blocked -> auto-selected
+
+    tile = sess._slot_tile(0)
+
+    assert sess.selected() == AgentKey("dev", "p1")
+    assert tile.repo == "* api"
+
+
+def test_slot_tile_selected_marker_moves_to_secondary_when_primary_off():
+    # Explicit tile_primary=[] must stay empty (not become a bare "* ");
+    # the selected marker moves to the next non-empty line instead.
+    cfg = make_config()
+    cfg.view.tile_primary = []
+    cfg.view.tile_secondary = ["branch"]
+    sess = ElgatoSession(cfg, FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    s = state("p1", Status.BLOCKED, "api")  # single blocked -> auto-selected
+    s.branch = "feat/x"
+    sess.apply_snapshot("dev", [s])
+
+    tile = sess._slot_tile(0)
+
+    assert sess.selected() == AgentKey("dev", "p1")
+    assert tile.repo == ""            # explicit [] stays empty, never "* "
+    assert tile.branch == "* feat/x"  # marker moved to secondary
+
+
+def test_slot_tile_selected_marker_hidden_when_both_lines_off():
+    cfg = make_config()
+    cfg.view.tile_primary = []
+    cfg.view.tile_secondary = []
+    sess = ElgatoSession(cfg, FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED, "api")])  # single blocked -> auto-selected
+
+    tile = sess._slot_tile(0)
+
+    assert sess.selected() == AgentKey("dev", "p1")
+    assert tile.repo == ""
+    assert tile.branch == ""
