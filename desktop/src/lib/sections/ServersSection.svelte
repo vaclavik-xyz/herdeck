@@ -18,26 +18,26 @@
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
 
-  // Per-row stable keys. Plain (non-$state) — only serversWithKeys (the $derived)
-  // needs to be reactive; rowKeys is its private bookkeeping.
+  // Per-row stable keys. Plain (non-$state) — only serversWithKeys ($derived) is reactive.
   let nextKey = 0;
   let rowKeys: number[] = serversOf(payload).map(() => nextKey++);
-  // Track the last payload we assigned ourselves so the derived can tell when an
-  // external payload replacement (Discard / Apply) has arrived.
-  let localPayload: ConfigPayload = payload;
+  // skipReset: set to true immediately before every local payload mutation so the
+  // derived knows not to reset keys. Avoids proxy-identity issues with $bindable.
+  let skipReset = false;
 
   const serversWithKeys = $derived.by<Array<{ s: ServerRecord; key: number }>>(() => {
     const ss = serversOf(payload);
-    if (payload !== localPayload) {
-      // External reload: reset all keys so no stale TokenSecretField state bleeds.
+    if (!skipReset) {
+      // External reload (Discard / Apply): reset all keys so no stale
+      // TokenSecretField state bleeds across the replaced server list.
       rowKeys = ss.map(() => nextKey++);
-      localPayload = payload;
     }
+    skipReset = false; // consume the flag
     return ss.map((s, i) => ({ s, key: rowKeys[i] }));
   });
 
   function assign(next: ConfigPayload): void {
-    localPayload = next; // mark as locally produced before triggering derived
+    skipReset = true; // tell derived: this is a local mutation, preserve keys
     payload = next;
   }
 
@@ -46,12 +46,12 @@
     onChange();
   }
   function add(): void {
-    rowKeys = [...rowKeys, nextKey++]; // stable key for the new tail row
+    rowKeys = [...rowKeys, nextKey++]; // stable key for the new tail row before assign
     assign(addServer(payload));
     onChange();
   }
   function remove(i: number): void {
-    rowKeys = rowKeys.filter((_, k) => k !== i); // drop key at index i
+    rowKeys = rowKeys.filter((_, k) => k !== i); // drop key at index i before assign
     assign(removeServer(payload, i));
     onChange();
   }
