@@ -2,6 +2,7 @@ import os
 import tomllib as _tomllib
 
 import pytest
+
 import herdeck.secrets as secret_store
 from herdeck.config import ConfigError
 from herdeck.deckapp.config_service import ConfigService

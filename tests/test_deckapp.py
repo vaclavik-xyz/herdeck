@@ -371,13 +371,10 @@ def test_error_body_is_browser_friendly_text():
 # --- config HTTP routes (Task 6) --------------------------------------------
 
 
-import json as _json
-
-
 def _post(app, path, body, token=None):
     req = urllib.request.Request(
         f"http://{app.host}:{app.port}{path}",
-        data=_json.dumps(body).encode(),
+        data=json.dumps(body).encode(),
         method="POST",
     )
     req.add_header("X-Herdeck-Token", token if token is not None else app.token)
@@ -444,12 +441,12 @@ def test_config_get_requires_token_and_returns_redacted(tmp_path, monkeypatch):
         bad = urllib.request.Request(f"http://{app.host}:{app.port}/config?token=nope")
         try:
             urllib.request.urlopen(bad)
-            assert False, "expected 403"
+            raise AssertionError("expected 403")
         except urllib.error.HTTPError as e:
             assert e.code == 403
         # Right token -> redacted config
         ok = urllib.request.urlopen(f"http://{app.host}:{app.port}/config?token={app.token}")
-        data = _json.loads(ok.read())
+        data = json.loads(ok.read())
         assert data["base"]["deck"] == {"grid": "5x3"}
         assert data["secrets"]["TOK"]["set"] is True
         assert "real" not in ok.headers.get("X-Debug", "")  # value never leaks
@@ -470,7 +467,7 @@ def test_config_post_writes_and_triggers_reload(tmp_path, monkeypatch):
         body = {"base": {"servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
                          "deck": {"grid": "4x3"}}, "profiles": {}, "local": {}}
         resp = _post(app, "/config", body, token=app.token)
-        assert _json.loads(resp.read())["errors"] == []
+        assert json.loads(resp.read())["errors"] == []
         assert reloaded == [1]
         assert 'grid = "4x3"' in cfg.read_text()
     finally:
@@ -559,7 +556,7 @@ def test_config_routes_404_without_service():
         # POST /config -> 404
         req = urllib.request.Request(
             f"http://{app.host}:{app.port}/config",
-            data=_json.dumps({"base": {}, "profiles": {}, "local": {}}).encode(),
+            data=json.dumps({"base": {}, "profiles": {}, "local": {}}).encode(),
             method="POST",
         )
         req.add_header("X-Herdeck-Token", app.token)
