@@ -32,7 +32,9 @@
   {#if value}
     {#if flag.set}
       <span class="ok" title={flag.source ?? ""}>🔑✓</span>
-      <button type="button" onclick={onclear}>clear</button>
+      {#if flag.source === "keychain"}
+        <button type="button" onclick={onclear}>clear</button>
+      {/if}
     {:else}
       <span class="missing">🔑✗</span>
       <button type="button" onclick={() => (entering = true)}>nastav</button>

@@ -49,7 +49,7 @@
 </script>
 
 <h2>Servers</h2>
-{#each servers as s, i (i)}
+{#each servers as s, i (`${s.id}|${s.url}|${s.token_env}`)}
   <fieldset>
     <legend>{s.id || "(nový server)"} <button type="button" onclick={() => remove(i)}>×</button></legend>
     <TextField label="id" value={s.id} oninput={(v) => set(i, "id", v)} />
