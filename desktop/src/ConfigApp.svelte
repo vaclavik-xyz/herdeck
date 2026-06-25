@@ -42,12 +42,24 @@
 
   async function load(): Promise<void> {
     try {
-      payload = parseConfig(await cfg.read());
+      const fresh = parseConfig(await cfg.read());
+      if (fresh == null) {
+        // A 200 that is not an object should not wipe the editor; surface it.
+        notice = "neočekávaná odpověď configu ze sidecaru";
+        return;
+      }
+      payload = fresh;
       dirty = false;
       errors = [];
-      reloadRev += 1;
+      notice = "";
+      reloadRev += 1; // re-seed map sections' local rows (keep the bump from Task 11)
     } catch {
-      payload = null; // sidecar not ready / no config -> onboarding handled in řez 4
+      // Transport/sidecar error (404 no config service, sidecar down, reload failed).
+      // ALWAYS surface it; keep any in-memory payload — never silently null a loaded
+      // config, and never swallow a failed discard/reload after a payload exists.
+      notice = payload == null
+        ? "sidecar zatím neběží — zkouším znovu…"
+        : "obnovení configu ze sidecaru selhalo (neuložené změny zůstávají)";
     }
   }
 
@@ -126,6 +138,9 @@
       {#if payload == null}
         <p class="hint">Načítám config… (nebo sidecar zatím neběží)</p>
       {:else if active === "Servers"}
+        {#if (payload.base.servers == null || (payload.base.servers as unknown[]).length === 0)}
+          <p class="hint">Zatím žádný server. Přidej první a klikni Apply pro vytvoření configu.</p>
+        {/if}
         <ServersSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
       {:else if active === "Deck"}
         <DeckSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
