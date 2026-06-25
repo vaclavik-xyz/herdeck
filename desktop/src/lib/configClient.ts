@@ -250,6 +250,150 @@ export function removeAt(
   return { ...payload, [root]: rootObj };
 }
 
+/** A base macro record as the editor edits it. */
+export interface MacroRecord {
+  label: string;
+  text: string;
+}
+
+/** The base `macros` list as editable records (always an array). */
+export function macrosOf(payload: ConfigPayload): MacroRecord[] {
+  const raw = payload.base.macros;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((m) => {
+    const r = obj(m);
+    return { label: str(r.label), text: str(r.text) };
+  });
+}
+
+function withMacros(payload: ConfigPayload, macros: MacroRecord[]): ConfigPayload {
+  // Absent `macros` means "use DEFAULT_MACROS"; an empty list would disable them. So when
+  // the last macro is removed, OMIT the key (return to defaults) rather than write `[]`.
+  const base = { ...clone(payload.base) };
+  if (macros.length === 0) delete base.macros;
+  else base.macros = macros;
+  return { ...payload, base };
+}
+
+/** NEW payload with a blank macro appended. */
+export function addMacro(payload: ConfigPayload): ConfigPayload {
+  return withMacros(payload, [...macrosOf(payload), { label: "", text: "" }]);
+}
+
+/** NEW payload with macro `index` removed. */
+export function removeMacro(payload: ConfigPayload, index: number): ConfigPayload {
+  return withMacros(payload, macrosOf(payload).filter((_, i) => i !== index));
+}
+
+/** NEW payload with one field of macro `index` set. */
+export function updateMacro(
+  payload: ConfigPayload,
+  index: number,
+  field: keyof MacroRecord,
+  value: string,
+): ConfigPayload {
+  const macros = macrosOf(payload).map((m, i) => (i === index ? { ...m, [field]: value } : m));
+  return withMacros(payload, macros);
+}
+
+// --- map-section serialization core (used by Start/Answer profile sections) ---
+
+/** A start-profile editor row. */
+export interface StartProfileRow {
+  name: string;
+  argv: string[];
+}
+
+/** An answer-profile editor row. `approve_always: null` = the key was ABSENT, which the
+ *  backend treats as "fall back to approve"; preserved so an unrelated edit never writes
+ *  `[]` (which would mean "no approve-always keys" — a silent semantics change). */
+export interface AnswerProfileRow {
+  name: string;
+  approve: string[];
+  deny: string[];
+  stop: string[];
+  approve_always: string[] | null;
+}
+
+function strList(v: unknown): string[] {
+  return Array.isArray(v) ? v.map(String) : [];
+}
+
+/** The base `start_profiles` map (`name → argv`) as editor rows. */
+export function startProfileRows(payload: ConfigPayload): StartProfileRow[] {
+  const sec = asDict((payload.base as Record<string, unknown>).start_profiles);
+  return Object.entries(sec).map(([name, argv]) => ({ name, argv: strList(argv) }));
+}
+
+/** The base `answer_profiles` map as editor rows, preserving `approve_always` absence. */
+export function answerProfileRows(payload: ConfigPayload): AnswerProfileRow[] {
+  const sec = asDict((payload.base as Record<string, unknown>).answer_profiles);
+  return Object.entries(sec).map(([name, raw]) => {
+    const o = asDict(raw);
+    return {
+      name,
+      approve: strList(o.approve),
+      deny: strList(o.deny),
+      stop: strList(o.stop),
+      approve_always: "approve_always" in o ? strList(o.approve_always) : null,
+    };
+  });
+}
+
+/** Serialize named rows into a map section. Blank names are skipped; a repeated name sets
+ *  `duplicate`; with no named rows the section is `undefined` so the caller OMITS the key
+ *  (never writes `{}`, which would disable backend defaults). */
+export function serializeNamedRows<R extends { name: string }, V>(
+  rows: R[],
+  toValue: (row: R) => V,
+): { duplicate: boolean; section: Record<string, V> | undefined } {
+  const named = rows.map((r) => r.name.trim()).filter((n) => n !== "");
+  const duplicate = new Set(named).size !== named.length;
+  const section: Record<string, V> = {};
+  for (const r of rows) {
+    const n = r.name.trim();
+    if (n !== "") section[n] = toValue(r);
+  }
+  return { duplicate, section: Object.keys(section).length > 0 ? section : undefined };
+}
+
+/** NEW payload with `base[section]` set to `serialized` (or the key DELETED when
+ *  `serialized` is `undefined` — absent means "use backend defaults", unlike `{}`), or
+ *  `null` when the serialized section is unchanged (so the caller skips marking dirty). */
+export function applyMapSection(
+  payload: ConfigPayload,
+  section: string,
+  serialized: Record<string, unknown> | undefined,
+): ConfigPayload | null {
+  const current = (payload.base as Record<string, unknown>)[section];
+  const currentSig = current === undefined ? "" : JSON.stringify(current);
+  const nextSig = serialized === undefined ? "" : JSON.stringify(serialized);
+  if (currentSig === nextSig) return null;
+  const base = { ...(payload.base as Record<string, unknown>) };
+  if (serialized === undefined) delete base[section];
+  else base[section] = serialized;
+  return { ...payload, base };
+}
+
+/** NEW payload writing `[root][section][key] = list`, or DELETING that key when `list` is
+ *  empty. In this config an ABSENT list key means "use the backend default" (e.g.
+ *  `DEFAULT_BOTTOM_ROW`, all servers for `overview_order`); writing an explicit `[]` would
+ *  instead mean "none" and silently disable that default. So řez 4a maps an emptied list
+ *  editor to "return to default" (omit the key). Authoring an INTENTIONAL explicit-empty
+ *  list (e.g. `view.tile_primary = []` to switch a tile line off) is řez 4b's presence-aware
+ *  override UX — out of scope here. */
+export function putList(
+  payload: ConfigPayload,
+  root: ConfigRoot,
+  section: string,
+  key: string,
+  list: string[],
+): ConfigPayload {
+  return list.length === 0
+    ? removeAt(payload, root, section, key)
+    : setAt(payload, root, section, key, list);
+}
+
 export function commandTransport(invoke: InvokeFn): ConfigTransport {
   const asCode = (v: unknown) => (typeof v === "number" ? v : 0);
   return {

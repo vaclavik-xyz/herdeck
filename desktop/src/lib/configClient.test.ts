@@ -244,3 +244,111 @@ describe("getAt / setAt / removeAt", () => {
     expect(getAt(next, "base", "deck", "grid")).toBe("5x3");
   });
 });
+
+import { macrosOf, addMacro, removeMacro, updateMacro } from "./configClient";
+
+describe("macros mutators", () => {
+  const withMacros = () =>
+    parseConfig({ base: { macros: [{ label: "go", text: "continue" }] } })!;
+
+  it("macrosOf returns the base macros list or []", () => {
+    expect(macrosOf(withMacros())).toEqual([{ label: "go", text: "continue" }]);
+    expect(macrosOf(parseConfig({})!)).toEqual([]);
+  });
+
+  it("addMacro appends a blank record without touching the input", () => {
+    const p = withMacros();
+    const next = addMacro(p);
+    expect(macrosOf(next)).toHaveLength(2);
+    expect(macrosOf(next)[1]).toEqual({ label: "", text: "" });
+    expect(macrosOf(p)).toHaveLength(1); // input untouched
+  });
+
+  it("updateMacro sets one field on a copy", () => {
+    const p = withMacros();
+    const next = updateMacro(p, 0, "text", "run tests");
+    expect(macrosOf(next)[0]).toEqual({ label: "go", text: "run tests" });
+    expect(macrosOf(p)[0].text).toBe("continue"); // input untouched
+  });
+
+  it("removeMacro drops the indexed record", () => {
+    const p = addMacro(withMacros());
+    const next = removeMacro(p, 0);
+    expect(macrosOf(next)).toHaveLength(1);
+    expect(macrosOf(next)[0]).toEqual({ label: "", text: "" });
+  });
+
+  it("removing the LAST macro omits base.macros (→ DEFAULT_MACROS, not [])", () => {
+    const p = parseConfig({ base: { macros: [{ label: "go", text: "continue" }] } })!;
+    const next = removeMacro(p, 0);
+    expect(macrosOf(next)).toEqual([]);
+    expect("macros" in (next.base as Record<string, unknown>)).toBe(false);
+  });
+});
+
+import { startProfileRows, answerProfileRows, serializeNamedRows, applyMapSection, putList } from "./configClient";
+
+describe("map-section serialization helpers", () => {
+  it("putList writes a non-empty list but OMITS the key when empty (→ backend default)", () => {
+    const p = parseConfig({ base: { view: { bottom_row: ["a", "b"] } } })!;
+    const cleared = putList(p, "base", "view", "bottom_row", []);
+    expect(getAt(cleared, "base", "view", "bottom_row")).toBeUndefined(); // omitted, not []
+    const set = putList(p, "base", "view", "tile_fields", ["repo"]);
+    expect(getAt(set, "base", "view", "tile_fields")).toEqual(["repo"]);
+  });
+
+  it("startProfileRows reads name→argv rows (or [])", () => {
+    const p = parseConfig({ base: { start_profiles: { claude: ["claude"], codex: ["codex", "--x"] } } })!;
+    expect(startProfileRows(p)).toEqual([
+      { name: "claude", argv: ["claude"] },
+      { name: "codex", argv: ["codex", "--x"] },
+    ]);
+    expect(startProfileRows(parseConfig({})!)).toEqual([]);
+  });
+
+  it("answerProfileRows preserves approve_always ABSENCE as null (not [])", () => {
+    const p = parseConfig({
+      base: {
+        answer_profiles: {
+          claude: { approve: ["1"], deny: ["esc"], stop: ["ctrl+c"], approve_always: ["2"] },
+          codex: { approve: ["y"], deny: ["n"], stop: ["ctrl+c"] }, // no approve_always
+        },
+      },
+    })!;
+    const rows = answerProfileRows(p);
+    expect(rows[0].approve_always).toEqual(["2"]);
+    expect(rows[1].approve_always).toBeNull(); // absent — NOT []
+  });
+
+  it("serializeNamedRows skips blank names and omits an empty section (undefined)", () => {
+    const r = serializeNamedRows([{ name: "", argv: ["x"] }], (e: { argv: string[] }) => e.argv);
+    expect(r.duplicate).toBe(false);
+    expect(r.section).toBeUndefined(); // no named rows → omit the key (never write {})
+  });
+
+  it("serializeNamedRows flags a duplicate name", () => {
+    const r = serializeNamedRows(
+      [{ name: "a", argv: ["1"] }, { name: "a", argv: ["2"] }],
+      (e: { argv: string[] }) => e.argv,
+    );
+    expect(r.duplicate).toBe(true);
+  });
+
+  it("serializeNamedRows builds the map from named rows only", () => {
+    const r = serializeNamedRows(
+      [{ name: "claude", argv: ["claude"] }, { name: "", argv: [] }],
+      (e: { argv: string[] }) => e.argv,
+    );
+    expect(r.section).toEqual({ claude: ["claude"] });
+  });
+
+  it("applyMapSection writes, deletes on undefined, and returns null on no-op", () => {
+    const p = parseConfig({ base: { deck: { grid: "5x3" } } })!;
+    expect(applyMapSection(p, "start_profiles", undefined)).toBeNull(); // absent → undefined = no change
+    const withSec = applyMapSection(p, "start_profiles", { claude: ["claude"] })!;
+    expect((withSec.base as Record<string, unknown>).start_profiles).toEqual({ claude: ["claude"] });
+    const removed = applyMapSection(withSec, "start_profiles", undefined)!;
+    expect("start_profiles" in (removed.base as Record<string, unknown>)).toBe(false);
+    expect(applyMapSection(withSec, "start_profiles", { claude: ["claude"] })).toBeNull(); // unchanged
+  });
+});
