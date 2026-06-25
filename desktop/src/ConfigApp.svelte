@@ -10,6 +10,7 @@
   import MacrosSection from "./lib/sections/MacrosSection.svelte";
   import StartProfilesSection from "./lib/sections/StartProfilesSection.svelte";
   import NotificationsSection from "./lib/sections/NotificationsSection.svelte";
+  import SafetySection from "./lib/sections/SafetySection.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport as deckTransport } from "./lib/deckClient";
   import {
@@ -137,6 +138,8 @@
         <StartProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => (notice = m)} />
       {:else if active === "Notifications"}
         <NotificationsSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Safety"}
+        <SafetySection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
       {:else}
         <p class="hint">Sekce „{active}" — řez 4b.</p>
       {/if}
