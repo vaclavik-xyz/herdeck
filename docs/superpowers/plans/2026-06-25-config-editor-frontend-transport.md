@@ -481,6 +481,28 @@ and add a match arm in `.on_menu_event(...)` (alongside "show"/"hide"/"quit"):
             }
 ```
 
+- [ ] **Step 4b: Hide the config window on close (never destroy it)**
+
+So `open_config` / tray "Settings…" can always re-show the window, intercept its close request and HIDE instead of letting Tauri destroy it. In the `.setup(...)` closure in `run()` (line ~296), after `build_tray(app)?;`, add:
+
+```rust
+            // The config window is hidden at startup and reopened on demand; if it
+            // were allowed to close, Tauri would DESTROY it and open_config would
+            // then fail with "config window not found". Intercept close -> hide, so
+            // it persists for the app's lifetime (the floating deck + sidecar run on).
+            if let Some(cfg_win) = app.get_webview_window("config") {
+                let w = cfg_win.clone();
+                cfg_win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = w.hide();
+                    }
+                });
+            }
+```
+
+(`open_config` keeps its `ok_or_else("config window not found")` as a defensive fallback, but with hide-on-close the window is never absent after startup.)
+
 - [ ] **Step 5: Build + test**
 
 Run: `cd desktop/src-tauri && cargo build 2>&1 | tail -20 && cargo test 2>&1 | tail -10`
@@ -964,6 +986,7 @@ Create `desktop/src/ConfigApp.svelte` (Svelte 5 runes; mirror `App.svelte`'s dis
   let dirty = $state(false);
   let errors = $state<string[]>([]);
   let busy = $state(false);
+  let notice = $state(""); // transient out-of-band message (e.g. a failed secret op)
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
   const preview = $derived(discovery ? deckTransport((cmd, args) => invoke(cmd, args)) : null);
@@ -1050,7 +1073,7 @@ Create `desktop/src/ConfigApp.svelte` (Svelte 5 runes; mirror `App.svelte`'s dis
       {#if payload == null}
         <p class="hint">Načítám config… (nebo sidecar zatím neběží)</p>
       {:else if active === "Servers"}
-        <ServersSection {payload} onChange={markDirty} />
+        <ServersSection {payload} onChange={markDirty} onError={(m) => (notice = m)} />
       {:else}
         <p class="hint">Sekce „{active}" — řez 4.</p>
       {/if}
@@ -1063,6 +1086,7 @@ Create `desktop/src/ConfigApp.svelte` (Svelte 5 runes; mirror `App.svelte`'s dis
 
   <footer class="savebar">
     <button onclick={discard} disabled={!dirty || busy}>Discard</button>
+    {#if notice}<span class="notice">{notice}</span>{/if}
     <span class="errcount" class:bad={errors.length > 0}>⚠ {errors.length} chyb</span>
     <button onclick={apply} disabled={!dirty || busy}>Apply</button>
   </footer>
@@ -1082,6 +1106,7 @@ Create `desktop/src/ConfigApp.svelte` (Svelte 5 runes; mirror `App.svelte`'s dis
   .hint { color: #888; }
   .savebar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid #222; }
   .savebar button { margin: 0; }
+  .notice { color: #e0a030; }
   .errcount { margin-left: auto; color: #888; }
   .errcount.bad { color: #e05050; }
 </style>
@@ -1096,7 +1121,8 @@ Create a minimal `desktop/src/lib/sections/ServersSection.svelte` (Task 6 replac
 ```svelte
 <script lang="ts">
   import type { ConfigPayload } from "../configClient";
-  let { payload, onChange }: { payload: ConfigPayload; onChange: () => void } = $props();
+  let { payload, onChange, onError }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void } = $props();
 </script>
 
 <p class="hint">Servers — řez 3 Task 6.</p>
@@ -1344,8 +1370,8 @@ Replace `desktop/src/lib/sections/ServersSection.svelte` with the real component
     type ConfigPayload,
   } from "../configClient";
 
-  let { payload = $bindable(), onChange }: { payload: ConfigPayload; onChange: () => void } =
-    $props();
+  let { payload = $bindable(), onChange, onError }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void } = $props();
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
   const servers = $derived(serversOf(payload));
@@ -1363,12 +1389,20 @@ Replace `desktop/src/lib/sections/ServersSection.svelte` with the real component
     onChange();
   }
   async function setSecret(name: string, value: string): Promise<void> {
-    await cfg.setSecret(name, value);
-    payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: true, source: "keychain" } } };
+    const code = await cfg.setSecret(name, value); // 204 on success
+    if (code === 204) {
+      payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: true, source: "keychain" } } };
+    } else {
+      onError(`uložení tokenu '${name}' selhalo (HTTP ${code})`);
+    }
   }
   async function clearSecret(name: string): Promise<void> {
-    await cfg.clearSecret(name);
-    payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: false, source: null } } };
+    const code = await cfg.clearSecret(name); // 204 on success
+    if (code === 204) {
+      payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: false, source: null } } };
+    } else {
+      onError(`smazání tokenu '${name}' selhalo (HTTP ${code})`);
+    }
   }
 </script>
 
@@ -1406,7 +1440,7 @@ In `desktop/src/ConfigApp.svelte`, change the Servers render to bind the payload
 
 ```svelte
       {:else if active === "Servers"}
-        <ServersSection bind:payload onChange={markDirty} />
+        <ServersSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
 ```
 
 (`payload` is `$state<ConfigPayload | null>`; the `{#if payload == null}` guard above already narrows it to non-null in this branch.)

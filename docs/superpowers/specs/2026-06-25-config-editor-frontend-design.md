@@ -101,12 +101,19 @@ heterogenní). Widgety:
 ## Sekce (sidebar)
 
 Všech 10, editovatelných (uživatel zvolil kompletní editor): **Servers** (id/url/token_env, add/remove)
-· **Deck** (grid, `overview_order` list, hardware) · **View** (`management`, `agent_slots`,
-`tile_primary`/`tile_secondary` token listy) · **Theme** · **Macros** (KV) · **Start profiles**
-(KV/list) · **Notifications** (enabled/on/backends +
+· **Deck** (`grid`, `overview_order` list — base/profile sekce `[deck]`) · **View** (`management`,
+`agent_slots`, `tile_primary`/`tile_secondary` token listy) · **Theme** · **Macros** (KV) ·
+**Start profiles** (KV/list) · **Notifications** (enabled/on/backends +
 telegram token_env/chat_id) · **Safety** · **Answer profiles** (KV map profilů: approve/deny/stop/...) ·
 **Profiles** (seznam pojmenovaných profilů, `extends`, výběr `servers`, create/delete přes
 `create_profile`/`delete_profile`).
+
+**Hardware je local-only.** `[hardware]` (brightness, tick_interval, deck kind, web_bind/port, …)
+žije v `local.toml` (machine-specific), NE v `base`/profilových `[deck]` overlayích. Edituje se proto
+jako součást **local** payloadu (`read()["local"]["hardware"]`), zapisuje se do `local.toml`, a
+NIKDY se nenabízí jako profilový override. V GUI je to samostatná local-only podsekce (v rámci Deck
+nebo vlastní „Hardware (tento stroj)"), aby se hardware nikdy nedostal do `base.deck`/`profiles.*.deck`.
+Týká se řezu 4 (Deck sekce); řez 3 staví jen Servers.
 
 ## Profil přepínač (base / overlay)
 
@@ -118,7 +125,11 @@ pro perzistentní aktivní profil v `local.toml`.
   hodnotu jako dimmed placeholder; per-field override/clear. `extends` a výběr `servers` profilu jsou
   v sekci Profiles.
 - **env-locked profil** (`HERDECK_PROFILE` nastaven): přepínač zamčený, `set_active` disabled s
-  vysvětlením (backend `set_active` vrací `changed=false`).
+  vysvětlením. Aby šel disabled stav vykreslit PŘED interakcí, `read()` aktuálně env-lock nevrací —
+  proto **řez 4 přidá do `read()` payloadu aditivní pole `env_locked: bool` + efektivní `active_profile`**
+  (malá backend úprava `ConfigService.read()`: `env_locked = bool(os.environ.get("HERDECK_PROFILE"))`).
+  Fallback bez backend změny: pokus o `set_active` → `changed=false` → zobrazit „profil zamčen env".
+  (Řez 3 staví switcher jen jako disabled skeleton, takže tohle se týká řezu 4.)
 
 ## Preview
 
