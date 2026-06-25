@@ -18,24 +18,22 @@
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
 
-  // Per-row stable keys. Plain (non-$state) variables — only serversWithKeys
-  // (which is $derived) needs to be reactive; rowKeys is its private bookkeeping.
+  // Per-row stable keys. Plain (non-$state) — only serversWithKeys (the $derived)
+  // needs to be reactive. rowKeys is its private bookkeeping.
   let nextKey = 0;
-  // Initialize eagerly so the first render already has correct keys.
   let rowKeys: number[] = serversOf(payload).map(() => nextKey++);
+  // expectedLen tracks the server count after local mutations so the derived can
+  // detect an external payload replacement (Discard/Apply) and reset all keys.
+  let expectedLen = rowKeys.length;
 
-  // Pure derived: reads payload → servers → zips with rowKeys.
-  // rowKeys is plain non-reactive state mutated before payload is reassigned
-  // in add/remove, so the derived always sees a consistent rowKeys on re-run.
-  // For external reloads that skip add/remove (Discard/Apply), reconcile here
-  // by reading and locally extending/truncating — writing only to local vars,
-  // not $state, which Svelte 5 permits inside $derived.by.
   const serversWithKeys = $derived.by<Array<{ s: ServerRecord; key: number }>>(() => {
     const ss = serversOf(payload);
-    // Grow for external reload that adds rows.
-    while (rowKeys.length < ss.length) rowKeys.push(nextKey++);
-    // Shrink for external reload that removes rows.
-    if (rowKeys.length > ss.length) rowKeys = rowKeys.slice(0, ss.length);
+    if (ss.length !== expectedLen) {
+      // External reload (Discard / Apply): reset all keys so no stale state bleeds
+      // between rows. TokenSecretField instances are fully remounted.
+      rowKeys = ss.map(() => nextKey++);
+      expectedLen = ss.length;
+    }
     return ss.map((s, i) => ({ s, key: rowKeys[i] }));
   });
 
@@ -45,12 +43,14 @@
   }
   function add(): void {
     rowKeys = [...rowKeys, nextKey++]; // stable key for the new tail row
-    payload = addServer(payload); // triggers derived re-run with keys already updated
+    expectedLen = rowKeys.length;      // mark length as locally expected
+    payload = addServer(payload);
     onChange();
   }
   function remove(i: number): void {
-    rowKeys = rowKeys.filter((_, k) => k !== i); // drop key at index i first
-    payload = removeServer(payload, i); // then trigger derived re-run
+    rowKeys = rowKeys.filter((_, k) => k !== i); // drop key at index i
+    expectedLen = rowKeys.length;                  // mark length as locally expected
+    payload = removeServer(payload, i);
     onChange();
   }
   async function setSecret(name: string, value: string): Promise<void> {
