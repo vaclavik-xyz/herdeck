@@ -7,6 +7,7 @@
   import DeckSection from "./lib/sections/DeckSection.svelte";
   import ViewSection from "./lib/sections/ViewSection.svelte";
   import ThemeSection from "./lib/sections/ThemeSection.svelte";
+  import MacrosSection from "./lib/sections/MacrosSection.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport as deckTransport } from "./lib/deckClient";
   import {
@@ -126,6 +127,8 @@
         <ViewSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
       {:else if active === "Theme"}
         <ThemeSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Macros"}
+        <MacrosSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
       {:else}
         <p class="hint">Sekce „{active}" — řez 4b.</p>
       {/if}
