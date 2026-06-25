@@ -3,6 +3,11 @@ import {
   parseConfig,
   parseValidate,
   commandTransport,
+  toWriteBody,
+  inheritedValue,
+  setOverride,
+  clearOverride,
+  secretFlag,
   type ConfigPayload,
 } from "./configClient";
 
@@ -80,5 +85,60 @@ describe("commandTransport", () => {
       { cmd: "config_secret_set", args: { tokenEnv: "TOK", value: "v" } },
       { cmd: "config_secret_clear", args: { tokenEnv: "TOK" } },
     ]);
+  });
+});
+
+describe("toWriteBody", () => {
+  it("drops secrets and deep-copies base/profiles/local", () => {
+    const payload = parseConfig(rawConfig())!;
+    const body = toWriteBody(payload);
+    expect(body).toEqual({
+      base: { servers: [{ id: "local", url: "ws://x", token_env: "TOK" }], deck: { grid: "5x3" } },
+      profiles: { mobile: { view: { management: "bottom_row" } } },
+      local: { active_profile: "mobile" },
+    });
+    expect("secrets" in body).toBe(false);
+    // deep copy: mutating the body must not touch the source payload
+    (body.base.deck as Record<string, unknown>).grid = "4x3";
+    expect(payload.base.deck).toEqual({ grid: "5x3" });
+  });
+});
+
+describe("inheritedValue", () => {
+  it("returns the base section value, or undefined when absent", () => {
+    const base = { view: { management: "launcher_menu" } };
+    expect(inheritedValue(base, "view", "management")).toBe("launcher_menu");
+    expect(inheritedValue(base, "view", "agent_slots")).toBeUndefined();
+    expect(inheritedValue(base, "deck", "grid")).toBeUndefined();
+  });
+});
+
+describe("setOverride / clearOverride", () => {
+  it("setOverride writes a new profiles map without touching the input", () => {
+    const profiles = { mobile: {} as Record<string, unknown> };
+    const next = setOverride(profiles, "mobile", "view", "management", "bottom_row");
+    expect(next.mobile.view).toEqual({ management: "bottom_row" });
+    expect(profiles.mobile).toEqual({}); // input untouched
+  });
+
+  it("clearOverride removes the key and prunes empty section/profile", () => {
+    const profiles = { mobile: { view: { management: "bottom_row" } } };
+    const next = clearOverride(profiles, "mobile", "view", "management");
+    expect(next.mobile.view).toBeUndefined(); // empty section pruned
+    expect(profiles.mobile.view).toEqual({ management: "bottom_row" }); // input untouched
+  });
+
+  it("clearOverride on an absent key is a harmless no-op copy", () => {
+    const profiles = { mobile: { view: { management: "bottom_row" } } };
+    const next = clearOverride(profiles, "mobile", "deck", "grid");
+    expect(next.mobile.view).toEqual({ management: "bottom_row" });
+  });
+});
+
+describe("secretFlag", () => {
+  it("returns the flag or a not-set default", () => {
+    const payload = parseConfig(rawConfig())!;
+    expect(secretFlag(payload, "TOK")).toEqual({ set: true, source: "env" });
+    expect(secretFlag(payload, "MISSING")).toEqual({ set: false, source: null });
   });
 });

@@ -72,6 +72,73 @@ export interface ConfigTransport {
   clearSecret(tokenEnv: string): Promise<number>;
 }
 
+/** Structured deep copy for the JSON-shaped config model (no functions/dates). */
+function clone<T>(v: T): T {
+  return JSON.parse(JSON.stringify(v)) as T;
+}
+
+/** The editable config (no secrets), deep-copied so edits never alias the
+ *  fetched payload. This is exactly what `POST /config[/validate]` takes. */
+export function toWriteBody(payload: ConfigPayload): WriteBody {
+  return {
+    base: clone(payload.base),
+    profiles: clone(payload.profiles),
+    local: clone(payload.local),
+  };
+}
+
+/** The base value a profile overlay inherits for `section.key`, or undefined. */
+export function inheritedValue(
+  base: Record<string, unknown>,
+  section: string,
+  key: string,
+): unknown {
+  const sec = base[section];
+  if (sec == null || typeof sec !== "object" || Array.isArray(sec)) return undefined;
+  return (sec as Record<string, unknown>)[key];
+}
+
+/** New profiles map with `profiles[name][section][key] = value`. Input untouched. */
+export function setOverride(
+  profiles: Record<string, Record<string, unknown>>,
+  name: string,
+  section: string,
+  key: string,
+  value: unknown,
+): Record<string, Record<string, unknown>> {
+  const next = clone(profiles);
+  const overlay = next[name] ?? (next[name] = {});
+  const sec = (overlay[section] as Record<string, unknown> | undefined) ?? {};
+  sec[key] = value;
+  overlay[section] = sec;
+  return next;
+}
+
+/** New profiles map with the overlay `section.key` removed; an emptied section
+ *  (and an emptied profile body) is pruned so write() omits it. Input untouched. */
+export function clearOverride(
+  profiles: Record<string, Record<string, unknown>>,
+  name: string,
+  section: string,
+  key: string,
+): Record<string, Record<string, unknown>> {
+  const next = clone(profiles);
+  const overlay = next[name];
+  if (overlay == null) return next;
+  const sec = overlay[section];
+  if (sec != null && typeof sec === "object" && !Array.isArray(sec)) {
+    const s = sec as Record<string, unknown>;
+    delete s[key];
+    if (Object.keys(s).length === 0) delete overlay[section];
+  }
+  return next;
+}
+
+/** The presence flag for `name`, defaulting to not-set. */
+export function secretFlag(payload: ConfigPayload, name: string): SecretFlag {
+  return payload.secrets[name] ?? { set: false, source: null };
+}
+
 export function commandTransport(invoke: InvokeFn): ConfigTransport {
   const asCode = (v: unknown) => (typeof v === "number" ? v : 0);
   return {
