@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use herdeck_desktop_lib::http::{fetch_image, fetch_state, http_get, send_press};
+use herdeck_desktop_lib::http::{fetch_image, fetch_state, http_delete, http_get, http_post_json, send_press};
 
 /// Bind a loopback listener and, on one connection, reply with `response` then
 /// close. Returns the bound port (already listening before we return).
@@ -103,6 +103,53 @@ fn fetch_image_returns_none_on_404() {
     let (port, _rx) = serve_once_capture(b"HTTP/1.0 404 Not Found\r\n\r\n".to_vec());
     let url = fetch_image("127.0.0.1", port, "/panel", "T", Duration::from_secs(2)).unwrap();
     assert_eq!(url, None);
+}
+
+#[test]
+fn http_post_json_sends_body_and_returns_status_and_body() {
+    let (port, rx) = serve_once_capture(
+        b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"errors\":[]}".to_vec(),
+    );
+    let (code, body) = http_post_json(
+        "127.0.0.1",
+        port,
+        "/config",
+        ("X-Herdeck-Token", "HDR"),
+        "{\"base\":{}}",
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert_eq!(code, 200);
+    assert_eq!(body, "{\"errors\":[]}");
+    let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(req.starts_with("POST /config HTTP/1.0"), "request was: {req:?}");
+    assert!(req.contains("X-Herdeck-Token: HDR\r\n"), "request was: {req:?}");
+    assert!(req.ends_with("{\"base\":{}}"), "request was: {req:?}");
+}
+
+#[test]
+fn http_post_json_returns_400_status_with_body() {
+    let (port, _rx) = serve_once_capture(b"HTTP/1.0 400 Bad Request\r\n\r\nbad".to_vec());
+    let (code, _body) =
+        http_post_json("127.0.0.1", port, "/config", ("X-Herdeck-Token", "H"), "{", Duration::from_secs(2)).unwrap();
+    assert_eq!(code, 400);
+}
+
+#[test]
+fn http_delete_sends_token_header_and_returns_status() {
+    let (port, rx) = serve_once_capture(b"HTTP/1.0 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec());
+    let code = http_delete(
+        "127.0.0.1",
+        port,
+        "/secret/TOK",
+        ("X-Herdeck-Token", "HDR"),
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert_eq!(code, 204);
+    let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(req.starts_with("DELETE /secret/TOK HTTP/1.0"), "request was: {req:?}");
+    assert!(req.contains("X-Herdeck-Token: HDR\r\n"), "request was: {req:?}");
 }
 
 #[test]
