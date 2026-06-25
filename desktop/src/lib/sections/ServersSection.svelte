@@ -18,25 +18,24 @@
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
 
-  // Per-row keys that survive index shifts. Initialized eagerly (synchronously)
-  // so the keyed {#each} never sees undefined keys even on first render.
-  // Mutations (add/remove) maintain the array; external reloads (Discard/Apply)
-  // are reconciled by the derived below which fills fresh keys when lengths diverge.
-  let nextKey = serversOf(payload).length; // start counter past the initial batch
-  let rowKeys = $state<number[]>(serversOf(payload).map((_, i) => i));
+  // Per-row stable keys. Plain (non-$state) variables — only serversWithKeys
+  // (which is $derived) needs to be reactive; rowKeys is its private bookkeeping.
+  let nextKey = 0;
+  // Initialize eagerly so the first render already has correct keys.
+  let rowKeys: number[] = serversOf(payload).map(() => nextKey++);
 
-  // Guard against external payload reloads (Discard/Apply) changing server count.
-  // We derive a reconciled list that always has exactly servers.length valid keys.
+  // Pure derived: reads payload → servers → zips with rowKeys.
+  // rowKeys is plain non-reactive state mutated before payload is reassigned
+  // in add/remove, so the derived always sees a consistent rowKeys on re-run.
+  // For external reloads that skip add/remove (Discard/Apply), reconcile here
+  // by reading and locally extending/truncating — writing only to local vars,
+  // not $state, which Svelte 5 permits inside $derived.by.
   const serversWithKeys = $derived.by<Array<{ s: ServerRecord; key: number }>>(() => {
     const ss = serversOf(payload);
-    // Grow: append fresh keys for new rows beyond what rowKeys tracks.
-    while (rowKeys.length < ss.length) {
-      rowKeys.push(nextKey++);
-    }
-    // Shrink: drop excess keys.
-    if (rowKeys.length > ss.length) {
-      rowKeys = rowKeys.slice(0, ss.length);
-    }
+    // Grow for external reload that adds rows.
+    while (rowKeys.length < ss.length) rowKeys.push(nextKey++);
+    // Shrink for external reload that removes rows.
+    if (rowKeys.length > ss.length) rowKeys = rowKeys.slice(0, ss.length);
     return ss.map((s, i) => ({ s, key: rowKeys[i] }));
   });
 
@@ -45,13 +44,13 @@
     onChange();
   }
   function add(): void {
-    payload = addServer(payload);
-    rowKeys = [...rowKeys, nextKey++]; // key for the new tail row
+    rowKeys = [...rowKeys, nextKey++]; // stable key for the new tail row
+    payload = addServer(payload); // triggers derived re-run with keys already updated
     onChange();
   }
   function remove(i: number): void {
-    payload = removeServer(payload, i);
-    rowKeys = rowKeys.filter((_, k) => k !== i); // drop key at index i
+    rowKeys = rowKeys.filter((_, k) => k !== i); // drop key at index i first
+    payload = removeServer(payload, i); // then trigger derived re-run
     onChange();
   }
   async function setSecret(name: string, value: string): Promise<void> {
