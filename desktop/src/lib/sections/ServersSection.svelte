@@ -10,29 +10,30 @@
     updateServer,
     secretFlag,
     type ConfigPayload,
+    type ServerRecord,
   } from "../configClient";
 
   let { payload = $bindable(), onChange, onError }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void } = $props();
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
-  const servers = $derived(serversOf(payload));
 
-  // Stable per-row keys independent of editable values.
-  let nextKey = $state(0);
-  let rowKeys = $state<number[]>([]);
+  // keyGen: a stable closure-captured counter used by the derived below.
+  // This lets us generate unique monotone keys without $effect timing issues.
+  let keyGen = 0;
 
-  // Keep rowKeys in sync with servers so external reloads (Discard/Apply) never
-  // leave rowKeys shorter than servers (which would cause ?? i fallback collisions).
-  // When servers grows, append fresh counter values; when it shrinks, truncate.
-  $effect(() => {
-    const len = servers.length;
-    if (rowKeys.length < len) {
-      const fill = Array.from({ length: len - rowKeys.length }, () => nextKey++);
-      rowKeys = [...rowKeys, ...fill];
-    } else if (rowKeys.length > len) {
-      rowKeys = rowKeys.slice(0, len);
+  // serversWithKeys is re-derived on every servers change. It expands/contracts
+  // the keys array synchronously so the keyed {#each} never sees undefined keys.
+  // We hold the prior key array in a captured variable so stable rows keep their key.
+  let prevKeys: number[] = [];
+  const serversWithKeys = $derived.by<Array<{ s: ServerRecord; key: number }>>(() => {
+    const ss = serversOf(payload);
+    const next: number[] = [];
+    for (let i = 0; i < ss.length; i++) {
+      next.push(prevKeys[i] !== undefined ? prevKeys[i] : keyGen++);
     }
+    prevKeys = next;
+    return ss.map((s, i) => ({ s, key: next[i] }));
   });
 
   function set(i: number, field: "id" | "url" | "token_env", v: string): void {
@@ -41,12 +42,10 @@
   }
   function add(): void {
     payload = addServer(payload);
-    rowKeys = [...rowKeys, nextKey++];
     onChange();
   }
   function remove(i: number): void {
     payload = removeServer(payload, i);
-    rowKeys = rowKeys.filter((_, k) => k !== i);
     onChange();
   }
   async function setSecret(name: string, value: string): Promise<void> {
@@ -68,7 +67,7 @@
 </script>
 
 <h2>Servers</h2>
-{#each servers as s, i (rowKeys[i])}
+{#each serversWithKeys as { s, key }, i (key)}
   <fieldset>
     <legend>{s.id || "(nový server)"} <button type="button" onclick={() => remove(i)}>×</button></legend>
     <TextField label="id" value={s.id} oninput={(v) => set(i, "id", v)} />
