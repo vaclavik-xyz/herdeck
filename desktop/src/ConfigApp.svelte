@@ -8,6 +8,7 @@
   import ViewSection from "./lib/sections/ViewSection.svelte";
   import ThemeSection from "./lib/sections/ThemeSection.svelte";
   import MacrosSection from "./lib/sections/MacrosSection.svelte";
+  import StartProfilesSection from "./lib/sections/StartProfilesSection.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport as deckTransport } from "./lib/deckClient";
   import {
@@ -30,6 +31,7 @@
   let errors = $state<string[]>([]);
   let busy = $state(false);
   let notice = $state(""); // transient out-of-band message (e.g. a failed secret op)
+  let reloadRev = $state(0); // bumps on every load(); map sections re-seed local rows on change
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
   const preview = $derived(discovery ? deckTransport((cmd, args) => invoke(cmd, args)) : null);
@@ -40,6 +42,7 @@
       payload = parseConfig(await cfg.read());
       dirty = false;
       errors = [];
+      reloadRev += 1;
     } catch {
       payload = null; // sidecar not ready / no config -> onboarding handled in řez 4
     }
@@ -129,6 +132,8 @@
         <ThemeSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
       {:else if active === "Macros"}
         <MacrosSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Start profiles"}
+        <StartProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => (notice = m)} />
       {:else}
         <p class="hint">Sekce „{active}" — řez 4b.</p>
       {/if}
