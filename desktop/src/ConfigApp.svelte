@@ -4,6 +4,14 @@
   import { listen } from "@tauri-apps/api/event";
   import DeckView from "./lib/DeckView.svelte";
   import ServersSection from "./lib/sections/ServersSection.svelte";
+  import DeckSection from "./lib/sections/DeckSection.svelte";
+  import ViewSection from "./lib/sections/ViewSection.svelte";
+  import ThemeSection from "./lib/sections/ThemeSection.svelte";
+  import MacrosSection from "./lib/sections/MacrosSection.svelte";
+  import StartProfilesSection from "./lib/sections/StartProfilesSection.svelte";
+  import NotificationsSection from "./lib/sections/NotificationsSection.svelte";
+  import SafetySection from "./lib/sections/SafetySection.svelte";
+  import AnswerProfilesSection from "./lib/sections/AnswerProfilesSection.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport as deckTransport } from "./lib/deckClient";
   import {
@@ -26,6 +34,7 @@
   let errors = $state<string[]>([]);
   let busy = $state(false);
   let notice = $state(""); // transient out-of-band message (e.g. a failed secret op)
+  let reloadRev = $state(0); // bumps on every load(); map sections re-seed local rows on change
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
   const preview = $derived(discovery ? deckTransport((cmd, args) => invoke(cmd, args)) : null);
@@ -33,11 +42,24 @@
 
   async function load(): Promise<void> {
     try {
-      payload = parseConfig(await cfg.read());
+      const fresh = parseConfig(await cfg.read());
+      if (fresh == null) {
+        // A 200 that is not an object should not wipe the editor; surface it.
+        notice = "neočekávaná odpověď configu ze sidecaru";
+        return;
+      }
+      payload = fresh;
       dirty = false;
       errors = [];
+      notice = "";
+      reloadRev += 1; // re-seed map sections' local rows (keep the bump from Task 11)
     } catch {
-      payload = null; // sidecar not ready / no config -> onboarding handled in řez 4
+      // Transport/sidecar error (404 no config service, sidecar down, reload failed).
+      // ALWAYS surface it; keep any in-memory payload — never silently null a loaded
+      // config, and never swallow a failed discard/reload after a payload exists.
+      notice = payload == null
+        ? "sidecar zatím neběží — zkouším znovu…"
+        : "obnovení configu ze sidecaru selhalo (neuložené změny zůstávají)";
     }
   }
 
@@ -116,9 +138,28 @@
       {#if payload == null}
         <p class="hint">Načítám config… (nebo sidecar zatím neběží)</p>
       {:else if active === "Servers"}
+        {#if (payload.base.servers == null || (payload.base.servers as unknown[]).length === 0)}
+          <p class="hint">Zatím žádný server. Přidej první a klikni Apply pro vytvoření configu.</p>
+        {/if}
         <ServersSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Deck"}
+        <DeckSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "View"}
+        <ViewSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Theme"}
+        <ThemeSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Macros"}
+        <MacrosSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Start profiles"}
+        <StartProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Notifications"}
+        <NotificationsSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Safety"}
+        <SafetySection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Answer profiles"}
+        <AnswerProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => (notice = m)} />
       {:else}
-        <p class="hint">Sekce „{active}" — řez 4.</p>
+        <p class="hint">Sekce „{active}" — řez 4b.</p>
       {/if}
     </section>
 
