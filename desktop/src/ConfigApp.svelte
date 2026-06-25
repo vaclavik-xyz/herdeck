@@ -116,7 +116,7 @@
       {#if payload == null}
         <p class="hint">Načítám config… (nebo sidecar zatím neběží)</p>
       {:else if active === "Servers"}
-        <ServersSection {payload} onChange={markDirty} onError={(m) => (notice = m)} />
+        <ServersSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
       {:else}
         <p class="hint">Sekce „{active}" — řez 4.</p>
       {/if}

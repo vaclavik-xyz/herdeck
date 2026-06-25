@@ -144,6 +144,53 @@ export function secretFlag(payload: ConfigPayload, name: string): SecretFlag {
   return payload.secrets[name] ?? { set: false, source: null };
 }
 
+/** A base server record as the editor edits it. */
+export interface ServerRecord {
+  id: string;
+  url: string;
+  token_env: string;
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+/** The base `servers` list as editable records (always an array). */
+export function serversOf(payload: ConfigPayload): ServerRecord[] {
+  const raw = payload.base.servers;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((s) => {
+    const r = obj(s);
+    return { id: str(r.id), url: str(r.url), token_env: str(r.token_env) };
+  });
+}
+
+function withServers(payload: ConfigPayload, servers: ServerRecord[]): ConfigPayload {
+  return { ...payload, base: { ...clone(payload.base), servers } };
+}
+
+/** NEW payload with a blank server appended. */
+export function addServer(payload: ConfigPayload): ConfigPayload {
+  return withServers(payload, [...serversOf(payload), { id: "", url: "", token_env: "" }]);
+}
+
+/** NEW payload with server `index` removed. */
+export function removeServer(payload: ConfigPayload, index: number): ConfigPayload {
+  const servers = serversOf(payload).filter((_, i) => i !== index);
+  return withServers(payload, servers);
+}
+
+/** NEW payload with one field of server `index` set. */
+export function updateServer(
+  payload: ConfigPayload,
+  index: number,
+  field: keyof ServerRecord,
+  value: string,
+): ConfigPayload {
+  const servers = serversOf(payload).map((s, i) => (i === index ? { ...s, [field]: value } : s));
+  return withServers(payload, servers);
+}
+
 export function commandTransport(invoke: InvokeFn): ConfigTransport {
   const asCode = (v: unknown) => (typeof v === "number" ? v : 0);
   return {

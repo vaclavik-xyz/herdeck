@@ -142,3 +142,36 @@ describe("secretFlag", () => {
     expect(secretFlag(payload, "MISSING")).toEqual({ set: false, source: null });
   });
 });
+
+import { serversOf, addServer, removeServer, updateServer } from "./configClient";
+
+describe("server mutations", () => {
+  it("serversOf returns the base server list or []", () => {
+    expect(serversOf(parseConfig(rawConfig())!)).toEqual([
+      { id: "local", url: "ws://x", token_env: "TOK" },
+    ]);
+    expect(serversOf(parseConfig({})!)).toEqual([]);
+  });
+
+  it("addServer appends a blank server without touching the input", () => {
+    const p = parseConfig(rawConfig())!;
+    const next = addServer(p);
+    expect(serversOf(next)).toHaveLength(2);
+    expect(serversOf(next)[1]).toEqual({ id: "", url: "", token_env: "" });
+    expect(serversOf(p)).toHaveLength(1); // input untouched
+  });
+
+  it("updateServer sets one field on a copy", () => {
+    const p = parseConfig(rawConfig())!;
+    const next = updateServer(p, 0, "url", "ws://new");
+    expect(serversOf(next)[0].url).toBe("ws://new");
+    expect(serversOf(p)[0].url).toBe("ws://x"); // input untouched
+  });
+
+  it("removeServer drops the indexed server", () => {
+    const p = addServer(parseConfig(rawConfig())!);
+    const next = removeServer(p, 0);
+    expect(serversOf(next)).toHaveLength(1);
+    expect(serversOf(next)[0]).toEqual({ id: "", url: "", token_env: "" });
+  });
+});
