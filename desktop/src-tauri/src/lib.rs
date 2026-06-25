@@ -33,6 +33,10 @@ struct AppState {
 /// Default timeout for the Rust-side sidecar proxy calls.
 const SIDECAR_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// The sidecar's mutating routes authenticate with this header (matches web.py
+/// and the deck `/press`). GET routes use a `?token=` query param instead.
+const HDR_TOKEN: &str = "X-Herdeck-Token";
+
 /// What the WebView is told about the sidecar. The access **token is deliberately
 /// omitted**: the frontend never talks to the sidecar directly. It invokes the
 /// token-free `check_health` / `deck_state` / `deck_tile` / `deck_panel` /
@@ -136,6 +140,124 @@ fn deck_press(state: tauri::State<'_, AppState>, index: u32) -> Result<u16, Stri
     http::send_press(&d.host, d.port, index, &d.token, SIDECAR_TIMEOUT)
 }
 
+/// Proxy `GET /config` (token as query param) → the redacted config JSON
+/// `{base, profiles, local, secrets}`. `Err` if the sidecar has no config
+/// service (404) or is unreachable.
+#[tauri::command]
+fn config_read(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let d = current_discovery(&state)?;
+    let body = http::http_get(
+        &d.host,
+        d.port,
+        &format!("/config?token={}", d.token),
+        SIDECAR_TIMEOUT,
+    )?;
+    serde_json::from_str(&body).map_err(|e| format!("invalid /config JSON from sidecar: {e}"))
+}
+
+/// Proxy `POST /config/validate` (header token) with the proposed config body →
+/// `{errors: [...]}`. The body is the JS `{base, profiles, local}` object.
+#[tauri::command]
+fn config_validate(
+    state: tauri::State<'_, AppState>,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    config_post_json(&state, "/config/validate", &body)
+}
+
+/// Proxy `POST /config` (header token) — atomic write + reload on the sidecar
+/// when `errors` is empty. Returns `{errors: [...]}`.
+#[tauri::command]
+fn config_write(
+    state: tauri::State<'_, AppState>,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    config_post_json(&state, "/config", &body)
+}
+
+/// Proxy `POST /profiles/active` (header token) → `{changed: bool}`. A 400
+/// (unknown/invalid profile name) surfaces as `Err` so the UI can show it.
+#[tauri::command]
+fn config_set_active(
+    state: tauri::State<'_, AppState>,
+    name: String,
+) -> Result<serde_json::Value, String> {
+    config_post_json(&state, "/profiles/active", &serde_json::json!({ "name": name }))
+}
+
+/// Proxy `POST /secret` (header token) — store `value` for `token_env` in the
+/// OS keychain. Returns the HTTP status (204 ok, 400 missing fields). The value
+/// is one-way: it is never read back.
+#[tauri::command]
+fn config_secret_set(
+    state: tauri::State<'_, AppState>,
+    token_env: String,
+    value: String,
+) -> Result<u16, String> {
+    let d = current_discovery(&state)?;
+    let body = serde_json::json!({ "token_env": token_env, "value": value }).to_string();
+    let (code, _resp) = http::http_post_json(
+        &d.host,
+        d.port,
+        "/secret",
+        (HDR_TOKEN, &d.token),
+        &body,
+        SIDECAR_TIMEOUT,
+    )?;
+    Ok(code)
+}
+
+/// Proxy `DELETE /secret/{token_env}` (header token) → status (204 ok).
+#[tauri::command]
+fn config_secret_clear(
+    state: tauri::State<'_, AppState>,
+    token_env: String,
+) -> Result<u16, String> {
+    let d = current_discovery(&state)?;
+    http::http_delete(
+        &d.host,
+        d.port,
+        &format!("/secret/{token_env}"),
+        (HDR_TOKEN, &d.token),
+        SIDECAR_TIMEOUT,
+    )
+}
+
+/// Shared POST-JSON-and-parse for the config routes that return a JSON object on
+/// 200. A non-200 (e.g. 400 for a malformed body / bad profile name) is an `Err`
+/// the command surfaces to JS.
+fn config_post_json(
+    state: &tauri::State<'_, AppState>,
+    path: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let d = current_discovery(state)?;
+    let (code, resp) = http::http_post_json(
+        &d.host,
+        d.port,
+        path,
+        (HDR_TOKEN, &d.token),
+        &body.to_string(),
+        SIDECAR_TIMEOUT,
+    )?;
+    if code == 200 {
+        serde_json::from_str(&resp).map_err(|e| format!("invalid JSON from {path}: {e}"))
+    } else {
+        Err(format!("sidecar returned HTTP {code} for {path}"))
+    }
+}
+
+/// Show + focus the (hidden-at-startup) config editor window.
+#[tauri::command]
+fn open_config(app: tauri::AppHandle) -> Result<(), String> {
+    let w = app
+        .get_webview_window("config")
+        .ok_or_else(|| "config window not found".to_string())?;
+    w.show().map_err(|e| e.to_string())?;
+    w.set_focus().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// How the sidecar is obtained: either an externally-managed one (dev override
 /// via env, no spawn) or a child process we spawn and supervise.
 enum SidecarPlan {
@@ -206,16 +328,23 @@ fn place_floating(window: &tauri::WebviewWindow) {
 
 /// Build the tray icon with a show/hide/quit menu.
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &hide, &quit])?;
+    let menu = Menu::with_items(app, &[&settings, &show, &hide, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("herdeck-tray")
         .tooltip("herdeck")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
+            "settings" => {
+                if let Some(w) = app.get_webview_window("config") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
             "show" => {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.show();
@@ -291,13 +420,33 @@ pub fn run() {
             deck_state,
             deck_tile,
             deck_panel,
-            deck_press
+            deck_press,
+            config_read,
+            config_validate,
+            config_write,
+            config_set_active,
+            config_secret_set,
+            config_secret_clear,
+            open_config
         ])
         .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
                 place_floating(&window);
             }
             build_tray(app)?;
+            // The config window is hidden at startup and reopened on demand; if it
+            // were allowed to close, Tauri would DESTROY it and open_config would
+            // then fail with "config window not found". Intercept close -> hide, so
+            // it persists for the app's lifetime (the floating deck + sidecar run on).
+            if let Some(cfg_win) = app.get_webview_window("config") {
+                let w = cfg_win.clone();
+                cfg_win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = w.hide();
+                    }
+                });
+            }
             start_sidecar(app, setup_discovery, setup_child, setup_stop);
             Ok(())
         })
