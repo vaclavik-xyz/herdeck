@@ -33,7 +33,26 @@ describe("parseConfig", () => {
 
   it("defaults missing sections to empty objects (onboarding)", () => {
     const c = parseConfig({})!;
-    expect(c).toEqual({ base: {}, profiles: {}, local: {}, secrets: {} });
+    expect(c).toEqual({
+      base: {},
+      profiles: {},
+      local: {},
+      secrets: {},
+      envLocked: false,
+      activeProfile: "default",
+    });
+  });
+
+  it("parses env_locked and active_profile when present", () => {
+    const c = parseConfig({ base: {}, env_locked: true, active_profile: "mobile" })!;
+    expect(c.envLocked).toBe(true);
+    expect(c.activeProfile).toBe("mobile");
+  });
+
+  it("coerces a non-string active_profile back to default", () => {
+    const c = parseConfig({ base: {}, env_locked: "yes", active_profile: 7 })!;
+    expect(c.envLocked).toBe(false); // only boolean true counts
+    expect(c.activeProfile).toBe("default");
   });
 
   it("normalizes a malformed secret flag", () => {

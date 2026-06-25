@@ -16,6 +16,10 @@ export interface ConfigPayload {
   profiles: Record<string, Record<string, unknown>>;
   local: Record<string, unknown>;
   secrets: Record<string, SecretFlag>;
+  /** True iff the sidecar runs under a `HERDECK_PROFILE` env lock (řez 4b uses it). */
+  envLocked: boolean;
+  /** The effective active profile name (env > local > base > "default"). */
+  activeProfile: string;
 }
 
 /** What `POST /config[/validate]` takes: the editable config minus `secrets`. */
@@ -46,7 +50,9 @@ export function parseConfig(raw: unknown): ConfigPayload | null {
   for (const [name, overlay] of Object.entries(obj(v.profiles))) profiles[name] = obj(overlay);
   const secrets: Record<string, SecretFlag> = {};
   for (const [name, flag] of Object.entries(obj(v.secrets))) secrets[name] = parseSecretFlag(flag);
-  return { base: obj(v.base), profiles, local: obj(v.local), secrets };
+  const envLocked = v.env_locked === true;
+  const activeProfile = typeof v.active_profile === "string" ? v.active_profile : "default";
+  return { base: obj(v.base), profiles, local: obj(v.local), secrets, envLocked, activeProfile };
 }
 
 /** Extract the `errors` string list from a `{errors: [...]}` reply, dropping
