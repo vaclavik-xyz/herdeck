@@ -108,7 +108,11 @@ export function setOverride(
 ): Record<string, Record<string, unknown>> {
   const next = clone(profiles);
   const overlay = next[name] ?? (next[name] = {});
-  const sec = (overlay[section] as Record<string, unknown> | undefined) ?? {};
+  const existing = overlay[section];
+  const sec: Record<string, unknown> =
+    existing != null && typeof existing === "object" && !Array.isArray(existing)
+      ? (existing as Record<string, unknown>)
+      : {};
   sec[key] = value;
   overlay[section] = sec;
   return next;
