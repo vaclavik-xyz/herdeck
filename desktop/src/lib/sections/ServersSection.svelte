@@ -18,47 +18,24 @@
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
 
-  // Per-row stable keys. Plain (non-$state) — only serversWithKeys ($derived) is reactive.
-  let nextKey = 0;
-  let rowKeys: number[] = serversOf(payload).map(() => nextKey++);
-  // skipReset: set to true immediately before every local payload mutation so the
-  // derived knows not to reset keys. Avoids proxy-identity issues with $bindable.
-  let skipReset = false;
-
-  const serversWithKeys = $derived.by<Array<{ s: ServerRecord; key: number }>>(() => {
-    const ss = serversOf(payload);
-    if (!skipReset) {
-      // External reload (Discard / Apply): reset all keys so no stale
-      // TokenSecretField state bleeds across the replaced server list.
-      rowKeys = ss.map(() => nextKey++);
-    }
-    skipReset = false; // consume the flag
-    return ss.map((s, i) => ({ s, key: rowKeys[i] }));
-  });
-
-  function assign(next: ConfigPayload): void {
-    skipReset = true; // tell derived: this is a local mutation, preserve keys
-    payload = next;
-  }
+  const servers = $derived(serversOf(payload));
 
   function set(i: number, field: "id" | "url" | "token_env", v: string): void {
-    assign(updateServer(payload, i, field, v));
+    payload = updateServer(payload, i, field, v);
     onChange();
   }
   function add(): void {
-    rowKeys = [...rowKeys, nextKey++]; // stable key for the new tail row before assign
-    assign(addServer(payload));
+    payload = addServer(payload);
     onChange();
   }
   function remove(i: number): void {
-    rowKeys = rowKeys.filter((_, k) => k !== i); // drop key at index i before assign
-    assign(removeServer(payload, i));
+    payload = removeServer(payload, i);
     onChange();
   }
   async function setSecret(name: string, value: string): Promise<void> {
     const code = await cfg.setSecret(name, value); // 204 on success
     if (code === 204) {
-      assign({ ...payload, secrets: { ...payload.secrets, [name]: { set: true, source: "keychain" } } });
+      payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: true, source: "keychain" } } };
     } else {
       onError(`uložení tokenu '${name}' selhalo (HTTP ${code})`);
     }
@@ -66,7 +43,7 @@
   async function clearSecret(name: string): Promise<void> {
     const code = await cfg.clearSecret(name); // 204 on success
     if (code === 204) {
-      assign({ ...payload, secrets: { ...payload.secrets, [name]: { set: false, source: null } } });
+      payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: false, source: null } } };
     } else {
       onError(`smazání tokenu '${name}' selhalo (HTTP ${code})`);
     }
@@ -74,7 +51,11 @@
 </script>
 
 <h2>Servers</h2>
-{#each serversWithKeys as { s, key }, i (key)}
+<!-- Index keying is correct here: this is an append / remove list (no row reordering),
+     and the only per-row transient state (TokenSecretField's in-progress secret entry) is
+     disposable. Editing a field keeps the same index → same DOM node → focus preserved.
+     A stable-id apparatus would add complexity that 9 řez-4 sections would clone. -->
+{#each servers as s, i (i)}
   <fieldset>
     <legend>{s.id || "(nový server)"} <button type="button" onclick={() => remove(i)}>×</button></legend>
     <TextField label="id" value={s.id} oninput={(v) => set(i, "id", v)} />
