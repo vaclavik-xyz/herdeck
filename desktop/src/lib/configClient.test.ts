@@ -445,3 +445,43 @@ describe("profile extends / servers", () => {
     expect((next.profiles.a as Record<string, unknown>).extends).toBe("default"); // sibling kept
   });
 });
+
+import { referencedTokenEnvs, orphanedSecrets, parseActiveChanged } from "./configClient";
+
+describe("token-env references / orphaned secrets / active-changed", () => {
+  it("referencedTokenEnvs collects token_env from servers, telegram, and profiles", () => {
+    const p = parseConfig({
+      base: {
+        servers: [{ id: "a", url: "ws://x", token_env: "TOK" }],
+        notifications: { telegram: { token_env: "TG", chat_id: "1" } },
+      },
+      profiles: { mobile: { notifications: { telegram: { token_env: "PTG" } } } },
+    })!;
+    expect(referencedTokenEnvs(p)).toEqual(new Set(["TOK", "TG", "PTG"]));
+  });
+
+  it("referencedTokenEnvs ignores blank token_env and non-strings", () => {
+    const p = parseConfig({ base: { servers: [{ id: "a", url: "ws://x", token_env: "" }] } })!;
+    expect(referencedTokenEnvs(p).size).toBe(0);
+  });
+
+  it("orphanedSecrets returns keychain-set names no token_env references", () => {
+    const p = parseConfig({
+      base: { servers: [{ id: "a", url: "ws://x", token_env: "TOK" }] },
+      secrets: {
+        TOK: { set: true, source: "keychain" }, // still referenced → not orphan
+        OLD: { set: true, source: "keychain" }, // referenced by nothing → orphan
+        ENVY: { set: true, source: "env" },     // env-sourced → never an orphan we clear
+        GONE: { set: false, source: "keychain" }, // not set → excluded
+      },
+    })!;
+    expect(orphanedSecrets(p)).toEqual(["OLD"]);
+  });
+
+  it("parseActiveChanged reads {changed: bool}", () => {
+    expect(parseActiveChanged({ changed: true })).toBe(true);
+    expect(parseActiveChanged({ changed: false })).toBe(false);
+    expect(parseActiveChanged(null)).toBe(false);
+    expect(parseActiveChanged("nope")).toBe(false);
+  });
+});

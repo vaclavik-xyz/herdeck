@@ -474,6 +474,41 @@ export function setProfileServers(
   return { ...payload, profiles };
 }
 
+/** Every non-blank `token_env` string referenced anywhere in base + profiles
+ *  (servers, base/profile telegram, profile overlays). Mirrors the backend's
+ *  `_collect_token_envs` so the editor can spot keychain entries gone orphan. */
+export function referencedTokenEnvs(payload: ConfigPayload): Set<string> {
+  const out = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) {
+      v.forEach(walk);
+    } else if (v != null && typeof v === "object") {
+      for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+        if (k === "token_env" && typeof val === "string" && val !== "") out.add(val);
+        else walk(val);
+      }
+    }
+  };
+  walk(payload.base);
+  walk(payload.profiles);
+  return out;
+}
+
+/** Keychain-backed secrets no `token_env` in the config still references — cleanup
+ *  candidates after a rename/delete. env-sourced secrets (we can't clear them) and
+ *  unset ones (nothing to clear) are excluded. */
+export function orphanedSecrets(payload: ConfigPayload): string[] {
+  const referenced = referencedTokenEnvs(payload);
+  return Object.entries(payload.secrets)
+    .filter(([name, flag]) => flag.set && flag.source === "keychain" && !referenced.has(name))
+    .map(([name]) => name);
+}
+
+/** Parse the `{changed: bool}` reply from `config_set_active`. */
+export function parseActiveChanged(raw: unknown): boolean {
+  return obj(raw).changed === true;
+}
+
 export function commandTransport(invoke: InvokeFn): ConfigTransport {
   const asCode = (v: unknown) => (typeof v === "number" ? v : 0);
   return {
