@@ -394,6 +394,129 @@ export function putList(
     : setAt(payload, root, section, key, list);
 }
 
+// --- profiles (řez 4b-i) ---
+
+/** Result of a profile mutation that can fail validation. */
+export type ProfileResult =
+  | { ok: true; payload: ConfigPayload }
+  | { ok: false; error: string };
+
+/** The named profile keys (the implicit base is "default", never listed here). */
+export function profileNames(payload: ConfigPayload): string[] {
+  return Object.keys(payload.profiles);
+}
+
+/** NEW payload with an empty profile `name`, or an error when the trimmed name is
+ *  blank, the reserved "default", or already taken. Input untouched. */
+export function createProfile(payload: ConfigPayload, name: string): ProfileResult {
+  const n = name.trim();
+  if (n === "") return { ok: false, error: "jméno profilu nesmí být prázdné" };
+  if (n === "default") return { ok: false, error: "'default' je rezervováno pro bázi" };
+  if (n in payload.profiles) return { ok: false, error: `profil '${n}' už existuje` };
+  const profiles = { ...clone(payload.profiles), [n]: {} };
+  return { ok: true, payload: { ...payload, profiles } };
+}
+
+/** NEW payload with profile `name` removed. Any PERSISTED active selector pointing
+ *  at the deleted profile is also cleared so the next Apply doesn't write an unknown
+ *  active profile (backend would reject it): both the local selector
+ *  (`local.active_profile`) AND the legacy top-level one (`base.active_profile`,
+ *  carried into base by řez-4a `read()`). Other keys in each are kept. An env lock
+ *  (`HERDECK_PROFILE`) can't be cleared here — `ProfilesSection` blocks deleting the
+ *  env-locked active profile (Task 4). Input untouched. */
+export function deleteProfile(payload: ConfigPayload, name: string): ConfigPayload {
+  const profiles = clone(payload.profiles);
+  delete profiles[name];
+  let local = payload.local;
+  if (asDict(payload.local).active_profile === name) {
+    local = { ...clone(payload.local) };
+    delete (local as Record<string, unknown>).active_profile;
+  }
+  let base = payload.base;
+  if (asDict(payload.base).active_profile === name) {
+    base = { ...clone(payload.base) };
+    delete (base as Record<string, unknown>).active_profile;
+  }
+  return { ...payload, profiles, local, base };
+}
+
+/** The `extends` target of profile `name` ("default" = inherit base, when absent). */
+export function profileExtends(payload: ConfigPayload, name: string): string {
+  const ext = asDict(payload.profiles[name]).extends;
+  return typeof ext === "string" ? ext : "default";
+}
+
+/** NEW payload with profile `name`'s `extends` set. A scalar — "default" is written
+ *  literally (equals the default), so it is exempt from absent≠empty. Input untouched. */
+export function setProfileExtends(
+  payload: ConfigPayload,
+  name: string,
+  extendsName: string,
+): ConfigPayload {
+  const profiles = clone(payload.profiles);
+  const overlay = { ...asDict(profiles[name]) };
+  overlay.extends = extendsName;
+  profiles[name] = overlay;
+  return { ...payload, profiles };
+}
+
+/** Profile `name`'s `servers` list (absent → []). */
+export function profileServers(payload: ConfigPayload, name: string): string[] {
+  return strList(asDict(payload.profiles[name]).servers);
+}
+
+/** NEW payload with profile `name`'s `servers` set, or the key OMITTED when the list
+ *  is empty. An absent `servers` means "inherit base servers"; an explicit `[]` (a
+ *  serverless profile) is řez 4b-ii's presence-aware authoring — out of scope here.
+ *  Input untouched. */
+export function setProfileServers(
+  payload: ConfigPayload,
+  name: string,
+  servers: string[],
+): ConfigPayload {
+  const profiles = clone(payload.profiles);
+  const overlay = { ...asDict(profiles[name]) };
+  if (servers.length === 0) delete overlay.servers;
+  else overlay.servers = servers;
+  profiles[name] = overlay;
+  return { ...payload, profiles };
+}
+
+/** Every non-blank `token_env` string referenced anywhere in base + profiles
+ *  (servers, base/profile telegram, profile overlays). Mirrors the backend's
+ *  `_collect_token_envs` so the editor can spot keychain entries gone orphan. */
+export function referencedTokenEnvs(payload: ConfigPayload): Set<string> {
+  const out = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) {
+      v.forEach(walk);
+    } else if (v != null && typeof v === "object") {
+      for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+        if (k === "token_env" && typeof val === "string" && val !== "") out.add(val);
+        else walk(val);
+      }
+    }
+  };
+  walk(payload.base);
+  walk(payload.profiles);
+  return out;
+}
+
+/** Keychain-backed secrets no `token_env` in the config still references — cleanup
+ *  candidates after a rename/delete. env-sourced secrets (we can't clear them) and
+ *  unset ones (nothing to clear) are excluded. */
+export function orphanedSecrets(payload: ConfigPayload): string[] {
+  const referenced = referencedTokenEnvs(payload);
+  return Object.entries(payload.secrets)
+    .filter(([name, flag]) => flag.set && flag.source === "keychain" && !referenced.has(name))
+    .map(([name]) => name);
+}
+
+/** Parse the `{changed: bool}` reply from `config_set_active`. */
+export function parseActiveChanged(raw: unknown): boolean {
+  return obj(raw).changed === true;
+}
+
 export function commandTransport(invoke: InvokeFn): ConfigTransport {
   const asCode = (v: unknown) => (typeof v === "number" ? v : 0);
   return {

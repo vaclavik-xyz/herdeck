@@ -542,6 +542,24 @@ def test_delete_secret_route_clears():
         app.close()
 
 
+def test_delete_secret_route_unquotes_path_segment():
+    """A percent-encoded token_env (space/slash) must be DECODED before clear_secret,
+    so the Rust-side percent-encoding (F-2) targets the real keychain key, not '%20'."""
+    stub = _StubConfigService()
+    app = create_mock_app(port=0, icon_provider=StubIcons(), config_service=stub)
+    try:
+        # %20 = space; the clear must target the decoded name "MY TOK".
+        url = f"http://{app.host}:{app.port}/secret/MY%20TOK"
+        req = urllib.request.Request(
+            url, method="DELETE", headers={"X-Herdeck-Token": app.token}
+        )
+        with urllib.request.urlopen(req, timeout=2) as r:
+            assert r.status == 204
+        assert stub.cleared == ["MY TOK"]
+    finally:
+        app.close()
+
+
 def test_config_routes_404_without_service():
     """When no config_service is provided, GET /config and POST /config -> 404."""
     app = create_mock_app(port=0, icon_provider=StubIcons())  # no config_service

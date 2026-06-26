@@ -60,7 +60,12 @@ modelu + zápisem přes existující `POST /config`).
 
 - **List + create + delete:** create vyžaduje jméno; validace **reserved „default"** (rezervováno pro
   bázi) + **duplicita** se hlásí client-side přes `onError` (a backend write validace je druhá pojistka).
-  delete odebere klíč z `payload.profiles`. Mirror `ServersSection` index-keying.
+  delete odebere klíč z `payload.profiles` a **zároveň vyčistí každý perzistovaný aktivní selektor
+  mířící na mazaný profil** — `local.active_profile` i legacy top-level `base.active_profile` (4a ho do
+  base nese pro round-trip) — jinak by Apply zapsal dangling aktivní profil a backend ho odmítne jako
+  „unknown profile". **Smazání env-locked aktivního profilu** (`envLocked && activeProfile === name`) je
+  **blokované** (env lock nelze z editoru zrušit, takže by zůstal mířit na chybějící profil). Mirror
+  `ServersSection` index-keying (jména profilů jsou po vytvoření neměnná — žádný rename v 4b-i).
 - **Per-profil `extends`:** `SelectField` (`default` + ostatní profily); cykly/neznámý cíl chytá backend
   write validace.
 - **Per-profil `servers`:** výběr `server.id` (multi-select / list validovaný proti base servers).
@@ -81,11 +86,15 @@ zůstávají). Izolováno do ConfigApp (+ malá sdílená `Banner`/`Toast` kompo
 ## F — deferred fixy (řez 3)
 
 - **token_env rename keychain orphan:** přejmenování (nebo smazání) `token_env` nechá starý keychain
-  záznam osiřelý. Fix je **frontend-only, bez backend změny**: po úspěšném Apply spočítat osiřelé klíče =
-  jména v `payload.secrets` s `source==="keychain"`, která už nereferencuje žádný `token_env` v configu
-  (servery + base/telegram + profily), a nabídnout jejich smazání přes existující `config_secret_clear`.
-  Hodnota se **nemigruje** (secrets jsou one-way / nečitelné) — uživatel token u nového názvu nastaví ručně.
-  Detekce i akce žijí v ConfigApp/configClient (čistá `orphanedSecrets(payload)` helper + potvrzovací prompt).
+  záznam osiřelý. Fix je **frontend-only, bez backend změny**: osiřelé klíče = jména v `payload.secrets`
+  s `source==="keychain"` + `set`, která už nereferencuje žádný `token_env` v configu (servery +
+  base/telegram + profily) — `orphanedSecrets(payload)` helper; úklid přes existující `config_secret_clear`.
+  **KRITICKÉ načasování:** orphans se musí spočítat z **EDITOVANÉHO pre-reload payloadu PŘED** post-write
+  `load()`. Sidecar `read()` vrací `secrets` jen pro **aktuálně referencované** token_envy (`_secret_flags`),
+  takže po rename+write+reload je starý název pryč z `payload.secrets` a post-load detekce by ho nikdy
+  nenašla. Pre-reload payload ještě nese load-time secrets snapshot (starý název), zatímco base/profiles už
+  referencují nový → orphan se odhalí. Hodnota se **nemigruje** (secrets jsou one-way) — uživatel token u
+  nového názvu nastaví ručně. Banner s akcí „uklidit" pak po úspěšném Apply nabídne smazání.
 - **DELETE /secret/{env} percent-encode:** `token_env` s mezerou/lomítkem rozbije request-line nebo
   `path.rsplit("/",1)` na sidecaru. **Oboustranný fix:** (1) Rust při stavbě cesty percent-encoduje
   segment `token_env`; (2) sidecar `do_DELETE` (`server.py`) musí segment `unquote`-nout, protože dnes

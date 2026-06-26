@@ -12,13 +12,18 @@
   import NotificationsSection from "./lib/sections/NotificationsSection.svelte";
   import SafetySection from "./lib/sections/SafetySection.svelte";
   import AnswerProfilesSection from "./lib/sections/AnswerProfilesSection.svelte";
+  import ProfilesSection from "./lib/sections/ProfilesSection.svelte";
+  import Banner from "./lib/Banner.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport as deckTransport } from "./lib/deckClient";
   import {
     commandTransport as cfgTransport,
     parseConfig,
     parseValidate,
+    parseActiveChanged,
     toWriteBody,
+    orphanedSecrets,
+    referencedTokenEnvs,
     type ConfigPayload,
   } from "./lib/configClient";
 
@@ -33,33 +38,58 @@
   let dirty = $state(false);
   let errors = $state<string[]>([]);
   let busy = $state(false);
-  let notice = $state(""); // transient out-of-band message (e.g. a failed secret op)
+  // A structured status banner (replaces the old plain `notice` string). Task 7
+  // reuses the optional action for the orphaned-keychain-secret cleanup.
+  type BannerState = { kind: "warning" | "error" | "success"; message: string; actionLabel?: string; onAction?: () => void };
+  let banner = $state<BannerState | null>(null);
+  function setBanner(kind: BannerState["kind"], message: string, actionLabel?: string, onAction?: () => void): void {
+    banner = { kind, message, actionLabel, onAction };
+  }
   let reloadRev = $state(0); // bumps on every load(); map sections re-seed local rows on change
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
   const preview = $derived(discovery ? deckTransport((cmd, args) => invoke(cmd, args)) : null);
-  const profiles = $derived(payload ? ["default (báze)", ...Object.keys(payload.profiles)] : ["default (báze)"]);
+  const profileOptions = $derived(payload ? ["default", ...Object.keys(payload.profiles)] : ["default"]);
+
+  const DEFAULT_LABEL = "default (báze)";
+  const optionLabel = (name: string): string => (name === "default" ? DEFAULT_LABEL : name);
+  const activeValue = $derived(payload?.activeProfile ?? "default");
+  const switcherDisabled = $derived(payload == null || payload.envLocked || dirty);
+
+  async function switchProfile(name: string): Promise<void> {
+    if (!payload) return;
+    if (name === payload.activeProfile) return; // no-op: same profile
+    try {
+      const changed = parseActiveChanged(await cfg.setActive(name));
+      if (changed) {
+        await load(); // re-read saved state; preview refreshes via its own poll
+      } else {
+        setBanner("warning", `profil '${name}' nelze aktivovat (zamčen nebo neznámý)`);
+      }
+    } catch (e) {
+      setBanner("error", `přepnutí profilu selhalo: ${String(e)}`);
+    }
+  }
 
   async function load(): Promise<void> {
     try {
       const fresh = parseConfig(await cfg.read());
       if (fresh == null) {
-        // A 200 that is not an object should not wipe the editor; surface it.
-        notice = "neočekávaná odpověď configu ze sidecaru";
+        setBanner("warning", "neočekávaná odpověď configu ze sidecaru");
         return;
       }
       payload = fresh;
       dirty = false;
       errors = [];
-      notice = "";
-      reloadRev += 1; // re-seed map sections' local rows (keep the bump from Task 11)
+      banner = null;
+      reloadRev += 1;
     } catch {
-      // Transport/sidecar error (404 no config service, sidecar down, reload failed).
-      // ALWAYS surface it; keep any in-memory payload — never silently null a loaded
-      // config, and never swallow a failed discard/reload after a payload exists.
-      notice = payload == null
-        ? "sidecar zatím neběží — zkouším znovu…"
-        : "obnovení configu ze sidecaru selhalo (neuložené změny zůstávají)";
+      setBanner(
+        "warning",
+        payload == null
+          ? "sidecar zatím neběží — zkouším znovu…"
+          : "obnovení configu ze sidecaru selhalo (neuložené změny zůstávají)",
+      );
     }
   }
 
@@ -74,14 +104,42 @@
       const res = parseValidate(await cfg.write(toWriteBody(payload)));
       errors = res;
       if (res.length === 0) {
+        // Capture orphans from the EDITED pre-reload payload (see Design note): the reloaded
+        // payload.secrets only carries still-referenced token_envs, so a renamed/deleted old
+        // key would vanish and post-load detection would miss it.
+        const orphans = orphanedSecrets(payload);
         dirty = false;
         await load(); // re-read saved state (preview refreshes itself via its own poll)
+        if (orphans.length > 0) {
+          setBanner(
+            "warning",
+            `${orphans.length} osiřelých keychain klíčů (${orphans.join(", ")})`,
+            "uklidit",
+            () => void cleanupOrphans(orphans),
+          );
+        }
       }
     } catch (e) {
       errors = [String(e)];
     } finally {
       busy = false;
     }
+  }
+
+  async function cleanupOrphans(names: string[]): Promise<void> {
+    if (!payload) return;
+    // Re-check NOW: a dirty edit after the banner appeared may have reintroduced one of these
+    // token_env names. Never clear a keychain secret the current config references.
+    const referenced = referencedTokenEnvs(payload);
+    const secrets = { ...payload.secrets };
+    for (const name of names) {
+      if (referenced.has(name)) continue;
+      const code = await cfg.clearSecret(name);
+      if (code === 204) secrets[name] = { set: false, source: null };
+      else { setBanner("error", `úklid tokenu '${name}' selhal (HTTP ${code})`); return; }
+    }
+    payload = { ...payload, secrets };
+    setBanner("success", "osiřelé keychain klíče uklizeny");
   }
 
   async function discard(): Promise<void> {
@@ -120,10 +178,19 @@
   <header class="topbar">
     <label>
       Profil:
-      <select disabled>
-        {#each profiles as p}<option>{p}</option>{/each}
+      <select
+        value={activeValue}
+        disabled={switcherDisabled}
+        onchange={(e) => switchProfile((e.target as HTMLSelectElement).value)}
+      >
+        {#each profileOptions as name}<option value={name}>{optionLabel(name)}</option>{/each}
       </select>
     </label>
+    {#if payload?.envLocked}
+      <span class="hint">profil zamčen přes HERDECK_PROFILE</span>
+    {:else if dirty}
+      <span class="hint">ulož nebo zahoď změny pro přepnutí profilu</span>
+    {/if}
     {#if dirty}<span class="dirty">● neuložené změny</span>{/if}
   </header>
 
@@ -141,25 +208,27 @@
         {#if (payload.base.servers == null || (payload.base.servers as unknown[]).length === 0)}
           <p class="hint">Zatím žádný server. Přidej první a klikni Apply pro vytvoření configu.</p>
         {/if}
-        <ServersSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <ServersSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Deck"}
-        <DeckSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <DeckSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "View"}
-        <ViewSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <ViewSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Theme"}
-        <ThemeSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <ThemeSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Macros"}
-        <MacrosSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <MacrosSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Start profiles"}
-        <StartProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => (notice = m)} />
+        <StartProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Notifications"}
-        <NotificationsSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <NotificationsSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Safety"}
-        <SafetySection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <SafetySection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Answer profiles"}
-        <AnswerProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => (notice = m)} />
+        <AnswerProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+      {:else if active === "Profiles"}
+        <ProfilesSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else}
-        <p class="hint">Sekce „{active}" — řez 4b.</p>
+        <p class="hint">Neznámá sekce „{active}".</p>
       {/if}
     </section>
 
@@ -170,7 +239,7 @@
 
   <footer class="savebar">
     <button onclick={discard} disabled={!dirty || busy}>Discard</button>
-    {#if notice}<span class="notice">{notice}</span>{/if}
+    {#if banner}<Banner kind={banner.kind} message={banner.message} actionLabel={banner.actionLabel} onAction={banner.onAction} />{/if}
     <span class="errcount" class:bad={errors.length > 0}>⚠ {errors.length} chyb</span>
     <button onclick={apply} disabled={!dirty || busy}>Apply</button>
   </footer>
@@ -190,7 +259,6 @@
   .hint { color: #888; }
   .savebar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid #222; }
   .savebar button { margin: 0; }
-  .notice { color: #e0a030; }
   .errcount { margin-left: auto; color: #888; }
   .errcount.bad { color: #e05050; }
 </style>

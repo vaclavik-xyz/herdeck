@@ -8,6 +8,10 @@ import {
   setOverride,
   clearOverride,
   secretFlag,
+  profileExtends,
+  setProfileExtends,
+  profileServers,
+  setProfileServers,
   type ConfigPayload,
 } from "./configClient";
 
@@ -350,5 +354,143 @@ describe("map-section serialization helpers", () => {
     const removed = applyMapSection(withSec, "start_profiles", undefined)!;
     expect("start_profiles" in (removed.base as Record<string, unknown>)).toBe(false);
     expect(applyMapSection(withSec, "start_profiles", { claude: ["claude"] })).toBeNull(); // unchanged
+  });
+});
+
+import { profileNames, createProfile, deleteProfile } from "./configClient";
+
+describe("profile CRUD", () => {
+  it("profileNames lists the named profiles", () => {
+    const p = parseConfig({ profiles: { mobile: {}, work: {} } })!;
+    expect(profileNames(p).sort()).toEqual(["mobile", "work"]);
+    expect(profileNames(parseConfig({})!)).toEqual([]);
+  });
+
+  it("createProfile adds an empty profile without touching the input", () => {
+    const p = parseConfig({ profiles: { mobile: {} } })!;
+    const res = createProfile(p, "work");
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(profileNames(res.payload).sort()).toEqual(["mobile", "work"]);
+      expect(res.payload.profiles.work).toEqual({});
+    }
+    expect(profileNames(p)).toEqual(["mobile"]); // input untouched
+  });
+
+  it("createProfile trims the name", () => {
+    const res = createProfile(parseConfig({})!, "  work  ");
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(profileNames(res.payload)).toEqual(["work"]);
+  });
+
+  it("createProfile rejects blank, reserved 'default', and duplicates", () => {
+    const p = parseConfig({ profiles: { mobile: {} } })!;
+    expect(createProfile(p, "  ")).toEqual({ ok: false, error: expect.stringContaining("prázdné") });
+    expect(createProfile(p, "default")).toEqual({ ok: false, error: expect.stringContaining("default") });
+    expect(createProfile(p, "mobile")).toEqual({ ok: false, error: expect.stringContaining("existuje") });
+  });
+
+  it("deleteProfile removes the profile on a copy", () => {
+    const p = parseConfig({ profiles: { mobile: {}, work: {} } })!;
+    const next = deleteProfile(p, "work");
+    expect(profileNames(next)).toEqual(["mobile"]);
+    expect(profileNames(p).sort()).toEqual(["mobile", "work"]); // input untouched
+  });
+
+  it("deleteProfile drops a now-dangling local active_profile", () => {
+    const p = parseConfig({ profiles: { mobile: {} }, local: { active_profile: "mobile", hardware: { brightness: 70 } } })!;
+    const next = deleteProfile(p, "mobile");
+    expect("active_profile" in next.local).toBe(false); // dangling selection cleared
+    expect((next.local.hardware as Record<string, unknown>).brightness).toBe(70); // rest kept
+  });
+
+  it("deleteProfile keeps an unrelated local active_profile", () => {
+    const p = parseConfig({ profiles: { mobile: {}, work: {} }, local: { active_profile: "work" } })!;
+    const next = deleteProfile(p, "mobile");
+    expect(next.local.active_profile).toBe("work");
+  });
+
+  it("deleteProfile drops a now-dangling base (top-level) active_profile", () => {
+    // řez-4a read() carries a legacy top-level active_profile into base for round-trip;
+    // deleting that profile must clear it too, else Apply writes an unknown active profile.
+    const p = parseConfig({ profiles: { mobile: {} }, base: { active_profile: "mobile", deck: { grid: "5x3" } } })!;
+    const next = deleteProfile(p, "mobile");
+    expect("active_profile" in next.base).toBe(false); // dangling base selector cleared
+    expect((next.base.deck as Record<string, unknown>).grid).toBe("5x3"); // sibling kept
+  });
+});
+
+describe("profile extends / servers", () => {
+  it("profileExtends reads the extends target or defaults to 'default'", () => {
+    const p = parseConfig({ profiles: { a: { extends: "b" }, b: {} } })!;
+    expect(profileExtends(p, "a")).toBe("b");
+    expect(profileExtends(p, "b")).toBe("default"); // absent → default
+  });
+
+  it("setProfileExtends sets the scalar on a copy", () => {
+    const p = parseConfig({ profiles: { a: {} } })!;
+    const next = setProfileExtends(p, "a", "b");
+    expect(profileExtends(next, "a")).toBe("b");
+    expect(profileExtends(p, "a")).toBe("default"); // input untouched
+  });
+
+  it("profileServers reads the servers list or []", () => {
+    const p = parseConfig({ profiles: { a: { servers: ["local", "vps"] }, b: {} } })!;
+    expect(profileServers(p, "a")).toEqual(["local", "vps"]);
+    expect(profileServers(p, "b")).toEqual([]); // absent → []
+  });
+
+  it("setProfileServers writes a non-empty list", () => {
+    const p = parseConfig({ profiles: { a: {} } })!;
+    const next = setProfileServers(p, "a", ["local"]);
+    expect(profileServers(next, "a")).toEqual(["local"]);
+    expect(profileServers(p, "a")).toEqual([]); // input untouched
+  });
+
+  it("setProfileServers OMITS the key when empty (→ inherit base servers, not [])", () => {
+    const p = parseConfig({ profiles: { a: { servers: ["local"], extends: "default" } } })!;
+    const next = setProfileServers(p, "a", []);
+    expect("servers" in (next.profiles.a as Record<string, unknown>)).toBe(false); // omitted, not []
+    expect((next.profiles.a as Record<string, unknown>).extends).toBe("default"); // sibling kept
+  });
+});
+
+import { referencedTokenEnvs, orphanedSecrets, parseActiveChanged } from "./configClient";
+
+describe("token-env references / orphaned secrets / active-changed", () => {
+  it("referencedTokenEnvs collects token_env from servers, telegram, and profiles", () => {
+    const p = parseConfig({
+      base: {
+        servers: [{ id: "a", url: "ws://x", token_env: "TOK" }],
+        notifications: { telegram: { token_env: "TG", chat_id: "1" } },
+      },
+      profiles: { mobile: { notifications: { telegram: { token_env: "PTG" } } } },
+    })!;
+    expect(referencedTokenEnvs(p)).toEqual(new Set(["TOK", "TG", "PTG"]));
+  });
+
+  it("referencedTokenEnvs ignores blank token_env and non-strings", () => {
+    const p = parseConfig({ base: { servers: [{ id: "a", url: "ws://x", token_env: "" }] } })!;
+    expect(referencedTokenEnvs(p).size).toBe(0);
+  });
+
+  it("orphanedSecrets returns keychain-set names no token_env references", () => {
+    const p = parseConfig({
+      base: { servers: [{ id: "a", url: "ws://x", token_env: "TOK" }] },
+      secrets: {
+        TOK: { set: true, source: "keychain" }, // still referenced → not orphan
+        OLD: { set: true, source: "keychain" }, // referenced by nothing → orphan
+        ENVY: { set: true, source: "env" },     // env-sourced → never an orphan we clear
+        GONE: { set: false, source: "keychain" }, // not set → excluded
+      },
+    })!;
+    expect(orphanedSecrets(p)).toEqual(["OLD"]);
+  });
+
+  it("parseActiveChanged reads {changed: bool}", () => {
+    expect(parseActiveChanged({ changed: true })).toBe(true);
+    expect(parseActiveChanged({ changed: false })).toBe(false);
+    expect(parseActiveChanged(null)).toBe(false);
+    expect(parseActiveChanged("nope")).toBe(false);
   });
 });

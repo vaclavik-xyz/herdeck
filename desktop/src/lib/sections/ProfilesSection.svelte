@@ -1,0 +1,115 @@
+<script lang="ts">
+  import SelectField from "../fields/SelectField.svelte";
+  import {
+    profileNames, createProfile, deleteProfile,
+    profileExtends, setProfileExtends, profileServers, setProfileServers,
+    serversOf, type ConfigPayload,
+  } from "../configClient";
+
+  let { payload = $bindable(), onChange, onError }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void } = $props();
+
+  let newName = $state("");
+
+  const names = $derived(profileNames(payload));
+  const serverIds = $derived(serversOf(payload).map((s) => s.id).filter((id) => id !== ""));
+
+  // Checkbox options for a profile = current base servers PLUS any stale refs this profile
+  // still holds (so an unknown/removed server id can be unchecked away — otherwise it is
+  // invisible and the backend rejects Apply as "unknown server" with no way to fix it).
+  function serverOptions(name: string): { id: string; known: boolean }[] {
+    const sel = profileServers(payload, name);
+    const stale = sel.filter((id) => !serverIds.includes(id));
+    return [
+      ...serverIds.map((id) => ({ id, known: true })),
+      ...stale.map((id) => ({ id, known: false })),
+    ];
+  }
+
+  // A profile may extend "default" (base) or any OTHER profile — never itself.
+  function extendsOptions(self: string): string[] {
+    return ["default", ...names.filter((n) => n !== self)];
+  }
+
+  function create(): void {
+    const res = createProfile(payload, newName);
+    if (!res.ok) { onError(res.error); return; }
+    payload = res.payload;
+    newName = "";
+    onChange();
+  }
+  function remove(name: string): void {
+    // An env lock (HERDECK_PROFILE) pins the active profile and can't be cleared from
+    // the editor — deleting it would leave the lock pointing at a missing profile. Block it.
+    if (payload.envLocked && payload.activeProfile === name) {
+      onError("nelze smazat profil zamčený přes HERDECK_PROFILE");
+      return;
+    }
+    payload = deleteProfile(payload, name);
+    onChange();
+  }
+  function setExtends(name: string, ext: string): void {
+    payload = setProfileExtends(payload, name, ext);
+    onChange();
+  }
+  function toggleServer(name: string, id: string, on: boolean): void {
+    const cur = profileServers(payload, name);
+    const next = on ? [...cur, id] : cur.filter((s) => s !== id);
+    payload = setProfileServers(payload, name, next);
+    onChange();
+  }
+</script>
+
+<h2>Profiles</h2>
+<p class="hint">Pojmenované profily překrývají bázi. Aktivní profil se vybírá nahoře; per-sekce overrides jsou řez 4b-ii.</p>
+
+<div class="create">
+  <input placeholder="jméno nového profilu" bind:value={newName} />
+  <button type="button" onclick={create}>+ vytvořit profil</button>
+</div>
+
+{#each names as name (name)}
+  <fieldset>
+    <legend>{name} <button type="button" onclick={() => remove(name)}>×</button></legend>
+    <SelectField
+      label="extends"
+      value={profileExtends(payload, name)}
+      options={extendsOptions(name)}
+      onchange={(v) => setExtends(name, v)}
+    />
+    <div class="servers">
+      <span class="lbl">servers</span>
+      {#if serverOptions(name).length === 0}
+        <span class="hint">žádné servery v bázi — přidej je v sekci Servers</span>
+      {:else}
+        {#each serverOptions(name) as opt (opt.id)}
+          <label class="chk">
+            <input
+              type="checkbox"
+              checked={profileServers(payload, name).includes(opt.id)}
+              onchange={(e) => toggleServer(name, opt.id, (e.target as HTMLInputElement).checked)}
+            />
+            {opt.id}{#if !opt.known} <span class="unknown">(neznámý)</span>{/if}
+          </label>
+        {/each}
+      {/if}
+    </div>
+  </fieldset>
+{/each}
+{#if names.length === 0}
+  <p class="hint">Zatím žádný profil. Vytvoř první výše.</p>
+{/if}
+
+<style>
+  h2 { margin: 0 0 8px; }
+  .hint { color: #888; margin: 0 0 8px; }
+  .create { display: flex; gap: 6px; margin: 8px 0; }
+  .create input { flex: 1; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
+  fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
+  legend { color: #ccc; } legend button { color: #e05050; background: none; border: 0; cursor: pointer; }
+  .servers { display: grid; grid-template-columns: 120px 1fr; gap: 8px; align-items: start; margin: 4px 0; }
+  .servers .lbl { color: #aaa; }
+  .chk { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; color: #ccc; }
+  .unknown { color: #e05050; font-size: 11px; }
+  button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+</style>
