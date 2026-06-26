@@ -12,6 +12,7 @@
   import NotificationsSection from "./lib/sections/NotificationsSection.svelte";
   import SafetySection from "./lib/sections/SafetySection.svelte";
   import AnswerProfilesSection from "./lib/sections/AnswerProfilesSection.svelte";
+  import ProfilesSection from "./lib/sections/ProfilesSection.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport as deckTransport } from "./lib/deckClient";
   import {
@@ -158,8 +159,10 @@
         <SafetySection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
       {:else if active === "Answer profiles"}
         <AnswerProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => (notice = m)} />
+      {:else if active === "Profiles"}
+        <ProfilesSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
       {:else}
-        <p class="hint">Sekce „{active}" — řez 4b.</p>
+        <p class="hint">Neznámá sekce „{active}".</p>
       {/if}
     </section>
 
