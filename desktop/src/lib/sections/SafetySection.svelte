@@ -1,27 +1,52 @@
 <script lang="ts">
   import BooleanField from "../fields/BooleanField.svelte";
   import ListField from "../fields/ListField.svelte";
-  import { getAt, setAt, putList, type ConfigPayload } from "../configClient";
+  import TriStateListField from "../fields/TriStateListField.svelte";
+  import OverrideField from "../fields/OverrideField.svelte";
+  import {
+    getAt, setAt, putList,
+    inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
+    type ListFieldState, type ConfigPayload,
+  } from "../configClient";
 
-  let { payload = $bindable(), onChange }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void } = $props();
+  let { payload = $bindable(), onChange, editProfile = null }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
 
-  const approveAlways = $derived((getAt(payload, "base", "safety", "approve_always") as boolean) ?? true);
-  const requireConfirmFor = $derived((getAt(payload, "base", "safety", "require_confirm_for") as string[]) ?? []);
+  const SEC = "safety";
+  const overlay = $derived(editProfile != null && editProfile !== "default");
+  const prof = $derived(editProfile ?? "");
 
-  function set(key: string, value: unknown): void {
-    payload = setAt(payload, "base", "safety", key, value);
+  // --- base mode: UNCHANGED from today (ListField + putList) ---
+  const approveAlways = $derived((getAt(payload, "base", SEC, "approve_always") as boolean) ?? true);
+  const requireConfirmFor = $derived((getAt(payload, "base", SEC, "require_confirm_for") as string[]) ?? []);
+  function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
+  function setBaseRcf(list: string[]): void { payload = putList(payload, "base", SEC, "require_confirm_for", list); onChange(); }
+
+  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key); return Array.isArray(v) ? v.join(" · ") : v == null ? "(nic)" : String(v); }
+  function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
+  function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? inheritedFor(payload, prof, SEC, key) : v; }
+  function setScState(key: string, s: "inherit" | "override"): void {
+    payload = { ...payload, profiles: s === "inherit" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, inheritedFor(payload, prof, SEC, key)) };
     onChange();
   }
-  function setRequireConfirmFor(list: string[]): void {
-    payload = putList(payload, "base", "safety", "require_confirm_for", list);
+  function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }
+  function ovRcfList(): string[] { const v = overrideValue(payload, prof, SEC, "require_confirm_for"); return Array.isArray(v) ? v as string[] : []; }
+  function setOvRcf(state: ListFieldState, list: string[]): void {
+    payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, "require_confirm_for") : setOverride(payload.profiles, prof, SEC, "require_confirm_for", state === "empty" ? [] : list) };
     onChange();
   }
 </script>
 
-<h2>Safety</h2>
-<BooleanField label="approve_always" value={approveAlways} onchange={(v) => set("approve_always", v)} />
-<ListField label="require_confirm_for" value={requireConfirmFor} onchange={setRequireConfirmFor} />
+<h2>Safety{#if overlay} · overlay: {editProfile}{/if}</h2>
+{#if overlay}
+  <OverrideField label="approve_always" state={scState("approve_always")} inheritedDisplay={hint("approve_always")} onstate={(s) => setScState("approve_always", s)}>
+    <BooleanField label="" value={Boolean(scValue("approve_always"))} onchange={(v) => setSc("approve_always", v)} />
+  </OverrideField>
+  <TriStateListField label="require_confirm_for" state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint("require_confirm_for")}`} onchange={setOvRcf} />
+{:else}
+  <BooleanField label="approve_always" value={approveAlways} onchange={(v) => set("approve_always", v)} />
+  <ListField label="require_confirm_for" value={requireConfirmFor} onchange={setBaseRcf} />
+{/if}
 
 <style>
   h2 { margin: 0 0 8px; }
