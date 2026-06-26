@@ -19,6 +19,9 @@
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
+  // Mirror of backend defaults (config.py ViewConfig) — keep in sync.
+  const VIEW_DEFAULTS: Record<string, unknown> = { management: "launcher_menu", agent_slots: "max", show_profile_on_panel: false };
+
   // --- base mode (unchanged from α) ---
   const management = $derived((getAt(payload, "base", SEC, "management") as string) ?? "launcher_menu");
   const agentSlots = $derived((getAt(payload, "base", SEC, "agent_slots") as string) ?? "");
@@ -27,11 +30,11 @@
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
 
   // --- overlay mode helpers ---
-  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key); return Array.isArray(v) ? v.join(" · ") : v == null ? "(nic)" : String(v); }
+  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? "(nic)" : String(v); }
   function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
-  function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? inheritedFor(payload, prof, SEC, key) : v; }
+  function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? (inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key]) : v; }
   function setScState(key: string, s: "inherit" | "override"): void {
-    payload = { ...payload, profiles: s === "inherit" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, inheritedFor(payload, prof, SEC, key)) };
+    payload = { ...payload, profiles: s === "inherit" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key]) };
     onChange();
   }
   function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }
@@ -45,7 +48,7 @@
 <h2>View{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <OverrideField label="management" state={scState("management")} inheritedDisplay={hint("management")} onstate={(s) => setScState("management", s)}>
-    <SelectField label="" value={String(scValue("management") ?? "launcher_menu")} options={MANAGEMENT} onchange={(v) => setSc("management", v)} />
+    <SelectField label="" value={String(scValue("management") ?? "")} options={MANAGEMENT} onchange={(v) => setSc("management", v)} />
   </OverrideField>
   <OverrideField label="agent_slots" state={scState("agent_slots")} inheritedDisplay={hint("agent_slots")} onstate={(s) => setScState("agent_slots", s)}>
     <TextField label="" value={String(scValue("agent_slots") ?? "")} oninput={(v) => setSc("agent_slots", v)} />
