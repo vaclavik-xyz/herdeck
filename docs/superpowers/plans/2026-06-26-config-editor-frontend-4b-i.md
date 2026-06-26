@@ -831,7 +831,7 @@ In `desktop/src/ConfigApp.svelte`, add the cleanup helper after `apply()` (near 
   }
 ```
 
-Then, in `apply()`, after the successful-write `await load();` (line 78), add the orphan check (the banner shown here outlives `load()`'s `banner = null` because this runs after it):
+Then, in `apply()`'s successful-write branch (`if (res.length === 0)`), add the orphan check: compute `orphans` from the edited payload **BEFORE** `await load()` (see the Design note — a post-load compute would miss the renamed/deleted old key), then show the banner AFTER `load()` using the captured list (it outlives `load()`'s `banner = null` because the banner call runs after `load()` returns):
 
 ```svelte
       if (res.length === 0) {
