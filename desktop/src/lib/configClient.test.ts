@@ -12,6 +12,8 @@ import {
   setProfileExtends,
   profileServers,
   setProfileServers,
+  listFieldState,
+  setListField,
   type ConfigPayload,
 } from "./configClient";
 
@@ -492,5 +494,50 @@ describe("token-env references / orphaned secrets / active-changed", () => {
     expect(parseActiveChanged({ changed: false })).toBe(false);
     expect(parseActiveChanged(null)).toBe(false);
     expect(parseActiveChanged("nope")).toBe(false);
+  });
+});
+
+describe("listFieldState / setListField", () => {
+  it("reads the tri-state of a list key (absent / [] / non-empty)", () => {
+    const def = parseConfig({ base: { view: {} } })!;
+    expect(listFieldState(def, "base", "view", "tile_primary")).toBe("default");
+    const empty = parseConfig({ base: { view: { tile_primary: [] } } })!;
+    expect(listFieldState(empty, "base", "view", "tile_primary")).toBe("empty");
+    const custom = parseConfig({ base: { view: { tile_primary: ["repo"] } } })!;
+    expect(listFieldState(custom, "base", "view", "tile_primary")).toBe("custom");
+  });
+
+  it("writes 'default' by OMITTING the key (input untouched)", () => {
+    const c = parseConfig({ base: { view: { tile_primary: ["repo"] } } })!;
+    const next = setListField(c, "base", "view", "tile_primary", "default", []);
+    expect("tile_primary" in (next.base.view as Record<string, unknown>)).toBe(false);
+    expect(c.base.view).toEqual({ tile_primary: ["repo"] });
+  });
+
+  it("writes 'empty' as an explicit []", () => {
+    const c = parseConfig({ base: { view: {} } })!;
+    const next = setListField(c, "base", "view", "tile_primary", "empty", []);
+    expect((next.base.view as Record<string, unknown>).tile_primary).toEqual([]);
+  });
+
+  it("writes 'custom' as the list", () => {
+    const c = parseConfig({ base: { view: {} } })!;
+    const next = setListField(c, "base", "view", "tile_primary", "custom", ["repo", "branch"]);
+    expect((next.base.view as Record<string, unknown>).tile_primary).toEqual(["repo", "branch"]);
+  });
+
+  it("round-trips every state through setListField → listFieldState", () => {
+    const c = parseConfig({ base: { deck: {} } })!;
+    for (const s of ["default", "empty", "custom"] as const) {
+      const list = s === "custom" ? ["a"] : [];
+      const next = setListField(c, "base", "deck", "overview_order", s, list);
+      expect(listFieldState(next, "base", "deck", "overview_order")).toBe(s);
+    }
+  });
+
+  it("treats a 'custom' write with an empty list as empty on read-back", () => {
+    const c = parseConfig({ base: { view: {} } })!;
+    const next = setListField(c, "base", "view", "tile_primary", "custom", []);
+    expect(listFieldState(next, "base", "view", "tile_primary")).toBe("empty");
   });
 });

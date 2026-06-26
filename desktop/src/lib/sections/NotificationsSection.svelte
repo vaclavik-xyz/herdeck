@@ -1,11 +1,12 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import BooleanField from "../fields/BooleanField.svelte";
-  import ListField from "../fields/ListField.svelte";
+  import TriStateListField from "../fields/TriStateListField.svelte";
   import TextField from "../fields/TextField.svelte";
   import TokenSecretField from "../fields/TokenSecretField.svelte";
   import {
-    commandTransport as cfgTransport, getAt, setAt, removeAt, putList, secretFlag, type ConfigPayload,
+    commandTransport as cfgTransport, getAt, setAt, removeAt, listFieldState, setListField,
+    secretFlag, type ListFieldState, type ConfigPayload,
   } from "../configClient";
 
   let { payload = $bindable(), onChange, onError }:
@@ -16,7 +17,9 @@
   const enabled = $derived((getAt(payload, "base", "notifications", "enabled") as boolean) ?? false);
   const sound = $derived((getAt(payload, "base", "notifications", "sound") as boolean) ?? true);
   const on = $derived((getAt(payload, "base", "notifications", "on") as string[]) ?? []);
+  const onState = $derived(listFieldState(payload, "base", "notifications", "on"));
   const backends = $derived((getAt(payload, "base", "notifications", "backends") as string[]) ?? []);
+  const backendsState = $derived(listFieldState(payload, "base", "notifications", "backends"));
 
   const telegram = $derived(((): { token_env: string; chat_id: string } => {
     const v = getAt(payload, "base", "notifications", "telegram");
@@ -28,9 +31,9 @@
     payload = setAt(payload, "base", "notifications", key, value);
     onChange();
   }
-  // `on`/`backends` are lists: empty → omit (backend defaults ["blocked"]/["macos"]), not [].
-  function setList(key: string, list: string[]): void {
-    payload = putList(payload, "base", "notifications", key, list);
+  // `on`/`backends` tri-state: absent → backend defaults (["blocked"]/["macos"]), [] → none, custom → list.
+  function setTri(key: string, state: ListFieldState, list: string[]): void {
+    payload = setListField(payload, "base", "notifications", key, state, list);
     onChange();
   }
   function setTelegram(field: "token_env" | "chat_id", v: string): void {
@@ -72,8 +75,8 @@
 <h2>Notifications</h2>
 <BooleanField label="enabled" value={enabled} onchange={(v) => set("enabled", v)} />
 <BooleanField label="sound" value={sound} onchange={(v) => set("sound", v)} />
-<ListField label="on" value={on} onchange={(v) => setList("on", v)} />
-<ListField label="backends" value={backends} onchange={(v) => setList("backends", v)} />
+<TriStateListField label="on" state={onState} list={on} onchange={(s, l) => setTri("on", s, l)} />
+<TriStateListField label="backends" state={backendsState} list={backends} onchange={(s, l) => setTri("backends", s, l)} />
 
 <fieldset class="tg">
   <legend>Telegram</legend>

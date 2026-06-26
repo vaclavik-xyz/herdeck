@@ -1,15 +1,16 @@
 <script lang="ts">
   import TextField from "../fields/TextField.svelte";
   import ListField from "../fields/ListField.svelte";
+  import TriStateListField from "../fields/TriStateListField.svelte";
   import {
     answerProfileRows, serializeNamedRows, applyMapSection,
-    type ConfigPayload, type AnswerProfileRow,
+    type ConfigPayload, type AnswerProfileRow, type ListFieldState,
   } from "../configClient";
 
   let { payload = $bindable(), onChange, onError, reloadRev }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev: number } = $props();
 
-  const KEYS = ["approve", "deny", "stop", "approve_always"] as const;
+  const LIST_KEYS = ["approve", "deny", "stop"] as const;
 
   // Local editor rows (source of truth while editing); re-seeded only when ConfigApp bumps
   // `reloadRev` (load/discard/Apply-reload) — same pattern as StartProfilesSection.
@@ -43,8 +44,17 @@
   }
 
   function rename(i: number, name: string): void { commit(rows.map((r, j) => (j === i ? { ...r, name } : r))); }
-  function setList(i: number, key: (typeof KEYS)[number], v: string[]): void {
+  function setList(i: number, key: (typeof LIST_KEYS)[number], v: string[]): void {
     commit(rows.map((r, j) => (j === i ? { ...r, [key]: v } : r)));
+  }
+  // approve_always carries a third "default" (null) state: absent → backend falls back to approve.
+  function aaState(r: AnswerProfileRow): ListFieldState {
+    if (r.approve_always === null) return "default";
+    return r.approve_always.length === 0 ? "empty" : "custom";
+  }
+  function setApproveAlways(i: number, state: ListFieldState, list: string[]): void {
+    const value: string[] | null = state === "default" ? null : state === "empty" ? [] : list;
+    commit(rows.map((r, j) => (j === i ? { ...r, approve_always: value } : r)));
   }
   function add(): void {
     commit([...rows, { name: "", approve: [], deny: [], stop: [], approve_always: null }]);
@@ -59,9 +69,15 @@
     <legend>{e.name || "(nový profil)"} <button type="button" onclick={() => remove(i)}>×</button></legend>
     <TextField label="name" value={e.name} oninput={(v) => rename(i, v)} />
     {#if e.name.trim() !== ""}
-      {#each KEYS as k}
+      {#each LIST_KEYS as k}
         <ListField label={k} value={e[k] ?? []} onchange={(v) => setList(i, k, v)} />
       {/each}
+      <TriStateListField
+        label="approve_always"
+        state={aaState(e)}
+        list={e.approve_always ?? []}
+        onchange={(s, l) => setApproveAlways(i, s, l)}
+      />
     {:else}
       <p class="hint">Zadej jméno profilu pro úpravu kláves.</p>
     {/if}

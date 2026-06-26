@@ -394,6 +394,40 @@ export function putList(
     : setAt(payload, root, section, key, list);
 }
 
+/** The tri-state of a list key: absent → "default" (backend default applies),
+ *  `[]` → "empty" (explicit none, default disabled), non-empty → "custom". */
+export type ListFieldState = "default" | "custom" | "empty";
+
+/** Read a list key's tri-state. A missing key (any level absent) is "default";
+ *  an empty array is "empty"; anything else present is "custom". */
+export function listFieldState(
+  payload: ConfigPayload,
+  root: ConfigRoot,
+  section: string,
+  key: string,
+): ListFieldState {
+  const v = getAt(payload, root, section, key);
+  if (v === undefined) return "default";
+  return Array.isArray(v) && v.length === 0 ? "empty" : "custom";
+}
+
+/** NEW payload writing the chosen tri-state for a list key: "default" OMITS the
+ *  key (removeAt → backend default), "empty" writes an explicit `[]`, "custom"
+ *  writes `list` (a "custom" list that is empty is written as `[]` and reads back
+ *  as "empty"). Composes the tested setAt/removeAt; input untouched. */
+export function setListField(
+  payload: ConfigPayload,
+  root: ConfigRoot,
+  section: string,
+  key: string,
+  state: ListFieldState,
+  list: string[],
+): ConfigPayload {
+  if (state === "default") return removeAt(payload, root, section, key);
+  if (state === "empty") return setAt(payload, root, section, key, []);
+  return setAt(payload, root, section, key, list);
+}
+
 // --- profiles (řez 4b-i) ---
 
 /** Result of a profile mutation that can fail validation. */
