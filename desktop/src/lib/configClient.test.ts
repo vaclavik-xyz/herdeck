@@ -579,6 +579,18 @@ describe("overlay resolution (β1)", () => {
     expect(inheritedFor(cyc, "a", "view", "management")).toBe("launcher_menu");
   });
 
+  it("inheritedFor falls back to base when an unknown target appears after a valid parent", () => {
+    const unk = parseConfig({
+      base: { view: { management: "launcher_menu" } },
+      profiles: {
+        parent: { extends: "ghost", view: { management: "bottom_row" } },
+        child: { extends: "parent", view: {} },
+      },
+    })!;
+    // child → parent → "ghost" (missing); unknown grandparent breaks the chain → base value
+    expect(inheritedFor(unk, "child", "view", "management")).toBe("launcher_menu");
+  });
+
   it("inheritedForPath resolves a nested path (theme.colors.<status>) through the chain", () => {
     expect(inheritedForPath(payload, "mob", ["theme", "colors", "blocked"])).toBe("#f00");
     expect(inheritedForPath(payload, "mob", ["theme", "colors", "idle"])).toBeUndefined();
