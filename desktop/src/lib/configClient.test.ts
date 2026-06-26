@@ -409,6 +409,15 @@ describe("profile CRUD", () => {
     const next = deleteProfile(p, "mobile");
     expect(next.local.active_profile).toBe("work");
   });
+
+  it("deleteProfile drops a now-dangling base (top-level) active_profile", () => {
+    // řez-4a read() carries a legacy top-level active_profile into base for round-trip;
+    // deleting that profile must clear it too, else Apply writes an unknown active profile.
+    const p = parseConfig({ profiles: { mobile: {} }, base: { active_profile: "mobile", deck: { grid: "5x3" } } })!;
+    const next = deleteProfile(p, "mobile");
+    expect("active_profile" in next.base).toBe(false); // dangling base selector cleared
+    expect((next.base.deck as Record<string, unknown>).grid).toBe("5x3"); // sibling kept
+  });
 });
 
 describe("profile extends / servers", () => {

@@ -417,10 +417,13 @@ export function createProfile(payload: ConfigPayload, name: string): ProfileResu
   return { ok: true, payload: { ...payload, profiles } };
 }
 
-/** NEW payload with profile `name` removed. If `name` was the local active
- *  profile, that now-dangling selection is dropped from `local` too (so the next
- *  Apply doesn't write an unknown active profile); other local keys are kept.
- *  Input untouched. */
+/** NEW payload with profile `name` removed. Any PERSISTED active selector pointing
+ *  at the deleted profile is also cleared so the next Apply doesn't write an unknown
+ *  active profile (backend would reject it): both the local selector
+ *  (`local.active_profile`) AND the legacy top-level one (`base.active_profile`,
+ *  carried into base by řez-4a `read()`). Other keys in each are kept. An env lock
+ *  (`HERDECK_PROFILE`) can't be cleared here — `ProfilesSection` blocks deleting the
+ *  env-locked active profile (Task 4). Input untouched. */
 export function deleteProfile(payload: ConfigPayload, name: string): ConfigPayload {
   const profiles = clone(payload.profiles);
   delete profiles[name];
@@ -429,7 +432,12 @@ export function deleteProfile(payload: ConfigPayload, name: string): ConfigPaylo
     local = { ...clone(payload.local) };
     delete (local as Record<string, unknown>).active_profile;
   }
-  return { ...payload, profiles, local };
+  let base = payload.base;
+  if (asDict(payload.base).active_profile === name) {
+    base = { ...clone(payload.base) };
+    delete (base as Record<string, unknown>).active_profile;
+  }
+  return { ...payload, profiles, local, base };
 }
 
 /** The `extends` target of profile `name` ("default" = inherit base, when absent). */
