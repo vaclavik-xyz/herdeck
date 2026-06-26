@@ -22,6 +22,7 @@
     parseValidate,
     parseActiveChanged,
     toWriteBody,
+    orphanedSecrets,
     type ConfigPayload,
   } from "./lib/configClient";
 
@@ -105,14 +106,38 @@
       const res = parseValidate(await cfg.write(toWriteBody(payload)));
       errors = res;
       if (res.length === 0) {
+        // Capture orphans from the EDITED pre-reload payload (see Design note): the reloaded
+        // payload.secrets only carries still-referenced token_envs, so a renamed/deleted old
+        // key would vanish and post-load detection would miss it.
+        const orphans = orphanedSecrets(payload);
         dirty = false;
         await load(); // re-read saved state (preview refreshes itself via its own poll)
+        if (orphans.length > 0) {
+          setBanner(
+            "warning",
+            `${orphans.length} osiřelých keychain klíčů (${orphans.join(", ")})`,
+            "uklidit",
+            () => void cleanupOrphans(orphans),
+          );
+        }
       }
     } catch (e) {
       errors = [String(e)];
     } finally {
       busy = false;
     }
+  }
+
+  async function cleanupOrphans(names: string[]): Promise<void> {
+    if (!payload) return;
+    const secrets = { ...payload.secrets };
+    for (const name of names) {
+      const code = await cfg.clearSecret(name);
+      if (code === 204) secrets[name] = { set: false, source: null };
+      else { setBanner("error", `úklid tokenu '${name}' selhal (HTTP ${code})`); return; }
+    }
+    payload = { ...payload, secrets };
+    setBanner("success", "osiřelé keychain klíče uklizeny");
   }
 
   async function discard(): Promise<void> {
