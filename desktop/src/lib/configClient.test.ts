@@ -14,6 +14,13 @@ import {
   setProfileServers,
   listFieldState,
   setListField,
+  inheritedFor,
+  inheritedForPath,
+  overrideValue,
+  overrideValuePath,
+  overrideState,
+  setOverridePath,
+  clearOverridePath,
   type ConfigPayload,
 } from "./configClient";
 
@@ -539,5 +546,66 @@ describe("listFieldState / setListField", () => {
     const c = parseConfig({ base: { view: {} } })!;
     const next = setListField(c, "base", "view", "tile_primary", "custom", []);
     expect(listFieldState(next, "base", "view", "tile_primary")).toBe("empty");
+  });
+});
+
+describe("overlay resolution (β1)", () => {
+  // base.view.management = launcher_menu; parent overrides it; child extends parent.
+  const payload = parseConfig({
+    base: { view: { management: "launcher_menu", agent_slots: "2" }, theme: { colors: { blocked: "#f00" } } },
+    profiles: {
+      parent: { view: { management: "bottom_row" } },
+      child: { extends: "parent", view: { agent_slots: "4" } },
+      mob: { view: { tile_primary: [] } },
+    },
+  })!;
+
+  it("inheritedFor resolves through the extends chain, excluding the profile's own overlay", () => {
+    // child inherits management from parent (parent overrode base), agent_slots from base (child overrides it itself)
+    expect(inheritedFor(payload, "child", "view", "management")).toBe("bottom_row");
+    expect(inheritedFor(payload, "child", "view", "agent_slots")).toBe("2");
+    // parent inherits management from base (its own override is excluded)
+    expect(inheritedFor(payload, "parent", "view", "management")).toBe("launcher_menu");
+    // absent everywhere → undefined
+    expect(inheritedFor(payload, "parent", "view", "missing")).toBeUndefined();
+  });
+
+  it("inheritedFor falls back to base on an unknown/cyclic extends target", () => {
+    const cyc = parseConfig({
+      base: { view: { management: "launcher_menu" } },
+      profiles: { a: { extends: "b", view: {} }, b: { extends: "a", view: { management: "bottom_row" } } },
+    })!;
+    // a extends b extends a → cycle; walk stops, falls back to base
+    expect(inheritedFor(cyc, "a", "view", "management")).toBe("launcher_menu");
+  });
+
+  it("inheritedForPath resolves a nested path (theme.colors.<status>) through the chain", () => {
+    expect(inheritedForPath(payload, "mob", ["theme", "colors", "blocked"])).toBe("#f00");
+    expect(inheritedForPath(payload, "mob", ["theme", "colors", "idle"])).toBeUndefined();
+  });
+
+  it("overrideValue / overrideValuePath read the profile's own overlay only", () => {
+    expect(overrideValue(payload, "parent", "view", "management")).toBe("bottom_row");
+    expect(overrideValue(payload, "child", "view", "management")).toBeUndefined(); // child does not override it
+    expect(overrideValuePath(payload, "parent", ["view", "management"])).toBe("bottom_row");
+  });
+
+  it("overrideState reports inherit / empty / custom", () => {
+    expect(overrideState(payload, "child", "view", "management")).toBe("default"); // absent → inherit
+    expect(overrideState(payload, "mob", "view", "tile_primary")).toBe("empty");   // []
+    expect(overrideState(payload, "parent", "view", "management")).toBe("custom"); // a value
+  });
+
+  it("setOverridePath creates a nested override without touching the input", () => {
+    const next = setOverridePath(payload.profiles, "mob", ["theme", "colors", "blocked"], "#0f0");
+    expect((next.mob.theme as any).colors.blocked).toBe("#0f0");
+    expect(payload.profiles.mob.theme).toBeUndefined(); // input untouched
+  });
+
+  it("clearOverridePath removes the leaf and prunes emptied ancestors, keeping the profile entry", () => {
+    const withColor = setOverridePath(payload.profiles, "mob", ["theme", "colors", "blocked"], "#0f0");
+    const cleared = clearOverridePath(withColor, "mob", ["theme", "colors", "blocked"]);
+    expect(cleared.mob.theme).toBeUndefined(); // colors emptied → theme pruned
+    expect("mob" in cleared).toBe(true);       // profile entry kept
   });
 });
