@@ -20,6 +20,7 @@
     commandTransport as cfgTransport,
     parseConfig,
     parseValidate,
+    parseActiveChanged,
     toWriteBody,
     type ConfigPayload,
   } from "./lib/configClient";
@@ -47,6 +48,29 @@
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
   const preview = $derived(discovery ? deckTransport((cmd, args) => invoke(cmd, args)) : null);
   const profiles = $derived(payload ? ["default (báze)", ...Object.keys(payload.profiles)] : ["default (báze)"]);
+
+  const DEFAULT_LABEL = "default (báze)";
+  // The label currently selected in the switcher (maps the effective active profile).
+  const activeLabel = $derived(
+    payload == null || payload.activeProfile === "default" ? DEFAULT_LABEL : payload.activeProfile,
+  );
+  const switcherDisabled = $derived(payload == null || payload.envLocked || dirty);
+
+  async function switchProfile(label: string): Promise<void> {
+    if (!payload) return;
+    const name = label === DEFAULT_LABEL ? "default" : label;
+    if (name === payload.activeProfile) return; // no-op: same profile
+    try {
+      const changed = parseActiveChanged(await cfg.setActive(name));
+      if (changed) {
+        await load(); // re-read saved state; preview refreshes via its own poll
+      } else {
+        setBanner("warning", `profil '${name}' nelze aktivovat (zamčen nebo neznámý)`);
+      }
+    } catch (e) {
+      setBanner("error", `přepnutí profilu selhalo: ${String(e)}`);
+    }
+  }
 
   async function load(): Promise<void> {
     try {
@@ -127,10 +151,19 @@
   <header class="topbar">
     <label>
       Profil:
-      <select disabled>
-        {#each profiles as p}<option>{p}</option>{/each}
+      <select
+        value={activeLabel}
+        disabled={switcherDisabled}
+        onchange={(e) => switchProfile((e.target as HTMLSelectElement).value)}
+      >
+        {#each profiles as p}<option value={p}>{p}</option>{/each}
       </select>
     </label>
+    {#if payload?.envLocked}
+      <span class="hint">profil zamčen přes HERDECK_PROFILE</span>
+    {:else if dirty}
+      <span class="hint">ulož nebo zahoď změny pro přepnutí profilu</span>
+    {/if}
     {#if dirty}<span class="dirty">● neuložené změny</span>{/if}
   </header>
 
