@@ -456,8 +456,8 @@ function inheritedChain(
   const ext0 = asDict(profiles[profile]).extends;
   let cur: string | undefined = typeof ext0 === "string" ? ext0 : undefined;
   while (cur && cur !== "default") {
-    if (!(cur in profiles)) break;   // unknown target: stop, use chain so far
-    if (seen.has(cur)) return [];    // cycle detected: discard chain, fall back to base
+    if (!(cur in profiles)) return []; // unknown target: discard chain, fall back to base
+    if (seen.has(cur)) return [];     // cycle detected: discard chain, fall back to base
     seen.add(cur);
     chain.push(cur);
     const ext = asDict(profiles[cur]).extends;
