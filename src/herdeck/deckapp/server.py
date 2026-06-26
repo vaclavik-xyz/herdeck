@@ -7,7 +7,7 @@ import os
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..config import ConfigError
 from ..orchestrator import Orchestrator
@@ -395,7 +395,7 @@ class DeckApp:
                     if app._config_service is None:
                         self._send(404)
                         return
-                    app._config_service.clear_secret(path.rsplit("/", 1)[1])
+                    app._config_service.clear_secret(unquote(path.rsplit("/", 1)[1]))
                     self._send(204)
                 else:
                     self._send(404)

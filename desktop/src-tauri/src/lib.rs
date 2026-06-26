@@ -217,7 +217,7 @@ fn config_secret_clear(
     http::http_delete(
         &d.host,
         d.port,
-        &format!("/secret/{token_env}"),
+        &format!("/secret/{}", http::percent_encode_segment(&token_env)),
         (HDR_TOKEN, &d.token),
         SIDECAR_TIMEOUT,
     )

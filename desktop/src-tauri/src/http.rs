@@ -273,6 +273,23 @@ pub fn http_delete(
     Ok(code)
 }
 
+/// Percent-encode a single URL path segment per RFC 3986: keep the unreserved
+/// set (`A-Z a-z 0-9 - . _ ~`), emit `%XX` (upper-hex) for every other byte.
+/// Used so a `token_env` with a space or slash can't break the DELETE request
+/// line or the sidecar's `path.rsplit('/')`. The sidecar `unquote`s it back.
+pub fn percent_encode_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 /// Standard base64 (with padding). Inline to avoid a new crate dependency; used
 /// to frame proxied PNG bytes as a `data:` URL the WebView `<img>` can render.
 pub fn base64_encode(input: &[u8]) -> String {
@@ -415,6 +432,15 @@ mod tests {
         assert!(req.contains("X-Herdeck-Token: tok\r\n"));
         assert!(req.contains("Content-Length: 0\r\n"));
         assert!(req.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn percent_encode_segment_encodes_unsafe_and_keeps_unreserved() {
+        assert_eq!(percent_encode_segment("TOK"), "TOK");
+        assert_eq!(percent_encode_segment("My_Tok-1.0~x"), "My_Tok-1.0~x");
+        assert_eq!(percent_encode_segment("MY TOK"), "MY%20TOK");
+        assert_eq!(percent_encode_segment("a/b"), "a%2Fb");
+        assert_eq!(percent_encode_segment("é"), "%C3%A9"); // UTF-8 bytes, upper-hex
     }
 
     #[test]
