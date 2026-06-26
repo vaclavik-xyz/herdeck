@@ -1,14 +1,16 @@
 <script lang="ts">
   import TextField from "../fields/TextField.svelte";
   import NumberField from "../fields/NumberField.svelte";
-  import ListField from "../fields/ListField.svelte";
-  import { getAt, setAt, removeAt, putList, type ConfigPayload } from "../configClient";
+  import TriStateListField from "../fields/TriStateListField.svelte";
+  import { getAt, setAt, removeAt, listFieldState, setListField, serversOf, type ListFieldState, type ConfigPayload } from "../configClient";
 
   let { payload = $bindable(), onChange }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void } = $props();
 
   const grid = $derived((getAt(payload, "base", "deck", "grid") as string) ?? "");
   const overviewOrder = $derived((getAt(payload, "base", "deck", "overview_order") as string[]) ?? []);
+  const overviewState = $derived(listFieldState(payload, "base", "deck", "overview_order"));
+  const overviewHint = $derived(serversOf(payload).map((s) => s.id).filter((id) => id !== "").join(" · "));
 
   // Hardware (local.toml). [local] = deck kind / sockets / web bind; [hardware] = numeric tuning.
   const hwDeck = $derived((getAt(payload, "local", "local", "deck") as string) ?? "");
@@ -25,9 +27,9 @@
     payload = setAt(payload, "base", "deck", key, value);
     onChange();
   }
-  // overview_order is a list: empty → omit (backend default = all servers), not an empty selection.
-  function setOverviewOrder(list: string[]): void {
-    payload = putList(payload, "base", "deck", "overview_order", list);
+  // overview_order tri-state: absent → all servers (default), [] → empty overview, custom → list.
+  function setOverviewOrder(state: ListFieldState, list: string[]): void {
+    payload = setListField(payload, "base", "deck", "overview_order", state, list);
     onChange();
   }
   // For optional local strings: blank clears the key (so we never write empty hardware paths).
@@ -43,7 +45,7 @@
 
 <h2>Deck</h2>
 <TextField label="grid" value={grid} oninput={(v) => setBase("grid", v)} />
-<ListField label="overview_order" value={overviewOrder} onchange={setOverviewOrder} />
+<TriStateListField label="overview_order" state={overviewState} list={overviewOrder} defaultHint={overviewHint} onchange={setOverviewOrder} />
 
 <fieldset class="hw">
   <legend>Hardware (tento stroj — local.toml)</legend>
