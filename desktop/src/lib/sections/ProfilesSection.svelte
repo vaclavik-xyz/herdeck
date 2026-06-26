@@ -14,6 +14,18 @@
   const names = $derived(profileNames(payload));
   const serverIds = $derived(serversOf(payload).map((s) => s.id).filter((id) => id !== ""));
 
+  // Checkbox options for a profile = current base servers PLUS any stale refs this profile
+  // still holds (so an unknown/removed server id can be unchecked away — otherwise it is
+  // invisible and the backend rejects Apply as "unknown server" with no way to fix it).
+  function serverOptions(name: string): { id: string; known: boolean }[] {
+    const sel = profileServers(payload, name);
+    const stale = sel.filter((id) => !serverIds.includes(id));
+    return [
+      ...serverIds.map((id) => ({ id, known: true })),
+      ...stale.map((id) => ({ id, known: false })),
+    ];
+  }
+
   // A profile may extend "default" (base) or any OTHER profile — never itself.
   function extendsOptions(self: string): string[] {
     return ["default", ...names.filter((n) => n !== self)];
@@ -67,17 +79,17 @@
     />
     <div class="servers">
       <span class="lbl">servers</span>
-      {#if serverIds.length === 0}
+      {#if serverOptions(name).length === 0}
         <span class="hint">žádné servery v bázi — přidej je v sekci Servers</span>
       {:else}
-        {#each serverIds as id (id)}
+        {#each serverOptions(name) as opt (opt.id)}
           <label class="chk">
             <input
               type="checkbox"
-              checked={profileServers(payload, name).includes(id)}
-              onchange={(e) => toggleServer(name, id, (e.target as HTMLInputElement).checked)}
+              checked={profileServers(payload, name).includes(opt.id)}
+              onchange={(e) => toggleServer(name, opt.id, (e.target as HTMLInputElement).checked)}
             />
-            {id}
+            {opt.id}{#if !opt.known} <span class="unknown">(neznámý)</span>{/if}
           </label>
         {/each}
       {/if}
@@ -98,5 +110,6 @@
   .servers { display: grid; grid-template-columns: 120px 1fr; gap: 8px; align-items: start; margin: 4px 0; }
   .servers .lbl { color: #aaa; }
   .chk { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; color: #ccc; }
+  .unknown { color: #e05050; font-size: 11px; }
   button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
 </style>

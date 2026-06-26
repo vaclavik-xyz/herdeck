@@ -23,6 +23,7 @@
     parseActiveChanged,
     toWriteBody,
     orphanedSecrets,
+    referencedTokenEnvs,
     type ConfigPayload,
   } from "./lib/configClient";
 
@@ -48,18 +49,15 @@
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
   const preview = $derived(discovery ? deckTransport((cmd, args) => invoke(cmd, args)) : null);
-  const profiles = $derived(payload ? ["default (báze)", ...Object.keys(payload.profiles)] : ["default (báze)"]);
+  const profileOptions = $derived(payload ? ["default", ...Object.keys(payload.profiles)] : ["default"]);
 
   const DEFAULT_LABEL = "default (báze)";
-  // The label currently selected in the switcher (maps the effective active profile).
-  const activeLabel = $derived(
-    payload == null || payload.activeProfile === "default" ? DEFAULT_LABEL : payload.activeProfile,
-  );
+  const optionLabel = (name: string): string => (name === "default" ? DEFAULT_LABEL : name);
+  const activeValue = $derived(payload?.activeProfile ?? "default");
   const switcherDisabled = $derived(payload == null || payload.envLocked || dirty);
 
-  async function switchProfile(label: string): Promise<void> {
+  async function switchProfile(name: string): Promise<void> {
     if (!payload) return;
-    const name = label === DEFAULT_LABEL ? "default" : label;
     if (name === payload.activeProfile) return; // no-op: same profile
     try {
       const changed = parseActiveChanged(await cfg.setActive(name));
@@ -130,8 +128,12 @@
 
   async function cleanupOrphans(names: string[]): Promise<void> {
     if (!payload) return;
+    // Re-check NOW: a dirty edit after the banner appeared may have reintroduced one of these
+    // token_env names. Never clear a keychain secret the current config references.
+    const referenced = referencedTokenEnvs(payload);
     const secrets = { ...payload.secrets };
     for (const name of names) {
+      if (referenced.has(name)) continue;
       const code = await cfg.clearSecret(name);
       if (code === 204) secrets[name] = { set: false, source: null };
       else { setBanner("error", `úklid tokenu '${name}' selhal (HTTP ${code})`); return; }
@@ -177,11 +179,11 @@
     <label>
       Profil:
       <select
-        value={activeLabel}
+        value={activeValue}
         disabled={switcherDisabled}
         onchange={(e) => switchProfile((e.target as HTMLSelectElement).value)}
       >
-        {#each profiles as p}<option value={p}>{p}</option>{/each}
+        {#each profileOptions as name}<option value={name}>{optionLabel(name)}</option>{/each}
       </select>
     </label>
     {#if payload?.envLocked}
