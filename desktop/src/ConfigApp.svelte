@@ -13,6 +13,7 @@
   import SafetySection from "./lib/sections/SafetySection.svelte";
   import AnswerProfilesSection from "./lib/sections/AnswerProfilesSection.svelte";
   import ProfilesSection from "./lib/sections/ProfilesSection.svelte";
+  import Banner from "./lib/Banner.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport as deckTransport } from "./lib/deckClient";
   import {
@@ -34,7 +35,13 @@
   let dirty = $state(false);
   let errors = $state<string[]>([]);
   let busy = $state(false);
-  let notice = $state(""); // transient out-of-band message (e.g. a failed secret op)
+  // A structured status banner (replaces the old plain `notice` string). Task 7
+  // reuses the optional action for the orphaned-keychain-secret cleanup.
+  type BannerState = { kind: "warning" | "error" | "success"; message: string; actionLabel?: string; onAction?: () => void };
+  let banner = $state<BannerState | null>(null);
+  function setBanner(kind: BannerState["kind"], message: string, actionLabel?: string, onAction?: () => void): void {
+    banner = { kind, message, actionLabel, onAction };
+  }
   let reloadRev = $state(0); // bumps on every load(); map sections re-seed local rows on change
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
@@ -45,22 +52,21 @@
     try {
       const fresh = parseConfig(await cfg.read());
       if (fresh == null) {
-        // A 200 that is not an object should not wipe the editor; surface it.
-        notice = "neočekávaná odpověď configu ze sidecaru";
+        setBanner("warning", "neočekávaná odpověď configu ze sidecaru");
         return;
       }
       payload = fresh;
       dirty = false;
       errors = [];
-      notice = "";
-      reloadRev += 1; // re-seed map sections' local rows (keep the bump from Task 11)
+      banner = null;
+      reloadRev += 1;
     } catch {
-      // Transport/sidecar error (404 no config service, sidecar down, reload failed).
-      // ALWAYS surface it; keep any in-memory payload — never silently null a loaded
-      // config, and never swallow a failed discard/reload after a payload exists.
-      notice = payload == null
-        ? "sidecar zatím neběží — zkouším znovu…"
-        : "obnovení configu ze sidecaru selhalo (neuložené změny zůstávají)";
+      setBanner(
+        "warning",
+        payload == null
+          ? "sidecar zatím neběží — zkouším znovu…"
+          : "obnovení configu ze sidecaru selhalo (neuložené změny zůstávají)",
+      );
     }
   }
 
@@ -142,25 +148,25 @@
         {#if (payload.base.servers == null || (payload.base.servers as unknown[]).length === 0)}
           <p class="hint">Zatím žádný server. Přidej první a klikni Apply pro vytvoření configu.</p>
         {/if}
-        <ServersSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <ServersSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Deck"}
-        <DeckSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <DeckSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "View"}
-        <ViewSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <ViewSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Theme"}
-        <ThemeSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <ThemeSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Macros"}
-        <MacrosSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <MacrosSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Start profiles"}
-        <StartProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => (notice = m)} />
+        <StartProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Notifications"}
-        <NotificationsSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <NotificationsSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Safety"}
-        <SafetySection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <SafetySection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Answer profiles"}
-        <AnswerProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => (notice = m)} />
+        <AnswerProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Profiles"}
-        <ProfilesSection bind:payload onChange={markDirty} onError={(m) => (notice = m)} />
+        <ProfilesSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else}
         <p class="hint">Neznámá sekce „{active}".</p>
       {/if}
@@ -173,7 +179,7 @@
 
   <footer class="savebar">
     <button onclick={discard} disabled={!dirty || busy}>Discard</button>
-    {#if notice}<span class="notice">{notice}</span>{/if}
+    {#if banner}<Banner kind={banner.kind} message={banner.message} actionLabel={banner.actionLabel} onAction={banner.onAction} />{/if}
     <span class="errcount" class:bad={errors.length > 0}>⚠ {errors.length} chyb</span>
     <button onclick={apply} disabled={!dirty || busy}>Apply</button>
   </footer>
@@ -193,7 +199,6 @@
   .hint { color: #888; }
   .savebar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid #222; }
   .savebar button { margin: 0; }
-  .notice { color: #e0a030; }
   .errcount { margin-left: auto; color: #888; }
   .errcount.bad { color: #e05050; }
 </style>
