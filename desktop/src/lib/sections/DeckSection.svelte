@@ -2,17 +2,44 @@
   import TextField from "../fields/TextField.svelte";
   import NumberField from "../fields/NumberField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
-  import { getAt, setAt, removeAt, listFieldState, setListField, serversOf, type ListFieldState, type ConfigPayload } from "../configClient";
+  import OverrideField from "../fields/OverrideField.svelte";
+  import {
+    getAt, setAt, removeAt, listFieldState, setListField, serversOf,
+    inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
+    type ListFieldState, type ConfigPayload,
+  } from "../configClient";
 
-  let { payload = $bindable(), onChange }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void } = $props();
+  let { payload = $bindable(), onChange, editProfile = null }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
 
-  const grid = $derived((getAt(payload, "base", "deck", "grid") as string) ?? "");
-  const overviewOrder = $derived((getAt(payload, "base", "deck", "overview_order") as string[]) ?? []);
-  const overviewState = $derived(listFieldState(payload, "base", "deck", "overview_order"));
-  const overviewHint = $derived(serversOf(payload).map((s) => s.id).filter((id) => id !== "").join(" · "));
+  const SEC = "deck";
+  const overlay = $derived(editProfile != null && editProfile !== "default");
+  const prof = $derived(editProfile ?? "");
+  const serverHint = $derived(serversOf(payload).map((s) => s.id).filter((id) => id !== "").join(" · "));
 
-  // Hardware (local.toml). [local] = deck kind / sockets / web bind; [hardware] = numeric tuning.
+  // --- base mode (grid + overview_order) ---
+  const grid = $derived((getAt(payload, "base", SEC, "grid") as string) ?? "");
+  const overviewState = $derived(listFieldState(payload, "base", SEC, "overview_order"));
+  const overviewOrder = $derived((getAt(payload, "base", SEC, "overview_order") as string[]) ?? []);
+  function setBase(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
+  function setBaseOverview(state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, "overview_order", state, list); onChange(); }
+
+  // --- overlay helpers (grid + overview_order) ---
+  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key); return Array.isArray(v) ? v.join(" · ") : v == null ? "(nic)" : String(v); }
+  function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
+  function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? inheritedFor(payload, prof, SEC, key) : v; }
+  function setScState(key: string, s: "inherit" | "override"): void {
+    payload = { ...payload, profiles: s === "inherit" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, inheritedFor(payload, prof, SEC, key)) };
+    onChange();
+  }
+  function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }
+  function ovOverviewList(): string[] { const v = overrideValue(payload, prof, SEC, "overview_order"); return Array.isArray(v) ? v as string[] : []; }
+  function setOvOverview(state: ListFieldState, list: string[]): void {
+    payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, "overview_order") : setOverride(payload.profiles, prof, SEC, "overview_order", state === "empty" ? [] : list) };
+    onChange();
+  }
+
+  // Hardware (local.toml) — never overlaid, always local.
   const hwDeck = $derived((getAt(payload, "local", "local", "deck") as string) ?? "");
   const hwSocket = $derived((getAt(payload, "local", "local", "herdr_socket") as string) ?? "");
   const hwBind = $derived((getAt(payload, "local", "local", "web_bind") as string) ?? "");
@@ -22,17 +49,6 @@
   const debounce = $derived((getAt(payload, "local", "hardware", "debounce") as number | null) ?? null);
   const keepAlive = $derived((getAt(payload, "local", "hardware", "keep_alive_interval") as number | null) ?? null);
   const tick = $derived((getAt(payload, "local", "hardware", "tick_interval") as number | null) ?? null);
-
-  function setBase(key: string, value: unknown): void {
-    payload = setAt(payload, "base", "deck", key, value);
-    onChange();
-  }
-  // overview_order tri-state: absent → all servers (default), [] → empty overview, custom → list.
-  function setOverviewOrder(state: ListFieldState, list: string[]): void {
-    payload = setListField(payload, "base", "deck", "overview_order", state, list);
-    onChange();
-  }
-  // For optional local strings: blank clears the key (so we never write empty hardware paths).
   function setLocalStr(table: string, key: string, v: string): void {
     payload = v.trim() === "" ? removeAt(payload, "local", table, key) : setAt(payload, "local", table, key, v);
     onChange();
@@ -43,13 +59,20 @@
   }
 </script>
 
-<h2>Deck</h2>
-<TextField label="grid" value={grid} oninput={(v) => setBase("grid", v)} />
-<TriStateListField label="overview_order" state={overviewState} list={overviewOrder} defaultHint={overviewHint} onchange={setOverviewOrder} />
+<h2>Deck{#if overlay} · overlay: {editProfile}{/if}</h2>
+{#if overlay}
+  <OverrideField label="grid" state={scState("grid")} inheritedDisplay={hint("grid")} onstate={(s) => setScState("grid", s)}>
+    <TextField label="" value={String(scValue("grid") ?? "")} oninput={(v) => setSc("grid", v)} />
+  </OverrideField>
+  <TriStateListField label="overview_order" state={overrideState(payload, prof, SEC, "overview_order")} list={ovOverviewList()} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint("overview_order")}`} onchange={setOvOverview} />
+{:else}
+  <TextField label="grid" value={grid} oninput={(v) => setBase("grid", v)} />
+  <TriStateListField label="overview_order" state={overviewState} list={overviewOrder} defaultHint={serverHint} onchange={setBaseOverview} />
+{/if}
 
 <fieldset class="hw">
   <legend>Hardware (tento stroj — local.toml)</legend>
-  <p class="hint">Platí jen pro tento počítač; nikdy se nepřenáší do profilů ani base configu.</p>
+  <p class="hint">Platí jen pro tento počítač; nikdy se nepřenáší do profilů ani base configu (ani v overlay módu).</p>
   <TextField label="deck" value={hwDeck} oninput={(v) => setLocalStr("local", "deck", v)} />
   <TextField label="herdr_socket" value={hwSocket} oninput={(v) => setLocalStr("local", "herdr_socket", v)} />
   <TextField label="web_bind" value={hwBind} oninput={(v) => setLocalStr("local", "web_bind", v)} />

@@ -2,20 +2,22 @@
   import ListField from "./ListField.svelte";
   import type { ListFieldState } from "../configClient";
 
-  let { label, state, list, defaultHint, onchange }:
+  let { label, state, list, defaultHint, inheritLabel, inheritHint, onchange }:
     {
       label: string;
       state: ListFieldState;
       list: string[];
       defaultHint?: string;
+      inheritLabel?: string;
+      inheritHint?: string;
       onchange: (state: ListFieldState, list: string[]) => void;
     } = $props();
 
-  const SEGMENTS: { value: ListFieldState; text: string }[] = [
-    { value: "default", text: "Výchozí" },
+  const SEGMENTS = $derived<{ value: ListFieldState; text: string }[]>([
+    { value: "default", text: inheritLabel ?? "Výchozí" },
     { value: "custom", text: "Vlastní" },
     { value: "empty", text: "Vypnuto" },
-  ];
+  ]);
 
   // Switching to "custom" carries the current list (user then edits it); if the list is
   // empty, seed one blank row so the write is non-empty ([] persists as "empty", not
@@ -47,7 +49,7 @@
     {#if state === "custom"}
       <ListField label="" value={list} onchange={(v) => onchange("custom", v)} />
     {:else if state === "default"}
-      <p class="hint">{defaultHint ? `výchozí: ${defaultHint}` : "(výchozí)"}</p>
+      <p class="hint">{inheritHint ?? (defaultHint ? `výchozí: ${defaultHint}` : "(výchozí)")}</p>
     {:else}
       <p class="hint">prázdné — vypnuto</p>
     {/if}

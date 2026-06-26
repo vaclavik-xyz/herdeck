@@ -428,6 +428,125 @@ export function setListField(
   return setAt(payload, root, section, key, list);
 }
 
+// --- profile overlay resolution (řez 4b-ii-β1) ---
+
+/** Read a path under `root`; returns whether every level was present + the value. */
+function readPath(root: unknown, path: string[]): { found: boolean; value: unknown } {
+  let cur: unknown = root;
+  for (const k of path) {
+    if (cur == null || typeof cur !== "object" || Array.isArray(cur) || !(k in (cur as Record<string, unknown>))) {
+      return { found: false, value: undefined };
+    }
+    cur = (cur as Record<string, unknown>)[k];
+  }
+  return { found: true, value: cur };
+}
+
+/** Overlay dicts a profile INHERITS: base-most parent down to but EXCLUDING `profile`
+ *  itself (the overlays via `extends`). Mirrors backend `_profile_overlays` minus the
+ *  profile's own overlay. A cycle or unknown target stops the walk (editor falls back to
+ *  base; backend rejects on write). */
+function inheritedChain(
+  profiles: Record<string, Record<string, unknown>>,
+  profile: string,
+): Record<string, unknown>[] {
+  const chain: string[] = [];
+  // Seed seen with the starting profile so any re-entry is detected as a cycle.
+  const seen = new Set<string>([profile]);
+  const ext0 = asDict(profiles[profile]).extends;
+  let cur: string | undefined = typeof ext0 === "string" ? ext0 : undefined;
+  while (cur && cur !== "default") {
+    if (!(cur in profiles)) return []; // unknown target: discard chain, fall back to base
+    if (seen.has(cur)) return [];     // cycle detected: discard chain, fall back to base
+    seen.add(cur);
+    chain.push(cur);
+    const ext = asDict(profiles[cur]).extends;
+    cur = typeof ext === "string" ? ext : undefined;
+  }
+  return chain.reverse().map((n) => asDict(profiles[n]));
+}
+
+/** The value `profile` inherits at `path` (base + parent overlays via extends, excluding
+ *  the profile's own overlay), or undefined when absent everywhere. */
+export function inheritedForPath(payload: ConfigPayload, profile: string, path: string[]): unknown {
+  let value = readPath(payload.base, path).value;
+  for (const overlay of inheritedChain(payload.profiles, profile)) {
+    const r = readPath(overlay, path);
+    if (r.found) value = r.value;
+  }
+  return value;
+}
+
+/** Chain-aware inherited value for `section.key` (the common 2-level case). */
+export function inheritedFor(payload: ConfigPayload, profile: string, section: string, key: string): unknown {
+  return inheritedForPath(payload, profile, [section, key]);
+}
+
+/** The raw value at `path` in `profile`'s OWN overlay (no inheritance), or undefined. */
+export function overrideValuePath(payload: ConfigPayload, profile: string, path: string[]): unknown {
+  return readPath(payload.profiles[profile], path).value;
+}
+
+/** The raw override value for `section.key` in `profile`'s overlay, or undefined. */
+export function overrideValue(payload: ConfigPayload, profile: string, section: string, key: string): unknown {
+  return overrideValuePath(payload, profile, [section, key]);
+}
+
+/** Override state of `section.key` in `profile`'s overlay: absent → "default" (= inherit),
+ *  `[]` → "empty", anything else present → "custom". Reuses `ListFieldState`; in overlay
+ *  context "default" denotes inheritance. */
+export function overrideState(payload: ConfigPayload, profile: string, section: string, key: string): ListFieldState {
+  const { found, value } = readPath(payload.profiles[profile], [section, key]);
+  if (!found) return "default";
+  return Array.isArray(value) && value.length === 0 ? "empty" : "custom";
+}
+
+/** NEW profiles map writing `profiles[name]<path> = value`, creating nested dicts as
+ *  needed. Input untouched. */
+export function setOverridePath(
+  profiles: Record<string, Record<string, unknown>>,
+  name: string,
+  path: string[],
+  value: unknown,
+): Record<string, Record<string, unknown>> {
+  const next = clone(profiles);
+  let cur: Record<string, unknown> = next[name] ?? (next[name] = {});
+  for (let i = 0; i < path.length - 1; i++) {
+    const k = path[i];
+    const child = cur[k];
+    if (child == null || typeof child !== "object" || Array.isArray(child)) cur[k] = {};
+    cur = cur[k] as Record<string, unknown>;
+  }
+  cur[path[path.length - 1]] = value;
+  return next;
+}
+
+/** NEW profiles map with `profiles[name]<path>` removed; emptied ancestor dicts are pruned
+ *  up to (but not including) the profile entry, which is kept. Input untouched. */
+export function clearOverridePath(
+  profiles: Record<string, Record<string, unknown>>,
+  name: string,
+  path: string[],
+): Record<string, Record<string, unknown>> {
+  const next = clone(profiles);
+  const stack: Record<string, unknown>[] = [];
+  let cur = next[name] as Record<string, unknown> | undefined;
+  if (cur == null) return next;
+  for (let i = 0; i < path.length - 1; i++) {
+    stack.push(cur);
+    const child = cur[path[i]];
+    if (child == null || typeof child !== "object" || Array.isArray(child)) return next; // path absent
+    cur = child as Record<string, unknown>;
+  }
+  stack.push(cur);
+  delete cur[path[path.length - 1]];
+  for (let i = stack.length - 1; i >= 1; i--) {
+    if (Object.keys(stack[i]).length === 0) delete stack[i - 1][path[i - 1]];
+    else break;
+  }
+  return next;
+}
+
 // --- profiles (řez 4b-i) ---
 
 /** Result of a profile mutation that can fail validation. */
