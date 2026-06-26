@@ -56,6 +56,14 @@
   const activeValue = $derived(payload?.activeProfile ?? "default");
   const switcherDisabled = $derived(payload == null || payload.envLocked || dirty);
 
+  // The profile whose OVERLAY the Tier-1 sections edit (β1). "default" → base mode.
+  const editProfile = $derived(payload && payload.activeProfile !== "default" ? payload.activeProfile : null);
+  // _OVERLAY_SECTIONS whose overlay editing is not built yet (řez β2): when a profile is
+  // active they still edit BASE — warn so the user doesn't think they edit the profile.
+  // Servers (base server list) and Profiles (meta-section) are NOT per-section overlays, so
+  // they get no note.
+  const BASE_ONLY_IN_OVERLAY = ["Macros", "Start profiles", "Notifications", "Answer profiles"];
+
   async function switchProfile(name: string): Promise<void> {
     if (!payload) return;
     if (name === payload.activeProfile) return; // no-op: same profile
@@ -202,6 +210,9 @@
     </nav>
 
     <section class="form">
+      {#if editProfile && BASE_ONLY_IN_OVERLAY.includes(active)}
+        <p class="overlaynote">⚠ Tato sekce zatím edituje <strong>base</strong> (overlay editace profilu „{editProfile}" přijde v řezu β2).</p>
+      {/if}
       {#if payload == null}
         <p class="hint">Načítám config… (nebo sidecar zatím neběží)</p>
       {:else if active === "Servers"}
@@ -210,11 +221,11 @@
         {/if}
         <ServersSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Deck"}
-        <DeckSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
+        <DeckSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "View"}
-        <ViewSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
+        <ViewSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Theme"}
-        <ThemeSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
+        <ThemeSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Macros"}
         <MacrosSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Start profiles"}
@@ -222,7 +233,7 @@
       {:else if active === "Notifications"}
         <NotificationsSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Safety"}
-        <SafetySection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
+        <SafetySection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Answer profiles"}
         <AnswerProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Profiles"}
@@ -257,6 +268,7 @@
   .form { padding: 16px; overflow: auto; }
   .preview { border-left: 1px solid #222; padding: 8px; overflow: auto; }
   .hint { color: #888; }
+  .overlaynote { color: #e0a030; background: #2a2410; border: 1px solid #4a3a10; border-radius: 4px; padding: 6px 10px; margin: 0 0 12px; }
   .savebar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid #222; }
   .savebar button { margin: 0; }
   .errcount { margin-left: auto; color: #888; }
