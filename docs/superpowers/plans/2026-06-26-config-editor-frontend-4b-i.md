@@ -57,7 +57,7 @@ Copied from `docs/superpowers/specs/2026-06-26-config-editor-frontend-4b-i-desig
   - `ProfileResult = { ok: true; payload: ConfigPayload } | { ok: false; error: string }`
   - `profileNames(payload): string[]` — `Object.keys(payload.profiles)`.
   - `createProfile(payload, name): ProfileResult` — trims `name`; errors on blank, the reserved `"default"`, or a duplicate; else a NEW payload with `profiles[name] = {}`.
-  - `deleteProfile(payload, name): ConfigPayload` — NEW payload with `profiles[name]` removed; if `local.active_profile === name`, that now-dangling selection is also dropped from `local` (so the next Apply doesn't write an unknown active profile). Input untouched.
+  - `deleteProfile(payload, name): ConfigPayload` — NEW payload with `profiles[name]` removed; any persisted active selector pointing at it is cleared too — both `local.active_profile` AND the legacy top-level `base.active_profile` (carried into base by řez-4a `read()`) — so the next Apply doesn't write an unknown active profile. Input untouched. (Deleting an env-locked active profile is blocked in the UI — Task 4.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -116,6 +116,15 @@ describe("profile CRUD", () => {
     const next = deleteProfile(p, "mobile");
     expect(next.local.active_profile).toBe("work");
   });
+
+  it("deleteProfile drops a now-dangling base (top-level) active_profile", () => {
+    // řez-4a read() carries a legacy top-level active_profile into base for round-trip;
+    // deleting that profile must clear it too, else Apply writes an unknown active profile.
+    const p = parseConfig({ profiles: { mobile: {} }, base: { active_profile: "mobile", deck: { grid: "5x3" } } })!;
+    const next = deleteProfile(p, "mobile");
+    expect("active_profile" in next.base).toBe(false); // dangling base selector cleared
+    expect((next.base.deck as Record<string, unknown>).grid).toBe("5x3"); // sibling kept
+  });
 });
 ```
 
@@ -152,10 +161,13 @@ export function createProfile(payload: ConfigPayload, name: string): ProfileResu
   return { ok: true, payload: { ...payload, profiles } };
 }
 
-/** NEW payload with profile `name` removed. If `name` was the local active
- *  profile, that now-dangling selection is dropped from `local` too (so the next
- *  Apply doesn't write an unknown active profile); other local keys are kept.
- *  Input untouched. */
+/** NEW payload with profile `name` removed. Any PERSISTED active selector pointing
+ *  at the deleted profile is also cleared so the next Apply doesn't write an unknown
+ *  active profile (backend would reject it): both the local selector
+ *  (`local.active_profile`) AND the legacy top-level one (`base.active_profile`,
+ *  carried into base by řez-4a `read()`). Other keys in each are kept. An env lock
+ *  (`HERDECK_PROFILE`) can't be cleared here — `ProfilesSection` blocks deleting the
+ *  env-locked active profile (Task 4). Input untouched. */
 export function deleteProfile(payload: ConfigPayload, name: string): ConfigPayload {
   const profiles = clone(payload.profiles);
   delete profiles[name];
@@ -164,7 +176,12 @@ export function deleteProfile(payload: ConfigPayload, name: string): ConfigPaylo
     local = { ...clone(payload.local) };
     delete (local as Record<string, unknown>).active_profile;
   }
-  return { ...payload, profiles, local };
+  let base = payload.base;
+  if (asDict(payload.base).active_profile === name) {
+    base = { ...clone(payload.base) };
+    delete (base as Record<string, unknown>).active_profile;
+  }
+  return { ...payload, profiles, local, base };
 }
 ```
 
@@ -482,6 +499,12 @@ git commit -m "feat(config-editor): referencedTokenEnvs + orphanedSecrets + pars
     onChange();
   }
   function remove(name: string): void {
+    // An env lock (HERDECK_PROFILE) pins the active profile and can't be cleared from
+    // the editor — deleting it would leave the lock pointing at a missing profile. Block it.
+    if (payload.envLocked && payload.activeProfile === name) {
+      onError("nelze smazat profil zamčený přes HERDECK_PROFILE");
+      return;
+    }
     payload = deleteProfile(payload, name);
     onChange();
   }
@@ -788,7 +811,7 @@ git commit -m "feat(config-editor): functional profile switcher (set_active + en
 - Consumes: `orphanedSecrets` (Task 3), `cfg.clearSecret` (exists), `setBanner`/`banner` (Task 5); `ConfigPayload`.
 - Produces: after a successful Apply, if the saved config has keychain secrets no `token_env` still references (e.g. after a `token_env` rename or a server/profile delete), the banner offers a one-click cleanup that clears each via `config_secret_clear` and updates the presence flags. No value is read or migrated.
 
-**Design note:** `apply()` already calls `load()` after a clean write, so by the time we check, `payload` reflects the saved config. Compute orphans from that fresh `payload`.
+**Design note (critical timing):** orphans MUST be computed from the EDITED, pre-reload `payload` — BEFORE `apply()`'s post-write `load()`. The sidecar `read()` only returns `secrets` for `token_env`s the SAVED config still references (`_secret_flags` collects from base+profiles), so after a rename/delete the old keychain key is absent from the reloaded `payload.secrets` and a post-load `orphanedSecrets` would never find it. The edited pre-reload payload still carries the load-time `secrets` snapshot (old name) while `base`/`profiles` already reference the new name, so `orphanedSecrets` correctly surfaces the old key. `payload` is non-null in `apply()` (it early-returns otherwise).
 
 - [ ] **Step 1: Add the orphan-cleanup flow to `apply()`**
 
@@ -812,9 +835,12 @@ Then, in `apply()`, after the successful-write `await load();` (line 78), add th
 
 ```svelte
       if (res.length === 0) {
+        // Capture orphans from the EDITED pre-reload payload (see Design note): the reloaded
+        // payload.secrets only carries still-referenced token_envs, so a renamed/deleted old
+        // key would vanish and post-load detection would miss it.
+        const orphans = orphanedSecrets(payload);
         dirty = false;
         await load(); // re-read saved state (preview refreshes itself via its own poll)
-        const orphans = payload ? orphanedSecrets(payload) : [];
         if (orphans.length > 0) {
           setBanner(
             "warning",
