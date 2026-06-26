@@ -16,17 +16,20 @@
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
+  // Mirror of backend defaults (settings.py _safety_config) — keep in sync.
+  const SAFETY_DEFAULTS: Record<string, unknown> = { approve_always: true };
+
   // --- base mode: UNCHANGED from today (ListField + putList) ---
   const approveAlways = $derived((getAt(payload, "base", SEC, "approve_always") as boolean) ?? true);
   const requireConfirmFor = $derived((getAt(payload, "base", SEC, "require_confirm_for") as string[]) ?? []);
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseRcf(list: string[]): void { payload = putList(payload, "base", SEC, "require_confirm_for", list); onChange(); }
 
-  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key); return Array.isArray(v) ? v.join(" · ") : v == null ? "(nic)" : String(v); }
+  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? SAFETY_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? "(nic)" : String(v); }
   function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
-  function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? inheritedFor(payload, prof, SEC, key) : v; }
+  function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? (inheritedFor(payload, prof, SEC, key) ?? SAFETY_DEFAULTS[key]) : v; }
   function setScState(key: string, s: "inherit" | "override"): void {
-    payload = { ...payload, profiles: s === "inherit" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, inheritedFor(payload, prof, SEC, key)) };
+    payload = { ...payload, profiles: s === "inherit" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, inheritedFor(payload, prof, SEC, key) ?? SAFETY_DEFAULTS[key]) };
     onChange();
   }
   function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }

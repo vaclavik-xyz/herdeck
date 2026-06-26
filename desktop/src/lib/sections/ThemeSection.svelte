@@ -18,6 +18,11 @@
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
+  // Mirror of backend DEFAULT_STATUS_COLORS (config.py) — keep in sync.
+  const DEFAULT_STATUS_COLORS: Record<string, string> = {
+    working: "green", idle: "blue", blocked: "amber", done: "dim", unknown: "grey", offline: "red",
+  };
+
   // --- base mode: UNCHANGED from today (colors via setAt, server_accents via ListField + putList) ---
   function baseColorOf(key: string): string {
     return (getAt(payload, "base", SEC, "colors") as Record<string, unknown> | undefined)?.[key] as string ?? "";
@@ -34,11 +39,11 @@
 
   // --- overlay: per-status colors via path helpers (profiles[X].theme.colors.<status>) ---
   function colorPath(status: string): string[] { return [SEC, "colors", status]; }
-  function colorInheritedHint(status: string): string { const v = inheritedForPath(payload, prof, colorPath(status)); return v == null ? "(nic)" : String(v); }
+  function colorInheritedHint(status: string): string { const v = inheritedForPath(payload, prof, colorPath(status)) ?? DEFAULT_STATUS_COLORS[status]; return v == null ? "(nic)" : String(v); }
   function colorState(status: string): "inherit" | "override" { return overrideValuePath(payload, prof, colorPath(status)) === undefined ? "inherit" : "override"; }
-  function colorValue(status: string): string { const v = overrideValuePath(payload, prof, colorPath(status)); return v === undefined ? String(inheritedForPath(payload, prof, colorPath(status)) ?? "") : String(v); }
+  function colorValue(status: string): string { const v = overrideValuePath(payload, prof, colorPath(status)); return v === undefined ? String(inheritedForPath(payload, prof, colorPath(status)) ?? DEFAULT_STATUS_COLORS[status] ?? "") : String(v); }
   function setColorState(status: string, s: "inherit" | "override"): void {
-    payload = { ...payload, profiles: s === "inherit" ? clearOverridePath(payload.profiles, prof, colorPath(status)) : setOverridePath(payload.profiles, prof, colorPath(status), inheritedForPath(payload, prof, colorPath(status)) ?? "") };
+    payload = { ...payload, profiles: s === "inherit" ? clearOverridePath(payload.profiles, prof, colorPath(status)) : setOverridePath(payload.profiles, prof, colorPath(status), inheritedForPath(payload, prof, colorPath(status)) ?? DEFAULT_STATUS_COLORS[status] ?? "") };
     onChange();
   }
   function setColor(status: string, v: string): void { payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, colorPath(status), v) }; onChange(); }
