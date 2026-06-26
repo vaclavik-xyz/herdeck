@@ -8,6 +8,10 @@ import {
   setOverride,
   clearOverride,
   secretFlag,
+  profileExtends,
+  setProfileExtends,
+  profileServers,
+  setProfileServers,
   type ConfigPayload,
 } from "./configClient";
 
@@ -404,5 +408,40 @@ describe("profile CRUD", () => {
     const p = parseConfig({ profiles: { mobile: {}, work: {} }, local: { active_profile: "work" } })!;
     const next = deleteProfile(p, "mobile");
     expect(next.local.active_profile).toBe("work");
+  });
+});
+
+describe("profile extends / servers", () => {
+  it("profileExtends reads the extends target or defaults to 'default'", () => {
+    const p = parseConfig({ profiles: { a: { extends: "b" }, b: {} } })!;
+    expect(profileExtends(p, "a")).toBe("b");
+    expect(profileExtends(p, "b")).toBe("default"); // absent → default
+  });
+
+  it("setProfileExtends sets the scalar on a copy", () => {
+    const p = parseConfig({ profiles: { a: {} } })!;
+    const next = setProfileExtends(p, "a", "b");
+    expect(profileExtends(next, "a")).toBe("b");
+    expect(profileExtends(p, "a")).toBe("default"); // input untouched
+  });
+
+  it("profileServers reads the servers list or []", () => {
+    const p = parseConfig({ profiles: { a: { servers: ["local", "vps"] }, b: {} } })!;
+    expect(profileServers(p, "a")).toEqual(["local", "vps"]);
+    expect(profileServers(p, "b")).toEqual([]); // absent → []
+  });
+
+  it("setProfileServers writes a non-empty list", () => {
+    const p = parseConfig({ profiles: { a: {} } })!;
+    const next = setProfileServers(p, "a", ["local"]);
+    expect(profileServers(next, "a")).toEqual(["local"]);
+    expect(profileServers(p, "a")).toEqual([]); // input untouched
+  });
+
+  it("setProfileServers OMITS the key when empty (→ inherit base servers, not [])", () => {
+    const p = parseConfig({ profiles: { a: { servers: ["local"], extends: "default" } } })!;
+    const next = setProfileServers(p, "a", []);
+    expect("servers" in (next.profiles.a as Record<string, unknown>)).toBe(false); // omitted, not []
+    expect((next.profiles.a as Record<string, unknown>).extends).toBe("default"); // sibling kept
   });
 });

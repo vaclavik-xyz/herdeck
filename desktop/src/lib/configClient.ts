@@ -432,6 +432,48 @@ export function deleteProfile(payload: ConfigPayload, name: string): ConfigPaylo
   return { ...payload, profiles, local };
 }
 
+/** The `extends` target of profile `name` ("default" = inherit base, when absent). */
+export function profileExtends(payload: ConfigPayload, name: string): string {
+  const ext = asDict(payload.profiles[name]).extends;
+  return typeof ext === "string" ? ext : "default";
+}
+
+/** NEW payload with profile `name`'s `extends` set. A scalar — "default" is written
+ *  literally (equals the default), so it is exempt from absent≠empty. Input untouched. */
+export function setProfileExtends(
+  payload: ConfigPayload,
+  name: string,
+  extendsName: string,
+): ConfigPayload {
+  const profiles = clone(payload.profiles);
+  const overlay = { ...asDict(profiles[name]) };
+  overlay.extends = extendsName;
+  profiles[name] = overlay;
+  return { ...payload, profiles };
+}
+
+/** Profile `name`'s `servers` list (absent → []). */
+export function profileServers(payload: ConfigPayload, name: string): string[] {
+  return strList(asDict(payload.profiles[name]).servers);
+}
+
+/** NEW payload with profile `name`'s `servers` set, or the key OMITTED when the list
+ *  is empty. An absent `servers` means "inherit base servers"; an explicit `[]` (a
+ *  serverless profile) is řez 4b-ii's presence-aware authoring — out of scope here.
+ *  Input untouched. */
+export function setProfileServers(
+  payload: ConfigPayload,
+  name: string,
+  servers: string[],
+): ConfigPayload {
+  const profiles = clone(payload.profiles);
+  const overlay = { ...asDict(profiles[name]) };
+  if (servers.length === 0) delete overlay.servers;
+  else overlay.servers = servers;
+  profiles[name] = overlay;
+  return { ...payload, profiles };
+}
+
 export function commandTransport(invoke: InvokeFn): ConfigTransport {
   const asCode = (v: unknown) => (typeof v === "number" ? v : 0);
   return {
