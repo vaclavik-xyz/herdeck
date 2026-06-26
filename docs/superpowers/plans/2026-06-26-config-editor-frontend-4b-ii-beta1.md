@@ -657,10 +657,11 @@ Replace the entire contents of `desktop/src/lib/sections/SafetySection.svelte` w
 ```svelte
 <script lang="ts">
   import BooleanField from "../fields/BooleanField.svelte";
+  import ListField from "../fields/ListField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import {
-    getAt, setAt, listFieldState, setListField,
+    getAt, setAt, putList,
     inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
     type ListFieldState, type ConfigPayload,
   } from "../configClient";
@@ -672,11 +673,11 @@ Replace the entire contents of `desktop/src/lib/sections/SafetySection.svelte` w
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
+  // --- base mode: UNCHANGED from today (ListField + putList) ---
   const approveAlways = $derived((getAt(payload, "base", SEC, "approve_always") as boolean) ?? true);
   const requireConfirmFor = $derived((getAt(payload, "base", SEC, "require_confirm_for") as string[]) ?? []);
-  const rcfState = $derived(listFieldState(payload, "base", SEC, "require_confirm_for"));
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
-  function setBaseRcf(state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, "require_confirm_for", state, list); onChange(); }
+  function setBaseRcf(list: string[]): void { payload = putList(payload, "base", SEC, "require_confirm_for", list); onChange(); }
 
   function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key); return Array.isArray(v) ? v.join(" · ") : v == null ? "(nic)" : String(v); }
   function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
@@ -701,7 +702,7 @@ Replace the entire contents of `desktop/src/lib/sections/SafetySection.svelte` w
   <TriStateListField label="require_confirm_for" state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint("require_confirm_for")}`} onchange={setOvRcf} />
 {:else}
   <BooleanField label="approve_always" value={approveAlways} onchange={(v) => set("approve_always", v)} />
-  <TriStateListField label="require_confirm_for" state={rcfState} list={requireConfirmFor} onchange={setBaseRcf} />
+  <ListField label="require_confirm_for" value={requireConfirmFor} onchange={setBaseRcf} />
 {/if}
 
 <style>
@@ -709,7 +710,7 @@ Replace the entire contents of `desktop/src/lib/sections/SafetySection.svelte` w
 </style>
 ```
 
-> Note: base `require_confirm_for` adopts the α tri-state here too (its backend default is `[]`, so the three states collapse to default≡empty visually, but using TriStateListField keeps base/overlay rendering uniform and is harmless — the prior plain `ListField` + `putList` is replaced).
+> Note: the base branch keeps the ORIGINAL `ListField` + `putList` (no base-mode change — α deliberately did not adopt `require_confirm_for` since its backend default is already `[]`). Only the overlay branch uses `TriStateListField` (inherit/custom/empty).
 
 - [ ] **Step 2: Verify the build + suite**
 
@@ -740,10 +741,11 @@ Replace the entire contents of `desktop/src/lib/sections/ThemeSection.svelte` wi
 ```svelte
 <script lang="ts">
   import TextField from "../fields/TextField.svelte";
+  import ListField from "../fields/ListField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import {
-    getAt, setAt, listFieldState, setListField,
+    getAt, setAt, putList,
     inheritedFor, inheritedForPath, overrideValue, overrideValuePath, overrideState,
     setOverride, clearOverride, setOverridePath, clearOverridePath,
     type ListFieldState, type ConfigPayload,
@@ -757,12 +759,11 @@ Replace the entire contents of `desktop/src/lib/sections/ThemeSection.svelte` wi
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
-  // --- base mode (unchanged) ---
+  // --- base mode: UNCHANGED from today (colors via setAt, server_accents via ListField + putList) ---
   function baseColorOf(key: string): string {
     return (getAt(payload, "base", SEC, "colors") as Record<string, unknown> | undefined)?.[key] as string ?? "";
   }
   const accents = $derived((getAt(payload, "base", SEC, "server_accents") as string[]) ?? []);
-  const accentsState = $derived(listFieldState(payload, "base", SEC, "server_accents"));
   function setBaseColor(key: string, v: string): void {
     const cur = getAt(payload, "base", SEC, "colors");
     const colors: Record<string, unknown> = cur != null && typeof cur === "object" && !Array.isArray(cur) ? { ...(cur as Record<string, unknown>) } : {};
@@ -770,7 +771,7 @@ Replace the entire contents of `desktop/src/lib/sections/ThemeSection.svelte` wi
     payload = setAt(payload, "base", SEC, "colors", colors);
     onChange();
   }
-  function setBaseAccents(state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, "server_accents", state, list); onChange(); }
+  function setBaseAccents(list: string[]): void { payload = putList(payload, "base", SEC, "server_accents", list); onChange(); }
 
   // --- overlay: per-status colors via path helpers (profiles[X].theme.colors.<status>) ---
   function colorPath(status: string): string[] { return [SEC, "colors", status]; }
@@ -810,7 +811,7 @@ Replace the entire contents of `desktop/src/lib/sections/ThemeSection.svelte` wi
 {#if overlay}
   <TriStateListField label="server_accents" state={overrideState(payload, prof, SEC, "server_accents")} list={ovAccents()} inheritLabel="Zdědit" inheritHint={`zděděno: ${accentHint()}`} onchange={setOvAccents} />
 {:else}
-  <TriStateListField label="server_accents" state={accentsState} list={accents} onchange={setBaseAccents} />
+  <ListField label="server_accents" value={accents} onchange={setBaseAccents} />
 {/if}
 
 <style>
@@ -820,7 +821,7 @@ Replace the entire contents of `desktop/src/lib/sections/ThemeSection.svelte` wi
 </style>
 ```
 
-> Note: base `server_accents` moves from `putList` to the α tri-state (`setListField`/`listFieldState`) for base/overlay uniformity; its backend default is non-empty (`DEFAULT_SERVER_ACCENTS`), so default≠empty is meaningful here.
+> Note: the base branch keeps the ORIGINAL `ListField` + `putList` for `server_accents` (no base-mode change). Only the overlay branch uses `TriStateListField` (inherit/custom/empty).
 
 - [ ] **Step 2: Verify the build + suite**
 
