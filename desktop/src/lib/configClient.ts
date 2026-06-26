@@ -394,6 +394,44 @@ export function putList(
     : setAt(payload, root, section, key, list);
 }
 
+// --- profiles (řez 4b-i) ---
+
+/** Result of a profile mutation that can fail validation. */
+export type ProfileResult =
+  | { ok: true; payload: ConfigPayload }
+  | { ok: false; error: string };
+
+/** The named profile keys (the implicit base is "default", never listed here). */
+export function profileNames(payload: ConfigPayload): string[] {
+  return Object.keys(payload.profiles);
+}
+
+/** NEW payload with an empty profile `name`, or an error when the trimmed name is
+ *  blank, the reserved "default", or already taken. Input untouched. */
+export function createProfile(payload: ConfigPayload, name: string): ProfileResult {
+  const n = name.trim();
+  if (n === "") return { ok: false, error: "jméno profilu nesmí být prázdné" };
+  if (n === "default") return { ok: false, error: "'default' je rezervováno pro bázi" };
+  if (n in payload.profiles) return { ok: false, error: `profil '${n}' už existuje` };
+  const profiles = { ...clone(payload.profiles), [n]: {} };
+  return { ok: true, payload: { ...payload, profiles } };
+}
+
+/** NEW payload with profile `name` removed. If `name` was the local active
+ *  profile, that now-dangling selection is dropped from `local` too (so the next
+ *  Apply doesn't write an unknown active profile); other local keys are kept.
+ *  Input untouched. */
+export function deleteProfile(payload: ConfigPayload, name: string): ConfigPayload {
+  const profiles = clone(payload.profiles);
+  delete profiles[name];
+  let local = payload.local;
+  if (asDict(payload.local).active_profile === name) {
+    local = { ...clone(payload.local) };
+    delete (local as Record<string, unknown>).active_profile;
+  }
+  return { ...payload, profiles, local };
+}
+
 export function commandTransport(invoke: InvokeFn): ConfigTransport {
   const asCode = (v: unknown) => (typeof v === "number" ? v : 0);
   return {

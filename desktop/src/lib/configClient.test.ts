@@ -352,3 +352,57 @@ describe("map-section serialization helpers", () => {
     expect(applyMapSection(withSec, "start_profiles", { claude: ["claude"] })).toBeNull(); // unchanged
   });
 });
+
+import { profileNames, createProfile, deleteProfile } from "./configClient";
+
+describe("profile CRUD", () => {
+  it("profileNames lists the named profiles", () => {
+    const p = parseConfig({ profiles: { mobile: {}, work: {} } })!;
+    expect(profileNames(p).sort()).toEqual(["mobile", "work"]);
+    expect(profileNames(parseConfig({})!)).toEqual([]);
+  });
+
+  it("createProfile adds an empty profile without touching the input", () => {
+    const p = parseConfig({ profiles: { mobile: {} } })!;
+    const res = createProfile(p, "work");
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(profileNames(res.payload).sort()).toEqual(["mobile", "work"]);
+      expect(res.payload.profiles.work).toEqual({});
+    }
+    expect(profileNames(p)).toEqual(["mobile"]); // input untouched
+  });
+
+  it("createProfile trims the name", () => {
+    const res = createProfile(parseConfig({})!, "  work  ");
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(profileNames(res.payload)).toEqual(["work"]);
+  });
+
+  it("createProfile rejects blank, reserved 'default', and duplicates", () => {
+    const p = parseConfig({ profiles: { mobile: {} } })!;
+    expect(createProfile(p, "  ")).toEqual({ ok: false, error: expect.stringContaining("prázdné") });
+    expect(createProfile(p, "default")).toEqual({ ok: false, error: expect.stringContaining("default") });
+    expect(createProfile(p, "mobile")).toEqual({ ok: false, error: expect.stringContaining("existuje") });
+  });
+
+  it("deleteProfile removes the profile on a copy", () => {
+    const p = parseConfig({ profiles: { mobile: {}, work: {} } })!;
+    const next = deleteProfile(p, "work");
+    expect(profileNames(next)).toEqual(["mobile"]);
+    expect(profileNames(p).sort()).toEqual(["mobile", "work"]); // input untouched
+  });
+
+  it("deleteProfile drops a now-dangling local active_profile", () => {
+    const p = parseConfig({ profiles: { mobile: {} }, local: { active_profile: "mobile", hardware: { brightness: 70 } } })!;
+    const next = deleteProfile(p, "mobile");
+    expect("active_profile" in next.local).toBe(false); // dangling selection cleared
+    expect((next.local.hardware as Record<string, unknown>).brightness).toBe(70); // rest kept
+  });
+
+  it("deleteProfile keeps an unrelated local active_profile", () => {
+    const p = parseConfig({ profiles: { mobile: {}, work: {} }, local: { active_profile: "work" } })!;
+    const next = deleteProfile(p, "mobile");
+    expect(next.local.active_profile).toBe("work");
+  });
+});
