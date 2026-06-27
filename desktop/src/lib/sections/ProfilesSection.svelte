@@ -4,7 +4,7 @@
   import {
     profileNames, createProfile, deleteProfile,
     profileExtends, setProfileExtends, profileServers,
-    profileServersState, setProfileServersExplicit, clearProfileServers,
+    profileServersState, setProfileServersExplicit, clearProfileServers, effectiveProfileServers,
     serversOf, type ConfigPayload,
   } from "../configClient";
 
@@ -56,12 +56,13 @@
   }
   function srvState(name: string): "inherit" | "override" { return profileServersState(payload, name) === "explicit" ? "override" : "inherit"; }
   function setSrvState(name: string, s: "inherit" | "override"): void {
-    // Toggling to explicit seeds the EFFECTIVE inherited selection (all base servers) so the
-    // profile doesn't silently become serverless on the toggle; the user then unchecks to
+    // Toggling to explicit seeds the EFFECTIVE inherited selection (mirrors backend resolution:
+    // nearest parent profile servers → merged deck.overview_order → all base servers) so the
+    // profile doesn't silently gain/lose servers on the toggle; the user then unchecks to
     // restrict, or unchecks all for an intentional serverless ([]) profile.
     payload = s === "inherit"
       ? clearProfileServers(payload, name)
-      : setProfileServersExplicit(payload, name, serverIds);
+      : setProfileServersExplicit(payload, name, effectiveProfileServers(payload, name));
     onChange();
   }
   function toggleServer(name: string, id: string, on: boolean): void {

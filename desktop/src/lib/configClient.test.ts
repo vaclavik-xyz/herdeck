@@ -756,3 +756,29 @@ describe("profile servers serverless authoring", () => {
     expect((start.profiles.dev as any).servers).toEqual(["a"]); // input untouched
   });
 });
+
+import { effectiveProfileServers } from "./configClient";
+
+describe("effectiveProfileServers (seed = backend inherited selection)", () => {
+  const srv = (id: string) => ({ id, url: "u", token_env: "" });
+  const mk = (
+    profiles: Record<string, Record<string, unknown>>,
+    deck?: Record<string, unknown>,
+  ): any => ({
+    base: deck ? { servers: [srv("a"), srv("b")], deck } : { servers: [srv("a"), srv("b")] },
+    profiles, local: {}, secrets: {}, activeProfile: "default", envLocked: false,
+  });
+  it("falls back to all base server ids when nothing restricts", () => {
+    expect(effectiveProfileServers(mk({ dev: {} }), "dev").sort()).toEqual(["a", "b"]);
+  });
+  it("uses merged deck.overview_order when present and no parent servers override", () => {
+    expect(effectiveProfileServers(mk({ dev: {} }, { overview_order: ["b"] }), "dev")).toEqual(["b"]);
+  });
+  it("nearest parent profile's servers override wins over overview_order", () => {
+    const p = mk({ mid: { servers: ["a"] }, dev: { extends: "mid" } }, { overview_order: ["b"] });
+    expect(effectiveProfileServers(p, "dev")).toEqual(["a"]);
+  });
+  it("includes the profile's own deck overlay overview_order", () => {
+    expect(effectiveProfileServers(mk({ dev: { deck: { overview_order: ["a"] } } }), "dev")).toEqual(["a"]);
+  });
+});

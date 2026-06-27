@@ -776,6 +776,26 @@ export function clearProfileServers(payload: ConfigPayload, name: string): Confi
   return { ...payload, profiles };
 }
 
+/** The servers a profile EFFECTIVELY inherits when it does NOT override `servers` itself —
+ *  mirrors backend `settings._build_config` selection resolution: the nearest parent profile in
+ *  the `extends` chain that sets `servers` wins; else the profile's merged `deck.overview_order`
+ *  (base + parents + the profile's own deck overlay); else all base server ids. Used to seed the
+ *  editor when toggling a profile to an explicit selection, so it starts from what the profile
+ *  already had — not an empty list (which would silently make it serverless). */
+export function effectiveProfileServers(payload: ConfigPayload, name: string): string[] {
+  // 1. nearest parent profile that sets `servers` (chain is base-most → parent; reverse so the
+  //    most-derived parent wins, matching the backend's last-overlay-wins assignment).
+  for (const overlay of [...inheritedChain(payload.profiles, name)].reverse()) {
+    if (Array.isArray(overlay.servers)) return (overlay.servers as unknown[]).map(String);
+  }
+  // 2. the profile's effective deck.overview_order (base + parents + the profile's own deck overlay).
+  const inhDeck = inheritedSection(payload, name, "deck").map;
+  const effDeck = asDict(mergeSection(inhDeck, asDict(asDict(payload.profiles[name]).deck)));
+  if (Array.isArray(effDeck.overview_order)) return (effDeck.overview_order as unknown[]).map(String);
+  // 3. all base server ids.
+  return serversOf(payload).map((s) => s.id).filter((id) => id !== "");
+}
+
 /** Every non-blank `token_env` string referenced anywhere in base + profiles
  *  (servers, base/profile telegram, profile overlays). Mirrors the backend's
  *  `_collect_token_envs` so the editor can spot keychain entries gone orphan. */
