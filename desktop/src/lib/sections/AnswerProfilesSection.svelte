@@ -92,11 +92,20 @@
     const own = ovEntry(name);
     return k in own ? argvOf(own[k]) : argvOf(inhEntry(name)[k]);
   }
+  // Backend `_parse_profile` falls back `approve_always` → the entry's `approve` when the key
+  // is absent from the merged entry. Mirror that so the overlay shows/seeds the real effective
+  // value: own approve_always → inherited approve_always → effective approve.
   function aaListOv(name: string): string[] {
     const own = ovEntry(name);
-    return "approve_always" in own ? argvOf(own.approve_always) : argvOf(inhEntry(name).approve_always);
+    if ("approve_always" in own) return argvOf(own.approve_always);
+    const inh = inhEntry(name);
+    return "approve_always" in inh ? argvOf(inh.approve_always) : entryKeyValue(name, "approve");
   }
-  function aaHint(name: string): string { return argvOf(inhEntry(name).approve_always).join(" · ") || "(nic)"; }
+  function aaHint(name: string): string {
+    const inh = inhEntry(name);
+    const v = "approve_always" in inh ? argvOf(inh.approve_always) : argvOf(inh.approve);
+    return v.join(" · ") || "(nic)";
+  }
   function writeEntry(name: string, entry: Record<string, unknown>): void { payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, [SEC, name], entry) }; onChange(); }
   function setEntryState(name: string, s: "inherit" | "override"): void {
     payload = { ...payload, profiles: s === "inherit" ? clearOverridePath(payload.profiles, prof, [SEC, name]) : setOverridePath(payload.profiles, prof, [SEC, name], inhEntry(name)) };
