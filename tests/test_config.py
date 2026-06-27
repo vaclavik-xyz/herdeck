@@ -102,6 +102,18 @@ def test_readme_uses_profile_schema_for_notifications():
     assert "backends" in section
 
 
+def test_readme_documents_interactive_telegram_security():
+    path = Path(__file__).resolve().parents[1] / "README.md"
+    section = path.read_text().split("## Notifications", 1)[1].split("\n## ", 1)[0]
+
+    assert "interactive = true" in section
+    assert "allowed_user_ids" in section
+    assert "message_thread_id" in section
+    assert "Reply to this message" in section
+    assert "Non-interactive notifications contain only" in section
+    assert "Notifications contain only the repo/label" not in section
+
+
 def test_readme_launcher_example_uses_valid_toml_shape():
     path = Path(__file__).resolve().parents[1] / "README.md"
     section = path.read_text().split("## Adding an agent type", 1)[1].split("\n## ", 1)[0]
@@ -419,6 +431,16 @@ def test_example_notifications_backends_default(monkeypatch):
     path = Path(__file__).resolve().parents[1] / "config.example.toml"
     cfg = load_config(path)
     assert "macos" in cfg.notifications.backends
+
+
+def test_example_config_includes_interactive_telegram_fields(monkeypatch):
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    text = path.read_text()
+
+    assert "message_thread_id" in text
+    assert "interactive = false" in text
+    assert "allowed_user_ids" in text
 
 
 def test_runtime_customization_defaults_on_config():
