@@ -23,6 +23,49 @@ def test_notifier_swallows_sink_errors():
     Notifier(sink=boom).notify("t", "b")  # must not raise
 
 
+def test_legacy_blocked_notifier_uses_agent_type_title_and_body():
+    import asyncio
+
+    from herdeck.model import AgentKey, AgentState, Status
+    from herdeck.notify import LegacyBlockedNotifier, Notifier
+
+    calls = []
+    notifier = LegacyBlockedNotifier(
+        Notifier(sink=lambda title, body, sound: calls.append((title, body, sound)))
+    )
+    agent = AgentState(AgentKey("local", "p1"), "codex", "herdeck", Status.BLOCKED)
+
+    asyncio.run(notifier.notify_blocked(agent, body="herdeck · main", sound=True, multi_server=False))
+
+    assert calls == [("codex", "herdeck · main", True)]
+
+
+def test_composite_blocked_notifier_calls_all_even_if_one_raises():
+    import asyncio
+
+    from herdeck.model import AgentKey, AgentState, Status
+    from herdeck.notify import CompositeBlockedNotifier
+
+    agent = AgentState(AgentKey("local", "p1"), "codex", "herdeck", Status.BLOCKED)
+    calls = []
+
+    class Boom:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            raise RuntimeError("x")
+
+    class Rec:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((agent.key.pane_id, body, sound, multi_server))
+
+    asyncio.run(
+        CompositeBlockedNotifier([Rec(), Boom(), Rec()]).notify_blocked(
+            agent, body="body", sound=False, multi_server=True
+        )
+    )
+
+    assert calls == [("p1", "body", False, True), ("p1", "body", False, True)]
+
+
 def test_telegram_sink_builds_url_and_payload():
     from herdeck.notify import make_telegram_sink
 

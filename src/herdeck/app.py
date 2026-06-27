@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from .bootstrap import (
     _discover_config_path,
@@ -22,6 +22,9 @@ from .driver.base import DeckDriver, PanelView
 from .driver.fake import FakeRenderer
 from .model import AgentState, Status
 from .notify import (
+    BlockedAlertNotifier,
+    BlockedNotificationRuntime,
+    LegacyBlockedNotifier,
     NoopNotifier,
     Notifier,
     _macos_sink,
@@ -79,6 +82,22 @@ def _build_notifier(
     return Notifier(sink=composite_sink(sinks))
 
 
+async def _guard_blocked_notify(coro: Awaitable[None]) -> None:
+    try:
+        await coro
+    except Exception:
+        log.debug("blocked alert notifier failed", exc_info=True)
+
+
+def _default_notify_schedule(coro: Awaitable[None]) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(_guard_blocked_notify(coro))
+    else:
+        loop.create_task(_guard_blocked_notify(coro))
+
+
 class App:
     """Glue between orchestrator (sync) and connectors (async)."""
 
@@ -89,7 +108,9 @@ class App:
         send: Callable[[Command], None],
         schedule: Callable[[Callable[[], None]], None] | None = None,
         notifier: Notifier | None = None,
-        notify_schedule: Callable[[Callable[[], None]], None] | None = None,
+        blocked_notifier: BlockedAlertNotifier | None = None,
+        blocked_runtime_factory: Callable[[Config], BlockedNotificationRuntime] | None = None,
+        notify_schedule: Callable[[Awaitable[None]], None] | None = None,
         switch_profile: Callable[[str], Config | None] | None = None,
         update_connectors: Callable[[Config], object] | None = None,
         config_reloader: Callable[[], Config] | None = None,
@@ -102,9 +123,20 @@ class App:
         self._update_connectors = update_connectors or (lambda cfg: None)
         self._config_reloader = config_reloader
         self.notifier = notifier or NoopNotifier()
-        # Notifications run off the render loop so a slow sink never blocks it;
-        # the default runs synchronously (tests, mock) — the lead passes an executor.
-        self._notify_schedule = notify_schedule or (lambda fn: fn())
+        self._blocked_runtime_factory = blocked_runtime_factory
+        self.notification_poller = None
+        self._notification_generation = 0
+        if blocked_notifier is not None:
+            runtime = BlockedNotificationRuntime(blocked_notifier)
+            self._blocked_runtime_factory = lambda config: runtime
+            self._install_blocked_runtime(runtime)
+        elif blocked_runtime_factory is not None:
+            self._install_blocked_runtime(blocked_runtime_factory(config))
+        else:
+            self._install_blocked_runtime(
+                BlockedNotificationRuntime(LegacyBlockedNotifier(self.notifier))
+            )
+        self._notify_schedule = notify_schedule or _default_notify_schedule
         self._blocked_keys: set = set()
         self.orch = Orchestrator(config, slots=deck.slot_count())
         deck.on_press(self._on_press)
@@ -112,6 +144,29 @@ class App:
         self._active_read_req: str | None = None
         self._ticks = 0
         self._status_panel: PanelView | None = None
+
+    def _install_blocked_runtime(self, runtime: BlockedNotificationRuntime) -> None:
+        self._notification_generation += 1
+        self.blocked_notifier = runtime.notifier
+        self.notification_poller = runtime.poller
+
+    @property
+    def notification_generation(self) -> int:
+        return self._notification_generation
+
+    def _rebuild_blocked_runtime(self, config: Config) -> None:
+        if self._blocked_runtime_factory is not None:
+            self._install_blocked_runtime(self._blocked_runtime_factory(config))
+        else:
+            self._install_blocked_runtime(
+                BlockedNotificationRuntime(LegacyBlockedNotifier(self.notifier))
+            )
+
+    def set_blocked_runtime_factory(
+        self, factory: Callable[[Config], BlockedNotificationRuntime]
+    ) -> None:
+        self._blocked_runtime_factory = factory
+        self._rebuild_blocked_runtime(self.config)
 
     def next_req_for(self, cmd: Command) -> str | None:
         if cmd.kind == "list":
@@ -171,15 +226,21 @@ class App:
         to, blocked_here = newly_blocked(prev_here, states)
         self._blocked_keys = (self._blocked_keys - scope) | blocked_here
         multi = len(self.config.overview_order) > 1
+        sound = self.config.notifications.sound
         for s in (x for x in states if x.key in to):
             label = s.repo or s.label
             parts = [p for p in (s.branch, s.key.server_id if multi else None) if p]
             body = f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
-            self._schedule_notify(s.agent_type, body)
+            self._schedule_blocked_notify(s, body, sound, multi)
 
-    def _schedule_notify(self, title: str, body: str) -> None:
-        sound = self.config.notifications.sound
-        self._notify_schedule(lambda: self.notifier.notify(title, body, sound))
+    def _schedule_blocked_notify(
+        self, agent: AgentState, body: str, sound: bool, multi_server: bool
+    ) -> None:
+        self._notify_schedule(
+            self.blocked_notifier.notify_blocked(
+                agent, body=body, sound=sound, multi_server=multi_server
+            )
+        )
 
     def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         if not self._server_allowed(server_id):
@@ -295,6 +356,7 @@ class App:
     def _apply_config(self, new_config: Config) -> None:
         self.config = new_config
         self.notifier = _build_notifier(new_config)
+        self._rebuild_blocked_runtime(new_config)
         self.orch.update_config(new_config)
         allowed_servers = {s.id for s in new_config.servers}
         self._blocked_keys = {k for k in self._blocked_keys if k.server_id in allowed_servers}
@@ -532,7 +594,7 @@ async def _run(
         send,
         schedule=lambda fn: loop.call_soon_threadsafe(fn),
         notifier=_build_notifier(config),
-        notify_schedule=lambda fn: loop.run_in_executor(None, fn),
+        notify_schedule=lambda coro: asyncio.create_task(coro),
         switch_profile=switch_profile,
         update_connectors=lambda cfg: manager.update(cfg.servers),
         config_reloader=config_reloader,

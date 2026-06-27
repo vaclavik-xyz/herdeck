@@ -266,6 +266,164 @@ def test_app_notifies_on_block_transition(monkeypatch):
     assert len(calls) == 1  # no duplicate while still blocked
 
 
+def test_app_blocked_notifier_receives_agent_state_and_metadata():
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+
+    class CaptureBlocked:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((agent.key, agent.agent_type, body, sound, multi_server))
+
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_notifier=CaptureBlocked(),
+    )
+
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+    )
+
+    assert calls == [(AgentKey("dev", "p1"), "claude", "api", True, False)]
+
+
+async def test_app_default_blocked_notification_scheduler_works_inside_running_loop():
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+
+    class CaptureBlocked:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((agent.key, body, sound, multi_server))
+
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_notifier=CaptureBlocked(),
+    )
+
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+    )
+    await asyncio.sleep(0)
+
+    assert calls == [(AgentKey("dev", "p1"), "api", True, False)]
+
+
+async def test_app_direct_blocked_notifier_exception_is_consumed_by_default_scheduler():
+    import gc
+
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    errors = []
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda loop, context: errors.append(context))
+
+    class BoomBlocked:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            raise RuntimeError("blocked notifier failed")
+
+    try:
+        app = App(
+            cfg,
+            FakeRenderer(13),
+            send=lambda c: None,
+            blocked_notifier=BoomBlocked(),
+        )
+
+        app.handle_snapshot(
+            "dev",
+            [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+        )
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert errors == []
+
+
+def test_apply_config_rebuilds_blocked_notification_runtime():
+    import asyncio
+
+    from herdeck.notify import BlockedNotificationRuntime
+
+    calls = []
+    pollers = []
+
+    class CaptureBlocked:
+        def __init__(self, label):
+            self._label = label
+
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((self._label, agent.key, body, sound, multi_server))
+
+    def runtime_factory(config):
+        poller = object()
+        pollers.append(poller)
+        return BlockedNotificationRuntime(CaptureBlocked(config.meta.active_profile), poller)
+
+    cfg = make_config()
+    cfg.meta.active_profile = "default"
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_runtime_factory=runtime_factory,
+    )
+    first_poller = app.notification_poller
+
+    new_cfg = make_config()
+    new_cfg.meta.active_profile = "mobile"
+    app._apply_config(new_cfg)
+
+    assert app.notification_poller is pollers[-1]
+    assert app.notification_poller is not first_poller
+    agent = AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)
+    asyncio.run(
+        app.blocked_notifier.notify_blocked(
+            agent, body="api · main", sound=False, multi_server=False
+        )
+    )
+    assert calls == [("mobile", AgentKey("dev", "p1"), "api · main", False, False)]
+
+
+def test_apply_config_preserves_direct_blocked_notifier():
+    calls = []
+    cfg = make_config()
+
+    class CaptureBlocked:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((agent.key, body, sound, multi_server))
+
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_notifier=CaptureBlocked(),
+    )
+
+    new_cfg = make_config()
+    new_cfg.meta.active_profile = "mobile"
+    app._apply_config(new_cfg)
+
+    agent = AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)
+    asyncio.run(
+        app.blocked_notifier.notify_blocked(
+            agent, body="api · main", sound=False, multi_server=False
+        )
+    )
+
+    assert calls == [(AgentKey("dev", "p1"), "api · main", False, False)]
+
+
 def test_app_notify_keeps_other_servers_blocked_keys():
     from herdeck.notify import Notifier
 
