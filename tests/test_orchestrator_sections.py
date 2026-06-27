@@ -49,6 +49,7 @@ def test_launcher_menu_type_tiles_section_is_start_profiles():
 def test_profile_menu_tiles_section_is_profiles():
     o = Orchestrator(_config(profile_names=("default", "work")), slots=13)
     o.on_press(12)  # enter launcher; entries = start types + "Profiles" at index 5
+    assert o.render().tiles[5].label == "Profiles"  # guard: don't press a blank tile if defaults change
     o.on_press(5)   # press "Profiles" → profile menu
     assert o.render().tiles[0].section == "profiles"
 
