@@ -302,10 +302,12 @@ class App:
         multi = len(self.config.overview_order) > 1
         sound = self.config.notifications.sound
         for s in (x for x in states if x.key in to):
-            label = s.repo or s.label
-            parts = [p for p in (s.branch, s.key.server_id if multi else None) if p]
-            body = f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
-            self._schedule_blocked_notify(s, body, sound, multi)
+            self._schedule_blocked_notify(
+                s,
+                self._blocked_notification_body(s, multi_server=multi),
+                sound,
+                multi,
+            )
 
     def _schedule_blocked_notify(
         self, agent: AgentState, body: str, sound: bool, multi_server: bool
@@ -315,6 +317,36 @@ class App:
                 agent, body=body, sound=sound, multi_server=multi_server
             )
         )
+
+    def _blocked_notification_body(self, agent: AgentState, *, multi_server: bool) -> str:
+        label = agent.repo or agent.label
+        parts = [
+            part
+            for part in (agent.branch, agent.key.server_id if multi_server else None)
+            if part
+        ]
+        return f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
+
+    def _rearm_interactive_blocked_alerts(self) -> None:
+        if not self.config.notifications.enabled:
+            return
+        if "blocked" not in self.config.notifications.on:
+            return
+        notify = getattr(self.notification_poller, "notify_blocked", None)
+        if not callable(notify):
+            return
+        multi = len(self.config.overview_order) > 1
+        sound = self.config.notifications.sound
+        for agent in self.orch.agents():
+            if agent.status is Status.BLOCKED:
+                self._notify_schedule(
+                    notify(
+                        agent,
+                        body=self._blocked_notification_body(agent, multi_server=multi),
+                        sound=sound,
+                        multi_server=multi,
+                    )
+                )
 
     def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         if not self._server_allowed(server_id):
@@ -448,6 +480,7 @@ class App:
             self._blocked_keys = {k for k in self._blocked_keys if k.server_id not in restarted}
         for server_id in restarted:
             self.orch.set_connection(server_id, False)
+        self._rearm_interactive_blocked_alerts()
         self._refresh()
 
     def reload_from_disk(self) -> None:

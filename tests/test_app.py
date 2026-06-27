@@ -431,6 +431,95 @@ def test_apply_config_rebuilds_blocked_notification_runtime():
     assert calls == [("mobile", AgentKey("dev", "p1"), "api · main", False, False)]
 
 
+def test_apply_config_rearms_current_blocked_agents_for_interactive_runtime_only():
+    from herdeck.notify import BlockedNotificationRuntime
+
+    calls = []
+
+    class CaptureBlocked:
+        def __init__(self, label, kind):
+            self._label = label
+            self._kind = kind
+
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((self._kind, self._label, agent.key, body, sound, multi_server))
+
+        async def poll_once(self, *, timeout=20, is_current=None):
+            pass
+
+    def runtime_factory(config):
+        return BlockedNotificationRuntime(
+            CaptureBlocked(config.meta.active_profile, "legacy"),
+            CaptureBlocked(config.meta.active_profile, "interactive"),
+        )
+
+    cfg = make_config()
+    cfg.meta.active_profile = "default"
+    cfg.notifications.enabled = True
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_runtime_factory=runtime_factory,
+    )
+
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+    )
+
+    new_cfg = make_config()
+    new_cfg.meta.active_profile = "mobile"
+    new_cfg.notifications.enabled = True
+    app._apply_config(new_cfg)
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+    )
+
+    assert calls == [
+        ("legacy", "default", AgentKey("dev", "p1"), "api", True, False),
+        ("interactive", "mobile", AgentKey("dev", "p1"), "api", True, False),
+    ]
+
+
+def test_apply_config_does_not_rearm_interactive_when_blocked_notifications_disabled():
+    from herdeck.notify import BlockedNotificationRuntime
+
+    calls = []
+
+    class CaptureBlocked:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((agent.key, body, sound, multi_server))
+
+        async def poll_once(self, *, timeout=20, is_current=None):
+            pass
+
+    def runtime_factory(config):
+        return BlockedNotificationRuntime(CaptureBlocked(), CaptureBlocked())
+
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_runtime_factory=runtime_factory,
+    )
+
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+    )
+
+    new_cfg = make_config()
+    new_cfg.notifications.enabled = True
+    new_cfg.notifications.on = []
+    app._apply_config(new_cfg)
+
+    assert calls == [(AgentKey("dev", "p1"), "api", True, False)]
+
+
 def test_apply_config_preserves_direct_blocked_notifier():
     calls = []
     cfg = make_config()

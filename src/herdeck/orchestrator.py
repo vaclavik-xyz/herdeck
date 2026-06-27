@@ -121,6 +121,9 @@ class Orchestrator:
     def get_agent(self, key: AgentKey) -> AgentState | None:
         return self._agents.get(key)
 
+    def agents(self) -> list[AgentState]:
+        return list(self._agents.values())
+
     def is_drill_pane(self, server_id: str, pane_id: str | None) -> bool:
         return (
             self._drill is not None

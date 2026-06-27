@@ -251,6 +251,9 @@ class TelegramInteractor:
         self, agent: AgentState, *, body: str, sound: bool, multi_server: bool
     ) -> None:
         record = self._store.reserve(agent.key)
+        reset_confirmation = getattr(self._control, "reset_confirmation", None)
+        if callable(reset_confirmation):
+            reset_confirmation(agent.key)
         try:
             prompt = await self._control.read_prompt(agent.key, timeout=3.0)
         except Exception:
@@ -387,6 +390,9 @@ class TelegramInteractor:
         return result.message or "failed", False
 
     async def _refresh_prompt(self, record: TelegramAlertRecord) -> None:
+        reset_confirmation = getattr(self._control, "reset_confirmation", None)
+        if callable(reset_confirmation):
+            reset_confirmation(record.key)
         agent = self._control.current_agent(record.key)
         if agent is None:
             text = "agent is no longer available"

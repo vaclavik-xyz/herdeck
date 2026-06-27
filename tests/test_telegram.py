@@ -370,6 +370,36 @@ async def test_interactor_notify_blocked_discards_reserved_alert_without_message
     assert store.by_token("tok1") is None
 
 
+@pytest.mark.asyncio
+async def test_interactor_notify_blocked_resets_agent_confirmation_state():
+    from herdeck.telegram import TelegramAlertStore, TelegramBotClient, TelegramInteractor
+
+    class ResetControl(FakeControl):
+        def __init__(self):
+            super().__init__(prompt="Allow edit?")
+            self.reset_keys = []
+
+        def reset_confirmation(self, key):
+            self.reset_keys.append(key)
+
+    client = TelegramBotClient("TOK", request=lambda method, fields: {"message_id": 9})
+    store = TelegramAlertStore(token_factory=lambda: "tok1")
+    control = ResetControl()
+    interactor = TelegramInteractor(
+        client,
+        control,
+        chat_id="-1001",
+        message_thread_id=None,
+        allowed_user_ids=[111],
+        store=store,
+    )
+    agent = AgentState(AgentKey("local", "p1"), "codex", "herdeck", Status.BLOCKED)
+
+    await interactor.notify_blocked(agent, body="herdeck · main", sound=True, multi_server=False)
+
+    assert control.reset_keys == [AgentKey("local", "p1")]
+
+
 class ActionControl(FakeControl):
     def __init__(self):
         super().__init__()
@@ -475,6 +505,154 @@ async def test_successful_terminal_callback_discards_token_before_second_tap():
     assert control.actions == [("approve", AgentKey("local", "p1"), 3.0)]
     assert ("answerCallbackQuery", {"callback_query_id": "cb1", "text": "sent"}) in calls
     assert ("answerCallbackQuery", {"callback_query_id": "cb2", "text": "stale"}) in calls
+
+
+@pytest.mark.asyncio
+async def test_callback_confirmation_required_keeps_token_for_second_tap():
+    from herdeck.app_control import ActionResult
+    from herdeck.telegram import TelegramAlertStore, TelegramBotClient, TelegramInteractor
+
+    calls = []
+    client = TelegramBotClient(
+        "TOK", request=lambda method, fields: calls.append((method, fields)) or True
+    )
+    store = TelegramAlertStore(token_factory=lambda: "tok1")
+    record = store.create(AgentKey("local", "p1"), chat_id="-1001", message_id=9)
+
+    class ConfirmingControl(ActionControl):
+        async def stop(self, key, *, timeout=3.0):
+            self.actions.append(("stop", key, timeout))
+            if len(self.actions) == 1:
+                return ActionResult(False, message="confirmation required")
+            return ActionResult(True)
+
+    control = ConfirmingControl()
+    interactor = TelegramInteractor(
+        client,
+        control,
+        chat_id="-1001",
+        message_thread_id=456,
+        allowed_user_ids=[111],
+        store=store,
+    )
+    callback = {
+        "from": {"id": 111},
+        "message": {
+            "chat": {"id": -1001},
+            "message_id": 9,
+            "message_thread_id": 456,
+        },
+        "data": f"h:{record.token}:stop",
+    }
+
+    assert not await interactor.process_update(
+        {"update_id": 1, "callback_query": {"id": "cb1", **callback}}
+    )
+    assert store.by_token(record.token) is record
+    assert await interactor.process_update(
+        {"update_id": 2, "callback_query": {"id": "cb2", **callback}}
+    )
+
+    assert store.by_token(record.token) is None
+    assert control.actions == [
+        ("stop", AgentKey("local", "p1"), 3.0),
+        ("stop", AgentKey("local", "p1"), 3.0),
+    ]
+    assert (
+        "answerCallbackQuery",
+        {"callback_query_id": "cb1", "text": "confirmation required"},
+    ) in calls
+    assert ("answerCallbackQuery", {"callback_query_id": "cb2", "text": "sent"}) in calls
+
+
+@pytest.mark.asyncio
+async def test_callback_read_again_resets_pending_confirmation_before_next_action():
+    from herdeck.app_control import ActionResult
+    from herdeck.telegram import TelegramAlertStore, TelegramBotClient, TelegramInteractor
+
+    calls = []
+    client = TelegramBotClient(
+        "TOK", request=lambda method, fields: calls.append((method, fields)) or True
+    )
+    store = TelegramAlertStore(token_factory=lambda: "tok1")
+    record = store.create(AgentKey("local", "p1"), chat_id="-1001", message_id=9)
+
+    class ConfirmingControl(ActionControl):
+        def __init__(self):
+            super().__init__()
+            self.armed = False
+            self.reset_keys = []
+
+        async def stop(self, key, *, timeout=3.0):
+            self.actions.append(("stop", key, timeout))
+            if not self.armed:
+                self.armed = True
+                return ActionResult(False, message="confirmation required")
+            return ActionResult(True)
+
+        def reset_confirmation(self, key):
+            self.armed = False
+            self.reset_keys.append(key)
+
+    control = ConfirmingControl()
+    interactor = TelegramInteractor(
+        client,
+        control,
+        chat_id="-1001",
+        message_thread_id=456,
+        allowed_user_ids=[111],
+        store=store,
+    )
+    base_callback = {
+        "from": {"id": 111},
+        "message": {
+            "chat": {"id": -1001},
+            "message_id": 9,
+            "message_thread_id": 456,
+        },
+    }
+
+    assert not await interactor.process_update(
+        {
+            "update_id": 1,
+            "callback_query": {
+                "id": "cb1",
+                **base_callback,
+                "data": f"h:{record.token}:stop",
+            },
+        }
+    )
+    assert await interactor.process_update(
+        {
+            "update_id": 2,
+            "callback_query": {
+                "id": "cb2",
+                **base_callback,
+                "data": f"h:{record.token}:read",
+            },
+        }
+    )
+    assert not await interactor.process_update(
+        {
+            "update_id": 3,
+            "callback_query": {
+                "id": "cb3",
+                **base_callback,
+                "data": f"h:{record.token}:stop",
+            },
+        }
+    )
+
+    assert control.actions == [
+        ("stop", AgentKey("local", "p1"), 3.0),
+        ("stop", AgentKey("local", "p1"), 3.0),
+    ]
+    assert control.reset_keys == [AgentKey("local", "p1")]
+    assert store.by_token(record.token) is record
+    assert (
+        "answerCallbackQuery",
+        {"callback_query_id": "cb3", "text": "confirmation required"},
+    ) in calls
 
 
 @pytest.mark.asyncio

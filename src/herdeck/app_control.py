@@ -29,9 +29,17 @@ class RuntimeAgentControl:
         self._current_agent = current_agent
         self._req = 0
         self._pending: dict[str, tuple[asyncio.Future, Command]] = {}
+        self._pending_confirm: tuple[str, AgentKey] | None = None
 
     def update_config(self, config: Config) -> None:
         self._config = config
+        self._pending_confirm = None
+
+    def reset_confirmation(self, key: AgentKey | None = None) -> None:
+        if key is None or (
+            self._pending_confirm is not None and self._pending_confirm[1] == key
+        ):
+            self._pending_confirm = None
 
     def current_agent(self, key: AgentKey) -> AgentState | None:
         return self._current_agent(key)
@@ -104,6 +112,12 @@ class RuntimeAgentControl:
         agent = self.current_agent(key)
         if agent is None:
             return ActionResult(False, message="agent is no longer available")
+        action_id = self._action_id(action, force=force, always=always)
+        if action_id in self._config.safety.require_confirm_for:
+            if self._pending_confirm != (action_id, key):
+                self._pending_confirm = (action_id, key)
+                return ActionResult(False, message="confirmation required")
+        self._pending_confirm = None
         command = build_action_command(
             action,
             agent,
@@ -112,6 +126,13 @@ class RuntimeAgentControl:
             always=always,
         )
         return self._action_result(await self._request(command, timeout=timeout))
+
+    def _action_id(self, action: str, *, force: bool, always: bool) -> str:
+        if action == "stop" or force:
+            return "act_force"
+        if action == "approve" and always:
+            return "approve_always"
+        return action
 
     def _action_result(self, data: dict) -> ActionResult:
         return ActionResult(

@@ -242,6 +242,71 @@ async def test_runtime_agent_control_approve_returns_missing_agent_as_failure():
 
 
 @pytest.mark.asyncio
+async def test_runtime_agent_control_stop_respects_safety_confirmation():
+    from herdeck.app_control import RuntimeAgentControl
+    from herdeck.config import AnswerProfile, Config
+
+    sender = FakeSender()
+    key = AgentKey("local", "p1")
+    cfg = Config(
+        servers=[],
+        profiles={
+            "default": AnswerProfile(["y"], ["n"], ["ctrl+c"], ["y"]),
+            "codex": AnswerProfile(["y", "enter"], ["n", "enter"], ["ctrl+c"], ["y", "enter"]),
+        },
+        overview_order=["local"],
+        grid=(5, 3),
+    )
+    cfg.safety.require_confirm_for = ["act_force"]
+    agent = AgentState(key, "codex", "herdeck", Status.BLOCKED)
+    control = RuntimeAgentControl(cfg, send=sender.send, current_agent=lambda k: agent if k == key else None)
+
+    first = await control.stop(key)
+
+    assert first.sent is False
+    assert first.skipped is False
+    assert first.message == "confirmation required"
+    assert sender.sent == []
+
+    task = asyncio.create_task(control.stop(key, timeout=1))
+    await asyncio.sleep(0)
+
+    cmd, req = sender.sent[0]
+    assert cmd == Command("act_force", "local", "p1", keys=["ctrl+c"])
+    assert control.handle_result(req, {"sent": True}) == cmd
+    assert (await task).sent is True
+
+
+@pytest.mark.asyncio
+async def test_runtime_agent_control_reset_confirmation_requires_new_first_tap():
+    from herdeck.app_control import RuntimeAgentControl
+    from herdeck.config import AnswerProfile, Config
+
+    sender = FakeSender()
+    key = AgentKey("local", "p1")
+    cfg = Config(
+        servers=[],
+        profiles={
+            "default": AnswerProfile(["y"], ["n"], ["ctrl+c"], ["y"]),
+            "codex": AnswerProfile(["y", "enter"], ["n", "enter"], ["ctrl+c"], ["y", "enter"]),
+        },
+        overview_order=["local"],
+        grid=(5, 3),
+    )
+    cfg.safety.require_confirm_for = ["act_force"]
+    agent = AgentState(key, "codex", "herdeck", Status.BLOCKED)
+    control = RuntimeAgentControl(cfg, send=sender.send, current_agent=lambda k: agent if k == key else None)
+
+    first = await control.stop(key)
+    control.reset_confirmation(key)
+    second = await control.stop(key)
+
+    assert first.message == "confirmation required"
+    assert second.message == "confirmation required"
+    assert sender.sent == []
+
+
+@pytest.mark.asyncio
 async def test_runtime_agent_control_send_text_returns_missing_agent():
     from herdeck.app_control import RuntimeAgentControl
     from herdeck.config import Config
