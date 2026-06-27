@@ -729,6 +729,53 @@ export function setProfileServers(
   return { ...payload, profiles };
 }
 
+/** Base `[section]` tri-state: absent → "default" (backend default map), `{}` → "empty"
+ *  (explicit none, e.g. no launchers), non-empty dict → "custom". */
+export function mapSectionState(payload: ConfigPayload, section: string): ListFieldState {
+  const v = (payload.base as Record<string, unknown>)[section];
+  if (v === undefined) return "default";
+  if (v != null && typeof v === "object" && !Array.isArray(v)) {
+    return Object.keys(v as Record<string, unknown>).length === 0 ? "empty" : "custom";
+  }
+  return "custom";
+}
+
+/** NEW payload setting base `[section]` map state: "default" DELETES the key (backend
+ *  default), "empty" writes `{}` (explicit none), "custom" is a no-op (the rows editor
+ *  populates the map). Input untouched. */
+export function setMapSectionState(payload: ConfigPayload, section: string, state: ListFieldState): ConfigPayload {
+  if (state === "custom") return payload;
+  const base = { ...(payload.base as Record<string, unknown>) };
+  if (state === "default") delete base[section];
+  else base[section] = {};
+  return { ...payload, base };
+}
+
+/** Whether profile `name` has an explicit `servers` selection (present, incl. `[]` =
+ *  serverless) or inherits base servers (key absent). */
+export function profileServersState(payload: ConfigPayload, name: string): "inherit" | "explicit" {
+  return "servers" in asDict(payload.profiles[name]) ? "explicit" : "inherit";
+}
+
+/** NEW payload writing profile `name`'s `servers` ALWAYS (even `[]` = serverless),
+ *  unlike `setProfileServers` which omits an empty list. Input untouched. */
+export function setProfileServersExplicit(payload: ConfigPayload, name: string, servers: string[]): ConfigPayload {
+  const profiles = clone(payload.profiles);
+  const overlay = { ...asDict(profiles[name]) };
+  overlay.servers = servers;
+  profiles[name] = overlay;
+  return { ...payload, profiles };
+}
+
+/** NEW payload OMITTING profile `name`'s `servers` key (back to inheriting base). Input untouched. */
+export function clearProfileServers(payload: ConfigPayload, name: string): ConfigPayload {
+  const profiles = clone(payload.profiles);
+  const overlay = { ...asDict(profiles[name]) };
+  delete overlay.servers;
+  profiles[name] = overlay;
+  return { ...payload, profiles };
+}
+
 /** Every non-blank `token_env` string referenced anywhere in base + profiles
  *  (servers, base/profile telegram, profile overlays). Mirrors the backend's
  *  `_collect_token_envs` so the editor can spot keychain entries gone orphan. */

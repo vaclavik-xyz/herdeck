@@ -30,6 +30,11 @@ import {
   DEFAULT_MACROS,
   overrideStatePath,
   macroRecords,
+  mapSectionState,
+  setMapSectionState,
+  profileServersState,
+  setProfileServersExplicit,
+  clearProfileServers,
   type ConfigPayload,
 } from "./configClient";
 
@@ -711,5 +716,43 @@ describe("macroRecords", () => {
     expect(macroRecords([{ label: "a", text: "x" }, {}])).toEqual([{ label: "a", text: "x" }, { label: "", text: "" }]);
     expect(macroRecords(undefined)).toEqual([]);
     expect(macroRecords("nope")).toEqual([]);
+  });
+});
+
+describe("mapSectionState / setMapSectionState (base map explicit-empty)", () => {
+  const mk = (sp: unknown): any => ({ base: sp === undefined ? {} : { start_profiles: sp }, profiles: {}, local: {}, secrets: {}, activeProfile: "default", envLocked: false });
+  it("absent → default, {} → empty, non-empty → custom", () => {
+    expect(mapSectionState(mk(undefined), "start_profiles")).toBe("default");
+    expect(mapSectionState(mk({}), "start_profiles")).toBe("empty");
+    expect(mapSectionState(mk({ codex: ["codex"] }), "start_profiles")).toBe("custom");
+  });
+  it("setMapSectionState writes {}, deletes, and leaves custom untouched (immutably)", () => {
+    const start = mk({ codex: ["codex"] });
+    const empty = setMapSectionState(start, "start_profiles", "empty");
+    expect((empty.base as any).start_profiles).toEqual({});
+    expect((start.base as any).start_profiles).toEqual({ codex: ["codex"] }); // input untouched
+    const def = setMapSectionState(start, "start_profiles", "default");
+    expect("start_profiles" in (def.base as any)).toBe(false);
+    expect(setMapSectionState(start, "start_profiles", "custom")).toBe(start); // no-op
+  });
+});
+
+describe("profile servers serverless authoring", () => {
+  const mk = (servers: unknown): any => ({ base: {}, profiles: { dev: servers === undefined ? {} : { servers } }, local: {}, secrets: {}, activeProfile: "default", envLocked: false });
+  it("profileServersState: absent → inherit, [] or list → explicit", () => {
+    expect(profileServersState(mk(undefined), "dev")).toBe("inherit");
+    expect(profileServersState(mk([]), "dev")).toBe("explicit");
+    expect(profileServersState(mk(["a"]), "dev")).toBe("explicit");
+  });
+  it("setProfileServersExplicit writes the key even for [] (serverless)", () => {
+    const out = setProfileServersExplicit(mk(undefined), "dev", []);
+    expect((out.profiles.dev as any).servers).toEqual([]);
+    expect(profileServersState(out, "dev")).toBe("explicit");
+  });
+  it("clearProfileServers omits the key (back to inherit), immutably", () => {
+    const start = mk(["a"]);
+    const out = clearProfileServers(start, "dev");
+    expect("servers" in (out.profiles.dev as any)).toBe(false);
+    expect((start.profiles.dev as any).servers).toEqual(["a"]); // input untouched
   });
 });
