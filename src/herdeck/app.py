@@ -25,6 +25,7 @@ from .model import AgentState, Status
 from .notify import (
     BlockedAlertNotifier,
     BlockedNotificationRuntime,
+    CompositeBlockedNotifier,
     LegacyBlockedNotifier,
     NoopNotifier,
     Notifier,
@@ -34,6 +35,7 @@ from .notify import (
 )
 from .orchestrator import Orchestrator
 from .secrets import get_secret
+from .telegram import TelegramBotClient, TelegramInteractor
 
 TICK_INTERVAL = 0.4
 # Every Nth tick, fully re-render so elapsed-time text on non-working tiles
@@ -57,6 +59,7 @@ def _build_notifier(
     getenv=get_secret,  # was os.environ.get — env-first/keychain via the shared resolver
     macos_sink=_macos_sink,
     telegram_factory=make_telegram_sink,
+    skip_telegram: bool = False,
 ) -> Notifier:
     """Assemble a notifier from the configured backends (graceful skip)."""
     n = config.notifications
@@ -67,6 +70,8 @@ def _build_notifier(
         if backend == "macos":
             sinks.append(macos_sink)
         elif backend == "telegram":
+            if skip_telegram:
+                continue
             tg = n.telegram
             token = getenv(tg.token_env) if tg else None
             if tg and token and tg.chat_id:
@@ -81,6 +86,69 @@ def _build_notifier(
     if not sinks:
         return NoopNotifier()
     return Notifier(sink=composite_sink(sinks))
+
+
+def _build_blocked_notification_runtime(
+    config: Config,
+    *,
+    getenv=get_secret,
+    macos_sink=_macos_sink,
+    telegram_factory=make_telegram_sink,
+    telegram_interactor_factory=None,
+) -> BlockedNotificationRuntime:
+    n = config.notifications
+    tg = n.telegram
+    interactive_requested = (
+        n.enabled
+        and tg is not None
+        and "telegram" in n.backends
+        and tg.interactive
+        and telegram_interactor_factory is not None
+    )
+    interactive_token = getenv(tg.token_env) if interactive_requested else None
+    interactive_enabled = bool(
+        interactive_requested
+        and interactive_token
+        and tg is not None
+        and tg.chat_id
+        and tg.allowed_user_ids
+    )
+    if interactive_enabled:
+        assert tg is not None
+        assert interactive_token is not None
+        interactor = telegram_interactor_factory(interactive_token, tg)
+        poll_once = getattr(interactor, "poll_once", None)
+        if callable(poll_once):
+            legacy = _build_notifier(
+                config,
+                getenv=getenv,
+                macos_sink=macos_sink,
+                telegram_factory=telegram_factory,
+                skip_telegram=True,
+            )
+            notifiers: list[BlockedAlertNotifier] = [LegacyBlockedNotifier(legacy), interactor]
+            notifier = (
+                notifiers[0] if len(notifiers) == 1 else CompositeBlockedNotifier(notifiers)
+            )
+            return BlockedNotificationRuntime(notifier, interactor)
+        log.warning(
+            "interactive telegram notifications requested but inbound poller "
+            "is unavailable; keeping one-way telegram backend"
+        )
+
+    legacy = _build_notifier(
+        config,
+        getenv=getenv,
+        macos_sink=macos_sink,
+        telegram_factory=telegram_factory,
+    )
+    notifiers = [LegacyBlockedNotifier(legacy)]
+    notifier = notifiers[0] if len(notifiers) == 1 else CompositeBlockedNotifier(notifiers)
+    return BlockedNotificationRuntime(notifier, None)
+
+
+def _build_blocked_notifier(*args, **kwargs) -> BlockedAlertNotifier:
+    return _build_blocked_notification_runtime(*args, **kwargs).notifier
 
 
 async def _guard_blocked_notify(coro: Awaitable[None]) -> None:
@@ -447,6 +515,75 @@ def make_config_reloader(snapshot):
     return reload_
 
 
+def _install_telegram_runtime(
+    app: App,
+    config: Config,
+    runtime_control: RuntimeAgentControl,
+    *,
+    getenv=get_secret,
+    bot_client_factory=TelegramBotClient,
+    interactor_factory=TelegramInteractor,
+) -> None:
+    app.set_runtime_control(runtime_control)
+
+    def build_blocked_runtime(runtime_config: Config) -> BlockedNotificationRuntime:
+        runtime_control.update_config(runtime_config)
+
+        def make_interactor(token: str, tg):
+            return interactor_factory(
+                bot_client_factory(token),
+                runtime_control,
+                chat_id=tg.chat_id,
+                message_thread_id=tg.message_thread_id,
+                allowed_user_ids=tg.allowed_user_ids,
+                prompt_max_chars=tg.prompt_max_chars,
+            )
+
+        return _build_blocked_notification_runtime(
+            runtime_config,
+            getenv=getenv,
+            telegram_interactor_factory=make_interactor,
+        )
+
+    app.set_blocked_runtime_factory(build_blocked_runtime)
+
+
+async def _poll_telegram_once_from_app(
+    app: App,
+    *,
+    timeout: int = 20,
+    idle_sleep=asyncio.sleep,
+) -> None:
+    generation = app.notification_generation
+    poller = app.notification_poller
+    if poller is None:
+        await idle_sleep(1)
+        return
+    if getattr(poller, "inbound_disabled", False):
+        await idle_sleep(60)
+        return
+    await poller.poll_once(
+        timeout=timeout,
+        is_current=lambda: app.notification_generation == generation,
+    )
+    if getattr(poller, "inbound_disabled", False):
+        await idle_sleep(60)
+
+
+def _start_telegram_poll_loop(app: App, *, create_task=asyncio.create_task):
+    async def poll_telegram():
+        while True:
+            try:
+                await _poll_telegram_once_from_app(app)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.debug("telegram poll failed", exc_info=True)
+                await asyncio.sleep(2)
+
+    return create_task(poll_telegram())
+
+
 def _mock_config() -> Config:
     """A zero-setup config for the offline simulator (no file/token needed)."""
     from .config import DEFAULT_PROFILES, ServerConfig
@@ -613,6 +750,18 @@ async def _run(
         update_connectors=lambda cfg: manager.update(cfg.servers),
         config_reloader=config_reloader,
     )
+
+    async def runtime_send(cmd: Command, req: str) -> None:
+        conn = manager.get(cmd.server_id)
+        if conn is not None:
+            await conn.send(command_to_msg(cmd, req))
+
+    runtime_control = RuntimeAgentControl(
+        config,
+        send=runtime_send,
+        current_agent=app.orch.get_agent,
+    )
+    _install_telegram_runtime(app, config, runtime_control)
     for server in config.servers:
         app.orch.set_connection(server.id, False)
     app._refresh()
@@ -626,6 +775,7 @@ async def _run(
 
     manager.update(config.servers)
     tasks = manager.tasks()
+    tasks.append(_start_telegram_poll_loop(app))
     tasks.append(_guard(_ticker(app, loop, tick_interval or config.hardware.tick_interval)))
     if hasattr(deck, "run_reader"):
         tasks.append(_guard(deck.run_reader()))
