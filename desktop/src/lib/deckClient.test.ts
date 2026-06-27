@@ -213,6 +213,20 @@ describe("commandTransport — talks to the token-free Tauri proxy commands", ()
   });
 });
 
+describe("tile_sections parsing", () => {
+  it("parseState normalizes tile_sections (string keys → number; drops junk)", () => {
+    const s = parseState({ version: 1, slots: 13, tiles: {}, tile_sections: { "0": "view", "12": "start_profiles", "x": "view", "3": 5 } });
+    expect(s?.sections).toEqual({ 0: "view", 12: "start_profiles" });
+  });
+  it("parseState yields empty sections when tile_sections is absent", () => {
+    const s = parseState({ version: 1, slots: 13, tiles: {} });
+    expect(s?.sections).toEqual({});
+  });
+  it("initialView has empty sections", () => {
+    expect(initialView().sections).toEqual({});
+  });
+});
+
 describe("stepDeck — folds a poll into the render model", () => {
   // A fake transport that records calls and yields deterministic srcs.
   function fakeTransport(states: unknown[]): DeckTransport & { pressed: number[] } {
