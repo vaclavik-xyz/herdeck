@@ -13,6 +13,8 @@ _OPTION_LABEL_MAX = 14
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 _MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
 _APPROVE_ALWAYS_HINTS = ("always", "don't ask", "dont ask", "do not ask")
+# Config section a management action's tile jumps to (klik-to-jump).
+_MGMT_SECTION = {"profiles": "profiles", "new_agent": "start_profiles"}
 
 
 def server_accent(server_id: str, accents: list[str] | None = None) -> str:
@@ -203,9 +205,9 @@ class Orchestrator:
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i in management:
-                tiles.append(TileView(i, self._management_label(management[i]), "grey"))
+                tiles.append(TileView(i, self._management_label(management[i]), "grey", section=_MGMT_SECTION.get(management[i])))
             elif not management_mode and i == self.slots - 1:  # reserved launcher tile
-                tiles.append(TileView(i, "+ New", "green"))
+                tiles.append(TileView(i, "+ New", "green", section="start_profiles"))
             elif i < len(shown):
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
@@ -234,6 +236,7 @@ class Orchestrator:
                         time_text=self._elapsed_text(s.key) if "time" in fields else None,
                         server_tag=tag,
                         server_accent=accent,
+                        section="view",
                     )
                 )
             else:
@@ -260,7 +263,7 @@ class Orchestrator:
             if i < len(names) and i < back_i:
                 name = names[i]
                 label = f"* {name}" if name == self.config.meta.active_profile else name
-                tiles.append(TileView(i, label[:_OPTION_LABEL_MAX], "blue"))
+                tiles.append(TileView(i, label[:_OPTION_LABEL_MAX], "blue", section="profiles"))
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
@@ -277,7 +280,7 @@ class Orchestrator:
             if i < len(entries) and i < back_i:
                 entry = entries[i]
                 agent_type = entry if entry in self.config.start_profiles else None
-                tiles.append(TileView(i, entry, "blue", agent_type=agent_type))
+                tiles.append(TileView(i, entry, "blue", agent_type=agent_type, section=("start_profiles" if agent_type else "profiles")))
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
@@ -364,9 +367,9 @@ class Orchestrator:
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i < len(actions):
-                tiles.append(TileView(i, actions[i]["label"], "blue", subtext=actions[i].get("subtext")))
+                tiles.append(TileView(i, actions[i]["label"], "blue", subtext=actions[i].get("subtext"), section="answer_profiles"))
             elif i == stop_i:
-                tiles.append(TileView(i, "Stop", "red"))
+                tiles.append(TileView(i, "Stop", "red", section="answer_profiles"))
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
