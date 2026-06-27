@@ -69,12 +69,20 @@ Change the app notification boundary from "pre-rendered title/body" to a typed b
 
 ```python
 class BlockedAlertNotifier(Protocol):
-    def notify_blocked(self, agent: AgentState, *, body: str, sound: bool, multi_server: bool) -> None: ...
+    async def notify_blocked(self, agent: AgentState, *, body: str, sound: bool, multi_server: bool) -> None: ...
 ```
 
 `body` is the current legacy-safe metadata string, so existing one-way sinks can be adapted without reimplementing formatting. `agent` gives interactive Telegram the `AgentKey`, repo, branch, label, and agent type it needs for prompt reads, callbacks, and reply correlation.
 
-Keep `Notifier.notify(title, body, sound)` as the low-level sink wrapper for macOS and non-interactive Telegram. Add a small adapter, for example `LegacyBlockedNotifier`, that converts `AgentState` plus metadata into the old `title/body/sound` call. `App._maybe_notify()` should call the typed blocked-alert notifier, not a raw sink, so interactive and legacy behavior share one transition detector.
+Keep `Notifier.notify(title, body, sound)` as the low-level sink wrapper for macOS and non-interactive Telegram. Add a small async adapter, for example `LegacyBlockedNotifier`, that converts `AgentState` plus metadata into the old `title/body/sound` call and runs blocking sinks off the event loop. `App._maybe_notify()` should schedule the typed blocked-alert notifier, not a raw sink, so interactive and legacy behavior share one transition detector.
+
+When interactive Telegram is enabled alongside other backends, use `CompositeBlockedNotifier` to preserve the other configured backends. Avoid duplicate Telegram sends by excluding the one-way Telegram sink from the legacy notifier whenever the interactive Telegram notifier is active. Only suppress the one-way Telegram sink after interactive Telegram is fully usable: token exists, `chat_id` is set, `allowed_user_ids` is non-empty, and the interactor is installed. If interactive config is incomplete, keep the existing one-way Telegram alert path and surface the missing interactive readiness in diagnostics.
+
+`message_thread_id` applies to both one-way Telegram notifications and interactive Telegram messages. Non-interactive alerts and incomplete-interactive fallback alerts must still be posted into the configured forum topic.
+
+Keep polling ownership separate from the composite notifier. The builder should return an explicit runtime bundle containing the `BlockedAlertNotifier` plus an optional inbound poller reference. The app stores that poller directly and must not infer it with `isinstance(app.blocked_notifier, TelegramInteractor)`, because interactive Telegram is normally wrapped inside `CompositeBlockedNotifier`.
+
+Config reloads and profile switches must rebuild the blocked notification runtime. That rebuild updates the legacy notifier, interactive Telegram interactor, poller reference, chat/topic/user filters, and runtime control config together, so old Telegram settings do not survive after `_apply_config()`.
 
 The interactor depends on an app-facing control adapter rather than directly knowing deck internals:
 
@@ -135,7 +143,9 @@ Button handling:
 - `Stop` calls unconditional stop (`act_force`).
 - `Read again` re-runs `read_prompt()` and posts a reply to the original alert or edits the alert text if the Bot API call succeeds.
 
-After every callback, Herdeck calls `answerCallbackQuery` so Telegram clients stop showing a spinner.
+After every callback, Herdeck calls `answerCallbackQuery` so Telegram clients stop showing a spinner. This includes timeout and failure responses when the underlying agent command, prompt read, or message edit raises. For action results, report `sent` only when `ActionResult.sent` is true, `skipped` only when `ActionResult.skipped` is true, otherwise report `ActionResult.message` or `failed`.
+
+When a Telegram action or reply result is consumed by the runtime control broker, Herdeck must still request a fresh `list` from that server for non-read commands so the deck UI refresh path matches local approve/deny/stop/send actions.
 
 ## Reply-To-Agent Flow
 
@@ -163,10 +173,13 @@ Use long polling with `getUpdates`:
 
 - `allowed_updates = ["message", "callback_query"]`
 - maintain `offset = last_update_id + 1`
+- advance the offset in a `finally` path for each received `update_id`, so Telegram acknowledgement failures cannot replay approve/deny/stop/text actions
+- guard each long-poll result with the current notification runtime generation, so a poller replaced during config reload cannot process updates with stale chat/topic/user filters
 - use a moderate timeout, for example 20 seconds
 - retry transient HTTP/network errors with capped backoff
+- prune expired and no-longer-blocked alert records before processing updates and before rendering `/status`
 
-Herdeck should not set a webhook in V1. If Telegram reports a webhook conflict, the interactor logs a clear warning and disables inbound interaction while keeping outbound alerts working.
+Herdeck should not set a webhook in V1. If Telegram reports a 409 webhook conflict, the interactor logs a clear warning, marks inbound polling disabled for that interactor, and keeps outbound alerts working.
 
 ## State And Expiry
 
@@ -194,6 +207,7 @@ The feature must preserve these invariants:
 - Never treat arbitrary topic messages as agent input; only replies to known alert messages route to agents.
 - Keep existing guarded approve/deny behavior.
 - Keep notification IO off the render loop.
+- Keep blocking Telegram Bot API HTTP calls off the asyncio event loop by using `asyncio.to_thread()` or the existing executor path.
 - Swallow or log network failures without crashing Herdeck.
 
 The prompt may contain sensitive command context. This is acceptable only because the user explicitly configures a target chat/topic. The default remains one-way disabled notifications.
@@ -203,8 +217,10 @@ The prompt may contain sensitive command context. This is acceptable only becaus
 - Missing token or chat id: skip Telegram backend as today.
 - Missing `allowed_user_ids` with `interactive = true`: interactive mode is disabled and doctor reports a failing notification check.
 - Telegram send failure: log debug/warning and keep the app running.
+- Telegram alert send failure or missing `message_id`: discard the reserved alert token so `/status` cannot show phantom alerts.
 - Prompt read timeout: send alert without prompt and keep `Read again` available.
 - Bridge connection loss: reply with failure status, do not retry indefinitely.
+- Reply `send_text` timeout or exception: reply in Telegram with a short delivery failure status.
 - Unknown/stale callback: answer callback with a short stale message.
 
 ## Testing Strategy
