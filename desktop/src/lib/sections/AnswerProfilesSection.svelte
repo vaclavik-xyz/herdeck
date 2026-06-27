@@ -83,6 +83,20 @@
     const e = inhEntry(name);
     return LIST_KEYS.map((k) => `${k}:${argvOf(e[k]).length}`).join(" · ");
   }
+  // Effective per-subkey value for display: the backend merges answer_profile entries
+  // RECURSIVELY per-subkey, so a partial overlay (e.g. only `approve`) inherits the omitted
+  // fields from base. Show that inherited value rather than an empty list; the write path
+  // (setEntryKey/setAAOv) only persists a field once the user changes it, so an omitted field
+  // stays inherited until edited.
+  function entryKeyValue(name: string, k: string): string[] {
+    const own = ovEntry(name);
+    return k in own ? argvOf(own[k]) : argvOf(inhEntry(name)[k]);
+  }
+  function aaListOv(name: string): string[] {
+    const own = ovEntry(name);
+    return "approve_always" in own ? argvOf(own.approve_always) : argvOf(inhEntry(name).approve_always);
+  }
+  function aaHint(name: string): string { return argvOf(inhEntry(name).approve_always).join(" · ") || "(nic)"; }
   function writeEntry(name: string, entry: Record<string, unknown>): void { payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, [SEC, name], entry) }; onChange(); }
   function setEntryState(name: string, s: "inherit" | "override"): void {
     payload = { ...payload, profiles: s === "inherit" ? clearOverridePath(payload.profiles, prof, [SEC, name]) : setOverridePath(payload.profiles, prof, [SEC, name], inhEntry(name)) };
@@ -116,9 +130,9 @@
       <legend>{name}{#if !isInherited(name)} <button type="button" onclick={() => removeOwn(name)}>×</button>{/if}</legend>
       <OverrideField label="keys" state={entryState(name)} inheritedDisplay={inhSummary(name)} onstate={(s) => setEntryState(name, s)}>
         {#each LIST_KEYS as k}
-          <ListField label={k} value={argvOf(ovEntry(name)[k])} onchange={(v) => setEntryKey(name, k, v)} />
+          <ListField label={k} value={entryKeyValue(name, k)} onchange={(v) => setEntryKey(name, k, v)} />
         {/each}
-        <TriStateListField label="approve_always" state={aaStateOv(name)} list={argvOf(ovEntry(name).approve_always)} onchange={(s, l) => setAAOv(name, s, l)} />
+        <TriStateListField label="approve_always" state={aaStateOv(name)} list={aaListOv(name)} inheritLabel="Zdědit" inheritHint={`zděděno: ${aaHint(name)}`} onchange={(s, l) => setAAOv(name, s, l)} />
       </OverrideField>
     </fieldset>
   {/each}
