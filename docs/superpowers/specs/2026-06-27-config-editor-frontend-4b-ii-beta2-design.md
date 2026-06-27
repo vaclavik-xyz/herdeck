@@ -62,15 +62,41 @@ Nové helpery (`desktop/src/lib/configClient.ts`). β1 helpery (`inheritedForPat
 
 - **`mergeSection(base, overlay)`** — JS mirror `_merge_section`: oba dicty → merge per-klíč rekurzivně,
   jinak `overlay` nahrazuje. Čistá, tested.
-- **`inheritedSection(payload, profile, section): Record<string, unknown>`** — efektivní zděděná mapa
-  sekce = `mergeSection` přes `[base[section], ...parentOverlays[section]]` (parent overlaye z
-  `inheritedChain`, EXCLUDING vlastní overlay profilu). Vrací `{}` když absent všude. Toto je věrný
-  resolver pro zobrazení zděděných položek + seed při override (zabraňuje β1-stylu „undefined inherited").
+- **`inheritedSection(payload, profile, section): { present: boolean; map: Record<string, unknown> }`** —
+  věrný chain merge = `mergeSection` přes `[base[section], ...parentOverlays[section]]` (parent overlaye
+  z `inheritedChain`, EXCLUDING vlastní overlay profilu). `present` = zda KTERÁKOLI úroveň (base/parent)
+  sekci nastavila (rozliší „absent všude" od explicitního `{}`). Toto je věrný RAW resolver; defaulty se
+  aplikují až v section-specific resolverech níže.
+
+### Default-aware inherited resolvery (β2 fix — backend default semantika)
+
+**Kritické:** backend pro ABSENT sekce neresolvuje na `{}`/`[]`, ale na DEFAULTY (`settings._build_config`).
+Frontend je nezná → bez tohoto by overlay UI skryl zděděné default položky a seedoval prázdný override
+(stejná třída chyby jako β1 scalar-default gap). Frontend mirrory s `// keep in sync` komentářem:
+
+- **`DEFAULT_START_PROFILES`** = `{claude:["claude"], codex:["codex"], cursor:["cursor-agent"],
+  gemini:["gemini"], opencode:["opencode"]}`.
+- **`DEFAULT_MACROS`** = `[{label:"continue",text:"continue"}, {label:"run tests",text:"run the tests"},
+  {label:"commit",text:"commit the changes"}, {label:"/compact",text:"/compact"}]`.
+- **`DEFAULT_ANSWER_PROFILES`** = `{claude:{approve:["1","enter"],deny:["esc"],stop:["ctrl+c"],
+  approve_always:["2","enter"]}, codex:{approve:["y","enter"],deny:["n","enter"],stop:["ctrl+c"],
+  approve_always:["y","enter"]}, default:{approve:["enter"],deny:["esc"],stop:["ctrl+c"],
+  approve_always:["enter"]}}`.
+
+Resolvery (každý vrací EFEKTIVNÍ zděděnou hodnotu, kterou sekce přímo zobrazí + použije jako seed):
+- **`inheritedStartProfiles(payload, profile)`** = `present ? map : DEFAULT_START_PROFILES`
+  (`_launcher`: absent → defaulty REPLACE; explicit `{}` → žádné launchery).
+- **`inheritedMacros(payload, profile): MacroRecord[]`** = `v = inheritedForPath(["macros"]);
+  v === undefined ? DEFAULT_MACROS : macroRecords(v)` (absent → defaulty; `[]` → žádná).
+- **`inheritedAnswerProfiles(payload, profile)`** = `{ ...DEFAULT_ANSWER_PROFILES, ...(present ? map : {}) }`
+  — backend `answer_profiles = dict(DEFAULT_PROFILES)` pak per-jméno PŘEPÍŠE configem (defaulty jsou VŽDY
+  base, nelze je odebrat; shallow per-entry spread = whole-entry replace, věrné backendu).
 
 ### Per-entry override (Start/Answer)
 
 Sekce čte živě z payloadu (žádné local rows v overlay módu):
-- zděděné položky = `Object.keys(inheritedSection(...))`,
+- zděděné položky = `Object.keys(inheritedStartProfiles(...))` resp. `inheritedAnswerProfiles(...)`
+  (default-aware — viz výše; zahrnují backend default položky když base sekci omituje),
 - vlastní overlay položky = klíče `profiles[prof][section]` (dict),
 - efektivní = sjednocení; per položka `name`:
   - `state`: `name in ownOverlay ? "override" : "inherit"`,
@@ -135,8 +161,9 @@ default).
   - overlay = whole-list override (backend nahrazuje list wholesale → per-entry nedává smysl).
     `OverrideField` [Zdědit | Vlastní] kolem celého editoru maker. Zdědit → dimmed „zděděno: N maker".
     Vlastní → editor maker (add/remove/edit) zapisující `profiles[prof].macros` přes `setOverridePath
-    ["macros"]`; přepnutí na Vlastní seedne zděděný list (`macroRecords(inheritedForPath ["macros"])`).
-    Zdědit → `clearOverridePath ["macros"]`. Base větev = dnešní editor beze změny.
+    ["macros"]`; přepnutí na Vlastní seedne zděděný list (`inheritedMacros(...)` — default-aware, takže
+    při base-omitu seedne `DEFAULT_MACROS`, ne prázdno). Zdědit → `clearOverridePath ["macros"]`. Base
+    větev = dnešní editor beze změny.
 - **Start profiles** (`StartProfilesSection.svelte`):
   - **base** větev: dnešní rows editor + **NOVÝ** segmentovaný [Výchozí | Vlastní | Vypnuto] (map-empty)
     s lokálním `mode` state (seed z `mapSectionState`, re-seed na `reloadRev`). Výchozí →
@@ -167,8 +194,12 @@ default).
 ## Testing (TDD)
 
 - **configClient** — čisté Vitest: `mergeSection` (dict per-key recursive, list/scalar replace);
-  `inheritedSection` (přímý extends → base; vícevrstvý řetězec merge per-key; exclude vlastního overlaye;
-  cyklus/neznámý cíl → base fallback přes `inheritedChain`); `overrideStatePath`; `macroRecords`;
+  `inheritedSection` (`{present, map}`: přímý extends → base; vícevrstvý řetězec merge per-key; exclude
+  vlastního overlaye; cyklus/neznámý cíl → base fallback přes `inheritedChain`; `present=false` při
+  absenci všude vs `present=true` u explicitního `{}`); **default-aware resolvery**
+  `inheritedStartProfiles`/`inheritedMacros`/`inheritedAnswerProfiles` (absent → backend default;
+  explicit `{}`/`[]` → none; answer defaulty vždy base + config per-jméno přepíše); `overrideStatePath`;
+  `macroRecords`;
   `mapSectionState` (absent/`{}`/non-empty); `setMapSectionState` (delete/`{}`/no-op, immutabilita);
   `profileServersState` (absent/`[]`/list); `setProfileServersExplicit` (zapíše i `[]`) +
   `clearProfileServers` (omit). Per-entry override pokrytí přes `setOverridePath`/`clearOverridePath`
@@ -182,7 +213,7 @@ default).
 
 | Soubor | Status | Odpovědnost |
 |---|---|---|
-| `desktop/src/lib/configClient.ts` | modify | `mergeSection` + `inheritedSection` + `overrideStatePath` + `macroRecords` (refactor `macrosOf`) + `mapSectionState`/`setMapSectionState` + `profileServersState`/`setProfileServersExplicit`/`clearProfileServers` |
+| `desktop/src/lib/configClient.ts` | modify | `mergeSection` + `inheritedSection` (`{present,map}`) + default mirrory + `inheritedStartProfiles`/`inheritedMacros`/`inheritedAnswerProfiles` + `overrideStatePath` + `macroRecords` (refactor `macrosOf`) + `mapSectionState`/`setMapSectionState` + `profileServersState`/`setProfileServersExplicit`/`clearProfileServers` |
 | `desktop/src/lib/configClient.test.ts` | modify | TDD pro všechny nové helpery |
 | `desktop/src/lib/sections/NotificationsSection.svelte` | modify | overlay-aware (scalars + lists + telegram nested + secret) |
 | `desktop/src/lib/sections/MacrosSection.svelte` | modify | overlay-aware whole-list override |
