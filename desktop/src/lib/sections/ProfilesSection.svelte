@@ -1,8 +1,10 @@
 <script lang="ts">
   import SelectField from "../fields/SelectField.svelte";
+  import OverrideField from "../fields/OverrideField.svelte";
   import {
     profileNames, createProfile, deleteProfile,
-    profileExtends, setProfileExtends, profileServers, setProfileServers,
+    profileExtends, setProfileExtends, profileServers,
+    profileServersState, setProfileServersExplicit, clearProfileServers,
     serversOf, type ConfigPayload,
   } from "../configClient";
 
@@ -52,10 +54,15 @@
     payload = setProfileExtends(payload, name, ext);
     onChange();
   }
+  function srvState(name: string): "inherit" | "override" { return profileServersState(payload, name) === "explicit" ? "override" : "inherit"; }
+  function setSrvState(name: string, s: "inherit" | "override"): void {
+    payload = s === "inherit" ? clearProfileServers(payload, name) : setProfileServersExplicit(payload, name, profileServers(payload, name));
+    onChange();
+  }
   function toggleServer(name: string, id: string, on: boolean): void {
     const cur = profileServers(payload, name);
     const next = on ? [...cur, id] : cur.filter((s) => s !== id);
-    payload = setProfileServers(payload, name, next);
+    payload = setProfileServersExplicit(payload, name, next); // explicit: keeps [] (serverless)
     onChange();
   }
 </script>
@@ -77,23 +84,27 @@
       options={extendsOptions(name)}
       onchange={(v) => setExtends(name, v)}
     />
-    <div class="servers">
-      <span class="lbl">servers</span>
-      {#if serverOptions(name).length === 0}
-        <span class="hint">žádné servery v bázi — přidej je v sekci Servers</span>
-      {:else}
-        {#each serverOptions(name) as opt (opt.id)}
-          <label class="chk">
-            <input
-              type="checkbox"
-              checked={profileServers(payload, name).includes(opt.id)}
-              onchange={(e) => toggleServer(name, opt.id, (e.target as HTMLInputElement).checked)}
-            />
-            {opt.id}{#if !opt.known} <span class="unknown">(neznámý)</span>{/if}
-          </label>
-        {/each}
-      {/if}
-    </div>
+    <OverrideField label="servers" state={srvState(name)} inheritedDisplay="zdědí base servery" onstate={(s) => setSrvState(name, s)}>
+      <div class="servers">
+        {#if serverOptions(name).length === 0}
+          <span class="hint">žádné servery v bázi — přidej je v sekci Servers</span>
+        {:else}
+          {#each serverOptions(name) as opt (opt.id)}
+            <label class="chk">
+              <input
+                type="checkbox"
+                checked={profileServers(payload, name).includes(opt.id)}
+                onchange={(e) => toggleServer(name, opt.id, (e.target as HTMLInputElement).checked)}
+              />
+              {opt.id}{#if !opt.known} <span class="unknown">(neznámý)</span>{/if}
+            </label>
+          {/each}
+          {#if profileServers(payload, name).length === 0}
+            <span class="hint">serverless: profil poběží bez serverů (explicitní prázdný výběr)</span>
+          {/if}
+        {/if}
+      </div>
+    </OverrideField>
   </fieldset>
 {/each}
 {#if names.length === 0}
@@ -107,8 +118,7 @@
   .create input { flex: 1; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
   fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
   legend { color: #ccc; } legend button { color: #e05050; background: none; border: 0; cursor: pointer; }
-  .servers { display: grid; grid-template-columns: 120px 1fr; gap: 8px; align-items: start; margin: 4px 0; }
-  .servers .lbl { color: #aaa; }
+  .servers { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 2px 0; }
   .chk { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; color: #ccc; }
   .unknown { color: #e05050; font-size: 11px; }
   button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
