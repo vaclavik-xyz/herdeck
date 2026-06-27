@@ -62,7 +62,7 @@
   // active they still edit BASE — warn so the user doesn't think they edit the profile.
   // Servers (base server list) and Profiles (meta-section) are NOT per-section overlays, so
   // they get no note.
-  const BASE_ONLY_IN_OVERLAY = ["Macros", "Start profiles", "Notifications", "Answer profiles"];
+  const BASE_ONLY_IN_OVERLAY = ["Macros", "Start profiles", "Answer profiles"];
 
   async function switchProfile(name: string): Promise<void> {
     if (!payload) return;
@@ -231,7 +231,7 @@
       {:else if active === "Start profiles"}
         <StartProfilesSection bind:payload {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Notifications"}
-        <NotificationsSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
+        <NotificationsSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Safety"}
         <SafetySection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Answer profiles"}

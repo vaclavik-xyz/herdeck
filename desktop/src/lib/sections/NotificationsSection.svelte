@@ -108,7 +108,22 @@
     payload = { ...payload, profiles: s === "inherit" ? clearOverridePath(payload.profiles, prof, tgPath(k)) : setOverridePath(payload.profiles, prof, tgPath(k), String(inheritedForPath(payload, prof, tgPath(k)) ?? "")) };
     onChange();
   }
-  function setTg(k: string, v: string): void { payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, tgPath(k), v) }; onChange(); }
+  function setTg(k: string, v: string): void {
+    // Mirror base setTelegram: omit blank sub-fields to avoid empty token_env crash in backend.
+    const other = k === "token_env" ? "chat_id" : "token_env";
+    const otherVal = String(overrideValuePath(payload, prof, tgPath(other)) ?? inheritedForPath(payload, prof, tgPath(other)) ?? "");
+    if (v.trim() === "" && otherVal.trim() === "") {
+      // Both would be blank → clear both overrides.
+      let profs = clearOverridePath(payload.profiles, prof, tgPath(k));
+      profs = clearOverridePath(profs, prof, tgPath(other));
+      payload = { ...payload, profiles: profs };
+    } else if (v.trim() === "") {
+      payload = { ...payload, profiles: clearOverridePath(payload.profiles, prof, tgPath(k)) };
+    } else {
+      payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, tgPath(k), v) };
+    }
+    onChange();
+  }
 </script>
 
 <h2>Notifications{#if overlay} · overlay: {editProfile}{/if}</h2>
