@@ -256,15 +256,37 @@ export interface MacroRecord {
   text: string;
 }
 
-/** The base `macros` list as editable records (always an array). */
-export function macrosOf(payload: ConfigPayload): MacroRecord[] {
-  const raw = payload.base.macros;
+/** Extract `{label,text}[]` from any list value (tolerates junk entries). */
+export function macroRecords(raw: unknown): MacroRecord[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((m) => {
     const r = obj(m);
     return { label: str(r.label), text: str(r.text) };
   });
 }
+
+/** The base `macros` list as editable records (always an array). */
+export function macrosOf(payload: ConfigPayload): MacroRecord[] {
+  return macroRecords(payload.base.macros);
+}
+
+// Frontend mirrors of backend defaults (config.py DEFAULT_*) — keep in sync.
+// Backend resolves ABSENT start_profiles/macros to these (REPLACE); answer_profiles
+// ALWAYS seeds these built-ins, config overriding per-name (settings._build_config).
+export const DEFAULT_START_PROFILES: Record<string, string[]> = {
+  claude: ["claude"], codex: ["codex"], cursor: ["cursor-agent"], gemini: ["gemini"], opencode: ["opencode"],
+};
+export const DEFAULT_MACROS: MacroRecord[] = [
+  { label: "continue", text: "continue" },
+  { label: "run tests", text: "run the tests" },
+  { label: "commit", text: "commit the changes" },
+  { label: "/compact", text: "/compact" },
+];
+export const DEFAULT_ANSWER_PROFILES: Record<string, Record<string, string[]>> = {
+  claude: { approve: ["1", "enter"], deny: ["esc"], stop: ["ctrl+c"], approve_always: ["2", "enter"] },
+  codex: { approve: ["y", "enter"], deny: ["n", "enter"], stop: ["ctrl+c"], approve_always: ["y", "enter"] },
+  default: { approve: ["enter"], deny: ["esc"], stop: ["ctrl+c"], approve_always: ["enter"] },
+};
 
 function withMacros(payload: ConfigPayload, macros: MacroRecord[]): ConfigPayload {
   // Absent `macros` means "use DEFAULT_MACROS"; an empty list would disable them. So when
@@ -501,6 +523,78 @@ export function overrideState(payload: ConfigPayload, profile: string, section: 
   return Array.isArray(value) && value.length === 0 ? "empty" : "custom";
 }
 
+/** JS mirror of backend `settings._merge_section`: two dicts merge per-key
+ *  recursively; a list/scalar overlay (or absent base) replaces wholesale. */
+export function mergeSection(base: unknown, overlay: unknown): unknown {
+  if (
+    base != null && typeof base === "object" && !Array.isArray(base) &&
+    overlay != null && typeof overlay === "object" && !Array.isArray(overlay)
+  ) {
+    const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+    for (const [k, v] of Object.entries(overlay as Record<string, unknown>)) {
+      out[k] = mergeSection(out[k], v);
+    }
+    return out;
+  }
+  return overlay;
+}
+
+/** Raw chain merge of `section` a `profile` INHERITS: base merged with parent overlays
+ *  via `extends` (per-key, mirroring the backend), EXCLUDING the profile's OWN overlay.
+ *  A cycle/unknown extends target falls back to base (via `inheritedChain`). `present` is
+ *  whether ANY level set the section — distinguishes "absent everywhere" (→ backend default)
+ *  from an explicit `{}` (→ none). Defaults are applied by the resolvers below, NOT here. */
+export function inheritedSection(
+  payload: ConfigPayload,
+  profile: string,
+  section: string,
+): { present: boolean; map: Record<string, unknown> } {
+  const base = asDict(payload.base);
+  let present = section in base;
+  let merged: unknown = base[section];
+  for (const overlay of inheritedChain(payload.profiles, profile)) {
+    if (section in overlay) {
+      merged = mergeSection(present ? merged : undefined, overlay[section]);
+      present = true;
+    }
+  }
+  return { present, map: asDict(merged) };
+}
+
+/** Effective inherited `start_profiles` map: absent everywhere → DEFAULT_START_PROFILES
+ *  (backend `_launcher(None)`); explicit `{}` → none; otherwise the merged map. */
+export function inheritedStartProfiles(payload: ConfigPayload, profile: string): Record<string, unknown> {
+  const { present, map } = inheritedSection(payload, profile, "start_profiles");
+  return present ? map : { ...DEFAULT_START_PROFILES };
+}
+
+/** Effective inherited `macros` list: absent → DEFAULT_MACROS (backend `_macro_set(None)`);
+ *  `[]` → none; otherwise the inherited list. (macros is a LIST → use inheritedForPath.) */
+export function inheritedMacros(payload: ConfigPayload, profile: string): MacroRecord[] {
+  const v = inheritedForPath(payload, profile, ["macros"]);
+  return v === undefined ? DEFAULT_MACROS.map((m) => ({ ...m })) : macroRecords(v);
+}
+
+/** Effective inherited `answer_profiles` map: DEFAULT_ANSWER_PROFILES are ALWAYS the base
+ *  (backend `dict(DEFAULT_PROFILES)`), config overriding whole entries per-name. Shallow
+ *  per-entry spread = whole-entry replace, faithful to backend `_build_config`. */
+export function inheritedAnswerProfiles(payload: ConfigPayload, profile: string): Record<string, unknown> {
+  const { present, map } = inheritedSection(payload, profile, "answer_profiles");
+  return { ...DEFAULT_ANSWER_PROFILES, ...(present ? map : {}) };
+}
+
+/** Override state at `path` in `profile`'s OWN overlay (path variant of `overrideState`):
+ *  absent → "default" (= inherit), `[]` → "empty", anything else present → "custom". */
+export function overrideStatePath(
+  payload: ConfigPayload,
+  profile: string,
+  path: string[],
+): ListFieldState {
+  const { found, value } = readPath(payload.profiles[profile], path);
+  if (!found) return "default";
+  return Array.isArray(value) && value.length === 0 ? "empty" : "custom";
+}
+
 /** NEW profiles map writing `profiles[name]<path> = value`, creating nested dicts as
  *  needed. Input untouched. */
 export function setOverridePath(
@@ -633,6 +727,73 @@ export function setProfileServers(
   else overlay.servers = servers;
   profiles[name] = overlay;
   return { ...payload, profiles };
+}
+
+/** Base `[section]` tri-state: absent → "default" (backend default map), `{}` → "empty"
+ *  (explicit none, e.g. no launchers), non-empty dict → "custom". */
+export function mapSectionState(payload: ConfigPayload, section: string): ListFieldState {
+  const v = (payload.base as Record<string, unknown>)[section];
+  if (v === undefined) return "default";
+  if (v != null && typeof v === "object" && !Array.isArray(v)) {
+    return Object.keys(v as Record<string, unknown>).length === 0 ? "empty" : "custom";
+  }
+  return "custom";
+}
+
+/** NEW payload setting base `[section]` map state: "default" DELETES the key (backend
+ *  default), "empty" writes `{}` (explicit none), "custom" is a no-op (the rows editor
+ *  populates the map). Input untouched. */
+export function setMapSectionState(payload: ConfigPayload, section: string, state: ListFieldState): ConfigPayload {
+  if (state === "custom") return payload;
+  const base = { ...(payload.base as Record<string, unknown>) };
+  if (state === "default") delete base[section];
+  else base[section] = {};
+  return { ...payload, base };
+}
+
+/** Whether profile `name` has an explicit `servers` selection (present, incl. `[]` =
+ *  serverless) or inherits base servers (key absent). */
+export function profileServersState(payload: ConfigPayload, name: string): "inherit" | "explicit" {
+  return "servers" in asDict(payload.profiles[name]) ? "explicit" : "inherit";
+}
+
+/** NEW payload writing profile `name`'s `servers` ALWAYS (even `[]` = serverless),
+ *  unlike `setProfileServers` which omits an empty list. Input untouched. */
+export function setProfileServersExplicit(payload: ConfigPayload, name: string, servers: string[]): ConfigPayload {
+  const profiles = clone(payload.profiles);
+  const overlay = { ...asDict(profiles[name]) };
+  overlay.servers = servers;
+  profiles[name] = overlay;
+  return { ...payload, profiles };
+}
+
+/** NEW payload OMITTING profile `name`'s `servers` key (back to inheriting base). Input untouched. */
+export function clearProfileServers(payload: ConfigPayload, name: string): ConfigPayload {
+  const profiles = clone(payload.profiles);
+  const overlay = { ...asDict(profiles[name]) };
+  delete overlay.servers;
+  profiles[name] = overlay;
+  return { ...payload, profiles };
+}
+
+/** The servers a profile EFFECTIVELY inherits when it does NOT override `servers` itself —
+ *  mirrors backend `settings._build_config` selection resolution: the nearest parent profile in
+ *  the `extends` chain that sets `servers` wins; else the profile's merged `deck.overview_order`
+ *  (base + parents + the profile's own deck overlay); else all base server ids. Used to seed the
+ *  editor when toggling a profile to an explicit selection, so it starts from what the profile
+ *  already had — not an empty list (which would silently make it serverless). */
+export function effectiveProfileServers(payload: ConfigPayload, name: string): string[] {
+  // 1. nearest parent profile that sets `servers` (chain is base-most → parent; reverse so the
+  //    most-derived parent wins, matching the backend's last-overlay-wins assignment).
+  for (const overlay of [...inheritedChain(payload.profiles, name)].reverse()) {
+    if (Array.isArray(overlay.servers)) return (overlay.servers as unknown[]).map(String);
+  }
+  // 2. the profile's effective deck.overview_order (base + parents + the profile's own deck overlay).
+  const inhDeck = inheritedSection(payload, name, "deck").map;
+  const effDeck = asDict(mergeSection(inhDeck, asDict(asDict(payload.profiles[name]).deck)));
+  if (Array.isArray(effDeck.overview_order)) return (effDeck.overview_order as unknown[]).map(String);
+  // 3. all base server ids.
+  return serversOf(payload).map((s) => s.id).filter((id) => id !== "");
 }
 
 /** Every non-blank `token_env` string referenced anywhere in base + profiles

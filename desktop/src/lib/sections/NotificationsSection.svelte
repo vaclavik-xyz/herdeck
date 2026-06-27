@@ -4,15 +4,25 @@
   import TriStateListField from "../fields/TriStateListField.svelte";
   import TextField from "../fields/TextField.svelte";
   import TokenSecretField from "../fields/TokenSecretField.svelte";
+  import OverrideField from "../fields/OverrideField.svelte";
   import {
     commandTransport as cfgTransport, getAt, setAt, removeAt, listFieldState, setListField,
     secretFlag, type ListFieldState, type ConfigPayload,
+    inheritedFor, inheritedForPath, overrideValue, overrideValuePath, overrideState,
+    setOverride, clearOverride, setOverridePath, clearOverridePath,
   } from "../configClient";
 
-  let { payload = $bindable(), onChange, onError }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void } = $props();
+  let { payload = $bindable(), onChange, onError, editProfile = null }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
+
+  const SEC = "notifications";
+  const overlay = $derived(editProfile != null && editProfile !== "default");
+  const prof = $derived(editProfile ?? "");
+  // Mirror of backend defaults (settings._notifications_config) — keep in sync.
+  const NOTIF_DEFAULTS: Record<string, boolean> = { enabled: false, sound: true };
+  const NOTIF_LIST_DEFAULTS: Record<string, string[]> = { on: ["blocked"], backends: ["macos"] };
 
   const enabled = $derived((getAt(payload, "base", "notifications", "enabled") as boolean) ?? false);
   const sound = $derived((getAt(payload, "base", "notifications", "sound") as boolean) ?? true);
@@ -70,29 +80,87 @@
       onError(`smazání tokenu '${name}' selhalo (HTTP ${code})`);
     }
   }
+
+  // --- overlay scalar (enabled/sound) ---
+  function scHint(key: string): string { const v = inheritedFor(payload, prof, SEC, key); return String(v ?? NOTIF_DEFAULTS[key]); }
+  function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
+  function scBool(key: string): boolean { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? Boolean(inheritedFor(payload, prof, SEC, key) ?? NOTIF_DEFAULTS[key]) : Boolean(v); }
+  function setScState(key: string, s: "inherit" | "override"): void {
+    payload = { ...payload, profiles: s === "inherit" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, inheritedFor(payload, prof, SEC, key) ?? NOTIF_DEFAULTS[key]) };
+    onChange();
+  }
+  function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }
+
+  // --- overlay list (on/backends) ---
+  function listHint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? NOTIF_LIST_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : "(nic)"; }
+  function ovList(key: string): string[] { const v = overrideValue(payload, prof, SEC, key); return Array.isArray(v) ? (v as string[]) : []; }
+  function setOvList(key: string, state: ListFieldState, list: string[]): void {
+    payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, state === "empty" ? [] : list) };
+    onChange();
+  }
+
+  // --- overlay telegram (nested dict, per-subfield via path) ---
+  function tgPath(k: string): string[] { return [SEC, "telegram", k]; }
+  // Effective telegram subfield value (own override → inherited → ""). NO inherit/override
+  // toggle: a blank token_env is poison (backend reads it as an env-var name), so we never
+  // persist a blank override — a cleared field reverts to inheriting, mirroring base setTelegram.
+  function tgValue(k: string): string {
+    const v = overrideValuePath(payload, prof, tgPath(k));
+    return v !== undefined ? String(v) : String(inheritedForPath(payload, prof, tgPath(k)) ?? "");
+  }
+  function tgOrigin(k: string): string {
+    if (overrideValuePath(payload, prof, tgPath(k)) !== undefined) return "vlastní";
+    return inheritedForPath(payload, prof, tgPath(k)) != null ? "zděděno" : "nenastaveno";
+  }
+  function setTg(k: string, v: string): void {
+    payload = {
+      ...payload,
+      profiles: v.trim() === ""
+        ? clearOverridePath(payload.profiles, prof, tgPath(k))
+        : setOverridePath(payload.profiles, prof, tgPath(k), v),
+    };
+    onChange();
+  }
 </script>
 
-<h2>Notifications</h2>
-<BooleanField label="enabled" value={enabled} onchange={(v) => set("enabled", v)} />
-<BooleanField label="sound" value={sound} onchange={(v) => set("sound", v)} />
-<TriStateListField label="on" state={onState} list={on} onchange={(s, l) => setTri("on", s, l)} />
-<TriStateListField label="backends" state={backendsState} list={backends} onchange={(s, l) => setTri("backends", s, l)} />
-
-<fieldset class="tg">
-  <legend>Telegram</legend>
-  <TokenSecretField
-    label="token"
-    value={telegram.token_env}
-    flag={secretFlag(payload, telegram.token_env)}
-    oninput={(v) => setTelegram("token_env", v)}
-    onset={(val) => setSecret(telegram.token_env, val)}
-    onclear={() => clearSecret(telegram.token_env)}
-  />
-  <TextField label="chat_id" value={telegram.chat_id} oninput={(v) => setTelegram("chat_id", v)} />
-</fieldset>
+<h2>Notifications{#if overlay} · overlay: {editProfile}{/if}</h2>
+{#if overlay}
+  <OverrideField label="enabled" state={scState("enabled")} inheritedDisplay={scHint("enabled")} onstate={(s) => setScState("enabled", s)}>
+    <BooleanField label="" value={scBool("enabled")} onchange={(v) => setSc("enabled", v)} />
+  </OverrideField>
+  <OverrideField label="sound" state={scState("sound")} inheritedDisplay={scHint("sound")} onstate={(s) => setScState("sound", s)}>
+    <BooleanField label="" value={scBool("sound")} onchange={(v) => setSc("sound", v)} />
+  </OverrideField>
+  <TriStateListField label="on" state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} inheritLabel="Zdědit" inheritHint={`zděděno: ${listHint("on")}`} onchange={(s, l) => setOvList("on", s, l)} />
+  <TriStateListField label="backends" state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} inheritLabel="Zdědit" inheritHint={`zděděno: ${listHint("backends")}`} onchange={(s, l) => setOvList("backends", s, l)} />
+  <fieldset class="tg">
+    <legend>Telegram</legend>
+    <p class="hint">Prázdné pole = zdědit (token se nikdy neuloží prázdný).</p>
+    <TokenSecretField
+      label={`token (${tgOrigin("token_env")})`}
+      value={tgValue("token_env")}
+      flag={secretFlag(payload, tgValue("token_env"))}
+      oninput={(v) => setTg("token_env", v)}
+      onset={(val) => setSecret(tgValue("token_env"), val)}
+      onclear={() => clearSecret(tgValue("token_env"))}
+    />
+    <TextField label={`chat_id (${tgOrigin("chat_id")})`} value={tgValue("chat_id")} oninput={(v) => setTg("chat_id", v)} />
+  </fieldset>
+{:else}
+  <BooleanField label="enabled" value={enabled} onchange={(v) => set("enabled", v)} />
+  <BooleanField label="sound" value={sound} onchange={(v) => set("sound", v)} />
+  <TriStateListField label="on" state={onState} list={on} onchange={(s, l) => setTri("on", s, l)} />
+  <TriStateListField label="backends" state={backendsState} list={backends} onchange={(s, l) => setTri("backends", s, l)} />
+  <fieldset class="tg">
+    <legend>Telegram</legend>
+    <TokenSecretField label="token" value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />
+    <TextField label="chat_id" value={telegram.chat_id} oninput={(v) => setTelegram("chat_id", v)} />
+  </fieldset>
+{/if}
 
 <style>
   h2 { margin: 0 0 8px; }
   .tg { border: 1px solid #2a2a30; border-radius: 6px; margin: 12px 0; padding: 8px 12px; }
   .tg legend { color: #ccc; }
+  .hint { color: #888; margin: 0 0 8px; }
 </style>

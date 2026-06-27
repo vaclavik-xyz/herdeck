@@ -32,12 +32,13 @@
 - Test: `desktop/src/lib/configClient.test.ts`
 
 **Interfaces:**
-- Produces: `mergeSection(base: unknown, overlay: unknown): unknown`; `inheritedSection(payload: ConfigPayload, profile: string, section: string): Record<string, unknown>`; `overrideStatePath(payload: ConfigPayload, profile: string, path: string[]): ListFieldState`; `macroRecords(raw: unknown): MacroRecord[]`. Refactors `macrosOf` to delegate to `macroRecords`.
-- Consumes: existing private `clone`, `asDict`, `obj`, `str`, `readPath`, `inheritedChain`; existing `MacroRecord`, `ListFieldState`.
+- Produces: `mergeSection(base: unknown, overlay: unknown): unknown`; `inheritedSection(payload, profile, section): { present: boolean; map: Record<string, unknown> }`; default mirrors `DEFAULT_START_PROFILES` / `DEFAULT_MACROS` / `DEFAULT_ANSWER_PROFILES`; default-aware resolvers `inheritedStartProfiles(payload, profile): Record<string, unknown>`, `inheritedMacros(payload, profile): MacroRecord[]`, `inheritedAnswerProfiles(payload, profile): Record<string, unknown>`; `overrideStatePath(payload, profile, path: string[]): ListFieldState`; `macroRecords(raw: unknown): MacroRecord[]`. Refactors `macrosOf` to delegate to `macroRecords`.
+- Consumes: existing private `clone`, `asDict`, `obj`, `str`, `readPath`, `inheritedChain`, `inheritedForPath`; existing `MacroRecord`, `ListFieldState`.
+- **Why default-aware:** backend `_build_config` resolves ABSENT `start_profiles`/`macros` to `DEFAULT_*` (REPLACE) and ALWAYS seeds `answer_profiles` with `DEFAULT_PROFILES` (config overrides per-name). A raw-merge resolver returning `{}`/`[]` would hide inherited defaults in overlay UI and seed empty overrides — so the effective resolvers apply the documented frontend mirrors (β1 scalar-default lesson, generalized to maps/lists).
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `desktop/src/lib/configClient.test.ts` (use the file's existing import line — add `mergeSection, inheritedSection, overrideStatePath, macroRecords` to it):
+Append to `desktop/src/lib/configClient.test.ts` (use the file's existing import line — add `mergeSection, inheritedSection, inheritedStartProfiles, inheritedMacros, inheritedAnswerProfiles, DEFAULT_START_PROFILES, DEFAULT_MACROS, overrideStatePath, macroRecords` to it):
 
 ```ts
 describe("mergeSection (mirror backend _merge_section)", () => {
@@ -53,15 +54,15 @@ describe("mergeSection (mirror backend _merge_section)", () => {
   });
 });
 
-describe("inheritedSection", () => {
+describe("inheritedSection (raw chain merge + presence)", () => {
   const base = (sp: unknown) => ({
-    base: { start_profiles: sp } as Record<string, unknown>,
+    base: (sp === undefined ? {} : { start_profiles: sp }) as Record<string, unknown>,
     profiles: {} as Record<string, Record<string, unknown>>,
     local: {}, secrets: {}, activeProfile: "default", envLocked: false,
   });
-  it("returns base section when profile extends default", () => {
+  it("returns base section (present) when profile extends default", () => {
     const p: any = base({ codex: ["codex"] }); p.profiles = { dev: {} };
-    expect(inheritedSection(p, "dev", "start_profiles")).toEqual({ codex: ["codex"] });
+    expect(inheritedSection(p, "dev", "start_profiles")).toEqual({ present: true, map: { codex: ["codex"] } });
   });
   it("merges parent overlays per-key, excluding the profile's own overlay", () => {
     const p: any = base({ codex: ["codex"] });
@@ -69,17 +70,39 @@ describe("inheritedSection", () => {
       mid: { extends: "default", start_profiles: { claude: ["claude"] } },
       dev: { extends: "mid", start_profiles: { codex: ["codex", "--yolo"] } },
     };
-    // base codex + mid's claude; dev's OWN override of codex is excluded
-    expect(inheritedSection(p, "dev", "start_profiles")).toEqual({ codex: ["codex"], claude: ["claude"] });
+    expect(inheritedSection(p, "dev", "start_profiles").map).toEqual({ codex: ["codex"], claude: ["claude"] });
   });
   it("falls back to base on a cycle or unknown extends target", () => {
     const p: any = base({ codex: ["codex"] });
     p.profiles = { dev: { extends: "ghost", start_profiles: { x: ["x"] } } };
-    expect(inheritedSection(p, "dev", "start_profiles")).toEqual({ codex: ["codex"] });
+    expect(inheritedSection(p, "dev", "start_profiles").map).toEqual({ codex: ["codex"] });
   });
-  it("returns {} when the section is absent everywhere", () => {
-    const p: any = base(undefined); p.profiles = { dev: {} };
-    expect(inheritedSection(p, "dev", "start_profiles")).toEqual({});
+  it("present=false when absent everywhere, present=true for explicit {}", () => {
+    const absent: any = base(undefined); absent.profiles = { dev: {} };
+    expect(inheritedSection(absent, "dev", "start_profiles")).toEqual({ present: false, map: {} });
+    const empty: any = base({}); empty.profiles = { dev: {} };
+    expect(inheritedSection(empty, "dev", "start_profiles")).toEqual({ present: true, map: {} });
+  });
+});
+
+describe("default-aware inherited resolvers", () => {
+  const mk = (baseObj: Record<string, unknown>): any => ({ base: baseObj, profiles: { dev: {} }, local: {}, secrets: {}, activeProfile: "default", envLocked: false });
+  it("inheritedStartProfiles: absent → DEFAULT_START_PROFILES, {} → none, custom → custom", () => {
+    expect(inheritedStartProfiles(mk({}), "dev")).toEqual(DEFAULT_START_PROFILES);
+    expect(inheritedStartProfiles(mk({ start_profiles: {} }), "dev")).toEqual({});
+    expect(inheritedStartProfiles(mk({ start_profiles: { x: ["x"] } }), "dev")).toEqual({ x: ["x"] });
+  });
+  it("inheritedMacros: absent → DEFAULT_MACROS, [] → none, custom → custom", () => {
+    expect(inheritedMacros(mk({}), "dev")).toEqual(DEFAULT_MACROS);
+    expect(inheritedMacros(mk({ macros: [] }), "dev")).toEqual([]);
+    expect(inheritedMacros(mk({ macros: [{ label: "a", text: "b" }] }), "dev")).toEqual([{ label: "a", text: "b" }]);
+  });
+  it("inheritedAnswerProfiles: built-ins always present, config overrides per-name", () => {
+    const r = inheritedAnswerProfiles(mk({}), "dev");
+    expect(Object.keys(r).sort()).toEqual(["claude", "codex", "default"]);
+    const r2 = inheritedAnswerProfiles(mk({ answer_profiles: { claude: { approve: ["x"], deny: [], stop: [] }, mine: { approve: ["m"], deny: [], stop: [] } } }), "dev");
+    expect((r2.claude as any).approve).toEqual(["x"]); // config replaces the built-in claude entry
+    expect(Object.keys(r2).sort()).toEqual(["claude", "codex", "default", "mine"]); // mine added, built-ins kept
   });
 });
 
@@ -127,9 +150,27 @@ export function macrosOf(payload: ConfigPayload): MacroRecord[] {
 }
 ```
 
-Add near the other resolver helpers (after `inheritedSection` site, e.g. just below `overrideState`):
+Add the default mirrors near the top-of-file consts (after the type/interface block) and the resolver helpers near the other resolvers (e.g. just below `overrideState`):
 
 ```ts
+// Frontend mirrors of backend defaults (config.py DEFAULT_*) — keep in sync.
+// Backend resolves ABSENT start_profiles/macros to these (REPLACE); answer_profiles
+// ALWAYS seeds these built-ins, config overriding per-name (settings._build_config).
+export const DEFAULT_START_PROFILES: Record<string, string[]> = {
+  claude: ["claude"], codex: ["codex"], cursor: ["cursor-agent"], gemini: ["gemini"], opencode: ["opencode"],
+};
+export const DEFAULT_MACROS: MacroRecord[] = [
+  { label: "continue", text: "continue" },
+  { label: "run tests", text: "run the tests" },
+  { label: "commit", text: "commit the changes" },
+  { label: "/compact", text: "/compact" },
+];
+export const DEFAULT_ANSWER_PROFILES: Record<string, Record<string, string[]>> = {
+  claude: { approve: ["1", "enter"], deny: ["esc"], stop: ["ctrl+c"], approve_always: ["2", "enter"] },
+  codex: { approve: ["y", "enter"], deny: ["n", "enter"], stop: ["ctrl+c"], approve_always: ["y", "enter"] },
+  default: { approve: ["enter"], deny: ["esc"], stop: ["ctrl+c"], approve_always: ["enter"] },
+};
+
 /** JS mirror of backend `settings._merge_section`: two dicts merge per-key
  *  recursively; a list/scalar overlay (or absent base) replaces wholesale. */
 export function mergeSection(base: unknown, overlay: unknown): unknown {
@@ -146,20 +187,48 @@ export function mergeSection(base: unknown, overlay: unknown): unknown {
   return overlay;
 }
 
-/** The effective map a `profile` INHERITS at `section`: base merged with parent
- *  overlays via `extends` (per-key, mirroring the backend), EXCLUDING the profile's
- *  OWN overlay. A cycle/unknown extends target falls back to base (via `inheritedChain`).
- *  Used to resolve inherited map entries faithfully (e.g. start_profiles, answer_profiles). */
+/** Raw chain merge of `section` a `profile` INHERITS: base merged with parent overlays
+ *  via `extends` (per-key, mirroring the backend), EXCLUDING the profile's OWN overlay.
+ *  A cycle/unknown extends target falls back to base (via `inheritedChain`). `present` is
+ *  whether ANY level set the section — distinguishes "absent everywhere" (→ backend default)
+ *  from an explicit `{}` (→ none). Defaults are applied by the resolvers below, NOT here. */
 export function inheritedSection(
   payload: ConfigPayload,
   profile: string,
   section: string,
-): Record<string, unknown> {
-  let merged: unknown = asDict(payload.base)[section];
+): { present: boolean; map: Record<string, unknown> } {
+  const base = asDict(payload.base);
+  let present = section in base;
+  let merged: unknown = base[section];
   for (const overlay of inheritedChain(payload.profiles, profile)) {
-    if (section in overlay) merged = mergeSection(merged, overlay[section]);
+    if (section in overlay) {
+      merged = mergeSection(present ? merged : undefined, overlay[section]);
+      present = true;
+    }
   }
-  return asDict(merged);
+  return { present, map: asDict(merged) };
+}
+
+/** Effective inherited `start_profiles` map: absent everywhere → DEFAULT_START_PROFILES
+ *  (backend `_launcher(None)`); explicit `{}` → none; otherwise the merged map. */
+export function inheritedStartProfiles(payload: ConfigPayload, profile: string): Record<string, unknown> {
+  const { present, map } = inheritedSection(payload, profile, "start_profiles");
+  return present ? map : { ...DEFAULT_START_PROFILES };
+}
+
+/** Effective inherited `macros` list: absent → DEFAULT_MACROS (backend `_macro_set(None)`);
+ *  `[]` → none; otherwise the inherited list. (macros is a LIST → use inheritedForPath.) */
+export function inheritedMacros(payload: ConfigPayload, profile: string): MacroRecord[] {
+  const v = inheritedForPath(payload, profile, ["macros"]);
+  return v === undefined ? DEFAULT_MACROS.map((m) => ({ ...m })) : macroRecords(v);
+}
+
+/** Effective inherited `answer_profiles` map: DEFAULT_ANSWER_PROFILES are ALWAYS the base
+ *  (backend `dict(DEFAULT_PROFILES)`), config overriding whole entries per-name. Shallow
+ *  per-entry spread = whole-entry replace, faithful to backend `_build_config`. */
+export function inheritedAnswerProfiles(payload: ConfigPayload, profile: string): Record<string, unknown> {
+  const { present, map } = inheritedSection(payload, profile, "answer_profiles");
+  return { ...DEFAULT_ANSWER_PROFILES, ...(present ? map : {}) };
 }
 
 /** Override state at `path` in `profile`'s OWN overlay (path variant of `overrideState`):
@@ -174,6 +243,8 @@ export function overrideStatePath(
   return Array.isArray(value) && value.length === 0 ? "empty" : "custom";
 }
 ```
+
+Note: `inheritedStartProfiles`/`inheritedMacros`/`inheritedAnswerProfiles` reference `macroRecords` and `inheritedForPath` — both must be declared above their use (place these resolvers after `macroRecords` and after the existing `inheritedForPath`, or rely on function hoisting; `export function` declarations hoist, so order is safe).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -445,8 +516,8 @@ Replace the whole file with:
   import TextField from "../fields/TextField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import {
-    macrosOf, addMacro, removeMacro, updateMacro, macroRecords,
-    inheritedForPath, overrideValuePath, overrideStatePath, setOverridePath, clearOverridePath,
+    macrosOf, addMacro, removeMacro, updateMacro, macroRecords, inheritedMacros,
+    overrideValuePath, overrideStatePath, setOverridePath, clearOverridePath,
     type ConfigPayload, type MacroRecord,
   } from "../configClient";
 
@@ -464,7 +535,7 @@ Replace the whole file with:
 
   // --- overlay mode: whole-list override (macros replace wholesale in the backend merge) ---
   function ovMacros(): MacroRecord[] { return macroRecords(overrideValuePath(payload, prof, ["macros"])); }
-  function inhMacros(): MacroRecord[] { return macroRecords(inheritedForPath(payload, prof, ["macros"])); }
+  function inhMacros(): MacroRecord[] { return inheritedMacros(payload, prof); }
   function ovState(): "inherit" | "override" { return overrideStatePath(payload, prof, ["macros"]) === "default" ? "inherit" : "override"; }
   function writeOv(list: MacroRecord[]): void { payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, ["macros"], list) }; onChange(); }
   function setOvState(s: "inherit" | "override"): void {
@@ -542,7 +613,7 @@ Replace the whole file with:
   import OverrideField from "../fields/OverrideField.svelte";
   import {
     startProfileRows, serializeNamedRows, applyMapSection,
-    mapSectionState, setMapSectionState, inheritedSection,
+    mapSectionState, setMapSectionState, inheritedStartProfiles,
     overrideValuePath, setOverridePath, clearOverridePath,
     type ConfigPayload, type StartProfileRow, type ListFieldState,
   } from "../configClient";
@@ -589,7 +660,9 @@ Replace the whole file with:
   function remove(i: number): void { commit(rows.filter((_, j) => j !== i)); }
 
   // --- overlay mode: per-entry override (read live, no local rows) ---
-  function inhMap(): Record<string, unknown> { return inheritedSection(payload, prof, SEC); }
+  // inhMap is default-aware: when base omits start_profiles the inherited map is
+  // DEFAULT_START_PROFILES (5 launchers), so overlay shows them as overridable entries.
+  function inhMap(): Record<string, unknown> { return inheritedStartProfiles(payload, prof); }
   function ownMap(): Record<string, unknown> { const v = overrideValuePath(payload, prof, [SEC]); return v != null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {}; }
   function entryNames(): string[] { return Array.from(new Set([...Object.keys(inhMap()), ...Object.keys(ownMap())])); }
   function isInherited(name: string): boolean { return name in inhMap(); }
@@ -694,7 +767,7 @@ git commit -m "feat: StartProfilesSection overlay per-entry + base map-empty (β
 
 - [ ] **Step 1: Add overlay imports + props + helpers**
 
-Extend the configClient import with `inheritedSection, overrideValuePath, setOverridePath, clearOverridePath` and add `OverrideField` import. Change props + add helpers:
+Extend the configClient import with `inheritedAnswerProfiles, overrideValuePath, setOverridePath, clearOverridePath` and add `OverrideField` import. Change props + add helpers:
 
 ```ts
 import OverrideField from "../fields/OverrideField.svelte";
@@ -710,7 +783,9 @@ const argvOf = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : [])
 const dictOf = (v: unknown): Record<string, unknown> => (v != null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
 // --- overlay mode: per-entry override (whole entry dict) ---
-function inhMap(): Record<string, unknown> { return inheritedSection(payload, prof, SEC); }
+// inhMap is default-aware: built-in answer profiles (claude/codex/default) are always
+// inherited (backend seeds DEFAULT_PROFILES), so overlay shows them as overridable entries.
+function inhMap(): Record<string, unknown> { return inheritedAnswerProfiles(payload, prof); }
 function ownMap(): Record<string, unknown> { const v = overrideValuePath(payload, prof, [SEC]); return dictOf(v); }
 function entryNames(): string[] { return Array.from(new Set([...Object.keys(inhMap()), ...Object.keys(ownMap())])); }
 function isInherited(name: string): boolean { return name in inhMap(); }
