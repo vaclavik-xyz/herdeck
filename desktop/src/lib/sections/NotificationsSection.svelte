@@ -101,27 +101,24 @@
 
   // --- overlay telegram (nested dict, per-subfield via path) ---
   function tgPath(k: string): string[] { return [SEC, "telegram", k]; }
-  function tgHint(k: string): string { const v = inheritedForPath(payload, prof, tgPath(k)); return v == null ? "(nic)" : String(v); }
-  function tgState(k: string): "inherit" | "override" { return overrideValuePath(payload, prof, tgPath(k)) === undefined ? "inherit" : "override"; }
-  function tgValue(k: string): string { const v = overrideValuePath(payload, prof, tgPath(k)); return v === undefined ? String(inheritedForPath(payload, prof, tgPath(k)) ?? "") : String(v); }
-  function setTgState(k: string, s: "inherit" | "override"): void {
-    payload = { ...payload, profiles: s === "inherit" ? clearOverridePath(payload.profiles, prof, tgPath(k)) : setOverridePath(payload.profiles, prof, tgPath(k), String(inheritedForPath(payload, prof, tgPath(k)) ?? "")) };
-    onChange();
+  // Effective telegram subfield value (own override → inherited → ""). NO inherit/override
+  // toggle: a blank token_env is poison (backend reads it as an env-var name), so we never
+  // persist a blank override — a cleared field reverts to inheriting, mirroring base setTelegram.
+  function tgValue(k: string): string {
+    const v = overrideValuePath(payload, prof, tgPath(k));
+    return v !== undefined ? String(v) : String(inheritedForPath(payload, prof, tgPath(k)) ?? "");
+  }
+  function tgOrigin(k: string): string {
+    if (overrideValuePath(payload, prof, tgPath(k)) !== undefined) return "vlastní";
+    return inheritedForPath(payload, prof, tgPath(k)) != null ? "zděděno" : "nenastaveno";
   }
   function setTg(k: string, v: string): void {
-    // Mirror base setTelegram: omit blank sub-fields to avoid empty token_env crash in backend.
-    const other = k === "token_env" ? "chat_id" : "token_env";
-    const otherVal = String(overrideValuePath(payload, prof, tgPath(other)) ?? inheritedForPath(payload, prof, tgPath(other)) ?? "");
-    if (v.trim() === "" && otherVal.trim() === "") {
-      // Both would be blank → clear both overrides.
-      let profs = clearOverridePath(payload.profiles, prof, tgPath(k));
-      profs = clearOverridePath(profs, prof, tgPath(other));
-      payload = { ...payload, profiles: profs };
-    } else if (v.trim() === "") {
-      payload = { ...payload, profiles: clearOverridePath(payload.profiles, prof, tgPath(k)) };
-    } else {
-      payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, tgPath(k), v) };
-    }
+    payload = {
+      ...payload,
+      profiles: v.trim() === ""
+        ? clearOverridePath(payload.profiles, prof, tgPath(k))
+        : setOverridePath(payload.profiles, prof, tgPath(k), v),
+    };
     onChange();
   }
 </script>
@@ -138,12 +135,16 @@
   <TriStateListField label="backends" state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} inheritLabel="Zdědit" inheritHint={`zděděno: ${listHint("backends")}`} onchange={(s, l) => setOvList("backends", s, l)} />
   <fieldset class="tg">
     <legend>Telegram</legend>
-    <OverrideField label="token" state={tgState("token_env")} inheritedDisplay={tgHint("token_env")} onstate={(s) => setTgState("token_env", s)}>
-      <TokenSecretField label="" value={tgValue("token_env")} flag={secretFlag(payload, tgValue("token_env"))} oninput={(v) => setTg("token_env", v)} onset={(val) => setSecret(tgValue("token_env"), val)} onclear={() => clearSecret(tgValue("token_env"))} />
-    </OverrideField>
-    <OverrideField label="chat_id" state={tgState("chat_id")} inheritedDisplay={tgHint("chat_id")} onstate={(s) => setTgState("chat_id", s)}>
-      <TextField label="" value={tgValue("chat_id")} oninput={(v) => setTg("chat_id", v)} />
-    </OverrideField>
+    <p class="hint">Prázdné pole = zdědit (token se nikdy neuloží prázdný).</p>
+    <TokenSecretField
+      label={`token (${tgOrigin("token_env")})`}
+      value={tgValue("token_env")}
+      flag={secretFlag(payload, tgValue("token_env"))}
+      oninput={(v) => setTg("token_env", v)}
+      onset={(val) => setSecret(tgValue("token_env"), val)}
+      onclear={() => clearSecret(tgValue("token_env"))}
+    />
+    <TextField label={`chat_id (${tgOrigin("chat_id")})`} value={tgValue("chat_id")} oninput={(v) => setTg("chat_id", v)} />
   </fieldset>
 {:else}
   <BooleanField label="enabled" value={enabled} onchange={(v) => set("enabled", v)} />
@@ -161,4 +162,5 @@
   h2 { margin: 0 0 8px; }
   .tg { border: 1px solid #2a2a30; border-radius: 6px; margin: 12px 0; padding: 8px 12px; }
   .tg legend { color: #ccc; }
+  .hint { color: #888; margin: 0 0 8px; }
 </style>
