@@ -56,7 +56,12 @@
   }
   function srvState(name: string): "inherit" | "override" { return profileServersState(payload, name) === "explicit" ? "override" : "inherit"; }
   function setSrvState(name: string, s: "inherit" | "override"): void {
-    payload = s === "inherit" ? clearProfileServers(payload, name) : setProfileServersExplicit(payload, name, profileServers(payload, name));
+    // Toggling to explicit seeds the EFFECTIVE inherited selection (all base servers) so the
+    // profile doesn't silently become serverless on the toggle; the user then unchecks to
+    // restrict, or unchecks all for an intentional serverless ([]) profile.
+    payload = s === "inherit"
+      ? clearProfileServers(payload, name)
+      : setProfileServersExplicit(payload, name, serverIds);
     onChange();
   }
   function toggleServer(name: string, id: string, on: boolean): void {
