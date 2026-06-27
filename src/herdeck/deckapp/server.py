@@ -75,6 +75,7 @@ class DeckApp:
         self._lock = threading.Lock()
         self._tiles: dict[int, bytes] = {}
         self._tile_ver: dict[int, int] = {}
+        self._tile_sections: dict[int, str] = {}
         self._panel: bytes | None = None
         self._panel_ver = 0
         self._version = 0
@@ -142,6 +143,11 @@ class DeckApp:
         if removed:  # a pure removal must still trip the client's gate
             self._bump()
         self._tiles = new
+        self._tile_sections = {
+            tile.index: tile.section
+            for tile in rs.tiles
+            if tile.index < self._slots and tile.section
+        }
         if self._panel != panel_png:
             self._panel = panel_png
             self._panel_ver = self._bump()
@@ -214,6 +220,7 @@ class DeckApp:
                 "has_panel": self._panel is not None,
                 "panel": self._panel_ver,
                 "tiles": dict(self._tile_ver),
+                "tile_sections": dict(self._tile_sections),
                 "summary": self._source.summary(),
                 "source": self._source.source_name,
                 "connected": self._source.connected,

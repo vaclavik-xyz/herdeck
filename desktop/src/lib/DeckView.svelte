@@ -16,11 +16,13 @@
   let {
     transport,
     pollMs = 300,
+    onJump = undefined,
   }: {
     // Live transport (built from the sidecar url + token via sidecar.ts). Null
     // until the shell reports both; the deck then renders its offline state.
     transport: DeckTransport | null;
     pollMs?: number;
+    onJump?: (section: string) => void;
   } = $props();
 
   let view = $state<DeckViewModel>(initialView());
@@ -49,8 +51,21 @@
     active = i;
   }
 
+  // Config-window preview passes onJump → "jump mode": a tile click switches the editor
+  // to that tile's config section and NEVER actuates the deck. The floating deck leaves
+  // onJump undefined and keeps the press behavior below.
+  function clickTile(i: number): void {
+    if (onJump) {
+      const section = view.sections[i];
+      if (section) onJump(section);
+      return;
+    }
+    void press(i);
+  }
+
   // Keyboard parity with the simulator: 1..9 -> tiles 0..8, 0 -> tile 9.
   function onKey(e: KeyboardEvent): void {
+    if (onJump) return; // jump-mode preview never actuates via keyboard
     if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
     if (e.key >= "1" && e.key <= "9") void press(e.key.charCodeAt(0) - 49);
     else if (e.key === "0") void press(9);
@@ -111,7 +126,7 @@
       <button
         class="cell"
         class:active={active === i}
-        onclick={() => void press(i)}
+        onclick={() => clickTile(i)}
         aria-label={`tile ${i + 1}`}
       >
         {#if view.tiles[i]}<img src={view.tiles[i]} alt="" />{/if}
@@ -120,7 +135,7 @@
     <button
       class="panel"
       class:active={active === view.slots}
-      onclick={() => void press(view.slots)}
+      onclick={() => { if (!onJump) void press(view.slots); }}
       aria-label="status panel"
     >
       {#if view.panel}<img src={view.panel} alt="" />{/if}

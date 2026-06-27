@@ -32,6 +32,19 @@
     "Start profiles", "Notifications", "Safety", "Answer profiles", "Profiles",
   ];
 
+  // klik-to-jump: backend tile section KEY (from deckClient /state.tile_sections) → this
+  // editor's sidebar section LABEL. A preview tile click switches `active` to its section.
+  const SECTION_FOR_KEY: Record<string, string> = {
+    view: "View",
+    start_profiles: "Start profiles",
+    answer_profiles: "Answer profiles",
+    profiles: "Profiles",
+  };
+  function jumpToSection(key: string): void {
+    const label = SECTION_FOR_KEY[key];
+    if (label) active = label;
+  }
+
   let discovery = $state<Discovery | null>(null);
   let payload = $state<ConfigPayload | null>(null);
   let active = $state("Servers");
@@ -239,7 +252,7 @@
     </section>
 
     <aside class="preview">
-      <DeckView transport={preview} />
+      <DeckView transport={preview} onJump={jumpToSection} />
     </aside>
   </div>
 

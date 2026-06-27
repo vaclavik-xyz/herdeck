@@ -35,6 +35,7 @@ class TileView:
     time_text: str | None = None  # elapsed in current status, e.g. "3m"
     server_tag: str | None = None
     server_accent: str | None = None
+    section: str | None = None  # config section a click jumps to (klik-to-jump); None = no jump
 
 
 @dataclass

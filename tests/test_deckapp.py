@@ -665,3 +665,16 @@ def test_post_config_non_object_json_returns_400():
             assert exc.value.code == 400, f"expected 400 for payload {payload!r}"
     finally:
         app.close()
+
+
+def test_state_exposes_tile_sections():
+    app = make_app()
+    state = app._state()
+    assert "tile_sections" in state
+    sections = state["tile_sections"]
+    assert isinstance(sections, dict)
+    # the "+ New" launcher tile (index slots-1 = 12) is deterministically tagged
+    assert sections[12] == "start_profiles"
+    # only the documented section keys ever appear; empty/None tiles are omitted
+    assert all(v in {"view", "start_profiles", "answer_profiles", "profiles"} for v in sections.values())
+    assert all(isinstance(k, int) for k in sections)

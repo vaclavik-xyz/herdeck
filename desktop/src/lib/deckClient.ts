@@ -24,6 +24,7 @@ export interface DeckState {
   hasPanel: boolean;
   panel: number; // panel image version
   tiles: Record<number, number>; // tile index -> image version
+  sections: Record<number, string>; // tile index -> config section key (klik-to-jump)
   summary: DeckSummary;
   source: string; // "mock" | "live"
   connected: boolean;
@@ -72,6 +73,18 @@ function parseTiles(raw: unknown): Record<number, number> {
   return out;
 }
 
+/** Normalize the JSON `tile_sections` object (string keys, string values) into a
+ *  numeric-keyed map, dropping non-integer indices or non-string section values. */
+function parseSections(raw: unknown): Record<number, string> {
+  const out: Record<number, string> = {};
+  if (raw == null || typeof raw !== "object") return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const i = Number(k);
+    if (Number.isInteger(i) && i >= 0 && typeof v === "string" && v) out[i] = v;
+  }
+  return out;
+}
+
 /** Shape a raw `/state` JSON value into a DeckState, or null when it is not a
  *  usable snapshot (so the caller can treat it as an offline tick). */
 export function parseState(raw: unknown): DeckState | null {
@@ -84,6 +97,7 @@ export function parseState(raw: unknown): DeckState | null {
     hasPanel: v.has_panel === true,
     panel: num(v.panel, -1),
     tiles: parseTiles(v.tiles),
+    sections: parseSections(v.tile_sections),
     summary: parseSummary(v.summary),
     source: typeof v.source === "string" ? v.source : "unknown",
     connected: v.connected === true,
@@ -229,6 +243,7 @@ export interface DeckViewModel {
   connected: boolean;
   summary: DeckSummary;
   tiles: Record<number, string>; // index -> img src
+  sections: Record<number, string>; // index -> config section key (klik-to-jump)
   panel: string | null;
 }
 
@@ -240,6 +255,7 @@ export function initialView(slots = 13): DeckViewModel {
     connected: false,
     summary: emptySummary(),
     tiles: {},
+    sections: {},
     panel: null,
   };
 }
@@ -306,6 +322,7 @@ export async function stepDeck(
     connected: state.connected,
     summary: state.summary,
     tiles,
+    sections: state.sections,
     panel,
   };
 }
