@@ -256,15 +256,37 @@ export interface MacroRecord {
   text: string;
 }
 
-/** The base `macros` list as editable records (always an array). */
-export function macrosOf(payload: ConfigPayload): MacroRecord[] {
-  const raw = payload.base.macros;
+/** Extract `{label,text}[]` from any list value (tolerates junk entries). */
+export function macroRecords(raw: unknown): MacroRecord[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((m) => {
     const r = obj(m);
     return { label: str(r.label), text: str(r.text) };
   });
 }
+
+/** The base `macros` list as editable records (always an array). */
+export function macrosOf(payload: ConfigPayload): MacroRecord[] {
+  return macroRecords(payload.base.macros);
+}
+
+// Frontend mirrors of backend defaults (config.py DEFAULT_*) — keep in sync.
+// Backend resolves ABSENT start_profiles/macros to these (REPLACE); answer_profiles
+// ALWAYS seeds these built-ins, config overriding per-name (settings._build_config).
+export const DEFAULT_START_PROFILES: Record<string, string[]> = {
+  claude: ["claude"], codex: ["codex"], cursor: ["cursor-agent"], gemini: ["gemini"], opencode: ["opencode"],
+};
+export const DEFAULT_MACROS: MacroRecord[] = [
+  { label: "continue", text: "continue" },
+  { label: "run tests", text: "run the tests" },
+  { label: "commit", text: "commit the changes" },
+  { label: "/compact", text: "/compact" },
+];
+export const DEFAULT_ANSWER_PROFILES: Record<string, Record<string, string[]>> = {
+  claude: { approve: ["1", "enter"], deny: ["esc"], stop: ["ctrl+c"], approve_always: ["2", "enter"] },
+  codex: { approve: ["y", "enter"], deny: ["n", "enter"], stop: ["ctrl+c"], approve_always: ["y", "enter"] },
+  default: { approve: ["enter"], deny: ["esc"], stop: ["ctrl+c"], approve_always: ["enter"] },
+};
 
 function withMacros(payload: ConfigPayload, macros: MacroRecord[]): ConfigPayload {
   // Absent `macros` means "use DEFAULT_MACROS"; an empty list would disable them. So when
@@ -497,6 +519,78 @@ export function overrideValue(payload: ConfigPayload, profile: string, section: 
  *  context "default" denotes inheritance. */
 export function overrideState(payload: ConfigPayload, profile: string, section: string, key: string): ListFieldState {
   const { found, value } = readPath(payload.profiles[profile], [section, key]);
+  if (!found) return "default";
+  return Array.isArray(value) && value.length === 0 ? "empty" : "custom";
+}
+
+/** JS mirror of backend `settings._merge_section`: two dicts merge per-key
+ *  recursively; a list/scalar overlay (or absent base) replaces wholesale. */
+export function mergeSection(base: unknown, overlay: unknown): unknown {
+  if (
+    base != null && typeof base === "object" && !Array.isArray(base) &&
+    overlay != null && typeof overlay === "object" && !Array.isArray(overlay)
+  ) {
+    const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+    for (const [k, v] of Object.entries(overlay as Record<string, unknown>)) {
+      out[k] = mergeSection(out[k], v);
+    }
+    return out;
+  }
+  return overlay;
+}
+
+/** Raw chain merge of `section` a `profile` INHERITS: base merged with parent overlays
+ *  via `extends` (per-key, mirroring the backend), EXCLUDING the profile's OWN overlay.
+ *  A cycle/unknown extends target falls back to base (via `inheritedChain`). `present` is
+ *  whether ANY level set the section — distinguishes "absent everywhere" (→ backend default)
+ *  from an explicit `{}` (→ none). Defaults are applied by the resolvers below, NOT here. */
+export function inheritedSection(
+  payload: ConfigPayload,
+  profile: string,
+  section: string,
+): { present: boolean; map: Record<string, unknown> } {
+  const base = asDict(payload.base);
+  let present = section in base;
+  let merged: unknown = base[section];
+  for (const overlay of inheritedChain(payload.profiles, profile)) {
+    if (section in overlay) {
+      merged = mergeSection(present ? merged : undefined, overlay[section]);
+      present = true;
+    }
+  }
+  return { present, map: asDict(merged) };
+}
+
+/** Effective inherited `start_profiles` map: absent everywhere → DEFAULT_START_PROFILES
+ *  (backend `_launcher(None)`); explicit `{}` → none; otherwise the merged map. */
+export function inheritedStartProfiles(payload: ConfigPayload, profile: string): Record<string, unknown> {
+  const { present, map } = inheritedSection(payload, profile, "start_profiles");
+  return present ? map : { ...DEFAULT_START_PROFILES };
+}
+
+/** Effective inherited `macros` list: absent → DEFAULT_MACROS (backend `_macro_set(None)`);
+ *  `[]` → none; otherwise the inherited list. (macros is a LIST → use inheritedForPath.) */
+export function inheritedMacros(payload: ConfigPayload, profile: string): MacroRecord[] {
+  const v = inheritedForPath(payload, profile, ["macros"]);
+  return v === undefined ? DEFAULT_MACROS.map((m) => ({ ...m })) : macroRecords(v);
+}
+
+/** Effective inherited `answer_profiles` map: DEFAULT_ANSWER_PROFILES are ALWAYS the base
+ *  (backend `dict(DEFAULT_PROFILES)`), config overriding whole entries per-name. Shallow
+ *  per-entry spread = whole-entry replace, faithful to backend `_build_config`. */
+export function inheritedAnswerProfiles(payload: ConfigPayload, profile: string): Record<string, unknown> {
+  const { present, map } = inheritedSection(payload, profile, "answer_profiles");
+  return { ...DEFAULT_ANSWER_PROFILES, ...(present ? map : {}) };
+}
+
+/** Override state at `path` in `profile`'s OWN overlay (path variant of `overrideState`):
+ *  absent → "default" (= inherit), `[]` → "empty", anything else present → "custom". */
+export function overrideStatePath(
+  payload: ConfigPayload,
+  profile: string,
+  path: string[],
+): ListFieldState {
+  const { found, value } = readPath(payload.profiles[profile], path);
   if (!found) return "default";
   return Array.isArray(value) && value.length === 0 ? "empty" : "custom";
 }

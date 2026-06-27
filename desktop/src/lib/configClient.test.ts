@@ -21,6 +21,15 @@ import {
   overrideState,
   setOverridePath,
   clearOverridePath,
+  mergeSection,
+  inheritedSection,
+  inheritedStartProfiles,
+  inheritedMacros,
+  inheritedAnswerProfiles,
+  DEFAULT_START_PROFILES,
+  DEFAULT_MACROS,
+  overrideStatePath,
+  macroRecords,
   type ConfigPayload,
 } from "./configClient";
 
@@ -619,5 +628,88 @@ describe("overlay resolution (β1)", () => {
     const cleared = clearOverridePath(withColor, "mob", ["theme", "colors", "blocked"]);
     expect(cleared.mob.theme).toBeUndefined(); // colors emptied → theme pruned
     expect("mob" in cleared).toBe(true);       // profile entry kept
+  });
+});
+
+describe("mergeSection (mirror backend _merge_section)", () => {
+  it("merges two dicts per-key recursively", () => {
+    expect(mergeSection({ a: 1, n: { x: 1 } }, { b: 2, n: { y: 2 } })).toEqual({ a: 1, b: 2, n: { x: 1, y: 2 } });
+  });
+  it("overlay replaces a list/scalar wholesale", () => {
+    expect(mergeSection([1, 2], [3])).toEqual([3]);
+    expect(mergeSection({ a: 1 }, 5)).toEqual(5);
+  });
+  it("overlay replaces when base is absent", () => {
+    expect(mergeSection(undefined, { a: 1 })).toEqual({ a: 1 });
+  });
+});
+
+describe("inheritedSection (raw chain merge + presence)", () => {
+  const base = (sp: unknown) => ({
+    base: (sp === undefined ? {} : { start_profiles: sp }) as Record<string, unknown>,
+    profiles: {} as Record<string, Record<string, unknown>>,
+    local: {}, secrets: {}, activeProfile: "default", envLocked: false,
+  });
+  it("returns base section (present) when profile extends default", () => {
+    const p: any = base({ codex: ["codex"] }); p.profiles = { dev: {} };
+    expect(inheritedSection(p, "dev", "start_profiles")).toEqual({ present: true, map: { codex: ["codex"] } });
+  });
+  it("merges parent overlays per-key, excluding the profile's own overlay", () => {
+    const p: any = base({ codex: ["codex"] });
+    p.profiles = {
+      mid: { extends: "default", start_profiles: { claude: ["claude"] } },
+      dev: { extends: "mid", start_profiles: { codex: ["codex", "--yolo"] } },
+    };
+    expect(inheritedSection(p, "dev", "start_profiles").map).toEqual({ codex: ["codex"], claude: ["claude"] });
+  });
+  it("falls back to base on a cycle or unknown extends target", () => {
+    const p: any = base({ codex: ["codex"] });
+    p.profiles = { dev: { extends: "ghost", start_profiles: { x: ["x"] } } };
+    expect(inheritedSection(p, "dev", "start_profiles").map).toEqual({ codex: ["codex"] });
+  });
+  it("present=false when absent everywhere, present=true for explicit {}", () => {
+    const absent: any = base(undefined); absent.profiles = { dev: {} };
+    expect(inheritedSection(absent, "dev", "start_profiles")).toEqual({ present: false, map: {} });
+    const empty: any = base({}); empty.profiles = { dev: {} };
+    expect(inheritedSection(empty, "dev", "start_profiles")).toEqual({ present: true, map: {} });
+  });
+});
+
+describe("default-aware inherited resolvers", () => {
+  const mk = (baseObj: Record<string, unknown>): any => ({ base: baseObj, profiles: { dev: {} }, local: {}, secrets: {}, activeProfile: "default", envLocked: false });
+  it("inheritedStartProfiles: absent → DEFAULT_START_PROFILES, {} → none, custom → custom", () => {
+    expect(inheritedStartProfiles(mk({}), "dev")).toEqual(DEFAULT_START_PROFILES);
+    expect(inheritedStartProfiles(mk({ start_profiles: {} }), "dev")).toEqual({});
+    expect(inheritedStartProfiles(mk({ start_profiles: { x: ["x"] } }), "dev")).toEqual({ x: ["x"] });
+  });
+  it("inheritedMacros: absent → DEFAULT_MACROS, [] → none, custom → custom", () => {
+    expect(inheritedMacros(mk({}), "dev")).toEqual(DEFAULT_MACROS);
+    expect(inheritedMacros(mk({ macros: [] }), "dev")).toEqual([]);
+    expect(inheritedMacros(mk({ macros: [{ label: "a", text: "b" }] }), "dev")).toEqual([{ label: "a", text: "b" }]);
+  });
+  it("inheritedAnswerProfiles: built-ins always present, config overrides per-name", () => {
+    const r = inheritedAnswerProfiles(mk({}), "dev");
+    expect(Object.keys(r).sort()).toEqual(["claude", "codex", "default"]);
+    const r2 = inheritedAnswerProfiles(mk({ answer_profiles: { claude: { approve: ["x"], deny: [], stop: [] }, mine: { approve: ["m"], deny: [], stop: [] } } }), "dev");
+    expect((r2.claude as any).approve).toEqual(["x"]); // config replaces the built-in claude entry
+    expect(Object.keys(r2).sort()).toEqual(["claude", "codex", "default", "mine"]); // mine added, built-ins kept
+  });
+});
+
+describe("overrideStatePath", () => {
+  const p: any = { base: {}, profiles: { dev: { macros: [] } }, local: {}, secrets: {}, activeProfile: "default", envLocked: false };
+  it("absent path → default, [] → empty, value → custom", () => {
+    expect(overrideStatePath(p, "dev", ["macros"])).toBe("empty");
+    expect(overrideStatePath(p, "dev", ["notifications"])).toBe("default");
+    const q: any = { ...p, profiles: { dev: { macros: [{ label: "a", text: "b" }] } } };
+    expect(overrideStatePath(q, "dev", ["macros"])).toBe("custom");
+  });
+});
+
+describe("macroRecords", () => {
+  it("extracts label/text records, tolerating junk", () => {
+    expect(macroRecords([{ label: "a", text: "x" }, {}])).toEqual([{ label: "a", text: "x" }, { label: "", text: "" }]);
+    expect(macroRecords(undefined)).toEqual([]);
+    expect(macroRecords("nope")).toEqual([]);
   });
 });
