@@ -5,6 +5,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 
+from .app_control import RuntimeAgentControl
 from .bootstrap import (
     _discover_config_path,
     _discover_local_config_path,
@@ -114,6 +115,7 @@ class App:
         switch_profile: Callable[[str], Config | None] | None = None,
         update_connectors: Callable[[Config], object] | None = None,
         config_reloader: Callable[[], Config] | None = None,
+        runtime_control: RuntimeAgentControl | None = None,
     ):
         self.config = config
         self.deck = deck
@@ -122,6 +124,7 @@ class App:
         self._switch_profile = switch_profile
         self._update_connectors = update_connectors or (lambda cfg: None)
         self._config_reloader = config_reloader
+        self._runtime_control = runtime_control
         self.notifier = notifier or NoopNotifier()
         self._blocked_runtime_factory = blocked_runtime_factory
         self.notification_poller = None
@@ -167,6 +170,9 @@ class App:
     ) -> None:
         self._blocked_runtime_factory = factory
         self._rebuild_blocked_runtime(self.config)
+
+    def set_runtime_control(self, runtime_control: RuntimeAgentControl | None) -> None:
+        self._runtime_control = runtime_control
 
     def next_req_for(self, cmd: Command) -> str | None:
         if cmd.kind == "list":
@@ -276,6 +282,12 @@ class App:
     def handle_result(self, server_id: str, req: str, data: dict) -> None:
         if not self._server_allowed(server_id):
             return
+        if self._runtime_control is not None:
+            handled = self._runtime_control.handle_result(req, data, server_id=server_id)
+            if handled is not None:
+                if handled.kind != "read":
+                    self._send(Command("list", handled.server_id))
+                return
         text = data.get("text")
         if text is not None:
             accepted = req == self._active_read_req and self.orch.is_drill_pane(
@@ -355,6 +367,8 @@ class App:
 
     def _apply_config(self, new_config: Config) -> None:
         self.config = new_config
+        if self._runtime_control is not None:
+            self._runtime_control.update_config(new_config)
         self.notifier = _build_notifier(new_config)
         self._rebuild_blocked_runtime(new_config)
         self.orch.update_config(new_config)

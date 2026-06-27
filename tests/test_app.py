@@ -104,6 +104,42 @@ async def test_guarded_swallows_cancelled_connector():
 # --- read-correlation logic retained from v1 (now asserted via the panel) ---
 
 
+def test_app_routes_runtime_request_results_before_deck_read_state():
+    cfg = make_config()
+    app = App(cfg, FakeRenderer(13), send=lambda c: None)
+
+    class Runtime:
+        def __init__(self):
+            self.results = []
+
+        def handle_result(self, req, data, *, server_id=None):
+            self.results.append((server_id, req, data))
+            return Command("read", "dev", "p1") if req == "tg1" else None
+
+    runtime = Runtime()
+    app.set_runtime_control(runtime)
+    app._active_read_req = "r1"
+    app.handle_result("dev", "tg1", {"text": "telegram prompt", "pane_id": "p1"})
+
+    assert runtime.results == [("dev", "tg1", {"text": "telegram prompt", "pane_id": "p1"})]
+    assert app._active_read_req == "r1"
+
+
+def test_app_re_lists_after_runtime_action_result():
+    cfg = make_config()
+    sent = []
+    app = App(cfg, FakeRenderer(13), send=lambda c: sent.append(c))
+
+    class Runtime:
+        def handle_result(self, req, data, *, server_id=None):
+            return Command("send_text", "dev", "p1") if req == "tg1" else None
+
+    app.set_runtime_control(Runtime())
+    app.handle_result("dev", "tg1", {"sent": True})
+
+    assert sent == [Command("list", "dev")]
+
+
 def test_stale_read_result_with_old_req_is_ignored():
     deck = FakeRenderer(13)
     app = App(make_config(), deck, send=lambda c: None)
