@@ -103,7 +103,9 @@
   }
   function aaHint(name: string): string {
     const inh = inhEntry(name);
-    const v = "approve_always" in inh ? argvOf(inh.approve_always) : argvOf(inh.approve);
+    // Same effective fallback as aaListOv: an absent approve_always resolves to the EFFECTIVE
+    // approve (own override if present, else inherited) — mirrors backend _parse_profile.
+    const v = "approve_always" in inh ? argvOf(inh.approve_always) : entryKeyValue(name, "approve");
     return v.join(" · ") || "(nic)";
   }
   function writeEntry(name: string, entry: Record<string, unknown>): void { payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, [SEC, name], entry) }; onChange(); }
