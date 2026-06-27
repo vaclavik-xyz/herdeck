@@ -109,8 +109,16 @@
     return v.join(" · ") || "(nic)";
   }
   function writeEntry(name: string, entry: Record<string, unknown>): void { payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, [SEC, name], entry) }; onChange(); }
+  // Deep-copy an entry's list values so the override seed never aliases the DEFAULT_ANSWER_PROFILES
+  // singleton (inhEntry returns a reference into it for built-in profiles); guards against any
+  // future in-place edit corrupting the shared default process-wide.
+  function cloneEntry(e: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(e)) out[k] = Array.isArray(v) ? v.map(String) : v;
+    return out;
+  }
   function setEntryState(name: string, s: "inherit" | "override"): void {
-    payload = { ...payload, profiles: s === "inherit" ? clearOverridePath(payload.profiles, prof, [SEC, name]) : setOverridePath(payload.profiles, prof, [SEC, name], inhEntry(name)) };
+    payload = { ...payload, profiles: s === "inherit" ? clearOverridePath(payload.profiles, prof, [SEC, name]) : setOverridePath(payload.profiles, prof, [SEC, name], cloneEntry(inhEntry(name))) };
     onChange();
   }
   function setEntryKey(name: string, key: (typeof LIST_KEYS)[number], v: string[]): void { writeEntry(name, { ...ovEntry(name), [key]: v }); }
