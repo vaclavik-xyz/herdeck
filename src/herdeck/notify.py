@@ -36,6 +36,7 @@ def _http_post(url: str, fields: dict[str, str]) -> None:
 def make_telegram_sink(
     token: str,
     chat_id: str,
+    message_thread_id: int | None = None,
     *,
     post: Callable[[str, dict[str, str]], None] = _http_post,
 ) -> Callable[[str, str, bool], None]:
@@ -43,14 +44,14 @@ def make_telegram_sink(
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
     def sink(title: str, body: str, sound: bool) -> None:
-        post(
-            url,
-            {
-                "chat_id": str(chat_id),
-                "text": f"{title}\n{body}",
-                "disable_notification": "false" if sound else "true",
-            },
-        )
+        fields = {
+            "chat_id": str(chat_id),
+            "text": f"{title}\n{body}",
+            "disable_notification": "false" if sound else "true",
+        }
+        if message_thread_id is not None:
+            fields["message_thread_id"] = str(message_thread_id)
+        post(url, fields)
 
     return sink
 

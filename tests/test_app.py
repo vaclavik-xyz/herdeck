@@ -329,7 +329,7 @@ def test_build_notifier_fires_both_backends():
     cfg = make_config()
     cfg.notifications.enabled = True
     cfg.notifications.backends = ["macos", "telegram"]
-    cfg.notifications.telegram = TelegramConfig("HERDECK_TG", "42")
+    cfg.notifications.telegram = TelegramConfig("HERDECK_TG", "42", message_thread_id=456)
 
     def rec_macos(t, b, s):
         calls.append(("macos", t))
@@ -342,10 +342,13 @@ def test_build_notifier_fires_both_backends():
         cfg,
         getenv=lambda k: "TOK",
         macos_sink=rec_macos,
-        telegram_factory=lambda tok, cid: (telegram_args.append((tok, cid)), rec_tg)[1],
+        telegram_factory=lambda tok, cid, thread: (
+            telegram_args.append((tok, cid, thread)),
+            rec_tg,
+        )[1],
     )
     n.notify("title", "body", False)
-    assert telegram_args == [("TOK", "42")]
+    assert telegram_args == [("TOK", "42", 456)]
     assert ("macos", "title") in calls and ("telegram", "title") in calls
 
 

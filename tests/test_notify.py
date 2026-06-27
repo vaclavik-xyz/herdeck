@@ -45,6 +45,22 @@ def test_telegram_sink_silent_when_no_sound():
     assert sent[0]["disable_notification"] == "true"
 
 
+def test_telegram_sink_includes_topic_when_configured():
+    from herdeck.notify import make_telegram_sink
+
+    sent = []
+    sink = make_telegram_sink(
+        "TOK",
+        "-1001",
+        message_thread_id=456,
+        post=lambda url, fields: sent.append(fields),
+    )
+
+    sink("Blocked", "api · main", True)
+
+    assert sent[0]["message_thread_id"] == "456"
+
+
 def test_composite_sink_calls_all_even_if_one_raises():
     from herdeck.notify import composite_sink
 

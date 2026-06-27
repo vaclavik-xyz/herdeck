@@ -66,7 +66,7 @@ def _build_notifier(
             tg = n.telegram
             token = getenv(tg.token_env) if tg else None
             if tg and token and tg.chat_id:
-                sinks.append(telegram_factory(token, tg.chat_id))
+                sinks.append(telegram_factory(token, tg.chat_id, tg.message_thread_id))
             else:
                 log.warning(
                     "telegram notifications enabled but token/chat_id "

@@ -36,6 +36,10 @@ class Macro:
 class TelegramConfig:
     token_env: str  # env var holding the bot token (never the token itself)
     chat_id: str  # target chat (not secret)
+    message_thread_id: int | None = None  # optional Telegram forum topic id
+    interactive: bool = False
+    allowed_user_ids: list[int] = field(default_factory=list)
+    prompt_max_chars: int = 1200
 
 
 @dataclass
@@ -173,17 +177,61 @@ def _parse_profile(name: str, raw: dict) -> AnswerProfile:
     )
 
 
+def _parse_telegram_bool(name: str, value: bool) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"notifications.telegram.{name} must be a boolean")
+    return value
+
+
+def _parse_telegram_int(name: str, value) -> int:
+    if type(value) is not int:
+        raise ConfigError(f"notifications.telegram.{name} must be an integer")
+    return value
+
+
+def _parse_telegram_optional_int(name: str, value) -> int | None:
+    if value is None:
+        return None
+    return _parse_telegram_int(name, value)
+
+
+def _parse_telegram_int_list(name: str, value) -> list[int]:
+    if not isinstance(value, list):
+        raise ConfigError(f"notifications.telegram.{name} must be a list")
+    parsed = []
+    for item in value:
+        try:
+            parsed.append(_parse_telegram_int(name, item))
+        except ConfigError as exc:
+            raise ConfigError(
+                f"notifications.telegram.{name} must contain integers"
+            ) from exc
+    return parsed
+
+
+def _parse_telegram_config(tg_raw: dict) -> TelegramConfig | None:
+    if "token_env" not in tg_raw or "chat_id" not in tg_raw:
+        log.warning(
+            "[notifications.telegram] needs both token_env and "
+            "chat_id; ignoring telegram config"
+        )
+        return None
+    thread = tg_raw.get("message_thread_id")
+    return TelegramConfig(
+        token_env=tg_raw["token_env"],
+        chat_id=str(tg_raw["chat_id"]),
+        message_thread_id=_parse_telegram_optional_int("message_thread_id", thread),
+        interactive=_parse_telegram_bool("interactive", tg_raw.get("interactive", False)),
+        allowed_user_ids=_parse_telegram_int_list(
+            "allowed_user_ids", tg_raw.get("allowed_user_ids", [])
+        ),
+        prompt_max_chars=_parse_telegram_int("prompt_max_chars", tg_raw.get("prompt_max_chars", 1200)),
+    )
+
+
 def parse_notifications(n: dict) -> Notifications:
     tg_raw = n.get("telegram")
-    telegram = None
-    if isinstance(tg_raw, dict):
-        if "token_env" in tg_raw and "chat_id" in tg_raw:
-            telegram = TelegramConfig(token_env=tg_raw["token_env"], chat_id=str(tg_raw["chat_id"]))
-        else:
-            log.warning(
-                "[notifications.telegram] needs both token_env and "
-                "chat_id; ignoring telegram config"
-            )
+    telegram = _parse_telegram_config(tg_raw) if isinstance(tg_raw, dict) else None
     return Notifications(
         enabled=n.get("enabled", False),
         on=list(n.get("on", ["blocked"])),
