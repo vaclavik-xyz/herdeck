@@ -23,9 +23,16 @@ for cand in "$BINDIR/_internal/herdeck_assets" "$BINDIR/herdeck_assets"; do
   [ -d "$cand" ] && ASSETS_DIR="$cand" && break
 done
 [ -n "$ASSETS_DIR" ] || { echo "FAIL: bundled herdeck_assets dir not found under $BINDIR"; exit 1; }
-if [ -x "$PY" ] && "$PY" -c "import PIL" 2>/dev/null; then
-  # Strongest proof: decode the baked PNG exactly as the frozen rasterizer does.
-  "$PY" - "$ASSETS_DIR" <<'PY'
+# This gate REQUIRES a real decode of the baked glyph — it never accepts a weaker
+# (CRC-only) check. Prefer the build venv python, then system python3.
+DECODER=""
+for cand in "$PY" python3; do
+  if [ -n "$cand" ] && command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import PIL" 2>/dev/null; then
+    DECODER="$cand"; break
+  fi
+done
+[ -n "$DECODER" ] || { echo "FAIL: no Pillow-capable interpreter (tried '$PY' and python3) to decode the baked glyph"; exit 1; }
+"$DECODER" - "$ASSETS_DIR" <<'PY'
 import hashlib, os, sys
 from PIL import Image
 d = sys.argv[1]
@@ -41,46 +48,6 @@ im = im.convert("RGBA")    # the exact op herdeck.frozen.make_png_rasterizer per
 assert im.size == (196, 196), f"FAIL: baked codex PNG dims {im.size}, want (196, 196): {png}"
 print(f"OK: baked codex PNG decodes (196x196 RGBA): {name}")
 PY
-else
-  # Fallback (no Pillow available): stdlib PNG signature + per-chunk CRC validation.
-  python3 - "$ASSETS_DIR" <<'PY'
-import hashlib, os, sys, zlib
-d = sys.argv[1]
-svg_path = os.path.join(d, "codex.svg")
-assert os.path.exists(svg_path), f"FAIL: codex.svg not bundled in {d}"
-svg = open(svg_path, encoding="utf-8").read()
-name = hashlib.sha1(svg.encode("utf-8")).hexdigest() + ".png"
-png = os.path.join(d, name)
-assert os.path.exists(png), f"FAIL: baked codex PNG {name} missing from bundle"
-data = open(png, "rb").read()
-assert data[:8] == b"\x89PNG\r\n\x1a\n", f"FAIL: baked codex PNG not a PNG: {png}"
-# Walk every chunk, verifying declared length + CRC32, so a corrupt/truncated
-# IDAT (or any chunk) is caught — proving the PNG is structurally decodable.
-pos, first, saw_iend, width, height = 8, True, False, None, None
-while pos < len(data):
-    assert pos + 8 <= len(data), f"FAIL: truncated chunk header in {png}"
-    length = int.from_bytes(data[pos:pos+4], "big")
-    ctype = data[pos+4:pos+8]
-    cdata = data[pos+8:pos+8+length]
-    assert len(cdata) == length, f"FAIL: truncated chunk {ctype!r} in {png}"
-    stored = data[pos+8+length:pos+12+length]
-    assert len(stored) == 4, f"FAIL: missing CRC for {ctype!r} in {png}"
-    assert (zlib.crc32(ctype + cdata) & 0xffffffff) == int.from_bytes(stored, "big"), \
-        f"FAIL: bad CRC for chunk {ctype!r} in {png}"
-    if first:
-        assert ctype == b"IHDR", f"FAIL: first chunk not IHDR in {png}"
-        width = int.from_bytes(cdata[0:4], "big")
-        height = int.from_bytes(cdata[4:8], "big")
-        first = False
-    if ctype == b"IEND":
-        saw_iend = True
-        break
-    pos += 12 + length
-assert width == 196 and height == 196, f"FAIL: baked codex PNG dims {width}x{height}, want 196x196: {png}"
-assert saw_iend, f"FAIL: baked codex PNG missing IEND chunk: {png}"
-print(f"OK: baked codex PNG valid (196x196, CRC-checked): {name}")
-PY
-fi
 
 # Force the deterministic mock source (no on-disk config / keychain needed).
 export HERDECK_MOCK=1
