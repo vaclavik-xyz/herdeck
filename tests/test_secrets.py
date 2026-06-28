@@ -82,8 +82,11 @@ def test_build_notifier_resolves_telegram_token_via_secrets(monkeypatch):
             telegram=TelegramConfig(token_env="TGTOK", chat_id="1"),
         ),
     )
-    _build_notifier(cfg, telegram_factory=lambda tok, chat: captured.append((tok, chat)))
-    assert captured == [("bot-token", "1")]  # telegram token resolved via keychain
+    _build_notifier(
+        cfg,
+        telegram_factory=lambda tok, chat, thread: captured.append((tok, chat, thread)),
+    )
+    assert captured == [("bot-token", "1", None)]  # telegram token resolved via keychain
 
 
 def test_doctor_check_config_sees_keychain_only_token(monkeypatch):

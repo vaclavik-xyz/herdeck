@@ -102,6 +102,18 @@ def test_readme_uses_profile_schema_for_notifications():
     assert "backends" in section
 
 
+def test_readme_documents_interactive_telegram_security():
+    path = Path(__file__).resolve().parents[1] / "README.md"
+    section = path.read_text().split("## Notifications", 1)[1].split("\n## ", 1)[0]
+
+    assert "interactive = true" in section
+    assert "allowed_user_ids" in section
+    assert "message_thread_id" in section
+    assert "Reply to this message" in section
+    assert "Non-interactive notifications contain only" in section
+    assert "Notifications contain only the repo/label" not in section
+
+
 def test_readme_launcher_example_uses_valid_toml_shape():
     path = Path(__file__).resolve().parents[1] / "README.md"
     section = path.read_text().split("## Adding an agent type", 1)[1].split("\n## ", 1)[0]
@@ -241,6 +253,166 @@ def test_notifications_parses_telegram_and_backends(tmp_path):
     assert cfg.notifications.telegram.chat_id == "123"  # coerced to str
 
 
+def test_notifications_parses_interactive_telegram_fields(tmp_path):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            "[notifications]\n"
+            "enabled=true\n"
+            'backends=["telegram"]\n'
+            "[notifications.telegram]\n"
+            'token_env="HERDECK_TG"\n'
+            'chat_id="-100123"\n'
+            "message_thread_id=456\n"
+            "interactive=true\n"
+            "allowed_user_ids=[111, 222]\n"
+            "prompt_max_chars=777\n",
+        )
+    )
+
+    tg = cfg.notifications.telegram
+    assert tg is not None
+    assert tg.token_env == "HERDECK_TG"
+    assert tg.chat_id == "-100123"
+    assert tg.message_thread_id == 456
+    assert tg.interactive is True
+    assert tg.allowed_user_ids == [111, 222]
+    assert tg.prompt_max_chars == 777
+
+
+def test_notifications_interactive_defaults_are_safe(tmp_path):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            "[notifications]\n"
+            "enabled=true\n"
+            'backends=["telegram"]\n'
+            "[notifications.telegram]\n"
+            'token_env="HERDECK_TG"\n'
+            'chat_id="42"\n',
+        )
+    )
+
+    tg = cfg.notifications.telegram
+    assert tg is not None
+    assert tg.message_thread_id is None
+    assert tg.interactive is False
+    assert tg.allowed_user_ids == []
+    assert tg.prompt_max_chars == 1200
+
+
+def test_notifications_interactive_rejects_string_bool(tmp_path):
+    with pytest.raises(ConfigError):
+        load_config(
+            _write(
+                tmp_path,
+                "[notifications]\n"
+                "enabled=true\n"
+                'backends=["telegram"]\n'
+                "[notifications.telegram]\n"
+                'token_env="HERDECK_TG"\n'
+                'chat_id="42"\n'
+                'interactive="false"\n',
+            )
+        )
+
+
+def test_notifications_allowed_user_ids_rejects_scalar_string(tmp_path):
+    with pytest.raises(ConfigError):
+        load_config(
+            _write(
+                tmp_path,
+                "[notifications]\n"
+                "enabled=true\n"
+                'backends=["telegram"]\n'
+                "[notifications.telegram]\n"
+                'token_env="HERDECK_TG"\n'
+                'chat_id="42"\n'
+                'allowed_user_ids="111"\n',
+            )
+        )
+
+
+def test_notifications_allowed_user_ids_rejects_float(tmp_path):
+    with pytest.raises(ConfigError):
+        load_config(
+            _write(
+                tmp_path,
+                "[notifications]\n"
+                "enabled=true\n"
+                'backends=["telegram"]\n'
+                "[notifications.telegram]\n"
+                'token_env="HERDECK_TG"\n'
+                'chat_id="42"\n'
+                "allowed_user_ids=[111.9]\n",
+            )
+        )
+
+
+def test_notifications_message_thread_id_rejects_float(tmp_path):
+    with pytest.raises(ConfigError):
+        load_config(
+            _write(
+                tmp_path,
+                "[notifications]\n"
+                "enabled=true\n"
+                'backends=["telegram"]\n'
+                "[notifications.telegram]\n"
+                'token_env="HERDECK_TG"\n'
+                'chat_id="42"\n'
+                "message_thread_id=456.7\n",
+            )
+        )
+
+
+def test_notifications_prompt_max_chars_rejects_bool(tmp_path):
+    with pytest.raises(ConfigError):
+        load_config(
+            _write(
+                tmp_path,
+                "[notifications]\n"
+                "enabled=true\n"
+                'backends=["telegram"]\n'
+                "[notifications.telegram]\n"
+                'token_env="HERDECK_TG"\n'
+                'chat_id="42"\n'
+                "prompt_max_chars=true\n",
+            )
+        )
+
+
+def test_profile_notifications_parse_interactive_telegram_fields(tmp_path):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            'active_profile="work"\n'
+            "[deck]\n"
+            'grid="5x3"\n'
+            "[profiles.work]\n"
+            "servers=[]\n"
+            "[profiles.work.notifications]\n"
+            "enabled=true\n"
+            'backends=["telegram"]\n'
+            "[profiles.work.notifications.telegram]\n"
+            'token_env="HERDECK_TG"\n'
+            'chat_id="-100123"\n'
+            "message_thread_id=456\n"
+            "interactive=true\n"
+            "allowed_user_ids=[111, 222]\n"
+            "prompt_max_chars=777\n",
+        )
+    )
+
+    tg = cfg.notifications.telegram
+    assert cfg.meta.active_profile == "work"
+    assert cfg.notifications.enabled is True
+    assert tg is not None
+    assert tg.message_thread_id == 456
+    assert tg.interactive is True
+    assert tg.allowed_user_ids == [111, 222]
+    assert tg.prompt_max_chars == 777
+
+
 def test_notifications_telegram_incomplete_is_skipped(tmp_path):
     # Incomplete telegram table never fails config load (graceful skip);
     # _build_notifier / doctor surface it later.
@@ -259,6 +431,16 @@ def test_example_notifications_backends_default(monkeypatch):
     path = Path(__file__).resolve().parents[1] / "config.example.toml"
     cfg = load_config(path)
     assert "macos" in cfg.notifications.backends
+
+
+def test_example_config_includes_interactive_telegram_fields(monkeypatch):
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    text = path.read_text()
+
+    assert "message_thread_id" in text
+    assert "interactive = false" in text
+    assert "allowed_user_ids" in text
 
 
 def test_runtime_customization_defaults_on_config():

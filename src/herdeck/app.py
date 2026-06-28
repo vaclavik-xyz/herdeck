@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
+from .app_control import RuntimeAgentControl
 from .bootstrap import (
     _discover_config_path,
     _discover_local_config_path,
@@ -22,6 +23,10 @@ from .driver.base import DeckDriver, PanelView
 from .driver.fake import FakeRenderer
 from .model import AgentState, Status
 from .notify import (
+    BlockedAlertNotifier,
+    BlockedNotificationRuntime,
+    CompositeBlockedNotifier,
+    LegacyBlockedNotifier,
     NoopNotifier,
     Notifier,
     _macos_sink,
@@ -30,6 +35,7 @@ from .notify import (
 )
 from .orchestrator import Orchestrator
 from .secrets import get_secret
+from .telegram import TelegramBotClient, TelegramInteractor
 
 TICK_INTERVAL = 0.4
 # Every Nth tick, fully re-render so elapsed-time text on non-working tiles
@@ -53,6 +59,7 @@ def _build_notifier(
     getenv=get_secret,  # was os.environ.get — env-first/keychain via the shared resolver
     macos_sink=_macos_sink,
     telegram_factory=make_telegram_sink,
+    skip_telegram: bool = False,
 ) -> Notifier:
     """Assemble a notifier from the configured backends (graceful skip)."""
     n = config.notifications
@@ -63,10 +70,12 @@ def _build_notifier(
         if backend == "macos":
             sinks.append(macos_sink)
         elif backend == "telegram":
+            if skip_telegram:
+                continue
             tg = n.telegram
             token = getenv(tg.token_env) if tg else None
             if tg and token and tg.chat_id:
-                sinks.append(telegram_factory(token, tg.chat_id))
+                sinks.append(telegram_factory(token, tg.chat_id, tg.message_thread_id))
             else:
                 log.warning(
                     "telegram notifications enabled but token/chat_id "
@@ -79,6 +88,85 @@ def _build_notifier(
     return Notifier(sink=composite_sink(sinks))
 
 
+def _build_blocked_notification_runtime(
+    config: Config,
+    *,
+    getenv=get_secret,
+    macos_sink=_macos_sink,
+    telegram_factory=make_telegram_sink,
+    telegram_interactor_factory=None,
+) -> BlockedNotificationRuntime:
+    n = config.notifications
+    tg = n.telegram
+    interactive_requested = (
+        n.enabled
+        and tg is not None
+        and "telegram" in n.backends
+        and tg.interactive
+        and telegram_interactor_factory is not None
+    )
+    interactive_token = getenv(tg.token_env) if interactive_requested else None
+    interactive_enabled = bool(
+        interactive_requested
+        and interactive_token
+        and tg is not None
+        and tg.chat_id
+        and tg.allowed_user_ids
+    )
+    if interactive_enabled:
+        assert tg is not None
+        assert interactive_token is not None
+        interactor = telegram_interactor_factory(interactive_token, tg)
+        poll_once = getattr(interactor, "poll_once", None)
+        if callable(poll_once):
+            legacy = _build_notifier(
+                config,
+                getenv=getenv,
+                macos_sink=macos_sink,
+                telegram_factory=telegram_factory,
+                skip_telegram=True,
+            )
+            notifiers: list[BlockedAlertNotifier] = [LegacyBlockedNotifier(legacy), interactor]
+            notifier = (
+                notifiers[0] if len(notifiers) == 1 else CompositeBlockedNotifier(notifiers)
+            )
+            return BlockedNotificationRuntime(notifier, interactor)
+        log.warning(
+            "interactive telegram notifications requested but inbound poller "
+            "is unavailable; keeping one-way telegram backend"
+        )
+
+    legacy = _build_notifier(
+        config,
+        getenv=getenv,
+        macos_sink=macos_sink,
+        telegram_factory=telegram_factory,
+    )
+    notifiers = [LegacyBlockedNotifier(legacy)]
+    notifier = notifiers[0] if len(notifiers) == 1 else CompositeBlockedNotifier(notifiers)
+    return BlockedNotificationRuntime(notifier, None)
+
+
+def _build_blocked_notifier(*args, **kwargs) -> BlockedAlertNotifier:
+    return _build_blocked_notification_runtime(*args, **kwargs).notifier
+
+
+async def _guard_blocked_notify(coro: Awaitable[None]) -> None:
+    try:
+        await coro
+    except Exception:
+        log.debug("blocked alert notifier failed", exc_info=True)
+
+
+def _default_notify_schedule(coro: Awaitable[None]) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(_guard_blocked_notify(coro))
+    else:
+        loop.create_task(_guard_blocked_notify(coro))
+
+
 class App:
     """Glue between orchestrator (sync) and connectors (async)."""
 
@@ -89,10 +177,13 @@ class App:
         send: Callable[[Command], None],
         schedule: Callable[[Callable[[], None]], None] | None = None,
         notifier: Notifier | None = None,
-        notify_schedule: Callable[[Callable[[], None]], None] | None = None,
+        blocked_notifier: BlockedAlertNotifier | None = None,
+        blocked_runtime_factory: Callable[[Config], BlockedNotificationRuntime] | None = None,
+        notify_schedule: Callable[[Awaitable[None]], None] | None = None,
         switch_profile: Callable[[str], Config | None] | None = None,
         update_connectors: Callable[[Config], object] | None = None,
         config_reloader: Callable[[], Config] | None = None,
+        runtime_control: RuntimeAgentControl | None = None,
     ):
         self.config = config
         self.deck = deck
@@ -101,10 +192,22 @@ class App:
         self._switch_profile = switch_profile
         self._update_connectors = update_connectors or (lambda cfg: None)
         self._config_reloader = config_reloader
+        self._runtime_control = runtime_control
         self.notifier = notifier or NoopNotifier()
-        # Notifications run off the render loop so a slow sink never blocks it;
-        # the default runs synchronously (tests, mock) — the lead passes an executor.
-        self._notify_schedule = notify_schedule or (lambda fn: fn())
+        self._blocked_runtime_factory = blocked_runtime_factory
+        self.notification_poller = None
+        self._notification_generation = 0
+        if blocked_notifier is not None:
+            runtime = BlockedNotificationRuntime(blocked_notifier)
+            self._blocked_runtime_factory = lambda config: runtime
+            self._install_blocked_runtime(runtime)
+        elif blocked_runtime_factory is not None:
+            self._install_blocked_runtime(blocked_runtime_factory(config))
+        else:
+            self._install_blocked_runtime(
+                BlockedNotificationRuntime(LegacyBlockedNotifier(self.notifier))
+            )
+        self._notify_schedule = notify_schedule or _default_notify_schedule
         self._blocked_keys: set = set()
         self.orch = Orchestrator(config, slots=deck.slot_count())
         deck.on_press(self._on_press)
@@ -112,6 +215,32 @@ class App:
         self._active_read_req: str | None = None
         self._ticks = 0
         self._status_panel: PanelView | None = None
+
+    def _install_blocked_runtime(self, runtime: BlockedNotificationRuntime) -> None:
+        self._notification_generation += 1
+        self.blocked_notifier = runtime.notifier
+        self.notification_poller = runtime.poller
+
+    @property
+    def notification_generation(self) -> int:
+        return self._notification_generation
+
+    def _rebuild_blocked_runtime(self, config: Config) -> None:
+        if self._blocked_runtime_factory is not None:
+            self._install_blocked_runtime(self._blocked_runtime_factory(config))
+        else:
+            self._install_blocked_runtime(
+                BlockedNotificationRuntime(LegacyBlockedNotifier(self.notifier))
+            )
+
+    def set_blocked_runtime_factory(
+        self, factory: Callable[[Config], BlockedNotificationRuntime]
+    ) -> None:
+        self._blocked_runtime_factory = factory
+        self._rebuild_blocked_runtime(self.config)
+
+    def set_runtime_control(self, runtime_control: RuntimeAgentControl | None) -> None:
+        self._runtime_control = runtime_control
 
     def next_req_for(self, cmd: Command) -> str | None:
         if cmd.kind == "list":
@@ -171,15 +300,53 @@ class App:
         to, blocked_here = newly_blocked(prev_here, states)
         self._blocked_keys = (self._blocked_keys - scope) | blocked_here
         multi = len(self.config.overview_order) > 1
-        for s in (x for x in states if x.key in to):
-            label = s.repo or s.label
-            parts = [p for p in (s.branch, s.key.server_id if multi else None) if p]
-            body = f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
-            self._schedule_notify(s.agent_type, body)
-
-    def _schedule_notify(self, title: str, body: str) -> None:
         sound = self.config.notifications.sound
-        self._notify_schedule(lambda: self.notifier.notify(title, body, sound))
+        for s in (x for x in states if x.key in to):
+            self._schedule_blocked_notify(
+                s,
+                self._blocked_notification_body(s, multi_server=multi),
+                sound,
+                multi,
+            )
+
+    def _schedule_blocked_notify(
+        self, agent: AgentState, body: str, sound: bool, multi_server: bool
+    ) -> None:
+        self._notify_schedule(
+            self.blocked_notifier.notify_blocked(
+                agent, body=body, sound=sound, multi_server=multi_server
+            )
+        )
+
+    def _blocked_notification_body(self, agent: AgentState, *, multi_server: bool) -> str:
+        label = agent.repo or agent.label
+        parts = [
+            part
+            for part in (agent.branch, agent.key.server_id if multi_server else None)
+            if part
+        ]
+        return f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
+
+    def _rearm_interactive_blocked_alerts(self) -> None:
+        if not self.config.notifications.enabled:
+            return
+        if "blocked" not in self.config.notifications.on:
+            return
+        notify = getattr(self.notification_poller, "notify_blocked", None)
+        if not callable(notify):
+            return
+        multi = len(self.config.overview_order) > 1
+        sound = self.config.notifications.sound
+        for agent in self.orch.agents():
+            if agent.status is Status.BLOCKED:
+                self._notify_schedule(
+                    notify(
+                        agent,
+                        body=self._blocked_notification_body(agent, multi_server=multi),
+                        sound=sound,
+                        multi_server=multi,
+                    )
+                )
 
     def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         if not self._server_allowed(server_id):
@@ -215,6 +382,12 @@ class App:
     def handle_result(self, server_id: str, req: str, data: dict) -> None:
         if not self._server_allowed(server_id):
             return
+        if self._runtime_control is not None:
+            handled = self._runtime_control.handle_result(req, data, server_id=server_id)
+            if handled is not None:
+                if handled.kind != "read":
+                    self._send(Command("list", handled.server_id))
+                return
         text = data.get("text")
         if text is not None:
             accepted = req == self._active_read_req and self.orch.is_drill_pane(
@@ -294,7 +467,10 @@ class App:
 
     def _apply_config(self, new_config: Config) -> None:
         self.config = new_config
+        if self._runtime_control is not None:
+            self._runtime_control.update_config(new_config)
         self.notifier = _build_notifier(new_config)
+        self._rebuild_blocked_runtime(new_config)
         self.orch.update_config(new_config)
         allowed_servers = {s.id for s in new_config.servers}
         self._blocked_keys = {k for k in self._blocked_keys if k.server_id in allowed_servers}
@@ -304,6 +480,7 @@ class App:
             self._blocked_keys = {k for k in self._blocked_keys if k.server_id not in restarted}
         for server_id in restarted:
             self.orch.set_connection(server_id, False)
+        self._rearm_interactive_blocked_alerts()
         self._refresh()
 
     def reload_from_disk(self) -> None:
@@ -369,6 +546,75 @@ def make_config_reloader(snapshot):
         return resolve_profile(refreshed).config
 
     return reload_
+
+
+def _install_telegram_runtime(
+    app: App,
+    config: Config,
+    runtime_control: RuntimeAgentControl,
+    *,
+    getenv=get_secret,
+    bot_client_factory=TelegramBotClient,
+    interactor_factory=TelegramInteractor,
+) -> None:
+    app.set_runtime_control(runtime_control)
+
+    def build_blocked_runtime(runtime_config: Config) -> BlockedNotificationRuntime:
+        runtime_control.update_config(runtime_config)
+
+        def make_interactor(token: str, tg):
+            return interactor_factory(
+                bot_client_factory(token),
+                runtime_control,
+                chat_id=tg.chat_id,
+                message_thread_id=tg.message_thread_id,
+                allowed_user_ids=tg.allowed_user_ids,
+                prompt_max_chars=tg.prompt_max_chars,
+            )
+
+        return _build_blocked_notification_runtime(
+            runtime_config,
+            getenv=getenv,
+            telegram_interactor_factory=make_interactor,
+        )
+
+    app.set_blocked_runtime_factory(build_blocked_runtime)
+
+
+async def _poll_telegram_once_from_app(
+    app: App,
+    *,
+    timeout: int = 20,
+    idle_sleep=asyncio.sleep,
+) -> None:
+    generation = app.notification_generation
+    poller = app.notification_poller
+    if poller is None:
+        await idle_sleep(1)
+        return
+    if getattr(poller, "inbound_disabled", False):
+        await idle_sleep(60)
+        return
+    await poller.poll_once(
+        timeout=timeout,
+        is_current=lambda: app.notification_generation == generation,
+    )
+    if getattr(poller, "inbound_disabled", False):
+        await idle_sleep(60)
+
+
+def _start_telegram_poll_loop(app: App, *, create_task=asyncio.create_task):
+    async def poll_telegram():
+        while True:
+            try:
+                await _poll_telegram_once_from_app(app)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.debug("telegram poll failed", exc_info=True)
+                await asyncio.sleep(2)
+
+    return create_task(poll_telegram())
 
 
 def _mock_config() -> Config:
@@ -532,11 +778,23 @@ async def _run(
         send,
         schedule=lambda fn: loop.call_soon_threadsafe(fn),
         notifier=_build_notifier(config),
-        notify_schedule=lambda fn: loop.run_in_executor(None, fn),
+        notify_schedule=lambda coro: asyncio.create_task(coro),
         switch_profile=switch_profile,
         update_connectors=lambda cfg: manager.update(cfg.servers),
         config_reloader=config_reloader,
     )
+
+    async def runtime_send(cmd: Command, req: str) -> None:
+        conn = manager.get(cmd.server_id)
+        if conn is not None:
+            await conn.send(command_to_msg(cmd, req))
+
+    runtime_control = RuntimeAgentControl(
+        config,
+        send=runtime_send,
+        current_agent=app.orch.get_agent,
+    )
+    _install_telegram_runtime(app, config, runtime_control)
     for server in config.servers:
         app.orch.set_connection(server.id, False)
     app._refresh()
@@ -550,6 +808,7 @@ async def _run(
 
     manager.update(config.servers)
     tasks = manager.tasks()
+    tasks.append(_start_telegram_poll_loop(app))
     tasks.append(_guard(_ticker(app, loop, tick_interval or config.hardware.tick_interval)))
     if hasattr(deck, "run_reader"):
         tasks.append(_guard(deck.run_reader()))

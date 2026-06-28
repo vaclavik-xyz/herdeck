@@ -174,6 +174,158 @@ def test_check_notifications_telegram_present_redacts():
     assert "SECRET-TOKEN-VALUE" not in c.detail  # never leak the value
 
 
+def test_check_notifications_interactive_requires_allowed_users():
+    from herdeck.config import Notifications, TelegramConfig
+    from herdeck.doctor import check_notifications
+
+    n = Notifications(
+        enabled=True,
+        backends=["telegram"],
+        telegram=TelegramConfig("HERDECK_TG", "42", interactive=True),
+    )
+
+    c = check_notifications(n, getenv=lambda k: "SECRET-TOKEN-VALUE")
+
+    assert c.ok is False
+    assert "interactive=missing allowed_user_ids" in c.detail
+    assert "no usable backend" not in c.detail
+    assert "SECRET-TOKEN-VALUE" not in c.detail
+
+
+def test_check_notifications_interactive_ready_redacts():
+    from herdeck.config import Notifications, TelegramConfig
+    from herdeck.doctor import check_notifications
+
+    n = Notifications(
+        enabled=True,
+        backends=["telegram"],
+        telegram=TelegramConfig(
+            "HERDECK_TG",
+            "-100123",
+            message_thread_id=456,
+            interactive=True,
+            allowed_user_ids=[111],
+        ),
+    )
+
+    c = check_notifications(n, getenv=lambda k: "SECRET-TOKEN-VALUE")
+
+    assert c.ok is True
+    assert "interactive=ready" in c.detail
+    assert "topic=present" in c.detail
+    assert "SECRET-TOKEN-VALUE" not in c.detail
+    assert "111" not in c.detail
+
+
+def test_collect_checks_resolves_active_profile_notifications(tmp_path, monkeypatch):
+    from herdeck.doctor import collect_checks
+
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'active_profile="work"\n'
+        "[deck]\n"
+        'grid="5x3"\n'
+        "[profiles.work]\n"
+        "servers=[]\n"
+        "[profiles.work.notifications]\n"
+        "enabled=true\n"
+        'backends=["telegram"]\n'
+        "[profiles.work.notifications.telegram]\n"
+        'token_env="HERDECK_TG"\n'
+        'chat_id="-100123"\n'
+        "message_thread_id=456\n"
+        "interactive=true\n"
+        "allowed_user_ids=[111]\n"
+    )
+    monkeypatch.setenv("HERDECK_CONFIG", str(config))
+    monkeypatch.setenv("HERDECK_TG", "SECRET-TOKEN-VALUE")
+    monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "missing.sock"))
+
+    checks = {check.name: check for check in collect_checks()}
+
+    assert checks["notifications"].ok is True
+    assert "interactive=ready" in checks["notifications"].detail
+    assert "topic=present" in checks["notifications"].detail
+    assert "SECRET-TOKEN-VALUE" not in checks["notifications"].detail
+    assert "111" not in checks["notifications"].detail
+
+
+def test_collect_checks_reports_notifications_when_server_token_missing(tmp_path, monkeypatch):
+    from herdeck.doctor import collect_checks
+
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'active_profile="work"\n'
+        "[[servers]]\n"
+        'id="remote"\n'
+        'url="wss://remote.example.test"\n'
+        'token_env="MISSING_SERVER_TOKEN"\n'
+        "[deck]\n"
+        'grid="5x3"\n'
+        "[profiles.work]\n"
+        'servers=["remote"]\n'
+        "[profiles.work.notifications]\n"
+        "enabled=true\n"
+        'backends=["telegram"]\n'
+        "[profiles.work.notifications.telegram]\n"
+        'token_env="HERDECK_TG"\n'
+        'chat_id="-100123"\n'
+        "interactive=true\n"
+    )
+    monkeypatch.setenv("HERDECK_CONFIG", str(config))
+    monkeypatch.delenv("MISSING_SERVER_TOKEN", raising=False)
+    monkeypatch.setenv("HERDECK_TG", "SECRET-TOKEN-VALUE")
+    monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "missing.sock"))
+
+    checks = {check.name: check for check in collect_checks()}
+
+    assert checks["configuration"].ok is False
+    assert "MISSING_SERVER_TOKEN=missing" in checks["configuration"].detail
+    assert checks["notifications"].ok is False
+    assert "interactive=missing allowed_user_ids" in checks["notifications"].detail
+    assert "disabled" not in checks["notifications"].detail
+    assert "SECRET-TOKEN-VALUE" not in checks["notifications"].detail
+
+
+def test_collect_checks_reports_invalid_notifications_when_server_token_missing(
+    tmp_path, monkeypatch
+):
+    from herdeck.doctor import collect_checks
+
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'active_profile="work"\n'
+        "[[servers]]\n"
+        'id="remote"\n'
+        'url="wss://remote.example.test"\n'
+        'token_env="MISSING_SERVER_TOKEN"\n'
+        "[deck]\n"
+        'grid="5x3"\n'
+        "[profiles.work]\n"
+        'servers=["remote"]\n'
+        "[profiles.work.notifications]\n"
+        "enabled=true\n"
+        'backends=["telegram"]\n'
+        "[profiles.work.notifications.telegram]\n"
+        'token_env="HERDECK_TG"\n'
+        'chat_id="-100123"\n'
+        'interactive="false"\n'
+    )
+    monkeypatch.setenv("HERDECK_CONFIG", str(config))
+    monkeypatch.delenv("MISSING_SERVER_TOKEN", raising=False)
+    monkeypatch.setenv("HERDECK_TG", "SECRET-TOKEN-VALUE")
+    monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "missing.sock"))
+
+    checks = {check.name: check for check in collect_checks()}
+
+    assert checks["configuration"].ok is False
+    assert checks["notifications"].ok is False
+    assert "invalid config" in checks["notifications"].detail
+    assert "interactive" in checks["notifications"].detail
+    assert "disabled" not in checks["notifications"].detail
+    assert "SECRET-TOKEN-VALUE" not in checks["notifications"].detail
+
+
 def test_check_notifications_telegram_missing_token_fails():
     from herdeck.config import Notifications, TelegramConfig
     from herdeck.doctor import check_notifications

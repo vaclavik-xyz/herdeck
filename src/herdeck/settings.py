@@ -19,11 +19,11 @@ from .config import (
     Notifications,
     SafetyConfig,
     ServerConfig,
-    TelegramConfig,
     ThemeConfig,
     ViewConfig,
     _parse_grid,
     _parse_profile,
+    _parse_telegram_config,
 )
 
 
@@ -218,8 +218,8 @@ def _notifications_config(raw: dict | None) -> Notifications:
     raw = raw or {}
     telegram = None
     tg_raw = raw.get("telegram")
-    if isinstance(tg_raw, dict) and "token_env" in tg_raw and "chat_id" in tg_raw:
-        telegram = TelegramConfig(tg_raw["token_env"], str(tg_raw["chat_id"]))
+    if isinstance(tg_raw, dict):
+        telegram = _parse_telegram_config(tg_raw)
     return Notifications(
         enabled=raw.get("enabled", False),
         on=list(raw.get("on", ["blocked"])),
@@ -227,6 +227,12 @@ def _notifications_config(raw: dict | None) -> Notifications:
         backends=list(raw.get("backends", ["macos"])),
         telegram=telegram,
     )
+
+
+def resolve_notifications(snapshot: SettingsSnapshot) -> Notifications:
+    active = _active_profile_name(snapshot)
+    merged, _selection = _merged_sections(snapshot.data, active)
+    return _notifications_config(merged.get("notifications"))
 
 
 def _safety_config(raw: dict | None) -> SafetyConfig:

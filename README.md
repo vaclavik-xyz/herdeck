@@ -265,6 +265,14 @@ sound = true
 token_env = "HERDECK_TELEGRAM_TOKEN"   # bot token read from this env var
 chat_id = "123456789"
 
+# Optional: route alerts into a Telegram forum topic, e.g. a Hermes topic.
+message_thread_id = 456
+
+# Optional: enable buttons and reply-to-agent routing.
+interactive = true
+allowed_user_ids = [123456789]
+prompt_max_chars = 1200
+
 # Override per profile:
 [profiles.work.notifications]
 backends = ["macos"]
@@ -278,9 +286,15 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 - Telegram setup: create a bot with @BotFather, `export HERDECK_TELEGRAM_TOKEN=<token>`
   (never commit the token), and set your numeric `chat_id`. A missing token or
   chat_id makes herdeck skip telegram with a warning — other backends still fire.
-- Notifications contain only the repo/label, branch, and (multi-server) server id
-  — never prompt text, command output, or tokens. They fire once per blocked
-  episode (re-arming after the agent leaves `blocked`) and never block the UI loop.
+- Non-interactive notifications contain only the repo/label, branch, and
+  (multi-server) server id; they never include prompt text, command output, or
+  tokens. When `interactive = true`, Telegram alerts include the current blocked
+  prompt, Approve/Deny/Stop/Read again buttons, and reply routing. Reply to this message
+  to send text to that specific agent. Herdeck accepts inbound actions only from
+  `allowed_user_ids`, only in the configured `chat_id`, and only in `message_thread_id`
+  when one is configured.
+- Notifications fire once per blocked episode (re-arming after the agent leaves
+  `blocked`) and never block the UI loop.
 
 ## Security
 - The bridge WebSocket is authenticated with a bearer token (constant-time

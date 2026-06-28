@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import Notifications
+from .config import ConfigError, Notifications
 from .secrets import get_secret
 
 SOCKET_TIMEOUT = 1.0
@@ -132,6 +132,15 @@ def check_notifications(notifications: Notifications, getenv=get_secret) -> Chec
             parts.append(f"chat_id={'present' if chat_present else 'missing'}")
             if token_present and chat_present:
                 usable += 1
+                if tg.interactive:
+                    if tg.allowed_user_ids:
+                        parts.append("interactive=ready")
+                        parts.append(
+                            "topic=present" if tg.message_thread_id is not None else "topic=absent"
+                        )
+                    else:
+                        parts.append("interactive=missing allowed_user_ids")
+                        ok = False
             else:
                 ok = False
     if usable == 0:
@@ -141,15 +150,25 @@ def check_notifications(notifications: Notifications, getenv=get_secret) -> Chec
 
 
 def _read_notifications(config_path: str | None) -> Notifications:
-    from .config import parse_notifications
-
     if config_path is None:
         return Notifications()
     try:
-        data = tomllib.loads(Path(config_path).read_text())
-        return parse_notifications(data.get("notifications", {}))
+        from .bootstrap import _discover_local_config_path
+        from .settings import load_settings, resolve_notifications
+
+        snapshot = load_settings(config_path, _discover_local_config_path(config_path))
+        return resolve_notifications(snapshot)
+    except ConfigError:
+        raise
     except Exception:
         return Notifications()
+
+
+def _check_configured_notifications(config_path: str | None) -> Check:
+    try:
+        return check_notifications(_read_notifications(config_path))
+    except ConfigError as exc:
+        return Check("notifications", False, f"invalid config ({exc})")
 
 
 def format_report(checks: Iterable[Check]) -> str:
@@ -232,7 +251,7 @@ def collect_checks() -> list[Check]:
         socket_check,
         check_optional_deps(_module_available),
         check_deck(_module_available),
-        check_notifications(_read_notifications(config_path)),
+        _check_configured_notifications(config_path),
     ]
     return checks
 

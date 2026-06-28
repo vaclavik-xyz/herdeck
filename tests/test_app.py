@@ -104,6 +104,42 @@ async def test_guarded_swallows_cancelled_connector():
 # --- read-correlation logic retained from v1 (now asserted via the panel) ---
 
 
+def test_app_routes_runtime_request_results_before_deck_read_state():
+    cfg = make_config()
+    app = App(cfg, FakeRenderer(13), send=lambda c: None)
+
+    class Runtime:
+        def __init__(self):
+            self.results = []
+
+        def handle_result(self, req, data, *, server_id=None):
+            self.results.append((server_id, req, data))
+            return Command("read", "dev", "p1") if req == "tg1" else None
+
+    runtime = Runtime()
+    app.set_runtime_control(runtime)
+    app._active_read_req = "r1"
+    app.handle_result("dev", "tg1", {"text": "telegram prompt", "pane_id": "p1"})
+
+    assert runtime.results == [("dev", "tg1", {"text": "telegram prompt", "pane_id": "p1"})]
+    assert app._active_read_req == "r1"
+
+
+def test_app_re_lists_after_runtime_action_result():
+    cfg = make_config()
+    sent = []
+    app = App(cfg, FakeRenderer(13), send=lambda c: sent.append(c))
+
+    class Runtime:
+        def handle_result(self, req, data, *, server_id=None):
+            return Command("send_text", "dev", "p1") if req == "tg1" else None
+
+    app.set_runtime_control(Runtime())
+    app.handle_result("dev", "tg1", {"sent": True})
+
+    assert sent == [Command("list", "dev")]
+
+
 def test_stale_read_result_with_old_req_is_ignored():
     deck = FakeRenderer(13)
     app = App(make_config(), deck, send=lambda c: None)
@@ -266,6 +302,253 @@ def test_app_notifies_on_block_transition(monkeypatch):
     assert len(calls) == 1  # no duplicate while still blocked
 
 
+def test_app_blocked_notifier_receives_agent_state_and_metadata():
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+
+    class CaptureBlocked:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((agent.key, agent.agent_type, body, sound, multi_server))
+
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_notifier=CaptureBlocked(),
+    )
+
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+    )
+
+    assert calls == [(AgentKey("dev", "p1"), "claude", "api", True, False)]
+
+
+async def test_app_default_blocked_notification_scheduler_works_inside_running_loop():
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+
+    class CaptureBlocked:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((agent.key, body, sound, multi_server))
+
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_notifier=CaptureBlocked(),
+    )
+
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+    )
+    await asyncio.sleep(0)
+
+    assert calls == [(AgentKey("dev", "p1"), "api", True, False)]
+
+
+async def test_app_direct_blocked_notifier_exception_is_consumed_by_default_scheduler():
+    import gc
+
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    errors = []
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda loop, context: errors.append(context))
+
+    class BoomBlocked:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            raise RuntimeError("blocked notifier failed")
+
+    try:
+        app = App(
+            cfg,
+            FakeRenderer(13),
+            send=lambda c: None,
+            blocked_notifier=BoomBlocked(),
+        )
+
+        app.handle_snapshot(
+            "dev",
+            [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+        )
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert errors == []
+
+
+def test_apply_config_rebuilds_blocked_notification_runtime():
+    import asyncio
+
+    from herdeck.notify import BlockedNotificationRuntime
+
+    calls = []
+    pollers = []
+
+    class CaptureBlocked:
+        def __init__(self, label):
+            self._label = label
+
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((self._label, agent.key, body, sound, multi_server))
+
+    def runtime_factory(config):
+        poller = object()
+        pollers.append(poller)
+        return BlockedNotificationRuntime(CaptureBlocked(config.meta.active_profile), poller)
+
+    cfg = make_config()
+    cfg.meta.active_profile = "default"
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_runtime_factory=runtime_factory,
+    )
+    first_poller = app.notification_poller
+
+    new_cfg = make_config()
+    new_cfg.meta.active_profile = "mobile"
+    app._apply_config(new_cfg)
+
+    assert app.notification_poller is pollers[-1]
+    assert app.notification_poller is not first_poller
+    agent = AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)
+    asyncio.run(
+        app.blocked_notifier.notify_blocked(
+            agent, body="api · main", sound=False, multi_server=False
+        )
+    )
+    assert calls == [("mobile", AgentKey("dev", "p1"), "api · main", False, False)]
+
+
+def test_apply_config_rearms_current_blocked_agents_for_interactive_runtime_only():
+    from herdeck.notify import BlockedNotificationRuntime
+
+    calls = []
+
+    class CaptureBlocked:
+        def __init__(self, label, kind):
+            self._label = label
+            self._kind = kind
+
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((self._kind, self._label, agent.key, body, sound, multi_server))
+
+        async def poll_once(self, *, timeout=20, is_current=None):
+            pass
+
+    def runtime_factory(config):
+        return BlockedNotificationRuntime(
+            CaptureBlocked(config.meta.active_profile, "legacy"),
+            CaptureBlocked(config.meta.active_profile, "interactive"),
+        )
+
+    cfg = make_config()
+    cfg.meta.active_profile = "default"
+    cfg.notifications.enabled = True
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_runtime_factory=runtime_factory,
+    )
+
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+    )
+
+    new_cfg = make_config()
+    new_cfg.meta.active_profile = "mobile"
+    new_cfg.notifications.enabled = True
+    app._apply_config(new_cfg)
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+    )
+
+    assert calls == [
+        ("legacy", "default", AgentKey("dev", "p1"), "api", True, False),
+        ("interactive", "mobile", AgentKey("dev", "p1"), "api", True, False),
+    ]
+
+
+def test_apply_config_does_not_rearm_interactive_when_blocked_notifications_disabled():
+    from herdeck.notify import BlockedNotificationRuntime
+
+    calls = []
+
+    class CaptureBlocked:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((agent.key, body, sound, multi_server))
+
+        async def poll_once(self, *, timeout=20, is_current=None):
+            pass
+
+    def runtime_factory(config):
+        return BlockedNotificationRuntime(CaptureBlocked(), CaptureBlocked())
+
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_runtime_factory=runtime_factory,
+    )
+
+    app.handle_snapshot(
+        "dev",
+        [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
+    )
+
+    new_cfg = make_config()
+    new_cfg.notifications.enabled = True
+    new_cfg.notifications.on = []
+    app._apply_config(new_cfg)
+
+    assert calls == [(AgentKey("dev", "p1"), "api", True, False)]
+
+
+def test_apply_config_preserves_direct_blocked_notifier():
+    calls = []
+    cfg = make_config()
+
+    class CaptureBlocked:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append((agent.key, body, sound, multi_server))
+
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        blocked_notifier=CaptureBlocked(),
+    )
+
+    new_cfg = make_config()
+    new_cfg.meta.active_profile = "mobile"
+    app._apply_config(new_cfg)
+
+    agent = AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)
+    asyncio.run(
+        app.blocked_notifier.notify_blocked(
+            agent, body="api · main", sound=False, multi_server=False
+        )
+    )
+
+    assert calls == [(AgentKey("dev", "p1"), "api · main", False, False)]
+
+
 def test_app_notify_keeps_other_servers_blocked_keys():
     from herdeck.notify import Notifier
 
@@ -329,7 +612,7 @@ def test_build_notifier_fires_both_backends():
     cfg = make_config()
     cfg.notifications.enabled = True
     cfg.notifications.backends = ["macos", "telegram"]
-    cfg.notifications.telegram = TelegramConfig("HERDECK_TG", "42")
+    cfg.notifications.telegram = TelegramConfig("HERDECK_TG", "42", message_thread_id=456)
 
     def rec_macos(t, b, s):
         calls.append(("macos", t))
@@ -342,11 +625,269 @@ def test_build_notifier_fires_both_backends():
         cfg,
         getenv=lambda k: "TOK",
         macos_sink=rec_macos,
-        telegram_factory=lambda tok, cid: (telegram_args.append((tok, cid)), rec_tg)[1],
+        telegram_factory=lambda tok, cid, thread: (
+            telegram_args.append((tok, cid, thread)),
+            rec_tg,
+        )[1],
     )
     n.notify("title", "body", False)
-    assert telegram_args == [("TOK", "42")]
+    assert telegram_args == [("TOK", "42", 456)]
     assert ("macos", "title") in calls and ("telegram", "title") in calls
+
+
+def test_build_blocked_notifier_preserves_macos_with_interactive_telegram():
+    from herdeck.app import _build_blocked_notification_runtime
+    from herdeck.config import TelegramConfig
+
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.backends = ["macos", "telegram"]
+    cfg.notifications.telegram = TelegramConfig(
+        "HERDECK_TG",
+        "-1001",
+        interactive=True,
+        allowed_user_ids=[111],
+    )
+    calls = []
+
+    class Interactive:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append(("interactive", agent.key, body, sound, multi_server))
+
+        async def poll_once(self, *, timeout=20, is_current=None):
+            calls.append(("poll", timeout))
+
+    def one_way_telegram_should_not_run(token, chat_id, message_thread_id):
+        raise AssertionError("interactive Telegram must replace the one-way Telegram sink")
+
+    runtime = _build_blocked_notification_runtime(
+        cfg,
+        getenv=lambda name: "TOK",
+        macos_sink=lambda title, body, sound: calls.append(("macos", title, body, sound)),
+        telegram_factory=one_way_telegram_should_not_run,
+        telegram_interactor_factory=lambda token, tg: calls.append(
+            ("factory", token, tg.chat_id)
+        )
+        or Interactive(),
+    )
+
+    agent = AgentState(AgentKey("local", "p1"), "codex", "herdeck", Status.BLOCKED)
+    asyncio.run(
+        runtime.notifier.notify_blocked(
+            agent, body="herdeck · main", sound=True, multi_server=False
+        )
+    )
+    assert runtime.poller is not None
+    asyncio.run(runtime.poller.poll_once(timeout=5))
+
+    assert calls == [
+        ("factory", "TOK", "-1001"),
+        ("macos", "codex", "herdeck · main", True),
+        ("interactive", AgentKey("local", "p1"), "herdeck · main", True, False),
+        ("poll", 5),
+    ]
+
+
+def test_build_blocked_runtime_keeps_one_way_telegram_when_interactive_incomplete():
+    from herdeck.app import _build_blocked_notification_runtime
+    from herdeck.config import TelegramConfig
+
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.backends = ["telegram"]
+    cfg.notifications.telegram = TelegramConfig(
+        "HERDECK_TG",
+        "-1001",
+        message_thread_id=456,
+        interactive=True,
+        allowed_user_ids=[],
+    )
+    calls = []
+
+    def telegram_sink(token, chat_id, message_thread_id):
+        return lambda title, body, sound: calls.append(
+            ("telegram", token, chat_id, message_thread_id, title, body, sound)
+        )
+
+    def interactor_should_not_run(token, tg):
+        raise AssertionError("interactive Telegram requires allowed_user_ids")
+
+    runtime = _build_blocked_notification_runtime(
+        cfg,
+        getenv=lambda name: "TOK",
+        telegram_factory=telegram_sink,
+        telegram_interactor_factory=interactor_should_not_run,
+    )
+
+    agent = AgentState(AgentKey("local", "p1"), "codex", "herdeck", Status.BLOCKED)
+    asyncio.run(
+        runtime.notifier.notify_blocked(
+            agent, body="herdeck · main", sound=True, multi_server=False
+        )
+    )
+
+    assert runtime.poller is None
+    assert calls == [("telegram", "TOK", "-1001", 456, "codex", "herdeck · main", True)]
+
+
+def test_build_blocked_runtime_keeps_one_way_telegram_until_interactor_can_poll():
+    from herdeck.app import _build_blocked_notification_runtime
+    from herdeck.config import TelegramConfig
+
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.backends = ["telegram"]
+    cfg.notifications.telegram = TelegramConfig(
+        "HERDECK_TG",
+        "-1001",
+        message_thread_id=456,
+        interactive=True,
+        allowed_user_ids=[111],
+    )
+    calls = []
+
+    def telegram_sink(token, chat_id, message_thread_id):
+        return lambda title, body, sound: calls.append(
+            ("telegram", token, chat_id, message_thread_id, title, body, sound)
+        )
+
+    class OutboundOnly:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            calls.append(("interactive", agent.key, body, sound, multi_server))
+
+    runtime = _build_blocked_notification_runtime(
+        cfg,
+        getenv=lambda name: "TOK",
+        telegram_factory=telegram_sink,
+        telegram_interactor_factory=lambda token, tg: OutboundOnly(),
+    )
+
+    agent = AgentState(AgentKey("local", "p1"), "codex", "herdeck", Status.BLOCKED)
+    asyncio.run(
+        runtime.notifier.notify_blocked(
+            agent, body="herdeck · main", sound=True, multi_server=False
+        )
+    )
+
+    assert runtime.poller is None
+    assert calls == [("telegram", "TOK", "-1001", 456, "codex", "herdeck · main", True)]
+
+
+def test_install_telegram_runtime_sets_factory_poller_and_control():
+    from herdeck.app import _install_telegram_runtime
+    from herdeck.config import TelegramConfig
+
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.backends = ["telegram"]
+    cfg.notifications.telegram = TelegramConfig(
+        "HERDECK_TG",
+        "-1001",
+        message_thread_id=456,
+        interactive=True,
+        allowed_user_ids=[111],
+        prompt_max_chars=777,
+    )
+    updates = []
+    made = []
+
+    class Control:
+        def update_config(self, config):
+            updates.append(config)
+
+    class Poller:
+        async def notify_blocked(self, agent, *, body, sound, multi_server):
+            pass
+
+        async def poll_once(self, *, timeout=20, is_current=None):
+            pass
+
+    control = Control()
+    app = App(cfg, FakeRenderer(13), send=lambda c: None)
+
+    _install_telegram_runtime(
+        app,
+        cfg,
+        control,
+        getenv=lambda name: "TOK",
+        bot_client_factory=lambda token: ("client", token),
+        interactor_factory=lambda client, runtime_control, **kwargs: made.append(
+            (client, runtime_control, kwargs)
+        )
+        or Poller(),
+    )
+
+    assert updates == [cfg]
+    assert made == [
+        (
+            ("client", "TOK"),
+            control,
+            {
+                "chat_id": "-1001",
+                "message_thread_id": 456,
+                "allowed_user_ids": [111],
+                "prompt_max_chars": 777,
+            },
+        )
+    ]
+    assert app.notification_poller is not None
+
+
+def test_start_telegram_poll_loop_schedules_and_uses_current_poller():
+    from herdeck.app import _poll_telegram_once_from_app, _start_telegram_poll_loop
+    from herdeck.notify import BlockedNotificationRuntime
+
+    cfg = make_config()
+    app = App(cfg, FakeRenderer(13), send=lambda c: None)
+    calls = []
+    guards = []
+
+    class Poller:
+        async def poll_once(self, *, timeout=20, is_current=None):
+            guards.append(is_current)
+            calls.append(("poll", timeout, is_current()))
+
+    async def fail_sleep(delay):
+        raise AssertionError("poller is present; idle sleep should not run")
+
+    app.notification_poller = Poller()
+    asyncio.run(_poll_telegram_once_from_app(app, timeout=7, idle_sleep=fail_sleep))
+
+    created = []
+    task = _start_telegram_poll_loop(app, create_task=lambda coro: created.append(coro) or object())
+
+    assert calls == [("poll", 7, True)]
+    assert guards[0]() is True
+    app._install_blocked_runtime(BlockedNotificationRuntime(app.blocked_notifier))
+    assert guards[0]() is False
+    assert task is not None
+    assert created
+    created[0].close()
+
+
+def test_poll_telegram_once_sleeps_after_poller_disables_inbound():
+    from herdeck.app import _poll_telegram_once_from_app
+
+    cfg = make_config()
+    app = App(cfg, FakeRenderer(13), send=lambda c: None)
+    calls = []
+    sleeps = []
+
+    class Poller:
+        inbound_disabled = False
+
+        async def poll_once(self, *, timeout=20, is_current=None):
+            calls.append(("poll", timeout, is_current()))
+            self.inbound_disabled = True
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    app.notification_poller = Poller()
+    asyncio.run(_poll_telegram_once_from_app(app, timeout=7, idle_sleep=record_sleep))
+
+    assert calls == [("poll", 7, True)]
+    assert sleeps == [60]
 
 
 def test_build_notifier_skips_telegram_without_token():
