@@ -1,78 +1,26 @@
+"""Back-compat re-export shim.
+
+The frozen-render helpers are generic (they depend only on ``herdeck.icons``),
+so they now live in ``herdeck.frozen``. This module re-exports them unchanged so
+``herdeck.elgato.runtime`` and any existing imports/tests keep working.
+"""
+
 from __future__ import annotations
 
-import hashlib
-import os
-import sys
-from collections.abc import Callable
+from ..frozen import (
+    BAKE_SIZE,
+    baked_assets_dir,
+    glyph_png_name,
+    is_frozen,
+    make_png_rasterizer,
+    prerasterize_assets,
+)
 
-from PIL import Image
-
-from ..icons import ICON_SIZE
-
-BAKE_SIZE = ICON_SIZE
-
-
-def is_frozen() -> bool:
-    """True when running inside a PyInstaller (or similar) frozen bundle."""
-    return bool(getattr(sys, "frozen", False))
-
-
-def baked_assets_dir() -> str:
-    """The bundled assets dir at runtime.
-
-    PyInstaller sets ``sys._MEIPASS`` in both onefile and onedir modes; the
-    ``.spec`` bundles ``src/herdeck/assets`` as data under ``herdeck_assets``.
-    """
-    base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.join(base, "herdeck_assets")
-
-
-def glyph_png_name(svg_text: str) -> str:
-    """Content-addressed PNG filename for an SVG glyph.
-
-    The build-time baker and the runtime loader both key on this, so neither
-    needs to know the agent type — keeping ``IconProvider``'s ``rasterize(svg,
-    size)`` seam untouched.
-    """
-    return hashlib.sha1(svg_text.encode("utf-8")).hexdigest() + ".png"
-
-
-def make_png_rasterizer(baked_dir: str) -> Callable[[str, int], Image.Image]:
-    """A Pillow-only rasterizer that returns a pre-baked PNG for an SVG glyph."""
-
-    def rasterize(svg: str, size: int) -> Image.Image:
-        path = os.path.join(baked_dir, glyph_png_name(svg))
-        img = Image.open(path).convert("RGBA")
-        if img.size != (size, size):
-            img = img.resize((size, size))
-        return img
-
-    return rasterize
-
-
-def prerasterize_assets(src_dir: str, out_dir: str, size: int = BAKE_SIZE) -> list[str]:
-    """Build-time: rasterize each ``*.svg`` in ``src_dir`` to a content-keyed PNG.
-
-    Uses cairosvg (build-time only; excluded from the frozen bundle). Returns the
-    baked PNG filenames (the bundle's glyph manifest). A PNG that already exists is
-    left untouched — no re-encode, no mtime churn — so iterating only ``*.svg`` makes
-    baking into the source assets dir (``out_dir == src_dir``) safe and idempotent.
-    """
-    import io
-
-    import cairosvg  # build-time only — never bundled (see the .spec excludes)
-
-    os.makedirs(out_dir, exist_ok=True)
-    baked: list[str] = []
-    for entry in sorted(os.listdir(src_dir)):
-        if not entry.endswith(".svg"):
-            continue
-        with open(os.path.join(src_dir, entry), encoding="utf-8") as fh:
-            svg = fh.read()
-        name = glyph_png_name(svg)
-        dst = os.path.join(out_dir, name)
-        if not os.path.exists(dst):
-            png = cairosvg.svg2png(bytestring=svg.encode(), output_width=size, output_height=size)
-            Image.open(io.BytesIO(png)).convert("RGBA").save(dst)
-        baked.append(name)
-    return baked
+__all__ = [
+    "BAKE_SIZE",
+    "baked_assets_dir",
+    "glyph_png_name",
+    "is_frozen",
+    "make_png_rasterizer",
+    "prerasterize_assets",
+]
