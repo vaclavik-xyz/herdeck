@@ -6,6 +6,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DESKTOP="$(dirname "$HERE")"
+ROOT="$(dirname "$DESKTOP")"
+PY="${HERDECK_PY:-$ROOT/.venv/bin/python}"
 BIN="${1:-$DESKTOP/src-tauri/resources/herdeck-deckapp/herdeck-deckapp}"
 test -x "$BIN" || { echo "FAIL: frozen binary not found at $BIN"; exit 1; }
 
@@ -21,7 +23,27 @@ for cand in "$BINDIR/_internal/herdeck_assets" "$BINDIR/herdeck_assets"; do
   [ -d "$cand" ] && ASSETS_DIR="$cand" && break
 done
 [ -n "$ASSETS_DIR" ] || { echo "FAIL: bundled herdeck_assets dir not found under $BINDIR"; exit 1; }
-python3 - "$ASSETS_DIR" <<'PY'
+if [ -x "$PY" ] && "$PY" -c "import PIL" 2>/dev/null; then
+  # Strongest proof: decode the baked PNG exactly as the frozen rasterizer does.
+  "$PY" - "$ASSETS_DIR" <<'PY'
+import hashlib, os, sys
+from PIL import Image
+d = sys.argv[1]
+svg_path = os.path.join(d, "codex.svg")
+assert os.path.exists(svg_path), f"FAIL: codex.svg not bundled in {d}"
+svg = open(svg_path, encoding="utf-8").read()
+name = hashlib.sha1(svg.encode("utf-8")).hexdigest() + ".png"
+png = os.path.join(d, name)
+assert os.path.exists(png), f"FAIL: baked codex PNG {name} missing from bundle"
+im = Image.open(png)
+im.load()                  # forces full IDAT inflate + decode (raises on corrupt data)
+im = im.convert("RGBA")    # the exact op herdeck.frozen.make_png_rasterizer performs
+assert im.size == (196, 196), f"FAIL: baked codex PNG dims {im.size}, want (196, 196): {png}"
+print(f"OK: baked codex PNG decodes (196x196 RGBA): {name}")
+PY
+else
+  # Fallback (no Pillow available): stdlib PNG signature + per-chunk CRC validation.
+  python3 - "$ASSETS_DIR" <<'PY'
 import hashlib, os, sys, zlib
 d = sys.argv[1]
 svg_path = os.path.join(d, "codex.svg")
@@ -58,6 +80,7 @@ assert width == 196 and height == 196, f"FAIL: baked codex PNG dims {width}x{hei
 assert saw_iend, f"FAIL: baked codex PNG missing IEND chunk: {png}"
 print(f"OK: baked codex PNG valid (196x196, CRC-checked): {name}")
 PY
+fi
 
 # Force the deterministic mock source (no on-disk config / keychain needed).
 export HERDECK_MOCK=1
