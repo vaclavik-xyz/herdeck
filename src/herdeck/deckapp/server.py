@@ -424,8 +424,8 @@ def _default_icons():
     from ..frozen import baked_assets_dir, is_frozen, make_png_rasterizer
     from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
 
-    cache = os.path.join(tempfile.gettempdir(), "herdeck-deckapp-icons")
     if is_frozen():
+        cache = os.path.join(tempfile.gettempdir(), "herdeck-deckapp-icons-frozen")
         baked = baked_assets_dir()
         return IconProvider(
             cache_dir=cache,
@@ -434,6 +434,7 @@ def _default_icons():
             rasterize=make_png_rasterizer(baked),
             assets_dir=baked,
         )
+    cache = os.path.join(tempfile.gettempdir(), "herdeck-deckapp-icons")
     return IconProvider(
         cache_dir=cache,
         slug_map=DEFAULT_AGENT_SLUGS,

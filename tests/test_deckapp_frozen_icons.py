@@ -26,3 +26,28 @@ def test_default_icons_non_frozen_keeps_cairosvg_defaults(monkeypatch):
     monkeypatch.setattr(frozen, "is_frozen", lambda: False)
     icons = server._default_icons()
     assert icons._assets_dir == _ASSETS_DIR  # default source-tree assets dir
+
+
+def test_frozen_icons_use_distinct_cache_namespace(tmp_path, monkeypatch):
+    """Frozen and non-frozen providers must use separate cache dirs so stale
+    PNGs from one render path never contaminate the other."""
+    import os
+
+    svg = "<svg>x</svg>"
+    from PIL import Image
+
+    from herdeck.icons import ICON_SIZE
+
+    Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (1, 2, 3, 255)).save(
+        tmp_path / frozen.glyph_png_name(svg)
+    )
+
+    monkeypatch.setattr(frozen, "is_frozen", lambda: True)
+    monkeypatch.setattr(frozen, "baked_assets_dir", lambda: str(tmp_path))
+    frozen_icons = server._default_icons()
+
+    monkeypatch.setattr(frozen, "is_frozen", lambda: False)
+    non_frozen_icons = server._default_icons()
+
+    assert os.path.basename(frozen_icons._cache_dir) == "herdeck-deckapp-icons-frozen"
+    assert os.path.basename(non_frozen_icons._cache_dir) == "herdeck-deckapp-icons"
