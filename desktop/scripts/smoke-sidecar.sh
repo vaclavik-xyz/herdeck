@@ -29,8 +29,16 @@ assert os.path.exists(svg_path), f"FAIL: codex.svg not bundled in {d}"
 svg = open(svg_path, encoding="utf-8").read()
 name = hashlib.sha1(svg.encode("utf-8")).hexdigest() + ".png"
 png = os.path.join(d, name)
-assert os.path.exists(png), f"FAIL: baked codex PNG {name} missing from bundle (frozen rasterizer would fall back to a letter)"
-print("OK: baked codex PNG present:", name)
+# Validate the baked PNG is a real, decodable image of the expected dimensions.
+# BAKE_SIZE = 196 (herdeck.icons.ICON_SIZE / frozen.BAKE_SIZE)
+EXPECTED = 196
+data = open(png, "rb").read() if os.path.exists(png) else b""
+assert len(data) > 24, f"FAIL: baked codex PNG too small/empty: {png}"
+assert data[:8] == b"\x89PNG\r\n\x1a\n", f"FAIL: baked codex PNG not a PNG: {png}"
+w = int.from_bytes(data[16:20], "big")
+h = int.from_bytes(data[20:24], "big")
+assert w == EXPECTED and h == EXPECTED, f"FAIL: baked codex PNG dims {w}x{h}, want {EXPECTED}x{EXPECTED}: {png}"
+print(f"OK: baked codex PNG valid ({w}x{h}):", name)
 PY
 
 # Force the deterministic mock source (no on-disk config / keychain needed).
