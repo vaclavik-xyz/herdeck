@@ -75,12 +75,23 @@ runtime keeps importing `from .frozen import ...` with zero behavior change. The
 existing Elgato frozen tests must stay green.
 
 **Wire the deckapp:** `deckapp/server.py:_default_icons()` — when `is_frozen()`,
-construct `IconProvider(..., rasterize=make_png_rasterizer(baked_assets_dir()))`.
-When not frozen, behavior is unchanged (no `rasterize` arg → `_default_rasterize`
-→ cairosvg). The `fetch=lambda s: None` offline default already holds in both
-paths. `IconProvider.__init__` already exposes
-`rasterize: Callable[[str, int], Image.Image] = _default_rasterize`
-(`src/herdeck/icons.py:227`) — no new seam needed.
+construct `IconProvider(..., rasterize=make_png_rasterizer(baked_dir),
+assets_dir=baked_dir)` where `baked_dir = baked_assets_dir()`. **Both** the
+`rasterize` seam **and** `assets_dir` must point at the bundled dir — exactly like
+the Elgato `_frozen_session` (`elgato/runtime.py:113-120`). `IconProvider`
+defaults `assets_dir=_ASSETS_DIR` (`= src/herdeck/assets`,
+`icons.py:32`), which does **not** exist in the frozen bundle; without the
+override `_base_glyph` finds no SVG, the offline `fetch` returns `None`, and every
+tile degrades to a letter glyph (the PNG rasterizer is never reached). The baked
+PNGs live **in the same `herdeck_assets` dir** as the SVGs
+(`prerasterize_assets` bakes in place), so one `assets_dir` serves both: the
+provider reads `<agent>.svg` from it, and the rasterizer loads the content-keyed
+PNG from it. When not frozen, behavior is unchanged (no `rasterize`/`assets_dir`
+args → `_default_rasterize` + `_ASSETS_DIR` → cairosvg). The `fetch=lambda s:
+None` offline default already holds in both paths. `IconProvider.__init__`
+already exposes `rasterize: Callable[[str, int], Image.Image] = _default_rasterize`
+and `assets_dir: str | None = _ASSETS_DIR` (`src/herdeck/icons.py:227-234`) — no
+new seam needed.
 
 ### 2. Frozen sidecar bundle (PyInstaller)
 
@@ -105,10 +116,17 @@ A committed PyInstaller spec + thin entry, mirroring `streamdeck/herdeck-backend
   - `hiddenimports`: deckapp submodules `herdeck.deckapp.server`,
     `herdeck.deckapp.live`, `herdeck.deckapp.mock`, `herdeck.deckapp.source`,
     `herdeck.deckapp.watcher`, `herdeck.deckapp.config_service`, plus
-    `websockets` as a safety net. Add more **only** if the real smoke run shows
-    PyInstaller missed a reachable import.
+    `websockets` and `tomli_w` as safety nets (`tomli_w` is imported at the top of
+    `config_service.py`; listing it guards against the lazy-import path being
+    missed). Add more **only** if the real smoke run shows PyInstaller missed a
+    reachable import.
   - `EXE(..., name="herdeck-deckapp", console=True, target_arch="arm64")`,
-    `COLLECT(..., name="herdeck-deckapp")` → **onedir**.
+    `COLLECT(..., name="herdeck-deckapp")` → **onedir**. `COLLECT` itself creates a
+    folder named `herdeck-deckapp/` **under** the `--distpath`, so the freeze runs
+    with `--distpath desktop/src-tauri/resources` (**not**
+    `…/resources/herdeck-deckapp`, which would double-nest). Result:
+    `desktop/src-tauri/resources/herdeck-deckapp/herdeck-deckapp` (folder/exe) —
+    the exact path the Rust resolver and the artifact check expect.
 - **Onedir, not onefile:** matches the Elgato decision — no per-launch temp
   self-extraction (faster cold start, avoids Gatekeeper/AV friction from a child
   process extracting into tmp). A folder inside the `.app` Resources is fine.
@@ -120,8 +138,16 @@ process emitting one discovery JSON line on stdout, same env contract
 ### 3. Bundling + production resolution (Rust / Tauri)
 
 - **`tauri.conf.json`:** add `bundle.resources` mapping the staged onedir folder
-  (`resources/herdeck-deckapp/` relative to `src-tauri/`) into the app bundle.
-  Narrow `bundle.targets` to macOS `["app", "dmg"]` for this arm64 milestone.
+  into the app bundle so the executable lands at
+  `<resource_dir>/herdeck-deckapp/herdeck-deckapp`. Use the **map form** to strip
+  the `resources/` staging prefix:
+  `"resources": { "resources/herdeck-deckapp": "herdeck-deckapp" }` (source is
+  relative to `src-tauri/`; dest is relative to the bundle's resource dir). The
+  plan confirms the exact Tauri placement against `app.path().resource_dir()` and
+  adjusts the dest if Tauri nests differently — the binding constraint is that the
+  staged path, the Tauri dest, and the Rust resolver path all agree on
+  `<resource_dir>/herdeck-deckapp/herdeck-deckapp`. Narrow `bundle.targets` to
+  macOS `["app", "dmg"]` for this arm64 milestone.
 - **Rust resolution** (`sidecar.rs` + `lib.rs`): new precedence in `resolve_plan`:
 
   1. **env override** (`HERDECK_DECKAPP_URL` + `HERDECK_DECKAPP_TOKEN`) → trust an
@@ -142,11 +168,19 @@ process emitting one discovery JSON line on stdout, same env contract
 
 ### 4. Build pipeline (committed scripts)
 
+- **Build env:** the freeze runs in a Python env with the `deck` extra installed
+  (`pip install -e '.[deck]'`), which provides every packaging dependency the
+  frozen graph needs — `tomli-w` (imported by `deckapp/config_service.py`),
+  `pillow`, `cairosvg` (build-time baker only — excluded from the bundle),
+  `keyring`, `python-dotenv`. The base `dependencies` (`websockets` only) is **not**
+  enough; a clean env that installs only the base would fail PyInstaller analysis
+  or frozen startup on the `import tomli_w`.
 - `desktop/scripts/build-sidecar.sh`:
   1. pre-rasterize `src/herdeck/assets/*.svg` → content-keyed PNGs into the assets
      dir PyInstaller bundles (idempotent; `prerasterize_assets`).
-  2. PyInstaller `desktop/herdeck-deckapp.spec` → onedir into
-     `desktop/src-tauri/resources/herdeck-deckapp/` (the `--distpath`).
+  2. PyInstaller `desktop/herdeck-deckapp.spec` with
+     `--distpath desktop/src-tauri/resources` (COLLECT adds the `herdeck-deckapp/`
+     folder) → `desktop/src-tauri/resources/herdeck-deckapp/herdeck-deckapp`.
 - `desktop/scripts/build-app.sh`: run `build-sidecar.sh`, then `npm run tauri
   build` (which runs `npm run build` via `beforeBuildCommand`).
 - **Gitignore** the staged bundle, the baked PNGs, and PyInstaller work dirs
@@ -194,9 +228,12 @@ comes from** and **how it rasterizes glyphs when frozen**.
 - **Real freeze + headless smoke gate (in-session, per chosen DoD):** run
   `build-sidecar.sh` to actually PyInstaller-freeze the deckapp, then spawn the
   frozen `herdeck-deckapp` binary headless and assert it (a) prints a valid
-  discovery JSON line within the timeout and (b) serves a token-authed
-  `GET /health`. This catches real PyInstaller gaps (hidden imports, frozen
-  rendering, missing font/assets) without a GUI.
+  discovery JSON line within the timeout, (b) serves a token-authed `GET /health`,
+  (c) serves `GET /tile/0` returning a PNG (exercises the frozen PNG rasterizer +
+  bundled `herdeck_assets`), and (d) serves `GET /config` (exercises the
+  `config_service` import graph, i.e. that `tomli_w` is bundled). This catches real
+  PyInstaller gaps (hidden imports, frozen rendering, missing assets, the
+  `tomli_w` packaging dep) without a GUI.
 - **Manual gate (user, on a Mac):** `npm run tauri build` → double-click
   `herdeck.app` → confirm the floating deck renders tiles and the config editor
   opens, with **no** Python / `.venv` present (overlaps the eventual signed-build
@@ -211,10 +248,12 @@ comes from** and **how it rasterizes glyphs when frozen**.
   at all; the manual `.app` gate should eyeball a tile. No TTF is bundled (matches
   Elgato). If a future target lacks the system font, the bundled Pillow default
   covers it.
-- **PyInstaller hidden imports** — the deckapp's reachable graph differs from the
-  Elgato backend's (`live`/`mock`/`source`/`watcher`/`config_service` +
-  `connector`/`websockets`). Resolve in the `.spec` `hiddenimports` and verify the
-  frozen binary actually serves via the smoke run.
+- **PyInstaller hidden imports + packaging deps** — the deckapp's reachable graph
+  differs from the Elgato backend's (`live`/`mock`/`source`/`watcher`/
+  `config_service` + `connector`/`websockets`), and `config_service` pulls
+  `tomli_w` (a `[deck]`-extra dep, not a base dep). Resolve imports in the `.spec`
+  `hiddenimports`, install the `deck` extra in the build env, and verify the frozen
+  binary actually serves `/health` + `/tile` + `/config` via the smoke run.
 - **`resource_dir()` in dev vs bundle** — must fall through to `.venv` in `tauri
   dev` (no staged bundle). The `exists()` check on the bundled binary is the
   guard; cover it with the `resolve_plan` precedence test.
