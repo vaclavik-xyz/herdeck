@@ -168,13 +168,17 @@ process emitting one discovery JSON line on stdout, same env contract
 
 ### 4. Build pipeline (committed scripts)
 
-- **Build env:** the freeze runs in a Python env with the `deck` extra installed
-  (`pip install -e '.[deck]'`), which provides every packaging dependency the
-  frozen graph needs — `tomli-w` (imported by `deckapp/config_service.py`),
-  `pillow`, `cairosvg` (build-time baker only — excluded from the bundle),
-  `keyring`, `python-dotenv`. The base `dependencies` (`websockets` only) is **not**
-  enough; a clean env that installs only the base would fail PyInstaller analysis
-  or frozen startup on the `import tomli_w`.
+- **Build env:** the freeze runs in a Python env installed with **both** the
+  `packaging` and `deck` extras — `pip install -e '.[deck,packaging]'`. The
+  existing `packaging` extra (used by the Elgato `build-plugin.sh`) provides
+  `pyinstaller>=6` + `cairosvg` + `pillow` + `websockets` + `keyring`; the `deck`
+  extra adds the deckapp runtime deps the frozen graph needs but `packaging`
+  lacks — `tomli-w` (imported by `deckapp/config_service.py`) and `python-dotenv`.
+  The `deck` extra also pulls `strmdck`/`hidapi`; those are merely *installed* in
+  the build env, never bundled (the `.spec` `excludes` drops `StreamDeck`/`hid`).
+  The base `dependencies` (`websockets` only) is **not** enough — neither
+  PyInstaller itself nor `tomli_w` is there, so a clean env that installs only the
+  base would fail at freeze time or frozen startup.
 - `desktop/scripts/build-sidecar.sh`:
   1. pre-rasterize `src/herdeck/assets/*.svg` → content-keyed PNGs into the assets
      dir PyInstaller bundles (idempotent; `prerasterize_assets`).
