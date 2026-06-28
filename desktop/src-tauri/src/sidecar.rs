@@ -83,6 +83,36 @@ pub fn resolve_dev_sidecar(repo_root: &Path) -> CommandSpec {
     }
 }
 
+/// Resolve the frozen/bundled sidecar command from the Tauri resource dir. The
+/// PyInstaller onedir bundle lands at `<resource_dir>/herdeck-deckapp/` with the
+/// executable inside it. Returns `Some` only when that binary actually exists, so
+/// a dev build (no staged bundle) cleanly falls through to the `.venv`.
+pub fn resolve_frozen_sidecar(resource_dir: &Path) -> Option<CommandSpec> {
+    let bin = resource_dir.join("herdeck-deckapp").join("herdeck-deckapp");
+    if bin.is_file() {
+        Some(CommandSpec {
+            program: bin.to_string_lossy().into_owned(),
+            args: vec![],
+            cwd: None,
+            envs: vec![],
+        })
+    } else {
+        None
+    }
+}
+
+/// Pick the sidecar to spawn: the bundled frozen binary when present (production),
+/// otherwise the dev `.venv` interpreter. `resource_dir` is `None` when Tauri
+/// could not resolve one (then we always use the dev path).
+pub fn choose_spawn(resource_dir: Option<&Path>, repo_root: &Path) -> CommandSpec {
+    if let Some(dir) = resource_dir {
+        if let Some(spec) = resolve_frozen_sidecar(dir) {
+            return spec;
+        }
+    }
+    resolve_dev_sidecar(repo_root)
+}
+
 /// Kill a child and reap it, so a failed spawn/handshake never leaves a zombie
 /// that the supervisor's retries would accumulate.
 fn kill_and_reap(child: &mut Child) {
@@ -295,6 +325,56 @@ fn wait_for_child(shared: &Arc<Mutex<Option<Child>>>, stop: &Arc<AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        // Dependency-free temp dir keyed by the (unique) test name.
+        let p = std::env::temp_dir().join(format!("herdeck-3a-{name}"));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn stage_frozen(resource_dir: &Path) -> PathBuf {
+        let dir = resource_dir.join("herdeck-deckapp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("herdeck-deckapp");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        bin
+    }
+
+    #[test]
+    fn resolve_frozen_sidecar_some_when_binary_exists() {
+        let res = scratch("frozen-exists");
+        let bin = stage_frozen(&res);
+        let spec = resolve_frozen_sidecar(&res).expect("should resolve");
+        assert_eq!(spec.program, bin.to_string_lossy());
+        assert!(spec.args.is_empty());
+        assert!(spec.cwd.is_none());
+        assert!(spec.envs.is_empty());
+    }
+
+    #[test]
+    fn resolve_frozen_sidecar_none_when_missing() {
+        let res = scratch("frozen-missing");
+        assert!(resolve_frozen_sidecar(&res).is_none());
+    }
+
+    #[test]
+    fn choose_spawn_prefers_frozen_then_falls_back_to_dev_venv() {
+        let res = scratch("choose-frozen");
+        stage_frozen(&res);
+        let frozen = choose_spawn(Some(&res), Path::new("/repo"));
+        assert!(frozen.program.ends_with("/herdeck-deckapp/herdeck-deckapp"));
+
+        // Empty resource dir -> no bundle -> dev venv.
+        let empty = scratch("choose-empty");
+        let dev = choose_spawn(Some(&empty), Path::new("/repo"));
+        assert!(dev.program.ends_with("/.venv/bin/python"));
+
+        // No resource dir at all -> dev venv.
+        let none = choose_spawn(None, Path::new("/repo"));
+        assert!(none.program.ends_with("/.venv/bin/python"));
+    }
 
     #[test]
     fn parses_a_valid_discovery_line() {
