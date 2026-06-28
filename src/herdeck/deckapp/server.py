@@ -413,12 +413,27 @@ class DeckApp:
 def _default_icons():
     """The shared IconProvider, configured for the mock: no network fetch, so the
     deck renders deterministically and offline (bundled SVG assets, else a letter
-    glyph). Reuses herdeck.icons — no rendering logic is reimplemented here."""
+    glyph). Reuses herdeck.icons — no rendering logic is reimplemented here.
+
+    When running frozen (PyInstaller bundle) there is no cairosvg, so glyphs are
+    served from pre-baked PNGs: pass BOTH the PNG rasterizer and the bundled
+    assets dir, matching the Elgato frozen session."""
     import os
     import tempfile
 
+    from ..frozen import baked_assets_dir, is_frozen, make_png_rasterizer
     from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
 
+    if is_frozen():
+        cache = os.path.join(tempfile.gettempdir(), "herdeck-deckapp-icons-frozen")
+        baked = baked_assets_dir()
+        return IconProvider(
+            cache_dir=cache,
+            slug_map=DEFAULT_AGENT_SLUGS,
+            fetch=lambda slug: None,  # offline-first when frozen
+            rasterize=make_png_rasterizer(baked),
+            assets_dir=baked,
+        )
     cache = os.path.join(tempfile.gettempdir(), "herdeck-deckapp-icons")
     return IconProvider(
         cache_dir=cache,

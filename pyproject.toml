@@ -34,7 +34,7 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10", "cairosvg", "ruff", "p
 # SVG rasterizer (cairosvg), and the frozen elgato-path runtime deps that must be importable
 # so PyInstaller can trace them (pillow, websockets). `pip install -e .[packaging]` makes the
 # build-plugin.sh pipeline reproducible in a clean env.
-packaging = ["pyinstaller>=6", "cairosvg", "pillow>=10", "websockets>=14", "keyring"]
+packaging = ["pyinstaller>=6", "cairosvg", "pillow>=10", "websockets>=14", "keyring", "tomli-w"]
 
 [project.scripts]
 herdeck = "herdeck.app:main"
