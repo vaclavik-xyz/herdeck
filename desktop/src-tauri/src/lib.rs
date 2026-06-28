@@ -21,7 +21,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition};
 
-use sidecar::{resolve_dev_sidecar, supervise, CommandSpec, Discovery, SupervisorConfig};
+use sidecar::{supervise, CommandSpec, Discovery, SupervisorConfig};
 
 /// Managed state read by the `get_discovery` command and by the supervisor
 /// callback. The live child handle and stop flag are held as separate `Arc`s
@@ -290,7 +290,7 @@ fn parse_host_port(url: &str) -> (String, u16) {
 /// Decide how to obtain the sidecar. If `HERDECK_DECKAPP_URL` +
 /// `HERDECK_DECKAPP_TOKEN` are set, trust that externally-started sidecar (handy
 /// for manual `tauri dev` smoke without a `.venv`); otherwise spawn the dev venv.
-fn resolve_plan() -> SidecarPlan {
+fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
     if let (Ok(url), Ok(token)) = (
         env::var("HERDECK_DECKAPP_URL"),
         env::var("HERDECK_DECKAPP_TOKEN"),
@@ -308,7 +308,10 @@ fn resolve_plan() -> SidecarPlan {
             });
         }
     }
-    SidecarPlan::Spawn(resolve_dev_sidecar(&repo_root_from_manifest()))
+    SidecarPlan::Spawn(sidecar::choose_spawn(
+        resource_dir.as_deref(),
+        &repo_root_from_manifest(),
+    ))
 }
 
 /// Position the floating window near the top-right corner and pin it on top.
@@ -375,7 +378,8 @@ fn start_sidecar(
     child: Arc<Mutex<Option<Child>>>,
     stop: Arc<AtomicBool>,
 ) {
-    match resolve_plan() {
+    let resource_dir = app.path().resource_dir().ok();
+    match resolve_plan(resource_dir) {
         SidecarPlan::External(d) => {
             let view = DiscoveryView::from(&d);
             *discovery.lock().unwrap() = Some(d);
