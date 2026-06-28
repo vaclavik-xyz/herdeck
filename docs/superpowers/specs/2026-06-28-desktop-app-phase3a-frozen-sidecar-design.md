@@ -168,17 +168,21 @@ process emitting one discovery JSON line on stdout, same env contract
 
 ### 4. Build pipeline (committed scripts)
 
-- **Build env:** the freeze runs in a Python env installed with **both** the
-  `packaging` and `deck` extras — `pip install -e '.[deck,packaging]'`. The
-  existing `packaging` extra (used by the Elgato `build-plugin.sh`) provides
-  `pyinstaller>=6` + `cairosvg` + `pillow` + `websockets` + `keyring`; the `deck`
-  extra adds the deckapp runtime deps the frozen graph needs but `packaging`
-  lacks — `tomli-w` (imported by `deckapp/config_service.py`) and `python-dotenv`.
-  The `deck` extra also pulls `strmdck`/`hidapi`; those are merely *installed* in
-  the build env, never bundled (the `.spec` `excludes` drops `StreamDeck`/`hid`).
-  The base `dependencies` (`websockets` only) is **not** enough — neither
-  PyInstaller itself nor `tomli_w` is there, so a clean env that installs only the
-  base would fail at freeze time or frozen startup.
+- **Build env:** the freeze runs in a Python env installed with the `packaging`
+  extra — `pip install -e '.[packaging]'`. The existing `packaging` extra (used by
+  the Elgato `build-plugin.sh`) already provides `pyinstaller>=6` + `cairosvg` +
+  `pillow` + `websockets` + `keyring`. The **only** dep the deckapp frozen graph
+  needs that `packaging` lacks is **`tomli-w`** (imported by
+  `deckapp/config_service.py`); the deckapp graph does **not** reach
+  `python-dotenv` or `deepdiff` (not imported anywhere in `src/herdeck`), and
+  `keyring` is already in `packaging`. So this slice **adds `tomli-w` to the
+  `packaging` extra** in `pyproject.toml` — making `packaging` the single
+  reproducible freeze extra for both the Elgato backend and the desktop sidecar
+  (`tomli-w` is harmless to the Elgato freeze). The full `deck` extra is **not**
+  used for the freeze: it pulls `strmdck`/`hidapi`/`deepdiff` (HID/physical-deck
+  deps, excluded from the bundle) and `strmdck` may not install cleanly in a fresh
+  packaging env. The base `dependencies` (`websockets` only) is **not** enough —
+  neither PyInstaller nor `tomli_w` is there.
 - `desktop/scripts/build-sidecar.sh`:
   1. pre-rasterize `src/herdeck/assets/*.svg` → content-keyed PNGs into the assets
      dir PyInstaller bundles (idempotent; `prerasterize_assets`).
@@ -255,9 +259,9 @@ comes from** and **how it rasterizes glyphs when frozen**.
 - **PyInstaller hidden imports + packaging deps** — the deckapp's reachable graph
   differs from the Elgato backend's (`live`/`mock`/`source`/`watcher`/
   `config_service` + `connector`/`websockets`), and `config_service` pulls
-  `tomli_w` (a `[deck]`-extra dep, not a base dep). Resolve imports in the `.spec`
-  `hiddenimports`, install the `deck` extra in the build env, and verify the frozen
-  binary actually serves `/health` + `/tile` + `/config` via the smoke run.
+  `tomli_w` (not in `packaging` until this slice adds it). Resolve imports in the
+  `.spec` `hiddenimports`, add `tomli-w` to the `packaging` extra, and verify the
+  frozen binary actually serves `/health` + `/tile` + `/config` via the smoke run.
 - **`resource_dir()` in dev vs bundle** — must fall through to `.venv` in `tauri
   dev` (no staged bundle). The `exists()` check on the bundled binary is the
   guard; cover it with the `resolve_plan` precedence test.
