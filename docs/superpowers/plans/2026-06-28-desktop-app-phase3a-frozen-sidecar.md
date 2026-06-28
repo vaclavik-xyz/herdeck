@@ -635,6 +635,30 @@ DESKTOP="$(dirname "$HERE")"
 BIN="${1:-$DESKTOP/src-tauri/resources/herdeck-deckapp/herdeck-deckapp}"
 test -x "$BIN" || { echo "FAIL: frozen binary not found at $BIN"; exit 1; }
 
+# --- Frozen baked-asset proof (robust; no tile-index assumptions) ---------------
+# The ONLY bundled SVG glyph is codex.svg, so a 200 from /tile is NOT proof the
+# frozen PNG rasterizer ran (a broken/missing baked PNG silently degrades to a
+# letter glyph and still returns 200). Instead assert the baked codex PNG is in the
+# bundle: that proves prerasterize + bundling worked and the frozen rasterizer will
+# find it. (The Task 2 unit test already proves the frozen wiring loads it.)
+BINDIR="$(dirname "$BIN")"
+ASSETS_DIR=""
+for cand in "$BINDIR/_internal/herdeck_assets" "$BINDIR/herdeck_assets"; do
+  [ -d "$cand" ] && ASSETS_DIR="$cand" && break
+done
+[ -n "$ASSETS_DIR" ] || { echo "FAIL: bundled herdeck_assets dir not found under $BINDIR"; exit 1; }
+python3 - "$ASSETS_DIR" <<'PY'
+import hashlib, os, sys
+d = sys.argv[1]
+svg_path = os.path.join(d, "codex.svg")
+assert os.path.exists(svg_path), f"FAIL: codex.svg not bundled in {d}"
+svg = open(svg_path, encoding="utf-8").read()
+name = hashlib.sha1(svg.encode("utf-8")).hexdigest() + ".png"
+png = os.path.join(d, name)
+assert os.path.exists(png), f"FAIL: baked codex PNG {name} missing from bundle (frozen rasterizer would fall back to a letter)"
+print("OK: baked codex PNG present:", name)
+PY
+
 # Force the deterministic mock source (no on-disk config / keychain needed).
 export HERDECK_MOCK=1
 
@@ -692,9 +716,9 @@ Expected: ends with `OK: …/resources/herdeck-deckapp/herdeck-deckapp`. If PyIn
 - [ ] **Step 4: Run the headless smoke against the frozen binary**
 
 Run: `bash desktop/scripts/smoke-sidecar.sh`
-Expected: prints the discovery line, `OK: health -> 200`, `OK: tile -> 200`, `OK: config -> 200`, `SMOKE PASS`.
+Expected: `OK: baked codex PNG present: <hash>.png`, the discovery line, `OK: health -> 200`, `OK: tile -> 200`, `OK: config -> 200`, `SMOKE PASS`.
 
-If `/tile` is non-200 or the process dies, the frozen render path is broken (missing assets/rasterizer) — fix the `.spec` datas / the Task 2 wiring before continuing. If `/config` is non-200, `tomli_w` is likely unbundled — confirm it is in `hiddenimports` and installed.
+If the baked-codex-PNG assertion fails, the frozen render path is broken (the baker didn't run, or `herdeck_assets` wasn't bundled) — fix `build-sidecar.sh` step 1 / the `.spec` datas before continuing. If `/tile` is non-200 or the process dies, the server crashed rendering — check the Task 2 wiring. If `/config` is non-200, `tomli_w` is likely unbundled — confirm it is in `hiddenimports` and installed.
 
 - [ ] **Step 5: Confirm the staged bundle stays gitignored**
 
