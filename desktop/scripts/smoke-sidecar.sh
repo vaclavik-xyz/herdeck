@@ -37,17 +37,18 @@ PY
 export HERDECK_MOCK=1
 
 LINE_FILE="$(mktemp)"
-"$BIN" >"$LINE_FILE" 2>/dev/null &
+STDERR_FILE="$(mktemp)"
+"$BIN" >"$LINE_FILE" 2>"$STDERR_FILE" &
 PID=$!
-trap 'kill "$PID" 2>/dev/null || true' EXIT
+trap 'kill "$PID" 2>/dev/null || true; rm -f "$STDERR_FILE"' EXIT
 
-# Wait up to ~10s for the discovery line.
-for _ in $(seq 1 100); do
+# Wait up to ~30s for the discovery line.
+for _ in $(seq 1 300); do
   [ -s "$LINE_FILE" ] && break
   sleep 0.1
 done
 DISCOVERY="$(head -n1 "$LINE_FILE")"
-[ -n "$DISCOVERY" ] || { echo "FAIL: no discovery line"; exit 1; }
+[ -n "$DISCOVERY" ] || { echo "FAIL: no discovery line"; echo "--- sidecar stderr: ---"; cat "$STDERR_FILE"; exit 1; }
 echo "discovery: $DISCOVERY"
 
 # Parse host/port/token without jq (python3 is always present on macOS).
