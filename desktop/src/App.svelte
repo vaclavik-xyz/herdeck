@@ -47,6 +47,9 @@
       const d = asDiscovery(event.payload);
       if (d) discovery = d;
     });
+    void listen("reonboard", () => {
+      reonboard = true;
+    });
 
     // Retry discovery until the supervised sidecar has printed its first line.
     void (async () => {

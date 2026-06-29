@@ -453,8 +453,9 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
+    let reconnect = MenuItem::with_id(app, "reconnect", "Change connection…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&settings, &show, &hide, &autostart, &quit])?;
+    let menu = Menu::with_items(app, &[&settings, &show, &hide, &reconnect, &autostart, &quit])?;
     let autostart_cb = autostart.clone();
 
     let mut builder = TrayIconBuilder::with_id("herdeck-tray")
@@ -477,6 +478,13 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             "hide" => {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.hide();
+                }
+            }
+            "reconnect" => {
+                let _ = app.emit_to("main", "reonboard", ());
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
                 }
             }
             "autostart" => {
