@@ -1,0 +1,100 @@
+name: release
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-linux:
+    name: Build Linux x86_64 (AppImage + deb + rpm)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            rpm \
+            build-essential \
+            file \
+            desktop-file-utils
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Freeze + smoke the sidecar (Linux x86_64)
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[packaging]"
+          bash desktop/scripts/build-sidecar.sh
+          bash desktop/scripts/smoke-sidecar.sh
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install frontend deps
+        working-directory: desktop
+        run: npm ci
+
+      - name: Remove any stale bundle output (warm cache may restore old bundles)
+        run: rm -rf desktop/src-tauri/target/release/bundle
+
+      - name: Build Tauri bundles
+        working-directory: desktop
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: npm run tauri build
+
+      - name: Verify all three Linux bundle formats were produced
+        working-directory: desktop/src-tauri/target/release/bundle
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          fail=0
+          for kind in "appimage/*.AppImage" "deb/*.deb" "rpm/*.rpm"; do
+            files=( $kind )
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "FAIL: no file matched $kind"; fail=1
+            else
+              echo "OK: $kind -> ${files[*]}"
+            fi
+          done
+          [ "$fail" -eq 0 ] || { echo "Missing one or more bundle formats"; exit 1; }
+
+      - name: Inspect rpm runtime Requires (diagnostic — appindicator best-effort)
+        working-directory: desktop/src-tauri/target/release/bundle/rpm
+        run: |
+          for f in *.rpm; do
+            echo "=== Requires of $f ==="
+            rpm -qpR "$f"
+          done
+
+      - name: Upload Linux bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: herdeck-linux-x86_64
+          path: |
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/rpm/*.rpm
+          if-no-files-found: error
