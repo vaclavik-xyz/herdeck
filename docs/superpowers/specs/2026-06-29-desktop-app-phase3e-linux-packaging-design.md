@@ -113,12 +113,16 @@ rpm targetu selhal — to je akceptovatelné, CI je zdroj pravdy.
   + `identifier` generuje `.desktop` soubor pro deb/rpm/AppImage.
 - **Tray runtime dependency** — floating deck má tray ikonu; na Linuxu ji kreslí
   `libayatana-appindicator3`. Tauri AppImage si appindicator lib bundluje sám
-  (`TRAY_LIBRARY_PATH`), ale **.deb/.rpm** by ji měly deklarovat jako runtime
-  závislost:
-  - `bundle.linux.deb.depends`: `["libayatana-appindicator3-1"]`
-  - `bundle.linux.rpm.depends`: `["libayatana-appindicator3"]`
-  - (Pokud Tauri 2 bundler appindicator do depends doplní automaticky, deklarace
-    je neškodná belt-and-suspenders; webkit2gtk a core libs Tauri doplňuje sám.)
+  (`TRAY_LIBRARY_PATH`):
+  - **.deb:** `bundle.linux.deb.depends`: `["libayatana-appindicator3-1"]` —
+    Tauri deb control file deklaruje pevný seznam depends (nespouští
+    `dpkg-shlibdeps`), takže tray lib je vhodné doplnit explicitně. Debian/Ubuntu
+    název je známý a správný.
+  - **.rpm:** **bez explicitního `depends`** — `rpmbuild` automaticky generuje
+    `Requires` pro linkované `.so` knihovny (scan ELF), takže tray lib se přidá
+    sám. Explicitní jméno balíku se na Fedora/RHEL liší od Debianu a špatný název
+    by udělal **neinstalovatelný rpm** → raději spoléhat na auto-detekci.
+  - webkit2gtk a core GTK libs doplňuje Tauri/rpmbuild sám.
 - Žádné nové ikony — PNG z 3d stačí pro Linux.
 
 ---
