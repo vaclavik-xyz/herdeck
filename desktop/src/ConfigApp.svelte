@@ -130,6 +130,8 @@
         const orphans = orphanedSecrets(payload);
         dirty = false;
         await load(); // re-read saved state (preview refreshes itself via its own poll)
+        // A changed [hotkeys] accelerator only takes effect once Rust re-registers it.
+        void invoke("reload_hotkey").catch(() => {});
         if (orphans.length > 0) {
           setBanner(
             "warning",

@@ -364,6 +364,81 @@ fn place_floating(window: &tauri::WebviewWindow) {
     }
 }
 
+/// Show/hide the floating `main` window — the deck-toggle hotkey action.
+fn toggle_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        if w.is_visible().unwrap_or(false) {
+            let _ = w.hide();
+        } else {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+    }
+}
+
+/// (Re)register the deck-toggle global shortcut from the sidecar's `/config`.
+/// Best-effort: any failure is logged and leaves the deck usable without a hotkey.
+fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+
+    let body = match http::http_get(
+        &d.host,
+        d.port,
+        &format!("/config?token={}", d.token),
+        SIDECAR_TIMEOUT,
+    ) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("hotkey: /config fetch failed: {e}");
+            return;
+        }
+    };
+    let cfg: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("hotkey: invalid /config JSON: {e}");
+            return;
+        }
+    };
+    let accel = match hotkey::toggle_deck_accelerator(&cfg) {
+        Some(a) => a,
+        None => return, // explicitly disabled
+    };
+
+    let app_for_cb = app.clone();
+    let handler = move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
+        if event.state == ShortcutState::Pressed {
+            toggle_main_window(&app_for_cb);
+        }
+    };
+    if let Err(e) = gs.on_shortcut(accel.as_str(), handler) {
+        eprintln!("hotkey: register '{accel}' failed: {e}");
+        if accel != hotkey::DEFAULT_TOGGLE_DECK {
+            let app_for_fb = app.clone();
+            let _ = gs.on_shortcut(
+                hotkey::DEFAULT_TOGGLE_DECK,
+                move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
+                    if event.state == ShortcutState::Pressed {
+                        toggle_main_window(&app_for_fb);
+                    }
+                },
+            );
+        }
+    }
+}
+
+/// Re-read `/config` and re-register the deck-toggle hotkey (the editor calls
+/// this after a successful config write so a changed accelerator takes effect).
+#[tauri::command]
+fn reload_hotkey(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let d = current_discovery(&state)?;
+    register_toggle_hotkey(&app, &d);
+    Ok(())
+}
+
 /// Build the tray icon with a show/hide/quit menu.
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
@@ -417,6 +492,7 @@ fn start_sidecar(
     match resolve_plan(resource_dir) {
         SidecarPlan::External(d) => {
             let view = DiscoveryView::from(&d);
+            register_toggle_hotkey(app.handle(), &d);
             *discovery.lock().unwrap() = Some(d);
             let _ = app.handle().emit("discovery", view); // token-free
         }
@@ -425,6 +501,7 @@ fn start_sidecar(
             std::thread::spawn(move || {
                 supervise(SupervisorConfig::new(spec), child, stop, move |d| {
                     let view = DiscoveryView::from(&d);
+                    register_toggle_hotkey(&handle, &d);
                     if let Some(state) = handle.try_state::<AppState>() {
                         *state.discovery.lock().unwrap() = Some(d);
                     }
@@ -453,6 +530,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(state)
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_discovery,
             check_health,
@@ -468,7 +546,8 @@ pub fn run() {
             config_secret_clear,
             setup_status,
             setup_connect,
-            open_config
+            open_config,
+            reload_hotkey
         ])
         .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
