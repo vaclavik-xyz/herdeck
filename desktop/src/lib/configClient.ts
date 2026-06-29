@@ -831,6 +831,23 @@ export function parseActiveChanged(raw: unknown): boolean {
   return obj(raw).changed === true;
 }
 
+/** The default deck-toggle global hotkey. Cross-platform: CmdOrCtrl maps to
+ *  Cmd on macOS and Ctrl elsewhere. */
+export const DEFAULT_TOGGLE_DECK_HOTKEY = "CmdOrCtrl+Shift+D";
+
+/** The configured deck-toggle accelerator for the editor field. An ABSENT key
+ *  shows the default; an explicit "" (disabled) is returned verbatim so the
+ *  field can show it empty. Mirrors the Rust semantics (missing=default, ""=off). */
+export function toggleDeckHotkey(payload: ConfigPayload): string {
+  const v = getAt(payload, "base", "hotkeys", "toggle_deck");
+  return typeof v === "string" ? v : DEFAULT_TOGGLE_DECK_HOTKEY;
+}
+
+/** NEW payload with base.hotkeys.toggle_deck set (incl. "" to disable). */
+export function setToggleDeckHotkey(payload: ConfigPayload, value: string): ConfigPayload {
+  return setAt(payload, "base", "hotkeys", "toggle_deck", value);
+}
+
 export function commandTransport(invoke: InvokeFn): ConfigTransport {
   const asCode = (v: unknown) => (typeof v === "number" ? v : 0);
   return {

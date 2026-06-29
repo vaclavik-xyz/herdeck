@@ -27,6 +27,7 @@ class ConfigService:
         "theme",
         "view",
         "safety",
+        "hotkeys",
     )
 
     def __init__(self, config_path, local_path):

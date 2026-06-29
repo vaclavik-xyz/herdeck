@@ -13,6 +13,7 @@
   import SafetySection from "./lib/sections/SafetySection.svelte";
   import AnswerProfilesSection from "./lib/sections/AnswerProfilesSection.svelte";
   import ProfilesSection from "./lib/sections/ProfilesSection.svelte";
+  import DesktopSection from "./lib/sections/DesktopSection.svelte";
   import Banner from "./lib/Banner.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport as deckTransport } from "./lib/deckClient";
@@ -29,7 +30,7 @@
 
   const SECTIONS = [
     "Servers", "Deck", "View", "Theme", "Macros",
-    "Start profiles", "Notifications", "Safety", "Answer profiles", "Profiles",
+    "Start profiles", "Notifications", "Safety", "Answer profiles", "Profiles", "Desktop",
   ];
 
   // klik-to-jump: backend tile section KEY (from deckClient /state.tile_sections) → this
@@ -129,6 +130,8 @@
         const orphans = orphanedSecrets(payload);
         dirty = false;
         await load(); // re-read saved state (preview refreshes itself via its own poll)
+        // A changed [hotkeys] accelerator only takes effect once Rust re-registers it.
+        void invoke("reload_hotkey").catch(() => {});
         if (orphans.length > 0) {
           setBanner(
             "warning",
@@ -246,6 +249,8 @@
         <AnswerProfilesSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "Profiles"}
         <ProfilesSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
+      {:else if active === "Desktop"}
+        <DesktopSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else}
         <p class="hint">Neznámá sekce „{active}".</p>
       {/if}

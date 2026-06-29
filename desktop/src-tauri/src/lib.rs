@@ -7,6 +7,7 @@
 //! the frontend can reach the sidecar over loopback. The sidecar is restarted on
 //! crash and killed on quit.
 
+pub mod hotkey;
 pub mod http;
 pub mod sidecar;
 
@@ -17,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition};
 
@@ -363,19 +364,105 @@ fn place_floating(window: &tauri::WebviewWindow) {
     }
 }
 
+/// Show/hide the floating `main` window — the deck-toggle hotkey action.
+fn toggle_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        if w.is_visible().unwrap_or(false) {
+            let _ = w.hide();
+        } else {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+    }
+}
+
+/// (Re)register the deck-toggle global shortcut from the sidecar's `/config`.
+/// Best-effort: any failure is logged and leaves the deck usable without a hotkey.
+fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+
+    let body = match http::http_get(
+        &d.host,
+        d.port,
+        &format!("/config?token={}", d.token),
+        SIDECAR_TIMEOUT,
+    ) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("hotkey: /config fetch failed: {e}");
+            return;
+        }
+    };
+    let cfg: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("hotkey: invalid /config JSON: {e}");
+            return;
+        }
+    };
+    let accel = match hotkey::toggle_deck_accelerator(&cfg) {
+        Some(a) => a,
+        None => return, // explicitly disabled
+    };
+
+    let app_for_cb = app.clone();
+    let handler = move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
+        if event.state == ShortcutState::Pressed {
+            toggle_main_window(&app_for_cb);
+        }
+    };
+    if let Err(e) = gs.on_shortcut(accel.as_str(), handler) {
+        eprintln!("hotkey: register '{accel}' failed: {e}");
+        if accel != hotkey::DEFAULT_TOGGLE_DECK {
+            let app_for_fb = app.clone();
+            let _ = gs.on_shortcut(
+                hotkey::DEFAULT_TOGGLE_DECK,
+                move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
+                    if event.state == ShortcutState::Pressed {
+                        toggle_main_window(&app_for_fb);
+                    }
+                },
+            );
+        }
+    }
+}
+
+/// Re-read `/config` and re-register the deck-toggle hotkey (the editor calls
+/// this after a successful config write so a changed accelerator takes effect).
+#[tauri::command]
+fn reload_hotkey(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let d = current_discovery(&state)?;
+    register_toggle_hotkey(&app, &d);
+    Ok(())
+}
+
 /// Build the tray icon with a show/hide/quit menu.
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri_plugin_autostart::ManagerExt;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "Start at login",
+        true,
+        app.autolaunch().is_enabled().unwrap_or(false),
+        None::<&str>,
+    )?;
+    let reconnect = MenuItem::with_id(app, "reconnect", "Change connection…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&settings, &show, &hide, &quit])?;
+    let menu = Menu::with_items(app, &[&settings, &show, &hide, &reconnect, &autostart, &quit])?;
+    let autostart_cb = autostart.clone();
 
     let mut builder = TrayIconBuilder::with_id("herdeck-tray")
         .tooltip("herdeck")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
+        .on_menu_event(move |app, event| match event.id.as_ref() {
             "settings" => {
                 if let Some(w) = app.get_webview_window("config") {
                     let _ = w.show();
@@ -392,6 +479,22 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.hide();
                 }
+            }
+            "reconnect" => {
+                let _ = app.emit_to("main", "reonboard", ());
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+            "autostart" => {
+                let mgr = app.autolaunch();
+                let now = mgr.is_enabled().unwrap_or(false);
+                let res = if now { mgr.disable() } else { mgr.enable() };
+                if let Err(e) = res {
+                    eprintln!("autostart toggle failed: {e}");
+                }
+                let _ = autostart_cb.set_checked(mgr.is_enabled().unwrap_or(false));
             }
             "quit" => app.exit(0),
             _ => {}
@@ -416,6 +519,7 @@ fn start_sidecar(
     match resolve_plan(resource_dir) {
         SidecarPlan::External(d) => {
             let view = DiscoveryView::from(&d);
+            register_toggle_hotkey(app.handle(), &d);
             *discovery.lock().unwrap() = Some(d);
             let _ = app.handle().emit("discovery", view); // token-free
         }
@@ -424,6 +528,7 @@ fn start_sidecar(
             std::thread::spawn(move || {
                 supervise(SupervisorConfig::new(spec), child, stop, move |d| {
                     let view = DiscoveryView::from(&d);
+                    register_toggle_hotkey(&handle, &d);
                     if let Some(state) = handle.try_state::<AppState>() {
                         *state.discovery.lock().unwrap() = Some(d);
                     }
@@ -452,6 +557,11 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(state)
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![
             get_discovery,
             check_health,
@@ -467,7 +577,8 @@ pub fn run() {
             config_secret_clear,
             setup_status,
             setup_connect,
-            open_config
+            open_config,
+            reload_hotkey
         ])
         .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
