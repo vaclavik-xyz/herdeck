@@ -74,11 +74,21 @@ jobs:
         env:
           # Ubicloud runners are full VMs (FUSE works), but keep EXTRACT_AND_RUN
           # as a belt-and-suspenders fallback. NO_STRIP avoids a common silent
-          # linuxdeploy strip failure during AppImage packaging. --verbose surfaces
-          # the real linuxdeploy error if AppImage bundling fails.
+          # linuxdeploy strip failure. --verbose surfaces linuxdeploy errors.
           APPIMAGE_EXTRACT_AND_RUN: "1"
           NO_STRIP: "true"
-        run: npm run tauri -- build --verbose
+        run: |
+          # AppImage's linuxdeploy scans the bundled PyInstaller sidecar and tries
+          # to resolve its vendored libs (auditwheel-hashed names like
+          # libwebp-<hash>.so) — but after linuxdeploy copies a Pillow .so out of
+          # the bundle, its $ORIGIN runpath no longer points at the sibling vendored
+          # lib, so resolution fails. Expose every dir that holds a bundled .so via
+          # LD_LIBRARY_PATH so linuxdeploy can find and deploy them.
+          SIDE="$GITHUB_WORKSPACE/desktop/src-tauri/resources/herdeck-deckapp"
+          EXTRA="$(find "$SIDE" -name '*.so*' -printf '%h\n' | sort -u | paste -sd: -)"
+          export LD_LIBRARY_PATH="${EXTRA}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+          npm run tauri -- build --verbose
 
       - name: Verify all three Linux bundle formats were produced
         working-directory: desktop/src-tauri/target/release/bundle
