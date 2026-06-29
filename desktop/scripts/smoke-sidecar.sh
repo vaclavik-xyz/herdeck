@@ -49,6 +49,19 @@ assert im.size == (196, 196), f"FAIL: baked codex PNG dims {im.size}, want (196,
 print(f"OK: baked codex PNG decodes (196x196 RGBA): {name}")
 PY
 
+# --- Frozen local-bridge import reachability ---------------------------------------
+# The local onboarding path pulls herdeck.bridge/bootstrap + the new deckapp modules.
+# A full local connect needs a herdr socket (unit-tested via StubHerdr), but assert
+# here that the FROZEN binary can import the whole local path (no missing hiddenimport).
+# Self-contained temp file (defined + cleaned up here) so it is safe under `set -u`,
+# regardless of where it sits relative to the other mktemp lines.
+IMPORT_ERR="$(mktemp)"
+if ! HERDECK_SELFTEST=imports "$BIN" >/dev/null 2>"$IMPORT_ERR"; then
+  echo "FAIL: frozen local-bridge imports unreachable"; cat "$IMPORT_ERR"; rm -f "$IMPORT_ERR"; exit 1
+fi
+rm -f "$IMPORT_ERR"
+echo "OK: frozen local-bridge imports reachable"
+
 # Force the deterministic mock source (no on-disk config / keychain needed).
 export HERDECK_MOCK=1
 
