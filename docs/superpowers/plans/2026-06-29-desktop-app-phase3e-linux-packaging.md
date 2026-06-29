@@ -270,9 +270,11 @@ Expected: `bundle config OK`.
 
 - [ ] **Step 4: Compile the Rust crate — this validates `tauri.conf.json` against Tauri's schema**
 
-Run (no pipe — a pipe to `tail` would mask `cargo test`'s exit code):
+Run in a subshell so the command's exit status IS `cargo test`'s (a trailing
+`cd ../..` or a pipe to `tail` would mask a failure), and the parent shell stays
+at repo root:
 ```bash
-cd desktop/src-tauri && cargo test; cd ../..
+(cd desktop/src-tauri && cargo test)
 ```
 Expected: `test result: ok.` and a zero exit status. If the config is invalid,
 `cargo test` exits non-zero with a `generate_context!` / config error.
