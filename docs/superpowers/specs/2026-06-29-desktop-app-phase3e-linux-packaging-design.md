@@ -248,5 +248,24 @@ jobs:
 
 ## Otevřené otázky
 
-- Žádné blokující. arm64 Linux, Wayland hotkey, Flatpak/Snap, signing jsou
-  vědomě mimo scope.
+- Žádné blokující. Wayland hotkey, Flatpak/Snap, signing jsou vědomě mimo scope.
+
+## Follow-up (po merge 3e): CI na Ubicloud + arm64 + AppImage fix
+
+Po mergi 3e (GitHub-hosted x86_64) jsme CI přesunuli na **Ubicloud runnery** —
+to mj. zlevnilo arm64 natolik, že **odložený arm64 Linux build je teď zapnutý**.
+
+- **Oba workflowy na Ubicloud:** `ci.yml` → `ubicloud-standard-2`; `release.yml`
+  → matrix x86_64 (`ubicloud-standard-4-ubuntu-2404`) + arm64
+  (`ubicloud-standard-4-arm-ubuntu-2404`). Default OS Ubicloudu = Ubuntu 24.04
+  (sedí na webkit2gtk-4.1). Free tier $2/měs ≈ 1250 min.
+- **arm64 nativně:** PyInstaller arm64 freeze běží na arm runneru (cross-compile
+  netřeba); per-arch artefakty `herdeck-linux-{x86_64,arm64}` — celkem 6 balíčků.
+- **AppImage fix (linuxdeploy vs. PyInstaller sidecar):** linuxdeploy scanoval
+  zabalený frozen sidecar a neuměl dohledat Pillow-vendored `libwebp-<hash>.so`
+  (auditwheel jméno; po zkopírování `.so` z bundle ztratil `$ORIGIN` runpath →
+  `ERROR: Could not find dependency`). Fix: před `tauri build` vystavit všechny
+  adresáře s vendored `.so` ze sidecaru přes `LD_LIBRARY_PATH`. Tím se AppImage
+  zabalí na obou arších. (`NO_STRIP=true` + `tauri build --verbose` jako podpora
+  diagnostiky.) deb/rpm linuxdeploy nepoužívají, fungovaly od začátku.
+- **Ověřeno** na obou arších přes pre-release tag → zelené, 6 artefaktů.
