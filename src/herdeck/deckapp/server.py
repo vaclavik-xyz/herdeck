@@ -498,6 +498,44 @@ def select_live():
     return (config, server)
 
 
+def select_source_kind(*, mock_env, remote, choice, socket_path, socket_exists):
+    """Pure source-selection precedence over already-gathered facts.
+
+    Returns ("remote", config, server) | ("local", socket_path) | ("mock", reason).
+    All IO (env, select_live result, persisted choice, socket existence) is passed
+    in, so every branch is unit-testable without touching the filesystem."""
+    if mock_env:
+        return ("mock", "mock_env")
+    # An explicit onboarding choice wins over a remote config on disk: a remote connect
+    # CLEARS the marker, so a remote config always implies "no marker" and falls through to
+    # the remote branch below. This makes a demo/local choice stick across restarts even
+    # when a remote config.toml is present.
+    if choice == "local":
+        return ("local", socket_path) if socket_exists else ("mock", "local_unavailable")
+    if choice == "demo":
+        return ("mock", "demo")
+    if remote is not None:
+        config, server = remote
+        return ("remote", config, server)
+    return ("mock", "first_run")
+
+
+def _resolve_source_kind():
+    """Gather the facts and apply select_source_kind."""
+    from ..bootstrap import resolve_socket_path
+    from .onboarding import read_choice
+
+    socket_path = resolve_socket_path(None)
+    config_path = _default_config_paths()[0]
+    return select_source_kind(
+        mock_env=bool(os.environ.get("HERDECK_MOCK")),
+        remote=select_live(),
+        choice=read_choice(config_path),
+        socket_path=socket_path,
+        socket_exists=os.path.exists(socket_path),
+    )
+
+
 def create_live_app(
     config,
     server,
