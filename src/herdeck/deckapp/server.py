@@ -253,6 +253,37 @@ class DeckApp:
             "server_id": self._source.server_id,
         }
 
+    def _setup_status(self) -> dict:
+        from ..bootstrap import resolve_socket_path
+        from .onboarding import read_choice
+
+        socket_path = resolve_socket_path(None)
+        socket_exists = os.path.exists(socket_path)
+        config_path = str(self._config_service._config_path) if self._config_service else None
+        choice = read_choice(config_path)
+        live = self._source.source_name == "live"
+        if live:
+            mode = "local" if getattr(self, "_local_bridge", None) is not None else "remote"
+            reason = None
+        else:
+            mode = "mock"
+            if os.environ.get("HERDECK_MOCK"):
+                reason = "mock_env"
+            elif choice == "demo":
+                reason = "demo"
+            elif choice == "local" and not socket_exists:
+                reason = "local_unavailable"
+            else:
+                reason = "first_run"
+        return {
+            "mode": mode,
+            "connected": self._source.connected,
+            "reason": reason,
+            "local_herdr_available": socket_exists,
+            "choice": choice,
+            "socket_path": socket_path,
+        }
+
     def _tile_png(self, index: int) -> bytes | None:
         with self._lock:
             return self._tiles.get(index)
@@ -327,6 +358,10 @@ class DeckApp:
                         return
                     self._send(200, json.dumps(app._config_service.read()).encode(),
                                "application/json")
+                elif path == "/setup":
+                    if not self._require_query_token(url):
+                        return
+                    self._send(200, json.dumps(app._setup_status()).encode(), "application/json")
                 else:
                     self._send(404)
 
