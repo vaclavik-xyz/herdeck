@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition};
 
@@ -441,17 +441,27 @@ fn reload_hotkey(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
 
 /// Build the tray icon with a show/hide/quit menu.
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri_plugin_autostart::ManagerExt;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "Start at login",
+        true,
+        app.autolaunch().is_enabled().unwrap_or(false),
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&settings, &show, &hide, &quit])?;
+    let menu = Menu::with_items(app, &[&settings, &show, &hide, &autostart, &quit])?;
+    let autostart_cb = autostart.clone();
 
     let mut builder = TrayIconBuilder::with_id("herdeck-tray")
         .tooltip("herdeck")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
+        .on_menu_event(move |app, event| match event.id.as_ref() {
             "settings" => {
                 if let Some(w) = app.get_webview_window("config") {
                     let _ = w.show();
@@ -468,6 +478,16 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.hide();
                 }
+            }
+            "autostart" => {
+                use tauri_plugin_autostart::ManagerExt;
+                let mgr = app.autolaunch();
+                let now = mgr.is_enabled().unwrap_or(false);
+                let res = if now { mgr.disable() } else { mgr.enable() };
+                if let Err(e) = res {
+                    eprintln!("autostart toggle failed: {e}");
+                }
+                let _ = autostart_cb.set_checked(mgr.is_enabled().unwrap_or(false));
             }
             "quit" => app.exit(0),
             _ => {}
@@ -531,6 +551,10 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![
             get_discovery,
             check_health,
