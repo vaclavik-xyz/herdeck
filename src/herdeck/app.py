@@ -832,10 +832,9 @@ def _resolve_deck_kind(config: Config | None, *, getenv=os.environ.get):
 
 
 def _resolve_socket_path(config: Config | None, *, getenv=os.environ.get) -> str:
-    raw = getenv("HERDR_SOCKET") or (
-        config.hardware.herdr_socket if config and config.hardware.herdr_socket else None
-    )
-    return os.path.expanduser(raw or "~/.config/herdr/herdr.sock")
+    from .bootstrap import resolve_socket_path
+
+    return resolve_socket_path(config, getenv=getenv)
 
 
 def _resolve_tick_interval(config: Config | None) -> float:
