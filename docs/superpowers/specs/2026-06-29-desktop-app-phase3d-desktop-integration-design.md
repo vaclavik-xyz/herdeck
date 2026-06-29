@@ -91,13 +91,15 @@ toggle_deck = "CmdOrCtrl+Shift+D"
 - **Mimo `Config` dataclass i `_OVERLAY_SECTIONS`** — hotkey není per-profil ani
   součást renderu/resolve; `_build_config` neznámé sekce ignoruje, takže nula
   dopadu na core. `validate_settings` projde (extra tabulka je inertní).
-- Prázdný / chybějící `toggle_deck` = hotkey vypnutý (žádná registrace).
+- **Sémantika hodnoty `toggle_deck` (jednotná napříč Rust i editorem):**
+  **chybějící klíč → default `CmdOrCtrl+Shift+D`**; **explicitní prázdný string
+  `""` → hotkey vypnutý** (žádná registrace). Editor proto prázdný string POVOLÍ.
 
 ### Registrace (Rust)
 
 - Po sidecar discovery Rust fetchne `GET /config` (stejně jako `config_read`
   interně přes `http::http_get`), vytáhne `base.hotkeys.toggle_deck`
-  (default `CmdOrCtrl+Shift+D` když chybí, žádná registrace když prázdný).
+  (chybějící klíč → default `CmdOrCtrl+Shift+D`; explicitní `""` → žádná registrace).
 - Zaregistruje globální shortcut přes `tauri-plugin-global-shortcut`; handler
   **toggluje viditelnost `main` okna** (`is_visible()` → `hide()` / `show()+set_focus()`)
   — čistě Rust-side, bez JS round-tripu.
@@ -117,8 +119,9 @@ toggle_deck = "CmdOrCtrl+Shift+D"
 - **Base-only** (žádný profil overlay / tri-state) — hotkey je globální.
 - Logika čtení/zápisu pole (snapshot ↔ `base.hotkeys`) ve framework-free helperu
   testovaném Vitestem; `.svelte` jen compile-smoke.
-- Validace lehká: neprázdný string; reálná kontrola = Rust při registraci
-  (graceful fallback). Po Apply zavolat `reload_hotkey`.
+- Validace lehká: **prázdný string je platný** (= hotkey vypnutý); akcelerátor
+  jinak nevaliduje editor — reálná kontrola je Rust při registraci (graceful
+  fallback). Po Apply zavolat `reload_hotkey`.
 
 ---
 
