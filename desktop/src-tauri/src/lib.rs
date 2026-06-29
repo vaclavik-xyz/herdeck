@@ -480,7 +480,6 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
             }
             "autostart" => {
-                use tauri_plugin_autostart::ManagerExt;
                 let mgr = app.autolaunch();
                 let now = mgr.is_enabled().unwrap_or(false);
                 let res = if now { mgr.disable() } else { mgr.enable() };
