@@ -1,4 +1,4 @@
-# PyInstaller spec — arm64 onedir frozen herdeck.deckapp sidecar for the desktop app.
+# PyInstaller spec — host-arch onedir frozen herdeck.deckapp sidecar for the desktop app.
 # Build via desktop/scripts/build-sidecar.sh, e.g.:
 #   pyinstaller desktop/herdeck-deckapp.spec --noconfirm \
 #     --distpath desktop/src-tauri/resources --workpath build/pyinstaller-deckapp
@@ -49,6 +49,7 @@ exe = EXE(
     exclude_binaries=True,
     name="herdeck-deckapp",
     console=True,
-    target_arch="arm64",
+    # No target_arch -> PyInstaller freezes for the HOST arch: arm64 on the dev
+    # Mac, x86_64 on the Linux CI runner. One spec serves both OSes (3e).
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="herdeck-deckapp")

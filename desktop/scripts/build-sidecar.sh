@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Freeze the herdeck.deckapp sidecar into an arm64 onedir bundle for the Tauri app.
+# Freeze the herdeck.deckapp sidecar into a host-arch onedir bundle for the Tauri app.
 # Prereq: a Python env with the `packaging` extra:  pip install -e '.[packaging]'
 set -euo pipefail
 
