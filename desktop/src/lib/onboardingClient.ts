@@ -8,6 +8,8 @@
 // proxies. A typed remote token flows OUT through `connect` and is never read
 // back.
 
+import type { InvokeFn } from "./deckClient";
+
 /** Shaped `GET /setup` status (snake_case JSON -> camelCase). `reason` is one of
  *  "mock_env" | "demo" | "first_run" | "local_unavailable" | null. */
 export interface SetupStatus {
@@ -55,4 +57,65 @@ export function shouldOnboard(status: SetupStatus | null, override: boolean): On
   const decision = onboardingDecision(status);
   if (override && decision === "deck") return "welcome";
   return decision;
+}
+
+/** The shape POSTed to `setup_connect` as `body`. The remote variant carries the
+ *  user-typed token (forwarded by Rust, never read back). */
+export type ConnectRequest =
+  | { choice: "local" }
+  | { choice: "demo" }
+  | { choice: "remote"; url: string; token: string; id?: string };
+
+/** Shaped `/setup/connect` result. `ok` gates the flip-to-deck; `error` is the
+ *  inline reason on failure (bad_token / unreachable / bad url / a thrown HTTP). */
+export interface ConnectResult {
+  ok: boolean;
+  connected: boolean;
+  error: string | null;
+}
+
+/** Narrow a raw connect result; never throws (garbage -> a non-ok result). */
+export function parseConnectResult(raw: unknown): ConnectResult {
+  if (raw == null || typeof raw !== "object") {
+    return { ok: false, connected: false, error: null };
+  }
+  const v = raw as Record<string, unknown>;
+  return {
+    ok: v.ok === true,
+    connected: v.connected === true,
+    error: typeof v.error === "string" ? v.error : null,
+  };
+}
+
+/** How the onboarding card talks to the sidecar. Injected so the card stays
+ *  framework-free and is testable with a fake, and so the real transport (the
+ *  two token-injecting Tauri commands) lives in one place. */
+export interface SetupTransport {
+  /** `setup_status` -> the parsed status, or null when unavailable/unreadable. */
+  status(): Promise<SetupStatus | null>;
+  /** `setup_connect({ body })` -> the parsed result. A thrown command (non-200 /
+   *  no WebView) becomes a non-ok result carrying the message, so the card can
+   *  show it inline rather than crashing. */
+  connect(req: ConnectRequest): Promise<ConnectResult>;
+}
+
+/** Production transport over the Tauri commands. `setup_status` takes no args;
+ *  `setup_connect` takes the request as `body` (matching the Rust signature). */
+export function setupTransport(invoke: InvokeFn): SetupTransport {
+  return {
+    async status() {
+      try {
+        return parseSetupStatus(await invoke("setup_status"));
+      } catch {
+        return null;
+      }
+    },
+    async connect(req) {
+      try {
+        return parseConnectResult(await invoke("setup_connect", { body: req }));
+      } catch (e) {
+        return { ok: false, connected: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    },
+  };
 }
