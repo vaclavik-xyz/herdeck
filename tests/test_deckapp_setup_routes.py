@@ -985,6 +985,40 @@ def test_connect_local_bridge_start_failure(tmp_path, monkeypatch):
         app.close()
 
 
+def test_connect_remote_deduplicates_server_ids(tmp_path, monkeypatch):
+    # A malformed config with TWO [[servers]] both id="herdr" must be collapsed to
+    # exactly ONE entry (the new url) after connect — no leftover duplicate survives.
+    import tomllib
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[[servers]]\nid = "herdr"\nurl = "ws://a:8788"\ntoken_env = "HERDECK_HERDR_TOKEN"\n'
+        '[[servers]]\nid = "herdr"\nurl = "ws://b:8788"\ntoken_env = "HERDECK_HERDR_TOKEN"\n'
+    )
+    monkeypatch.setenv("HERDECK_CONFIG", str(cfg))
+    monkeypatch.delenv("HERDECK_MOCK", raising=False)
+    fake = _FakeKeyring()
+    monkeypatch.setattr("herdeck.secrets._keyring", lambda: fake)
+    monkeypatch.setattr(srv, "_probe_sync", lambda url, token: ProbeResult(True, "ok"))
+    monkeypatch.setattr(srv, "build_live_source_for_connect", lambda config, server: _DisconnectedSource())
+    app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
+    try:
+        status, body = _post(
+            app, "/setup/connect",
+            {"choice": "remote", "url": "ws://new:8788", "token": "t", "id": "herdr"},
+        )
+        assert status == 200 and body["ok"] is True
+        data = tomllib.loads(cfg.read_text())
+        herdr_servers = [s for s in data.get("servers", []) if s.get("id") == "herdr"]
+        assert len(herdr_servers) == 1, f"expected 1 herdr server, got {herdr_servers}"
+        assert herdr_servers[0]["url"] == "ws://new:8788"
+        # neither of the old duplicate urls must remain
+        text = cfg.read_text()
+        assert "ws://a" not in text and "ws://b" not in text
+    finally:
+        app.close()
+
+
 def test_connect_bad_body_is_400(tmp_path, monkeypatch):
     monkeypatch.setenv("HERDECK_CONFIG", str(tmp_path / "config.toml"))
     app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())

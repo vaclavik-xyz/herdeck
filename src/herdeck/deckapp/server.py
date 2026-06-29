@@ -912,14 +912,20 @@ def connect(app, body) -> dict | None:
         if existing is not None and not (isinstance(existing, list) and all(isinstance(s, dict) for s in existing)):
             # parseable TOML but a wrong shape (e.g. `servers = ["bad"]`) would crash the upsert
             return {"ok": False, "error": "existing config is malformed (servers) — fix it in Settings"}
-        servers = list(existing or [])
         entry = {"id": server_id, "url": url, "token_env": token_env}
-        for i, s in enumerate(servers):
-            if s.get("id") == server_id:
-                servers[i] = entry
-                break
-        else:
-            servers.append(entry)
+        rebuilt = []
+        replaced = False
+        for s in (existing or []):
+            if isinstance(s, dict) and s.get("id") == server_id:
+                if not replaced:
+                    rebuilt.append(entry)  # replace the first match in place
+                    replaced = True
+                # drop any further duplicate with the same id
+            else:
+                rebuilt.append(s)
+        if not replaced:
+            rebuilt.append(entry)
+        servers = rebuilt
         payload["base"]["servers"] = servers
         # token_env (HERDECK_<ID>_TOKEN) lives in ONE flat keychain namespace shared by ALL
         # config sections — other servers, `notifications.telegram`, profile overlays. Two ids
