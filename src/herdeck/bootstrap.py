@@ -19,6 +19,15 @@ from .config import (
 )
 
 
+def resolve_socket_path(config=None, *, getenv=os.environ.get) -> str:
+    """Resolve the herdr Unix socket path: HERDR_SOCKET env, else the config's
+    hardware override, else the XDG default. Shared by the CLI and the deckapp."""
+    raw = getenv("HERDR_SOCKET") or (
+        config.hardware.herdr_socket if config and config.hardware.herdr_socket else None
+    )
+    return os.path.expanduser(raw or "~/.config/herdr/herdr.sock")
+
+
 def resolve_mode(*, mock, config_path, config_has_servers, socket_path, socket_exists):
     """Decide how to run from already-gathered facts (pure; no IO)."""
     if mock:

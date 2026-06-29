@@ -22,6 +22,20 @@ from .server import create_app
 
 
 def main() -> int:
+    if os.environ.get("HERDECK_SELFTEST") == "imports":
+        import importlib
+
+        for mod in (
+            "herdeck.deckapp.onboarding",
+            "herdeck.deckapp.local_bridge",
+            "herdeck.deckapp.probe",
+            "herdeck.bridge",
+            "herdeck.bootstrap",
+            "herdeck.connector",
+        ):
+            importlib.import_module(mod)
+        return 0
+
     port = int(os.environ.get("HERDECK_DECKAPP_PORT", "0"))
     # Bind to the IPv4 loopback only (per spec). We deliberately do NOT honour a
     # configurable bind here: anything else (`localhost`, `::1`, a LAN address)

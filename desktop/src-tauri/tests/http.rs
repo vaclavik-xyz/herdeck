@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use herdeck_desktop_lib::http::{fetch_image, fetch_state, http_delete, http_get, http_post_json, send_press};
+use herdeck_desktop_lib::http::{fetch_image, fetch_setup, fetch_state, http_delete, http_get, http_post_json, post_setup_connect, send_press};
 
 /// Bind a loopback listener and, on one connection, reply with `response` then
 /// close. Returns the bound port (already listening before we return).
@@ -167,4 +167,32 @@ fn send_press_posts_with_token_header_and_returns_status() {
         req.contains("X-Herdeck-Token: HDR_TOK\r\n"),
         "request was: {req:?}"
     );
+}
+
+#[test]
+fn fetch_setup_injects_token_as_query_param() {
+    let (port, rx) = serve_once_capture(
+        b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"mode\":\"mock\",\"reason\":\"first_run\"}".to_vec(),
+    );
+    let body = fetch_setup("127.0.0.1", port, "SECRET", Duration::from_secs(2)).unwrap();
+    assert!(body.contains("\"reason\":\"first_run\""));
+    let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(req.starts_with("GET /setup?token=SECRET HTTP/1.0"), "request was: {req:?}");
+}
+
+#[test]
+fn post_setup_connect_sends_header_token_and_body() {
+    let (port, rx) = serve_once_capture(
+        b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true,\"connected\":true}".to_vec(),
+    );
+    let (code, body) = post_setup_connect(
+        "127.0.0.1", port, "HDR", "{\"choice\":\"demo\"}", Duration::from_secs(2),
+    )
+    .unwrap();
+    assert_eq!(code, 200);
+    assert!(body.contains("\"ok\":true"));
+    let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(req.starts_with("POST /setup/connect HTTP/1.0"), "request was: {req:?}");
+    assert!(req.contains("X-Herdeck-Token: HDR\r\n"), "request was: {req:?}");
+    assert!(req.ends_with("{\"choice\":\"demo\"}"), "request was: {req:?}");
 }

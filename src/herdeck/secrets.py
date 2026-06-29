@@ -61,3 +61,11 @@ def clear_secret(name: str) -> None:
         _keyring().delete_password(SERVICE, name)
     except Exception:
         pass
+
+
+def peek_keychain(name: str) -> str | None:
+    """The keychain value for `name` (keychain only, ignoring env — unlike get_secret,
+    which is env-first), or None if ABSENT. Unlike the other readers this does NOT swallow
+    backend errors — it RAISES — so a caller can distinguish 'missing' (None) from
+    'unreadable' (exception) and never erase a token it failed to snapshot."""
+    return _keyring().get_password(SERVICE, name)

@@ -112,6 +112,32 @@ class ConfigService:
     def validate(self, data: dict) -> list[str]:
         return validate_settings(self._snapshot_for(data))
 
+    def resolve_selected_server(self, data: dict, *, assume_present: str | None = None):
+        """The resolved `(config, servers[0])` for the active profile, or None if there is
+        no server / it cannot resolve. Only `assume_present` (the token_env about to be
+        stored) is placeholdered so a not-yet-stored secret doesn't block resolution; every
+        OTHER selected server's token_env must resolve for REAL. That way a config which
+        would NOT load on restart (another selected server's token missing) is rejected
+        here, never persisted. A caller that needs to CONNECT replaces the chosen server's
+        token with the real one (`dataclasses.replace`) before building the live source."""
+        from ..settings import resolve_profile
+
+        saved: dict[str, str | None] = {}
+        try:
+            if assume_present and not os.environ.get(assume_present):
+                saved[assume_present] = os.environ.get(assume_present)
+                os.environ[assume_present] = "x"
+            config = resolve_profile(self._snapshot_for(data)).config
+            return (config, config.servers[0]) if config.servers else None
+        except (ConfigError, KeyError, TypeError, ValueError, AttributeError):
+            return None  # a parseable-but-malformed config (missing/odd keys) → not a 500
+        finally:
+            for n, original in saved.items():
+                if original is None:
+                    os.environ.pop(n, None)
+                else:
+                    os.environ[n] = original
+
     HEADER = "# Managed by herdeck-config — generated; manual comments are not preserved\n"
 
     def write(self, data: dict) -> list[str]:

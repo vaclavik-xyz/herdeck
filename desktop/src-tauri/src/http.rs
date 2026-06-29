@@ -345,6 +345,24 @@ pub fn fetch_image(
     }
 }
 
+/// Proxy `GET /setup`, injecting the token as a query param. Returns the JSON body.
+pub fn fetch_setup(host: &str, port: u16, token: &str, timeout: Duration) -> Result<String, String> {
+    http_get(host, port, &format!("/setup?token={token}"), timeout)
+}
+
+/// Proxy `POST /setup/connect` with the token in the `X-Herdeck-Token` header and a
+/// JSON body. Returns `(status, body)` for all statuses (200 carries `{ok,…}`, 400 a
+/// malformed body), matching `http_post_json`.
+pub fn post_setup_connect(
+    host: &str,
+    port: u16,
+    token: &str,
+    body: &str,
+    timeout: Duration,
+) -> Result<(u16, String), String> {
+    http_post_json(host, port, "/setup/connect", ("X-Herdeck-Token", token), body, timeout)
+}
+
 /// Proxy `POST /press/{index}` with the token in the `X-Herdeck-Token` header,
 /// returning the sidecar's HTTP status code (204 ok, 403 bad token, 400 bad index).
 pub fn send_press(

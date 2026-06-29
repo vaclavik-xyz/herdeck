@@ -33,6 +33,13 @@ struct AppState {
 /// Default timeout for the Rust-side sidecar proxy calls.
 const SIDECAR_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// `/setup/connect` runs, inside the sidecar, the whole remote transaction: a probe
+/// (≈4 s) THEN build + render-prepare + keychain/config snapshots + write + swap. The
+/// proxy must comfortably outlast the full worst case (not just the probe) so it never
+/// times out while the sidecar is mid-persist (a torn result). 15 s leaves wide margin
+/// over the 4 s probe + the sub-second post-probe work; far above the 3 s SIDECAR_TIMEOUT.
+const SETUP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// The sidecar's mutating routes authenticate with this header (matches web.py
 /// and the deck `/press`). GET routes use a `?token=` query param instead.
 const HDR_TOKEN: &str = "X-Herdeck-Token";
@@ -221,6 +228,33 @@ fn config_secret_clear(
         (HDR_TOKEN, &d.token),
         SIDECAR_TIMEOUT,
     )
+}
+
+/// Proxy `GET /setup` (token as query param) → the first-run status JSON.
+#[tauri::command]
+fn setup_status(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let d = current_discovery(&state)?;
+    let body = http::fetch_setup(&d.host, d.port, &d.token, SIDECAR_TIMEOUT)?;
+    serde_json::from_str(&body).map_err(|e| format!("invalid /setup JSON from sidecar: {e}"))
+}
+
+/// Proxy `POST /setup/connect` (header token) → the connect result `{ok, …}`. Uses a
+/// dedicated timeout longer than the sidecar's remote probe. The typed token VALUE is
+/// in the forwarded body; it is never read back.
+#[tauri::command]
+fn setup_connect(
+    state: tauri::State<'_, AppState>,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let d = current_discovery(&state)?;
+    let (code, resp) = http::post_setup_connect(
+        &d.host, d.port, &d.token, &body.to_string(), SETUP_CONNECT_TIMEOUT,
+    )?;
+    if code == 200 {
+        serde_json::from_str(&resp).map_err(|e| format!("invalid /setup/connect JSON: {e}"))
+    } else {
+        Err(format!("sidecar returned HTTP {code} for /setup/connect"))
+    }
 }
 
 /// Shared POST-JSON-and-parse for the config routes that return a JSON object on
@@ -431,6 +465,8 @@ pub fn run() {
             config_set_active,
             config_secret_set,
             config_secret_clear,
+            setup_status,
+            setup_connect,
             open_config
         ])
         .setup(move |app| {
