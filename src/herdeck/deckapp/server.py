@@ -625,6 +625,24 @@ def _select_source():
     return MockSource()
 
 
+def _load_partial_config():
+    """The on-disk config (resolved profile) for local mode's overlay, or None if absent
+    or unloadable. Lets local mode preserve the user's grid/profiles/view/theme even with
+    no [[servers]] — matching the CLI's local mode."""
+    from ..bootstrap import _discover_config_path, _discover_local_config_path
+    from ..config import ConfigError
+    from ..settings import load_settings, resolve_profile
+
+    path = _discover_config_path()
+    if not path:
+        return None
+    try:
+        snapshot = load_settings(path, _discover_local_config_path(path))
+        return resolve_profile(snapshot).config
+    except (ConfigError, OSError):
+        return None
+
+
 def _start_local_bridge(socket_path, *, runner_factory=None):
     """Start the embedded bridge and synthesize its loopback (config, server).
     Returns (config, server, runner); the caller owns runner teardown."""
@@ -637,7 +655,7 @@ def _start_local_bridge(socket_path, *, runner_factory=None):
     except Exception:
         runner.close()  # clean up a partially-started runner before re-raising
         raise
-    config = local_config(port, token)
+    config = local_config(port, token, _load_partial_config())
     return config, config.servers[0], runner
 
 

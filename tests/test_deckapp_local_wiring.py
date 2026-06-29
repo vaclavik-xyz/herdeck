@@ -38,6 +38,20 @@ def test_start_local_bridge_yields_loopback_config_and_runner():
         runner.close()
 
 
+def test_start_local_bridge_preserves_serverless_config_settings(tmp_path, monkeypatch):
+    """A serverless config.toml (no [[servers]]) provides its grid/view/etc. as the
+    partial overlay so local mode does NOT fall back to defaults."""
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[deck]\ngrid = \"4x2\"\n")
+    monkeypatch.setenv("HERDECK_CONFIG", str(cfg))
+
+    config, _server, runner = srv._start_local_bridge("unused.sock", runner_factory=_stub_runner_factory)
+    try:
+        assert config.grid == (4, 2)
+    finally:
+        runner.close()
+
+
 def test_set_local_bridge_closes_previous():
     app = srv.create_mock_app(serve=False)
     try:
