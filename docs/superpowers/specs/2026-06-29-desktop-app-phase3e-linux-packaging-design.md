@@ -188,6 +188,9 @@ jobs:
   `push: tags: ['v*']`. NE každý push.
 - **`HERDECK_PY`** se v `build-sidecar.sh` resolvuje na `$ROOT/.venv/bin/python`
   → CI vytvoří `.venv` přesně tam.
+- **Stale-bundle clean** (krok před buildem) → `rm -rf .../target/release/bundle`;
+  cargo cache zahrnuje `target`, takže warm-cache run by jinak mohl obnovit staré
+  AppImage/deb/rpm a verify by prošel na zastaralém artefaktu (falešná zelená).
 - **Per-format completeness check** (krok před uploadem) → ověří, že každý ze tří
   globů (`*.AppImage`, `*.deb`, `*.rpm`) matchl ≥1 soubor; chybějící jeden formát
   = červený job. (`if-no-files-found: error` failuje jen když nematchne NIC, tak

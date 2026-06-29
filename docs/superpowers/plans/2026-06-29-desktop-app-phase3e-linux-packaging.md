@@ -375,6 +375,9 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: Remove any stale bundle output (warm cache may restore old bundles)
+        run: rm -rf desktop/src-tauri/target/release/bundle
+
       - name: Build Tauri bundles
         working-directory: desktop
         env:
@@ -422,6 +425,12 @@ Notes for the implementer (do not add to the file):
 - `smoke-sidecar.sh` uses `python3` (provided by setup-python) for JSON parsing
   and the venv python (with Pillow from `.[packaging]`) to decode the baked glyph.
 - `APPIMAGE_EXTRACT_AND_RUN=1` avoids the FUSE requirement on the runner.
+- The **"Remove any stale bundle output"** step deletes
+  `desktop/src-tauri/target/release/bundle` before the build. The cargo cache
+  includes `target`, so a warm-cache run could otherwise restore OLD
+  AppImage/deb/rpm files; if a format then failed to rebuild, the verify step
+  would falsely pass on the stale artifact (and a stale file could be uploaded).
+  Cleaning first guarantees verify + upload only see freshly-built artifacts.
 - The **"Verify all three Linux bundle formats"** step is the real completeness
   gate: `if-no-files-found: error` only fails when *zero* paths match, so it would
   still pass if e.g. the rpm target silently produced nothing while appimage+deb
@@ -457,7 +466,7 @@ joined = "\n".join(str(s) for s in steps)
 for needle in ["libwebkit2gtk-4.1-dev", "libayatana-appindicator3-dev", "rpm",
                "build-sidecar.sh", "smoke-sidecar.sh", "npm run tauri build",
                "APPIMAGE_EXTRACT_AND_RUN", "if-no-files-found",
-               "Verify all three", "rpm -qpR"]:
+               "Remove any stale bundle output", "Verify all three", "rpm -qpR"]:
     assert needle in joined, f"missing step content: {needle}"
 print("workflow OK")
 PY
