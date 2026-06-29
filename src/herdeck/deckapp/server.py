@@ -71,6 +71,7 @@ class DeckApp:
         self._token = token or secrets.token_urlsafe(24)
         self._config_service = config_service
         self._reloader = reloader
+        self._local_bridge = None  # LocalBridgeRunner when in local mode, else None
 
         self._lock = threading.Lock()
         self._tiles: dict[int, bytes] = {}
@@ -167,6 +168,13 @@ class DeckApp:
                 watcher.close()
             except Exception:
                 pass
+        bridge = getattr(self, "_local_bridge", None)
+        if bridge is not None:
+            try:
+                bridge.close()
+            except Exception:
+                pass
+            self._local_bridge = None
         try:
             self._source.close()  # stop the live connector/loop (no-op for mock)
         except Exception:
@@ -186,6 +194,17 @@ class DeckApp:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1)
         self._thread = None
+
+    def _set_local_bridge(self, runner) -> None:
+        """Adopt `runner` as the embedded-bridge owner, closing any previous one.
+        Pass None to drop the bridge (e.g. when switching to remote/mock)."""
+        old = getattr(self, "_local_bridge", None)
+        if old is not None and old is not runner:
+            try:
+                old.close()
+            except Exception:
+                pass
+        self._local_bridge = runner
 
     def swap_source(self, new_source) -> None:
         """Replace the state source and rebuild the orchestrator from its config
@@ -592,16 +611,44 @@ def _default_config_service():
 
 
 def _select_source():
-    """Re-read the on-disk config and build the appropriate source (live or mock)."""
-    selected = select_live()
-    if selected is None:
-        from .mock import MockSource
+    """Re-select the source for a config-watch reload, RESPECTING the onboarding precedence
+    (a demo/local marker is honored, not overridden by a resolvable remote config). Only the
+    NORMAL reloader (remote/demo/mock) calls this; a `local` result is a defensive fallback
+    to mock — the bridge is never (re)started from a reload."""
+    kind = _resolve_source_kind()
+    if kind[0] == "remote":
+        from .live import build_live_source
 
-        return MockSource()
-    config, server = selected
-    from .live import build_live_source
+        return build_live_source(kind[1], kind[2])
+    from .mock import MockSource
 
-    return build_live_source(config, server)
+    return MockSource()
+
+
+def _start_local_bridge(socket_path, *, runner_factory=None):
+    """Start the embedded bridge and synthesize its loopback (config, server).
+    Returns (config, server, runner); the caller owns runner teardown."""
+    from ..bootstrap import local_config
+    from .local_bridge import LocalBridgeRunner
+
+    runner = (runner_factory or LocalBridgeRunner)(socket_path)
+    try:
+        _host, port, token = runner.start()
+    except Exception:
+        runner.close()  # clean up a partially-started runner before re-raising
+        raise
+    config = local_config(port, token)
+    return config, config.servers[0], runner
+
+
+def _reloader_for(app, kind, select_source):
+    """The config-watch reloader for the built source. In LOCAL mode the embedded
+    bridge's lifecycle is owned by create_app startup + /setup/connect, so a
+    config-watch reload must be a no-op — re-selecting would swap the bridge source
+    out (back to mock) and orphan the running LocalBridgeRunner."""
+    if kind[0] == "local":
+        return lambda: None
+    return lambda: app.swap_source(select_source())
 
 
 def create_app(
@@ -625,24 +672,33 @@ def create_app(
 
     cfg_path, local_path = _default_config_paths()
     svc = config_service if config_service is not None else _default_config_service()
-    selected = select_live()
-    if selected is None:
+    kind = _resolve_source_kind()
+    if kind[0] == "remote":
+        _, config, server = kind
+        app = create_live_app(
+            config, server, host=host, port=port, icon_provider=icon_provider,
+            serve=serve, config_service=svc,
+        )
+    elif kind[0] == "local":
+        # create_live_app already builds with clock=time.monotonic, so live elapsed
+        # time advances; the embedded bridge runner is tracked for teardown on close.
+        _, socket_path = kind
+        config, server, runner = _start_local_bridge(socket_path)
+        try:
+            app = create_live_app(
+                config, server, host=host, port=port, icon_provider=icon_provider,
+                serve=serve, config_service=svc,
+            )
+        except Exception:
+            runner.close()  # don't leak the bridge thread/socket if app construction fails
+            raise
+        app._set_local_bridge(runner)
+    else:
         app = create_mock_app(
             host=host, port=port, icon_provider=icon_provider, serve=serve, config_service=svc
         )
-    else:
-        config, server = selected
-        app = create_live_app(
-            config,
-            server,
-            host=host,
-            port=port,
-            icon_provider=icon_provider,
-            serve=serve,
-            config_service=svc,
-        )
     if reloader is None:
-        app._reloader = lambda: app.swap_source(_select_source())
+        app._reloader = _reloader_for(app, kind, _select_source)
     else:
         app._reloader = reloader
 
