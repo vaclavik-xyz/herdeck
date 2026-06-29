@@ -35,6 +35,9 @@ import {
   profileServersState,
   setProfileServersExplicit,
   clearProfileServers,
+  DEFAULT_TOGGLE_DECK_HOTKEY,
+  toggleDeckHotkey,
+  setToggleDeckHotkey,
   type ConfigPayload,
 } from "./configClient";
 
@@ -780,5 +783,31 @@ describe("effectiveProfileServers (seed = backend inherited selection)", () => {
   });
   it("includes the profile's own deck overlay overview_order", () => {
     expect(effectiveProfileServers(mk({ dev: { deck: { overview_order: ["a"] } } }), "dev")).toEqual(["a"]);
+  });
+});
+
+function emptyPayload() {
+  return parseConfig({ base: {}, profiles: {}, local: {}, secrets: {} })!;
+}
+
+describe("toggle-deck hotkey helpers", () => {
+  it("returns the default when the key is absent", () => {
+    expect(toggleDeckHotkey(emptyPayload())).toBe(DEFAULT_TOGGLE_DECK_HOTKEY);
+  });
+
+  it("returns an explicit empty string (= disabled) verbatim", () => {
+    const p = parseConfig({ base: { hotkeys: { toggle_deck: "" } } })!;
+    expect(toggleDeckHotkey(p)).toBe("");
+  });
+
+  it("returns a configured accelerator verbatim", () => {
+    const p = parseConfig({ base: { hotkeys: { toggle_deck: "Alt+Space" } } })!;
+    expect(toggleDeckHotkey(p)).toBe("Alt+Space");
+  });
+
+  it("writes the accelerator into base.hotkeys.toggle_deck", () => {
+    const p = setToggleDeckHotkey(emptyPayload(), "Ctrl+Shift+K");
+    expect(toggleDeckHotkey(p)).toBe("Ctrl+Shift+K");
+    expect((p.base.hotkeys as Record<string, unknown>).toggle_deck).toBe("Ctrl+Shift+K");
   });
 });
