@@ -49,3 +49,9 @@ class ConfigWatcher:
         self._stop.set()
         if self._thread.is_alive():
             self._thread.join(timeout)
+
+    def resync(self) -> None:
+        """Adopt the current file mtimes as the baseline, so the next poll does not treat
+        the latest (intentional) write as a change. Used by an in-process writer (the
+        onboarding commit) that has already applied + swapped the change itself."""
+        self._last = self._snapshot()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hmac
-import io
 import json
 import os
 import secrets
@@ -72,6 +71,8 @@ class DeckApp:
         self._config_service = config_service
         self._reloader = reloader
         self._local_bridge = None  # LocalBridgeRunner when in local mode, else None
+        self._suppress_reload = False  # set by the onboarding commit to mute the watcher
+        self._setup_lock = threading.RLock()  # shared mutation lock (/setup/connect + config-write routes + reload); RLock because the config routes call reload() while holding it
 
         self._lock = threading.Lock()
         self._tiles: dict[int, bytes] = {}
@@ -119,39 +120,44 @@ class DeckApp:
         with self._lock:
             self._refresh_locked()
 
-    def _refresh_locked(self) -> None:
-        # The orchestrator and source are not thread-safe; ThreadingHTTPServer
-        # serves each request on its own thread, so all access to them (render,
-        # press, state reads) is serialized under self._lock.
+    def _render_locked(self, source, orch, slots):
+        """Render `source` through `orch` → (tiles, panel_png, sections). This is the
+        FALLIBLE part of a refresh (apply_to / orchestrator render / icon raster / panel
+        compose); it mutates no self state, so it can run on a throwaway orchestrator in
+        `_prepare_swap` or on the live deck inside `_refresh_locked`."""
+        import io
+
         from ..icons import compose_panel
 
-        self._source.apply_to(self._orch)
-        rs = self._orch.render()
-        new: dict[int, bytes] = {}
-        for tile in rs.tiles:
-            if tile.index >= self._slots:
-                continue
-            new[tile.index] = self._icons.render_tile_bytes(tile)
+        source.apply_to(orch)
+        rs = orch.render()
+        tiles = {t.index: self._icons.render_tile_bytes(t) for t in rs.tiles if t.index < slots}
         buf = io.BytesIO()
         compose_panel(rs.panel).convert("RGB").save(buf, "PNG")
-        panel_png = buf.getvalue()
-        for i, png in new.items():
-            if self._tiles.get(i) != png:  # bump only changed/new tiles
+        sections = {t.index: t.section for t in rs.tiles if t.index < slots and t.section}
+        return tiles, buf.getvalue(), sections
+
+    def _apply_rendered_locked(self, tiles, panel_png, sections):
+        """Assign pre-rendered tiles/panel/sections with version bumps — pure dict/int ops
+        (no rendering), so it CANNOT raise. Callers hold self._lock. Byte-for-byte the tail
+        of the original `_refresh_locked`."""
+        for i, png in tiles.items():
+            if self._tiles.get(i) != png:
                 self._tile_ver[i] = self._bump()
-        removed = set(self._tile_ver) - set(new)
+        removed = set(self._tile_ver) - set(tiles)
         for i in removed:
             del self._tile_ver[i]
-        if removed:  # a pure removal must still trip the client's gate
+        if removed:
             self._bump()
-        self._tiles = new
-        self._tile_sections = {
-            tile.index: tile.section
-            for tile in rs.tiles
-            if tile.index < self._slots and tile.section
-        }
+        self._tiles = tiles
+        self._tile_sections = sections
         if self._panel != panel_png:
             self._panel = panel_png
             self._panel_ver = self._bump()
+
+    def _refresh_locked(self) -> None:
+        tiles, panel_png, sections = self._render_locked(self._source, self._orch, self._slots)
+        self._apply_rendered_locked(tiles, panel_png, sections)
 
     def press(self, index: int) -> None:
         """Inject a press (called from the HTTP thread). Out-of-range/crafted
@@ -206,29 +212,54 @@ class DeckApp:
                 pass
         self._local_bridge = runner
 
-    def swap_source(self, new_source) -> None:
-        """Replace the state source and rebuild the orchestrator from its config
-        (grid/slots may have changed), then re-render. The single lock serializes
-        this against in-flight HTTP reads/presses."""
+    def _prepare_swap(self, new_source, *, clock=None):
+        """Build the orchestrator AND render `new_source` into it — all the FALLIBLE parts
+        of a swap (grid parse, Orchestrator construction, render). Returns a prepared bundle
+        `(slots, orch, clock, tiles, panel_png, sections)` for an assignment-only commit;
+        mutates NO live deck state (throwaway orchestrator), so any failure raises here,
+        BEFORE anything is swapped or persisted. Pass `clock=time.monotonic` for a LIVE
+        source so its elapsed-time text advances (else a connect from the mock app keeps
+        the mock's frozen clock)."""
+        clk = clock if clock is not None else self._clock
+        cols, rows = new_source.config.grid
+        slots = cols * rows - 2
+        orch = Orchestrator(new_source.config, slots=slots, clock=clk)
+        tiles, panel_png, sections = self._render_locked(new_source, orch, slots)
+        return slots, orch, clk, tiles, panel_png, sections
+
+    def _commit_swap(self, new_source, prepared) -> None:
+        """Assign the prepared source/orchestrator/clock + its pre-rendered tiles under the
+        lock — **pure assignment, no render**, so it cannot raise for a validated config:
+        the post-persist swap is guaranteed not to half-swap. The single lock serializes
+        against in-flight reads/presses."""
+        slots, orch, clk, tiles, panel_png, sections = prepared
         with self._lock:
             old = self._source
             self._source = new_source
-            cols, rows = new_source.config.grid
-            self._slots = cols * rows - 2
-            self._orch = Orchestrator(new_source.config, slots=self._slots, clock=self._clock)
-            new_source.attach(self._orch, lock=self._lock, refresh_locked=self._refresh_locked)
-            self._refresh_locked()
+            self._slots = slots
+            self._orch = orch
+            self._clock = clk  # adopt the clock the orchestrator was built with
+            new_source.attach(orch, lock=self._lock, refresh_locked=self._refresh_locked)
+            self._apply_rendered_locked(tiles, panel_png, sections)
         try:
             old.close()
         except Exception:
             pass
 
+    def swap_source(self, new_source) -> None:
+        """Prepare + commit in one call (the reloader and other callers). The render runs in
+        prepare (before any assignment), so a malformed config raises without half-swapping."""
+        self._commit_swap(new_source, self._prepare_swap(new_source))
+
     def reload(self) -> None:
         """Apply an edited on-disk config in place. The real sidecar injects a
         reloader (via create_app) that re-selects the source and swap_source()s
         it; tests may inject a stub. No reloader -> safe no-op."""
-        if self._reloader is not None:
-            self._reloader()
+        if getattr(self, "_suppress_reload", False):
+            return
+        with self._setup_lock:  # serialize against in-flight connect / config-write transactions
+            if self._reloader is not None:
+                self._reloader()
 
     # --- state snapshots ---
     def _state(self) -> dict:
@@ -400,6 +431,18 @@ class DeckApp:
                         self._send(204)
                     except ValueError:
                         self._send(400)
+                elif path == "/setup/connect":
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    with app._setup_lock:  # serialize concurrent connects (ThreadingHTTPServer)
+                        result = connect(app, body)
+                    if result is None:
+                        self._send(400)
+                        return
+                    self._send(200, json.dumps(result).encode(), "application/json")
                 elif path in ("/config/validate", "/config", "/profiles/active", "/secret"):
                     if not self._require_header_token():
                         return
@@ -416,9 +459,10 @@ class DeckApp:
                         body = self._json_body()
                         if body is _BAD_BODY:
                             return
-                        errors = app._config_service.write(body)
-                        if not errors:
-                            app.reload()
+                        with app._setup_lock:
+                            errors = app._config_service.write(body)
+                            if not errors:
+                                app.reload()
                         self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
                     elif path == "/profiles/active":
                         body = self._json_body()
@@ -429,7 +473,8 @@ class DeckApp:
                             self._send(400)
                             return
                         try:
-                            changed = app._config_service.set_active(name)
+                            with app._setup_lock:
+                                changed = app._config_service.set_active(name)
                         except ConfigError:
                             self._send(400)
                             return
@@ -443,7 +488,8 @@ class DeckApp:
                         if not token_env or not value:
                             self._send(400)
                             return
-                        app._config_service.set_secret(token_env, value)
+                        with app._setup_lock:
+                            app._config_service.set_secret(token_env, value)
                         self._send(204)
                 else:
                     self._send(404)
@@ -456,7 +502,8 @@ class DeckApp:
                     if app._config_service is None:
                         self._send(404)
                         return
-                    app._config_service.clear_secret(unquote(path.rsplit("/", 1)[1]))
+                    with app._setup_lock:
+                        app._config_service.clear_secret(unquote(path.rsplit("/", 1)[1]))
                     self._send(204)
                 else:
                     self._send(404)
@@ -702,6 +749,294 @@ def _reloader_for(app, kind, select_source):
     if kind[0] == "local":
         return lambda: None
     return lambda: app.swap_source(select_source())
+
+
+def _token_env_for(server_id: str) -> str:
+    slug = "".join(c if c.isalnum() else "_" for c in server_id).upper()
+    return f"HERDECK_{slug}_TOKEN"
+
+
+def _restore_secret(name: str, prior: str | None) -> None:
+    """Restore the keychain entry for `name` to its snapshot `prior`: re-store the prior
+    value if it existed, else clear it. So a rollback after overwriting an existing token
+    (reconnecting an existing server) never destroys the previously-stored secret.
+    Best-effort: never raises."""
+    from .. import secrets as secret_store
+
+    try:
+        if prior is None:
+            secret_store.clear_secret(name)
+        else:
+            secret_store.set_secret(name, prior)
+    except Exception:
+        pass
+
+
+def _restore_file(path, prior_text) -> None:
+    """Restore a file to its prior contents (or remove it if it did not exist before).
+    Used to undo a partial/failed config write so no serverful-but-tokenless config is
+    left behind. Best-effort: never raises."""
+    try:
+        if prior_text is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(prior_text, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _snapshot_config(svc):
+    """Read the current config.toml/local.toml text (or None if absent) for rollback.
+    Raises OSError on a read fault — the caller snapshots BEFORE mutating anything, so a
+    failure here persists nothing."""
+    cfg = svc._config_path.read_text(encoding="utf-8") if svc._config_path.exists() else None
+    local = svc._local_path.read_text(encoding="utf-8") if svc._local_path.exists() else None
+    return cfg, local
+
+
+def _restore_choice(config_path, prior: str | None) -> None:
+    """Restore the onboarding marker to its snapshot: re-write the prior choice if there
+    was one, else clear it. Used to undo a local connect whose swap failed after the
+    marker was written. Best-effort: never raises."""
+    from .onboarding import clear_choice, write_choice
+
+    try:
+        if prior is None:
+            clear_choice(config_path)
+        else:
+            write_choice(config_path, prior)
+    except OSError:
+        pass
+
+
+def _probe_sync(url: str, token: str):
+    """Sync wrapper over the async probe (the HTTP handler runs on a plain thread)."""
+    import asyncio
+
+    from .probe import probe_server
+
+    return asyncio.run(probe_server(url, token))
+
+
+def build_live_source_for_connect(config, server):
+    from .live import build_live_source
+
+    return build_live_source(config, server)
+
+
+def connect(app, body) -> dict | None:
+    """Run the onboarding connect flow. Returns the response dict, or None for a
+    malformed body (the route maps None -> HTTP 400). Live swaps follow
+    build -> swap -> adopt so a failed build never strands the app on a closed
+    bridge; remote builds the live source BEFORE persisting (no half-commit)."""
+    import dataclasses
+    import time
+    import tomllib
+
+    from .mock import MockSource
+    from .onboarding import read_choice, write_choice
+
+    choice = body.get("choice")
+    config_path = str(app._config_service._config_path) if app._config_service else None
+
+    if choice == "demo":
+        # Transactional like local/remote: prepare (render mock) BEFORE the marker, commit after.
+        prior_choice = read_choice(config_path)
+        new_source = MockSource()
+        try:
+            prepared = app._prepare_swap(new_source)  # render mock (fallible) BEFORE persisting
+            write_choice(config_path, "demo")  # persist
+        except Exception:
+            _restore_choice(config_path, prior_choice)
+            new_source.close()
+            return {"ok": False, "error": "could not switch to demo"}
+        app._commit_swap(new_source, prepared)  # assignment-only
+        app._set_local_bridge(None)
+        app._reloader = _reloader_for(app, ("mock",), _select_source)  # mock/remote reloads resume
+        return {"ok": True}
+
+    if choice == "local":
+        from ..bootstrap import resolve_socket_path
+
+        socket_path = resolve_socket_path(None)
+        if not os.path.exists(socket_path):
+            return {"ok": False, "error": f"herdr socket not found at {socket_path}"}
+        new_source = None
+        runner = None
+        prior_choice = read_choice(config_path)  # snapshot the marker for rollback
+        try:
+            config, server, runner = _start_local_bridge(socket_path)  # may raise (bridge bind)
+            new_source = build_live_source_for_connect(config, server)  # build ...
+            prepared = app._prepare_swap(new_source, clock=time.monotonic)  # ... pre-build orch (live clock) BEFORE the marker ...
+            write_choice(config_path, "local")  # ... persist (durable)
+        except Exception:
+            _restore_choice(config_path, prior_choice)  # undo the marker if it was written
+            if new_source is not None:
+                new_source.close()  # don't leak the built source / its connector runner
+            if runner is not None:
+                runner.close()  # ... or the just-started bridge; previous source untouched
+            return {"ok": False, "error": "could not start local source"}
+        app._commit_swap(new_source, prepared)  # non-failing: all fallible work done; sets the live clock
+        app._set_local_bridge(runner)  # adopt new bridge (closes old one)
+        app._reloader = _reloader_for(app, ("local",), _select_source)  # no-op: don't swap out the bridge
+        return {"ok": True, "connected": app._source.connected}
+
+    if choice == "remote":
+        url, token, server_id = body.get("url"), body.get("token"), body.get("id") or "herdr"
+        if not (isinstance(url, str) and url and isinstance(token, str) and token
+                and isinstance(server_id, str) and server_id):
+            return None  # -> 400: url/token/id must be non-empty strings (e.g. {"id": 123} is invalid)
+        token_env = _token_env_for(server_id)
+        # Secret resolution is ENV-FIRST: if token_env is already exported with a DIFFERENT
+        # value, that env value would shadow whatever we store in the keychain, so the
+        # persisted config would NOT resolve to the typed token. Reject before doing anything.
+        env_token = os.environ.get(token_env)
+        if env_token is not None and env_token != token:
+            return {
+                "ok": False,
+                "error": f"{token_env} is set in the environment and would override the saved token; unset it or connect with that value",
+            }
+        result = _probe_sync(url, token)
+        if not result.ok:
+            return {"ok": False, "error": result.reason}
+        try:
+            data = app._config_service.read()  # a malformed/unreadable existing config must not 500
+        except (OSError, tomllib.TOMLDecodeError):
+            return {"ok": False, "error": "existing config is unreadable — fix it in Settings"}
+        payload = {
+            "base": dict(data.get("base") or {}),
+            "profiles": data.get("profiles") or {},
+            "local": data.get("local") or {},
+        }
+        existing = payload["base"].get("servers")
+        if existing is not None and not (isinstance(existing, list) and all(isinstance(s, dict) for s in existing)):
+            # parseable TOML but a wrong shape (e.g. `servers = ["bad"]`) would crash the upsert
+            return {"ok": False, "error": "existing config is malformed (servers) — fix it in Settings"}
+        servers = list(existing or [])
+        entry = {"id": server_id, "url": url, "token_env": token_env}
+        for i, s in enumerate(servers):
+            if s.get("id") == server_id:
+                servers[i] = entry
+                break
+        else:
+            servers.append(entry)
+        payload["base"]["servers"] = servers
+        # token_env (HERDECK_<ID>_TOKEN) lives in ONE flat keychain namespace shared by ALL
+        # config sections — other servers, `notifications.telegram`, profile overlays. Two ids
+        # can collide (`foo-bar`/`foo_bar`), and a derived name can clash with a NON-server
+        # secret. Collect every token_env the EXISTING config references except the server we
+        # are replacing; reject if ours is already in use, so we never overwrite another secret.
+        from .config_service import ConfigService
+
+        base_wo_ours = dict(data.get("base") or {})
+        base_wo_ours["servers"] = [
+            s for s in (base_wo_ours.get("servers") or [])
+            if not (isinstance(s, dict) and s.get("id") == server_id)
+        ]
+        in_use = []
+        ConfigService._collect_token_envs(base_wo_ours, in_use)
+        ConfigService._collect_token_envs(data.get("profiles") or {}, in_use)
+        if token_env in in_use:
+            return {
+                "ok": False,
+                "error": f"token env {token_env} is already used elsewhere in the config — pick a different id",
+            }
+        # BUILD-BEFORE-PERSIST: resolve the merged payload (placeholder tokens) to confirm
+        # selection, then build the live source with the REAL token baked into the chosen
+        # ServerConfig — all BEFORE mutating keychain/config, so any selection / validation
+        # / build failure persists NOTHING (no orphaned secret, no serverful-but-dead config).
+        resolved = app._config_service.resolve_selected_server(payload, assume_present=token_env)
+        if resolved is None or resolved[1].id != server_id:
+            return {
+                "ok": False,
+                "error": "config does not resolve to this server (check the active profile / overview_order / other servers' tokens) — fix it in Settings",
+            }
+        config, placeholder_server = resolved
+        real_server = dataclasses.replace(placeholder_server, token=token)  # real token, not keychain
+        try:
+            new_source = build_live_source_for_connect(config, real_server)  # build BEFORE persist
+        except Exception:
+            return {"ok": False, "error": "could not build the remote source"}
+        # Persist + swap as one watcher-suppressed transaction (see _commit_remote).
+        return _commit_remote(app, payload, token_env, token, new_source, config_path)
+
+    return None  # unknown choice -> 400
+
+
+def _commit_remote(app, payload, token_env, token, new_source, config_path) -> dict:
+    """Persist (secret-then-config) and swap to `new_source` as ONE transaction, with the
+    config watcher SUPPRESSED so its mtime poll can't reload mid-commit (double-swapping
+    to a second source) or swap to the half-written config during a rollback. Any failure
+    restores the prior secret + config and closes the just-built source. The watcher
+    baseline is resynced on exit so it doesn't fire on our own writes/restores."""
+    import time
+
+    from .. import secrets as secret_store
+    from .onboarding import clear_choice
+
+    app._suppress_reload = True
+    try:
+        # Pre-build the orchestrator (the only fallible part of the swap) BEFORE persisting,
+        # so the post-persist commit (_commit_swap) is guaranteed non-throwing.
+        try:
+            prepared = app._prepare_swap(new_source, clock=time.monotonic)  # live clock
+        except Exception:
+            new_source.close()
+            return {"ok": False, "error": "could not build the remote source"}
+        # Snapshot the prior keychain value AND the on-disk config BEFORE any mutation, so a
+        # read fault can't strand a secret, and a partial write (config ok, local faults) is
+        # undone — never leaving a serverful-but-tokenless config or a destroyed prior token.
+        # peek_keychain raises (not None) on a backend READ error, so we abort here rather
+        # than risk erasing an existing token we couldn't actually read.
+        try:
+            prior_secret = secret_store.peek_keychain(token_env)
+        except Exception:
+            new_source.close()
+            return {"ok": False, "error": "could not read the existing token — check the keychain"}
+        svc = app._config_service
+        try:
+            prior_config, prior_local = _snapshot_config(svc)
+        except OSError:
+            new_source.close()  # nothing mutated yet
+            return {"ok": False, "error": "could not read config"}
+        try:
+            secret_store.set_secret(token_env, token)
+        except Exception:
+            _restore_secret(token_env, prior_secret)  # set may have partially overwritten
+            new_source.close()
+            return {"ok": False, "error": "could not store token"}
+
+        def _rollback():
+            _restore_file(svc._config_path, prior_config)
+            _restore_file(svc._local_path, prior_local)
+            _restore_secret(token_env, prior_secret)  # restore prior token, don't destroy it
+            new_source.close()
+
+        try:
+            errors = svc.write(payload)
+        except OSError:  # atomic write can fault, possibly after a partial write
+            _rollback()
+            return {"ok": False, "error": "could not write config"}
+        if errors:  # structural validation runs before any write, so nothing was written
+            _rollback()
+            return {"ok": False, "error": "; ".join(errors)}
+        # Clear the stale local/demo marker as PART OF THE COMMIT: remote == a usable config,
+        # no opt-in marker. If the unlink faults, roll everything back so a later-removed
+        # config falls to first_run (the card), never to a stale marker that would mask it.
+        try:
+            clear_choice(config_path)
+        except OSError:
+            _rollback()
+            return {"ok": False, "error": "could not finalize onboarding"}
+        app._commit_swap(new_source, prepared)  # non-failing: all fallible work done; sets the live clock
+        app._set_local_bridge(None)  # ... then drop any local bridge
+        app._reloader = _reloader_for(app, ("remote",), _select_source)  # config-edit reloads resume
+        return {"ok": True, "connected": app._source.connected}  # honest: connector dials async
+    finally:
+        watcher = getattr(app, "_watcher", None)
+        if watcher is not None:
+            watcher.resync()  # adopt our writes as the baseline; no spurious reload
+        app._suppress_reload = False
 
 
 def create_app(
