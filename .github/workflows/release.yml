@@ -6,8 +6,16 @@ on:
 
 jobs:
   build-linux:
-    name: Build Linux x86_64 (AppImage + deb + rpm)
-    runs-on: ubuntu-24.04
+    name: Build Linux ${{ matrix.arch }} (AppImage + deb + rpm)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubicloud-standard-4-ubuntu-2404
+          - arch: arm64
+            runner: ubicloud-standard-4-arm-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +37,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Freeze + smoke the sidecar (Linux x86_64)
+      - name: Freeze + smoke the sidecar (Linux ${{ matrix.arch }})
         run: |
           python -m venv .venv
           .venv/bin/pip install --upgrade pip
@@ -46,7 +54,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             desktop/src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          key: ${{ matrix.arch }}-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.arch }}-cargo-
 
       - uses: actions/setup-node@v4
         with:
@@ -62,8 +72,13 @@ jobs:
       - name: Build Tauri bundles
         working-directory: desktop
         env:
+          # Ubicloud runners are full VMs (FUSE works), but keep EXTRACT_AND_RUN
+          # as a belt-and-suspenders fallback. NO_STRIP avoids a common silent
+          # linuxdeploy strip failure during AppImage packaging. --verbose surfaces
+          # the real linuxdeploy error if AppImage bundling fails.
           APPIMAGE_EXTRACT_AND_RUN: "1"
-        run: npm run tauri build
+          NO_STRIP: "true"
+        run: npm run tauri -- build --verbose
 
       - name: Verify all three Linux bundle formats were produced
         working-directory: desktop/src-tauri/target/release/bundle
@@ -84,6 +99,7 @@ jobs:
       - name: Inspect rpm runtime Requires (diagnostic — appindicator best-effort)
         working-directory: desktop/src-tauri/target/release/bundle/rpm
         run: |
+          shopt -s nullglob
           for f in *.rpm; do
             echo "=== Requires of $f ==="
             rpm -qpR "$f"
@@ -92,7 +108,7 @@ jobs:
       - name: Upload Linux bundles
         uses: actions/upload-artifact@v4
         with:
-          name: herdeck-linux-x86_64
+          name: herdeck-linux-${{ matrix.arch }}
           path: |
             desktop/src-tauri/target/release/bundle/appimage/*.AppImage
             desktop/src-tauri/target/release/bundle/deb/*.deb
