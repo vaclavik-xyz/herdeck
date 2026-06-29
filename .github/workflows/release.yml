@@ -56,6 +56,9 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: Remove any stale bundle output (warm cache may restore old bundles)
+        run: rm -rf desktop/src-tauri/target/release/bundle
+
       - name: Build Tauri bundles
         working-directory: desktop
         env:
