@@ -308,3 +308,26 @@ def test_set_and_clear_secret_delegate_to_store(tmp_path, monkeypatch):
     svc.set_secret("TOK", "v")
     svc.clear_secret("TOK")
     assert calls == [("set", "TOK", "v"), ("clear", "TOK")]
+
+
+def test_read_roundtrips_hotkeys_section(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOK", raising=False)
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    text = (
+        '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n'
+        '[hotkeys]\ntoggle_deck = "CmdOrCtrl+Shift+D"\n'
+    )
+    svc = _svc(tmp_path, text=text)
+    assert svc.read()["base"]["hotkeys"] == {"toggle_deck": "CmdOrCtrl+Shift+D"}
+
+
+def test_write_roundtrips_hotkeys_section(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "real")
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    svc = _svc(tmp_path)
+    data = svc.read()
+    data["base"]["hotkeys"] = {"toggle_deck": "Alt+Space"}
+    assert svc.write(data) == []  # no structural errors
+    assert _tomllib.loads((tmp_path / "config.toml").read_text())["hotkeys"] == {
+        "toggle_deck": "Alt+Space"
+    }
