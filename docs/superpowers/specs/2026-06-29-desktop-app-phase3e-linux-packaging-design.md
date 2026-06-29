@@ -119,9 +119,13 @@ rpm targetu selhal — to je akceptovatelné, CI je zdroj pravdy.
     `dpkg-shlibdeps`), takže tray lib je vhodné doplnit explicitně. Debian/Ubuntu
     název je známý a správný.
   - **.rpm:** **bez explicitního `depends`** — `rpmbuild` automaticky generuje
-    `Requires` pro linkované `.so` knihovny (scan ELF), takže tray lib se přidá
-    sám. Explicitní jméno balíku se na Fedora/RHEL liší od Debianu a špatný název
-    by udělal **neinstalovatelný rpm** → raději spoléhat na auto-detekci.
+    `Requires` pro linkované `.so` knihovny (scan ELF). Explicitní jméno balíku se
+    na Fedora/RHEL liší od Debianu a špatný název by udělal **neinstalovatelný
+    rpm** → raději spoléhat na auto-detekci. **Caveat:** tray appindicator lib je
+    načítaná dynamicky (Tauri `TRAY_LIBRARY_PATH`), takže nemusí být ELF `NEEDED`
+    a auto-Requires ji může minout → rpm tray-dep je v1 **best-effort**. CI proto
+    loguje `rpm -qpR` (diagnostika, nefailuje) pro viditelnost; AppImage si
+    appindicator bundluje, deb ji deklaruje explicitně — to jsou primární cesty.
   - webkit2gtk a core GTK libs doplňuje Tauri/rpmbuild sám.
 - Žádné nové ikony — PNG z 3d stačí pro Linux.
 
@@ -184,8 +188,11 @@ jobs:
   `push: tags: ['v*']`. NE každý push.
 - **`HERDECK_PY`** se v `build-sidecar.sh` resolvuje na `$ROOT/.venv/bin/python`
   → CI vytvoří `.venv` přesně tam.
-- **`if-no-files-found: error`** → chybějící artefakt = červený job (gate nesmí
-  tiše projít bez balíčků).
+- **Per-format completeness check** (krok před uploadem) → ověří, že každý ze tří
+  globů (`*.AppImage`, `*.deb`, `*.rpm`) matchl ≥1 soubor; chybějící jeden formát
+  = červený job. (`if-no-files-found: error` failuje jen když nematchne NIC, tak
+  by neodhalil samostatně chybějící rpm.)
+- **`rpm -qpR` diagnostika** (nefailuje) → loguje runtime Requires rpm balíčku.
 - **Release attach** jen na tag (na `workflow_dispatch` se jen nahrají artefakty).
 - Caching (cargo/npm) je vítaný optimalizační detail, ne blocker.
 

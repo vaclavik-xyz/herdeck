@@ -270,11 +270,12 @@ Expected: `bundle config OK`.
 
 - [ ] **Step 4: Compile the Rust crate — this validates `tauri.conf.json` against Tauri's schema**
 
-Run:
+Run (no pipe — a pipe to `tail` would mask `cargo test`'s exit code):
 ```bash
-cd desktop/src-tauri && cargo test 2>&1 | tail -5; cd ../..
+cd desktop/src-tauri && cargo test; cd ../..
 ```
-Expected: `test result: ok.`
+Expected: `test result: ok.` and a zero exit status. If the config is invalid,
+`cargo test` exits non-zero with a `generate_context!` / config error.
 
 This is a **real config-validation gate**, not just a regression guard: `lib.rs`
 calls `tauri::generate_context!()`, which reads and validates `tauri.conf.json`
@@ -378,6 +379,30 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: npm run tauri build
 
+      - name: Verify all three Linux bundle formats were produced
+        working-directory: desktop/src-tauri/target/release/bundle
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          fail=0
+          for kind in "appimage/*.AppImage" "deb/*.deb" "rpm/*.rpm"; do
+            files=( $kind )
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "FAIL: no file matched $kind"; fail=1
+            else
+              echo "OK: $kind -> ${files[*]}"
+            fi
+          done
+          [ "$fail" -eq 0 ] || { echo "Missing one or more bundle formats"; exit 1; }
+
+      - name: Inspect rpm runtime Requires (diagnostic — appindicator best-effort)
+        working-directory: desktop/src-tauri/target/release/bundle/rpm
+        run: |
+          for f in *.rpm; do
+            echo "=== Requires of $f ==="
+            rpm -qpR "$f"
+          done
+
       - name: Upload Linux bundles
         uses: actions/upload-artifact@v4
         with:
@@ -395,7 +420,18 @@ Notes for the implementer (do not add to the file):
 - `smoke-sidecar.sh` uses `python3` (provided by setup-python) for JSON parsing
   and the venv python (with Pillow from `.[packaging]`) to decode the baked glyph.
 - `APPIMAGE_EXTRACT_AND_RUN=1` avoids the FUSE requirement on the runner.
-- `if-no-files-found: error` makes a missing bundle fail the job (no silent pass).
+- The **"Verify all three Linux bundle formats"** step is the real completeness
+  gate: `if-no-files-found: error` only fails when *zero* paths match, so it would
+  still pass if e.g. the rpm target silently produced nothing while appimage+deb
+  exist. The explicit per-format glob check fails the job if any one is missing.
+- The **rpm `rpm -qpR` diagnostic** logs the rpm's runtime `Requires`. The tray's
+  appindicator lib is loaded dynamically (Tauri's `TRAY_LIBRARY_PATH`), so it may
+  NOT appear as an ELF `NEEDED` entry and rpmbuild's auto `.so` requirement
+  generation can miss it. v1 treats rpm tray-dep completeness as **best-effort**
+  (the AppImage bundles appindicator; the deb declares it explicitly). The
+  diagnostic makes the rpm's actual Requires visible in the CI log for a human to
+  judge; it does not fail the build.
+- `if-no-files-found: error` stays as a secondary guard on the upload itself.
 - The `rpm` apt package supplies `rpmbuild`, required for the rpm target.
 - No GitHub Release step in v1: `workflow_dispatch` just uploads artifacts. (A
   release-attach step on tags is a documented future add; not in scope here.)
@@ -418,7 +454,8 @@ steps = job["steps"]
 joined = "\n".join(str(s) for s in steps)
 for needle in ["libwebkit2gtk-4.1-dev", "libayatana-appindicator3-dev", "rpm",
                "build-sidecar.sh", "smoke-sidecar.sh", "npm run tauri build",
-               "APPIMAGE_EXTRACT_AND_RUN", "if-no-files-found"]:
+               "APPIMAGE_EXTRACT_AND_RUN", "if-no-files-found",
+               "Verify all three", "rpm -qpR"]:
     assert needle in joined, f"missing step content: {needle}"
 print("workflow OK")
 PY
