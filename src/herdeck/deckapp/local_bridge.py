@@ -60,6 +60,12 @@ class LocalBridgeRunner:
             if handle is not None:
                 server, btask = handle
                 btask.cancel()
+                try:
+                    await btask
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
                 server.close()
                 try:
                     await server.wait_closed()
