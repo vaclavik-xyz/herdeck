@@ -7,6 +7,7 @@
 //! the frontend can reach the sidecar over loopback. The sidecar is restarted on
 //! crash and killed on quit.
 
+pub mod hotkey;
 pub mod http;
 pub mod sidecar;
 
