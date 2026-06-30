@@ -291,3 +291,20 @@ def test_icon_for_cache_key_changes_with_bundled_asset_set(tmp_path):
     name_a = _provider(tmp_path / "ca", a).icon_for("claude", "green")
     name_b = _provider(tmp_path / "cb", b).icon_for("claude", "green")
     assert name_a != name_b
+
+
+def test_render_cache_key_changes_when_same_named_asset_content_changes(tmp_path):
+    """Same filename + same byte size but DIFFERENT content (a re-baked/edited
+    glyph) must still invalidate the cache, so the fingerprint hashes file
+    contents — not just name+size (roborev)."""
+    a = tmp_path / "a"
+    a.mkdir()
+    (a / "claude.svg").write_text("<svg>aaa</svg>")
+    b = tmp_path / "b"
+    b.mkdir()
+    (b / "claude.svg").write_text("<svg>bbb</svg>")  # same length, different bytes
+    assert (a / "claude.svg").stat().st_size == (b / "claude.svg").stat().st_size
+    tile = _tile_ns()
+    name_a = _provider(tmp_path / "ca", a).render_tile(tile)
+    name_b = _provider(tmp_path / "cb", b).render_tile(tile)
+    assert name_a != name_b

@@ -51,25 +51,32 @@ def _safe_name(agent_type: str) -> str:
 
 
 def _fingerprint_assets(assets_dir: str | None) -> str:
-    """A short digest of the bundled-glyph set in ``assets_dir`` (sorted
-    name+size pairs). Folded into the render-cache keys so that adding,
-    removing, or re-baking a bundled mark invalidates stale cached tiles —
-    otherwise an UPGRADED app reuses a pre-bundle letter-glyph tile for a
-    newly bundled agent (the Q1-on-upgrade staleness seen on macbench).
-    Returns ``"0"`` when there is no assets dir or it cannot be listed."""
+    """A short content digest of the bundled-glyph set in ``assets_dir`` (each
+    file's name + its bytes). Folded into the render-cache keys so that adding,
+    removing, OR re-baking/editing a bundled mark invalidates stale cached
+    tiles — otherwise an UPGRADED app reuses a pre-bundle letter-glyph tile for
+    a newly bundled agent (the Q1-on-upgrade staleness seen on macbench).
+    Hashes contents (not just name+size) so a same-name same-length re-bake is
+    caught too. The asset set is small (a handful of KB), so the one read per
+    provider construction is negligible. Returns ``"0"`` when there is no
+    assets dir or it cannot be listed."""
     if not assets_dir:
         return "0"
     try:
         names = sorted(os.listdir(assets_dir))
     except OSError:
         return "0"
-    parts = []
+    h = hashlib.sha1()
     for n in names:
+        h.update(n.encode())
+        h.update(b"\0")
         try:
-            parts.append(f"{n}:{os.path.getsize(os.path.join(assets_dir, n))}")
+            with open(os.path.join(assets_dir, n), "rb") as fh:
+                h.update(fh.read())
         except OSError:
-            parts.append(n)
-    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:10]
+            pass  # unreadable entry (e.g. a subdir): name alone still contributes
+        h.update(b"\0")
+    return h.hexdigest()[:10]
 
 
 # agent type -> Simple Icons slug (None => generated glyph fallback)
