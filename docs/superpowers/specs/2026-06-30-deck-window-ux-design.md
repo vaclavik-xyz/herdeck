@@ -159,10 +159,13 @@ by Rust a sidecar mohly číst **jiný soubor**.
      souběžný `/setup/connect` ho drží až ~15 s. Proto tray persist použít **dedikovaný timeout
      ≥ 15 s** (strop `/setup/connect`, jako `setup_connect`) — jinak by 3s `SIDECAR_TIMEOUT`
      uťal pomalý-ale-úspěšný zápis a klient by ho mylně považoval za failed, zatímco server
-     po uvolnění locku stejně zapíše (divergence). Signál apply/abort = **skutečný HTTP výsledek**,
-     ne timeout; timeout (>15 s) = genuinní wedge → abort.
-  2. **Pokud persist selže** (HTTP 4xx/5xx / sidecar down / wedge-timeout) → **NEaplikovat**
-     (žádný restart, žádný `set_always_on_top`), vrátit zaškrtnutí na původní + zalogovat.
+     po uvolnění locku stejně zapíše (divergence). Signál apply/abort = **skutečný výsledek
+     `POST /config`**, ne timeout. **Pozor na kontrakt `/config`:** validační chyby vrací
+     **HTTP 200 s `{errors:[...]}` a NIC nezapíše** — persist je úspěšný **jen při HTTP 200 A
+     `errors == []`** (parsovat tělo). Timeout (>15 s) = genuinní wedge.
+  2. **Pokud persist selže** (HTTP 4xx/5xx / **200 s neprázdným `errors`** / nevalidní JSON /
+     sidecar down / wedge-timeout) → **NEaplikovat** (žádný restart, žádný `set_always_on_top`),
+     vrátit zaškrtnutí na původní + zalogovat.
   3. **Apply (jen po úspěšném persistu):**
      - oba borderless (floating↔always_on_top) → **živě** `main.set_always_on_top(target==aot)`
        + překreslit zaškrtnutí. Bez restartu.
