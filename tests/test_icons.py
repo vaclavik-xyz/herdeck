@@ -1,6 +1,6 @@
 import os
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from herdeck.icons import IconProvider
 
@@ -318,3 +318,70 @@ def test_comet_overlay_is_phase_distinct_and_sized(tmp_path):
     b = p._comet_overlay(62, 2, 2, 4)
     assert isinstance(a, _Image.Image) and a.size == (62, 62)
     assert a.tobytes() != b.tobytes()  # the comet head sweeps with the phase
+
+
+def _asym_rasterize(svg, size):
+    # Left half white, right half transparent — so a rotation or a rescale
+    # visibly changes the pixels (a uniform square would not under a 90° turn).
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ImageDraw.Draw(img).rectangle([0, 0, size // 2, size], fill=(255, 255, 255, 255))
+    return img
+
+
+def _anim_provider(cache_dir, assets_dir):
+    return IconProvider(
+        cache_dir=str(cache_dir),
+        slug_map={"claude": None},
+        fetch=lambda s: None,
+        rasterize=_asym_rasterize,
+        assets_dir=str(assets_dir),
+    )
+
+
+def _agent_tile(**over):
+    from types import SimpleNamespace
+
+    base = dict(
+        color="green", label="", subtext=None, agent_type="claude", spinner=1,
+        repo="api", branch="main", status_text="WORKING", time_text="1m",
+        server_tag=None, server_accent=None, working_animation="spin",
+    )
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_each_working_animation_renders_distinctly(tmp_path):
+    p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
+    styles = ("spin", "comet", "pulse", "sweep", "none")
+    out = {s: p.render_tile_bytes(_agent_tile(working_animation=s)) for s in styles}
+    assert len(set(out.values())) == 5  # all five working styles are mutually distinct
+
+
+def test_none_working_matches_static_idle_and_differs_from_spin(tmp_path):
+    p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
+    none_working = p.render_tile_bytes(_agent_tile(working_animation="none", spinner=1))
+    idle_static = p.render_tile_bytes(_agent_tile(working_animation="none", spinner=None))
+    assert none_working == idle_static  # "none" disables animation -> renders like idle
+    spin = p.render_tile_bytes(_agent_tile(working_animation="spin", spinner=1))
+    assert none_working != spin
+
+
+def test_idle_tile_renders_identically_across_styles(tmp_path):
+    p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
+    a = p.render_tile_bytes(_agent_tile(working_animation="spin", spinner=None))
+    b = p.render_tile_bytes(_agent_tile(working_animation="sweep", spinner=None))
+    assert a == b  # idle tiles ignore the style entirely
+
+
+def test_working_tile_cache_key_includes_animation(tmp_path):
+    p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
+    spin = p.render_tile(_agent_tile(working_animation="spin", spinner=1))
+    pulse = p.render_tile(_agent_tile(working_animation="pulse", spinner=1))
+    assert spin != pulse  # style is part of the working-tile cache key
+
+
+def test_idle_tile_cache_key_ignores_animation(tmp_path):
+    p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
+    a = p.render_tile(_agent_tile(working_animation="spin", spinner=None))
+    b = p.render_tile(_agent_tile(working_animation="pulse", spinner=None))
+    assert a == b  # idle tiles share one cache key regardless of style (no churn)
