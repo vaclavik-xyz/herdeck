@@ -52,6 +52,7 @@ class DeckApp:
         token: str | None = None,
         serve: bool = True,
         clock=None,
+        tick_interval: float = 0.0,
         config_service=None,
         reloader=None,
     ):
@@ -99,6 +100,18 @@ class DeckApp:
             self._thread.start()
         else:
             self.host, self.port = host, port
+
+        # Background ticker: advance the spinner phase + re-render every
+        # tick_interval seconds so working tiles animate in the served /state.
+        # Only when actually serving (mock/test path leaves it off -> deterministic).
+        self._tick_interval = tick_interval
+        self._ticker_stop = threading.Event()
+        self._ticker_thread: threading.Thread | None = None
+        if serve and tick_interval > 0:
+            self._ticker_thread = threading.Thread(
+                target=self._ticker_loop, name="herdeck-deckapp-tick", daemon=True
+            )
+            self._ticker_thread.start()
 
     @property
     def token(self) -> str:
@@ -159,6 +172,20 @@ class DeckApp:
         tiles, panel_png, sections = self._render_locked(self._source, self._orch, self._slots)
         self._apply_rendered_locked(tiles, panel_png, sections)
 
+    def _tick_once(self) -> None:
+        """Advance the spinner phase and re-render once, atomically w.r.t. presses
+        and bridge updates (same lock). Only working tiles change bytes, so the
+        version diff bumps just them."""
+        with self._lock:
+            self._orch.tick()
+            self._refresh_locked()
+
+    def _ticker_loop(self) -> None:
+        # Event.wait returns False on timeout (a tick is due) and True once close()
+        # sets the event (clean stop) — so this never busy-waits and exits promptly.
+        while not self._ticker_stop.wait(self._tick_interval):
+            self._tick_once()
+
     def press(self, index: int) -> None:
         """Inject a press (called from the HTTP thread). Out-of-range/crafted
         indices are ignored; valid ones update mock state and re-render."""
@@ -168,6 +195,12 @@ class DeckApp:
                 self._refresh_locked()
 
     def close(self) -> None:
+        ticker = getattr(self, "_ticker_thread", None)
+        if ticker is not None:
+            self._ticker_stop.set()
+            if ticker is not threading.current_thread():
+                ticker.join(timeout=2)
+            self._ticker_thread = None
         watcher = getattr(self, "_watcher", None)
         if watcher is not None:
             try:
