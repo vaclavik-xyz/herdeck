@@ -119,7 +119,6 @@
 <style>
   .onboarding {
     box-sizing: border-box;
-    min-height: 100vh;
     padding: 24px 18px;
     background: #0b0b0d;
     color: #e7ecf3;

@@ -331,3 +331,26 @@ def test_write_roundtrips_hotkeys_section(tmp_path, monkeypatch):
     assert _tomllib.loads((tmp_path / "config.toml").read_text())["hotkeys"] == {
         "toggle_deck": "Alt+Space"
     }
+
+
+def test_read_roundtrips_desktop_section(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOK", raising=False)
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    text = (
+        '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n'
+        '[desktop]\nwindow_mode = "floating"\n'
+    )
+    svc = _svc(tmp_path, text=text)
+    assert svc.read()["base"]["desktop"] == {"window_mode": "floating"}
+
+
+def test_write_roundtrips_desktop_section(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "real")
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    svc = _svc(tmp_path)
+    data = svc.read()
+    data["base"]["desktop"] = {"window_mode": "always_on_top"}
+    assert svc.write(data) == []  # no structural errors
+    assert _tomllib.loads((tmp_path / "config.toml").read_text())["desktop"] == {
+        "window_mode": "always_on_top"
+    }

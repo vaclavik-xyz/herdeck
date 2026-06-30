@@ -38,6 +38,10 @@ import {
   DEFAULT_TOGGLE_DECK_HOTKEY,
   toggleDeckHotkey,
   setToggleDeckHotkey,
+  WINDOW_MODES,
+  DEFAULT_WINDOW_MODE,
+  windowMode,
+  setWindowMode,
   type ConfigPayload,
 } from "./configClient";
 
@@ -809,5 +813,26 @@ describe("toggle-deck hotkey helpers", () => {
     const p = setToggleDeckHotkey(emptyPayload(), "Ctrl+Shift+K");
     expect(toggleDeckHotkey(p)).toBe("Ctrl+Shift+K");
     expect((p.base.hotkeys as Record<string, unknown>).toggle_deck).toBe("Ctrl+Shift+K");
+  });
+});
+
+describe("window mode", () => {
+  it("defaults to normal when absent", () => {
+    expect(windowMode(emptyPayload())).toBe(DEFAULT_WINDOW_MODE);
+    expect(DEFAULT_WINDOW_MODE).toBe("normal");
+  });
+
+  it("returns a stored valid mode", () => {
+    const p = setWindowMode(emptyPayload(), "always_on_top");
+    expect(windowMode(p)).toBe("always_on_top");
+  });
+
+  it("falls back to default for an unknown stored value", () => {
+    const p = setAt(emptyPayload(), "base", "desktop", "window_mode", "bogus");
+    expect(windowMode(p)).toBe("normal");
+  });
+
+  it("exposes exactly the three modes", () => {
+    expect(WINDOW_MODES).toEqual(["normal", "floating", "always_on_top"]);
   });
 });

@@ -11,22 +11,8 @@
   },
   "app": {
     "withGlobalTauri": false,
+    "macOSPrivateApi": true,
     "windows": [
-      {
-        "label": "main",
-        "title": "herdeck",
-        "width": 360,
-        "height": 600,
-        "minWidth": 280,
-        "minHeight": 320,
-        "resizable": true,
-        "decorations": false,
-        "alwaysOnTop": true,
-        "transparent": false,
-        "visible": true,
-        "shadow": true,
-        "skipTaskbar": false
-      },
       {
         "label": "config",
         "title": "herdeck — Config",
