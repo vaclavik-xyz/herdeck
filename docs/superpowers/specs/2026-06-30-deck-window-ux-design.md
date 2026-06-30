@@ -135,10 +135,15 @@ by Rust a sidecar mohly číst **jiný soubor**.
 - Normal režim má **zavírací křížek** → **intercept `CloseRequested` → `prevent_close` + hide**
   (vzor `config` okna). Tray „Show"/hotkey vrátí. macOS tray-app: žádné quit-on-last-window
   k potlačení.
-- `app.restart()` vrací **`!` (nikdy se nevrátí)** → za voláním NESMÍ být kód. Spustí
-  `RunEvent::ExitRequested` → existující exit handler **zabije sidecar child** (žádný sirotek)
-  → nový proces ho respawnne. Intercept close-to-hide se týká jen user-close, **nesmí
-  pohltit** `app.exit(0)`/`app.restart()`.
+- **Restart MUSÍ být `app.request_restart()`, NE `app.restart()`** (ověřeno proti Tauri 2.11.3
+  `app.rs`): tray menu handler běží na **main threadu**, kde `restart()` volá `cleanup_before_exit()`
+  + `process::restart()` **přímo a PŘESKAKUJE `RunEvent::ExitRequested`/`Exit`** (doc comment: „we
+  cannot guarantee the delivery of those events, so we skip them"). Náš sidecar-kill je právě v
+  ExitRequested/Exit handleru → `restart()` z traye by sidecar **osiřil** (přesně pozorovaný orphan
+  symptom). `request_restart()` projde `request_exit(RESTART_EXIT_CODE)` → event loop spustí
+  ExitRequested/Exit (exit handler **zabije sidecar child**, žádný sirotek) → restart. `request_restart()`
+  vrací `()` → za ním **musí být `return`** (jinak propadne do live-apply větve). Intercept
+  close-to-hide se týká jen user-close (WindowEvent), **nepohltí** RunEvent ExitRequested/Exit.
 
 ---
 
@@ -169,7 +174,8 @@ by Rust a sidecar mohly číst **jiný soubor**.
   3. **Apply (jen po úspěšném persistu):**
      - oba borderless (floating↔always_on_top) → **živě** `main.set_always_on_top(target==aot)`
        + překreslit zaškrtnutí. Bez restartu.
-     - jinak (zahrnuje normal) → **`app.restart()`**.
+     - jinak (zahrnuje normal) → **`app.request_restart()` + `return`** (NE `app.restart()` — viz 2c:
+       main-thread restart přeskočí ExitRequested a osiřil by sidecar; request_restart projde exit handlerem).
 - **Známý transient cost:** úspěšný `POST /config` spustí `app.reload()` → u remote decku
   **přestaví+znovupřipojí live source** (server.py reload→build_live_source→close old), i když
   je window_mode pro render irelevantní. Pro normal↔borderless je to mootnuté (stejně restart);

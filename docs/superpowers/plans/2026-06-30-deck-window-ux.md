@@ -15,7 +15,7 @@
 - **Config path agreement.** Rust resolves `config.toml` with the SAME existence-check order as the sidecar's `_discover_config_path` (`HERDECK_CONFIG` env → `$HOME/.config/herdeck/config.toml` IF EXISTS → `<repo_root>/config.toml` IF EXISTS → default `$HOME/.config/herdeck/config.toml`), hardcoded `$HOME/.config/...` (NOT `XDG_CONFIG_HOME`), and **exports the resolved absolute path as `HERDECK_CONFIG` into the sidecar spawn env** so both read the same file.
 - **`window_mode` lives in base `config.toml` `[desktop]`, never in `local.toml`.**
 - **POST /config persist succeeds ONLY when HTTP status is 200 AND `errors == []`.** `/config` returns validation failures as HTTP 200 with `{errors:[...]}` and writes nothing. Use a timeout ≥ 15 s (`SETUP_CONNECT_TIMEOUT`) for the persist POST — `/config` blocks on `_setup_lock`. Apply (restart / set_always_on_top) ONLY after a confirmed-successful persist.
-- **`app.restart()` returns `!` (never returns).** No code may follow it on the same path. It fires `RunEvent::ExitRequested`, whose existing handler kills the sidecar child.
+- **Restart from the tray MUST use `app.request_restart()`, NOT `app.restart()`** (verified against Tauri 2.11.3 `app.rs`): a tray menu handler runs on the MAIN THREAD, where `restart()` calls `cleanup_before_exit()` + `process::restart()` directly and SKIPS `RunEvent::ExitRequested`/`Exit` (its doc comment: "we cannot guarantee the delivery of those events, so we skip them"). The sidecar kill lives in that handler, so `restart()` would ORPHAN the sidecar. `request_restart()` routes through `request_exit(RESTART_EXIT_CODE)` so the event loop fires the exit events (the kill handler runs) before restarting. `request_restart()` returns `()`, so it MUST be followed by `return` (else control falls through to the live-apply branch). The main-window close-intercept is a WindowEvent and never swallows the RunEvent exit/restart.
 - **Token never in JS.** The tray persist uses the Rust `http::http_get` / `http::http_post_json` helpers with the token injected Rust-side (existing pattern). **Secret values are one-way:** the persist drops the redacted `secrets` field from the GET response and POSTs only `{base, profiles, local}` (the established editor write contract) — never logs or echoes secret values.
 - **Remove `min-height: 100vh` from ALL THREE files:** `App.svelte` (`main`), `DeckView.svelte` (`.deck`), `Onboarding.svelte` (`.onboarding`). Otherwise content-fit cannot shrink the window.
 - **Capability:** add `core:window:allow-set-size` to `capabilities/default.json` permissions (the JS `setSize` is ACL-gated; `core:default` is read-only).
@@ -856,7 +856,12 @@ fn select_window_mode(app: &tauri::AppHandle, target: WindowMode, items: &WmItem
         return;
     }
     if window_mode::switch_needs_restart(current, target) {
-        app.restart(); // diverges (-> !); ExitRequested handler kills the sidecar
+        // NOT app.restart(): a tray menu event runs on the MAIN THREAD, where
+        // Tauri's restart() skips RunEvent::ExitRequested/Exit and would ORPHAN
+        // the sidecar child (its kill lives in that handler). request_restart()
+        // routes through the event loop so the exit handler runs before restart.
+        app.request_restart();
+        return;
     }
     // Reached only for a live borderless↔borderless switch.
     if let Some(w) = app.get_webview_window("main") {
