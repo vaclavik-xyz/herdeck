@@ -321,6 +321,30 @@ def test_d200_working_write_updates_diff_state(tmp_path):
         os.chdir(before)
 
 
+def test_d200_periodic_resync_resends_all_tiles(tmp_path):
+    # After RESYNC_INTERVAL, every tile is re-sent (one small write each) even with
+    # no content change, so a dropped async USB write self-heals within the interval.
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    tiles = [TileView(0, "a", "blue"), TileView(1, "b", "green")]
+    try:
+        driver.render(tiles)
+        assert _wait_until(lambda: len(dev.calls) == 1)  # first paint: one full write
+        driver.render(tiles)  # unchanged -> diff empty -> skipped
+        time.sleep(0.15)
+        assert len(dev.calls) == 1
+        driver._last_full_ts -= driver.RESYNC_INTERVAL + 1  # force the re-sync window open
+        driver.render(tiles)  # identical content, but re-sync re-sends every tile
+        assert _wait_until(lambda: len(dev.calls) == 3)  # +2: one small write per tile
+        resync = dev.calls[1:]
+        assert {next(iter(b)) for b, _ in resync} == {0, 1}
+        assert all(update_only for _, update_only in resync)
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
 def test_d200_failed_write_is_retried(tmp_path):
     class _FlakyDev(_FakeDev):
         def __init__(self):

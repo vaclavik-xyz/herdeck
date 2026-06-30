@@ -35,6 +35,11 @@ class D200Driver(DeckDriver):
 
     KEEP_ALIVE_INTERVAL = 5.0
     SLOW_WRITE_MS = 250.0  # device writes slower than this get a WARNING log
+    RESYNC_INTERVAL = 120.0  # seconds; periodically re-send every tile (one small
+                             # write each) so a dropped async USB write can't leave a
+                             # tile stale forever — the diff optimistically records
+                             # _last_icon on the synchronous set_buttons return, but
+                             # the real USB write is drained async by RenderPump.
     BRIGHTNESS = 80
     DEBOUNCE = 0.25  # ignore repeats of the same key within this window
     _CONTROL_USAGE_PAGE = 0x0C
@@ -54,6 +59,7 @@ class D200Driver(DeckDriver):
         self._last_write_ms: float | None = None
         self._last_write_count = 0
         self._last_icon: dict[int, str] = {}
+        self._last_full_ts = 0.0  # monotonic time of the last full re-sync
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
         self._previous_cwd = os.getcwd()
@@ -165,6 +171,15 @@ class D200Driver(DeckDriver):
         elif channel == "working":
             self._write_working(payload)
 
+    def _resync_tiles(self, buttons: dict[int, dict]) -> None:
+        """Re-send every tile as its own small write (avoids the big-zip retry stall
+        a single 13-tile write risks) so dropped async USB writes self-heal."""
+        for i in sorted(buttons):
+            one = {i: buttons[i]}
+            if self._timed_set_buttons("resync", one, update_only=True):
+                self._record(one)
+        self._last_full_ts = time.monotonic()
+
     def _diff(self, buttons: dict[int, dict]) -> dict[int, dict]:
         """Keep only buttons whose icon filename differs from the last write."""
         return {
@@ -219,6 +234,10 @@ class D200Driver(DeckDriver):
             # First paint establishes the full button layout.
             if self._timed_set_buttons("tiles", buttons, update_only=False):
                 self._record(buttons)
+                self._last_full_ts = time.monotonic()
+            return
+        if time.monotonic() - self._last_full_ts >= self.RESYNC_INTERVAL:
+            self._resync_tiles(buttons)
             return
         changed = self._diff(buttons)
         if not changed:
