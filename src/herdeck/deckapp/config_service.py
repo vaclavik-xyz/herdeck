@@ -28,6 +28,7 @@ class ConfigService:
         "view",
         "safety",
         "hotkeys",
+        "desktop",
     )
 
     def __init__(self, config_path, local_path):
