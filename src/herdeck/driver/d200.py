@@ -24,6 +24,40 @@ _PANEL_LEFT_INDEX = 13
 _PANEL_RIGHT_INDEX = 14
 
 
+class _SleeplessTime:
+    """Proxy for the time module whose sleep() is a no-op; every other attribute
+    passes through to the real module. Used to neutralize strmdck's retry-loop
+    time.sleep(0.05) (a pure-CPU throttle between zip-rebuild attempts) without
+    touching the global time.sleep."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def sleep(self, *_args, **_kwargs):
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _neutralize_retry_sleep() -> None:
+    """strmdck's UlanziD200._prepare_zip retries zip-building in a tight loop with
+    time.sleep(0.05) between attempts (working around a device firmware bug where
+    bytes 0x00/0x7c at packet boundaries glitch the deck). That sleep waits on
+    nothing but ran ~8-15x per set_buttons, freezing the D200 render worker
+    400-800ms (occasionally seconds) on every spinner frame. Replace the module's
+    time with a sleepless proxy so retries spin without delay. Idempotent and
+    fail-safe."""
+    try:
+        import strmdck.devices.ulanzi_d200 as ud
+
+        if isinstance(ud.time, _SleeplessTime):
+            return
+        ud.time = _SleeplessTime(ud.time)
+    except Exception:
+        log.warning("could not neutralize strmdck retry sleep; D200 spinner may stall")
+
+
 def split_panel(img: Image.Image) -> tuple[Image.Image, Image.Image]:
     left = img.crop((0, 0, _CELL, _CELL))
     right = img.crop((PANEL_W - _CELL, 0, PANEL_W, _CELL))
@@ -99,6 +133,7 @@ class D200Driver(DeckDriver):
         import hid
         from strmdck.devices.ulanzi_d200 import UlanziD200Device
 
+        _neutralize_retry_sleep()
         vid, pid = UlanziD200Device.USB_VENDOR_ID, UlanziD200Device.USB_PRODUCT_ID
         last = None
         for _ in range(retries):

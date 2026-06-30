@@ -400,3 +400,47 @@ def test_d200_failed_write_is_retried(tmp_path):
     finally:
         driver.close()
         os.chdir(before)
+
+
+def test_neutralize_retry_sleep_noops_strmdck_sleep(monkeypatch):
+    # The function must replace strmdck.devices.ulanzi_d200's `time` so sleep() is a
+    # no-op (kills the retry-loop throttle) while every other time.* passes through.
+    # strmdck is not installed locally, so fake the module tree in sys.modules.
+    import sys
+    import time as real_time
+    import types
+
+    fake_strmdck = types.ModuleType("strmdck")
+    fake_devices = types.ModuleType("strmdck.devices")
+    fake_mod = types.ModuleType("strmdck.devices.ulanzi_d200")
+    fake_mod.time = real_time
+    fake_devices.ulanzi_d200 = fake_mod
+    fake_strmdck.devices = fake_devices
+    monkeypatch.setitem(sys.modules, "strmdck", fake_strmdck)
+    monkeypatch.setitem(sys.modules, "strmdck.devices", fake_devices)
+    monkeypatch.setitem(sys.modules, "strmdck.devices.ulanzi_d200", fake_mod)
+
+    from herdeck.driver.d200 import _neutralize_retry_sleep
+
+    _neutralize_retry_sleep()
+
+    # sleep() is now a no-op: a 2s sleep returns instantly
+    t0 = real_time.monotonic()
+    fake_mod.time.sleep(2.0)
+    assert real_time.monotonic() - t0 < 0.1
+    # other time.* still work (passthrough to the real module)
+    assert isinstance(fake_mod.time.monotonic(), float)
+    # idempotent: a second call does not re-wrap the proxy
+    patched = fake_mod.time
+    _neutralize_retry_sleep()
+    assert fake_mod.time is patched
+
+
+def test_neutralize_retry_sleep_is_failsafe_when_strmdck_missing(monkeypatch):
+    # If strmdck can't be imported, the function must swallow the error (driver still works).
+    import sys
+
+    monkeypatch.setitem(sys.modules, "strmdck", None)  # forces ImportError on import
+    from herdeck.driver.d200 import _neutralize_retry_sleep
+
+    _neutralize_retry_sleep()  # must not raise
