@@ -774,11 +774,25 @@ def test_swap_source_fans_full_frame_to_sinks():
 
 
 def test_close_detaches_sinks_before_closing():
-    """close() must detach the sink list under the lock before calling close() on each
-    sink (Finding 2: race-free teardown)."""
+    # Prove the ORDERING: when a sink's close() runs, the sink list has already
+    # been detached (emptied) under the lock. With the old broken order (close
+    # sinks, THEN clear) app._sinks would still hold the sink here.
     app, src, server = make_live_icons(StubIcons())
-    sink = RecordingSink()
+    seen = {}
+
+    class OrderSink:
+        def __init__(self):
+            self.closed = False
+
+        def deliver(self, frame):
+            pass
+
+        def close(self):
+            seen["sinks_at_close"] = list(app._sinks)
+            self.closed = True
+
+    sink = OrderSink()
     app.add_sink(sink)
     app.close()
-    assert sink.closed is True          # sink was closed
-    assert app._sinks == []             # detached
+    assert sink.closed is True
+    assert seen["sinks_at_close"] == []  # detached before close() ran
