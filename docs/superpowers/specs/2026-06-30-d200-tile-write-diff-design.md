@@ -32,12 +32,18 @@ Diagnostické workflow (5 paralelních vyšetřovatelů + měření na macbench 
 
 ### Observabilita (instrumentace)
 
-Logy služby jsou dnes prázdné — žádná runtime data. Přidá se **timing instrumentace** kolem `set_buttons`: změřit dobu zápisu (`time.perf_counter`), zalogovat kanál + počet dlaždic + `update_only` + ms; nad prahem (`_slow_write_ms`, default 250 ms) varovat (`WARNING`), jinak `DEBUG`. Driver navíc vystaví `self._last_write_ms` / `self._last_write_count` pro testovatelnost. Tohle je trvalý guardrail **a** umožní before/after měření na decku (nasadit instrumentační commit samostatně → změřit baseline → nasadit diff → porovnat).
+Logy služby jsou dnes prázdné — žádná runtime data. Přidá se **timing instrumentace** na dvou úrovních:
+
+1. **D200 driver (synchronní porce).** Kolem `set_buttons` změřit dobu (`time.perf_counter`), zalogovat kanál + počet dlaždic + `update_only` + ms; nad prahem (`SLOW_WRITE_MS`, default 250 ms) varovat (`WARNING`), jinak `DEBUG`. Vystaví `self._last_write_ms` / `self._last_write_count`. **Pozor:** strmdck `set_buttons` je sice synchronní, ale skutečný USB přenos plánuje přes `_write_packet` → `loop.create_task(_write_packet_async)` a **vrací hned**; tahle metrika tedy měří jen synchronní `_prepare_zip` (vč. retry smyčky s `time.sleep(0.05)` — **primární amplifikátor záseku**) + scheduling, **ne** vlastní USB zápis paketů.
+2. **RenderPump (skutečný worker-block = freeze).** Vlastní USB zápisy (`create_task`'nuté) drainuje pumpa přes `asyncio.gather(*pending)` v `_paint_batch` až **po** návratu z `_paint`. Skutečná doba blokace worker vlákna (= co se na decku jeví jako zásek) je tedy celé `loop.run_until_complete(_paint_batch(...))` **včetně drainu**. Pumpa proto změří tenhle blok (`self._last_paint_ms`), zaloguje kanály + ms a nad prahem (`SLOW_PAINT_MS`, default 250 ms) varuje. Tohle je autoritativní freeze metrika.
+
+Obojí je trvalý guardrail **a** umožní before/after měření na decku (nasadit instrumentační commit samostatně → změřit baseline → nasadit diff → porovnat).
 
 ## Komponenty / soubory
 
-Vše v jednom souboru:
+Primárně `d200.py`; observabilita freezu si vynutí i malé měření v `render_pump.py` (skutečný worker-block je tam, viz Observabilita bod 2):
 
+- `src/herdeck/driver/render_pump.py` (změna, jen měření): modul-logger, `SLOW_PAINT_MS`, `self._last_paint_ms`, časování `run_until_complete(_paint_batch)` vč. drainu + log/warn. Žádná změna chování renderu.
 - `src/herdeck/driver/d200.py` (změna):
   - `import logging`, `import time`; modul-logger `log = logging.getLogger(__name__)`.
   - `__init__`: `self._last_icon: dict[int, str] = {}`, `self._slow_write_ms = ...`, `self._last_write_ms`/`_last_write_count`.
