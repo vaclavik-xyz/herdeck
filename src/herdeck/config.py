@@ -63,6 +63,7 @@ DEFAULT_STATUS_COLORS: dict[str, str] = {
 DEFAULT_SERVER_ACCENTS: list[str] = ["teal", "violet", "orange", "pink", "lime"]
 DEFAULT_TILE_FIELDS: list[str] = ["repo", "branch", "status", "time", "server"]
 TILE_LINE_TOKENS: tuple[str, ...] = ("repo", "branch", "workspace", "tab", "agent")
+WORKING_ANIMATIONS: tuple[str, ...] = ("spin", "comet", "pulse", "sweep", "none")
 DEFAULT_BOTTOM_ROW: list[str] = ["profiles", "notifications", "safety", "theme", "new_agent"]
 
 
@@ -84,6 +85,7 @@ class ViewConfig:
     # token list rendered by layout.compose_line.
     tile_primary: list[str] | None = None
     tile_secondary: list[str] | None = None
+    working_animation: str = "spin"
 
 
 @dataclass

@@ -15,17 +15,19 @@
 
   const SEC = "view";
   const MANAGEMENT = ["launcher_menu", "bottom_row"];
+  const WORKING_ANIMATIONS = ["spin", "comet", "pulse", "sweep", "none"];
   const LIST_KEYS = ["bottom_row", "tile_fields", "tile_primary", "tile_secondary"] as const;
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
   // Mirror of backend defaults (config.py ViewConfig) — keep in sync.
-  const VIEW_DEFAULTS: Record<string, unknown> = { management: "launcher_menu", agent_slots: "max", show_profile_on_panel: false };
+  const VIEW_DEFAULTS: Record<string, unknown> = { management: "launcher_menu", agent_slots: "max", show_profile_on_panel: false, working_animation: "spin" };
 
   // --- base mode (unchanged from α) ---
   const management = $derived((getAt(payload, "base", SEC, "management") as string) ?? "launcher_menu");
   const agentSlots = $derived((getAt(payload, "base", SEC, "agent_slots") as string) ?? "");
   const showProfile = $derived((getAt(payload, "base", SEC, "show_profile_on_panel") as boolean) ?? false);
+  const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? "spin");
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
 
@@ -56,6 +58,9 @@
   <OverrideField label="show_profile_on_panel" state={scState("show_profile_on_panel")} inheritedDisplay={hint("show_profile_on_panel")} onstate={(s) => setScState("show_profile_on_panel", s)}>
     <BooleanField label="" value={Boolean(scValue("show_profile_on_panel"))} onchange={(v) => setSc("show_profile_on_panel", v)} />
   </OverrideField>
+  <OverrideField label="working_animation" state={scState("working_animation")} inheritedDisplay={hint("working_animation")} onstate={(s) => setScState("working_animation", s)}>
+    <SelectField label="" value={String(scValue("working_animation") ?? "spin")} options={WORKING_ANIMATIONS} onchange={(v) => setSc("working_animation", v)} />
+  </OverrideField>
   {#each LIST_KEYS as key}
     <TriStateListField label={key} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint(key)}`} onchange={(s, l) => setOvList(key, s, l)} />
   {/each}
@@ -63,6 +68,7 @@
   <SelectField label="management" value={management} options={MANAGEMENT} onchange={(v) => set("management", v)} />
   <TextField label="agent_slots" value={agentSlots} oninput={(v) => set("agent_slots", v)} />
   <BooleanField label="show_profile_on_panel" value={showProfile} onchange={(v) => set("show_profile_on_panel", v)} />
+  <SelectField label="working_animation" value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
   {#each LIST_KEYS as key}
     <TriStateListField label={key} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? []} onchange={(s, l) => setBaseTri(key, s, l)} />
   {/each}

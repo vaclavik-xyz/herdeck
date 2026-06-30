@@ -37,3 +37,14 @@ def test_tick_noop_in_drill():
     o.apply_snapshot("dev", [st("p1", Status.WORKING)])
     o.on_press(0)  # enter drill
     assert o.tick() == []  # no spinner work while drilled in
+
+
+def test_working_tile_carries_configured_animation():
+    cfg = make_config()
+    cfg.view.working_animation = "pulse"
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING), st("p2", Status.IDLE)])
+    o.tick()
+    tiles = o.render().tiles
+    assert tiles[0].working_animation == "pulse"  # working agent tile gets the config value
+    assert tiles[12].working_animation == "spin"  # trailing empty tile keeps the default

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 from collections.abc import Callable
@@ -342,20 +343,27 @@ class IconProvider:
         bg.convert("RGB").save(path)
         return name
 
-    def _draw_spinner(self, img: Image.Image, phase: int) -> None:
-        """Composite an anti-aliased comet ring: a bright head with a fading tail
-        sweeping around the tile, drawn supersampled then downscaled."""
-        z = ICON_SIZE * _SS
+    def _comet_overlay(self, size: int, phase: int, inset: int, width: int) -> Image.Image:
+        """A transparent ``size``×``size`` overlay holding an anti-aliased comet
+        ring — a bright head with a fading tail — at rotation ``phase``, drawn
+        supersampled then downscaled. ``inset`` and ``width`` are in final
+        (pre-supersample) pixels. Shared by the full-tile spinner (``icon_for``)
+        and the per-logo comet animation (``_compose_agent_tile``)."""
+        z = size * _SS
         ov = Image.new("RGBA", (z, z), (0, 0, 0, 0))
         d = ImageDraw.Draw(ov)
-        inset, w = RING_INSET * _SS, RING_WIDTH * _SS
-        box = [inset, inset, z - inset, z - inset]
+        inset_s, w = inset * _SS, width * _SS
+        box = [inset_s, inset_s, z - inset_s, z - inset_s]
         head = phase * (360 / SPINNER_FRAMES)
         step = 4
         for i in range(0, RING_SPAN, step):
             alpha = int(235 * (1 - i / RING_SPAN))
             d.arc(box, head - i - step, head - i, fill=(255, 255, 255, alpha), width=w)
-        img.alpha_composite(ov.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS))
+        return ov.resize((size, size), Image.LANCZOS)
+
+    def _draw_spinner(self, img: Image.Image, phase: int) -> None:
+        """Composite the full-tile comet ring used by ``icon_for``."""
+        img.alpha_composite(self._comet_overlay(ICON_SIZE, phase, RING_INSET, RING_WIDTH))
 
     # --- rich tile rendering (full tile incl. text; device label left empty) ---
     def render_tile(self, tile) -> str:
@@ -380,6 +388,8 @@ class IconProvider:
             tile.status_text,
             tile.time_text,
         ]
+        if spinner is not None:
+            sig_parts.append(getattr(tile, "working_animation", "spin"))
         if tile.server_tag or tile.server_accent:
             sig_parts.extend([tile.server_tag, tile.server_accent])
         sig = "|".join(str(x) for x in sig_parts)
@@ -436,11 +446,26 @@ class IconProvider:
         accent = COLORS.get(tile.color, COLORS["dim"])
         bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), TILE_BG + (255,))
         d = ImageDraw.Draw(bg)
-        # logo top-left, rotated by the spinner phase while working
-        logo = self._base_glyph(tile.agent_type or "default").resize((46, 46), Image.LANCZOS)
-        if spinner is not None:
-            logo = logo.rotate(-spinner * SPIN_DEG, resample=Image.BICUBIC)
-        bg.alpha_composite(logo, (12, 12))
+        anim = getattr(tile, "working_animation", "spin")
+        working = spinner is not None
+        # logo top-left; while working it animates per the chosen style
+        base_logo = self._base_glyph(tile.agent_type or "default")
+        if working and anim == "pulse":
+            # "breathe": scale the mark between ~0.82x and 1.0x by the spinner phase
+            f = 0.82 + 0.18 * (0.5 + 0.5 * math.sin(2 * math.pi * spinner / SPINNER_FRAMES))
+            s = max(1, round(46 * f))
+            logo = base_logo.resize((s, s), Image.LANCZOS)
+            off = 12 + (46 - s) // 2  # keep the smaller mark centred in its 46px box
+            bg.alpha_composite(logo, (off, off))
+        else:
+            logo = base_logo.resize((46, 46), Image.LANCZOS)
+            if working and anim == "spin":
+                logo = logo.rotate(-spinner * SPIN_DEG, resample=Image.BICUBIC)
+            bg.alpha_composite(logo, (12, 12))
+            if working and anim == "comet":
+                # thin comet ring orbiting the static mark; the 62px overlay is
+                # centred over the 46px logo box at (12,12) -> composite at (4,4)
+                bg.alpha_composite(self._comet_overlay(62, spinner, 2, 4), (4, 4))
         # status word + elapsed time, top-right
         if tile.status_text:
             fs = _font(16)
@@ -483,5 +508,16 @@ class IconProvider:
             d.rounded_rectangle([x, y, x + chip_w, y + chip_h], radius=4, fill=chip_fill)
             text_y = y + (chip_h - (bb[3] - bb[1])) / 2 - bb[1]
             d.text((x + pad_x, text_y), tag, font=fc, fill=(255, 255, 255))
-        d.rectangle([0, ICON_SIZE - 8, ICON_SIZE, ICON_SIZE], fill=accent)  # accent
+        # accent bar — "sweep" slides a bright segment along a dimmed bar
+        y0 = ICON_SIZE - 8
+        if working and anim == "sweep":
+            dim = tuple(int(c * 0.4) for c in accent)
+            d.rectangle([0, y0, ICON_SIZE, ICON_SIZE], fill=dim)
+            seg_w = ICON_SIZE // 4
+            left = int((spinner / SPINNER_FRAMES) * ICON_SIZE)
+            d.rectangle([left, y0, min(left + seg_w, ICON_SIZE), ICON_SIZE], fill=accent)
+            if left + seg_w > ICON_SIZE:  # wrap the bright segment past the right edge
+                d.rectangle([0, y0, (left + seg_w) - ICON_SIZE, ICON_SIZE], fill=accent)
+        else:
+            d.rectangle([0, y0, ICON_SIZE, ICON_SIZE], fill=accent)
         return bg
