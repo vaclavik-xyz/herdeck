@@ -10,6 +10,7 @@
 pub mod hotkey;
 pub mod http;
 pub mod sidecar;
+pub mod window_mode;
 
 use std::env;
 use std::path::{Path, PathBuf};
