@@ -174,11 +174,17 @@ class D200Driver(DeckDriver):
     def _resync_tiles(self, buttons: dict[int, dict]) -> None:
         """Re-send every tile as its own small write (avoids the big-zip retry stall
         a single 13-tile write risks) so dropped async USB writes self-heal."""
+        all_ok = True
         for i in sorted(buttons):
             one = {i: buttons[i]}
             if self._timed_set_buttons("resync", one, update_only=True):
                 self._record(one)
-        self._last_full_ts = time.monotonic()
+            else:
+                all_ok = False
+        if all_ok:
+            # Leave the resync window open on any failure so the next render retries
+            # immediately instead of waiting the full RESYNC_INTERVAL.
+            self._last_full_ts = time.monotonic()
 
     def _diff(self, buttons: dict[int, dict]) -> dict[int, dict]:
         """Keep only buttons whose icon filename differs from the last write."""

@@ -345,6 +345,33 @@ def test_d200_periodic_resync_resends_all_tiles(tmp_path):
         os.chdir(before)
 
 
+def test_d200_resync_window_stays_open_on_partial_failure(tmp_path):
+    # If a per-tile resync write fails, _last_full_ts must NOT advance, so the next
+    # render retries the resync instead of waiting the full RESYNC_INTERVAL.
+    class _ResyncFailDev(_FakeDev):
+        def set_buttons(self, buttons, update_only=False):
+            # fail only the single-tile resync write for index 1
+            if update_only and len(buttons) == 1 and 1 in buttons:
+                raise RuntimeError("usb boom")
+            super().set_buttons(buttons, update_only)
+
+    dev = _ResyncFailDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    tiles = [TileView(0, "a", "blue"), TileView(1, "b", "green")]
+    try:
+        driver.render(tiles)  # first paint: both tiles in one update_only=False write
+        assert _wait_until(lambda: len(dev.calls) == 1)
+        driver._last_full_ts -= driver.RESYNC_INTERVAL + 1  # open the resync window
+        driver.render(tiles)  # resync: index 0 ok, index 1 raises -> window stays open
+        assert _wait_until(lambda: len(dev.calls) == 2)  # only index 0's write landed
+        driver.render(tiles)  # window still open -> resync retried -> index 0 re-sent again
+        assert _wait_until(lambda: len(dev.calls) == 3)
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
 def test_d200_failed_write_is_retried(tmp_path):
     class _FlakyDev(_FakeDev):
         def __init__(self):
