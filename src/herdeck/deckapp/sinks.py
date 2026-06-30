@@ -6,8 +6,14 @@ Orchestrator + one bridge connection drive several displays in lockstep."""
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,3 +39,55 @@ class RenderSink(Protocol):
     def deliver(self, frame: RenderFrame) -> None: ...
 
     def close(self) -> None: ...
+
+
+class D200Sink:
+    """RenderSink that drives a physical Ulanzi D200 via an open ``D200Driver``.
+
+    Full frames push every in-range tile plus the panel; working frames push only
+    the spinner-advancing tiles (cheap partial USB writes). The driver's own
+    per-index write diff and the neutralized strmdck retry-sleep keep those writes
+    fast. Physical button presses are read on a private thread+event-loop and
+    routed to ``on_press`` (the DeckApp's thread-safe ``press``), so a D200 press
+    flows through the SAME Orchestrator + bridge as a window press."""
+
+    def __init__(
+        self,
+        driver,
+        *,
+        on_press: Callable[[int], None],
+        slots: int,
+        start_reader: bool = True,
+    ):
+        self._driver = driver
+        self._slots = slots
+        driver.on_press(on_press)
+        self._reader_thread: threading.Thread | None = None
+        if start_reader:
+            self._reader_thread = threading.Thread(
+                target=self._run_reader, name="herdeck-d200-reader", daemon=True
+            )
+            self._reader_thread.start()
+
+    def deliver(self, frame) -> None:
+        rs = frame.render
+        if frame.full or frame.working is None:
+            self._driver.render([t for t in rs.tiles if t.index < self._slots])
+            self._driver.render_panel(rs.panel)
+            return
+        wanted = set(frame.working)
+        tiles = [t for t in rs.tiles if t.index in wanted]
+        if tiles:
+            self._driver.render_working(tiles)
+
+    def _run_reader(self) -> None:
+        try:
+            asyncio.run(self._driver.run_reader())
+        except Exception:
+            log.warning("D200 press reader stopped", exc_info=True)
+
+    def close(self) -> None:
+        try:
+            self._driver.close()  # closes the device, which ends run_reader()
+        except Exception:
+            log.warning("D200 driver close failed", exc_info=True)
