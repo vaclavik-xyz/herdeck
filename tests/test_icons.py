@@ -236,3 +236,75 @@ def test_drill_option_subtext_is_drawn_under_label(tmp_path):
     plain = p.render_tile_bytes(TileView(0, "1", "blue"))
     with_sub = p.render_tile_bytes(TileView(0, "1", "blue", subtext="Yes, proceed and apply"))
     assert plain != with_sub
+
+
+def _tile_ns(**over):
+    from types import SimpleNamespace
+
+    base = dict(
+        color="green", label="repo", subtext=None, agent_type="claude", spinner=None,
+        repo="repo", branch="main", status_text="idle", time_text="1m",
+        server_tag=None, server_accent=None,
+    )
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def _provider(cache_dir, assets_dir):
+    return IconProvider(
+        cache_dir=str(cache_dir),
+        slug_map={"claude": None},
+        fetch=lambda s: None,
+        rasterize=_fake_rasterize,
+        assets_dir=str(assets_dir),
+    )
+
+
+def _assets_dir(tmp_path, sub, *svgs):
+    d = tmp_path / sub
+    d.mkdir()
+    for s in svgs:
+        (d / s).write_text(f"<svg>{s}</svg>")
+    return d
+
+
+def test_render_cache_key_changes_when_bundled_asset_set_changes(tmp_path):
+    """Adding a bundled glyph must invalidate the on-disk render cache, else an
+    upgraded app serves the stale letter-glyph tile for the newly bundled agent
+    (the Q1-on-upgrade regression seen on macbench)."""
+    a = _assets_dir(tmp_path, "a", "codex.svg")
+    b = _assets_dir(tmp_path, "b", "codex.svg", "claude.svg")  # one extra bundled mark
+
+    tile = _tile_ns()
+    name_a = _provider(tmp_path / "ca", a).render_tile(tile)
+    name_b = _provider(tmp_path / "cb", b).render_tile(tile)
+    name_a2 = _provider(tmp_path / "ca2", a).render_tile(tile)
+
+    assert name_a != name_b   # different bundled-asset set -> distinct cache key
+    assert name_a == name_a2  # same asset set -> stable cache key (still cacheable)
+
+
+def test_icon_for_cache_key_changes_with_bundled_asset_set(tmp_path):
+    a = _assets_dir(tmp_path, "a", "codex.svg")
+    b = _assets_dir(tmp_path, "b", "codex.svg", "claude.svg")
+
+    name_a = _provider(tmp_path / "ca", a).icon_for("claude", "green")
+    name_b = _provider(tmp_path / "cb", b).icon_for("claude", "green")
+    assert name_a != name_b
+
+
+def test_render_cache_key_changes_when_same_named_asset_content_changes(tmp_path):
+    """Same filename + same byte size but DIFFERENT content (a re-baked/edited
+    glyph) must still invalidate the cache, so the fingerprint hashes file
+    contents — not just name+size (roborev)."""
+    a = tmp_path / "a"
+    a.mkdir()
+    (a / "claude.svg").write_text("<svg>aaa</svg>")
+    b = tmp_path / "b"
+    b.mkdir()
+    (b / "claude.svg").write_text("<svg>bbb</svg>")  # same length, different bytes
+    assert (a / "claude.svg").stat().st_size == (b / "claude.svg").stat().st_size
+    tile = _tile_ns()
+    name_a = _provider(tmp_path / "ca", a).render_tile(tile)
+    name_b = _provider(tmp_path / "cb", b).render_tile(tile)
+    assert name_a != name_b
