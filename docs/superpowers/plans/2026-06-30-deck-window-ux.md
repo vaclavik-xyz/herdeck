@@ -1436,7 +1436,8 @@ Replace `desktop/src/lib/sections/DesktopSection.svelte` with (adds a `SelectFie
 <p class="hint">
   Režim plovoucího okna decku: <code>normal</code> = běžné okno s rámečkem,
   <code>floating</code> = bez rámečku, <code>always_on_top</code> = vždy navrchu.
-  Změna se projeví po Apply (přechod na/z <code>normal</code> okno restartuje).
+  Apply tuto volbu jen uloží — projeví se po restartu aplikace. Pro okamžité
+  přepnutí použij tray menu „Window mode".
 </p>
 <SelectField label="window_mode" value={mode} options={[...WINDOW_MODES]} onchange={setMode} />
 <p class="hint">
