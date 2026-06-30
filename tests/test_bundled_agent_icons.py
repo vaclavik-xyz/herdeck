@@ -52,6 +52,8 @@ def test_frozen_provider_renders_bundled_mark_not_letter(monkeypatch):
         glyph = icons._base_glyph(name)
         letter = icons._letter_glyph(name)
         assert glyph.size == (ICON_SIZE, ICON_SIZE)
-        assert list(glyph.getdata()) != list(letter.getdata()), (
+        # Compare raw pixel bytes (both RGBA, same size) — avoids the deprecated
+        # Image.getdata() path that warns on every call.
+        assert glyph.tobytes() != letter.tobytes(), (
             f"{name}: asset branch missed -> degraded to letter glyph"
         )
