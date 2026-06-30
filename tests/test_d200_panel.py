@@ -10,6 +10,14 @@ from herdeck.driver.base import PanelView, TileView
 from herdeck.driver.d200 import D200Driver, compose_panel, split_panel
 
 
+class _ContentIcons:
+    """render_tile filename varies with tile content (time_text), so a changed
+    tile yields a different filename and the driver's diff can detect it."""
+
+    def render_tile(self, tile):
+        return f"icon_{tile.index}_{tile.time_text}.png"
+
+
 def _wait_until(pred, timeout=2.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -48,7 +56,7 @@ class _FakeIcons:
         return f"icon_{tile.index}.png"
 
 
-def _make_driver(tmp_path, dev):
+def _make_driver(tmp_path, dev, icons=None):
     class _Driver(D200Driver):
         def _open_device(self, retries=5, delay=1.0):
             return dev
@@ -56,7 +64,7 @@ def _make_driver(tmp_path, dev):
         def _set_panel_background_mode(self):
             pass
 
-    return _Driver(workdir=str(tmp_path), icon_provider=_FakeIcons())
+    return _Driver(workdir=str(tmp_path), icon_provider=icons or _FakeIcons())
 
 
 def test_d200_render_is_offloaded_and_non_blocking(tmp_path):
@@ -238,6 +246,106 @@ def test_d200_write_failure_is_swallowed_and_warns(tmp_path, caplog):
             driver.render([TileView(0, "x", "blue")])
             assert _wait_until(lambda: "tiles write failed" in caplog.text, timeout=2.0)
         assert pump_thread.is_alive()  # a failed write must not kill the worker
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_d200_first_paint_sends_all_update_only_false(tmp_path):
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        driver.render([TileView(0, "a", "blue"), TileView(1, "b", "green")])
+        assert _wait_until(lambda: dev.calls)
+        buttons, update_only = dev.calls[0]
+        assert set(buttons) == {0, 1}
+        assert update_only is False
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_d200_unchanged_tiles_skip_write(tmp_path):
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    tiles = [TileView(0, "a", "blue"), TileView(1, "b", "green")]
+    try:
+        driver.render(tiles)
+        assert _wait_until(lambda: len(dev.calls) == 1)
+        driver.render(tiles)  # identical icons -> empty diff -> no write
+        time.sleep(0.15)
+        assert len(dev.calls) == 1
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_d200_only_changed_tile_is_sent(tmp_path):
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev, icons=_ContentIcons())
+    try:
+        driver.render(
+            [TileView(0, "a", "blue", time_text="1s"), TileView(1, "b", "green", time_text="2s")]
+        )
+        assert _wait_until(lambda: len(dev.calls) == 1)
+        driver.render(
+            [TileView(0, "a", "blue", time_text="9s"), TileView(1, "b", "green", time_text="2s")]
+        )  # only index 0 changed
+        assert _wait_until(lambda: len(dev.calls) == 2)
+        buttons, update_only = dev.calls[1]
+        assert set(buttons) == {0}
+        assert update_only is True
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_d200_working_write_updates_diff_state(tmp_path):
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev, icons=_ContentIcons())
+    try:
+        driver.render([TileView(0, "a", "blue", time_text="1s")])
+        assert _wait_until(lambda: len(dev.calls) == 1)
+        driver.render_working([TileView(0, "a", "blue", time_text="2s")])
+        assert _wait_until(lambda: len(dev.calls) == 2)
+        # full render with the SAME content the working frame already painted -> skipped
+        driver.render([TileView(0, "a", "blue", time_text="2s")])
+        time.sleep(0.15)
+        assert len(dev.calls) == 2
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_d200_failed_write_is_retried(tmp_path):
+    class _FlakyDev(_FakeDev):
+        def __init__(self):
+            super().__init__()
+            self.fail_next = True
+
+        def set_buttons(self, buttons, update_only=False):
+            if self.fail_next:
+                self.fail_next = False
+                raise RuntimeError("usb boom")
+            super().set_buttons(buttons, update_only)
+
+    dev = _FlakyDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    tiles = [TileView(0, "a", "blue")]
+    try:
+        driver.render(tiles)  # first paint raises -> _last_icon stays empty
+        time.sleep(0.15)
+        assert dev.calls == []
+        driver.render(tiles)  # retry -> succeeds as a fresh first paint
+        assert _wait_until(lambda: len(dev.calls) == 1)
+        buttons, update_only = dev.calls[0]
+        assert set(buttons) == {0}
+        assert update_only is False
     finally:
         driver.close()
         os.chdir(before)

@@ -53,6 +53,7 @@ class D200Driver(DeckDriver):
         self.KEEP_ALIVE_INTERVAL = keep_alive_interval
         self._last_write_ms: float | None = None
         self._last_write_count = 0
+        self._last_icon: dict[int, str] = {}
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
         self._previous_cwd = os.getcwd()
@@ -164,6 +165,18 @@ class D200Driver(DeckDriver):
         elif channel == "working":
             self._write_working(payload)
 
+    def _diff(self, buttons: dict[int, dict]) -> dict[int, dict]:
+        """Keep only buttons whose icon filename differs from the last write."""
+        return {
+            i: b for i, b in buttons.items() if b.get("icon") != self._last_icon.get(i)
+        }
+
+    def _record(self, buttons: dict[int, dict]) -> None:
+        for i, b in buttons.items():
+            icon = b.get("icon")
+            if icon is not None:
+                self._last_icon[i] = icon
+
     def _timed_set_buttons(
         self, channel: str, buttons: dict[int, dict], *, update_only: bool
     ) -> bool:
@@ -201,7 +214,17 @@ class D200Driver(DeckDriver):
         return True
 
     def _write_tiles(self, tiles: list[TileView]) -> None:
-        self._timed_set_buttons("tiles", self._tile_buttons(tiles), update_only=False)
+        buttons = self._tile_buttons(tiles)
+        if not self._last_icon:
+            # First paint establishes the full button layout.
+            if self._timed_set_buttons("tiles", buttons, update_only=False):
+                self._record(buttons)
+            return
+        changed = self._diff(buttons)
+        if not changed:
+            return
+        if self._timed_set_buttons("tiles", changed, update_only=True):
+            self._record(changed)
 
     def _write_panel(self, panel: PanelView) -> None:
         try:
@@ -222,7 +245,11 @@ class D200Driver(DeckDriver):
         )
 
     def _write_working(self, tiles: list[TileView]) -> None:
-        self._timed_set_buttons("working", self._tile_buttons(tiles), update_only=True)
+        changed = self._diff(self._tile_buttons(tiles))
+        if not changed:
+            return
+        if self._timed_set_buttons("working", changed, update_only=True):
+            self._record(changed)
 
     def _keep_alive_write(self) -> None:
         with contextlib.suppress(Exception):
