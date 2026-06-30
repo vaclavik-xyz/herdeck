@@ -11,6 +11,7 @@ from .config import (
     DEFAULT_PROFILES,
     DEFAULT_START_PROFILES,
     TILE_LINE_TOKENS,
+    WORKING_ANIMATIONS,
     Config,
     ConfigError,
     ConfigMeta,
@@ -209,6 +210,13 @@ def _view_config(raw: dict | None) -> ViewConfig:
                 if tok not in TILE_LINE_TOKENS:
                     raise ConfigError(f"unknown tile token '{tok}' in view.{key}")
             setattr(view, key, tokens)
+    if "working_animation" in raw:
+        val = raw["working_animation"]
+        if val not in WORKING_ANIMATIONS:
+            raise ConfigError(
+                f"unknown view.working_animation '{val}'; want one of {WORKING_ANIMATIONS}"
+            )
+        view.working_animation = val
     if "show_profile_on_panel" in raw:
         view.show_profile_on_panel = bool(raw["show_profile_on_panel"])
     return view

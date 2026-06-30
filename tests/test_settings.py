@@ -522,6 +522,19 @@ def test_view_config_rejects_unknown_tile_token():
         _view_config({"tile_secondary": ["branch", "bogus"]})
 
 
+def test_view_config_parses_working_animation():
+    assert _view_config({"working_animation": "pulse"}).working_animation == "pulse"
+
+
+def test_view_config_defaults_working_animation_to_spin():
+    assert _view_config({}).working_animation == "spin"
+
+
+def test_view_config_rejects_unknown_working_animation():
+    with pytest.raises(ConfigError, match="unknown view.working_animation 'spinny'"):
+        _view_config({"working_animation": "spinny"})
+
+
 def test_profile_view_overlay_merges_tile_primary():
     data = {
         "view": {"tile_fields": ["repo"]},
