@@ -228,3 +228,46 @@ def test_fire_and_forget_task_from_paint_runs_to_completion():
         assert ran.wait(2.0)  # the create_task'd coroutine executed before close
     finally:
         pump.close()
+
+
+def test_paint_block_timing_includes_async_drain():
+    """The worker-block time (the freeze metric) must include the async USB-write
+    tasks paints schedule via create_task and the pump drains each cycle — not
+    just the synchronous return of paint."""
+    import asyncio
+
+    async def _slow_write():
+        await asyncio.sleep(0.05)
+
+    def paint(ch, p):
+        asyncio.get_running_loop().create_task(_slow_write())
+
+    pump = RenderPump(paint=paint)
+    pump.start()
+    try:
+        pump.submit("tiles", "x")
+        assert _wait_until(lambda: pump._last_paint_ms is not None)
+    finally:
+        pump.close()
+    assert pump._last_paint_ms >= 50.0  # the 50ms async drain is included
+
+
+def test_slow_paint_block_warns(caplog):
+    import asyncio
+    import logging
+
+    async def _slow_write():
+        await asyncio.sleep(0.05)
+
+    def paint(ch, p):
+        asyncio.get_running_loop().create_task(_slow_write())
+
+    pump = RenderPump(paint=paint)
+    pump.SLOW_PAINT_MS = 10.0  # instance override so the 50ms drain trips the warning
+    pump.start()
+    try:
+        with caplog.at_level(logging.WARNING, logger="herdeck.driver.render_pump"):
+            pump.submit("tiles", "x")
+            assert _wait_until(lambda: "render worker blocked" in caplog.text, timeout=2.0)
+    finally:
+        pump.close()

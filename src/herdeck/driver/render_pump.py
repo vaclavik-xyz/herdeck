@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from collections.abc import Callable
+
+log = logging.getLogger(__name__)
 
 
 class RenderPump:
@@ -18,6 +21,7 @@ class RenderPump:
 
     # Paint order when several channels are pending in one cycle.
     CHANNELS = ("tiles", "panel", "working")
+    SLOW_PAINT_MS = 250.0  # a worker-block longer than this gets a WARNING log
 
     def __init__(
         self,
@@ -34,6 +38,7 @@ class RenderPump:
         self._cv = threading.Condition()
         self._pending: dict[str, object] = {}
         self._stopped = False
+        self._last_paint_ms: float | None = None
         self._thread = threading.Thread(target=self._run, name="herdeck-render", daemon=True)
 
     def start(self) -> None:
@@ -81,7 +86,15 @@ class RenderPump:
                     # update in the same batch is stale — drop it (would clobber fresh tiles).
                     batch.pop("working", None)
                 do_keep_alive = self._keep_alive is not None and self._clock() >= next_keep_alive
+                t0 = self._clock()
                 loop.run_until_complete(self._paint_batch(batch, do_keep_alive))
+                dt_ms = (self._clock() - t0) * 1000.0
+                self._last_paint_ms = dt_ms
+                channels = ",".join(ch for ch in self.CHANNELS if ch in batch)
+                if dt_ms >= self.SLOW_PAINT_MS:
+                    log.warning("render worker blocked %.0fms painting [%s]", dt_ms, channels)
+                elif channels:
+                    log.debug("render worker painted [%s] in %.1fms", channels, dt_ms)
                 if do_keep_alive:
                     next_keep_alive = self._clock() + self._interval
         finally:

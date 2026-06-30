@@ -170,6 +170,11 @@ class D200Driver(DeckDriver):
         """Write buttons to the device, timing and logging the USB write. Returns
         True on success; False if the device write raised (the caller must then
         treat the buttons as not-yet-applied)."""
+        # NOTE: strmdck's set_buttons is synchronous only for _prepare_zip (+ its
+        # retry loop); the actual USB packet writes are create_task'd and drained
+        # later by RenderPump. So this times the synchronous prepare+schedule cost
+        # (the retry-loop amplifier); the full worker-block incl. the async USB
+        # drain is measured by RenderPump._last_paint_ms.
         if not buttons:
             return False
         t0 = time.perf_counter()
