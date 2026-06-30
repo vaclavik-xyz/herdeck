@@ -723,6 +723,7 @@ def create_live_app(
         icon_provider=icon_provider,
         serve=serve,
         clock=time.monotonic,
+        tick_interval=config.hardware.tick_interval,
         config_service=config_service,
         reloader=reloader,
     )

@@ -650,3 +650,10 @@ def test_ticker_thread_runs_and_stops_when_serving():
     finally:
         app.close()
     assert not app._ticker_thread or not app._ticker_thread.is_alive()
+
+
+def test_create_live_app_enables_ticker_from_config():
+    config, server = live_config()
+    app = create_live_app(config, server, serve=False, connector_factory=FakeConnector)
+    assert app._tick_interval == config.hardware.tick_interval
+    assert config.hardware.tick_interval == 0.4  # the live default that drives animation
