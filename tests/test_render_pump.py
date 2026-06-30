@@ -180,3 +180,51 @@ def test_close_stops_worker_thread():
     pump.start()
     pump.close()
     assert not pump._thread.is_alive()
+
+
+def test_paint_runs_inside_a_running_event_loop():
+    """Device libraries (strmdck D200) schedule USB writes via
+    asyncio.get_running_loop()+create_task, so a paint MUST run inside a running
+    loop — else the write is silently dropped and the device stays blank."""
+    import asyncio
+
+    outcome = []
+
+    def paint(ch, p):
+        try:
+            asyncio.get_running_loop()
+            outcome.append("loop")
+        except RuntimeError:
+            outcome.append("noloop")
+
+    pump = RenderPump(paint=paint)
+    pump.start()
+    try:
+        pump.submit("tiles", "x")
+        assert _wait_until(lambda: bool(outcome))
+    finally:
+        pump.close()
+    assert outcome == ["loop"]
+
+
+def test_fire_and_forget_task_from_paint_runs_to_completion():
+    """strmdck's _write_packet does loop.create_task(write()) and returns at once;
+    the pump must let that scheduled write actually run each cycle (mirrors the
+    real device-write path)."""
+    import asyncio
+
+    ran = threading.Event()
+
+    async def _write():
+        ran.set()
+
+    def paint(ch, p):
+        asyncio.get_running_loop().create_task(_write())
+
+    pump = RenderPump(paint=paint)
+    pump.start()
+    try:
+        pump.submit("tiles", "x")
+        assert ran.wait(2.0)  # the create_task'd coroutine executed before close
+    finally:
+        pump.close()
