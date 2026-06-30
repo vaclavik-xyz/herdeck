@@ -17,6 +17,7 @@ export interface SetupStatus {
   connected: boolean;
   reason: string | null;
   localHerdrAvailable: boolean;
+  savedRemoteAvailable: boolean;
   choice: string | null; // "local" | "demo" | null
   socketPath: string;
 }
@@ -32,6 +33,7 @@ export function parseSetupStatus(raw: unknown): SetupStatus | null {
     connected: v.connected === true,
     reason: typeof v.reason === "string" ? v.reason : null,
     localHerdrAvailable: v.local_herdr_available === true,
+    savedRemoteAvailable: v.saved_remote_available === true,
     choice: typeof v.choice === "string" ? v.choice : null,
     socketPath: typeof v.socket_path === "string" ? v.socket_path : "",
   };
@@ -64,6 +66,7 @@ export function shouldOnboard(status: SetupStatus | null, override: boolean): On
 export type ConnectRequest =
   | { choice: "local" }
   | { choice: "demo" }
+  | { choice: "saved" }
   | { choice: "remote"; url: string; token: string; id?: string };
 
 /** Shaped `/setup/connect` result. `ok` gates the flip-to-deck; `error` is the

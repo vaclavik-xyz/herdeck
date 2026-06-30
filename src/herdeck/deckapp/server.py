@@ -311,6 +311,7 @@ class DeckApp:
             "connected": self._source.connected,
             "reason": reason,
             "local_herdr_available": socket_exists,
+            "saved_remote_available": _has_saved_remote(self._config_service),
             "choice": choice,
             "socket_path": socket_path,
         }
@@ -599,6 +600,28 @@ def select_live():
     return (config, server)
 
 
+def _has_saved_remote(config_service) -> bool:
+    """True when an on-disk config has at least one ``[[servers]]`` entry — a RAW
+    TOML read with NO token/keychain resolution, so it is safe to call on the hot
+    ``/setup`` poll. Authoritative resolution (does the token actually resolve?) is
+    deferred to connect-time ``select_live()`` (fail-soft "no saved connection").
+    Mock-gated: under ``HERDECK_MOCK`` there is no saved button, matching the
+    existing ``reason="mock_env"`` special-casing."""
+    import tomllib
+
+    if os.environ.get("HERDECK_MOCK") or config_service is None:
+        return False
+    path = config_service._config_path
+    if not path.exists():
+        return False
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    servers = data.get("servers")
+    return isinstance(servers, list) and len(servers) > 0
+
+
 def select_source_kind(*, mock_env, remote, choice, socket_path, socket_exists):
     """Pure source-selection precedence over already-gathered facts.
 
@@ -834,7 +857,7 @@ def connect(app, body) -> dict | None:
     import tomllib
 
     from .mock import MockSource
-    from .onboarding import read_choice, write_choice
+    from .onboarding import clear_choice, read_choice, write_choice
 
     choice = body.get("choice")
     config_path = str(app._config_service._config_path) if app._config_service else None
@@ -965,6 +988,33 @@ def connect(app, body) -> dict | None:
             return {"ok": False, "error": "could not build the remote source"}
         # Persist + swap as one watcher-suppressed transaction (see _commit_remote).
         return _commit_remote(app, payload, token_env, token, new_source, config_path)
+
+    if choice == "saved":
+        # One-click escape from the demo trap: re-select the on-disk remote (token from
+        # the keychain) and clear the demo/local marker. Transactional like the others —
+        # build + prepare BEFORE clearing the marker; any failure restores it and closes
+        # the just-built source. NO _suppress_reload (this writes only onboarding.toml,
+        # which the watcher does not track) and NO probe (select_live() confirms token
+        # PRESENCE, not validity; the live source dials async, so connected may be False).
+        remote = select_live()  # (config, server) from disk + keychain, or None
+        if remote is None:
+            return {"ok": False, "error": "no saved connection"}
+        config, server = remote
+        prior_choice = read_choice(config_path)
+        new_source = None
+        try:
+            new_source = build_live_source_for_connect(config, server)  # build (fallible)
+            prepared = app._prepare_swap(new_source, clock=time.monotonic)  # render (fallible)
+            clear_choice(config_path)  # persist: drop the demo/local marker
+        except Exception:
+            _restore_choice(config_path, prior_choice)  # marker untouched / restored
+            if new_source is not None:
+                new_source.close()
+            return {"ok": False, "error": "could not restore saved connection"}
+        app._commit_swap(new_source, prepared)  # assignment-only, non-failing
+        app._set_local_bridge(None)  # saved targets remote; drop any local bridge
+        app._reloader = _reloader_for(app, ("remote",), _select_source)
+        return {"ok": True, "connected": app._source.connected}
 
     return None  # unknown choice -> 400
 

@@ -12,11 +12,9 @@ BIN="${1:-$DESKTOP/src-tauri/resources/herdeck-deckapp/herdeck-deckapp}"
 test -x "$BIN" || { echo "FAIL: frozen binary not found at $BIN"; exit 1; }
 
 # --- Frozen baked-asset proof (robust; no tile-index assumptions) ---------------
-# The ONLY bundled SVG glyph is codex.svg, so a 200 from /tile is NOT proof the
-# frozen PNG rasterizer ran (a broken/missing baked PNG silently degrades to a
-# letter glyph and still returns 200). Instead assert the baked codex PNG is in the
-# bundle: that proves prerasterize + bundling worked and the frozen rasterizer will
-# find it. (The Task 2 unit test already proves the frozen wiring loads it.)
+# Assert every bundled SVG glyph has a decodable baked PNG in the bundle — proves
+# prerasterize + bundling worked for all marks (a missing/broken baked PNG silently
+# degrades to a letter glyph).
 BINDIR="$(dirname "$BIN")"
 ASSETS_DIR=""
 for cand in "$BINDIR/_internal/herdeck_assets" "$BINDIR/herdeck_assets"; do
@@ -33,20 +31,21 @@ for cand in "$PY" python3; do
 done
 [ -n "$DECODER" ] || { echo "FAIL: no Pillow-capable interpreter (tried '$PY' and python3) to decode the baked glyph"; exit 1; }
 "$DECODER" - "$ASSETS_DIR" <<'PY'
-import hashlib, os, sys
+import glob, hashlib, os, sys
 from PIL import Image
 d = sys.argv[1]
-svg_path = os.path.join(d, "codex.svg")
-assert os.path.exists(svg_path), f"FAIL: codex.svg not bundled in {d}"
-svg = open(svg_path, encoding="utf-8").read()
-name = hashlib.sha1(svg.encode("utf-8")).hexdigest() + ".png"
-png = os.path.join(d, name)
-assert os.path.exists(png), f"FAIL: baked codex PNG {name} missing from bundle"
-im = Image.open(png)
-im.load()                  # forces full IDAT inflate + decode (raises on corrupt data)
-im = im.convert("RGBA")    # the exact op herdeck.frozen.make_png_rasterizer performs
-assert im.size == (196, 196), f"FAIL: baked codex PNG dims {im.size}, want (196, 196): {png}"
-print(f"OK: baked codex PNG decodes (196x196 RGBA): {name}")
+svgs = sorted(glob.glob(os.path.join(d, "*.svg")))
+assert svgs, f"FAIL: no bundled SVGs in {d}"
+for svg_path in svgs:
+    svg = open(svg_path, encoding="utf-8").read()
+    name = hashlib.sha1(svg.encode("utf-8")).hexdigest() + ".png"
+    png = os.path.join(d, name)
+    assert os.path.exists(png), f"FAIL: baked PNG {name} missing for {os.path.basename(svg_path)}"
+    im = Image.open(png)
+    im.load()                  # forces full IDAT inflate + decode (raises on corrupt data)
+    im = im.convert("RGBA")    # the exact op herdeck.frozen.make_png_rasterizer performs
+    assert im.size == (196, 196), f"FAIL: baked PNG dims {im.size} for {name}, want (196, 196)"
+print(f"OK: {len(svgs)} bundled SVG(s) have decodable 196x196 baked PNGs")
 PY
 
 # --- Frozen local-bridge import reachability ---------------------------------------
