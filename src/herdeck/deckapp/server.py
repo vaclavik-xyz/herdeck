@@ -246,12 +246,14 @@ class DeckApp:
             if ticker is not threading.current_thread():
                 ticker.join(timeout=2)
             self._ticker_thread = None
-        for sink in getattr(self, "_sinks", []):
+        with self._lock:
+            sinks = getattr(self, "_sinks", [])
+            self._sinks = []
+        for sink in sinks:
             try:
                 sink.close()
             except Exception:
                 pass
-        self._sinks = []
         watcher = getattr(self, "_watcher", None)
         if watcher is not None:
             try:
@@ -299,7 +301,7 @@ class DeckApp:
     def _prepare_swap(self, new_source, *, clock=None):
         """Build the orchestrator AND render `new_source` into it — all the FALLIBLE parts
         of a swap (grid parse, Orchestrator construction, render). Returns a prepared bundle
-        `(slots, orch, clock, tiles, panel_png, sections)` for an assignment-only commit;
+        `(slots, orch, clock, rs, tiles, panel_png, sections)` for an assignment-only commit;
         mutates NO live deck state (throwaway orchestrator), so any failure raises here,
         BEFORE anything is swapped or persisted. Pass `clock=time.monotonic` for a LIVE
         source so its elapsed-time text advances (else a connect from the mock app keeps
@@ -308,15 +310,16 @@ class DeckApp:
         cols, rows = new_source.config.grid
         slots = cols * rows - 2
         orch = Orchestrator(new_source.config, slots=slots, clock=clk)
-        _, tiles, panel_png, sections = self._render_locked(new_source, orch, slots)
-        return slots, orch, clk, tiles, panel_png, sections
+        rs, tiles, panel_png, sections = self._render_locked(new_source, orch, slots)
+        return slots, orch, clk, rs, tiles, panel_png, sections
 
     def _commit_swap(self, new_source, prepared) -> None:
         """Assign the prepared source/orchestrator/clock + its pre-rendered tiles under the
         lock — **pure assignment, no render**, so it cannot raise for a validated config:
         the post-persist swap is guaranteed not to half-swap. The single lock serializes
-        against in-flight reads/presses."""
-        slots, orch, clk, tiles, panel_png, sections = prepared
+        against in-flight reads/presses. After applying the new tiles the sink list is
+        fanned out a full frame so physical sinks repaint immediately on swap."""
+        slots, orch, clk, rs, tiles, panel_png, sections = prepared
         with self._lock:
             old = self._source
             self._source = new_source
@@ -325,6 +328,7 @@ class DeckApp:
             self._clock = clk  # adopt the clock the orchestrator was built with
             new_source.attach(orch, lock=self._lock, refresh_locked=self._refresh_locked)
             self._apply_rendered_locked(tiles, panel_png, sections)
+            self._fan_out_locked(rs, None, True)
         try:
             old.close()
         except Exception:

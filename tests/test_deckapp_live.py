@@ -752,3 +752,33 @@ def test_close_closes_sinks():
     app.add_sink(sink)
     app.close()
     assert sink.closed is True
+
+
+def test_swap_source_fans_full_frame_to_sinks():
+    """swap_source must immediately repaint every registered sink (Finding 1)."""
+    app, src, server = make_live_icons(StubIcons())
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    sink = RecordingSink()
+    app.add_sink(sink)
+    sink.frames.clear()  # discard the initial paint from add_sink
+
+    # Build a second live source the same way make_live_icons does.
+    config2, server2 = live_config()
+    new_src = LiveSource(config2, server2)
+    new_src.attach_runner(FakeRunner())
+
+    app.swap_source(new_src)
+    assert sink.frames, "swap_source must fan out at least one frame"
+    assert sink.frames[-1].full is True
+
+
+def test_close_detaches_sinks_before_closing():
+    """close() must detach the sink list under the lock before calling close() on each
+    sink (Finding 2: race-free teardown)."""
+    app, src, server = make_live_icons(StubIcons())
+    sink = RecordingSink()
+    app.add_sink(sink)
+    app.close()
+    assert sink.closed is True          # sink was closed
+    assert app._sinks == []             # detached
