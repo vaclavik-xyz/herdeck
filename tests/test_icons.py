@@ -308,3 +308,13 @@ def test_render_cache_key_changes_when_same_named_asset_content_changes(tmp_path
     name_a = _provider(tmp_path / "ca", a).render_tile(tile)
     name_b = _provider(tmp_path / "cb", b).render_tile(tile)
     assert name_a != name_b
+
+
+def test_comet_overlay_is_phase_distinct_and_sized(tmp_path):
+    from PIL import Image as _Image
+
+    p = _provider(tmp_path / "co", _assets_dir(tmp_path, "a", "claude.svg"))
+    a = p._comet_overlay(62, 0, 2, 4)
+    b = p._comet_overlay(62, 2, 2, 4)
+    assert isinstance(a, _Image.Image) and a.size == (62, 62)
+    assert a.tobytes() != b.tobytes()  # the comet head sweeps with the phase

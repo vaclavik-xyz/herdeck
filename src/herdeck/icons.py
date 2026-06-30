@@ -342,20 +342,27 @@ class IconProvider:
         bg.convert("RGB").save(path)
         return name
 
-    def _draw_spinner(self, img: Image.Image, phase: int) -> None:
-        """Composite an anti-aliased comet ring: a bright head with a fading tail
-        sweeping around the tile, drawn supersampled then downscaled."""
-        z = ICON_SIZE * _SS
+    def _comet_overlay(self, size: int, phase: int, inset: int, width: int) -> Image.Image:
+        """A transparent ``size``×``size`` overlay holding an anti-aliased comet
+        ring — a bright head with a fading tail — at rotation ``phase``, drawn
+        supersampled then downscaled. ``inset`` and ``width`` are in final
+        (pre-supersample) pixels. Shared by the full-tile spinner (``icon_for``)
+        and the per-logo comet animation (``_compose_agent_tile``)."""
+        z = size * _SS
         ov = Image.new("RGBA", (z, z), (0, 0, 0, 0))
         d = ImageDraw.Draw(ov)
-        inset, w = RING_INSET * _SS, RING_WIDTH * _SS
-        box = [inset, inset, z - inset, z - inset]
+        inset_s, w = inset * _SS, width * _SS
+        box = [inset_s, inset_s, z - inset_s, z - inset_s]
         head = phase * (360 / SPINNER_FRAMES)
         step = 4
         for i in range(0, RING_SPAN, step):
             alpha = int(235 * (1 - i / RING_SPAN))
             d.arc(box, head - i - step, head - i, fill=(255, 255, 255, alpha), width=w)
-        img.alpha_composite(ov.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS))
+        return ov.resize((size, size), Image.LANCZOS)
+
+    def _draw_spinner(self, img: Image.Image, phase: int) -> None:
+        """Composite the full-tile comet ring used by ``icon_for``."""
+        img.alpha_composite(self._comet_overlay(ICON_SIZE, phase, RING_INSET, RING_WIDTH))
 
     # --- rich tile rendering (full tile incl. text; device label left empty) ---
     def render_tile(self, tile) -> str:
