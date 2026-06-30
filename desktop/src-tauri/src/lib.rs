@@ -21,7 +21,9 @@ use std::time::Duration;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Emitter, Manager, PhysicalPosition};
+use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+
+use window_mode::WindowMode;
 
 use sidecar::{supervise, CommandSpec, Discovery, SupervisorConfig};
 
@@ -30,6 +32,10 @@ use sidecar::{supervise, CommandSpec, Discovery, SupervisorConfig};
 /// owned by the supervisor + exit-handler closures (not routed through here).
 struct AppState {
     discovery: Arc<Mutex<Option<Discovery>>>,
+    /// The live window mode. Set at startup from config; updated in-process on a
+    /// live floating↔always_on_top switch (a restart-mode switch replaces the
+    /// whole process, which re-reads config).
+    window_mode: Arc<Mutex<WindowMode>>,
 }
 
 /// Default timeout for the Rust-side sidecar proxy calls.
@@ -80,6 +86,14 @@ fn get_discovery(state: tauri::State<'_, AppState>) -> Option<DiscoveryView> {
         .unwrap()
         .as_ref()
         .map(DiscoveryView::from)
+}
+
+/// The window mode the deck was built with (updated live on a borderless switch).
+/// The frontend ALSO reads `<html data-window-mode>` (set pre-paint by Rust); this
+/// command is the programmatic path for logic that needs it after mount.
+#[tauri::command]
+fn get_window_mode(state: tauri::State<'_, AppState>) -> String {
+    state.window_mode.lock().unwrap().as_str().to_string()
 }
 
 /// The current discovery, or an error until the supervised sidecar has reported
@@ -350,13 +364,11 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
     ))
 }
 
-/// Position the floating window near the top-right corner and pin it on top.
+/// Position the floating window near the top-right of the PRIMARY monitor. The
+/// builder owns `always_on_top` (per mode); this only places the window.
 fn place_floating(window: &tauri::WebviewWindow) {
-    let _ = window.set_always_on_top(true);
-    if let (Ok(Some(monitor)), Ok(win_size)) = (window.current_monitor(), window.outer_size()) {
+    if let (Ok(Some(monitor)), Ok(win_size)) = (window.primary_monitor(), window.outer_size()) {
         let screen = monitor.size();
-        // The monitor's origin in the virtual desktop; without it a "top-right"
-        // calc lands on the wrong screen (or off-screen) on multi-monitor setups.
         let origin = monitor.position();
         let margin = 16i32;
         let x = (origin.x + screen.width as i32 - win_size.width as i32 - margin).max(origin.x);
@@ -509,12 +521,16 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Start the sidecar supervisor (or record the external discovery).
+/// Start the sidecar supervisor (or record the external discovery). `config_path`
+/// is exported as `HERDECK_CONFIG` so the spawned sidecar reads the SAME config
+/// file Rust resolved the window mode from (mooting the sidecar's CWD-relative
+/// branch — important for the frozen `.app`, where CWD is nondeterministic).
 fn start_sidecar(
     app: &tauri::App,
     discovery: Arc<Mutex<Option<Discovery>>>,
     child: Arc<Mutex<Option<Child>>>,
     stop: Arc<AtomicBool>,
+    config_path: &Path,
 ) {
     let resource_dir = app.path().resource_dir().ok();
     match resolve_plan(resource_dir) {
@@ -524,7 +540,11 @@ fn start_sidecar(
             *discovery.lock().unwrap() = Some(d);
             let _ = app.handle().emit("discovery", view); // token-free
         }
-        SidecarPlan::Spawn(spec) => {
+        SidecarPlan::Spawn(mut spec) => {
+            spec.envs.push((
+                "HERDECK_CONFIG".to_string(),
+                config_path.to_string_lossy().into_owned(),
+            ));
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 supervise(SupervisorConfig::new(spec), child, stop, move |d| {
@@ -546,15 +566,29 @@ pub fn run() {
     let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let stop = Arc::new(AtomicBool::new(false));
 
+    // Resolve config.toml with the sidecar's existence-check order, then read the
+    // window mode BEFORE the window is built (transparent/decorations are
+    // creation-time props in Tauri 2).
+    let home = PathBuf::from(env::var("HOME").unwrap_or_default());
+    let repo_root = repo_root_from_manifest();
+    let env_override = env::var("HERDECK_CONFIG").ok();
+    let config_path =
+        window_mode::resolve_config_path(env_override.as_deref(), &home, &repo_root);
+    let mode = window_mode::read_window_mode(&config_path);
+
     // Clones for the setup closure and the supervisor.
     let setup_discovery = discovery.clone();
     let setup_child = child.clone();
     let setup_stop = stop.clone();
+    let setup_config_path = config_path.clone();
     // Clones for the exit handler.
     let exit_child = child.clone();
     let exit_stop = stop.clone();
 
-    let state = AppState { discovery };
+    let state = AppState {
+        discovery,
+        window_mode: Arc::new(Mutex::new(mode)),
+    };
 
     tauri::Builder::default()
         .manage(state)
@@ -579,17 +613,73 @@ pub fn run() {
             setup_status,
             setup_connect,
             open_config,
-            reload_hotkey
+            reload_hotkey,
+            get_window_mode
         ])
         .setup(move |app| {
-            if let Some(window) = app.get_webview_window("main") {
-                place_floating(&window);
+            // `main` is no longer in tauri.conf.json — build it here so its
+            // transparent/decorations match the mode. The init script sets
+            // `<html data-window-mode>` BEFORE first paint so the borderless CSS
+            // applies with no flash of opaque-normal styling (FOUC).
+            let app_handle = app.handle().clone();
+            let init = format!(
+                "document.documentElement.dataset.windowMode='{}'",
+                mode.as_str()
+            );
+            let builder = WebviewWindowBuilder::new(&app_handle, "main", WebviewUrl::default())
+                .title("herdeck")
+                .shadow(true)
+                .initialization_script(init);
+            let builder = match mode {
+                WindowMode::Normal => builder
+                    .decorations(true)
+                    .transparent(false)
+                    .always_on_top(false)
+                    .resizable(true)
+                    .inner_size(380.0, 340.0)
+                    .skip_taskbar(false),
+                WindowMode::Floating => builder
+                    .decorations(false)
+                    .transparent(true)
+                    .always_on_top(false)
+                    .resizable(false)
+                    .inner_size(360.0, 320.0)
+                    .skip_taskbar(true),
+                WindowMode::AlwaysOnTop => builder
+                    .decorations(false)
+                    .transparent(true)
+                    .always_on_top(true)
+                    .resizable(false)
+                    .inner_size(360.0, 320.0)
+                    .skip_taskbar(true),
+            };
+            let main_window = builder.build()?;
+
+            // Borderless modes get the top-right placement; normal opens where the
+            // OS puts it and is user-movable via the titlebar.
+            if mode.is_borderless() {
+                place_floating(&main_window);
             }
+
+            // Normal mode has a close button; intercept close -> hide (like the
+            // `config` window) so the tray "Show" brings it back and the app +
+            // sidecar keep running. CloseRequested is window-close only — it does
+            // NOT fire for app.exit/app.restart, so this never blocks quit/restart.
+            {
+                let w = main_window.clone();
+                main_window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = w.hide();
+                    }
+                });
+            }
+
             build_tray(app)?;
+
             // The config window is hidden at startup and reopened on demand; if it
             // were allowed to close, Tauri would DESTROY it and open_config would
-            // then fail with "config window not found". Intercept close -> hide, so
-            // it persists for the app's lifetime (the floating deck + sidecar run on).
+            // then fail with "config window not found". Intercept close -> hide.
             if let Some(cfg_win) = app.get_webview_window("config") {
                 let w = cfg_win.clone();
                 cfg_win.on_window_event(move |event| {
@@ -599,7 +689,7 @@ pub fn run() {
                     }
                 });
             }
-            start_sidecar(app, setup_discovery, setup_child, setup_stop);
+            start_sidecar(app, setup_discovery, setup_child, setup_stop, &setup_config_path);
             Ok(())
         })
         .build(tauri::generate_context!())

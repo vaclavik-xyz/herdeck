@@ -2,5 +2,5 @@
   "identifier": "default",
   "description": "Default capability for the floating deck window (core APIs: events for discovery, window controls).",
   "windows": ["main", "config"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-set-size"]
 }
