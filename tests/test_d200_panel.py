@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 import time
@@ -190,4 +191,53 @@ def test_d200_icons_dir_configures_override_provider(monkeypatch, tmp_path):
         assert driver._icons._overrides_dir == os.path.join(str(tmp_path), "herdeck-icons")
         driver.close()
     finally:
+        os.chdir(before)
+
+
+def test_d200_write_records_timing_and_count(tmp_path):
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        driver.render([TileView(0, "x", "blue"), TileView(1, "y", "green")])
+        assert _wait_until(lambda: dev.calls)
+        assert driver._last_write_count == 2
+        assert driver._last_write_ms is not None
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_d200_slow_write_warns(tmp_path, caplog):
+    block = threading.Event()  # never set -> set_buttons waits the full 1.0s
+    dev = _FakeDev(block=block)
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        with caplog.at_level(logging.WARNING, logger="herdeck.driver.d200"):
+            driver.render([TileView(0, "x", "blue")])
+            assert _wait_until(lambda: dev.calls, timeout=3.0)
+        assert "slow tiles write" in caplog.text
+    finally:
+        block.set()
+        driver.close()
+        os.chdir(before)
+
+
+def test_d200_write_failure_is_swallowed_and_warns(tmp_path, caplog):
+    class _RaisingDev(_FakeDev):
+        def set_buttons(self, buttons, update_only=False):
+            raise RuntimeError("usb boom")
+
+    dev = _RaisingDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    pump_thread = driver._pump._thread
+    try:
+        with caplog.at_level(logging.WARNING, logger="herdeck.driver.d200"):
+            driver.render([TileView(0, "x", "blue")])
+            assert _wait_until(lambda: "tiles write failed" in caplog.text, timeout=2.0)
+        assert pump_thread.is_alive()  # a failed write must not kill the worker
+    finally:
+        driver.close()
         os.chdir(before)

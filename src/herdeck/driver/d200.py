@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import contextlib
 import io
+import logging
 import os
+import time
 from collections.abc import Callable
 
 from PIL import Image
@@ -10,6 +12,8 @@ from PIL import Image
 from ..icons import compose_panel
 from .base import DeckDriver, PanelView, TileView
 from .render_pump import RenderPump
+
+log = logging.getLogger(__name__)
 
 PANEL_W = 392
 _CELL = 196
@@ -30,6 +34,7 @@ class D200Driver(DeckDriver):
     """Ulanzi D200 driver. Renders 13 tiles + a 2-cell status panel."""
 
     KEEP_ALIVE_INTERVAL = 5.0
+    SLOW_WRITE_MS = 250.0  # device writes slower than this get a WARNING log
     BRIGHTNESS = 80
     DEBOUNCE = 0.25  # ignore repeats of the same key within this window
     _CONTROL_USAGE_PAGE = 0x0C
@@ -46,6 +51,8 @@ class D200Driver(DeckDriver):
         # Stable working dir so strmdck's relative .build/.cache never collide (R-4).
         self.DEBOUNCE = debounce
         self.KEEP_ALIVE_INTERVAL = keep_alive_interval
+        self._last_write_ms: float | None = None
+        self._last_write_count = 0
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
         self._previous_cwd = os.getcwd()
@@ -82,8 +89,6 @@ class D200Driver(DeckDriver):
             raise
 
     def _open_device(self, retries: int = 5, delay: float = 1.0):
-        import time
-
         import hid
         from strmdck.devices.ulanzi_d200 import UlanziD200Device
 
@@ -159,12 +164,39 @@ class D200Driver(DeckDriver):
         elif channel == "working":
             self._write_working(payload)
 
-    def _write_tiles(self, tiles: list[TileView]) -> None:
+    def _timed_set_buttons(
+        self, channel: str, buttons: dict[int, dict], *, update_only: bool
+    ) -> bool:
+        """Write buttons to the device, timing and logging the USB write. Returns
+        True on success; False if the device write raised (the caller must then
+        treat the buttons as not-yet-applied)."""
+        if not buttons:
+            return False
+        t0 = time.perf_counter()
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                self._dev.set_buttons(self._tile_buttons(tiles))
+                self._dev.set_buttons(buttons, update_only=update_only)
         except Exception:
-            pass  # a failed write must never stall the worker
+            log.warning("d200 %s write failed (%d tiles)", channel, len(buttons))
+            return False
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        self._last_write_ms = dt_ms
+        self._last_write_count = len(buttons)
+        level = logging.WARNING if dt_ms >= self.SLOW_WRITE_MS else logging.DEBUG
+        prefix = "slow " if dt_ms >= self.SLOW_WRITE_MS else ""
+        log.log(
+            level,
+            "d200 %s%s write: %.1fms, %d tiles, update_only=%s",
+            prefix,
+            channel,
+            dt_ms,
+            len(buttons),
+            update_only,
+        )
+        return True
+
+    def _write_tiles(self, tiles: list[TileView]) -> None:
+        self._timed_set_buttons("tiles", self._tile_buttons(tiles), update_only=False)
 
     def _write_panel(self, panel: PanelView) -> None:
         try:
@@ -172,24 +204,20 @@ class D200Driver(DeckDriver):
             os.makedirs(_ICON_DIR, exist_ok=True)
             left.save(os.path.join(_ICON_DIR, "panel_left.png"))
             right.save(os.path.join(_ICON_DIR, "panel_right.png"))
-            with contextlib.redirect_stdout(io.StringIO()):
-                # update_only so refreshing the panel never clears the 13 tiles.
-                self._dev.set_buttons(
-                    {
-                        _PANEL_LEFT_INDEX: {"name": "", "icon": "panel_left.png"},
-                        _PANEL_RIGHT_INDEX: {"name": "", "icon": "panel_right.png"},
-                    },
-                    update_only=True,
-                )
         except Exception:
-            pass
+            return
+        # update_only so refreshing the panel never clears the 13 tiles.
+        self._timed_set_buttons(
+            "panel",
+            {
+                _PANEL_LEFT_INDEX: {"name": "", "icon": "panel_left.png"},
+                _PANEL_RIGHT_INDEX: {"name": "", "icon": "panel_right.png"},
+            },
+            update_only=True,
+        )
 
     def _write_working(self, tiles: list[TileView]) -> None:
-        try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                self._dev.set_buttons(self._tile_buttons(tiles), update_only=True)
-        except Exception:
-            pass
+        self._timed_set_buttons("working", self._tile_buttons(tiles), update_only=True)
 
     def _keep_alive_write(self) -> None:
         with contextlib.suppress(Exception):
@@ -210,8 +238,6 @@ class D200Driver(DeckDriver):
             os.chdir(self._previous_cwd)
 
     async def run_reader(self) -> None:
-        import time
-
         last_index = None
         last_time = 0.0
         async for action in self._dev.read_packet():
