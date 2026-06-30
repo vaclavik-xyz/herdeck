@@ -81,9 +81,13 @@ CWD-relativní `./config.toml`. Rust dnes `HERDECK_CONFIG` při spawnu **nenasta
 by Rust a sidecar mohly číst **jiný soubor**.
 
 **Řešení (pin cesty):**
-- Rust resolvuje cestu k `config.toml`: `HERDECK_CONFIG` env (pokud set & neprázdné, na
-  **absolutní**) → jinak `$HOME/.config/herdeck/config.toml` (hardcoded, **NE** `XDG_CONFIG_HOME`,
-  ať se shoduje s deckappem) → jinak (dev) `<repo_root>/config.toml` pokud existuje.
+- Rust resolvuje cestu k `config.toml` **se stejnými existence-checky jako sidecar**
+  (`_discover_config_path`): `HERDECK_CONFIG` env (pokud set & neprázdné → **absolutní**) →
+  jinak `$HOME/.config/herdeck/config.toml` **pokud existuje** → jinak `<repo_root>/config.toml`
+  **pokud existuje** (dev) → jinak default `$HOME/.config/herdeck/config.toml` (first-run/write
+  fallback; nemusí existovat → window_mode `Normal`). **Hardcoded `$HOME/.config/...`, NE
+  `XDG_CONFIG_HOME`**, ať se shoduje s deckappem. (Pozn.: pin neexistujícího `$HOME` defaultu
+  by v devu ignoroval repo config — proto existence-checky před fallbackem.)
 - **Rust tuto resolvovanou absolutní cestu EXPORTUJE jako `HERDECK_CONFIG` do spawnu sidecaru**
   (přidat do `CommandSpec` env v `sidecar.rs`/`choose_spawn`). Tím Rust i sidecar čtou
   **týž soubor** a CWD-relativní větev je mootnutá (důležité hlavně pro frozen `.app`, kde
@@ -151,7 +155,13 @@ by Rust a sidecar mohly číst **jiný soubor**.
      sync blocking, jako `reload_hotkey` — žádné async; tray handler je sync Fn). `GET /config` →
      nastavit `base.desktop.window_mode=target` → `POST /config` s `{base,profiles,local}`
      (active_profile je uvnitř base). Round-trip zachová strukturované sekce (ne komentáře).
-  2. **Pokud persist selže** (sidecar down / 4xx / busy pod `_setup_lock`) → **NEaplikovat**
+     **Timeout:** `POST /config` bere `_setup_lock`, na kterém **blokuje** (sidecar nevrací busy/409);
+     souběžný `/setup/connect` ho drží až ~15 s. Proto tray persist použít **dedikovaný timeout
+     ≥ 15 s** (strop `/setup/connect`, jako `setup_connect`) — jinak by 3s `SIDECAR_TIMEOUT`
+     uťal pomalý-ale-úspěšný zápis a klient by ho mylně považoval za failed, zatímco server
+     po uvolnění locku stejně zapíše (divergence). Signál apply/abort = **skutečný HTTP výsledek**,
+     ne timeout; timeout (>15 s) = genuinní wedge → abort.
+  2. **Pokud persist selže** (HTTP 4xx/5xx / sidecar down / wedge-timeout) → **NEaplikovat**
      (žádný restart, žádný `set_always_on_top`), vrátit zaškrtnutí na původní + zalogovat.
   3. **Apply (jen po úspěšném persistu):**
      - oba borderless (floating↔always_on_top) → **živě** `main.set_always_on_top(target==aot)`
