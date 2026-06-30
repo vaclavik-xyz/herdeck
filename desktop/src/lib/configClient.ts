@@ -848,6 +848,27 @@ export function setToggleDeckHotkey(payload: ConfigPayload, value: string): Conf
   return setAt(payload, "base", "hotkeys", "toggle_deck", value);
 }
 
+/** The three deck window modes (matches Rust `WindowMode::as_str`). */
+export const WINDOW_MODES = ["normal", "floating", "always_on_top"] as const;
+export type WindowMode = (typeof WINDOW_MODES)[number];
+
+/** Default deck window mode. Mirrors Rust `parse_window_mode` (missing → Normal). */
+export const DEFAULT_WINDOW_MODE: WindowMode = "normal";
+
+/** The configured deck window mode. An ABSENT or unknown value → the default,
+ *  mirroring the Rust parser (missing/garbage → Normal). */
+export function windowMode(payload: ConfigPayload): WindowMode {
+  const v = getAt(payload, "base", "desktop", "window_mode");
+  return typeof v === "string" && (WINDOW_MODES as readonly string[]).includes(v)
+    ? (v as WindowMode)
+    : DEFAULT_WINDOW_MODE;
+}
+
+/** NEW payload with base.desktop.window_mode set. */
+export function setWindowMode(payload: ConfigPayload, value: WindowMode): ConfigPayload {
+  return setAt(payload, "base", "desktop", "window_mode", value);
+}
+
 export function commandTransport(invoke: InvokeFn): ConfigTransport {
   const asCode = (v: unknown) => (typeof v === "number" ? v : 0);
   return {
