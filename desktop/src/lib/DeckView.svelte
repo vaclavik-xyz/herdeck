@@ -160,7 +160,6 @@
     flex-direction: column;
     gap: 8px;
     box-sizing: border-box;
-    min-height: 100vh;
     padding: 10px;
     background: #0b0b0d;
     font: 12px/1.3 system-ui, -apple-system, sans-serif;

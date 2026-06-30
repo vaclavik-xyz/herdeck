@@ -6,11 +6,27 @@
   import Onboarding from "./lib/Onboarding.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport } from "./lib/deckClient";
+  import { fitDecision } from "./lib/windowFit";
   import {
     setupTransport,
     shouldOnboard,
     type SetupStatus,
   } from "./lib/onboardingClient";
+
+  // Window mode is injected on <html data-window-mode> by Rust BEFORE first paint
+  // (initialization_script), so the borderless CSS applies with no FOUC. Falls
+  // back to "normal" in a plain browser (no Tauri / no attribute).
+  const windowMode =
+    (typeof document !== "undefined"
+      ? document.documentElement.dataset.windowMode
+      : undefined) ?? "normal";
+  const borderless = windowMode !== "normal";
+
+  // Borderless width matches the Rust builder inner_size width; the window is
+  // non-resizable, so width is constant and only the height is fit to content.
+  const BORDERLESS_WIDTH = 360;
+
+  let shell = $state<HTMLElement | undefined>(undefined);
 
   let discovery = $state<Discovery | null>(null);
   let status = $state<SetupStatus | null>(null);
@@ -18,9 +34,6 @@
   // status would show the deck (so a demo/local-pinned user can re-onboard).
   let reonboard = $state(false);
 
-  // The deck reaches the sidecar through token-free Tauri proxies; the setup
-  // transport uses the two token-injecting setup commands. Both need discovery
-  // first (the Rust commands resolve the sidecar from it).
   const transport = $derived(
     discovery ? commandTransport((cmd, args) => invoke(cmd, args)) : null,
   );
@@ -28,7 +41,6 @@
     discovery ? setupTransport((cmd, args) => invoke(cmd, args)) : null,
   );
 
-  // Which surface to show. Defaults to the deck so no setup state traps the user.
   const view = $derived(shouldOnboard(status, reonboard));
 
   async function pullDiscovery(): Promise<void> {
@@ -37,6 +49,22 @@
       if (d) discovery = d;
     } catch {
       // Not in a Tauri WebView (plain browser): leave null, DeckView goes offline.
+    }
+  }
+
+  // Content-fit: size the borderless window to the intrinsic content height. Skips
+  // redundant calls via fitDecision's anti-feedback guard. No-op (try/catch) when
+  // not in a Tauri WebView.
+  let lastRequestedHeight: number | null = null;
+  async function fitWindow(scrollHeight: number): Promise<void> {
+    const d = fitDecision(scrollHeight, lastRequestedHeight, BORDERLESS_WIDTH);
+    if (!d.apply) return;
+    lastRequestedHeight = d.height;
+    try {
+      const { getCurrentWindow, LogicalSize } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().setSize(new LogicalSize(d.width, d.height));
+    } catch {
+      /* not in a Tauri WebView */
     }
   }
 
@@ -51,7 +79,6 @@
       reonboard = true;
     });
 
-    // Retry discovery until the supervised sidecar has printed its first line.
     void (async () => {
       while (alive && !discovery) {
         await pullDiscovery();
@@ -59,9 +86,6 @@
       }
     })();
 
-    // Poll /setup once discovery is up. A few seconds is enough: after a
-    // successful connect (and once the source swap settles) the next poll flips
-    // the card to the deck without a manual refresh.
     void (async () => {
       while (alive) {
         if (setup) status = await setup.status();
@@ -69,58 +93,101 @@
       }
     })();
 
+    // Borderless content-fit: observe the shell's intrinsic height and resize the
+    // window to match. rAF-batched so a burst of mutations triggers one setSize.
+    let ro: ResizeObserver | undefined;
+    if (borderless && shell && typeof ResizeObserver !== "undefined") {
+      let scheduled = false;
+      ro = new ResizeObserver(() => {
+        if (scheduled) return;
+        scheduled = true;
+        requestAnimationFrame(() => {
+          scheduled = false;
+          if (shell) void fitWindow(shell.scrollHeight);
+        });
+      });
+      ro.observe(shell);
+    }
+
     return () => {
       alive = false;
+      ro?.disconnect();
     };
   });
 
   function onConnected(): void {
     reonboard = false;
-    // Re-poll promptly so the card flips as soon as the swap settles.
     void (async () => {
       if (setup) status = await setup.status();
     })();
   }
 </script>
 
-<main>
-  {#if view === "deck"}
-    <DeckView {transport} />
-    <!-- Re-onboarding affordance: reachable beyond first run, so a user pinned by
-         a demo/local marker can switch connection (the backend /setup/connect is
-         not first-run-gated). -->
-    <button
-      class="reonboard"
-      title="Změnit připojení"
-      aria-label="Změnit připojení"
-      onclick={() => (reonboard = true)}>⚙</button
-    >
-  {:else}
-    <Onboarding
-      {view}
-      {status}
-      transport={setup}
-      {onConnected}
-      onDismiss={reonboard ? () => (reonboard = false) : undefined}
-    />
-  {/if}
+<main class:borderless>
+  <div class="shell" bind:this={shell}>
+    {#if borderless}<div class="drag" data-tauri-drag-region></div>{/if}
+    {#if view === "deck"}
+      <DeckView {transport} />
+      <!-- Re-onboarding affordance, in document flow so content-fit measures it
+           and overflow:hidden never clips it. -->
+      <div class="tools">
+        <button
+          class="reonboard"
+          title="Změnit připojení"
+          aria-label="Změnit připojení"
+          onclick={() => (reonboard = true)}>⚙</button
+        >
+      </div>
+    {:else}
+      <Onboarding
+        {view}
+        {status}
+        transport={setup}
+        {onConnected}
+        onDismiss={reonboard ? () => (reonboard = false) : undefined}
+      />
+    {/if}
+  </div>
 </main>
 
 <style>
+  /* Opaque by default (normal + plain browser); borderless makes the window
+     transparent so the rounded .shell is the only painted surface. */
   :global(html, body) {
     margin: 0;
     background: #0b0b0d;
   }
+  :global(html[data-window-mode="floating"]),
+  :global(html[data-window-mode="floating"] body),
+  :global(html[data-window-mode="always_on_top"]),
+  :global(html[data-window-mode="always_on_top"] body) {
+    background: transparent;
+  }
+
   main {
     position: relative;
     width: 100vw;
-    min-height: 100vh;
     box-sizing: border-box;
   }
+  .shell {
+    background: #0b0b0d;
+  }
+  /* Rounded opaque card flush to the (transparent) window edge so the drop shadow
+     traces the card silhouette. */
+  main.borderless .shell {
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .drag {
+    height: 18px;
+    width: 100%;
+  }
+  .tools {
+    display: flex;
+    justify-content: flex-end;
+    padding: 2px 6px 6px;
+  }
   .reonboard {
-    position: fixed;
-    left: 8px;
-    bottom: 8px;
     width: 22px;
     height: 22px;
     padding: 0;
