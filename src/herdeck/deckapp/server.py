@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import os
 import secrets
 import threading
@@ -10,7 +11,10 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..config import ConfigError
 from ..orchestrator import Orchestrator
+from .sinks import RenderFrame
 from .source import StateSource
+
+log = logging.getLogger(__name__)
 
 # NOTE: herdeck.icons (and its Pillow dependency) is imported lazily inside the
 # render path, not at module import time, so `import herdeck.deckapp` — and the
@@ -40,6 +44,8 @@ class DeckApp:
     on ``driver.web.WebDeck``: same per-tile version diffing, same constant-time
     token check, bind to 127.0.0.1 only.
     """
+
+    FULL_REFRESH_TICKS = 25  # every Nth tick re-renders all tiles + panel (advances idle elapsed on the D200); other ticks send working-only frames
 
     def __init__(
         self,
@@ -82,6 +88,8 @@ class DeckApp:
         self._panel: bytes | None = None
         self._panel_ver = 0
         self._version = 0
+        self._sinks: list = []  # RenderSink fan-out targets (HTTP buffer is DeckApp's own)
+        self._ticks = 0
 
         # Hand the source the render orchestrator (plus this lock and the lock-free
         # render) so a live source can drive on_press/read-results against the very
@@ -121,6 +129,15 @@ class DeckApp:
     def source_name(self) -> str:
         return self._source.source_name
 
+    @property
+    def config(self):
+        """The live config (from the source) — the runtime entry builds the D200 driver from config.hardware."""
+        return self._source.config
+
+    @property
+    def slots(self) -> int:
+        return self._slots
+
     def _bump(self) -> int:
         """Assign the next monotonic version. Call while holding self._lock."""
         self._version += 1
@@ -148,7 +165,7 @@ class DeckApp:
         buf = io.BytesIO()
         compose_panel(rs.panel).convert("RGB").save(buf, "PNG")
         sections = {t.index: t.section for t in rs.tiles if t.index < slots and t.section}
-        return tiles, buf.getvalue(), sections
+        return rs, tiles, buf.getvalue(), sections
 
     def _apply_rendered_locked(self, tiles, panel_png, sections):
         """Assign pre-rendered tiles/panel/sections with version bumps — pure dict/int ops
@@ -168,17 +185,45 @@ class DeckApp:
             self._panel = panel_png
             self._panel_ver = self._bump()
 
-    def _refresh_locked(self) -> None:
-        tiles, panel_png, sections = self._render_locked(self._source, self._orch, self._slots)
+    def _refresh_locked(self, *, working=None, full=True) -> None:
+        rs, tiles, panel_png, sections = self._render_locked(self._source, self._orch, self._slots)
         self._apply_rendered_locked(tiles, panel_png, sections)
+        self._fan_out_locked(rs, working, full)
+
+    def _fan_out_locked(self, rs, working, full) -> None:
+        """Deliver the rendered frame to every sink under self._lock. A sink that
+        raises is isolated — the HTTP buffer (already updated above) and the other
+        sinks must not be affected."""
+        if not self._sinks:
+            return
+        frame = RenderFrame(render=rs, working=working, full=full)
+        for sink in self._sinks:
+            try:
+                sink.deliver(frame)
+            except Exception:
+                log.warning("render sink %r failed to deliver a frame", sink, exc_info=True)
+
+    def add_sink(self, sink) -> None:
+        """Register a render sink and immediately paint it one full frame so it
+        starts in sync with the current deck state (the live ticker keeps it
+        animated thereafter)."""
+        with self._lock:
+            self._sinks.append(sink)
+            self._refresh_locked(working=None, full=True)
 
     def _tick_once(self) -> None:
         """Advance the spinner phase and re-render once, atomically w.r.t. presses
-        and bridge updates (same lock). Only working tiles change bytes, so the
-        version diff bumps just them."""
+        and bridge updates (same lock). Most ticks fan out a WORKING-only frame
+        (cheap on the D200); every FULL_REFRESH_TICKS-th tick is a full frame so
+        idle elapsed advances on every sink. The HTTP buffer is fully re-rendered
+        and version-diffed every tick regardless (idle tiles stay quiet via the diff)."""
         with self._lock:
-            self._orch.tick()
-            self._refresh_locked()
+            working = self._orch.tick()
+            self._ticks += 1
+            if self._ticks % self.FULL_REFRESH_TICKS == 0:
+                self._refresh_locked(working=None, full=True)
+            else:
+                self._refresh_locked(working=working, full=False)
 
     def _ticker_loop(self) -> None:
         # Event.wait returns False on timeout (a tick is due) and True once close()
@@ -201,6 +246,12 @@ class DeckApp:
             if ticker is not threading.current_thread():
                 ticker.join(timeout=2)
             self._ticker_thread = None
+        for sink in getattr(self, "_sinks", []):
+            try:
+                sink.close()
+            except Exception:
+                pass
+        self._sinks = []
         watcher = getattr(self, "_watcher", None)
         if watcher is not None:
             try:
@@ -257,7 +308,7 @@ class DeckApp:
         cols, rows = new_source.config.grid
         slots = cols * rows - 2
         orch = Orchestrator(new_source.config, slots=slots, clock=clk)
-        tiles, panel_png, sections = self._render_locked(new_source, orch, slots)
+        _, tiles, panel_png, sections = self._render_locked(new_source, orch, slots)
         return slots, orch, clk, tiles, panel_png, sections
 
     def _commit_swap(self, new_source, prepared) -> None:
