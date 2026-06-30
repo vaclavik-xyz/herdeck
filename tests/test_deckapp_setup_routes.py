@@ -1030,3 +1030,54 @@ def test_connect_bad_body_is_400(tmp_path, monkeypatch):
             assert e.code == 400
     finally:
         app.close()
+
+
+def test_has_saved_remote_true_with_servers(tmp_path):
+    import types
+
+    from herdeck.deckapp import server as s
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid = "herdr"\nurl = "ws://1.2.3.4:8788"\ntoken_env = "HERDECK_HERDR_TOKEN"\n')
+    svc = types.SimpleNamespace(_config_path=cfg)
+    assert s._has_saved_remote(svc) is True
+
+
+def test_has_saved_remote_false_when_mock_env(tmp_path, monkeypatch):
+    import types
+
+    from herdeck.deckapp import server as s
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid = "herdr"\nurl = "ws://1.2.3.4:8788"\ntoken_env = "HERDECK_HERDR_TOKEN"\n')
+    monkeypatch.setenv("HERDECK_MOCK", "1")  # masked even with a real saved config
+    svc = types.SimpleNamespace(_config_path=cfg)
+    assert s._has_saved_remote(svc) is False
+
+
+def test_has_saved_remote_false_without_servers(tmp_path, monkeypatch):
+    import types
+
+    from herdeck.deckapp import server as s
+
+    monkeypatch.delenv("HERDECK_MOCK", raising=False)
+    missing = tmp_path / "config.toml"
+    assert s._has_saved_remote(types.SimpleNamespace(_config_path=missing)) is False  # no file
+    empty = tmp_path / "empty.toml"
+    empty.write_text("[base]\n")  # parses, but no [[servers]]
+    assert s._has_saved_remote(types.SimpleNamespace(_config_path=empty)) is False
+    assert s._has_saved_remote(None) is False  # no config service
+
+
+def test_setup_status_exposes_saved_remote_available(tmp_path, monkeypatch):
+    monkeypatch.delenv("HERDECK_MOCK", raising=False)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid = "herdr"\nurl = "ws://1.2.3.4:8788"\ntoken_env = "HERDECK_HERDR_TOKEN"\n')
+    monkeypatch.setenv("HERDECK_CONFIG", str(cfg))
+    monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "nope.sock"))
+    app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
+    try:
+        _, body = _get(app, f"/setup?token={app.token}")
+        assert body["saved_remote_available"] is True
+    finally:
+        app.close()

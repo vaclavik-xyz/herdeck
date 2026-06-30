@@ -311,6 +311,7 @@ class DeckApp:
             "connected": self._source.connected,
             "reason": reason,
             "local_herdr_available": socket_exists,
+            "saved_remote_available": _has_saved_remote(self._config_service),
             "choice": choice,
             "socket_path": socket_path,
         }
@@ -597,6 +598,28 @@ def select_live():
     if not server.token:
         return None
     return (config, server)
+
+
+def _has_saved_remote(config_service) -> bool:
+    """True when an on-disk config has at least one ``[[servers]]`` entry — a RAW
+    TOML read with NO token/keychain resolution, so it is safe to call on the hot
+    ``/setup`` poll. Authoritative resolution (does the token actually resolve?) is
+    deferred to connect-time ``select_live()`` (fail-soft "no saved connection").
+    Mock-gated: under ``HERDECK_MOCK`` there is no saved button, matching the
+    existing ``reason="mock_env"`` special-casing."""
+    import tomllib
+
+    if os.environ.get("HERDECK_MOCK") or config_service is None:
+        return False
+    path = config_service._config_path
+    if not path.exists():
+        return False
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    servers = data.get("servers")
+    return isinstance(servers, list) and len(servers) > 0
 
 
 def select_source_kind(*, mock_env, remote, choice, socket_path, socket_exists):
