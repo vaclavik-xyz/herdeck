@@ -38,6 +38,26 @@ class StubIcons:
         return buf.getvalue()
 
 
+class SpinIcons:
+    """Like StubIcons but its bytes depend on the spinner phase, so a tick that
+    advances a working tile's phase changes that tile's PNG (and only that one)."""
+
+    def render_tile_bytes(self, tile):
+        sig = f"{tile.index}|{tile.status_text}|{tile.spinner}"
+        buf = io.BytesIO()
+        c = sum(sig.encode()) % 256
+        Image.new("RGB", (4, 4), (c, c, c)).save(buf, "PNG")
+        return buf.getvalue()
+
+
+def make_live_icons(icons, *, serve=False, tick_interval=0.0):
+    config, server = live_config()
+    src = LiveSource(config, server)
+    src.attach_runner(FakeRunner())
+    app = DeckApp(src, serve=serve, icon_provider=icons, tick_interval=tick_interval)
+    return app, src, server
+
+
 class FakeRunner:
     """Captures the wire messages a press would send to the bridge, synchronously
     (no asyncio). Each send is recorded exactly once — there is no retry."""
@@ -581,3 +601,59 @@ def test_create_live_app_reports_live_without_network():
         assert SECRET not in json.dumps(app._health())
     finally:
         app.close()
+
+
+# --- background ticker (Task 1: herdeck-runtime-slice-a) --------------------
+
+
+def test_tick_once_advances_spinner_phase():
+    app, src, server = make_live_icons(StubIcons())
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    app.refresh()
+    before = app._orch._phase
+    app._tick_once()
+    assert app._orch._phase == before + 1
+
+
+def test_tick_once_animates_working_tile():
+    app, src, server = make_live_icons(SpinIcons())
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    app.refresh()
+    v = app._state()["version"]
+    app._tick_once()
+    assert app._state()["version"] > v  # the working tile re-keyed (spinner advanced)
+
+
+def test_tick_once_quiet_when_all_idle():
+    app, src, server = make_live_icons(SpinIcons())
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.IDLE)])
+    app.refresh()
+    v = app._state()["version"]
+    app._tick_once()
+    assert app._state()["version"] == v  # idle deck does not churn /state
+
+
+def test_ticker_thread_not_started_without_serve_or_interval():
+    app_a, _, _ = make_live_icons(StubIcons(), serve=False, tick_interval=0.0)
+    app_b, _, _ = make_live_icons(StubIcons(), serve=False, tick_interval=0.4)
+    assert app_a._ticker_thread is None  # tick_interval 0 -> no ticker
+    assert app_b._ticker_thread is None  # serve=False -> no ticker (not actually serving)
+
+
+def test_ticker_thread_runs_and_stops_when_serving():
+    app, src, server = make_live_icons(SpinIcons(), serve=True, tick_interval=0.02)
+    try:
+        assert app._ticker_thread is not None and app._ticker_thread.is_alive()
+    finally:
+        app.close()
+    assert not app._ticker_thread or not app._ticker_thread.is_alive()
+
+
+def test_create_live_app_enables_ticker_from_config():
+    config, server = live_config()
+    app = create_live_app(config, server, serve=False, connector_factory=FakeConnector)
+    assert app._tick_interval == config.hardware.tick_interval
+    assert config.hardware.tick_interval == 0.4  # the live default that drives animation
