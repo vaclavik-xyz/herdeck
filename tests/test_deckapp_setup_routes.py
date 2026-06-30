@@ -1081,3 +1081,75 @@ def test_setup_status_exposes_saved_remote_available(tmp_path, monkeypatch):
         assert body["saved_remote_available"] is True
     finally:
         app.close()
+
+
+def _write_saved_config(tmp_path, monkeypatch):
+    """A resolvable saved remote: config.toml with one server + its keychain token +
+    a pre-existing demo marker (the trap we are escaping). Returns the config path."""
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid = "herdr"\nurl = "ws://10.0.0.5:8788"\ntoken_env = "HERDECK_HERDR_TOKEN"\n')
+    monkeypatch.setenv("HERDECK_CONFIG", str(cfg))
+    monkeypatch.delenv("HERDECK_MOCK", raising=False)
+    fake = _FakeKeyring()
+    fake.store[("herdeck", "HERDECK_HERDR_TOKEN")] = "saved-tok"  # so select_live() resolves
+    monkeypatch.setattr("herdeck.secrets._keyring", lambda: fake)
+    from herdeck.deckapp import onboarding
+
+    onboarding.write_choice(str(cfg), "demo")  # currently trapped in demo
+    return str(cfg)
+
+
+def test_connect_saved_swaps_live_and_clears_marker(tmp_path, monkeypatch):
+    from herdeck.deckapp import onboarding
+
+    cfg = _write_saved_config(tmp_path, monkeypatch)
+    # Build a non-networked live source that reports connected=False (honest async dial).
+    monkeypatch.setattr(srv, "build_live_source_for_connect", lambda config, server: _DisconnectedSource())
+    app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
+    prev = app._source
+    try:
+        status, body = _post(app, "/setup/connect", {"choice": "saved"})
+        assert status == 200 and body["ok"] is True
+        assert body["connected"] is False  # honest: the just-built source isn't connected yet
+        assert app._source is not prev  # swapped to the saved remote
+        assert onboarding.read_choice(cfg) is None  # demo marker cleared
+    finally:
+        app.close()
+
+
+def test_connect_saved_no_config_is_soft_error_keeps_marker(tmp_path, monkeypatch):
+    from herdeck.deckapp import onboarding
+
+    monkeypatch.setenv("HERDECK_CONFIG", str(tmp_path / "config.toml"))  # absent
+    monkeypatch.delenv("HERDECK_MOCK", raising=False)
+    onboarding.write_choice(str(tmp_path / "config.toml"), "demo")
+    app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
+    prev = app._source
+    try:
+        status, body = _post(app, "/setup/connect", {"choice": "saved"})
+        assert status == 200 and body["ok"] is False and body["error"] == "no saved connection"
+        assert app._source is prev  # no swap
+        assert onboarding.read_choice(str(tmp_path / "config.toml")) == "demo"  # marker untouched
+    finally:
+        app.close()
+
+
+def test_connect_saved_build_failure_restores_marker(tmp_path, monkeypatch):
+    from herdeck.deckapp import onboarding
+
+    cfg = _write_saved_config(tmp_path, monkeypatch)
+
+    def _boom(config, server):
+        raise RuntimeError("connector blew up")
+
+    monkeypatch.setattr(srv, "build_live_source_for_connect", _boom)
+    app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
+    prev = app._source
+    try:
+        status, body = _post(app, "/setup/connect", {"choice": "saved"})
+        assert status == 200 and body["ok"] is False
+        assert "could not restore saved connection" in body["error"]
+        assert app._source is prev  # previous source intact
+        assert onboarding.read_choice(cfg) == "demo"  # marker restored (build failed before clear)
+    finally:
+        app.close()

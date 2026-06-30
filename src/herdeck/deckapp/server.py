@@ -857,7 +857,7 @@ def connect(app, body) -> dict | None:
     import tomllib
 
     from .mock import MockSource
-    from .onboarding import read_choice, write_choice
+    from .onboarding import clear_choice, read_choice, write_choice
 
     choice = body.get("choice")
     config_path = str(app._config_service._config_path) if app._config_service else None
@@ -988,6 +988,33 @@ def connect(app, body) -> dict | None:
             return {"ok": False, "error": "could not build the remote source"}
         # Persist + swap as one watcher-suppressed transaction (see _commit_remote).
         return _commit_remote(app, payload, token_env, token, new_source, config_path)
+
+    if choice == "saved":
+        # One-click escape from the demo trap: re-select the on-disk remote (token from
+        # the keychain) and clear the demo/local marker. Transactional like the others —
+        # build + prepare BEFORE clearing the marker; any failure restores it and closes
+        # the just-built source. NO _suppress_reload (this writes only onboarding.toml,
+        # which the watcher does not track) and NO probe (select_live() confirms token
+        # PRESENCE, not validity; the live source dials async, so connected may be False).
+        remote = select_live()  # (config, server) from disk + keychain, or None
+        if remote is None:
+            return {"ok": False, "error": "no saved connection"}
+        config, server = remote
+        prior_choice = read_choice(config_path)
+        new_source = None
+        try:
+            new_source = build_live_source_for_connect(config, server)  # build (fallible)
+            prepared = app._prepare_swap(new_source, clock=time.monotonic)  # render (fallible)
+            clear_choice(config_path)  # persist: drop the demo/local marker
+        except Exception:
+            _restore_choice(config_path, prior_choice)  # marker untouched / restored
+            if new_source is not None:
+                new_source.close()
+            return {"ok": False, "error": "could not restore saved connection"}
+        app._commit_swap(new_source, prepared)  # assignment-only, non-failing
+        app._set_local_bridge(None)  # saved targets remote; drop any local bridge
+        app._reloader = _reloader_for(app, ("remote",), _select_source)
+        return {"ok": True, "connected": app._source.connected}
 
     return None  # unknown choice -> 400
 
