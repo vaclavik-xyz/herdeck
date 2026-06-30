@@ -55,6 +55,9 @@ pub fn parse_window_mode(toml_str: &str) -> WindowMode {
 /// `always_on_top`); any change involving `normal` flips `transparent`, which is
 /// a creation-time prop → restart.
 pub fn switch_needs_restart(from: WindowMode, to: WindowMode) -> bool {
+    if from == to {
+        return false;
+    }
     !(from.is_borderless() && to.is_borderless())
 }
 
@@ -152,6 +155,13 @@ mod tests {
         assert!(switch_needs_restart(WindowMode::Normal, WindowMode::Floating));
         assert!(switch_needs_restart(WindowMode::Floating, WindowMode::Normal));
         assert!(switch_needs_restart(WindowMode::Normal, WindowMode::AlwaysOnTop));
+    }
+
+    #[test]
+    fn same_mode_never_restarts() {
+        assert!(!switch_needs_restart(WindowMode::Normal, WindowMode::Normal));
+        assert!(!switch_needs_restart(WindowMode::Floating, WindowMode::Floating));
+        assert!(!switch_needs_restart(WindowMode::AlwaysOnTop, WindowMode::AlwaysOnTop));
     }
 
     fn scratch(name: &str) -> PathBuf {
