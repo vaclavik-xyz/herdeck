@@ -452,12 +452,157 @@ fn reload_hotkey(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
     Ok(())
 }
 
+/// The three window-mode tray checkboxes. There is no native radio group, so we
+/// hold all three handles and drive the checkmarks ourselves (like `autostart_cb`).
+#[derive(Clone)]
+struct WmItems {
+    normal: CheckMenuItem<tauri::Wry>,
+    floating: CheckMenuItem<tauri::Wry>,
+    aot: CheckMenuItem<tauri::Wry>,
+}
+
+/// Check exactly the item for `mode`, uncheck the other two.
+fn set_wm_checks(items: &WmItems, mode: WindowMode) {
+    let _ = items.normal.set_checked(mode == WindowMode::Normal);
+    let _ = items.floating.set_checked(mode == WindowMode::Floating);
+    let _ = items.aot.set_checked(mode == WindowMode::AlwaysOnTop);
+}
+
+/// Persist `window_mode = target` to base config via the sidecar. Read-modify-write
+/// over the existing `/config` routes (token injected Rust-side, like the editor).
+/// Returns `Ok(())` ONLY on a confirmed write: the `/config` contract returns
+/// validation failures as HTTP 200 with a non-empty `errors`, writing NOTHING, so
+/// success requires HTTP 200 AND `errors == []`. The POST blocks on `_setup_lock`,
+/// so it uses the longer `SETUP_CONNECT_TIMEOUT`; a timeout there is a genuine wedge.
+fn persist_window_mode(state: &AppState, target: WindowMode) -> Result<(), String> {
+    let d = state
+        .discovery
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "sidecar not ready".to_string())?;
+    let body = http::http_get(
+        &d.host,
+        d.port,
+        &format!("/config?token={}", d.token),
+        SIDECAR_TIMEOUT,
+    )?;
+    let mut cfg: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("invalid /config JSON: {e}"))?;
+    {
+        let base = cfg
+            .get_mut("base")
+            .and_then(|b| b.as_object_mut())
+            .ok_or_else(|| "config response missing base table".to_string())?;
+        let desktop = base
+            .entry("desktop")
+            .or_insert_with(|| serde_json::json!({}));
+        let desktop_obj = desktop
+            .as_object_mut()
+            .ok_or_else(|| "config desktop is not a table".to_string())?;
+        desktop_obj.insert(
+            "window_mode".to_string(),
+            serde_json::Value::String(target.as_str().to_string()),
+        );
+    }
+    // POST only {base, profiles, local} — the redacted `secrets` field from the GET
+    // is display-only and never written back (secret values are one-way).
+    let payload = serde_json::json!({
+        "base": cfg.get("base").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "profiles": cfg.get("profiles").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "local": cfg.get("local").cloned().unwrap_or_else(|| serde_json::json!({})),
+    });
+    let (code, resp) = http::http_post_json(
+        &d.host,
+        d.port,
+        "/config",
+        (HDR_TOKEN, &d.token),
+        &payload.to_string(),
+        SETUP_CONNECT_TIMEOUT,
+    )?;
+    if code != 200 {
+        return Err(format!("POST /config returned HTTP {code}"));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&resp).map_err(|e| format!("invalid /config response JSON: {e}"))?;
+    match parsed.get("errors").and_then(|e| e.as_array()) {
+        Some(arr) if arr.is_empty() => Ok(()),
+        Some(_) => Err("config rejected (validation errors)".to_string()),
+        None => Err("config response missing 'errors' field".to_string()),
+    }
+}
+
+/// Tray handler for a window-mode choice: persist FIRST, apply only on success.
+/// floating↔always_on_top applies live (toggle always_on_top); any change to/from
+/// normal restarts (transparent is creation-time). On persist failure: revert the
+/// checkmarks, log, do nothing else.
+fn select_window_mode(app: &tauri::AppHandle, target: WindowMode, items: &WmItems) {
+    let state = match app.try_state::<AppState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let current = *state.window_mode.lock().unwrap();
+    if target == current {
+        set_wm_checks(items, current); // re-assert, no-op
+        return;
+    }
+    if let Err(e) = persist_window_mode(&state, target) {
+        eprintln!("window mode: persist failed, not applying: {e}");
+        set_wm_checks(items, current); // revert to the real persisted mode
+        return;
+    }
+    if window_mode::switch_needs_restart(current, target) {
+        app.restart(); // diverges (-> !); ExitRequested handler kills the sidecar
+    }
+    // Reached only for a live borderless↔borderless switch.
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_always_on_top(target == WindowMode::AlwaysOnTop);
+    }
+    *state.window_mode.lock().unwrap() = target;
+    set_wm_checks(items, target);
+}
+
 /// Build the tray icon with a show/hide/quit menu.
-fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     use tauri_plugin_autostart::ManagerExt;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
+    let wm_normal = CheckMenuItem::with_id(
+        app,
+        "wm_normal",
+        "Normal",
+        true,
+        current_mode == WindowMode::Normal,
+        None::<&str>,
+    )?;
+    let wm_floating = CheckMenuItem::with_id(
+        app,
+        "wm_floating",
+        "Floating",
+        true,
+        current_mode == WindowMode::Floating,
+        None::<&str>,
+    )?;
+    let wm_aot = CheckMenuItem::with_id(
+        app,
+        "wm_aot",
+        "Always on top",
+        true,
+        current_mode == WindowMode::AlwaysOnTop,
+        None::<&str>,
+    )?;
+    let wm_submenu = tauri::menu::Submenu::with_items(
+        app,
+        "Window mode",
+        true,
+        &[&wm_normal, &wm_floating, &wm_aot],
+    )?;
+    let wm_items = WmItems {
+        normal: wm_normal,
+        floating: wm_floating,
+        aot: wm_aot,
+    };
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
@@ -468,14 +613,20 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     )?;
     let reconnect = MenuItem::with_id(app, "reconnect", "Change connection…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&settings, &show, &hide, &reconnect, &autostart, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&settings, &show, &hide, &wm_submenu, &reconnect, &autostart, &quit],
+    )?;
     let autostart_cb = autostart.clone();
+    let wm_items_cb = wm_items.clone();
 
     let mut builder = TrayIconBuilder::with_id("herdeck-tray")
         .tooltip("herdeck")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(move |app, event| match event.id.as_ref() {
+        .on_menu_event(move |app, event| {
+            let wm_items = &wm_items_cb;
+            match event.id.as_ref() {
             "settings" => {
                 if let Some(w) = app.get_webview_window("config") {
                     let _ = w.show();
@@ -509,8 +660,12 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
                 let _ = autostart_cb.set_checked(mgr.is_enabled().unwrap_or(false));
             }
+            "wm_normal" => select_window_mode(app, WindowMode::Normal, wm_items),
+            "wm_floating" => select_window_mode(app, WindowMode::Floating, wm_items),
+            "wm_aot" => select_window_mode(app, WindowMode::AlwaysOnTop, wm_items),
             "quit" => app.exit(0),
             _ => {}
+        }
         });
 
     // Reuse the embedded app icon for the tray (skip gracefully if absent).
@@ -675,7 +830,7 @@ pub fn run() {
                 });
             }
 
-            build_tray(app)?;
+            build_tray(app, mode)?;
 
             // The config window is hidden at startup and reopened on demand; if it
             // were allowed to close, Tauri would DESTROY it and open_config would
