@@ -50,6 +50,28 @@ def _safe_name(agent_type: str) -> str:
     return f"{safe or '_'}.{digest}"
 
 
+def _fingerprint_assets(assets_dir: str | None) -> str:
+    """A short digest of the bundled-glyph set in ``assets_dir`` (sorted
+    name+size pairs). Folded into the render-cache keys so that adding,
+    removing, or re-baking a bundled mark invalidates stale cached tiles —
+    otherwise an UPGRADED app reuses a pre-bundle letter-glyph tile for a
+    newly bundled agent (the Q1-on-upgrade staleness seen on macbench).
+    Returns ``"0"`` when there is no assets dir or it cannot be listed."""
+    if not assets_dir:
+        return "0"
+    try:
+        names = sorted(os.listdir(assets_dir))
+    except OSError:
+        return "0"
+    parts = []
+    for n in names:
+        try:
+            parts.append(f"{n}:{os.path.getsize(os.path.join(assets_dir, n))}")
+        except OSError:
+            parts.append(n)
+    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:10]
+
+
 # agent type -> Simple Icons slug (None => generated glyph fallback)
 DEFAULT_AGENT_SLUGS: dict[str, str | None] = {
     "claude": "claude",
@@ -239,6 +261,9 @@ class IconProvider:
         self._fetch = fetch
         self._rasterize = rasterize
         self._assets_dir = assets_dir
+        # Fold the bundled-glyph set into the cache keys so a changed asset set
+        # (e.g. an app upgrade that bundles new marks) invalidates stale tiles.
+        self._asset_fp = _fingerprint_assets(assets_dir)
         os.makedirs(cache_dir, exist_ok=True)
         self._glyph_cache: dict[str, Image.Image] = {}
 
@@ -295,7 +320,7 @@ class IconProvider:
         if spinner is not None:
             spinner %= SPINNER_FRAMES  # bound the cache to a fixed frame set
         key = f"{_safe_name(agent_type)}_{color}" + (f"_s{spinner}" if spinner is not None else "")
-        name = f"icon_v{CACHE_VERSION}_{key}.png"
+        name = f"icon_v{CACHE_VERSION}_{self._asset_fp}_{key}.png"
         path = os.path.join(self._cache_dir, name)
         if os.path.exists(path):
             return name
@@ -337,6 +362,7 @@ class IconProvider:
         spinner = None if tile.spinner is None else tile.spinner % SPINNER_FRAMES
         sig_parts = [
             TILE_VERSION,
+            self._asset_fp,
             tile.color,
             tile.label,
             tile.subtext,
