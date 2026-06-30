@@ -552,7 +552,12 @@ fn select_window_mode(app: &tauri::AppHandle, target: WindowMode, items: &WmItem
         return;
     }
     if window_mode::switch_needs_restart(current, target) {
-        app.restart(); // diverges (-> !); ExitRequested handler kills the sidecar
+        // NOT app.restart(): a tray menu event runs on the MAIN THREAD, where
+        // Tauri's restart() skips RunEvent::ExitRequested/Exit and would ORPHAN
+        // the sidecar child (its kill lives in that handler). request_restart()
+        // routes through the event loop so the exit handler runs before restart.
+        app.request_restart();
+        return;
     }
     // Reached only for a live borderless↔borderless switch.
     if let Some(w) = app.get_webview_window("main") {
