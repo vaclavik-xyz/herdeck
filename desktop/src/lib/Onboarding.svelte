@@ -32,6 +32,7 @@
   let error = $state<string | null>(null);
 
   const localAvailable = $derived(status?.localHerdrAvailable === true);
+  const savedAvailable = $derived(status?.savedRemoteAvailable === true);
 
   async function run(req: ConnectRequest): Promise<void> {
     if (!transport || busy) return;
@@ -52,6 +53,9 @@
   function connectDemo(): void {
     void run({ choice: "demo" });
   }
+  function connectSaved(): void {
+    void run({ choice: "saved" });
+  }
   function connectRemote(): void {
     const u = url.trim();
     if (!u || !token) {
@@ -69,6 +73,12 @@
   {#if view === "reconnect"}
     <h1>herdr neběží</h1>
     <p class="lead">Lokální připojení je zapamatované, ale herdr teď neběží.</p>
+    {#if savedAvailable}
+      <p class="lead">Máš uložené spojení.</p>
+      <div class="actions">
+        <button class="primary" disabled={busy} onclick={connectSaved}>Připojit k uloženému spojení</button>
+      </div>
+    {/if}
     <div class="actions">
       <button class="primary" disabled={busy} onclick={connectLocal}>Zkusit znovu</button>
       <button class="link" disabled={busy} onclick={() => (showRemote = !showRemote)}>
@@ -77,6 +87,12 @@
     </div>
   {:else}
     <h1>Připojit herdeck</h1>
+    {#if savedAvailable}
+      <p class="lead">Máš uložené spojení.</p>
+      <div class="actions">
+        <button class="primary" disabled={busy} onclick={connectSaved}>Připojit k uloženému spojení</button>
+      </div>
+    {/if}
     {#if localAvailable}
       <p class="lead ok">✓ herdr běží lokálně</p>
       <div class="actions">

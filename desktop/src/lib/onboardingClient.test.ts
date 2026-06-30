@@ -11,6 +11,7 @@ const full = {
   connected: true,
   reason: null,
   local_herdr_available: false,
+  saved_remote_available: false,
   choice: null,
   socket_path: "/home/u/.config/herdr/herdr.sock",
 };
@@ -49,6 +50,16 @@ describe("parseSetupStatus", () => {
     expect(s?.choice).toBeNull();
     expect(s?.socketPath).toBe("");
   });
+
+  it("maps saved_remote_available -> savedRemoteAvailable (true)", () => {
+    const s = parseSetupStatus({ ...full, saved_remote_available: true });
+    expect(s?.savedRemoteAvailable).toBe(true);
+  });
+
+  it("defaults savedRemoteAvailable to false when absent or wrong-typed", () => {
+    expect(parseSetupStatus({ mode: "mock" })?.savedRemoteAvailable).toBe(false);
+    expect(parseSetupStatus({ mode: "mock", saved_remote_available: "yes" })?.savedRemoteAvailable).toBe(false);
+  });
 });
 
 describe("onboardingDecision (exhaustive on reason, defaults to deck)", () => {
@@ -57,6 +68,7 @@ describe("onboardingDecision (exhaustive on reason, defaults to deck)", () => {
     connected: false,
     reason,
     localHerdrAvailable: true,
+    savedRemoteAvailable: false,
     choice: null,
     socketPath: "",
   });
@@ -87,6 +99,7 @@ describe("shouldOnboard (manual re-onboarding override)", () => {
     connected: false,
     reason: "demo",
     localHerdrAvailable: true,
+    savedRemoteAvailable: false,
     choice: "demo",
     socketPath: "",
   };
@@ -108,6 +121,7 @@ import {
   setupTransport,
   type ConnectRequest,
 } from "./onboardingClient";
+import type { InvokeFn } from "./deckClient";
 
 describe("parseConnectResult", () => {
   it("shapes a success", () => {
@@ -166,5 +180,17 @@ describe("setupTransport", () => {
     const r = await setupTransport(invoke).connect({ choice: "demo" });
     expect(r.ok).toBe(false);
     expect(r.error).toContain("HTTP 503");
+  });
+
+  it("connect() forwards a saved request as the body arg", async () => {
+    let seen: unknown;
+    const invoke = (async (_cmd: string, args?: unknown) => {
+      seen = args;
+      return { ok: true, connected: false };
+    }) as InvokeFn;
+    const t = setupTransport(invoke);
+    const r = await t.connect({ choice: "saved" });
+    expect(seen).toEqual({ body: { choice: "saved" } });
+    expect(r.ok).toBe(true);
   });
 });
