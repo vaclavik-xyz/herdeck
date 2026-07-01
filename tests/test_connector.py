@@ -263,3 +263,62 @@ async def test_connector_serializes_concurrent_sends_in_call_order():
     )
 
     assert [json.loads(msg)["type"] for msg in conn._ws.sent] == ["focus", "read"]
+
+
+# --- connect-failure surfacing (audit: connector-error-surface) ---------------
+
+
+async def test_connect_refused_sets_last_error_and_logs_once(caplog):
+    import logging
+
+    cfg = ServerConfig("workbox", "ws://127.0.0.1:1", "tok")  # nothing listens
+    conn = Connector(
+        cfg,
+        on_snapshot=lambda sid, st: None,
+        on_event=lambda sid, s: None,
+        on_connection=lambda sid, up: None,
+        backoff_base=0.02,
+        backoff_max=0.02,
+    )
+    with caplog.at_level(logging.WARNING, logger="herdeck.connector"):
+        task = asyncio.create_task(conn.run())
+        for _ in range(100):
+            if conn.last_connect_error:
+                break
+            await asyncio.sleep(0.02)
+        # let it fail a few more times: identical reason must not re-log
+        await asyncio.sleep(0.15)
+        conn.stop()
+        await asyncio.wait_for(task, timeout=2.0)
+    assert conn.last_connect_error  # reason retained for ctl's timeout message
+    warnings = [r for r in caplog.records if "workbox" in r.getMessage()]
+    assert len(warnings) == 1  # once per distinct failure, no spam
+
+
+async def test_bridge_4401_close_reads_as_token_rejection():
+    async def reject(ws):
+        await ws.close(code=4401, reason="unauthorized")
+
+    server = await websockets.serve(reject, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    cfg = ServerConfig("workbox", f"ws://127.0.0.1:{port}", "bad")
+    conn = Connector(
+        cfg,
+        on_snapshot=lambda sid, st: None,
+        on_event=lambda sid, s: None,
+        on_connection=lambda sid, up: None,
+        backoff_base=0.02,
+        backoff_max=0.02,
+    )
+    try:
+        task = asyncio.create_task(conn.run())
+        for _ in range(100):
+            if conn.last_connect_error and "token rejected" in conn.last_connect_error:
+                break
+            await asyncio.sleep(0.02)
+        conn.stop()
+        await asyncio.wait_for(task, timeout=2.0)
+        assert "token rejected" in (conn.last_connect_error or "")
+    finally:
+        server.close()
+        await server.wait_closed()

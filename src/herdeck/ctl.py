@@ -108,7 +108,17 @@ class CtlSession:
                 timeout=timeout,
             )
         except TimeoutError as exc:
-            raise ConnectionLost("timed out waiting for first snapshot") from exc
+            # Name the servers that never answered — and why, when the
+            # connector knows (e.g. "token rejected", "connection refused").
+            missing = []
+            for server in self.servers:
+                if self._snapshots[server.id].is_set():
+                    continue
+                conn = self._connectors.get(server.id)
+                reason = getattr(conn, "last_connect_error", None)
+                missing.append(f"'{server.id}'" + (f" ({reason})" if reason else ""))
+            detail = f" from {', '.join(missing)}" if missing else ""
+            raise ConnectionLost(f"timed out waiting for first snapshot{detail}") from exc
 
     async def request(self, cmd: Command, *, timeout: float) -> dict:
         if cmd.kind == "list":

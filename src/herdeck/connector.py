@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 
 import websockets
@@ -8,6 +9,25 @@ import websockets
 from .config import ServerConfig
 from .model import AgentKey, AgentState
 from .protocol import Error, Event, Result, Snapshot, decode_inbound, encode
+
+log = logging.getLogger("herdeck.connector")
+
+
+def _describe_connect_error(exc: Exception) -> str:
+    """Human-readable reason for a failed connect. An HTTP 401/403 handshake
+    rejection means a bad token — that must read differently from a dead
+    bridge or a DNS failure."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status in (401, 403):
+        return f"token rejected (HTTP {status}) — check token_env/keychain"
+    # The bridge accepts the handshake and then closes an unauthorized client
+    # with app code 4401 — surfaced as a ConnectionClosed with rcvd.code.
+    close_code = getattr(getattr(exc, "rcvd", None), "code", None)
+    if close_code == 4401:
+        return "token rejected (close 4401) — check token_env/keychain"
+    return str(exc) or type(exc).__name__
 
 
 class Connector:
@@ -35,6 +55,14 @@ class Connector:
         self._loop = None
         self._wake = None
         self._send_lock = asyncio.Lock()
+        self._last_connect_error: str | None = None
+        self._last_logged_error: str | None = None
+
+    @property
+    def last_connect_error(self) -> str | None:
+        """The most recent connect-failure reason (None after a successful
+        connect). Surfaced e.g. by ctl's first-snapshot timeout message."""
+        return self._last_connect_error
 
     def stop(self) -> None:
         self._stop = True
@@ -74,13 +102,33 @@ class Connector:
                     connected = True
                     self._on_connection(self.server.id, True)
                     await ws.send(encode({"type": "list"}))  # resync-on-reconnect
+                    first = True
                     async for raw in ws:
+                        if first:
+                            # A frame arrived, so this connect genuinely authed:
+                            # reset the failure memory (a handshake alone is not
+                            # proof — the bridge closes bad tokens with 4401
+                            # AFTER accepting the connection).
+                            first = False
+                            self._last_connect_error = None
+                            self._last_logged_error = None
                         try:
                             self._dispatch(raw)
                         except Exception as exc:
                             self._on_error(str(exc) or type(exc).__name__)
-            except (OSError, websockets.WebSocketException):
-                pass
+            except (OSError, websockets.WebSocketException) as exc:
+                reason = _describe_connect_error(exc)
+                if reason != self._last_logged_error:
+                    # log once per DISTINCT failure: a rejected token must be
+                    # visible, a flapping network must not spam the log
+                    log.warning(
+                        "connect to '%s' (%s) failed: %s",
+                        self.server.id,
+                        self.server.url,
+                        reason,
+                    )
+                    self._last_logged_error = reason
+                self._last_connect_error = reason
             finally:
                 self._ws = None
                 if connected:
