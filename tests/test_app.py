@@ -1216,3 +1216,19 @@ def test_key_press_dismisses_a_held_status_panel(monkeypatch):
     app._set_status_panel("profile locked", ["work"], "amber")
     deck.simulate_press(0)  # the user acted; the notice is acknowledged
     assert deck.last_panel.title != "profile locked"
+
+
+def test_successful_apply_clears_a_held_reload_failed_panel(monkeypatch):
+    """failed reload -> fixed file -> successful reload must not keep showing
+    'reload failed' for the hold window (roborev c2d807f)."""
+    from herdeck import app as app_mod
+
+    t = [1000.0]
+    monkeypatch.setattr(app_mod, "_monotonic", lambda: t[0])
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app.handle_snapshot("dev", [blocked("p1")])
+    app._set_status_panel("reload failed", ["bad toml"], "amber")
+    assert deck.last_panel.title == "reload failed"
+    app._apply_config(make_config())  # the next reload succeeded
+    assert deck.last_panel.title != "reload failed"

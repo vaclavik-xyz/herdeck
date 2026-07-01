@@ -486,6 +486,8 @@ class App:
         self._apply_config(new_config)
 
     def _apply_config(self, new_config: Config) -> None:
+        # A successful apply supersedes any held "reload failed" notice.
+        self._status_panel = None
         self.config = new_config
         if self._runtime_control is not None:
             self._runtime_control.update_config(new_config)
