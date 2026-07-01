@@ -402,3 +402,42 @@ def test_collect_checks_probes_remote_servers(tmp_path, monkeypatch):
     checks = {c.name: c for c in collect_checks()}
     assert checks["server 'remote'"].ok is False
     assert "connection refused" in checks["server 'remote'"].detail
+
+
+async def test_probe_server_rejects_non_snapshot_greeting():
+    """Any WebSocket service can answer a frame; only a decodable herdeck
+    snapshot counts as a live bridge (roborev 907d24a)."""
+    import websockets
+
+    from herdeck.doctor import _probe_server_ws
+
+    async def not_a_bridge(ws):
+        await ws.send('{"hello": "world"}')
+
+    server = await websockets.serve(not_a_bridge, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        error = await _probe_server_ws(f"ws://127.0.0.1:{port}", "t")
+        assert error is not None and "snapshot" in error
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_probe_server_accepts_real_snapshot_greeting():
+    import json
+
+    import websockets
+
+    from herdeck.doctor import _probe_server_ws
+
+    async def bridge(ws):
+        await ws.send(json.dumps({"type": "snapshot", "server_id": "x", "panes": []}))
+
+    server = await websockets.serve(bridge, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        assert await _probe_server_ws(f"ws://127.0.0.1:{port}", "t") is None
+    finally:
+        server.close()
+        await server.wait_closed()

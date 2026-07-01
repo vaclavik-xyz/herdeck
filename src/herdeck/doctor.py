@@ -217,6 +217,7 @@ async def _probe_server_ws(url: str, token: str) -> str | None:
     import websockets
 
     from .connector import _describe_connect_error
+    from .protocol import Snapshot, decode_inbound
 
     try:
         async with websockets.connect(
@@ -225,7 +226,15 @@ async def _probe_server_ws(url: str, token: str) -> str | None:
             open_timeout=SERVER_PROBE_TIMEOUT,
             close_timeout=1,
         ) as ws:
-            await asyncio.wait_for(ws.recv(), timeout=SERVER_PROBE_TIMEOUT)
+            raw = await asyncio.wait_for(ws.recv(), timeout=SERVER_PROBE_TIMEOUT)
+            # Any WebSocket service can answer a frame; only a decodable
+            # herdeck snapshot proves this is a herdeck-bridge.
+            try:
+                msg = decode_inbound(raw)
+            except Exception:
+                return "answered, but not with a herdeck snapshot (is this a herdeck-bridge?)"
+            if not isinstance(msg, Snapshot):
+                return f"answered with {type(msg).__name__}, not a snapshot"
             return None
     except TimeoutError:
         return f"connected but no snapshot within {SERVER_PROBE_TIMEOUT:g}s"
