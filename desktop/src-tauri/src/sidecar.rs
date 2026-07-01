@@ -51,6 +51,7 @@ impl Discovery {
 /// without mutating process env (which would race parallel tests).
 fn runtime_file_path_from(runtime_dir: Option<String>, home: &str) -> PathBuf {
     let base = runtime_dir
+        .filter(|d| !d.is_empty()) // empty HERDECK_RUNTIME_DIR == unset (matches Python's `or`)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(home).join(".cache").join("herdeck"));
     base.join("runtime.json")
@@ -510,6 +511,13 @@ mod tests {
         assert_eq!(with_dir, Path::new("/run/hd/runtime.json"));
         let with_home = runtime_file_path_from(None, "/home/x");
         assert_eq!(with_home, Path::new("/home/x/.cache/herdeck/runtime.json"));
+    }
+
+    #[test]
+    fn runtime_file_path_from_treats_empty_dir_as_unset() {
+        // Matches the Python writer: an empty HERDECK_RUNTIME_DIR falls back to home.
+        let p = runtime_file_path_from(Some("".to_string()), "/home/x");
+        assert_eq!(p, Path::new("/home/x/.cache/herdeck/runtime.json"));
     }
 
     #[test]
