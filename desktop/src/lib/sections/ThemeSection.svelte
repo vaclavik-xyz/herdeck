@@ -9,6 +9,7 @@
     setOverride, clearOverride, setOverridePath, clearOverridePath,
     type ListFieldState, type ConfigPayload,
   } from "../configClient";
+  import { DEFAULT_STATUS_COLORS } from "../statusColors";
 
   let { payload = $bindable(), onChange, editProfile = null }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
@@ -17,11 +18,6 @@
   const STATUS = ["working", "idle", "blocked", "done", "unknown", "offline"];
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
-
-  // Mirror of backend DEFAULT_STATUS_COLORS (config.py) — keep in sync.
-  const DEFAULT_STATUS_COLORS: Record<string, string> = {
-    working: "green", idle: "blue", blocked: "amber", done: "dim", unknown: "grey", offline: "red",
-  };
 
   // --- base mode: UNCHANGED from today (colors via setAt, server_accents via ListField + putList) ---
   function baseColorOf(key: string): string {
