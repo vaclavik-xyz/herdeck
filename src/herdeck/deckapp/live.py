@@ -228,19 +228,29 @@ class LiveSource(StateSource):
                 runner.send(command_to_msg(Command("list", self._server.id), None))
             return
         # A read result: cache it for an instant future drill (while the pane is
-        # blocked), and surface the prompt now only if it still matches the request
-        # we issued and the pane is still drilled (re-checked under the deck lock so
-        # a concurrent invalidation wins).
+        # blocked), and surface the prompt now only if it still matches a read we
+        # issued and the pane is still drilled (re-checked under the deck lock so a
+        # concurrent invalidation wins).
         pane_id = data.get("pane_id")
 
         def mutate():
             self._cache_preread(pane_id, text, req)
             orch = self._orch
-            if orch is None:
+            if orch is None or req is None or not orch.is_drill_pane(self._server.id, pane_id):
                 return False
+            drilled = orch.drill_key()
+            agent = orch.get_agent(drilled)
+            # For a BLOCKED drill the detection becomes actionable (parse_options ->
+            # approve/deny), so accept only the current-episode read (_preread_req,
+            # registered while blocked and dropped on unblock): a pre-block or prior-
+            # episode capture must never feed the blocked options. A non-blocked drill
+            # only shows the read as detail text, so the plain active-read match holds.
             with self._lock:
-                accepted = req is not None and req == self._active_read_req
-            if accepted and orch.is_drill_pane(self._server.id, pane_id):
+                if agent is not None and agent.status is Status.BLOCKED:
+                    accepted = req == self._preread_req.get(drilled)
+                else:
+                    accepted = req == self._active_read_req
+            if accepted:
                 orch.set_detection(text)
                 return True
             return False

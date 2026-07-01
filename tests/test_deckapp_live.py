@@ -479,6 +479,35 @@ def test_preread_result_does_not_render_overview():
     assert app._orch._detection == ""
 
 
+def test_pre_block_drill_read_does_not_surface_on_blocked_drill():
+    # Drill a WORKING pane; it blocks while still drilled and the pre-block read then
+    # returns. That capture predates the block episode, so it must not feed the
+    # blocked drill's detection (which would parse it into approve/deny actions).
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    app.press(0)  # drill the working pane -> focus + read (pre-block)
+    pre_block_read = _reads(runner)[-1]
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))  # blocks while drilled
+    src._on_result(pre_block_read["req"], {"text": "1. STALE", "pane_id": "p0"})
+    assert app._orch._detection == ""  # pre-block capture never surfaces on the blocked drill
+    runner.sent.clear()
+    app.press(0)  # no options -> blank tile -> no action sent
+    assert not [m for m in runner.sent if m["type"] == "act"]
+
+
+def test_working_drill_read_still_surfaces_while_working():
+    # The scoping must not break the normal case: a read for a still-WORKING drilled
+    # pane surfaces in the detail panel as before.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    app.press(0)  # drill working pane
+    read = _reads(runner)[-1]
+    src._on_result(read["req"], {"text": "building...", "pane_id": "p0"})
+    assert app._orch._detection == "building..."  # still-working read surfaces
+
+
 def test_late_read_from_pre_block_drill_is_rejected():
     # Drill a pane while it is WORKING; before its read returns the pane blocks. The
     # read was issued pre-block, so it must not seed the block episode's prompt — and
