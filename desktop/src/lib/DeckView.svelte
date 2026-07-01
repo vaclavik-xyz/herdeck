@@ -12,6 +12,7 @@
     type DeckTransport,
     type DeckViewModel,
   } from "./deckClient";
+  import { visibilityGatedLoop } from "./pollGate";
 
   let {
     transport,
@@ -88,22 +89,15 @@
   });
 
   onMount(() => {
-    // Self-scheduling loop (web.py's pattern): schedule the next poll only AFTER
-    // the current step's fetch resolves, so steps never overlap. setInterval
-    // would let a slow poll finish after a newer one and move the version gate
-    // backwards / clobber the view.
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    async function loop(): Promise<void> {
-      if (stopped) return;
-      await step();
-      if (!stopped) timer = setTimeout(() => void loop(), pollMs);
-    }
-    void loop();
+    // Visibility-gated self-scheduling loop (web.py's pattern + tray-app gating):
+    // the next poll is scheduled only AFTER the current step resolves (steps
+    // never overlap), and the loop parks entirely while the window is hidden —
+    // the deck lives in the tray, so hidden webviews must not keep polling and
+    // refetching tile PNGs nobody sees. One immediate step fires on show.
+    const stopLoop = visibilityGatedLoop(step, () => pollMs);
     window.addEventListener("keydown", onKey);
     return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
+      stopLoop();
       window.removeEventListener("keydown", onKey);
     };
   });

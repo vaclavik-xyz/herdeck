@@ -12,6 +12,7 @@
     shouldOnboard,
     type SetupStatus,
   } from "./lib/onboardingClient";
+  import { visibilityGatedLoop } from "./lib/pollGate";
 
   // Window mode is injected on <html data-window-mode> by Rust BEFORE first paint
   // (initialization_script), so the borderless CSS applies with no FOUC. Falls
@@ -86,12 +87,14 @@
       }
     })();
 
-    void (async () => {
-      while (alive) {
+    // Visibility-gated: the setup poll parks while the window is hidden (the
+    // deck lives in the tray) and refreshes immediately on show.
+    const stopSetupPoll = visibilityGatedLoop(
+      async () => {
         if (setup) status = await setup.status();
-        await new Promise((r) => setTimeout(r, status ? 2500 : 600));
-      }
-    })();
+      },
+      () => (status ? 2500 : 600),
+    );
 
     // Borderless content-fit: observe the shell's intrinsic height and resize the
     // window to match. rAF-batched so a burst of mutations triggers one setSize.
@@ -111,6 +114,7 @@
 
     return () => {
       alive = false;
+      stopSetupPoll();
       ro?.disconnect();
     };
   });
