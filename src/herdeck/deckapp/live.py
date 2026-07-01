@@ -31,7 +31,7 @@ import threading
 from ..commands import Command, command_to_msg
 from ..config import Config, ServerConfig
 from ..connector import Connector
-from ..model import AgentKey, AgentState
+from ..model import AgentKey, AgentState, Status
 from ..orchestrator import Orchestrator
 from .source import StateSource
 
@@ -154,10 +154,10 @@ class LiveSource(StateSource):
         def mutate():
             with self._lock:
                 self._agents = dict(new_by_key)
-            # Drop a pending read if the drilled pane's state changed
-            # (App.handle_snapshot): an old prompt's options must not stay
-            # actionable across a state change.
-            self._invalidate_if_drill_changed(server_id, new_by_key)
+            # Drop the drilled prompt only if the pane left BLOCKED
+            # (App.handle_snapshot): the prompt + in-flight read stay valid while it
+            # is still blocked.
+            self._invalidate_if_drill_unblocked(server_id, new_by_key.get(self._drilled_key()))
             return True
 
         self._apply(mutate)
@@ -166,10 +166,11 @@ class LiveSource(StateSource):
         def mutate():
             with self._lock:
                 self._agents[state.key] = state
-            # Any event for the drilled pane invalidates the read
-            # (App.handle_event): the prompt may have changed, so stale approve/deny
-            # options must clear.
-            self._invalidate_if_drill_pane(server_id, state.key.pane_id)
+            # Same rule for a single-pane event: only a real unblock clears the
+            # drilled prompt (App.handle_event).
+            drilled = self._drilled_key()
+            if drilled is not None and drilled == state.key:
+                self._invalidate_if_drill_unblocked(server_id, state)
             return True
 
         self._apply(mutate)
@@ -230,30 +231,33 @@ class LiveSource(StateSource):
                 self._refresh_locked_cb()
 
     # --- read invalidation (callers hold the deck lock) ---
-    def _invalidate_if_drill_changed(self, server_id: str, new_by_key: dict) -> None:
-        """Clear detection if a snapshot changed the drilled pane's state."""
+    def _drilled_key(self) -> AgentKey | None:
         orch = self._orch
-        if orch is None:
-            return
-        drill = orch.drill_key()
-        if (
-            drill is not None
-            and drill.server_id == server_id
-            and orch.get_agent(drill) != new_by_key.get(drill)
-        ):
-            orch.set_detection("")
-            with self._lock:
-                self._active_read_req = None
+        return orch.drill_key() if orch is not None else None
 
-    def _invalidate_if_drill_pane(self, server_id: str, pane_id) -> None:
-        """Clear detection if an event targets the drilled pane."""
+    def _invalidate_if_drill_unblocked(self, server_id: str, new_state) -> None:
+        """Drop the drilled prompt only when the agent actually leaves BLOCKED
+        (mirrors App._invalidate_read_if_unblocked).
+
+        The prompt (and an in-flight read) stay valid as long as the agent stays
+        blocked. Wiping on every cosmetic change instead — e.g. a ``branch`` label
+        that flaps in the bridge snapshot because ``worktree.list`` was momentarily
+        unavailable — rejected the in-flight read (prompt never showed; "click 3×")
+        or cleared an already-shown prompt ("shows then disappears").
+
+        ``new_state`` is the drilled pane's state in the update that just arrived
+        (``None`` if it dropped out of the fleet); the caller has already confirmed
+        the update is authoritative for the drilled server / pane.
+        """
         orch = self._orch
-        if orch is None:
+        drill = orch.drill_key() if orch is not None else None
+        if drill is None or drill.server_id != server_id:
             return
-        if orch.is_drill_pane(server_id, pane_id):
-            orch.set_detection("")
-            with self._lock:
-                self._active_read_req = None
+        if new_state is not None and new_state.status is Status.BLOCKED:
+            return  # still blocked -> same prompt, keep the options live
+        orch.set_detection("")
+        with self._lock:
+            self._active_read_req = None
 
     def _next_req(self, cmd) -> str | None:
         # Mirrors App.next_req_for: `list` carries no req; everything else gets a

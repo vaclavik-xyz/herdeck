@@ -326,25 +326,45 @@ def _drill_with_detection(app, src, server, runner):
     runner.sent.clear()
 
 
-def test_event_on_drilled_pane_invalidates_detection():
+def test_event_unblocking_drilled_pane_clears_stale_prompt():
     app, src, server, runner = make_live()
     src._on_connection(server.id, True)
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
     _drill_with_detection(app, src, server, runner)
-    # the pane re-blocks (possibly a different prompt) -> stale options must clear
-    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED, label="changed"))
-    app.press(0)  # no actionable option remains
+    # the agent leaves BLOCKED then re-blocks (possibly a new prompt): the old
+    # options must have been dropped on unblock, so nothing is actionable until a
+    # fresh read (had the prompt lingered, press 0 would still send an act).
+    src._on_event(server.id, agent(server.id, "p0", Status.IDLE))
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))
+    app.press(0)
     assert runner.sent == []
 
 
-def test_snapshot_changing_drilled_pane_invalidates_detection():
+def test_snapshot_unblocking_drilled_pane_clears_stale_prompt():
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    _drill_with_detection(app, src, server, runner)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.IDLE)])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    app.press(0)
+    assert runner.sent == []
+
+
+def test_cosmetic_change_keeps_detection_while_blocked():
+    # Regression ("shows then disappears"): a still-blocked drilled pane whose
+    # cosmetic fields flap between snapshots — e.g. the branch label appearing and
+    # vanishing as worktree.list momentarily fails in the bridge (label stands in
+    # for branch here) — must NOT clear the shown prompt.
     app, src, server, runner = make_live()
     src._on_connection(server.id, True)
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
     _drill_with_detection(app, src, server, runner)
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED, label="changed")])
-    app.press(0)
-    assert runner.sent == []
+    app.press(0)  # options stay live -> first option still acts
+    assert len(runner.sent) == 1
+    assert runner.sent[0]["type"] == "act"
+    assert runner.sent[0]["keys"] == ["1"]
 
 
 def test_snapshot_not_changing_drilled_pane_keeps_detection():
