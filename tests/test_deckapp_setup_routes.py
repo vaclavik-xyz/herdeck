@@ -917,7 +917,10 @@ def test_connect_local_swap_failure_rolls_back(tmp_path, monkeypatch):
         app.close()
 
 
-def test_local_connect_sets_noop_reloader(tmp_path, monkeypatch):
+def test_local_connect_reloader_rebuilds_live_source_keeping_bridge(tmp_path, monkeypatch):
+    """A reload in local mode rebuilds the live source from disk against the
+    RUNNING bridge — it must neither fall back to mock nor touch the bridge
+    (audit: local-apply-reload)."""
     sock = tmp_path / "herdr.sock"
     sock.touch()
     monkeypatch.setenv("HERDR_SOCKET", str(sock))
@@ -925,18 +928,31 @@ def test_local_connect_sets_noop_reloader(tmp_path, monkeypatch):
     monkeypatch.delenv("HERDECK_MOCK", raising=False)
 
     class _Runner:
-        def close(self):
-            pass
+        bound = ("127.0.0.1", 4242, "tok")
+        closed = False
 
-    monkeypatch.setattr(srv, "_start_local_bridge", lambda sp: ("CFG", "SRV", _Runner()))
-    monkeypatch.setattr(srv, "build_live_source_for_connect", lambda c, s: _DisconnectedSource())
+        def close(self):
+            self.closed = True
+
+    runner = _Runner()
+    built = []
+
+    def _build(config, server):
+        src = _DisconnectedSource()
+        built.append(src)
+        return src
+
+    monkeypatch.setattr(srv, "_start_local_bridge", lambda sp: ("CFG", "SRV", runner))
+    monkeypatch.setattr(srv, "build_live_source_for_connect", _build)
     app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
     try:
         _, body = _post(app, "/setup/connect", {"choice": "local"})
         assert body["ok"] is True
-        local_source = app._source
-        app.reload()  # a normal reloader would swap the bridge source out for mock
-        assert app._source is local_source  # local mode installs a no-op reloader
+        first = app._source
+        app.reload()  # rebuild from disk against the running bridge
+        assert app._source is not first  # a FRESH live source was adopted
+        assert app._source is built[-1]  # ... built via the live-source builder
+        assert runner.closed is False  # ... and the bridge was left running
     finally:
         app._set_local_bridge(None)
         app.close()

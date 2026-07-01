@@ -867,13 +867,38 @@ def _start_local_bridge(socket_path, *, runner_factory=None):
     return config, config.servers[0], runner
 
 
+def _local_reloader(app):
+    """LOCAL-mode reloader: rebuild the live source against the RUNNING embedded
+    bridge (same port/token — the bridge itself is never restarted or swapped
+    out by a reload), so an editor Apply / on-disk edit actually reaches the
+    deck. The old no-op silently ignored every Apply on the primary
+    ('herdr běží lokálně') onboarding path."""
+    from ..bootstrap import local_config
+
+    def reload_() -> None:
+        runner = getattr(app, "_local_bridge", None)
+        bound = runner.bound if runner is not None else None
+        if bound is None:
+            return  # defensive: no live bridge to rebuild against
+        _host, port, token = bound
+        config = local_config(port, token, _load_partial_config())
+        new_source = build_live_source_for_connect(config, config.servers[0])
+        try:
+            app.swap_source(new_source)
+        except Exception:
+            new_source.close()  # don't leak the built source / its connector runner
+            raise
+
+    return reload_
+
+
 def _reloader_for(app, kind, select_source):
-    """The config-watch reloader for the built source. In LOCAL mode the embedded
-    bridge's lifecycle is owned by create_app startup + /setup/connect, so a
-    config-watch reload must be a no-op — re-selecting would swap the bridge source
-    out (back to mock) and orphan the running LocalBridgeRunner."""
+    """The config-watch reloader for the built source. LOCAL mode rebuilds the
+    live source against the running embedded bridge (the bridge lifecycle stays
+    owned by create_app startup + /setup/connect); mock/remote re-select from
+    disk."""
     if kind[0] == "local":
-        return lambda: None
+        return _local_reloader(app)
     return lambda: app.swap_source(select_source())
 
 
