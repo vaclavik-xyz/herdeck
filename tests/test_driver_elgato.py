@@ -1,10 +1,21 @@
 import io
 import os
+import time
 
 from PIL import Image
 
 from herdeck.driver.base import PanelView, TileView
 from herdeck.driver.elgato import ElgatoDriver
+
+
+def _wait_until(pred, timeout=2.0):
+    """Device writes now land on the RenderPump worker thread."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(0.005)
+    return False
 
 
 class FakeIcons:
@@ -31,6 +42,7 @@ class FakeDeck:
         self._key_count = key_count
         self._key_size = key_size
         self.images: dict[int, bytes] = {}  # key index -> native image bytes
+        self.writes: list[int] = []  # every set_key_image call, in order
         self.callback = None
         self.brightness = None
         self.reset_called = False
@@ -44,6 +56,7 @@ class FakeDeck:
 
     def set_key_image(self, key: int, image) -> None:
         self.images[key] = image
+        self.writes.append(key)
 
     def set_key_callback(self, cb) -> None:
         self.callback = cb
@@ -67,19 +80,25 @@ def test_render_resizes_and_writes_native_key_images(monkeypatch):
     deck = FakeDeck(key_count=15, key_size=(72, 72))
     drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
     monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
-    drv.render([TileView(0, "a", "green"), TileView(1, "b", "blue")])
-    assert set(deck.images) == {0, 1}
-    assert all(deck.images[k] for k in (0, 1))  # non-empty bytes written
-    assert len(deck.images[0]) == 72 * 72 * 3  # resized to the deck key size
+    try:
+        drv.render([TileView(0, "a", "green"), TileView(1, "b", "blue")])
+        assert _wait_until(lambda: set(deck.images) == {0, 1})
+        assert all(deck.images[k] for k in (0, 1))  # non-empty bytes written
+        assert len(deck.images[0]) == 72 * 72 * 3  # resized to the deck key size
+    finally:
+        drv.close()
 
 
 def test_render_panel_writes_the_two_reserved_keys(monkeypatch):
     deck = FakeDeck(key_count=15)  # slot_count == 13
     drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
     monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
-    drv.render_panel(PanelView("overview", ["1 working"], "grey"))
-    assert set(deck.images) == {13, 14}  # the two reserved panel keys
-    assert all(deck.images[k] for k in (13, 14))  # non-empty halves
+    try:
+        drv.render_panel(PanelView("overview", ["1 working"], "grey"))
+        assert _wait_until(lambda: set(deck.images) == {13, 14})  # the reserved panel keys
+        assert all(deck.images[k] for k in (13, 14))  # non-empty halves
+    finally:
+        drv.close()
 
 
 def test_key_down_forwards_index_and_key_up_is_ignored():
@@ -98,8 +117,11 @@ def test_render_working_only_touches_the_given_keys(monkeypatch):
     deck = FakeDeck(key_count=15)
     drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
     monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
-    drv.render_working([TileView(2, "x", "amber"), TileView(5, "y", "amber")])
-    assert set(deck.images) == {2, 5}  # untouched keys keep their image
+    try:
+        drv.render_working([TileView(2, "x", "amber"), TileView(5, "y", "amber")])
+        assert _wait_until(lambda: set(deck.images) == {2, 5})  # others keep their image
+    finally:
+        drv.close()
 
 
 def test_elgato_brightness_can_be_configured():
@@ -117,3 +139,56 @@ def test_elgato_icons_dir_configures_override_provider(monkeypatch, tmp_path):
     icons = drv._icon_provider()
 
     assert icons._overrides_dir == os.path.join(str(tmp_path), "herdeck-icons")
+
+
+class VaryingIcons:
+    """PNG bytes vary with the tile's colour, so a changed tile changes bytes."""
+
+    def render_tile_bytes(self, tile: TileView) -> bytes:
+        buf = io.BytesIO()
+        c = sum(tile.color.encode()) % 255
+        Image.new("RGB", (4, 4), (c, c, c)).save(buf, "PNG")
+        return buf.getvalue()
+
+
+def test_unchanged_keys_are_never_rewritten(monkeypatch):
+    """Elgato firmware retains key images: rewriting an unchanged key every
+    tick was pure USB waste (audit: elgato-diff-pump)."""
+    deck = FakeDeck(key_count=15)
+    drv = ElgatoDriver(device=deck, icon_provider=VaryingIcons())
+    monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
+    try:
+        drv.render([TileView(0, "a", "green")])
+        assert _wait_until(lambda: deck.writes.count(0) == 1)
+        drv.render([TileView(0, "a", "green")])  # identical content
+        drv.render_panel(PanelView("t", ["x"], "grey"))  # marks the cycle done
+        assert _wait_until(lambda: 13 in deck.images)
+        assert deck.writes.count(0) == 1  # unchanged key was diffed out
+        drv.render([TileView(0, "a", "amber")])  # content changed -> rewritten
+        assert _wait_until(lambda: deck.writes.count(0) == 2)
+    finally:
+        drv.close()
+
+
+def test_unchanged_panel_is_not_recomposed_or_rewritten(monkeypatch):
+    deck = FakeDeck(key_count=15)
+    drv = ElgatoDriver(device=deck, icon_provider=VaryingIcons())
+    monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
+    try:
+        drv.render_panel(PanelView("t", ["x"], "grey"))
+        assert _wait_until(lambda: deck.writes.count(13) == 1)
+        drv.render_panel(PanelView("t", ["x"], "grey"))  # identical content
+        drv.render([TileView(0, "a", "green")])  # marks the cycle done
+        assert _wait_until(lambda: 0 in deck.images)
+        assert deck.writes.count(13) == 1  # panel keys untouched
+    finally:
+        drv.close()
+
+
+def test_close_stops_the_render_worker():
+    deck = FakeDeck(key_count=15)
+    drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
+    worker = drv._pump._thread
+    drv.close()
+    assert deck.closed
+    assert not worker.is_alive()
