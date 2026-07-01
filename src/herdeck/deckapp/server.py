@@ -212,17 +212,19 @@ class DeckApp:
             self._refresh_locked(working=None, full=True)
 
     def _tick_once(self) -> None:
-        """Advance the spinner phase and re-render once, atomically w.r.t. presses
-        and bridge updates (same lock). Most ticks fan out a WORKING-only frame
-        (cheap on the D200); every FULL_REFRESH_TICKS-th tick is a full frame so
-        idle elapsed advances on every sink. The HTTP buffer is fully re-rendered
-        and version-diffed every tick regardless (idle tiles stay quiet via the diff)."""
+        """Advance the spinner phase and re-render, atomically w.r.t. presses
+        and bridge updates (same lock). A tick renders only when something
+        actually animates (a WORKING tile) or on the periodic full refresh —
+        bridge updates and presses trigger their own refresh, so an idle deck
+        does no per-tick render/encode/device work at all (matching the legacy
+        App.handle_tick). Every FULL_REFRESH_TICKS-th tick is a full frame so
+        idle elapsed text advances and every sink resyncs."""
         with self._lock:
             working = self._orch.tick()
             self._ticks += 1
             if self._ticks % self.FULL_REFRESH_TICKS == 0:
                 self._refresh_locked(working=None, full=True)
-            else:
+            elif working:
                 self._refresh_locked(working=working, full=False)
 
     def _ticker_loop(self) -> None:

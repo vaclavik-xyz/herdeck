@@ -678,3 +678,40 @@ def test_state_exposes_tile_sections():
     # only the documented section keys ever appear; empty/None tiles are omitted
     assert all(v in {"view", "start_profiles", "answer_profiles", "profiles"} for v in sections.values())
     assert all(isinstance(k, int) for k in sections)
+
+
+# --- idle ticks skip rendering entirely (audit: idle-tick-early-out) --------
+
+
+class _RecordingSink:
+    def __init__(self):
+        self.frames = []
+
+    def deliver(self, frame):
+        self.frames.append(frame)
+
+
+def test_idle_ticks_skip_render_and_fanout():
+    src = MockSource()
+    for a in src._agents:
+        a.status = Status.IDLE
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    sink = _RecordingSink()
+    app.add_sink(sink)  # paints one initial full frame
+    base_frames = len(sink.frames)
+    for _ in range(app.FULL_REFRESH_TICKS - 1):
+        app._tick_once()
+    # nothing animates -> no render, no fan-out, no device work
+    assert len(sink.frames) == base_frames
+    app._tick_once()  # the FULL_REFRESH_TICKS-th tick still resyncs every sink
+    assert len(sink.frames) == base_frames + 1
+    assert sink.frames[-1].full is True
+
+
+def test_working_ticks_still_fan_out_frames():
+    app = make_app()  # demo fleet includes WORKING agents
+    sink = _RecordingSink()
+    app.add_sink(sink)
+    base = len(sink.frames)
+    app._tick_once()
+    assert len(sink.frames) == base + 1
