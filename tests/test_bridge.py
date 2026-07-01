@@ -505,3 +505,50 @@ async def test_stream_caches_labels_across_status_wakes():
     await asyncio.wait_for(gen.__anext__(), timeout=1.0)
     assert stub.label_calls == 2
     await gen.aclose()
+
+
+async def test_stream_refreshes_labels_by_age_when_wakes_starve_the_poll(monkeypatch):
+    """Constant status wakes keep the slow-poll timeout from firing; labels must
+    still refresh once they are older than poll_interval (roborev 8847c23)."""
+    import asyncio
+
+    from herdeck import bridge as bridge_mod
+    from herdeck.bridge import HerdrEvents
+
+    t = [0.0]
+    monkeypatch.setattr(bridge_mod.time, "monotonic", lambda: t[0])
+
+    class CountingHerdr:
+        def __init__(self):
+            self.panes = [raw_pane("w1:p1", agent="claude", status="idle")]
+            self.label_calls = 0
+
+        async def list_panes(self):
+            return self.panes
+
+        async def worktrees(self):
+            self.label_calls += 1
+            return []
+
+        async def workspaces(self):
+            return []
+
+        async def tabs(self):
+            return []
+
+    stub = CountingHerdr()
+    ev = HerdrEvents(stub, poll_interval=5.0)
+    gen = ev.stream()
+    await gen.__anext__()  # labels fetched at t=0
+    assert stub.label_calls == 1
+    stub.panes = [raw_pane("w1:p1", agent="claude", status="blocked")]
+    t[0] = 1.0
+    ev._wake.set()  # young cache + status wake -> no label refetch
+    await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert stub.label_calls == 1
+    stub.panes = [raw_pane("w1:p1", agent="claude", status="working")]
+    t[0] = 6.0  # cache older than poll_interval; wake is still a status event
+    ev._wake.set()
+    await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert stub.label_calls == 2
+    await gen.aclose()

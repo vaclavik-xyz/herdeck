@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import os
+import time
 from typing import Protocol
 
 import websockets
@@ -222,9 +223,12 @@ class HerdrEvents:
         self._wake = asyncio.Event()
         # Cached worktree/workspace/tab label lists. A pane.agent_status_changed
         # wake cannot change them, so status wakes reuse the cache and pay for
-        # pane.list only; fleet events (_listen) and the slow poll mark it stale.
+        # pane.list only; fleet events (_listen) mark it stale, and an age check
+        # refreshes it at least every poll_interval even when constant status
+        # wakes keep the slow-poll timeout from ever firing.
         self._labels: tuple[list, list, list] | None = None
         self._labels_stale = True
+        self._labels_at = 0.0  # monotonic time of the last label refresh
 
     async def stream(self):
         listener = asyncio.create_task(self._listen()) if self._socket_path else None
@@ -238,6 +242,7 @@ class HerdrEvents:
                         )
                         self._labels = labels
                         self._labels_stale = False
+                        self._labels_at = time.monotonic()
                     else:
                         raw = await self._herdr.list_panes()
                     cur = _wire_panes(raw, *self._labels)
@@ -250,8 +255,13 @@ class HerdrEvents:
                 try:  # wake on a push event, else slow poll
                     await asyncio.wait_for(self._wake.wait(), timeout=self._interval)
                 except TimeoutError:
-                    self._labels_stale = True  # slow-poll safety net refreshes labels too
+                    pass
                 self._wake.clear()
+                # Age-based staling (not timeout-based): frequent status wakes can
+                # keep the timeout from ever firing, which would let labels (e.g.
+                # a branch change, which is not a fleet event) stay stale forever.
+                if time.monotonic() - self._labels_at >= self._interval:
+                    self._labels_stale = True
         finally:
             if listener is not None:
                 listener.cancel()
