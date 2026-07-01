@@ -26,6 +26,7 @@
     orphanedSecrets,
     referencedTokenEnvs,
     errorCountLabel,
+    isStaleRevisionError,
     type ConfigPayload,
   } from "./lib/configClient";
 
@@ -124,6 +125,18 @@
     busy = true;
     try {
       const res = parseValidate(await cfg.write(toWriteBody(payload)));
+      if (res.some(isStaleRevisionError)) {
+        // The files changed under the editor (re-onboarding, tray switch, hand
+        // edit): never resurrect the stale snapshot — offer a reload instead.
+        errors = [];
+        setBanner(
+          "warning",
+          "config se mezitím změnil na disku — načti novou verzi (neuložené změny se ztratí)",
+          "načíst",
+          () => void load(),
+        );
+        return;
+      }
       errors = res;
       if (res.length === 0) {
         showErrors = false;
@@ -189,6 +202,12 @@
     }).then((fn) => {
       unlisten = fn;
     });
+    // The config window is hidden on close, not destroyed — a payload can be
+    // days old when it reappears. Refresh a CLEAN editor on visibility.
+    const onVisible = (): void => {
+      if (!document.hidden && payload != null && !dirty) void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     void (async () => {
       while (alive && !discovery) {
         try {
@@ -204,6 +223,7 @@
     return () => {
       alive = false;
       unlisten?.();
+      document.removeEventListener("visibilitychange", onVisible);
     };
   });
 </script>

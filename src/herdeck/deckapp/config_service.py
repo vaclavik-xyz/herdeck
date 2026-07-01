@@ -5,6 +5,7 @@ no config resolution logic is reimplemented here.
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 import tomllib
 from pathlib import Path
@@ -31,9 +32,27 @@ class ConfigService:
         "desktop",
     )
 
+    # A write whose payload was loaded against an older on-disk revision is
+    # rejected with this error (prefix-matched by the editor): blindly writing
+    # would resurrect the stale snapshot and silently delete whatever changed
+    # the files meanwhile (re-onboarding's [[servers]], the tray window-mode
+    # switch, a hand edit).
+    STALE_REVISION_ERROR = "stale_revision: config changed on disk since the editor loaded it"
+
     def __init__(self, config_path, local_path):
         self._config_path = Path(config_path)
         self._local_path = Path(local_path)
+
+    def revision(self) -> str:
+        """Short content hash of the on-disk config pair."""
+        h = hashlib.sha256()
+        for path in (self._config_path, self._local_path):
+            try:
+                h.update(path.read_bytes())
+            except OSError:
+                h.update(b"\0absent\0")
+            h.update(b"\0")
+        return h.hexdigest()[:16]
 
     def read(self) -> dict:
         env_profile = os.environ.get("HERDECK_PROFILE")
@@ -77,6 +96,7 @@ class ConfigService:
             "secrets": self._secret_flags(base, profiles),
             "env_locked": env_profile is not None,
             "active_profile": active,
+            "revision": self.revision(),
         }
 
     @staticmethod
@@ -143,6 +163,9 @@ class ConfigService:
     HEADER = "# Managed by herdeck-config — generated; manual comments are not preserved\n"
 
     def write(self, data: dict) -> list[str]:
+        expected = data.get("revision")
+        if expected is not None and expected != self.revision():
+            return [self.STALE_REVISION_ERROR]
         structural = self._structural_errors(data)
         if structural:
             return structural

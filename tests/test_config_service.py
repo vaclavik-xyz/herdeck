@@ -97,7 +97,9 @@ def test_read_surfaces_profile_only_secret(tmp_path, monkeypatch):
 def test_read_missing_config_is_empty_for_onboarding(tmp_path, monkeypatch):
     monkeypatch.delenv("HERDECK_PROFILE", raising=False)
     svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
-    assert svc.read() == {
+    payload = svc.read()
+    assert payload.pop("revision")  # content hash present even with no files
+    assert payload == {
         "base": {},
         "profiles": {},
         "local": {},
@@ -354,3 +356,38 @@ def test_write_roundtrips_desktop_section(tmp_path, monkeypatch):
     assert _tomllib.loads((tmp_path / "config.toml").read_text())["desktop"] == {
         "window_mode": "always_on_top"
     }
+
+
+def test_write_rejects_a_stale_revision(tmp_path, monkeypatch):
+    """A payload loaded against an older on-disk revision must not clobber
+    newer changes (re-onboarding, tray switch, hand edit)
+    (audit: editor-staleness-guard)."""
+    monkeypatch.setenv("TOK", "x")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid="a"\nurl="ws://x"\ntoken_env="TOK"\n')
+    svc = ConfigService(cfg, tmp_path / "local.toml")
+    payload = svc.read()
+    assert payload["revision"]
+    # something else changes the file under the editor
+    cfg.write_text('[[servers]]\nid="b"\nurl="ws://y"\ntoken_env="TOK"\n')
+    body = {
+        "base": payload["base"],
+        "profiles": payload["profiles"],
+        "local": payload["local"],
+        "revision": payload["revision"],
+    }
+    errors = svc.write(body)
+    assert errors and errors[0].startswith("stale_revision")
+    assert 'id="b"' in cfg.read_text()  # the newer content survived
+
+
+def test_write_without_revision_stays_compatible(tmp_path, monkeypatch):
+    """Rust's read-modify-write (persist_window_mode) sends no revision and
+    must keep working."""
+    monkeypatch.setenv("TOK", "x")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid="a"\nurl="ws://x"\ntoken_env="TOK"\n')
+    svc = ConfigService(cfg, tmp_path / "local.toml")
+    payload = svc.read()
+    body = {"base": payload["base"], "profiles": {}, "local": {}}
+    assert svc.write(body) == []
