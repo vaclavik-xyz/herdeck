@@ -391,3 +391,18 @@ def test_write_without_revision_stays_compatible(tmp_path, monkeypatch):
     payload = svc.read()
     body = {"base": payload["base"], "profiles": {}, "local": {}}
     assert svc.write(body) == []
+
+
+def test_validate_for_write_matches_write_semantics(tmp_path, monkeypatch):
+    """Live validation must never flag a missing secret that Apply accepts
+    (roborev 4fb7f7a)."""
+    monkeypatch.delenv("NEWTOK", raising=False)
+    cfg = tmp_path / "config.toml"
+    svc = ConfigService(cfg, tmp_path / "local.toml")
+    body = {
+        "base": {"servers": [{"id": "a", "url": "ws://x", "token_env": "NEWTOK"}]},
+        "profiles": {},
+        "local": {},
+    }
+    assert svc.validate_for_write(body) == []  # write() would accept this
+    assert svc.validate(body) != []  # ...though full resolution needs the secret

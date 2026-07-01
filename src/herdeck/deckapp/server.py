@@ -576,7 +576,9 @@ class DeckApp:
                         body = self._json_body()
                         if body is _BAD_BODY:
                             return
-                        errors = app._config_service.validate(body)
+                        # Same semantics as write(): structural only, so live
+                        # validation never flags a missing secret Apply accepts.
+                        errors = app._config_service.validate_for_write(body)
                         self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
                     elif path == "/config":
                         body = self._json_body()

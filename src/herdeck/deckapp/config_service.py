@@ -134,6 +134,12 @@ class ConfigService:
     def validate(self, data: dict) -> list[str]:
         return validate_settings(self._snapshot_for(data))
 
+    def validate_for_write(self, data: dict) -> list[str]:
+        """Exactly the validation write() applies (structural only — a missing
+        secret must not block, matching onboarding). The live-validate route
+        uses this so editing never shows an error Apply would accept."""
+        return self._structural_errors(data)
+
     def resolve_selected_server(self, data: dict, *, assume_present: str | None = None):
         """The resolved `(config, servers[0])` for the active profile, or None if there is
         no server / it cannot resolve. Only `assume_present` (the token_env about to be
