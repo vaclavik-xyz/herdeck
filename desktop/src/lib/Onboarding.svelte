@@ -9,6 +9,7 @@
     SetupTransport,
     ConnectRequest,
   } from "./onboardingClient";
+  import { connectErrorMessage } from "./onboardingClient";
 
   let {
     view,
@@ -43,7 +44,7 @@
     if (r.ok) {
       onConnected();
     } else {
-      error = r.error ?? "Připojení selhalo.";
+      error = connectErrorMessage(r.error, status?.socketPath);
     }
   }
 

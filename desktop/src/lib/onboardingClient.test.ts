@@ -4,6 +4,7 @@ import {
   onboardingDecision,
   shouldOnboard,
   type SetupStatus,
+  connectErrorMessage,
 } from "./onboardingClient";
 
 const full = {
@@ -192,5 +193,28 @@ describe("setupTransport", () => {
     const r = await t.connect({ choice: "saved" });
     expect(seen).toEqual({ body: { choice: "saved" } });
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("connectErrorMessage", () => {
+  it("maps known machine codes to actionable Czech text", () => {
+    expect(connectErrorMessage("bad_token")).toContain("Token nesedí");
+    expect(connectErrorMessage("unreachable")).toContain("Server neodpovídá");
+    expect(connectErrorMessage("could not start local source")).toContain("herdr");
+    expect(connectErrorMessage("no saved connection")).toContain("Uložené spojení");
+  });
+
+  it("includes the socket path in the local-socket message when known", () => {
+    const msg = connectErrorMessage(
+      "herdr socket not found at /tmp/h.sock",
+      "/tmp/h.sock",
+    );
+    expect(msg).toContain("/tmp/h.sock");
+    expect(msg).toContain("spusť herdr");
+  });
+
+  it("passes unknown errors through verbatim and defaults when empty", () => {
+    expect(connectErrorMessage("weird failure")).toBe("weird failure");
+    expect(connectErrorMessage(null)).toBe("Připojení selhalo.");
   });
 });
