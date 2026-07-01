@@ -4,6 +4,8 @@ import hashlib
 import math
 import os
 import re
+import time
+from collections import OrderedDict
 from collections.abc import Callable
 
 from PIL import Image, ImageDraw
@@ -18,6 +20,42 @@ SPINNER_FRAMES = 8
 # Bump when the rendered icon output changes so stale cached PNGs from older
 # versions are ignored, not reused.
 CACHE_VERSION = 3
+
+# Generated tile/icon PNGs are content-addressed (the filename encodes the full
+# render signature), so eviction is always safe — at worst the next render
+# recreates the file. Without eviction a 24/7 deck grows the cache dir without
+# bound: the elapsed-time text in the signature mints fresh filenames forever.
+PRUNE_MAX_AGE_S = 3600.0
+_PRUNE_EVERY_WRITES = 4096  # opportunistic prune cadence for long-running processes
+_BYTES_CACHE_MAX = 512  # in-memory PNG-bytes LRU entries (~a few MB)
+
+
+def prune_generated(cache_dir: str, max_age_s: float = PRUNE_MAX_AGE_S) -> int:
+    """Delete generated ``tile_*``/``icon_v*`` PNGs older than ``max_age_s``.
+
+    Only the content-addressed names this module writes are touched; anything
+    else in the dir (panel_left.png, user files) is left alone. Returns the
+    number of files removed."""
+    try:
+        entries = os.scandir(cache_dir)
+    except OSError:
+        return 0
+    cutoff = time.time() - max_age_s
+    removed = 0
+    with entries:
+        for entry in entries:
+            name = entry.name
+            if not name.endswith(".png"):
+                continue
+            if not (name.startswith("tile_") or name.startswith("icon_v")):
+                continue
+            try:
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    os.unlink(entry.path)
+                    removed += 1
+            except OSError:
+                pass  # raced/unreadable entry: skip
+    return removed
 
 # The agent mark is inset (not edge-to-edge) so the comet ring has clean room
 # around it and tiles look deliberate rather than cramped.
@@ -307,7 +345,10 @@ class IconProvider:
         # (e.g. an app upgrade that bundles new marks) invalidates stale tiles.
         self._asset_fp = _fingerprint_assets(assets_dir)
         os.makedirs(cache_dir, exist_ok=True)
+        prune_generated(cache_dir)
         self._glyph_cache: dict[str, Image.Image] = {}
+        self._bytes_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._writes_since_prune = 0
 
     def _base_glyph(self, agent_type: str) -> Image.Image:
         """A monochrome mark for an agent type.
@@ -400,14 +441,10 @@ class IconProvider:
         img.alpha_composite(self._comet_overlay(ICON_SIZE, phase, RING_INSET, RING_WIDTH))
 
     # --- rich tile rendering (full tile incl. text; device label left empty) ---
-    def render_tile(self, tile) -> str:
-        """Render a full TileView (logo, repo, branch, status, time) to a cached
-        PNG and return its filename. Agent tiles (tile.repo set) get the rich
-        layout; control tiles render their centred label on a colour."""
-        import hashlib
-
-        # Bound the rotation phase so the cache reuses a fixed set of frames
-        # instead of writing a new PNG on every tick.
+    def _tile_name(self, tile) -> tuple[str, int | None]:
+        """The content-addressed cache filename for a TileView (and its bounded
+        spinner phase). The rotation phase is bounded to SPINNER_FRAMES so the
+        cache reuses a fixed set of frames instead of minting a new PNG per tick."""
         spinner = None if tile.spinner is None else tile.spinner % SPINNER_FRAMES
         sig_parts = [
             TILE_VERSION,
@@ -428,7 +465,13 @@ class IconProvider:
         if tile.server_tag or tile.server_accent:
             sig_parts.extend([tile.server_tag, tile.server_accent])
         sig = "|".join(str(x) for x in sig_parts)
-        name = "tile_" + hashlib.sha1(sig.encode()).hexdigest()[:16] + ".png"
+        return "tile_" + hashlib.sha1(sig.encode()).hexdigest()[:16] + ".png", spinner
+
+    def render_tile(self, tile) -> str:
+        """Render a full TileView (logo, repo, branch, status, time) to a cached
+        PNG and return its filename. Agent tiles (tile.repo set) get the rich
+        layout; control tiles render their centred label on a colour."""
+        name, spinner = self._tile_name(tile)
         path = os.path.join(self._cache_dir, name)
         if os.path.exists(path):
             return name
@@ -438,13 +481,29 @@ class IconProvider:
             else self._compose_label_tile(tile)
         )
         img.convert("RGB").save(path)
+        self._writes_since_prune += 1
+        if self._writes_since_prune >= _PRUNE_EVERY_WRITES:
+            self._writes_since_prune = 0
+            prune_generated(self._cache_dir)
         return name
 
     def render_tile_bytes(self, tile) -> bytes:
-        """Render a tile and return its PNG bytes (for the web simulator)."""
+        """Render a tile and return its PNG bytes (web simulator / HTTP state).
+
+        Served from a small in-memory LRU so the per-tick full-frame render
+        never touches the filesystem for tiles it has already produced."""
+        name, _ = self._tile_name(tile)
+        cached = self._bytes_cache.get(name)
+        if cached is not None:
+            self._bytes_cache.move_to_end(name)
+            return cached
         name = self.render_tile(tile)
         with open(os.path.join(self._cache_dir, name), "rb") as fh:
-            return fh.read()
+            data = fh.read()
+        self._bytes_cache[name] = data
+        while len(self._bytes_cache) > _BYTES_CACHE_MAX:
+            self._bytes_cache.popitem(last=False)
+        return data
 
     def _compose_label_tile(self, tile) -> Image.Image:
         bg = Image.new(

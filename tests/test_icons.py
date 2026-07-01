@@ -445,3 +445,45 @@ def test_idle_tile_cache_key_ignores_animation(tmp_path):
     a = p.render_tile(_agent_tile(working_animation="spin", spinner=None))
     b = p.render_tile(_agent_tile(working_animation="pulse", spinner=None))
     assert a == b  # idle tiles share one cache key regardless of style (no churn)
+
+
+# --- cache eviction + in-memory bytes cache (audit: cache-unbounded) ---
+
+
+def test_init_prunes_stale_generated_pngs(tmp_path):
+    import time as _time
+
+    stale_tile = tmp_path / "tile_deadbeef.png"
+    stale_icon = tmp_path / "icon_v2_0_stale_green.png"
+    fresh_tile = tmp_path / "tile_fresh.png"
+    foreign = tmp_path / "panel_left.png"
+    for f in (stale_tile, stale_icon, fresh_tile, foreign):
+        f.write_bytes(b"png")
+    old = _time.time() - 48 * 3600
+    for f in (stale_tile, stale_icon, foreign):
+        os.utime(f, (old, old))
+    make_provider(tmp_path)
+    assert not stale_tile.exists()
+    assert not stale_icon.exists()
+    assert fresh_tile.exists()  # fresh generated files survive the age cutoff
+    assert foreign.exists()  # non-generated names are never touched, however old
+
+
+def test_render_tile_bytes_serves_from_memory_without_recreating_file(tmp_path):
+    p = make_provider(tmp_path)
+    tile = _tile_ns()
+    first = p.render_tile_bytes(tile)
+    for f in tmp_path.glob("tile_*.png"):
+        f.unlink()
+    assert p.render_tile_bytes(tile) == first
+    # memory-cache hit must not touch the disk cache at all
+    assert not list(tmp_path.glob("tile_*.png"))
+
+
+def test_render_tile_recreates_pruned_file_for_device_path(tmp_path):
+    p = make_provider(tmp_path)
+    tile = _tile_ns()
+    name = p.render_tile(tile)
+    (tmp_path / name).unlink()
+    assert p.render_tile(tile) == name
+    assert (tmp_path / name).exists()  # strmdck reads the file by name
