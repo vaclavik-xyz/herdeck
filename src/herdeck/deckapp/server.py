@@ -363,6 +363,26 @@ class DeckApp:
             if self._reloader is not None:
                 self._reloader()
 
+    def _watcher_reload(self) -> None:
+        """ConfigWatcher entry point: reload only if the files REALLY differ
+        from the adopted baseline once the transaction lock is held. A poll
+        that fired mid-transaction (after a route write changed the mtime but
+        before that route's reload+resync finished) queues a callback that
+        must NOT replay the reload — resync() cannot cancel a callback
+        already in flight (roborev a59985b)."""
+        if getattr(self, "_suppress_reload", False):
+            return
+        with self._setup_lock:
+            if getattr(self, "_suppress_reload", False):
+                return
+            watcher = getattr(self, "_watcher", None)
+            if watcher is not None:
+                if not watcher.dirty():
+                    return  # already handled by the route that held the lock
+                watcher.resync()  # adopt BEFORE reloading (this callback owns it)
+            if self._reloader is not None:
+                self._reloader()
+
     # --- state snapshots ---
     def _state(self) -> dict:
         with self._lock:
@@ -1283,7 +1303,12 @@ def create_app(
 
     # Watch the config files; fire the reloader when any changes on disk.
     # Filter out None (local path is absent when no local override exists).
+    # adopt_before_fire=False: _watcher_reload re-checks dirtiness under the
+    # transaction lock and owns baseline adoption, so a poll that fired during
+    # a route write/reload transaction cannot replay the reload.
     watch_paths = [p for p in (cfg_path, local_path) if p is not None]
-    app._watcher = ConfigWatcher(watch_paths, app.reload, interval=1.0)
+    app._watcher = ConfigWatcher(
+        watch_paths, app._watcher_reload, interval=1.0, adopt_before_fire=False
+    )
     app._watcher.start()
     return app

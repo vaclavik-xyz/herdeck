@@ -770,3 +770,26 @@ def test_config_post_resyncs_watcher_so_it_does_not_reload_twice(tmp_path, monke
         assert app._watcher.resyncs == 1  # watcher adopted our write as baseline
     finally:
         app.close()
+
+
+def test_watcher_reload_skips_when_files_match_baseline(tmp_path, monkeypatch):
+    """A watcher callback queued mid-transaction (route already reloaded and
+    resynced) must not replay the reload; a genuinely dirty file still does
+    (roborev a59985b)."""
+    from herdeck.deckapp.watcher import ConfigWatcher
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("x = 1\n")
+    reloads = []
+    app = create_mock_app(port=0, serve=False, reloader=lambda: reloads.append(1))
+    app._watcher = ConfigWatcher([cfg], app._watcher_reload, adopt_before_fire=False)
+    try:
+        app._watcher_reload()  # baseline matches -> the stale callback is a no-op
+        assert reloads == []
+        cfg.write_text("x = 2\n")  # a real external edit
+        app._watcher_reload()
+        assert reloads == [1]
+        app._watcher_reload()  # handled + resynced -> quiet again
+        assert reloads == [1]
+    finally:
+        app.close()
