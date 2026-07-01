@@ -535,6 +535,20 @@ def test_view_config_rejects_unknown_working_animation():
         _view_config({"working_animation": "spinny"})
 
 
+def test_view_config_parses_tile_fill():
+    assert _view_config({"tile_fill": "solid"}).tile_fill == "solid"
+    assert _view_config({"tile_fill": "tint"}).tile_fill == "tint"
+
+
+def test_view_config_defaults_tile_fill_to_none():
+    assert _view_config({}).tile_fill == "none"
+
+
+def test_view_config_rejects_unknown_tile_fill():
+    with pytest.raises(ConfigError, match="unknown view.tile_fill 'glow'"):
+        _view_config({"tile_fill": "glow"})
+
+
 def test_profile_view_overlay_merges_tile_primary():
     data = {
         "view": {"tile_fields": ["repo"]},

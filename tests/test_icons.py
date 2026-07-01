@@ -344,7 +344,7 @@ def _agent_tile(**over):
     base = dict(
         color="green", label="", subtext=None, agent_type="claude", spinner=1,
         repo="api", branch="main", status_text="WORKING", time_text="1m",
-        server_tag=None, server_accent=None, working_animation="spin",
+        server_tag=None, server_accent=None, working_animation="spin", tile_fill="none",
     )
     base.update(over)
     return SimpleNamespace(**base)
@@ -355,6 +355,36 @@ def test_each_working_animation_renders_distinctly(tmp_path):
     styles = ("spin", "comet", "pulse", "sweep", "none")
     out = {s: p.render_tile_bytes(_agent_tile(working_animation=s)) for s in styles}
     assert len(set(out.values())) == 5  # all five working styles are mutually distinct
+
+
+def test_each_tile_fill_renders_distinctly(tmp_path):
+    p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
+    fills = ("none", "tint", "solid")
+    # idle (spinner=None) so the only variable is the fill style, not animation
+    out = {f: p.render_tile_bytes(_agent_tile(tile_fill=f, spinner=None)) for f in fills}
+    assert len(set(out.values())) == 3  # none / tint / solid are mutually distinct
+
+
+def test_tile_fill_is_part_of_cache_key(tmp_path):
+    p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
+    a = p.render_tile(_agent_tile(tile_fill="none", spinner=None))
+    b = p.render_tile(_agent_tile(tile_fill="solid", spinner=None))
+    assert a != b  # the fill style is part of the tile cache key
+
+
+def test_solid_fill_paints_whole_tile_the_status_colour(tmp_path):
+    import io
+
+    from PIL import Image
+
+    from herdeck.driver.base import COLORS
+
+    p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
+    png = p.render_tile_bytes(
+        _agent_tile(color="cyan", tile_fill="solid", spinner=None, status_text="DONE")
+    )
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    assert img.getpixel((2, 2)) == COLORS["cyan"]  # top-left bg = full status colour
 
 
 def test_none_working_matches_static_idle_and_differs_from_spin(tmp_path):

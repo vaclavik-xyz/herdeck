@@ -10,6 +10,7 @@ from .config import (
     DEFAULT_MACROS,
     DEFAULT_PROFILES,
     DEFAULT_START_PROFILES,
+    TILE_FILLS,
     TILE_LINE_TOKENS,
     WORKING_ANIMATIONS,
     Config,
@@ -217,6 +218,11 @@ def _view_config(raw: dict | None) -> ViewConfig:
                 f"unknown view.working_animation '{val}'; want one of {WORKING_ANIMATIONS}"
             )
         view.working_animation = val
+    if "tile_fill" in raw:
+        val = raw["tile_fill"]
+        if val not in TILE_FILLS:
+            raise ConfigError(f"unknown view.tile_fill '{val}'; want one of {TILE_FILLS}")
+        view.tile_fill = val
     if "show_profile_on_panel" in raw:
         view.show_profile_on_panel = bool(raw["show_profile_on_panel"])
     return view

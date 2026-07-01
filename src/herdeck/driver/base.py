@@ -30,6 +30,7 @@ class TileView:
     agent_type: str | None = None
     spinner: int | None = None  # rotation phase for working tiles
     working_animation: str = "spin"  # how a working tile animates ([view].working_animation)
+    tile_fill: str = "none"  # how the tile is filled with its status colour ([view].tile_fill)
     # Rich agent-tile content (None on control tiles, which render `label` only):
     repo: str | None = None
     branch: str | None = None

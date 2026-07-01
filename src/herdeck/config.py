@@ -64,6 +64,11 @@ DEFAULT_SERVER_ACCENTS: list[str] = ["teal", "violet", "orange", "pink", "lime"]
 DEFAULT_TILE_FIELDS: list[str] = ["repo", "branch", "status", "time", "server"]
 TILE_LINE_TOKENS: tuple[str, ...] = ("repo", "branch", "workspace", "tab", "agent")
 WORKING_ANIMATIONS: tuple[str, ...] = ("spin", "comet", "pulse", "sweep", "none")
+# How an agent tile is filled with its status colour:
+#   none  = dark tile, colour only in the status word + bottom accent bar (default)
+#   tint  = whole tile a darkened shade of the status colour + a bright bottom edge
+#   solid = whole tile the full status colour (text contrast flips on bright colours)
+TILE_FILLS: tuple[str, ...] = ("none", "tint", "solid")
 DEFAULT_BOTTOM_ROW: list[str] = ["profiles", "notifications", "safety", "theme", "new_agent"]
 
 
@@ -86,6 +91,7 @@ class ViewConfig:
     tile_primary: list[str] | None = None
     tile_secondary: list[str] | None = None
     working_animation: str = "spin"
+    tile_fill: str = "none"
 
 
 @dataclass
