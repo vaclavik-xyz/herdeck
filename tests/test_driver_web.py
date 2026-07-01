@@ -72,7 +72,9 @@ def test_page_only_highlights_after_successful_press():
     from herdeck.driver import web
 
     page = web._PAGE
-    assert "if(r.status===403) location.reload()" in page
+    # a 403 press no longer blind-reloads (that landed on the plaintext 403);
+    # it surfaces the token problem in-page instead
+    assert "if(r.status===403){ setStale(" in page
     assert "if(!r.ok) return" in page
     assert page.index("await fetch") < page.index("btns.forEach")
 
@@ -374,5 +376,31 @@ def test_root_403_serves_html_explanation(tmp_path):
             assert e.headers.get_content_type() == "text/html"
             body = e.read().decode()
             assert "token" in body.lower()
+    finally:
+        d.close()
+
+
+def test_page_carries_stale_indicator_and_touch_feedback(tmp_path):
+    """Smoke-level guards for the embedded page: stale-state indication,
+    explicit 403 handling, wake-refresh and touch affordances
+    (audit: websim-stale-indicator + websim-touch-feedback)."""
+    import urllib.request
+
+    d = WebDeck(
+        slots=4, host="127.0.0.1", port=0, serve=True,
+        icon_provider=StubIcons(), token_path=str(tmp_path / "web-token"),
+    )
+    try:
+        with urllib.request.urlopen(
+            f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=5
+        ) as r:
+            page = r.read().decode()
+        assert "setStale" in page and "disconnected — last update" in page
+        assert "token expired" in page  # explicit 403 handling, no silent freeze
+        assert "visibilitychange" in page  # immediate poll on phone wake
+        assert "touch-action:manipulation" in page
+        assert "-webkit-tap-highlight-color" in page
+        assert ".cell:active" in page  # instant local press feedback
+        assert "pollNow()" in page  # press triggers an immediate state poll
     finally:
         d.close()

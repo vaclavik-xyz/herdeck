@@ -309,12 +309,20 @@ _PAGE = """<!doctype html><meta charset=utf-8>
  #deck{background:#2a2a2e;padding:18px;border-radius:18px;
    display:grid;grid-template-columns:repeat(5,min(17vw,150px));gap:10px}
  .cell{width:min(17vw,150px);height:min(17vw,150px);border-radius:8px;background:#111;cursor:pointer;
-   overflow:hidden;border:none;padding:0}
+   overflow:hidden;border:none;padding:0;
+   touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+ .cell:active{transform:scale(.95);filter:brightness(1.3)} /* instant, local press feedback */
  .cell.active{outline:3px solid #5af}
  .cell img{width:100%;height:100%;display:block}
  #panel{grid-column:4 / 6;width:calc(min(17vw,150px)*2 + 10px);height:min(17vw,150px);border-radius:8px;
-   overflow:hidden;cursor:pointer;background:#111}
+   overflow:hidden;cursor:pointer;background:#111;
+   touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+ #panel:active{filter:brightness(1.3)}
  #panel img{width:100%;height:100%;display:block}
+ #deck.stale{filter:grayscale(1) opacity(.5);transition:filter .2s}
+ #note{position:fixed;left:50%;top:10px;transform:translateX(-50%);max-width:90vw;
+   background:#3a1d1d;color:#f0a0a0;padding:6px 12px;border-radius:8px;
+   font:13px system-ui;display:none;z-index:9}
  /* phone portrait: width is the constraint, so shrink the 5-wide deck */
  @media (max-width:560px){
    #deck{grid-template-columns:repeat(5,min(17vw,110px));gap:6px;padding:10px}
@@ -335,21 +343,31 @@ _PAGE = """<!doctype html><meta charset=utf-8>
 <div id=deck></div>
 <script>
 const deck=document.getElementById('deck');
+const note=document.createElement('div');note.id='note';document.body.appendChild(note);
 const pressToken=__PRESS_TOKEN_JSON__;
 let cells=[]; const btns=[]; let slotCount=0;
 function auth(path){
   return path+(path.includes('?')?'&':'?')+'token='+encodeURIComponent(pressToken);
 }
+// Stale-state indication: a control surface silently showing dead state is
+// actively misleading — a 'blocked' tile may have been resolved minutes ago.
+let fails=0, lastOk=Date.now();
+function setStale(msg){deck.classList.add('stale');note.textContent=msg;note.style.display='block';}
+function clearStale(){fails=0;lastOk=Date.now();deck.classList.remove('stale');note.style.display='none';}
 // one press path for clicks and keys: post the press, outline the pressed cell.
 async function press(i){
   let r;
   try{
     r=await fetch('/press/'+i,{method:'POST',headers:{'X-Herdeck-Token':pressToken}});
-  }catch(e){ return; }
-  if(r.status===403) location.reload();
+  }catch(e){
+    setStale('press failed — disconnected?');
+    return;
+  }
+  if(r.status===403){ setStale('token expired — open the fresh URL from the startup log'); return; }
   if(!r.ok) return;
   btns.forEach(b=>b.classList.remove('active'));   // clear any stale outline first
   if(btns[i]) btns[i].classList.add('active');     // panel (no button) leaves none active
+  pollNow();  // the press already re-rendered server-side; don't wait 300ms
 }
 function addCell(i){
   const b=document.createElement('button');b.className='cell';
@@ -378,9 +396,18 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='0') press(9);
 });
 let lastV=-1; const tv={}; let pv=-1;
+let pollTimer=null, inFlight=false;
 async function poll(){
+  if(inFlight) return;             // the in-flight poll reschedules; never overlap
+  inFlight=true;
   try{
-    const s=await (await fetch(auth('/state'))).json();
+    const r=await fetch(auth('/state'));
+    if(r.status===403){
+      setStale('token expired — open the fresh URL from the startup log');
+      return;                      // rescheduled in finally; keeps checking
+    }
+    const s=await r.json();
+    clearStale();
     ensureCells(s.slots);
     if(s.version!==lastV){          // cheap gate: nothing changed at all
       lastV=s.version;
@@ -393,9 +420,18 @@ async function poll(){
       }
       if(s.has_panel && s.panel!==pv){ pv=s.panel; pimg.src=auth('/panel?v='+pv); }
     }
-  }catch(e){}
-  setTimeout(poll,300);
+  }catch(e){
+    fails++;
+    if(fails>=2) setStale('disconnected — last update '+Math.max(1,Math.round((Date.now()-lastOk)/1000))+'s ago');
+  }finally{
+    inFlight=false;
+    clearTimeout(pollTimer);
+    pollTimer=setTimeout(poll,300);
+  }
 }
+function pollNow(){ clearTimeout(pollTimer); void poll(); }
+// a woken phone should refresh immediately, not after the next timer tick
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) pollNow(); });
 poll();
 </script>
 """
