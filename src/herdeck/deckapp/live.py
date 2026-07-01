@@ -302,13 +302,12 @@ class LiveSource(StateSource):
 
     def _cache_preread(self, pane_id: str | None, text: str, req: str | None) -> None:
         """Store a read result as the pane's cached prompt — only while the pane is
-        still BLOCKED and only if ``req`` matches a read we issued for the pane's
-        CURRENT block episode: either the background pre-read (``_preread_req``) or the
-        active drill read (``_active_read_req``, which the drill fires and which is
-        cleared on unblock). Accepting the drill read keeps the cache fresh when a
-        prompt changes in place, so re-drilling seeds the new prompt; a late result
-        from a prior episode carries an old req and is rejected. Caller holds the
-        deck lock."""
+        still BLOCKED and only if ``req`` is the read we last issued for the pane's
+        CURRENT block episode (``_preread_req[key]``, set by BOTH the background
+        pre-read and the drill read, and dropped the moment the pane leaves BLOCKED).
+        The drill read thus keeps the cache fresh when a prompt changes in place,
+        while a late read from a prior episode carries a since-replaced req and is
+        rejected. Caller holds the deck lock."""
         if pane_id is None or req is None:
             return
         key = AgentKey(self._server.id, pane_id)
@@ -317,7 +316,7 @@ class LiveSource(StateSource):
             if (
                 state is not None
                 and state.status is Status.BLOCKED
-                and req in (self._preread_req.get(key), self._active_read_req)
+                and req == self._preread_req.get(key)
             ):
                 self._preread[key] = text
 
@@ -352,7 +351,9 @@ class LiveSource(StateSource):
 
     def _next_req(self, cmd) -> str | None:
         # Mirrors App.next_req_for: `list` carries no req; everything else gets a
-        # fresh sequential id. A `read` id is remembered so its result can be matched.
+        # fresh sequential id. A `read` id is remembered so its result can be matched
+        # (``_active_read_req`` for the drill display; ``_preread_req`` per pane so the
+        # drill read also refreshes the pre-read cache under the same episode scope).
         if cmd.kind == "list":
             return None
         with self._lock:
@@ -360,6 +361,8 @@ class LiveSource(StateSource):
             req = f"r{self._req}"
             if cmd.kind == "read":
                 self._active_read_req = req
+                if cmd.pane_id is not None:
+                    self._preread_req[AgentKey(cmd.server_id, cmd.pane_id)] = req
         return req
 
 

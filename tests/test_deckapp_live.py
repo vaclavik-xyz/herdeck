@@ -479,6 +479,23 @@ def test_preread_result_does_not_render_overview():
     assert app._orch._detection == ""
 
 
+def test_late_drill_read_after_backout_and_reblock_is_rejected():
+    # Drill a blocked pane, back out before its read returns, let the pane unblock
+    # while on the overview and re-block. The late drill read from the prior episode
+    # must not repopulate the cache — its block episode is over.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])  # episode A
+    app.press(0)  # drill -> focus + read
+    drill_read = _reads(runner)[-1]
+    app.press(app._slots - 1)  # Back before the read returns
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.IDLE)])  # unblock on overview
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])  # episode B
+    src._on_result(drill_read["req"], {"text": "1. STALE", "pane_id": "p0"})  # episode A, late
+    app.press(0)  # drill episode B
+    assert app._orch._detection == ""  # the stale drill read never seeded
+
+
 def test_drill_read_refreshes_cache_for_reentry():
     # The drill's own fresh read keeps the cache current: if the prompt changed in
     # place, backing out and re-drilling the still-blocked pane seeds the NEW prompt,
