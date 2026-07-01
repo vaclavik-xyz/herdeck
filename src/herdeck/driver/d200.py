@@ -207,18 +207,19 @@ class D200Driver(DeckDriver):
             self._write_working(payload)
 
     def _resync_tiles(self, buttons: dict[int, dict]) -> None:
-        """Re-send every tile as its own small write (avoids the big-zip retry stall
-        a single 13-tile write risks) so dropped async USB writes self-heal."""
-        all_ok = True
-        for i in sorted(buttons):
-            one = {i: buttons[i]}
-            if self._timed_set_buttons("resync", one, update_only=True):
-                self._record(one)
-            else:
-                all_ok = False
-        if all_ok:
-            # Leave the resync window open on any failure so the next render retries
-            # immediately instead of waiting the full RESYNC_INTERVAL.
+        """Re-send ALL tiles in one combined write so dropped async USB writes self-heal.
+
+        Individual per-tile writes were a workaround for strmdck's retry-loop stall on a
+        big zip; with that retry sleep neutralized (_neutralize_retry_sleep), a combined
+        write is fast (~12ms prepare, like the normal full refresh). Crucially, unlike 13
+        separate USB writes draining in one RenderPump batch (~6s of round-trips), one
+        combined write never blocks the render worker long enough to starve the keep-alive
+        — the stall that blanked the deck and left tiles/panel black until the next refresh.
+        """
+        if self._timed_set_buttons("resync", buttons, update_only=True):
+            self._record(buttons)
+            # Only advance the window on success; a failed write leaves it open so the
+            # next render retries immediately instead of waiting the full RESYNC_INTERVAL.
             self._last_full_ts = time.monotonic()
 
     def _diff(self, buttons: dict[int, dict]) -> dict[int, dict]:
