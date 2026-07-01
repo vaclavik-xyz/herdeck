@@ -566,6 +566,13 @@ class DeckApp:
                             errors = app._config_service.write(body)
                             if not errors:
                                 app.reload()
+                                # Adopt our own write as the watcher baseline so it
+                                # does not re-fire on the mtime change and reload a
+                                # SECOND time (two source swaps = two reconnects and
+                                # a double disconnected/empty flash per editor save).
+                                watcher = getattr(app, "_watcher", None)
+                                if watcher is not None:
+                                    watcher.resync()
                         self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
                     elif path == "/profiles/active":
                         body = self._json_body()

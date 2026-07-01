@@ -735,3 +735,38 @@ def test_unchanged_panel_is_encoded_once(monkeypatch):
     assert calls["n"] == base  # identical panel content -> memoized bytes reused
     app.press(0)  # cycles an agent status -> summary counts change
     assert calls["n"] > base
+
+
+def test_config_post_resyncs_watcher_so_it_does_not_reload_twice(tmp_path, monkeypatch):
+    """The route-driven reload already applied the write; the watcher must adopt
+    it as its baseline instead of re-firing a SECOND full source swap
+    (audit: config-save-double-reload)."""
+    from herdeck.deckapp.config_service import ConfigService
+
+    monkeypatch.setenv("TOK", "real")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n')
+    svc = ConfigService(cfg, tmp_path / "local.toml")
+    reloaded = []
+    app = create_mock_app(port=0, config_service=svc, reloader=lambda: reloaded.append(1))
+
+    class _Watcher:
+        def __init__(self):
+            self.resyncs = 0
+
+        def resync(self):
+            self.resyncs += 1
+
+        def close(self):
+            pass
+
+    app._watcher = _Watcher()
+    try:
+        body = {"base": {"servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
+                         "deck": {"grid": "4x3"}}, "profiles": {}, "local": {}}
+        resp = _post(app, "/config", body, token=app.token)
+        assert json.loads(resp.read())["errors"] == []
+        assert reloaded == [1]  # exactly one reload (route-driven)
+        assert app._watcher.resyncs == 1  # watcher adopted our write as baseline
+    finally:
+        app.close()
