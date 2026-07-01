@@ -291,7 +291,10 @@ class LiveSource(StateSource):
         buffer. Sends fire after releasing ``self._lock`` — ``runner.send`` is
         fire-and-forget and never blocks."""
         runner = self._runner
+        orch = self._orch
+        drilled = self._drilled_key()
         reads: list[tuple[str, AgentKey]] = []
+        clear_detection = False
         with self._lock:
             blocked = {k for k, s in self._agents.items() if s.status is Status.BLOCKED}
             for key in set(self._preread) | set(self._preread_req):
@@ -305,6 +308,13 @@ class LiveSource(StateSource):
                 bg_req = f"p{self._bg_req}"
                 self._preread_req[key] = bg_req  # register so the poll won't re-issue
                 reads.append((bg_req, key))
+                if key == drilled:
+                    # The drilled pane just entered a block episode with no valid read:
+                    # any current detection is a pre-block capture. Drop it so the
+                    # blocked drill shows no options until the fresh read lands.
+                    clear_detection = True
+        if clear_detection and orch is not None:
+            orch.set_detection("")
         if runner is None:
             return
         for bg_req, key in reads:

@@ -516,6 +516,24 @@ def test_pre_block_drill_read_does_not_surface_on_blocked_drill():
     assert not [m for m in runner.sent if m["type"] == "act"]
 
 
+def test_pre_block_detection_cleared_when_drilled_pane_blocks():
+    # A pane drilled while WORKING whose pre-block read already populated the detail
+    # must not keep that capture as actionable options once it blocks: entering
+    # BLOCKED clears the stale detection until the fresh current-episode read lands.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    app.press(0)  # drill working -> pre-block read
+    pre = _reads(runner)[-1]
+    src._on_result(pre["req"], {"text": "1. Deploy prod\n2. Cancel", "pane_id": "p0"})
+    assert app._orch._detection == "1. Deploy prod\n2. Cancel"  # surfaced as working detail
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))  # blocks while drilled
+    assert app._orch._detection == ""  # stale pre-block capture cleared, not actionable
+    runner.sent.clear()
+    app.press(0)  # press an option tile before the fresh read returns
+    assert not [m for m in runner.sent if m["type"] == "act"]  # nothing stale sent
+
+
 def test_working_drill_read_still_surfaces_while_working():
     # The scoping must not break the normal case: a read for a still-WORKING drilled
     # pane surfaces in the detail panel as before.
