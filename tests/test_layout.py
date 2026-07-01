@@ -194,18 +194,13 @@ def test_panel_detail_shows_question_not_option_lines():
     assert panel.lines == ["Do you want to proceed?"]
 
 
-def test_panel_detail_wraps_long_question_before_options():
+def test_panel_detail_keeps_long_question_as_one_logical_line():
+    # Wrapping happens at render time (compose_panel) by PIXEL width — the old
+    # 36-character wrap overflowed the panel's 360px budget on every full line.
     agent = AgentState(AgentKey("s", "p"), "claude", "api", Status.BLOCKED)
-    panel = panel_detail(
-        agent,
-        "Allow this long filesystem edit request that needs more room to be readable?\n"
-        "1. Yes\n"
-        "2. No",
-    )
-    assert len(panel.lines) > 1
-    assert len(panel.lines) <= 3
-    assert all(len(line) <= 36 for line in panel.lines)
-    assert all(not line.startswith(("1.", "2.")) for line in panel.lines)
+    q = "Allow this long filesystem edit request that needs more room to be readable?"
+    panel = panel_detail(agent, q + "\n1. Yes\n2. No")
+    assert panel.lines == [q]
 
 
 def test_panel_detail_strips_ansi_and_still_skips_options():

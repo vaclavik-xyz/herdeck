@@ -519,3 +519,23 @@ def test_wrap_marks_cut_tail_with_ellipsis():
     assert cut[-1].endswith("…")
     intact = _wrap(d, "Yes", f, 180, 3)
     assert intact == ["Yes"]  # nothing cut -> no spurious ellipsis
+
+
+def test_panel_body_lines_wrap_by_pixel_width_without_losing_words():
+    """The panel body wraps logical lines with the ACTUAL font and pixel budget
+    (audit: panel-pixel-wrap)."""
+    from PIL import Image, ImageDraw
+
+    from herdeck.icons import PANEL_W, _font, _panel_body_lines
+
+    d = ImageDraw.Draw(Image.new("RGB", (PANEL_W, 196)))
+    f = _font(24)
+    text = "Claude needs your permission to run the following command right now"
+    lines = _panel_body_lines(d, [text], f, PANEL_W - 32)
+    assert len(lines) >= 2
+    for line in lines:
+        assert d.textlength(line, font=f) <= PANEL_W - 32
+    assert " ".join(lines) == text  # nothing silently dropped between lines
+    overflow = text + " and then some more words that cannot possibly fit on this panel"
+    lines = _panel_body_lines(d, [overflow], f, PANEL_W - 32)
+    assert len(lines) == 3 and lines[-1].endswith("…")

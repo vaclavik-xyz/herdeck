@@ -266,6 +266,23 @@ def _panel_bg(color: str) -> tuple[int, int, int]:
     return tuple(max(12, int(channel * 0.28)) for channel in rgb)
 
 
+_PANEL_BODY_LINES = 3
+
+
+def _panel_body_lines(draw, lines, font, max_w, max_lines=_PANEL_BODY_LINES) -> list[str]:
+    """Pixel-wrapped display lines for the panel body (<= max_lines total).
+
+    Panel lines are LOGICAL lines; wrapping them here with the actual font is
+    what keeps a long prompt readable — character-count wrapping upstream
+    systematically overflowed the pixel budget and ellipsized every full line."""
+    out: list[str] = []
+    for line in lines:
+        if len(out) == max_lines:
+            break
+        out.extend(_wrap(draw, line, font, max_w, max_lines - len(out)))
+    return out[:max_lines]
+
+
 def compose_panel(panel: PanelView) -> Image.Image:
     """Render a PanelView to a 392x196 image with large, readable text.
 
@@ -283,7 +300,8 @@ def compose_panel(panel: PanelView) -> Image.Image:
     )
     line_f = _font(24)
     y = 60
-    for line in panel.lines[:3]:
+    for line in _panel_body_lines(d, panel.lines, line_f, PANEL_W - 32):
+        # _truncate is a safety net for unbreakable tokens wider than the panel.
         d.text((16, y), _truncate(d, line, line_f, PANEL_W - 32), font=line_f, fill=(232, 232, 236))
         y += 40
     return img
