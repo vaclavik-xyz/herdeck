@@ -25,6 +25,7 @@
     toWriteBody,
     orphanedSecrets,
     referencedTokenEnvs,
+    errorCountLabel,
     type ConfigPayload,
   } from "./lib/configClient";
 
@@ -51,6 +52,7 @@
   let active = $state("Servers");
   let dirty = $state(false);
   let errors = $state<string[]>([]);
+  let showErrors = $state(false); // expanded error list above the savebar
   let busy = $state(false);
   // A structured status banner (replaces the old plain `notice` string). Task 7
   // reuses the optional action for the orphaned-keychain-secret cleanup.
@@ -124,6 +126,7 @@
       const res = parseValidate(await cfg.write(toWriteBody(payload)));
       errors = res;
       if (res.length === 0) {
+        showErrors = false;
         // Capture orphans from the EDITED pre-reload payload (see Design note): the reloaded
         // payload.secrets only carries still-referenced token_envs, so a renamed/deleted old
         // key would vanish and post-load detection would miss it.
@@ -139,10 +142,18 @@
             "uklidit",
             () => void cleanupOrphans(orphans),
           );
+        } else {
+          setBanner("success", "uloženo");
         }
+      } else {
+        // A rejected Apply must SHOW what is wrong, not just count it.
+        showErrors = true;
+        banner = null;
       }
     } catch (e) {
       errors = [String(e)];
+      showErrors = true;
+      banner = null;
     } finally {
       busy = false;
     }
@@ -261,10 +272,23 @@
     </aside>
   </div>
 
+  {#if showErrors && errors.length > 0}
+    <div class="errlist" role="alert">
+      <ul>
+        {#each errors as err}<li>{err}</li>{/each}
+      </ul>
+    </div>
+  {/if}
+
   <footer class="savebar">
     <button onclick={discard} disabled={!dirty || busy}>Discard</button>
     {#if banner}<Banner kind={banner.kind} message={banner.message} actionLabel={banner.actionLabel} onAction={banner.onAction} />{/if}
-    <span class="errcount" class:bad={errors.length > 0}>⚠ {errors.length} chyb</span>
+    <span class="spacer"></span>
+    {#if errors.length > 0}
+      <button class="errcount" onclick={() => (showErrors = !showErrors)}>
+        ⚠ {errorCountLabel(errors.length)} {showErrors ? "▾" : "▸"}
+      </button>
+    {/if}
     <button onclick={apply} disabled={!dirty || busy}>Apply</button>
   </footer>
 </main>
@@ -283,6 +307,9 @@
   .hint { color: #888; }
   .savebar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid #222; }
   .savebar button { margin: 0; }
-  .errcount { margin-left: auto; color: #888; }
-  .errcount.bad { color: #e05050; }
+  .spacer { flex: 1; }
+  .errcount { background: none; border: 0; cursor: pointer; color: #e05050; }
+  .errlist { border-top: 1px solid #3a1d1d; background: #171012; color: #e08080; max-height: 120px; overflow: auto; padding: 6px 12px; font-size: 12px; }
+  .errlist ul { margin: 0; padding-left: 18px; }
+  .errlist li { margin: 2px 0; }
 </style>

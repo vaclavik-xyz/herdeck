@@ -43,6 +43,7 @@ import {
   windowMode,
   setWindowMode,
   type ConfigPayload,
+  errorCountLabel,
 } from "./configClient";
 
 function rawConfig(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -834,5 +835,15 @@ describe("window mode", () => {
 
   it("exposes exactly the three modes", () => {
     expect(WINDOW_MODES).toEqual(["normal", "floating", "always_on_top"]);
+  });
+});
+
+describe("errorCountLabel", () => {
+  it("pluralizes Czech counts", () => {
+    expect(errorCountLabel(1)).toBe("1 chyba");
+    expect(errorCountLabel(2)).toBe("2 chyby");
+    expect(errorCountLabel(4)).toBe("4 chyby");
+    expect(errorCountLabel(5)).toBe("5 chyb");
+    expect(errorCountLabel(11)).toBe("11 chyb");
   });
 });
