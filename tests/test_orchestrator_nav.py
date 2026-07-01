@@ -583,12 +583,14 @@ def _clocked(clk):
 
 
 def test_order_holds_positions_until_target_settles():
+    # A DONE transition re-sorts (done ranks above working) but must not
+    # shuffle tiles under the finger. (A NEW BLOCK adopts immediately by
+    # design — that is the paging-autojump attention path.)
     clk = [1000.0]
     o = _clocked(clk)
     o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
     assert [t.label for t in o.render().tiles[:2]] == ["one", "two"]
-    o.apply_event("dev", st("p2", Status.BLOCKED, label="two"))
-    # blocked would sort first, but tiles must not shuffle under the finger
+    o.apply_event("dev", st("p2", Status.DONE, label="two"))
     assert [t.label for t in o.render().tiles[:2]] == ["one", "two"]
     clk[0] += 2.5  # target stable past the settle window -> adopt the sort
     assert [t.label for t in o.render().tiles[:2]] == ["two", "one"]
@@ -604,7 +606,7 @@ def test_new_agent_appends_at_end_until_settle():
         [
             st("p1", Status.WORKING, label="one"),
             st("p2", Status.IDLE, label="two"),
-            st("p3", Status.BLOCKED, label="three"),
+            st("p3", Status.DONE, label="three"),
         ],
     )
     assert [t.label for t in o.render().tiles[:3]] == ["one", "two", "three"]
@@ -635,7 +637,7 @@ def test_press_on_freshly_reshuffled_slot_is_swallowed():
     o = _clocked(clk)
     o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
     o.render()
-    o.apply_event("dev", st("p2", Status.BLOCKED, label="two"))
+    o.apply_event("dev", st("p2", Status.DONE, label="two"))
     o.render()  # production refreshes on every event; the settle timer starts here
     clk[0] += 2.5
     o.render()  # adoption: slot 0 repopulates (one -> two) right now
@@ -673,7 +675,7 @@ def test_idle_tick_does_not_adopt_the_new_order(monkeypatch):
     o = _clocked(clk)
     o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
     o.render()
-    o.apply_event("dev", st("p2", Status.BLOCKED, label="two"))
+    o.apply_event("dev", st("p2", Status.DONE, label="two"))
     o.render()  # settle timer starts (production refreshes on every event)
     clk[0] += 2.5
     o.tick()  # idle tick past the settle window — must stay read-only
@@ -714,3 +716,34 @@ def test_drill_recovers_when_server_reconnects():
     rs = o.render()
     assert rs.tiles[0].color == "green"  # approve colour back
     assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1", "enter"])]
+
+
+def test_new_block_jumps_overview_to_front_page():
+    """A new blocked episode must not sit stranded on another page while the
+    panel shows '▲ needs you' over non-blocked tiles (audit: paging-autojump)."""
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=3, clock=lambda: clk[0])  # 2 agent slots
+    o.apply_snapshot(
+        "dev",
+        [st("p1", Status.IDLE), st("p2", Status.IDLE), st("p3", Status.IDLE, label="late")],
+    )
+    o.render()
+    o.on_press(3)  # panel press -> page 2 (shows p3)
+    assert o.render().tiles[0].label == "late"
+    o.apply_event("dev", st("p3", Status.BLOCKED, label="late"))
+    rs = o.render()  # jumped back to page 1 with the blocked agent adopted first
+    assert rs.tiles[0].label == "late" and rs.tiles[0].color == "amber"
+    assert o.render().panel.title == "▲ needs you"
+    # the jump repopulated slots under a possible finger -> guard applies
+    assert o.on_press(0) == []
+    clk[0] += 0.5
+    assert o.on_press(0)[0].pane_id == "p3"
+
+
+def test_new_block_never_yanks_an_open_drill():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)  # drill p1
+    o.apply_event("dev", st("p2", Status.BLOCKED))
+    assert o.is_drilling()  # still inside the drill
+    assert o.render().tiles[12].label == "Back"

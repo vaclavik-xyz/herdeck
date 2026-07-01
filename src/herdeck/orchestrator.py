@@ -79,6 +79,7 @@ class Orchestrator:
         self._display_order: list[AgentKey] = []
         self._target_keys: list[AgentKey] = []
         self._target_since: float = 0.0
+        self._force_adopt: bool = False  # one-shot: adopt on next render, slot-guarded
         self._slot_changed_at: dict[int, float] = {}
 
     def _agent_slots(self) -> int:
@@ -95,11 +96,14 @@ class Orchestrator:
         """
         return (self.slots, self.slots + 1)
 
-    def _touch(self, state: AgentState) -> None:
-        """Record when a pane entered its current status (for elapsed time)."""
+    def _touch(self, state: AgentState) -> bool:
+        """Record when a pane entered its current status (for elapsed time).
+        Returns True when this starts a NEW blocked episode."""
         prev = self._since.get(state.key)
         if prev is None or prev[0] is not state.status:
             self._since[state.key] = (state.status, self._clock())
+            return state.status is Status.BLOCKED
+        return False
 
     def _elapsed_text(self, key: AgentKey) -> str:
         rec = self._since.get(key)
@@ -124,9 +128,12 @@ class Orchestrator:
             else None
         )
         self._agents = {k: v for k, v in self._agents.items() if k.server_id != server_id}
+        new_blocks = False
         for s in states:
             self._agents[s.key] = s
-            self._touch(s)
+            new_blocks = self._touch(s) or new_blocks
+        if new_blocks:
+            self._on_new_block()
         live = set(self._agents)
         self._since = {k: v for k, v in self._since.items() if k in live}
         if self._drill is not None and self._drill.server_id == server_id:
@@ -137,7 +144,8 @@ class Orchestrator:
         if self._drill == state.key and self._agents.get(state.key) != state:
             self._pending_confirm = None
         self._agents[state.key] = state
-        self._touch(state)
+        if self._touch(state):
+            self._on_new_block()
 
     def set_connection(self, server_id: str, up: bool) -> None:
         self._down.discard(server_id) if up else self._down.add(server_id)
@@ -167,6 +175,18 @@ class Orchestrator:
     def is_drilling(self) -> bool:
         return self._drill is not None
 
+    def _on_new_block(self) -> None:
+        """A new blocked episode needs attention: jump the overview to the top
+        page and adopt the fresh sort NOW (blocked sorts first), instead of
+        leaving the amber tile stranded on a page the user must hunt for. The
+        adoption keeps the old display for slot-change tracking, so the press
+        guard covers a finger already in flight. A drill/menu is never yanked —
+        the overview re-sorts on exit anyway."""
+        if self._drill is not None or self._launcher or self._profile_menu:
+            return
+        self._page = 0
+        self._force_adopt = True  # adopt on next render, WITH slot guards
+
     # --- render ---
     def _resettle(self) -> None:
         """Adopt the fresh sort on the next render — view transitions (paging,
@@ -181,9 +201,11 @@ class Orchestrator:
         an agent unblocked from the phone mid-reach makes the press drill a
         different agent (and focus its pane on screen). Instead, tiles KEEP
         their positions while the fleet is changing; the fresh sort is adopted
-        only once the target order has been stable for _ORDER_SETTLE_S, or at
-        view transitions (_resettle). Removed agents drop out immediately; new
-        agents append at the end until the next adoption."""
+        only once the target order has been stable for _ORDER_SETTLE_S, at
+        view transitions (_resettle), or when a NEW BLOCK force-adopts
+        (attention beats stability there — see _on_new_block; the slot press
+        guard still protects a finger in flight). Removed agents drop out
+        immediately; new agents append at the end until the next adoption."""
         target = layout.order_agents(self._agents.values(), self.config.overview_order)
         target_keys = [s.key for s in target]
         now = self._clock()
@@ -191,8 +213,9 @@ class Orchestrator:
             self._target_keys = target_keys
             self._target_since = now
         by_key = {s.key: s for s in target}
-        if not self._display_order or now - self._target_since >= _ORDER_SETTLE_S:
+        if not self._display_order or self._force_adopt or now - self._target_since >= _ORDER_SETTLE_S:
             display = list(target_keys)
+            self._force_adopt = False
         else:
             display = [k for k in self._display_order if k in by_key]
             display += [k for k in target_keys if k not in display]
