@@ -174,7 +174,8 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 # Bump when tile composition changes so stale cached tile PNGs are ignored.
 # 2: tile_fill (none/tint/solid) — solid contrast + solid-sweep composition.
 # 3: readable subtext (branch/time) on solid dark-colour fills (e.g. blue).
-TILE_VERSION = 3
+# 4: wrapped text marks a cut-off tail with an ellipsis.
+TILE_VERSION = 4
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -297,10 +298,15 @@ def _truncate(draw, text, font, max_w):
 
 
 def _wrap(draw, text, font, max_w, max_lines=2):
-    """Wrap text (splitting on '/' too, for branch names) to <= max_lines."""
+    """Wrap text (splitting on '/' too, for branch names) to <= max_lines.
+
+    A cut-off tail is ALWAYS marked with an ellipsis: silently dropping words
+    turned e.g. the drill option "…don't ask again for rm commands in
+    /Users/admin/projects" into an apparent approval for "rm commands in /"."""
     words = text.replace("/", " / ").split()
     lines: list[str] = []
     cur = ""
+    truncated = False
     for w in words:
         test = (cur + " " + w).strip()
         if draw.textlength(test, font=font) <= max_w:
@@ -310,11 +316,18 @@ def _wrap(draw, text, font, max_w, max_lines=2):
                 lines.append(cur)
             cur = w
         if len(lines) == max_lines:
+            truncated = True  # cur (and any remaining words) no longer fit
             break
     if cur and len(lines) < max_lines:
         lines.append(cur)
     if lines:
-        lines[-1] = _truncate(draw, lines[-1], font, max_w)
+        if truncated:
+            last = lines[-1]
+            while last and draw.textlength(last + "…", font=font) > max_w:
+                last = last[:-1]
+            lines[-1] = last + "…"
+        else:
+            lines[-1] = _truncate(draw, lines[-1], font, max_w)
     return lines[:max_lines]
 
 

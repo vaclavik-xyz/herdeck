@@ -503,3 +503,19 @@ def test_cache_hit_refreshes_old_mtime_so_active_files_survive_prune(tmp_path):
     assert p.render_tile(tile) == name  # cache hit on a stale-mtime file
     assert prune_generated(str(tmp_path)) == 0  # hit refreshed mtime -> not stale
     assert path.exists()
+
+
+def test_wrap_marks_cut_tail_with_ellipsis():
+    """Dropping words beyond max_lines must be visible — an unmarked truncation
+    of a permission scope reads as the complete text (audit: wrap-ellipsis)."""
+    from PIL import Image, ImageDraw
+
+    from herdeck.icons import _font, _wrap
+
+    d = ImageDraw.Draw(Image.new("RGB", (196, 196)))
+    f = _font(22)
+    cut = _wrap(d, "Yes, and don't ask again for rm commands in /Users/admin/projects", f, 180, 3)
+    assert len(cut) == 3
+    assert cut[-1].endswith("…")
+    intact = _wrap(d, "Yes", f, 180, 3)
+    assert intact == ["Yes"]  # nothing cut -> no spurious ellipsis
