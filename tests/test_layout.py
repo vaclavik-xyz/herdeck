@@ -244,6 +244,29 @@ def test_parse_options_question_list_and_dedup():
     assert opts[0].label == "Dodavatelské doklady"
 
 
+def test_parse_options_uses_last_menu_not_stale_scrollback():
+    from herdeck.layout import parse_options
+
+    # Detected pane text carries old numbered lists scrolled up above the live
+    # prompt; the current menu is the last block starting at 1, and a side panel
+    # sharing the option rows must be trimmed from the labels.
+    txt = (
+        "1. Groq vrací přepis\n2. Přidá se LLM krok\n3. Tím se naplní\n4. V UI odznak\n"
+        "\nsome later output\n"
+        "1. Textová diarizace\n2. Časování\n"
+        "\n❯ 1. Délka obsahu (rozhovoru)     ┌────────────┐\n"
+        "  2. Čas zpracování (per fáze)    │ DÉLKA      │\n"
+        "  3. Obojí                        │ ───────    │\n"
+        "Enter to select · Esc to cancel"
+    )
+    opts = parse_options(txt)
+    assert [(o.key, o.label) for o in opts] == [
+        ("1", "Délka obsahu (rozhovoru)"),
+        ("2", "Čas zpracování (per fáze)"),
+        ("3", "Obojí"),
+    ]
+
+
 def test_parse_options_strips_ansi_sequences():
     from herdeck.layout import parse_options
 

@@ -12,6 +12,9 @@ from .model import AgentState, Status
 # Leading markers (cursor caret, bullets, whitespace) are skipped before the digit.
 _OPTION_RE = re.compile(r"^[\s>❯❱*\-)(]*(\d+)[.)]\s+(\S.*?)\s*$")
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+# A box-drawing run (U+2500–U+257F) and everything after it: a side panel drawn
+# in the same terminal row as an option, to be trimmed off the option's label.
+_BOX_DRAWING_RE = re.compile("\\s*[─-╿].*$")
 _DETAIL_LINE_WIDTH = 36
 _DETAIL_MAX_LINES = 3
 
@@ -151,20 +154,33 @@ class Option:
 def parse_options(text: str) -> list[Option]:
     """Extract numbered choices from an agent prompt (permission menu, question).
 
-    Matches lines like ``1. Yes`` / ``❯ 2. Cenotvorba`` / ``3) No``. Duplicate
-    numbers keep their first occurrence; order follows appearance.
+    Matches lines like ``1. Yes`` / ``❯ 2. Cenotvorba`` / ``3) No``. The detected
+    pane text can carry stale numbered lists scrolled up above the live prompt, so
+    parsing anchors on the CURRENT menu — the last block that starts at ``1`` — to
+    keep an older list from shadowing it. Duplicate numbers keep their first
+    occurrence; a side panel sharing an option's row (box-drawing columns) is
+    trimmed from the label.
     """
-    options: list[Option] = []
-    seen: set[str] = set()
+    matches: list[tuple[str, str]] = []
     for line in (text or "").splitlines():
         m = _OPTION_RE.match(_ANSI_RE.sub("", line).strip())
         if not m:
             continue
-        key = m.group(1)
+        label = _BOX_DRAWING_RE.sub("", m.group(2)).strip()
+        matches.append((m.group(1), label))
+    # Restart at the last option keyed "1": that is the most recent menu, so an
+    # older numbered list higher in the scrollback can't win.
+    start = 0
+    for i, (key, _) in enumerate(matches):
+        if key == "1":
+            start = i
+    options: list[Option] = []
+    seen: set[str] = set()
+    for key, label in matches[start:]:
         if key in seen:
             continue
         seen.add(key)
-        options.append(Option(key, m.group(2).strip()))
+        options.append(Option(key, label))
     return options
 
 
