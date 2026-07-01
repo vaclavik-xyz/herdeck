@@ -213,6 +213,20 @@ class LiveSource(StateSource):
         def mutate():
             with self._lock:
                 self._connected = up
+                if not up:
+                    # In-flight background reads died with the connection
+                    # (Connector.send is at-most-once), so their req markers
+                    # must go too — otherwise _reconcile_prereads keeps
+                    # skipping the still-blocked panes after a reconnect and
+                    # instant drill stays dark until each pane re-blocks. The
+                    # cached prompt TEXT stays: it is a best-effort hint until
+                    # the fresh episode read lands.
+                    self._preread_req.clear()
+            if up:
+                # The resync snapshot follows, but reconcile NOW so panes that
+                # stayed blocked across the outage get their episode read even
+                # if that snapshot arrives content-identical.
+                self._reconcile_prereads()
             return True
 
         self._apply(mutate)
