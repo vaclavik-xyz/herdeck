@@ -58,23 +58,30 @@ def test_full_frame_renders_all_in_range_tiles_and_panel():
     assert drv.working_renders == []
 
 
-def test_working_frame_renders_only_working_tiles():
+def test_working_frame_renders_full_frame():
+    # D200Sink always renders a full frame regardless of frame.full/frame.working.
+    # The D200 firmware drops cells absent from a partial write, so even a
+    # working/spinner tick must re-send every tile + the panel to keep the whole
+    # deck lit.
     drv = FakeDriver()
-    sink = _sink(drv)
-    rs = _RS([_Tile(0), _Tile(1), _Tile(2)])
+    sink = _sink(drv, slots=3)
+    rs = _RS([_Tile(0), _Tile(1), _Tile(2), _Tile(5)])  # 5 is out of range (slots=3)
     sink.deliver(RenderFrame(render=rs, working=[1], full=False))
-    assert drv.working_renders == [[1]]
-    assert drv.full_renders == []
-    assert drv.panels == []
+    assert drv.full_renders == [[0, 1, 2]]  # all in-range tiles; not just working=[1]
+    assert drv.panels == ["PANEL"]
+    assert drv.working_renders == []  # render_working is never called
 
 
-def test_working_frame_with_no_working_tiles_is_a_noop():
+def test_working_frame_with_no_working_tiles_still_renders_full_frame():
+    # Even a working frame with an empty working set triggers a full render —
+    # D200Sink ignores frame.working entirely.
     drv = FakeDriver()
     sink = _sink(drv)
     rs = _RS([_Tile(0), _Tile(1)])
     sink.deliver(RenderFrame(render=rs, working=[], full=False))
+    assert drv.full_renders == [[0, 1]]
+    assert drv.panels == ["PANEL"]
     assert drv.working_renders == []
-    assert drv.full_renders == []
 
 
 def test_press_callback_is_registered_on_the_driver():
