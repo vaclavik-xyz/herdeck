@@ -747,3 +747,37 @@ def test_new_block_never_yanks_an_open_drill():
     o.apply_event("dev", st("p2", Status.BLOCKED))
     assert o.is_drilling()  # still inside the drill
     assert o.render().tiles[12].label == "Back"
+
+
+def test_armed_confirm_does_not_survive_a_disconnect():
+    """arm -> server drops -> quick reconnect: a single press must NOT complete
+    the stale confirmation (roborev b866632)."""
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)
+    assert o.on_press(11) == []  # arms Stop
+    o.set_connection("dev", False)
+    o.set_connection("dev", True)
+    assert o.on_press(11) == []  # re-arms; does NOT fire the stale confirmation
+    assert o.on_press(11) == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
+
+
+def test_page_jump_guards_presses_even_when_order_is_unchanged():
+    """The auto page jump swaps every visible tile; an in-flight press must be
+    swallowed even if the blocker already sorted first (roborev 6906bfa)."""
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=3, clock=lambda: clk[0])  # 2 agent slots
+    o.apply_snapshot(
+        "dev",
+        [st("p1", Status.DONE, label="first"), st("p2", Status.IDLE), st("p3", Status.IDLE)],
+    )
+    o.render()
+    o.on_press(3)  # page 2
+    o.render()
+    # p1 blocks: it ALREADY sorted first, so the display order is unchanged —
+    # only the page jump changes what is visible
+    o.apply_event("dev", st("p1", Status.BLOCKED, label="first"))
+    o.render()
+    assert o.on_press(0) == []  # swallowed: the tile under the finger changed
+    clk[0] += 0.5
+    assert o.on_press(0)[0].pane_id == "p1"

@@ -149,6 +149,12 @@ class Orchestrator:
 
     def set_connection(self, server_id: str, up: bool) -> None:
         self._down.discard(server_id) if up else self._down.add(server_id)
+        if not up and self._pending_confirm is not None:
+            # An armed confirmation must not survive an outage: the offline
+            # drill hides it, so after a quick reconnect a single press could
+            # complete a confirmation the user no longer sees as armed.
+            if self._pending_confirm[1].server_id == server_id:
+                self._pending_confirm = None
 
     def set_detection(self, text: str) -> None:
         if text != self._detection:
@@ -184,6 +190,13 @@ class Orchestrator:
         the overview re-sorts on exit anyway."""
         if self._drill is not None or self._launcher or self._profile_menu:
             return
+        if self._page % max(1, -(-len(self._agents) // self._agent_slots())) != 0:
+            # The jump swaps every visible tile even when the ORDER is
+            # unchanged (e.g. the blocker already sorted first), which the
+            # display-diff guard cannot see — guard the whole first page.
+            now = self._clock()
+            for i in range(self._agent_slots()):
+                self._slot_changed_at[i] = now
         self._page = 0
         self._force_adopt = True  # adopt on next render, WITH slot guards
 
