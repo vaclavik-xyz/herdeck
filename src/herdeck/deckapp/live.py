@@ -222,11 +222,10 @@ class LiveSource(StateSource):
                     # cached prompt TEXT stays: it is a best-effort hint until
                     # the fresh episode read lands.
                     self._preread_req.clear()
-            if up:
-                # The resync snapshot follows, but reconcile NOW so panes that
-                # stayed blocked across the outage get their episode read even
-                # if that snapshot arrives content-identical.
-                self._reconcile_prereads()
+            # No reconnect-time reads: the connector's resync `list` snapshot
+            # always follows and _on_snapshot reconciles against the FRESH
+            # fleet — issuing reads from the stale pre-disconnect agents here
+            # would race panes that unblocked or vanished while offline.
             return True
 
         self._apply(mutate)

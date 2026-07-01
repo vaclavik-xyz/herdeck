@@ -1073,10 +1073,13 @@ def test_reconnect_reissues_prereads_for_still_blocked_panes():
     # bridge drops (mac sleep); the in-flight read is lost with it
     src._on_connection(server.id, False)
     src._on_connection(server.id, True)
-    # even before the resync snapshot lands, a fresh episode read is issued
+    # no read yet: reissuing must wait for the RESYNC snapshot (fresh fleet),
+    # not fire against the stale pre-disconnect agents
     reads = [m for m in runner.sent if m.get("type") == "read"]
-    assert len(reads) == 2
-    # and the resync snapshot does not double-issue for the same episode
+    assert len(reads) == 1
     src._on_snapshot(server.id, [agent(server.id, "p1", Status.BLOCKED)])
     reads = [m for m in runner.sent if m.get("type") == "read"]
-    assert len(reads) == 2
+    assert len(reads) == 2  # fresh episode read for the still-blocked pane
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.BLOCKED)])
+    reads = [m for m in runner.sent if m.get("type") == "read"]
+    assert len(reads) == 2  # no double-issue for the same episode
