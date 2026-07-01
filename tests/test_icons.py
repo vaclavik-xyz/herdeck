@@ -487,3 +487,19 @@ def test_render_tile_recreates_pruned_file_for_device_path(tmp_path):
     (tmp_path / name).unlink()
     assert p.render_tile(tile) == name
     assert (tmp_path / name).exists()  # strmdck reads the file by name
+
+
+def test_cache_hit_refreshes_old_mtime_so_active_files_survive_prune(tmp_path):
+    import time as _time
+
+    from herdeck.icons import prune_generated
+
+    p = make_provider(tmp_path)
+    tile = _tile_ns()
+    name = p.render_tile(tile)
+    path = tmp_path / name
+    old = _time.time() - 2 * 3600
+    os.utime(path, (old, old))
+    assert p.render_tile(tile) == name  # cache hit on a stale-mtime file
+    assert prune_generated(str(tmp_path)) == 0  # hit refreshed mtime -> not stale
+    assert path.exists()

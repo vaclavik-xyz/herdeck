@@ -473,7 +473,20 @@ class IconProvider:
         layout; control tiles render their centred label on a colour."""
         name, spinner = self._tile_name(tile)
         path = os.path.join(self._cache_dir, name)
-        if os.path.exists(path):
+        try:
+            st = os.stat(path)
+        except OSError:
+            st = None
+        if st is not None:
+            # Keep actively-served files out of prune's stale window: refresh a
+            # sufficiently old mtime on hit, so a filename already handed to the
+            # device path (strmdck reads it later, during set_buttons) can never
+            # be deleted by the opportunistic prune mid-batch.
+            if time.time() - st.st_mtime > PRUNE_MAX_AGE_S / 2:
+                try:
+                    os.utime(path)
+                except OSError:
+                    pass
             return name
         img = (
             self._compose_agent_tile(tile, spinner)
