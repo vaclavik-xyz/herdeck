@@ -13,6 +13,7 @@ from .config import ConfigError, Notifications
 from .secrets import get_secret
 
 SOCKET_TIMEOUT = 1.0
+SERVER_PROBE_TIMEOUT = 2.0
 
 
 @dataclass
@@ -69,6 +70,26 @@ def check_config(
         False,
         f"config at {config_path} has no servers and no herdr socket is available",
     )
+
+
+def check_servers(servers, probe) -> list[Check]:
+    """One connectivity check per configured [[servers]] entry.
+
+    ``probe(url, token) -> error string or None``. Without this, a bridge that
+    is down, a wrong URL/port and a present-but-rejected token all passed
+    doctor with green checkmarks — exactly the remote failure modes users hit."""
+    checks = []
+    for server in servers:
+        try:
+            error = probe(server.url, server.token)
+        except Exception as exc:
+            error = str(exc) or type(exc).__name__
+        name = f"server '{server.id}'"
+        if error is None:
+            checks.append(Check(name, True, f"{server.url} answered with a snapshot"))
+        else:
+            checks.append(Check(name, False, f"{server.url}: {error}"))
+    return checks
 
 
 def check_optional_deps(is_available: Callable[[str], bool]) -> Check:
@@ -189,13 +210,42 @@ def _probe_socket(path: str) -> dict:
     return asyncio.run(asyncio.wait_for(_socket_pane_list(path), timeout=SOCKET_TIMEOUT))
 
 
+async def _probe_server_ws(url: str, token: str) -> str | None:
+    """Connect to a bridge and wait for its greeting snapshot. None on success,
+    else a human-readable reason (reusing the connector's classification, so a
+    rejected token reads as 'token rejected', not as a generic close)."""
+    import websockets
+
+    from .connector import _describe_connect_error
+
+    try:
+        async with websockets.connect(
+            url,
+            additional_headers={"Authorization": f"Bearer {token}"},
+            open_timeout=SERVER_PROBE_TIMEOUT,
+            close_timeout=1,
+        ) as ws:
+            await asyncio.wait_for(ws.recv(), timeout=SERVER_PROBE_TIMEOUT)
+            return None
+    except TimeoutError:
+        return f"connected but no snapshot within {SERVER_PROBE_TIMEOUT:g}s"
+    except (OSError, websockets.WebSocketException) as exc:
+        return _describe_connect_error(exc)
+
+
+def _probe_server(url: str, token: str) -> str | None:
+    return asyncio.run(_probe_server_ws(url, token))
+
+
 def _module_available(module: str) -> bool:
     return importlib.util.find_spec(module) is not None
 
 
-def _read_config_facts(config_path: str | None) -> tuple[bool, list[str], Check | None]:
+def _read_config_facts(
+    config_path: str | None,
+) -> tuple[bool, list[str], Check | None, list]:
     if config_path is None:
-        return False, [], None
+        return False, [], None, []
     try:
         data = tomllib.loads(Path(config_path).read_text())
         servers = data.get("servers", [])
@@ -209,6 +259,7 @@ def _read_config_facts(config_path: str | None) -> tuple[bool, list[str], Check 
             False,
             [],
             Check("configuration", False, f"cannot read config at {config_path} ({exc})"),
+            [],
         )
 
     from .config import ConfigError, load_config
@@ -217,19 +268,21 @@ def _read_config_facts(config_path: str | None) -> tuple[bool, list[str], Check 
         config = load_config(config_path)
     except ConfigError as exc:
         if any(not get_secret(env) for env in token_envs):
-            return bool(servers), token_envs, None
+            return bool(servers), token_envs, None, []
         return (
             bool(servers),
             token_envs,
             Check("configuration", False, f"invalid config at {config_path} ({exc})"),
+            [],
         )
     except Exception as exc:
         return (
             bool(servers),
             token_envs,
             Check("configuration", False, f"invalid config at {config_path} ({exc})"),
+            [],
         )
-    return bool(config.servers), token_envs, None
+    return bool(config.servers), token_envs, None, list(config.servers)
 
 
 def collect_checks() -> list[Check]:
@@ -238,7 +291,7 @@ def collect_checks() -> list[Check]:
     config_path = _discover_config_path()
     socket_path = os.path.expanduser(os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock"))
     socket_exists = os.path.exists(socket_path)
-    has_servers, token_envs, config_error = _read_config_facts(config_path)
+    has_servers, token_envs, config_error, servers = _read_config_facts(config_path)
     socket_check = (
         Check("herdr socket", True, "remote config present; local socket not required")
         if has_servers
@@ -248,11 +301,18 @@ def collect_checks() -> list[Check]:
         config_error
         if config_error is not None
         else check_config(config_path, has_servers, socket_exists, token_envs=token_envs),
-        socket_check,
-        check_optional_deps(_module_available),
-        check_deck(_module_available),
-        _check_configured_notifications(config_path),
     ]
+    # Actually contact each configured server — token presence alone said
+    # nothing about a dead bridge, a wrong URL or a rejected token.
+    checks.extend(check_servers(servers, _probe_server))
+    checks.extend(
+        [
+            socket_check,
+            check_optional_deps(_module_available),
+            check_deck(_module_available),
+            _check_configured_notifications(config_path),
+        ]
+    )
     return checks
 
 

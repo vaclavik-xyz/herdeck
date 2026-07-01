@@ -114,12 +114,16 @@ token_env = "HERDECK_TOKEN"
     monkeypatch.setenv("HERDECK_CONFIG", str(config))
     monkeypatch.setenv("HERDECK_TOKEN", "secret")
     monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "missing.sock"))
+    import herdeck.doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_probe_server", lambda url, token: None)
 
     checks = {check.name: check for check in collect_checks()}
 
     assert checks["configuration"].ok is True
     assert checks["herdr socket"].ok is True
     assert "not required" in checks["herdr socket"].detail
+    assert checks["server 'remote'"].ok is True  # remote servers are now probed
 
 
 async def test_socket_pane_list_returns_raw_rpc(monkeypatch):
@@ -359,3 +363,42 @@ def test_check_notifications_macos_only_ok():
 
     c = check_notifications(Notifications(enabled=True, backends=["macos"]))
     assert c.ok is True
+
+
+def test_check_servers_reports_reachable_and_failing():
+    """A half-configured remote must not pass with all checkmarks
+    (audit: doctor-remote-probe)."""
+    from herdeck.config import ServerConfig
+    from herdeck.doctor import check_servers
+
+    servers = [ServerConfig("ok", "ws://a:8788", "t"), ServerConfig("bad", "ws://b:8788", "t")]
+
+    def probe(url, token):
+        if url == "ws://a:8788":
+            return None
+        return "token rejected (close 4401) — check token_env/keychain"
+
+    checks = check_servers(servers, probe)
+    assert checks[0].name == "server 'ok'" and checks[0].ok
+    assert "answered" in checks[0].detail
+    assert checks[1].name == "server 'bad'" and not checks[1].ok
+    assert "token rejected" in checks[1].detail
+    assert "t" != checks[1].detail  # token value itself never printed
+
+
+def test_collect_checks_probes_remote_servers(tmp_path, monkeypatch):
+    import herdeck.doctor as doctor_mod
+    from herdeck.doctor import collect_checks
+
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[[servers]]\nid = "remote"\nurl = "wss://remote.example.test"\ntoken_env = "HERDECK_TOKEN"\n'
+    )
+    monkeypatch.setenv("HERDECK_CONFIG", str(config))
+    monkeypatch.setenv("HERDECK_TOKEN", "secret")
+    monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "missing.sock"))
+    monkeypatch.setattr(doctor_mod, "_probe_server", lambda url, token: "connection refused")
+
+    checks = {c.name: c for c in collect_checks()}
+    assert checks["server 'remote'"].ok is False
+    assert "connection refused" in checks["server 'remote'"].detail
