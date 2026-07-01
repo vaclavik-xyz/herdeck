@@ -107,6 +107,20 @@ fn current_discovery(state: &tauri::State<'_, AppState>) -> Result<Discovery, St
         .ok_or_else(|| "sidecar not ready".to_string())
 }
 
+/// Probe an already-running headless runtime's token-authed `GET /health`
+/// (Rust-side, so the token never enters JS). `true` iff it responds — the
+/// signal that a `runtime.json` we found is live (not stale) and we should
+/// ATTACH to it rather than spawn our own sidecar.
+fn probe_runtime_health(d: &Discovery) -> bool {
+    http::http_get(
+        &d.host,
+        d.port,
+        &format!("/health?token={}", d.token),
+        SIDECAR_TIMEOUT,
+    )
+    .is_ok()
+}
+
 /// Probe the sidecar's token-authed `GET /health` and return its JSON. Done
 /// Rust-side (not via WebView `fetch`) so it isn't blocked by CORS, and so the
 /// access token never has to live in JS. `Err` if the sidecar isn't ready yet
@@ -358,6 +372,18 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
             });
         }
     }
+    // Attach to an already-running headless runtime (herdeck.runtime) when its
+    // discovery file is present AND /health responds: the window then shares the
+    // runtime's Orchestrator + bridge + clock (D200 and window in lockstep) instead
+    // of spawning its own sidecar. External == "we don't own it": quitting the
+    // window never kills the launchd runtime. A missing/stale file falls through.
+    if let Some(d) = sidecar::decide_runtime_attach(
+        sidecar::read_runtime_discovery(&sidecar::runtime_file_path()),
+        probe_runtime_health,
+    ) {
+        return SidecarPlan::External(d);
+    }
+
     SidecarPlan::Spawn(sidecar::choose_spawn(
         resource_dir.as_deref(),
         &repo_root_from_manifest(),
