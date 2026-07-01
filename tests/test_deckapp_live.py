@@ -383,6 +383,116 @@ def test_snapshot_not_changing_drilled_pane_keeps_detection():
     assert runner.sent[0]["keys"] == ["1"]
 
 
+# --- pre-read: warm the blocked prompt in the background for an instant drill ----
+
+
+def _reads(runner):
+    return [m for m in runner.sent if m["type"] == "read"]
+
+
+def test_blocked_pane_triggers_background_preread():
+    # A pane entering BLOCKED is read in the background so its prompt is cached
+    # before the user ever drills it (the drill then paints options in one frame).
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    runner.sent.clear()
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    reads = _reads(runner)
+    assert len(reads) == 1
+    assert reads[0]["pane_id"] == "p0"
+    assert reads[0]["source"] == "detection"
+
+
+def test_preread_issued_once_while_blocked():
+    # The background read fires once per block episode, not on every snapshot poll.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    runner.sent.clear()
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    assert _reads(runner) == []
+
+
+def test_preread_not_reissued_for_drilled_pane_after_reblock():
+    # The drilled pane owns its own read (fired on press); it must not also get a
+    # background pre-read — even after an unblock drops its cache and it re-blocks.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    app.press(0)  # drill p0 (still the drilled pane below)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.IDLE)])  # unblock -> cache dropped
+    runner.sent.clear()
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])  # re-block while drilled
+    assert _reads(runner) == []
+
+
+def test_preread_makes_drill_instant():
+    # With the prompt cached, drilling shows actionable options WITHOUT waiting for
+    # a post-drill read round-trip: the first option acts immediately.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    preread = _reads(runner)[-1]
+    src._on_result(preread["req"], {"text": "1. Approve\n2. Deny", "pane_id": "p0"})
+    app.press(0)  # drill -> options seeded from cache, no wait
+    runner.sent.clear()  # discard the focus + refresh-read the drill still fires
+    app.press(0)  # press the first option
+    assert len(runner.sent) == 1
+    assert runner.sent[0]["type"] == "act"
+    assert runner.sent[0]["keys"] == ["1"]
+
+
+def test_drill_seeds_detection_from_cache():
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    preread = _reads(runner)[-1]
+    src._on_result(preread["req"], {"text": "1. Approve\n2. Deny", "pane_id": "p0"})
+    app.press(0)  # drill
+    assert app._orch._detection == "1. Approve\n2. Deny"  # seeded, no empty flash
+
+
+def test_drill_still_fires_fresh_read_for_refresh():
+    # A warm cache paints instantly, but the drill still focuses AND issues a fresh
+    # read so a prompt that changed in place corrects within one round-trip.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    preread = _reads(runner)[-1]
+    src._on_result(preread["req"], {"text": "1. Approve", "pane_id": "p0"})
+    runner.sent.clear()
+    app.press(0)
+    assert [m["type"] for m in runner.sent] == ["focus", "read"]
+
+
+def test_preread_result_does_not_render_overview():
+    # Caching a background prompt while sitting on the overview must be silent: no
+    # detection surfaced, no version churn (we are not drilling that pane).
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    preread = _reads(runner)[-1]
+    v = app._state()["version"]
+    src._on_result(preread["req"], {"text": "1. Approve", "pane_id": "p0"})
+    assert app._state()["version"] == v
+    assert app._orch._detection == ""
+
+
+def test_unblock_clears_preread_cache_then_reblock_rereads():
+    # The cached prompt is dropped when the pane leaves BLOCKED; a re-block reads
+    # afresh so a stale prompt never seeds the next drill.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    preread = _reads(runner)[-1]
+    src._on_result(preread["req"], {"text": "1. Approve", "pane_id": "p0"})
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.IDLE)])  # unblock
+    runner.sent.clear()
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])  # re-block
+    assert len(_reads(runner)) == 1
+
+
 def test_snapshot_transition_is_atomic_under_deck_lock():
     # A live update must apply its buffer swap, invalidation and render as ONE
     # transition under the DeckApp lock, so a press (which holds the same lock)

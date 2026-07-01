@@ -69,7 +69,13 @@ class LiveSource(StateSource):
         self._agents: dict[AgentKey, AgentState] = {}
         self._connected = False
         self._req = 0
+        self._bg_req = 0
         self._active_read_req: str | None = None
+        # Pre-read cache: the last-read prompt per BLOCKED pane, read in the
+        # background so a drill paints its options in one frame (no read round-trip,
+        # no empty flash). ``None`` = a read is in flight; a str = the cached prompt.
+        # An entry is dropped when the pane leaves BLOCKED (its prompt is now stale).
+        self._preread: dict[AgentKey, str | None] = {}
         self._orch: Orchestrator | None = None
         self._deck_lock = None
         self._refresh_locked_cb = None
@@ -119,7 +125,15 @@ class LiveSource(StateSource):
         orch, runner = self._orch, self._runner
         if orch is None or runner is None:
             return
-        for cmd in orch.on_press(index):
+        was_drilling = orch.is_drilling()
+        cmds = orch.on_press(index)
+        # If this press just opened a drill into a blocked pane whose prompt we
+        # pre-read, seed the detection so the very first render shows the options —
+        # no wait for the read round-trip, no empty-drill flash. The drill's own
+        # read (in cmds) still fires as a refresh, correcting any in-place change.
+        if not was_drilling:
+            self._seed_detection_from_preread(orch)
+        for cmd in cmds:
             try:
                 msg = command_to_msg(cmd, self._next_req(cmd))
             except ValueError:
@@ -127,6 +141,21 @@ class LiveSource(StateSource):
                 # phase 1 does not reload config from the deck, so they are ignored.
                 continue
             runner.send(msg)
+
+    def _seed_detection_from_preread(self, orch) -> None:
+        """Paint a freshly-opened blocked drill from the pre-read cache (caller holds
+        the deck lock, via DeckApp.press). No-op unless the pane is blocked and a
+        prompt string was cached (a pending ``None`` entry does not seed)."""
+        key = orch.drill_key()
+        if key is None:
+            return
+        agent = orch.get_agent(key)
+        if agent is None or agent.status is not Status.BLOCKED:
+            return
+        with self._lock:
+            cached = self._preread.get(key)
+        if isinstance(cached, str) and cached:
+            orch.set_detection(cached)
 
     def summary(self) -> dict:
         from .. import layout
@@ -158,6 +187,7 @@ class LiveSource(StateSource):
             # (App.handle_snapshot): the prompt + in-flight read stay valid while it
             # is still blocked.
             self._invalidate_if_drill_unblocked(server_id, new_by_key.get(self._drilled_key()))
+            self._reconcile_prereads()
             return True
 
         self._apply(mutate)
@@ -171,6 +201,7 @@ class LiveSource(StateSource):
             drilled = self._drilled_key()
             if drilled is not None and drilled == state.key:
                 self._invalidate_if_drill_unblocked(server_id, state)
+            self._reconcile_prereads()
             return True
 
         self._apply(mutate)
@@ -193,12 +224,14 @@ class LiveSource(StateSource):
             if runner is not None:
                 runner.send(command_to_msg(Command("list", self._server.id), None))
             return
-        # A read result: surface the prompt only if it still matches the request we
-        # issued and the pane is still drilled (re-checked under the deck lock so a
-        # concurrent invalidation wins).
+        # A read result: cache it for an instant future drill (while the pane is
+        # blocked), and surface the prompt now only if it still matches the request
+        # we issued and the pane is still drilled (re-checked under the deck lock so
+        # a concurrent invalidation wins).
         pane_id = data.get("pane_id")
 
         def mutate():
+            self._cache_preread(pane_id, text)
             orch = self._orch
             if orch is None:
                 return False
@@ -229,6 +262,50 @@ class LiveSource(StateSource):
             changed = mutate()
             if changed and self._refresh_locked_cb is not None:
                 self._refresh_locked_cb()
+
+    # --- pre-read cache (callers hold the deck lock) ---
+    def _reconcile_prereads(self) -> None:
+        """Keep the pre-read cache in step with the fleet: drop entries for panes no
+        longer blocked (their prompt is stale), and issue one background read for each
+        newly-blocked pane that is not the drilled pane (the drill owns its own read).
+
+        Runs inside a mutate() (deck lock held); ``self._lock`` guards the cache +
+        buffer. Sends fire after releasing ``self._lock`` — ``runner.send`` is
+        fire-and-forget and never blocks."""
+        runner = self._runner
+        drilled = self._drilled_key()
+        reads: list[tuple[str, AgentKey]] = []
+        with self._lock:
+            blocked = {k for k, s in self._agents.items() if s.status is Status.BLOCKED}
+            for key in list(self._preread):
+                if key not in blocked:
+                    del self._preread[key]  # left BLOCKED -> prompt is stale
+            for key in blocked:
+                if key in self._preread or key == drilled:
+                    continue  # already read/pending, or the drill will read it
+                self._preread[key] = None  # mark pending so the poll won't re-issue
+                self._bg_req += 1
+                reads.append((f"p{self._bg_req}", key))
+        if runner is None:
+            return
+        for bg_req, key in reads:
+            runner.send(
+                command_to_msg(
+                    Command("read", key.server_id, key.pane_id, source="detection"), bg_req
+                )
+            )
+
+    def _cache_preread(self, pane_id: str | None, text: str) -> None:
+        """Store a read result as the pane's cached prompt — only while the pane is
+        still BLOCKED, so a result arriving after an unblock does not resurrect a
+        stale entry. Caller holds the deck lock."""
+        if pane_id is None:
+            return
+        key = AgentKey(self._server.id, pane_id)
+        with self._lock:
+            state = self._agents.get(key)
+            if state is not None and state.status is Status.BLOCKED:
+                self._preread[key] = text
 
     # --- read invalidation (callers hold the deck lock) ---
     def _drilled_key(self) -> AgentKey | None:
