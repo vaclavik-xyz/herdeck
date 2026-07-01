@@ -230,6 +230,7 @@ class Orchestrator:
                         agent_type=s.agent_type,
                         spinner=phase,
                         working_animation=self.config.view.working_animation,
+                        tile_fill=self.config.view.tile_fill,
                         repo=layout.compose_line(s, primary_tokens),
                         branch=layout.compose_line(s, secondary_tokens),
                         status_text=(

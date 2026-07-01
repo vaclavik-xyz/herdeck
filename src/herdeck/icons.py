@@ -134,9 +134,43 @@ _GLYPH_FONT_SIZE = 120
 _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default)
 
 # Bump when tile composition changes so stale cached tile PNGs are ignored.
-TILE_VERSION = 1
+# 2: tile_fill (none/tint/solid) — solid contrast + solid-sweep composition.
+# 3: readable subtext (branch/time) on solid dark-colour fills (e.g. blue).
+TILE_VERSION = 3
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
+
+
+def _lum(c: tuple[int, int, int]) -> float:
+    """Perceived luminance (Rec. 601) of an RGB colour, on a 0-255 scale."""
+    return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+
+
+def _tint_bg(accent: tuple[int, int, int]) -> tuple[int, int, int]:
+    """A darkened shade of the status colour, used as the whole-tile background
+    for tile_fill='tint' — clearly coloured but dark enough that the light text
+    stays readable."""
+    return tuple(int(c * 0.34) for c in accent)
+
+
+def _tile_text_colors(fill, bg_col, accent):
+    """(repo, branch, time, status-word) colours for an agent tile, picked for
+    contrast against the fill background.
+
+    none/tint sit on a dark background -> white repo + dim-grey subtext, and the
+    status word keeps the accent colour. A solid fill flips by background
+    brightness: a bright colour (green/amber/cyan) takes dark text; a darker
+    colour (e.g. blue) keeps light text but with a near-white subtext so the
+    branch + elapsed time stay readable on the colour instead of washing out."""
+    solid = fill == "solid"
+    if solid and _lum(bg_col) > 120:  # bright colour -> dark text
+        return (18, 18, 22), (45, 45, 50), (55, 55, 60), (18, 18, 22)
+    if solid:  # darker colour -> light text, brighter subtext than on the dark bg
+        return (255, 255, 255), (230, 230, 236), (215, 215, 222), (255, 255, 255)
+    return (255, 255, 255), (180, 180, 188), (165, 165, 170), accent  # none / tint
+
+
+
 SERVER_CHIP_COLORS: dict[str, tuple[int, int, int]] = {
     "teal": (24, 150, 145),
     "violet": (135, 100, 235),
@@ -387,6 +421,7 @@ class IconProvider:
             tile.branch,
             tile.status_text,
             tile.time_text,
+            getattr(tile, "tile_fill", "none"),
         ]
         if spinner is not None:
             sig_parts.append(getattr(tile, "working_animation", "spin"))
@@ -444,8 +479,21 @@ class IconProvider:
 
     def _compose_agent_tile(self, tile, spinner=None) -> Image.Image:
         accent = COLORS.get(tile.color, COLORS["dim"])
-        bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), TILE_BG + (255,))
+        # tile_fill: how much of the tile the status colour covers.
+        #   none  -> dark background (colour lives in the word + bottom bar)
+        #   tint  -> whole tile a darkened shade of the colour + bright bottom edge
+        #   solid -> whole tile the full colour
+        fill = getattr(tile, "tile_fill", "none")
+        if fill == "solid":
+            bg_col = accent
+        elif fill == "tint":
+            bg_col = _tint_bg(accent)
+        else:
+            bg_col = TILE_BG
+        bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), bg_col + (255,))
         d = ImageDraw.Draw(bg)
+        # text colours chosen for contrast against the fill (see _tile_text_colors)
+        repo_fill, branch_fill, time_fill, word_fill = _tile_text_colors(fill, bg_col, accent)
         anim = getattr(tile, "working_animation", "spin")
         working = spinner is not None
         # logo top-left; while working it animates per the chosen style
@@ -473,7 +521,7 @@ class IconProvider:
                 (ICON_SIZE - 12 - d.textlength(tile.status_text, font=fs), 13),
                 tile.status_text,
                 font=fs,
-                fill=accent,
+                fill=word_fill,
             )
         if tile.time_text:
             ft = _font(15)
@@ -481,7 +529,7 @@ class IconProvider:
                 (ICON_SIZE - 12 - d.textlength(tile.time_text, font=ft), 35),
                 tile.time_text,
                 font=ft,
-                fill=(165, 165, 170),
+                fill=time_fill,
             )
         # repo (primary) + branch (secondary, wrapped)
         fr = _font(23)
@@ -489,13 +537,13 @@ class IconProvider:
             (12, 68),
             _truncate(d, tile.repo or "", fr, ICON_SIZE - 24),
             font=fr,
-            fill=(255, 255, 255),
+            fill=repo_fill,
         )
         if tile.branch:
             fb = _font(16)
             y = 98
             for line in _wrap(d, tile.branch, fb, ICON_SIZE - 24, 2):
-                d.text((12, y), line, font=fb, fill=(180, 180, 188))
+                d.text((12, y), line, font=fb, fill=branch_fill)
                 y += 20
         if tile.server_tag:
             chip_fill = _rgb_color(tile.server_accent or "", (95, 95, 105))
@@ -508,16 +556,25 @@ class IconProvider:
             d.rounded_rectangle([x, y, x + chip_w, y + chip_h], radius=4, fill=chip_fill)
             text_y = y + (chip_h - (bb[3] - bb[1])) / 2 - bb[1]
             d.text((x + pad_x, text_y), tag, font=fc, fill=(255, 255, 255))
-        # accent bar — "sweep" slides a bright segment along a dimmed bar
+        # bottom accent bar. "sweep" is a moving segment along the bottom edge; it
+        # must stay visible on any fill, so its colours adapt — on a solid tile
+        # (background already = accent) it uses a dark base + a bright segment; on
+        # none/tint a dimmed base + the accent segment. The plain static bar is
+        # drawn only when the fill isn't solid (on solid it would be invisible).
         y0 = ICON_SIZE - 8
         if working and anim == "sweep":
-            dim = tuple(int(c * 0.4) for c in accent)
-            d.rectangle([0, y0, ICON_SIZE, ICON_SIZE], fill=dim)
+            if fill == "solid":
+                base = tuple(int(c * 0.45) for c in accent)
+                seg_col = tuple(min(255, c + 90) for c in accent)
+            else:
+                base = tuple(int(c * 0.4) for c in accent)
+                seg_col = accent
+            d.rectangle([0, y0, ICON_SIZE, ICON_SIZE], fill=base)
             seg_w = ICON_SIZE // 4
             left = int((spinner / SPINNER_FRAMES) * ICON_SIZE)
-            d.rectangle([left, y0, min(left + seg_w, ICON_SIZE), ICON_SIZE], fill=accent)
+            d.rectangle([left, y0, min(left + seg_w, ICON_SIZE), ICON_SIZE], fill=seg_col)
             if left + seg_w > ICON_SIZE:  # wrap the bright segment past the right edge
-                d.rectangle([0, y0, (left + seg_w) - ICON_SIZE, ICON_SIZE], fill=accent)
-        else:
+                d.rectangle([0, y0, (left + seg_w) - ICON_SIZE, ICON_SIZE], fill=seg_col)
+        elif fill != "solid":
             d.rectangle([0, y0, ICON_SIZE, ICON_SIZE], fill=accent)
         return bg

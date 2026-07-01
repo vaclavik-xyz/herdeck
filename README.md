@@ -150,7 +150,10 @@ The D200 has **13 buttons** (a 5×3 grid minus the small status window). The
 orchestrator takes the real button count from the driver: agent tiles fill the
 first N−3 slots; the last three are **Next** (jump to next blocked), **Refresh**,
 and **Link** (connection status). State is encoded by color: working = green,
-idle = blue, blocked = amber, done = cyan, error/disconnected = red.
+idle = blue, blocked = amber, done = cyan, error/disconnected = red. By default
+the colour shows in the status word and a bottom accent bar; set
+`[view].tile_fill` to `tint` (whole tile a darkened shade of the colour) or
+`solid` (whole tile the full colour) for more at-a-glance visibility.
 
 ## Stream Deck (Elgato) plugin backend
 herdeck can also drive a native **Elgato Stream Deck** as a plugin. A thin

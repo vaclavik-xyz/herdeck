@@ -305,6 +305,7 @@ class ElgatoSession:
             s.label,
             self._color(s),
             agent_type=s.agent_type,
+            tile_fill=self.config.view.tile_fill,
             repo=primary,
             branch=secondary,
             status_text="OFFLINE" if down else s.status.value.upper(),

@@ -59,6 +59,16 @@ def test_done_sorts_above_working_and_renders_cyan():
     assert rs.tiles[2].color == "blue"  # idle last
 
 
+def test_tile_fill_propagates_from_config_to_agent_tiles():
+    cfg = make_config()
+    cfg.view.tile_fill = "solid"
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    rs = o.render()
+    assert rs.tiles[0].tile_fill == "solid"  # agent tile carries the config value
+    assert rs.tiles[1].tile_fill == "none"  # empty/control tiles keep the default
+
+
 def test_overview_panel_summary():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED), state("p2", Status.WORKING)])
