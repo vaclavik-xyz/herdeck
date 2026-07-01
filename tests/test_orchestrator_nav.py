@@ -507,3 +507,37 @@ def test_update_config_prunes_removed_server_state():
     o.update_config(next_cfg)
 
     assert "old agent" not in [t.label for t in o.render().tiles]
+
+
+# --- armed-confirmation visibility + expiry (audit: armed-confirm-feedback) --
+
+
+def test_armed_stop_confirmation_is_visible_and_expires():
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
+    o.config.safety.require_confirm_for = ["act_force"]
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)
+    stop_i = o.slots - 2
+    assert o.render().tiles[stop_i].label == "Stop"
+    assert o.on_press(stop_i) == []  # first press arms
+    rs = o.render()
+    assert rs.tiles[stop_i].label == "Sure?"  # armed state is visible
+    assert rs.panel.lines[0] == "press again to confirm"
+    clk[0] += 10  # TTL expired: the stale arm must not complete
+    assert o.render().tiles[stop_i].label == "Stop"  # visual arm cleared
+    assert o.on_press(stop_i) == []  # re-arms instead of firing
+    assert o.on_press(stop_i) == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
+
+
+def test_armed_option_confirmation_marks_only_that_option_tile():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    assert o.on_press(1) == []  # arms the approve_always option
+    tiles = o.render().tiles
+    assert tiles[1].label == "Sure?"
+    assert tiles[0].label != "Sure?"
+    assert o.render().panel.lines[0] == "press again to confirm"

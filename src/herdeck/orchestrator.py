@@ -10,6 +10,9 @@ from .driver.base import PanelView, TileView
 from .model import AgentKey, AgentState, Status
 
 _OPTION_LABEL_MAX = 14
+# An armed destructive-action confirmation expires after this long, so a stale
+# arm from minutes ago can never be completed by a later single press.
+_CONFIRM_TTL_S = 5.0
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 _MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
 _APPROVE_ALWAYS_HINTS = ("always", "don't ask", "dont ask", "do not ask")
@@ -53,6 +56,7 @@ class Orchestrator:
         self._profile_menu: bool = False
         self._profile_menu_origin: str = "overview"
         self._pending_confirm: tuple[str, AgentKey] | None = None
+        self._pending_confirm_at: float = 0.0
 
     def _agent_slots(self) -> int:
         """Overview tiles available for agents (the last tile is the launcher)."""
@@ -373,15 +377,42 @@ class Orchestrator:
                 )
         return actions[:stop_i], stop_i, back_i
 
+    def _armed_action(self) -> str | None:
+        """The armed (fresh, for the drilled agent) confirm action id, or None."""
+        if self._drill is None or self._pending_confirm is None:
+            return None
+        action, key = self._pending_confirm
+        if key != self._drill or self._clock() - self._pending_confirm_at > _CONFIRM_TTL_S:
+            return None
+        return action
+
+    def _arm_confirm(self, action: str, key: AgentKey) -> None:
+        self._pending_confirm = (action, key)
+        self._pending_confirm_at = self._clock()
+
+    def _confirm_armed(self, action: str, key: AgentKey) -> bool:
+        return (
+            self._pending_confirm == (action, key)
+            and self._clock() - self._pending_confirm_at <= _CONFIRM_TTL_S
+        )
+
     def _render_drill(self) -> RenderState:
         agent = self._agents.get(self._drill)
         actions, stop_i, back_i = self._drill_layout()
+        # An armed confirmation must be visible: without feedback the first press
+        # looks like a dead button and the natural "retry" press completes a
+        # confirmation the user never knew was armed.
+        armed = self._armed_action()
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i < len(actions):
-                tiles.append(TileView(i, actions[i]["label"], "blue", subtext=actions[i].get("subtext"), section="answer_profiles"))
+                label = actions[i]["label"]
+                if armed is not None and actions[i].get("id") == armed:
+                    label = "Sure?"
+                tiles.append(TileView(i, label, "blue", subtext=actions[i].get("subtext"), section="answer_profiles"))
             elif i == stop_i:
-                tiles.append(TileView(i, "Stop", "red", section="answer_profiles"))
+                stop_label = "Sure?" if armed == "act_force" else "Stop"
+                tiles.append(TileView(i, stop_label, "red", section="answer_profiles"))
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
@@ -391,6 +422,8 @@ class Orchestrator:
             if agent is not None
             else PanelView("", [], "grey")
         )
+        if armed is not None and agent is not None:
+            panel = PanelView(panel.title, ["press again to confirm", *panel.lines], panel.color)
         return RenderState(tiles, panel)
 
     # --- presses ---
@@ -499,9 +532,9 @@ class Orchestrator:
             action = "act_force"
             if (
                 action in self.config.safety.require_confirm_for
-                and self._pending_confirm != (action, key)
+                and not self._confirm_armed(action, key)
             ):
-                self._pending_confirm = (action, key)
+                self._arm_confirm(action, key)  # (re-)arm; an expired arm never fires
                 return []
             self._pending_confirm = None
             cmd = Command("act_force", key.server_id, key.pane_id, keys=self._profile_for(key).stop)
@@ -511,9 +544,9 @@ class Orchestrator:
             action_id = actions[index].get("id")
             if (
                 action_id in self.config.safety.require_confirm_for
-                and self._pending_confirm != (action_id, key)
+                and not self._confirm_armed(action_id, key)
             ):
-                self._pending_confirm = (action_id, key)
+                self._arm_confirm(action_id, key)  # (re-)arm; an expired arm never fires
                 return []
             self._pending_confirm = None
             cmd = actions[index]["make"](key)
