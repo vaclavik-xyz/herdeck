@@ -54,6 +54,10 @@ class CtlSession:
         self._conn_up: dict[str, bool] = {}
         self._changed = asyncio.Event()
         self._req = 0
+        # Servers that produced no first snapshot within open()'s timeout,
+        # mapped to the connector's failure reason (None if unknown). A partial
+        # fleet proceeds; callers surface this as a warning.
+        self.unavailable: dict[str, str | None] = {}
 
     # --- Connector callbacks (sync, on this loop) ---
     def _on_snapshot(self, sid: str, states: list[AgentState]) -> None:
@@ -110,15 +114,24 @@ class CtlSession:
         except TimeoutError as exc:
             # Name the servers that never answered — and why, when the
             # connector knows (e.g. "token rejected", "connection refused").
-            missing = []
+            missing: dict[str, str | None] = {}
             for server in self.servers:
                 if self._snapshots[server.id].is_set():
                     continue
                 conn = self._connectors.get(server.id)
-                reason = getattr(conn, "last_connect_error", None)
-                missing.append(f"'{server.id}'" + (f" ({reason})" if reason else ""))
-            detail = f" from {', '.join(missing)}" if missing else ""
-            raise ConnectionLost(f"timed out waiting for first snapshot{detail}") from exc
+                missing[server.id] = getattr(conn, "last_connect_error", None)
+            if len(missing) >= len(self.servers):
+                parts = [
+                    f"'{sid}'" + (f" ({reason})" if reason else "")
+                    for sid, reason in missing.items()
+                ]
+                detail = f" from {', '.join(parts)}" if parts else ""
+                raise ConnectionLost(f"timed out waiting for first snapshot{detail}") from exc
+            # A PARTIAL fleet proceeds: one dead bridge must not brick a
+            # command aimed at a healthy server (`ls`, or approve of an agent
+            # that answered). Actions targeting an unavailable server still
+            # fail cleanly in request()/resolution.
+            self.unavailable = missing
 
     async def request(self, cmd: Command, *, timeout: float) -> dict:
         if cmd.kind == "list":
@@ -380,6 +393,9 @@ async def _amain(args) -> int:
     session = CtlSession(config, server_filter=args.server)
     try:
         await session.open(timeout=args.timeout)
+        for sid, reason in session.unavailable.items():
+            suffix = f": {reason}" if reason else ""
+            print(f"warning: server '{sid}' unavailable{suffix}", file=sys.stderr)
         return await dispatch(args, session)
     except ConnectionLost as e:
         print(f"connection error: {e}", file=sys.stderr)
