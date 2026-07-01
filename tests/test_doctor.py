@@ -462,3 +462,27 @@ def test_notifications_check_probes_telegram_token():
         n, getenv=lambda k: "tok", telegram_probe=lambda t: "token rejected (401 Unauthorized)"
     )
     assert not bad.ok and "token rejected" in bad.detail
+
+
+def test_check_runtime_reports_live_stale_and_absent(tmp_path, monkeypatch):
+    """A stale runtime.json (crash leftover) was previously invisible
+    (audit: doctor-deps-runtime)."""
+    from herdeck.doctor import check_runtime
+
+    monkeypatch.setenv("HERDECK_RUNTIME_DIR", str(tmp_path))
+    absent = check_runtime(lambda p: None, lambda u, t: True)
+    assert absent.ok and "no runtime.json" in absent.detail
+    info = {"url": "http://127.0.0.1:9", "token": "t"}
+    live = check_runtime(lambda p: info, lambda u, t: True)
+    assert live.ok and "answering" in live.detail
+    stale = check_runtime(lambda p: info, lambda u, t: False)
+    assert not stale.ok and "stale runtime.json" in stale.detail
+
+
+def test_optional_deps_cover_the_converged_runtime():
+    from herdeck.doctor import check_optional_deps
+
+    c = check_optional_deps(lambda m: m not in ("tomli_w", "keyring"))
+    assert "tomli_w=missing" in c.detail
+    assert "keyring=missing" in c.detail
+    assert "desktop/converged runtime needs" in c.detail

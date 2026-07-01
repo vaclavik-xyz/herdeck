@@ -98,6 +98,12 @@ def check_optional_deps(is_available: Callable[[str], bool]) -> Check:
         ("cairosvg", "cairosvg"),
         ("strmdck", "strmdck"),
         ("streamdeck", "StreamDeck"),
+        # The converged runtime imports these unconditionally at startup
+        # (config write / keychain tokens) yet they live only in extras — a
+        # missing tomli_w crashed the deployed macbench runtime with a raw
+        # ImportError while doctor showed all green.
+        ("tomli_w", "tomli_w"),
+        ("keyring", "keyring"),
     )
     statuses = [
         f"{label}=present" if is_available(import_name) else f"{label}=missing"
@@ -107,6 +113,8 @@ def check_optional_deps(is_available: Callable[[str], bool]) -> Check:
     detail = "; ".join(statuses)
     if missing:
         detail += '; optional hints: pip install ".[deck]" or ".[elgato]"'
+        if "tomli_w" in missing or "keyring" in missing:
+            detail += "; the desktop/converged runtime needs tomli_w + keyring"
     return Check("optional dependencies", True, detail)
 
 
@@ -277,6 +285,42 @@ def _probe_server(url: str, token: str) -> str | None:
     return asyncio.run(_probe_server_ws(url, token))
 
 
+def _runtime_health(url: str, token: str) -> bool:
+    """Does the runtime at `url` answer its token-authed /health within 1s?"""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{url}/health?token={token}", timeout=1) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def check_runtime(read_file, health) -> Check:
+    """State of the converged runtime's discovery file (runtime.json).
+
+    A stale file (crash leftover) makes the desktop window spawn its own
+    sidecar in confusing silence — this was previously diagnosable only by
+    reverse-engineering Tauri behavior."""
+    from .deckapp.discovery import runtime_file_path
+
+    path = runtime_file_path()
+    info = read_file(path)
+    if info is None:
+        return Check("runtime", True, "no runtime.json (no headless runtime running)")
+    url, token = info.get("url"), info.get("token")
+    if not url or not token:
+        return Check("runtime", False, f"malformed runtime.json at {path}")
+    if health(url, token):
+        return Check("runtime", True, f"headless runtime answering at {url}")
+    return Check(
+        "runtime",
+        False,
+        f"stale runtime.json at {path} (runtime not responding) — the desktop "
+        "window will spawn its own sidecar; delete the file or restart the runtime",
+    )
+
+
 def _module_available(module: str) -> bool:
     return importlib.util.find_spec(module) is not None
 
@@ -345,11 +389,14 @@ def collect_checks() -> list[Check]:
     # Actually contact each configured server — token presence alone said
     # nothing about a dead bridge, a wrong URL or a rejected token.
     checks.extend(check_servers(servers, _probe_server))
+    from .deckapp.discovery import read_runtime_file
+
     checks.extend(
         [
             socket_check,
             check_optional_deps(_module_available),
             check_deck(_module_available),
+            check_runtime(read_runtime_file, _runtime_health),
             _check_configured_notifications(config_path),
         ]
     )
