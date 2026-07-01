@@ -88,6 +88,7 @@ class D200Driver(DeckDriver):
         self._last_write_ms: float | None = None
         self._last_write_count = 0
         self._last_icon: dict[int, str] = {}
+        self._last_panel_key: tuple | None = None
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
         self._previous_cwd = os.getcwd()
@@ -262,13 +263,19 @@ class D200Driver(DeckDriver):
             self._record(buttons)
 
     def _write_panel(self, panel: PanelView) -> None:
-        try:
-            left, right = split_panel(compose_panel(panel))
-            os.makedirs(_ICON_DIR, exist_ok=True)
-            left.save(os.path.join(_ICON_DIR, "panel_left.png"))
-            right.save(os.path.join(_ICON_DIR, "panel_right.png"))
-        except Exception:
-            return
+        # Skip the compose/crop/save when the panel content is unchanged — the
+        # files on disk already hold these exact pixels. The device write below
+        # is still issued every time (unchanged behavior).
+        key = (panel.title, tuple(panel.lines), panel.color)
+        if key != self._last_panel_key:
+            try:
+                left, right = split_panel(compose_panel(panel))
+                os.makedirs(_ICON_DIR, exist_ok=True)
+                left.save(os.path.join(_ICON_DIR, "panel_left.png"))
+                right.save(os.path.join(_ICON_DIR, "panel_right.png"))
+            except Exception:
+                return
+            self._last_panel_key = key
         # update_only so refreshing the panel never clears the 13 tiles.
         self._timed_set_buttons(
             "panel",

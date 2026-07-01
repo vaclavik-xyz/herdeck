@@ -715,3 +715,23 @@ def test_working_ticks_still_fan_out_frames():
     base = len(sink.frames)
     app._tick_once()
     assert len(sink.frames) == base + 1
+
+
+def test_unchanged_panel_is_encoded_once(monkeypatch):
+    import herdeck.icons as icons_mod
+
+    calls = {"n": 0}
+    real = icons_mod.compose_panel
+
+    def counting(panel):
+        calls["n"] += 1
+        return real(panel)
+
+    monkeypatch.setattr(icons_mod, "compose_panel", counting)
+    app = make_app()  # initial refresh composes once
+    base = calls["n"]
+    app.refresh()
+    app.refresh()
+    assert calls["n"] == base  # identical panel content -> memoized bytes reused
+    app.press(0)  # cycles an agent status -> summary counts change
+    assert calls["n"] > base

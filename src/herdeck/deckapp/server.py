@@ -82,6 +82,7 @@ class DeckApp:
         self._setup_lock = threading.RLock()  # shared mutation lock (/setup/connect + config-write routes + reload); RLock because the config routes call reload() while holding it
 
         self._lock = threading.Lock()
+        self._panel_memo: tuple[tuple, bytes] | None = None  # (panel content key, png)
         self._tiles: dict[int, bytes] = {}
         self._tile_ver: dict[int, int] = {}
         self._tile_sections: dict[int, str] = {}
@@ -153,8 +154,9 @@ class DeckApp:
     def _render_locked(self, source, orch, slots):
         """Render `source` through `orch` → (tiles, panel_png, sections). This is the
         FALLIBLE part of a refresh (apply_to / orchestrator render / icon raster / panel
-        compose); it mutates no self state, so it can run on a throwaway orchestrator in
-        `_prepare_swap` or on the live deck inside `_refresh_locked`."""
+        compose); apart from the value-keyed panel memo it mutates no self state, so it
+        can run on a throwaway orchestrator in `_prepare_swap` or on the live deck
+        inside `_refresh_locked`."""
         import io
 
         from ..icons import compose_panel
@@ -162,10 +164,20 @@ class DeckApp:
         source.apply_to(orch)
         rs = orch.render()
         tiles = {t.index: self._icons.render_tile_bytes(t) for t in rs.tiles if t.index < slots}
-        buf = io.BytesIO()
-        compose_panel(rs.panel).convert("RGB").save(buf, "PNG")
+        # Memoize the encoded panel by content: panel text changes every few
+        # seconds at most, while refreshes run per tick — recomposing + PNG-encoding
+        # an identical panel dominated the steady-state tick cost.
+        panel_key = (rs.panel.title, tuple(rs.panel.lines), rs.panel.color)
+        memo = self._panel_memo
+        if memo is not None and memo[0] == panel_key:
+            panel_png = memo[1]
+        else:
+            buf = io.BytesIO()
+            compose_panel(rs.panel).convert("RGB").save(buf, "PNG")
+            panel_png = buf.getvalue()
+            self._panel_memo = (panel_key, panel_png)
         sections = {t.index: t.section for t in rs.tiles if t.index < slots and t.section}
-        return rs, tiles, buf.getvalue(), sections
+        return rs, tiles, panel_png, sections
 
     def _apply_rendered_locked(self, tiles, panel_png, sections):
         """Assign pre-rendered tiles/panel/sections with version bumps — pure dict/int ops
