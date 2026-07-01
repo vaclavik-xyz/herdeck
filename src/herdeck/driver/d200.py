@@ -69,11 +69,14 @@ class D200Driver(DeckDriver):
 
     KEEP_ALIVE_INTERVAL = 5.0
     SLOW_WRITE_MS = 250.0  # device writes slower than this get a WARNING log
-    RESYNC_INTERVAL = 120.0  # seconds; periodically re-send every tile (one small
-                             # write each) so a dropped async USB write can't leave a
-                             # tile stale forever — the diff optimistically records
-                             # _last_icon on the synchronous set_buttons return, but
-                             # the real USB write is drained async by RenderPump.
+    RESYNC_INTERVAL = 15.0  # seconds; periodically re-send ALL tiles (one combined
+                            # write) so a tile that went black on the device — a
+                            # dropped/glitched async USB write the diff can't detect
+                            # (it optimistically records _last_icon on the synchronous
+                            # set_buttons return, but the real USB write is drained
+                            # async by RenderPump) — self-heals within seconds instead
+                            # of staying black for minutes. Cheap now that the resync is
+                            # one combined write and the strmdck retry sleep is neutralized.
     BRIGHTNESS = 80
     DEBOUNCE = 0.25  # ignore repeats of the same key within this window
     _CONTROL_USAGE_PAGE = 0x0C
