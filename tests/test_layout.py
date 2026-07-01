@@ -275,3 +275,19 @@ def test_parse_options_none():
 
     assert parse_options("just some text, no options") == []
     assert parse_options("") == []
+
+
+def test_spotlight_title_carries_the_blocked_count():
+    """Three blocked agents must not look identical to one
+    (audit: blocked-count-spotlight)."""
+    pv = panel_overview(Counts(3, 1, 0, 0), 0, 1, set(), 4, ("api", "5m"))
+    assert pv.title == "▲ 3 need you"
+    assert pv.lines[0] == "api"  # the oldest blocked agent stays spotlighted
+    single = panel_overview(Counts(1, 1, 0, 0), 0, 1, set(), 2, ("api", "5m"))
+    assert single.title == "▲ needs you"
+
+
+def test_offline_panel_still_reports_blocked_agents():
+    pv = panel_overview(Counts(2, 0, 0, 0), 0, 1, {"down-server"}, 2, ("api", "5m"))
+    assert pv.title == "OFFLINE"
+    assert "▲ 2 blocked" in pv.lines

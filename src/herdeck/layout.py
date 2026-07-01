@@ -129,9 +129,14 @@ def panel_overview(
 ) -> PanelView:
     if down:
         title, lines, color = "OFFLINE", ["reconnecting…"], "red"
+        if counts.blocked:
+            # one dead server must not hide that agents are waiting for input
+            lines.append(f"▲ {counts.blocked} blocked")
     elif spotlight is not None:
         label, elapsed = spotlight
-        title = "▲ needs you"
+        # With several agents blocked the deck must not look like just one:
+        # the spotlight names the oldest, the title carries the count.
+        title = "▲ needs you" if counts.blocked <= 1 else f"▲ {counts.blocked} need you"
         lines = [label, f"blocked {elapsed}".rstrip()]
         color = "amber"
     else:
