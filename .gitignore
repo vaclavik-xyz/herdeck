@@ -15,3 +15,8 @@ build/
 
 # herdr-agent-company run dirs (manifest, inbox, evidence)
 .scratch/
+
+# local tooling artifacts (roborev config, clawpatch cache, uv lockfile) — not part of the project
+.clawpatch/
+.roborev.toml
+uv.lock

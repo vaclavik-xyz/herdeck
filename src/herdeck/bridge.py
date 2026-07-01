@@ -422,12 +422,16 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     import secrets
 
     token = secrets.token_urlsafe(32)
-    herdr = herdr or SocketHerdr(socket_path)
-    events = HerdrEvents(herdr, socket_path=socket_path)
+    # Separate SocketHerdr for the event stream vs client requests: each serializes
+    # its own RPCs, so an on-demand read/focus/act never queues behind an in-flight
+    # fleet snapshot (see serve()). A test may inject a single stub for both.
+    events_herdr = herdr or SocketHerdr(socket_path)
+    client_herdr = herdr or SocketHerdr(socket_path)
+    events = HerdrEvents(events_herdr, socket_path=socket_path)
     clients: set = set()
 
     async def handler(ws):
-        await _serve_connection(ws, herdr, "local", token, clients)
+        await _serve_connection(ws, client_herdr, "local", token, clients)
 
     server = await websockets.serve(handler, host, 0)
     port = server.sockets[0].getsockname()[1]
@@ -436,12 +440,19 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
 
 
 async def serve(socket_path: str, host: str, port: int, server_id: str, token: str):
-    herdr = SocketHerdr(socket_path)
-    events = HerdrEvents(herdr, socket_path=socket_path)  # push events + slow poll
+    # The event stream polls herdr constantly (pane.list + worktree/workspace/tab
+    # lists) under its SocketHerdr's RPC serialize-lock. Give client requests
+    # (read/focus/act) their OWN SocketHerdr so an on-demand read never waits for an
+    # in-progress snapshot — that queueing (worktree.list alone spikes to ~130ms)
+    # added a couple hundred ms per drill RPC. herdr accepts concurrent one-shot
+    # connections, so the two run in parallel.
+    events_herdr = SocketHerdr(socket_path)
+    client_herdr = SocketHerdr(socket_path)
+    events = HerdrEvents(events_herdr, socket_path=socket_path)  # push events + slow poll
     clients: set = set()
 
     async def handler(ws):
-        await _serve_connection(ws, herdr, server_id, token, clients)
+        await _serve_connection(ws, client_herdr, server_id, token, clients)
 
     async with websockets.serve(handler, host, port):
         await _broadcast(events.stream(), clients, server_id)  # runs forever

@@ -31,7 +31,7 @@ import threading
 from ..commands import Command, command_to_msg
 from ..config import Config, ServerConfig
 from ..connector import Connector
-from ..model import AgentKey, AgentState
+from ..model import AgentKey, AgentState, Status
 from ..orchestrator import Orchestrator
 from .source import StateSource
 
@@ -69,7 +69,16 @@ class LiveSource(StateSource):
         self._agents: dict[AgentKey, AgentState] = {}
         self._connected = False
         self._req = 0
+        self._bg_req = 0
         self._active_read_req: str | None = None
+        # Pre-read cache: the last-read prompt per BLOCKED pane, read in the
+        # background so a drill paints its options in one frame (no read round-trip,
+        # no empty flash). ``_preread`` holds the cached prompt text; ``_preread_req``
+        # holds the request id of the in-flight read for the pane's CURRENT block
+        # episode. Both are dropped when the pane leaves BLOCKED, so a result from a
+        # prior episode (an old req) can never repopulate the cache after a re-block.
+        self._preread: dict[AgentKey, str] = {}
+        self._preread_req: dict[AgentKey, str] = {}
         self._orch: Orchestrator | None = None
         self._deck_lock = None
         self._refresh_locked_cb = None
@@ -119,7 +128,15 @@ class LiveSource(StateSource):
         orch, runner = self._orch, self._runner
         if orch is None or runner is None:
             return
-        for cmd in orch.on_press(index):
+        was_drilling = orch.is_drilling()
+        cmds = orch.on_press(index)
+        # If this press just opened a drill into a blocked pane whose prompt we
+        # pre-read, seed the detection so the very first render shows the options —
+        # no wait for the read round-trip, no empty-drill flash. The drill's own
+        # read (in cmds) still fires as a refresh, correcting any in-place change.
+        if not was_drilling:
+            self._seed_detection_from_preread(orch)
+        for cmd in cmds:
             try:
                 msg = command_to_msg(cmd, self._next_req(cmd))
             except ValueError:
@@ -127,6 +144,21 @@ class LiveSource(StateSource):
                 # phase 1 does not reload config from the deck, so they are ignored.
                 continue
             runner.send(msg)
+
+    def _seed_detection_from_preread(self, orch) -> None:
+        """Paint a freshly-opened blocked drill from the pre-read cache (caller holds
+        the deck lock, via DeckApp.press). No-op unless the pane is blocked and a
+        prompt string was cached (a pending ``None`` entry does not seed)."""
+        key = orch.drill_key()
+        if key is None:
+            return
+        agent = orch.get_agent(key)
+        if agent is None or agent.status is not Status.BLOCKED:
+            return
+        with self._lock:
+            cached = self._preread.get(key)
+        if isinstance(cached, str) and cached:
+            orch.set_detection(cached)
 
     def summary(self) -> dict:
         from .. import layout
@@ -154,10 +186,11 @@ class LiveSource(StateSource):
         def mutate():
             with self._lock:
                 self._agents = dict(new_by_key)
-            # Drop a pending read if the drilled pane's state changed
-            # (App.handle_snapshot): an old prompt's options must not stay
-            # actionable across a state change.
-            self._invalidate_if_drill_changed(server_id, new_by_key)
+            # Drop the drilled prompt only if the pane left BLOCKED
+            # (App.handle_snapshot): the prompt + in-flight read stay valid while it
+            # is still blocked.
+            self._invalidate_if_drill_unblocked(server_id, new_by_key.get(self._drilled_key()))
+            self._reconcile_prereads()
             return True
 
         self._apply(mutate)
@@ -166,10 +199,12 @@ class LiveSource(StateSource):
         def mutate():
             with self._lock:
                 self._agents[state.key] = state
-            # Any event for the drilled pane invalidates the read
-            # (App.handle_event): the prompt may have changed, so stale approve/deny
-            # options must clear.
-            self._invalidate_if_drill_pane(server_id, state.key.pane_id)
+            # Same rule for a single-pane event: only a real unblock clears the
+            # drilled prompt (App.handle_event).
+            drilled = self._drilled_key()
+            if drilled is not None and drilled == state.key:
+                self._invalidate_if_drill_unblocked(server_id, state)
+            self._reconcile_prereads()
             return True
 
         self._apply(mutate)
@@ -192,18 +227,30 @@ class LiveSource(StateSource):
             if runner is not None:
                 runner.send(command_to_msg(Command("list", self._server.id), None))
             return
-        # A read result: surface the prompt only if it still matches the request we
+        # A read result: cache it for an instant future drill (while the pane is
+        # blocked), and surface the prompt now only if it still matches a read we
         # issued and the pane is still drilled (re-checked under the deck lock so a
         # concurrent invalidation wins).
         pane_id = data.get("pane_id")
 
         def mutate():
+            self._cache_preread(pane_id, text, req)
             orch = self._orch
-            if orch is None:
+            if orch is None or req is None or not orch.is_drill_pane(self._server.id, pane_id):
                 return False
+            drilled = orch.drill_key()
+            agent = orch.get_agent(drilled)
+            # For a BLOCKED drill the detection becomes actionable (parse_options ->
+            # approve/deny), so accept only the current-episode read (_preread_req,
+            # registered while blocked and dropped on unblock): a pre-block or prior-
+            # episode capture must never feed the blocked options. A non-blocked drill
+            # only shows the read as detail text, so the plain active-read match holds.
             with self._lock:
-                accepted = req is not None and req == self._active_read_req
-            if accepted and orch.is_drill_pane(self._server.id, pane_id):
+                if agent is not None and agent.status is Status.BLOCKED:
+                    accepted = req == self._preread_req.get(drilled)
+                else:
+                    accepted = req == self._active_read_req
+            if accepted:
                 orch.set_detection(text)
                 return True
             return False
@@ -229,35 +276,108 @@ class LiveSource(StateSource):
             if changed and self._refresh_locked_cb is not None:
                 self._refresh_locked_cb()
 
-    # --- read invalidation (callers hold the deck lock) ---
-    def _invalidate_if_drill_changed(self, server_id: str, new_by_key: dict) -> None:
-        """Clear detection if a snapshot changed the drilled pane's state."""
-        orch = self._orch
-        if orch is None:
-            return
-        drill = orch.drill_key()
-        if (
-            drill is not None
-            and drill.server_id == server_id
-            and orch.get_agent(drill) != new_by_key.get(drill)
-        ):
-            orch.set_detection("")
-            with self._lock:
-                self._active_read_req = None
+    # --- pre-read cache (callers hold the deck lock) ---
+    def _reconcile_prereads(self) -> None:
+        """Keep the pre-read cache in step with the fleet: drop entries for panes no
+        longer blocked (their prompt is stale), and issue one background read for each
+        blocked pane that has no current-episode read yet.
 
-    def _invalidate_if_drill_pane(self, server_id: str, pane_id) -> None:
-        """Clear detection if an event targets the drilled pane."""
+        This includes the drilled pane: pressing a BLOCKED pane registers its own read
+        (so no second read is issued there), but a pane drilled while WORKING that then
+        blocks has only a rejected pre-block read — it needs a fresh episode read here
+        or its blocked drill would stay blank until the user backs out and re-drills.
+
+        Runs inside a mutate() (deck lock held); ``self._lock`` guards the cache +
+        buffer. Sends fire after releasing ``self._lock`` — ``runner.send`` is
+        fire-and-forget and never blocks."""
+        runner = self._runner
         orch = self._orch
-        if orch is None:
-            return
-        if orch.is_drill_pane(server_id, pane_id):
+        drilled = self._drilled_key()
+        reads: list[tuple[str, AgentKey]] = []
+        clear_detection = False
+        with self._lock:
+            blocked = {k for k, s in self._agents.items() if s.status is Status.BLOCKED}
+            for key in set(self._preread) | set(self._preread_req):
+                if key not in blocked:  # left BLOCKED -> prompt + pending read are stale
+                    self._preread.pop(key, None)
+                    self._preread_req.pop(key, None)
+            for key in blocked:
+                if key in self._preread_req:
+                    continue  # a current-episode read is already out (pre-read or drill read)
+                self._bg_req += 1
+                bg_req = f"p{self._bg_req}"
+                self._preread_req[key] = bg_req  # register so the poll won't re-issue
+                reads.append((bg_req, key))
+                if key == drilled:
+                    # The drilled pane just entered a block episode with no valid read:
+                    # any current detection is a pre-block capture. Drop it so the
+                    # blocked drill shows no options until the fresh read lands.
+                    clear_detection = True
+        if clear_detection and orch is not None:
             orch.set_detection("")
-            with self._lock:
-                self._active_read_req = None
+        if runner is None:
+            return
+        for bg_req, key in reads:
+            runner.send(
+                command_to_msg(
+                    Command("read", key.server_id, key.pane_id, source="detection"), bg_req
+                )
+            )
+
+    def _cache_preread(self, pane_id: str | None, text: str, req: str | None) -> None:
+        """Store a read result as the pane's cached prompt — only while the pane is
+        still BLOCKED and only if ``req`` is the read we last issued for the pane's
+        CURRENT block episode (``_preread_req[key]``, set by BOTH the background
+        pre-read and the drill read, and dropped the moment the pane leaves BLOCKED).
+        The drill read thus keeps the cache fresh when a prompt changes in place,
+        while a late read from a prior episode carries a since-replaced req and is
+        rejected. Caller holds the deck lock."""
+        if pane_id is None or req is None:
+            return
+        key = AgentKey(self._server.id, pane_id)
+        with self._lock:
+            state = self._agents.get(key)
+            if (
+                state is not None
+                and state.status is Status.BLOCKED
+                and req == self._preread_req.get(key)
+            ):
+                self._preread[key] = text
+
+    # --- read invalidation (callers hold the deck lock) ---
+    def _drilled_key(self) -> AgentKey | None:
+        orch = self._orch
+        return orch.drill_key() if orch is not None else None
+
+    def _invalidate_if_drill_unblocked(self, server_id: str, new_state) -> None:
+        """Drop the drilled prompt only when the agent actually leaves BLOCKED
+        (mirrors App._invalidate_read_if_unblocked).
+
+        The prompt (and an in-flight read) stay valid as long as the agent stays
+        blocked. Wiping on every cosmetic change instead — e.g. a ``branch`` label
+        that flaps in the bridge snapshot because ``worktree.list`` was momentarily
+        unavailable — rejected the in-flight read (prompt never showed; "click 3×")
+        or cleared an already-shown prompt ("shows then disappears").
+
+        ``new_state`` is the drilled pane's state in the update that just arrived
+        (``None`` if it dropped out of the fleet); the caller has already confirmed
+        the update is authoritative for the drilled server / pane.
+        """
+        orch = self._orch
+        drill = orch.drill_key() if orch is not None else None
+        if drill is None or drill.server_id != server_id:
+            return
+        if new_state is not None and new_state.status is Status.BLOCKED:
+            return  # still blocked -> same prompt, keep the options live
+        orch.set_detection("")
+        with self._lock:
+            self._active_read_req = None
 
     def _next_req(self, cmd) -> str | None:
         # Mirrors App.next_req_for: `list` carries no req; everything else gets a
-        # fresh sequential id. A `read` id is remembered so its result can be matched.
+        # fresh sequential id. A `read` id is remembered so its result can be matched
+        # (``_active_read_req`` for the drill display; ``_preread_req`` per pane so the
+        # drill read also refreshes the pre-read cache under the same episode scope).
         if cmd.kind == "list":
             return None
         with self._lock:
@@ -265,6 +385,16 @@ class LiveSource(StateSource):
             req = f"r{self._req}"
             if cmd.kind == "read":
                 self._active_read_req = req
+                # Register the drill read as the episode's read ONLY when the pane is
+                # already BLOCKED. A read issued while the pane is WORKING/IDLE belongs
+                # to the pre-block state; letting its marker survive into a later block
+                # episode would both suppress the fresh pre-read and let a pre-block
+                # capture be accepted as the block prompt.
+                if cmd.pane_id is not None:
+                    key = AgentKey(cmd.server_id, cmd.pane_id)
+                    state = self._agents.get(key)
+                    if state is not None and state.status is Status.BLOCKED:
+                        self._preread_req[key] = req
         return req
 
 

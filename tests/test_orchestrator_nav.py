@@ -50,17 +50,19 @@ def test_pressing_option_sends_its_number_and_returns_to_overview():
     o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
     o.on_press(0)
     o.set_detection(PROMPT)
-    assert o.on_press(2) == [Command("act_if_blocked", "dev", "p1", keys=["3"])]
+    assert o.on_press(2) == [Command("act_if_blocked", "dev", "p1", keys=["3", "enter"])]
     assert not o.is_drilling()  # back on the fleet overview
     assert o.render().tiles[0].agent_type == "claude"
 
 
-def test_pressing_option_one_sends_its_number():
+def test_pressing_option_one_sends_its_number_and_enter():
+    # A numbered menu needs the digit AND Enter to confirm (the digit alone only
+    # moves the selection); send both so the choice actually submits.
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
     o.on_press(0)
     o.set_detection(PROMPT)
-    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1"])]
+    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1", "enter"])]
 
 
 def test_drill_option_tiles_carry_number_as_label_and_text_as_subtext():
@@ -287,7 +289,7 @@ def test_safety_confirmation_blocks_parsed_approve_always_until_second_press():
     second = o.on_press(1)
 
     assert first == []
-    assert second == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+    assert second == [Command("act_if_blocked", "dev", "p1", keys=["2", "enter"])]
 
 
 def test_safety_confirmation_blocks_label_based_approve_always_until_second_press():
@@ -303,7 +305,7 @@ def test_safety_confirmation_blocks_label_based_approve_always_until_second_pres
     second = o.on_press(1)
 
     assert first == []
-    assert second == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+    assert second == [Command("act_if_blocked", "dev", "p1", keys=["2", "enter"])]
 
 
 def test_safety_confirmation_resets_when_detection_changes():
@@ -317,7 +319,7 @@ def test_safety_confirmation_resets_when_detection_changes():
     o.set_detection("Proceed?\n1. Yes\n2. Yes, always\n3. No")
 
     assert o.on_press(1) == []
-    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2", "enter"])]
 
 
 def test_safety_keeps_approve_when_approve_always_shares_key():
@@ -330,7 +332,7 @@ def test_safety_keeps_approve_when_approve_always_shares_key():
     o.set_detection(PROMPT)
 
     assert o.render().tiles[0].label == "1"
-    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1"])]
+    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1", "enter"])]
 
 
 def test_safety_confirmation_survives_unchanged_snapshot():
@@ -344,7 +346,7 @@ def test_safety_confirmation_survives_unchanged_snapshot():
     assert o.on_press(1) == []
     o.apply_snapshot("dev", [state])
 
-    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2", "enter"])]
 
 
 def test_safety_confirmation_survives_unchanged_event():
@@ -358,7 +360,7 @@ def test_safety_confirmation_survives_unchanged_event():
     assert o.on_press(1) == []
     o.apply_event("dev", state)
 
-    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2"])]
+    assert o.on_press(1) == [Command("act_if_blocked", "dev", "p1", keys=["2", "enter"])]
 
 
 def test_overview_panel_spotlights_oldest_blocked():
