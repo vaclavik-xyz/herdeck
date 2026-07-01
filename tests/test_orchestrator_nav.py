@@ -683,3 +683,34 @@ def test_idle_tick_does_not_adopt_the_new_order(monkeypatch):
     clk[0] += 0.5
     cmds = o.on_press(0)
     assert cmds and cmds[0].pane_id == "p2"  # now the user has seen the new order
+
+
+def test_drill_goes_inert_and_shows_offline_when_server_drops():
+    """Drill was blind to a server disconnect: option tiles stayed colourful
+    and pressable while the dead connector dropped every command
+    (audit: drill-offline-guard)."""
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    o.set_connection("dev", False)
+    rs = o.render()
+    assert all(t.color == "grey" for t in rs.tiles[:3])  # options inert
+    assert rs.tiles[11].color == "grey"  # Stop inert too
+    assert rs.panel.lines == ["OFFLINE — reconnecting…"]
+    assert o.on_press(0) == []  # an action press is swallowed, not dropped silently
+    assert o.on_press(11) == []  # Stop as well
+    assert o.on_press(12) == []  # ...but Back still leaves the drill
+    assert not o.is_drilling()
+
+
+def test_drill_recovers_when_server_reconnects():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    o.set_connection("dev", False)
+    o.set_connection("dev", True)
+    rs = o.render()
+    assert rs.tiles[0].color == "green"  # approve colour back
+    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1", "enter"])]

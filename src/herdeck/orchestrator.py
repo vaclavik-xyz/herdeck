@@ -470,24 +470,32 @@ class Orchestrator:
             and self._clock() - self._pending_confirm_at <= _CONFIRM_TTL_S
         )
 
+    def _drill_down(self) -> bool:
+        """Is the drilled agent's server currently disconnected?"""
+        return self._drill is not None and self._drill.server_id in self._down
+
     def _render_drill(self) -> RenderState:
         agent = self._agents.get(self._drill)
         actions, stop_i, back_i = self._drill_layout()
+        # The overview marks a down server everywhere; the drill must too —
+        # otherwise the option tiles stay colourful and pressable while the
+        # dead connector silently drops every command.
+        down = self._drill_down()
         # An armed confirmation must be visible: without feedback the first press
         # looks like a dead button and the natural "retry" press completes a
         # confirmation the user never knew was armed.
-        armed = self._armed_action()
+        armed = self._armed_action() if not down else None
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i < len(actions):
                 label = actions[i]["label"]
                 if armed is not None and actions[i].get("confirm_key") == armed:
                     label = "Sure?"
-                color = _ACTION_COLORS.get(actions[i].get("id"), "blue")
+                color = "grey" if down else _ACTION_COLORS.get(actions[i].get("id"), "blue")
                 tiles.append(TileView(i, label, color, subtext=actions[i].get("subtext"), section="answer_profiles"))
             elif i == stop_i:
                 stop_label = "Sure?" if armed == "act_force" else "Stop"
-                tiles.append(TileView(i, stop_label, "red", section="answer_profiles"))
+                tiles.append(TileView(i, stop_label, "grey" if down else "red", section="answer_profiles"))
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
@@ -497,7 +505,10 @@ class Orchestrator:
             if agent is not None
             else PanelView("", [], "grey")
         )
-        if armed is not None and agent is not None:
+        if down:
+            offline = self.config.theme.colors.get("offline", "red")
+            panel = PanelView(panel.title, ["OFFLINE — reconnecting…"], offline)
+        elif armed is not None and agent is not None:
             panel = PanelView(panel.title, ["press again to confirm", *panel.lines], panel.color)
         return RenderState(tiles, panel)
 
@@ -619,6 +630,10 @@ class Orchestrator:
             self._drill = None
             self._pending_confirm = None
             self._resettle()
+            return []
+        if self._drill_down():
+            # The connector is down: a command would be dropped silently. Only
+            # Back (handled above) works until the server reconnects.
             return []
         if index == stop_i:  # Stop — always, unconditional
             action = "act_force"
