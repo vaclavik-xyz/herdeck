@@ -44,12 +44,13 @@ class RenderSink(Protocol):
 class D200Sink:
     """RenderSink that drives a physical Ulanzi D200 via an open ``D200Driver``.
 
-    Full frames push every in-range tile plus the panel; working frames push only
-    the spinner-advancing tiles (cheap partial USB writes). The driver's own
-    per-index write diff and the neutralized strmdck retry-sleep keep those writes
-    fast. Physical button presses are read on a private thread+event-loop and
-    routed to ``on_press`` (the DeckApp's thread-safe ``press``), so a D200 press
-    flows through the SAME Orchestrator + bridge as a window press."""
+    Every frame (full or working) pushes every in-range tile plus the panel as a
+    full set. The D200 firmware drops cells not included in a partial write, so
+    always re-sending the complete layout keeps static and idle tiles lit. The
+    neutralized strmdck retry-sleep makes a full combined write cheap (~12ms).
+    Physical button presses are read on a private thread+event-loop and routed to
+    ``on_press`` (the DeckApp's thread-safe ``press``), so a D200 press flows
+    through the SAME Orchestrator + bridge as a window press."""
 
     def __init__(
         self,
@@ -70,15 +71,15 @@ class D200Sink:
             self._reader_thread.start()
 
     def deliver(self, frame) -> None:
+        # Always render a FULL frame — every tile plus the panel. The D200 drops the
+        # cells missing from a partial (working-only) update, so a working frame would
+        # blank the static/idle tiles + panel; re-sending everything keeps the whole
+        # deck lit. render() is one combined full-set write in the driver, cheap now
+        # that the strmdck retry sleep is neutralized. `frame.working` is ignored (the
+        # animating tiles carry their new spinner phase in the full set anyway).
         rs = frame.render
-        if frame.full or frame.working is None:
-            self._driver.render([t for t in rs.tiles if t.index < self._slots])
-            self._driver.render_panel(rs.panel)
-            return
-        wanted = set(frame.working)
-        tiles = [t for t in rs.tiles if t.index in wanted]
-        if tiles:
-            self._driver.render_working(tiles)
+        self._driver.render([t for t in rs.tiles if t.index < self._slots])
+        self._driver.render_panel(rs.panel)
 
     def _run_reader(self) -> None:
         try:

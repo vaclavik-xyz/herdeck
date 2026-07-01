@@ -69,11 +69,6 @@ class D200Driver(DeckDriver):
 
     KEEP_ALIVE_INTERVAL = 5.0
     SLOW_WRITE_MS = 250.0  # device writes slower than this get a WARNING log
-    RESYNC_INTERVAL = 120.0  # seconds; periodically re-send every tile (one small
-                             # write each) so a dropped async USB write can't leave a
-                             # tile stale forever — the diff optimistically records
-                             # _last_icon on the synchronous set_buttons return, but
-                             # the real USB write is drained async by RenderPump.
     BRIGHTNESS = 80
     DEBOUNCE = 0.25  # ignore repeats of the same key within this window
     _CONTROL_USAGE_PAGE = 0x0C
@@ -93,7 +88,6 @@ class D200Driver(DeckDriver):
         self._last_write_ms: float | None = None
         self._last_write_count = 0
         self._last_icon: dict[int, str] = {}
-        self._last_full_ts = 0.0  # monotonic time of the last full re-sync
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
         self._previous_cwd = os.getcwd()
@@ -206,22 +200,6 @@ class D200Driver(DeckDriver):
         elif channel == "working":
             self._write_working(payload)
 
-    def _resync_tiles(self, buttons: dict[int, dict]) -> None:
-        """Re-send ALL tiles in one combined write so dropped async USB writes self-heal.
-
-        Individual per-tile writes were a workaround for strmdck's retry-loop stall on a
-        big zip; with that retry sleep neutralized (_neutralize_retry_sleep), a combined
-        write is fast (~12ms prepare, like the normal full refresh). Crucially, unlike 13
-        separate USB writes draining in one RenderPump batch (~6s of round-trips), one
-        combined write never blocks the render worker long enough to starve the keep-alive
-        — the stall that blanked the deck and left tiles/panel black until the next refresh.
-        """
-        if self._timed_set_buttons("resync", buttons, update_only=True):
-            self._record(buttons)
-            # Only advance the window on success; a failed write leaves it open so the
-            # next render retries immediately instead of waiting the full RESYNC_INTERVAL.
-            self._last_full_ts = time.monotonic()
-
     def _diff(self, buttons: dict[int, dict]) -> dict[int, dict]:
         """Keep only buttons whose icon filename differs from the last write."""
         return {
@@ -271,21 +249,17 @@ class D200Driver(DeckDriver):
         return True
 
     def _write_tiles(self, tiles: list[TileView]) -> None:
+        # Always a FULL set (update_only=False) of every tile. The D200 drops the
+        # cells NOT included in a partial (update_only=True) write — so static tiles
+        # (e.g. the "New" launcher) and idle tiles vanish, and only the tiles touched
+        # by the frequent working/spinner updates stay lit. Re-sending every tile on
+        # each full render re-establishes the whole layout. The per-index write-diff +
+        # periodic resync that this replaces existed only to dodge strmdck's retry-loop
+        # stall on a big zip; with that sleep neutralized a full set is cheap (~12ms
+        # prepare, one USB write), so the optimization is no longer worth its cost.
         buttons = self._tile_buttons(tiles)
-        if not self._last_icon:
-            # First paint establishes the full button layout.
-            if self._timed_set_buttons("tiles", buttons, update_only=False):
-                self._record(buttons)
-                self._last_full_ts = time.monotonic()
-            return
-        if time.monotonic() - self._last_full_ts >= self.RESYNC_INTERVAL:
-            self._resync_tiles(buttons)
-            return
-        changed = self._diff(buttons)
-        if not changed:
-            return
-        if self._timed_set_buttons("tiles", changed, update_only=True):
-            self._record(changed)
+        if self._timed_set_buttons("tiles", buttons, update_only=False):
+            self._record(buttons)
 
     def _write_panel(self, panel: PanelView) -> None:
         try:

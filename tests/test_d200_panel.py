@@ -266,7 +266,10 @@ def test_d200_first_paint_sends_all_update_only_false(tmp_path):
         os.chdir(before)
 
 
-def test_d200_unchanged_tiles_skip_write(tmp_path):
+def test_d200_unchanged_tiles_still_write(tmp_path):
+    # render() is always a full-set write (update_only=False), even when all
+    # tile icons are identical to the last write. The diff optimisation is gone;
+    # every render() call produces exactly one USB write with all tiles.
     dev = _FakeDev()
     before = os.getcwd()
     driver = _make_driver(tmp_path, dev)
@@ -274,15 +277,19 @@ def test_d200_unchanged_tiles_skip_write(tmp_path):
     try:
         driver.render(tiles)
         assert _wait_until(lambda: len(dev.calls) == 1)
-        driver.render(tiles)  # identical icons -> empty diff -> no write
-        time.sleep(0.15)
-        assert len(dev.calls) == 1
+        driver.render(tiles)  # identical icons -> still a full write (no diff skip)
+        assert _wait_until(lambda: len(dev.calls) == 2)
+        buttons, update_only = dev.calls[1]
+        assert set(buttons) == {0, 1}
+        assert update_only is False
     finally:
         driver.close()
         os.chdir(before)
 
 
-def test_d200_only_changed_tile_is_sent(tmp_path):
+def test_d200_render_always_sends_all_tiles(tmp_path):
+    # render() sends every tile as a single full-set write (update_only=False),
+    # regardless of which tiles changed. This replaces the old per-index diff.
     dev = _FakeDev()
     before = os.getcwd()
     driver = _make_driver(tmp_path, dev, icons=_ContentIcons())
@@ -293,17 +300,21 @@ def test_d200_only_changed_tile_is_sent(tmp_path):
         assert _wait_until(lambda: len(dev.calls) == 1)
         driver.render(
             [TileView(0, "a", "blue", time_text="9s"), TileView(1, "b", "green", time_text="2s")]
-        )  # only index 0 changed
+        )  # only index 0 changed, but ALL tiles are re-sent
         assert _wait_until(lambda: len(dev.calls) == 2)
         buttons, update_only = dev.calls[1]
-        assert set(buttons) == {0}
-        assert update_only is True
+        assert set(buttons) == {0, 1}  # both tiles sent, not just the changed one
+        assert update_only is False
     finally:
         driver.close()
         os.chdir(before)
 
 
 def test_d200_working_write_updates_diff_state(tmp_path):
+    # render_working() still uses the per-index diff (only changed working tiles
+    # are written, update_only=True). A subsequent render() for the same content
+    # that the working frame already painted still sends all tiles (full set,
+    # update_only=False) — the diff optimisation does NOT apply to render().
     dev = _FakeDev()
     before = os.getcwd()
     driver = _make_driver(tmp_path, dev, icons=_ContentIcons())
@@ -312,70 +323,16 @@ def test_d200_working_write_updates_diff_state(tmp_path):
         assert _wait_until(lambda: len(dev.calls) == 1)
         driver.render_working([TileView(0, "a", "blue", time_text="2s")])
         assert _wait_until(lambda: len(dev.calls) == 2)
-        # full render with the SAME content the working frame already painted -> skipped
+        # working write used update_only=True (partial, only the changed spinner tile)
+        working_buttons, working_update_only = dev.calls[1]
+        assert set(working_buttons) == {0}
+        assert working_update_only is True
+        # render() always sends a full set regardless of what the working frame painted
         driver.render([TileView(0, "a", "blue", time_text="2s")])
-        time.sleep(0.15)
-        assert len(dev.calls) == 2
-    finally:
-        driver.close()
-        os.chdir(before)
-
-
-def test_d200_periodic_resync_resends_all_tiles(tmp_path):
-    # After RESYNC_INTERVAL, all tiles are re-sent in ONE combined write (not one per
-    # tile), so a dropped async USB write self-heals without 13 separate USB round-trips
-    # draining in one batch (~6s) — which would starve the keep-alive and blank the deck.
-    dev = _FakeDev()
-    before = os.getcwd()
-    driver = _make_driver(tmp_path, dev)
-    tiles = [TileView(0, "a", "blue"), TileView(1, "b", "green")]
-    try:
-        driver.render(tiles)
-        assert _wait_until(lambda: len(dev.calls) == 1)  # first paint: one full write
-        driver.render(tiles)  # unchanged -> diff empty -> skipped
-        time.sleep(0.15)
-        assert len(dev.calls) == 1
-        driver._last_full_ts -= driver.RESYNC_INTERVAL + 1  # force the re-sync window open
-        driver.render(tiles)  # identical content, but re-sync re-sends all tiles at once
-        assert _wait_until(lambda: len(dev.calls) == 2)  # +1: ONE combined re-sync write
-        resync_buttons, update_only = dev.calls[1]
-        assert set(resync_buttons) == {0, 1}  # every tile in the single write
-        assert update_only is True
-    finally:
-        driver.close()
-        os.chdir(before)
-
-
-def test_d200_resync_window_stays_open_on_failure(tmp_path):
-    # If the combined resync write fails, _last_full_ts must NOT advance, so the next
-    # render retries the resync instead of waiting the full RESYNC_INTERVAL.
-    class _ResyncFailDev(_FakeDev):
-        def __init__(self):
-            super().__init__()
-            self.fail_next_update = True
-
-        def set_buttons(self, buttons, update_only=False):
-            # fail the first update_only write (the resync) once; succeed thereafter
-            if update_only and self.fail_next_update:
-                self.fail_next_update = False
-                raise RuntimeError("usb boom")
-            super().set_buttons(buttons, update_only)
-
-    dev = _ResyncFailDev()
-    before = os.getcwd()
-    driver = _make_driver(tmp_path, dev)
-    tiles = [TileView(0, "a", "blue"), TileView(1, "b", "green")]
-    try:
-        driver.render(tiles)  # first paint (update_only=False) -> lands + recorded
-        assert _wait_until(lambda: len(dev.calls) == 1)
-        driver._last_full_ts -= driver.RESYNC_INTERVAL + 1  # open the resync window
-        driver.render(tiles)  # resync combined write RAISES -> window stays open, nothing lands
-        assert _wait_until(lambda: dev.fail_next_update is False)  # the failing resync ran
-        assert len(dev.calls) == 1  # the failed resync write did not land
-        driver.render(tiles)  # window still open -> resync retried -> now succeeds
-        assert _wait_until(lambda: len(dev.calls) == 2)
-        resync_buttons, update_only = dev.calls[1]
-        assert set(resync_buttons) == {0, 1} and update_only is True
+        assert _wait_until(lambda: len(dev.calls) == 3)
+        full_buttons, full_update_only = dev.calls[2]
+        assert set(full_buttons) == {0}
+        assert full_update_only is False
     finally:
         driver.close()
         os.chdir(before)
