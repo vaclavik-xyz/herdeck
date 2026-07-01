@@ -89,7 +89,7 @@
 
     // Visibility-gated: the setup poll parks while the window is hidden (the
     // deck lives in the tray) and refreshes immediately on show.
-    const stopSetupPoll = visibilityGatedLoop(
+    const setupPoll = visibilityGatedLoop(
       async () => {
         if (setup) status = await setup.status();
       },
@@ -114,7 +114,7 @@
 
     return () => {
       alive = false;
-      stopSetupPoll();
+      setupPoll.stop();
       ro?.disconnect();
     };
   });

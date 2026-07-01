@@ -10,17 +10,26 @@ export type VisibilityDoc = Pick<
   "hidden" | "addEventListener" | "removeEventListener"
 >;
 
+/** Handle to a running gated loop. */
+export type GatedLoop = {
+  stop: () => void;
+  /** Run a step immediately (e.g. right after a press the server already
+   * applied) instead of waiting out the current interval. No-op while hidden
+   * or stopped; never overlaps an in-flight step. */
+  kick: () => void;
+};
+
 /**
  * Run `step` immediately and then every `intervalMs()` while the document is
  * visible; park while hidden; one immediate step on show. Steps never overlap
  * (the next is scheduled only after the previous resolves — setInterval would
- * let a slow poll clobber a newer one). Returns a stop function.
+ * let a slow poll clobber a newer one).
  */
 export function visibilityGatedLoop(
   step: () => Promise<void> | void,
   intervalMs: () => number,
   doc: VisibilityDoc = document,
-): () => void {
+): GatedLoop {
   let stopped = false;
   let running = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -44,11 +53,23 @@ export function visibilityGatedLoop(
     if (!doc.hidden) void run(); // immediate refresh on show; parked while hidden
   }
 
+  function kick(): void {
+    if (stopped || doc.hidden) return;
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    void run();
+  }
+
   doc.addEventListener("visibilitychange", onVisibility);
   void run();
-  return () => {
-    stopped = true;
-    if (timer) clearTimeout(timer);
-    doc.removeEventListener("visibilitychange", onVisibility);
+  return {
+    kick,
+    stop: () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      doc.removeEventListener("visibilitychange", onVisibility);
+    },
   };
 }

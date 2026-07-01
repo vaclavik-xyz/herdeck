@@ -35,7 +35,7 @@ describe("visibilityGatedLoop", () => {
   it("steps immediately and reschedules at the interval", async () => {
     const doc = new FakeDoc();
     const steps: number[] = [];
-    const stop = visibilityGatedLoop(() => void steps.push(1), () => 300, doc);
+    const { stop } = visibilityGatedLoop(() => void steps.push(1), () => 300, doc);
     await flush();
     expect(steps.length).toBe(1);
     await vi.advanceTimersByTimeAsync(300);
@@ -48,7 +48,7 @@ describe("visibilityGatedLoop", () => {
   it("parks while hidden and does one immediate step on show", async () => {
     const doc = new FakeDoc();
     let steps = 0;
-    const stop = visibilityGatedLoop(() => void steps++, () => 300, doc);
+    const { stop } = visibilityGatedLoop(() => void steps++, () => 300, doc);
     await flush();
     expect(steps).toBe(1);
     doc.setHidden(true);
@@ -67,7 +67,7 @@ describe("visibilityGatedLoop", () => {
     let steps = 0;
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => (release = r));
-    const stop = visibilityGatedLoop(
+    const { stop } = visibilityGatedLoop(
       async () => {
         steps++;
         await gate;
@@ -91,7 +91,7 @@ describe("visibilityGatedLoop", () => {
     let maxActive = 0;
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => (release = r));
-    const stop = visibilityGatedLoop(
+    const { stop } = visibilityGatedLoop(
       async () => {
         active++;
         maxActive = Math.max(maxActive, active);
@@ -113,11 +113,43 @@ describe("visibilityGatedLoop", () => {
   it("stop cancels the loop and removes the listener", async () => {
     const doc = new FakeDoc();
     let steps = 0;
-    const stop = visibilityGatedLoop(() => void steps++, () => 300, doc);
+    const { stop } = visibilityGatedLoop(() => void steps++, () => 300, doc);
     await flush();
     stop();
     await vi.advanceTimersByTimeAsync(3000);
     expect(steps).toBe(1);
     expect(doc.listenerCount).toBe(0);
+  });
+});
+
+describe("kick", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("runs an immediate step and reschedules from it", async () => {
+    const doc = new FakeDoc();
+    let steps = 0;
+    const loop = visibilityGatedLoop(() => void steps++, () => 300, doc);
+    await flush();
+    expect(steps).toBe(1);
+    await vi.advanceTimersByTimeAsync(100);
+    loop.kick(); // e.g. a press the server already applied
+    await flush();
+    expect(steps).toBe(2);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(steps).toBe(3); // interval restarted from the kick
+    loop.stop();
+  });
+
+  it("is a no-op while hidden", async () => {
+    const doc = new FakeDoc();
+    let steps = 0;
+    const loop = visibilityGatedLoop(() => void steps++, () => 300, doc);
+    await flush();
+    doc.setHidden(true);
+    loop.kick();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(steps).toBe(1);
+    loop.stop();
   });
 });
