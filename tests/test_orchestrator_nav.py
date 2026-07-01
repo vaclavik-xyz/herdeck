@@ -663,3 +663,23 @@ def test_duplicate_deny_options_confirm_independently():
     assert tiles[2].label == "3"  # the sibling deny option is NOT armed
     assert o.on_press(2) == []  # pressing the sibling arms IT instead of firing
     assert o.on_press(2) == [Command("act_if_blocked", "dev", "p1", keys=["3", "enter"])]
+
+
+def test_idle_tick_does_not_adopt_the_new_order(monkeypatch):
+    """An idle tick produces no frame, so it must not adopt the settled sort —
+    otherwise presses resolve against an order the user has never seen
+    (roborev 0e4d730)."""
+    clk = [1000.0]
+    o = _clocked(clk)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
+    o.render()
+    o.apply_event("dev", st("p2", Status.BLOCKED, label="two"))
+    o.render()  # settle timer starts (production refreshes on every event)
+    clk[0] += 2.5
+    o.tick()  # idle tick past the settle window — must stay read-only
+    assert [k.pane_id for k in o._display_order] == ["p1", "p2"]
+    clk[0] += 1.0  # long past the press guard IF the tick had adopted
+    assert o.on_press(0) == []  # adoption happens IN the press -> guard swallows
+    clk[0] += 0.5
+    cmds = o.on_press(0)
+    assert cmds and cmds[0].pane_id == "p2"  # now the user has seen the new order

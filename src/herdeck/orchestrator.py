@@ -357,11 +357,24 @@ class Orchestrator:
         return RenderState(tiles, PanelView("new agent", ["pick a type"], "grey"))
 
     def tick(self) -> list[int]:
-        """Advance the spinner phase; return overview tile indices that are working."""
+        """Advance the spinner phase; return overview tile indices that are working.
+
+        Uses a READ-ONLY view of the current display order: order adoption is a
+        visible change, so it may only happen where a frame is produced
+        (render) or a press is being resolved (slot-guarded) — an idle tick
+        that skips rendering must not silently move the order presses resolve
+        against."""
         if self._drill is not None or self._launcher or self._profile_menu:
             return []
         self._phase += 1
-        shown, _ = layout.page(self._ordered(), self._page, self._agent_slots())
+        by_key = {s.key: s for s in self._agents.values()}
+        display = [k for k in self._display_order if k in by_key]
+        if not display:
+            display = [
+                s.key
+                for s in layout.order_agents(self._agents.values(), self.config.overview_order)
+            ]
+        shown, _ = layout.page([by_key[k] for k in display], self._page, self._agent_slots())
         return [i for i, s in enumerate(shown) if s.status is Status.WORKING]
 
     def _drill_layout(self) -> tuple[list, int, int]:

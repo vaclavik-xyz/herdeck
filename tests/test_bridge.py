@@ -516,7 +516,7 @@ async def test_stream_refreshes_labels_by_age_when_wakes_starve_the_poll(monkeyp
     from herdeck.bridge import HerdrEvents
 
     t = [0.0]
-    monkeypatch.setattr(bridge_mod.time, "monotonic", lambda: t[0])
+    monkeypatch.setattr(bridge_mod, "_monotonic", lambda: t[0])
 
     class CountingHerdr:
         def __init__(self):

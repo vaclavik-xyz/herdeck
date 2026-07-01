@@ -14,6 +14,10 @@ from .protocol import encode
 # herdr agent_status values that mark a pane as worth showing on the deck.
 _AGENT_STATUSES = {"idle", "working", "blocked", "done"}
 
+# Module-level indirection so tests can fake the clock without touching the
+# shared stdlib time module (which asyncio's loop may also consult).
+_monotonic = time.monotonic
+
 
 class HerdrClient(Protocol):
     async def list_panes(self) -> list[dict]: ...
@@ -242,7 +246,7 @@ class HerdrEvents:
                         )
                         self._labels = labels
                         self._labels_stale = False
-                        self._labels_at = time.monotonic()
+                        self._labels_at = _monotonic()
                     else:
                         raw = await self._herdr.list_panes()
                     cur = _wire_panes(raw, *self._labels)
@@ -260,7 +264,7 @@ class HerdrEvents:
                 # Age-based staling (not timeout-based): frequent status wakes can
                 # keep the timeout from ever firing, which would let labels (e.g.
                 # a branch change, which is not a fleet event) stay stale forever.
-                if time.monotonic() - self._labels_at >= self._interval:
+                if _monotonic() - self._labels_at >= self._interval:
                     self._labels_stale = True
         finally:
             if listener is not None:
