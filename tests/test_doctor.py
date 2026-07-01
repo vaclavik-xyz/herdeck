@@ -244,6 +244,9 @@ def test_collect_checks_resolves_active_profile_notifications(tmp_path, monkeypa
     monkeypatch.setenv("HERDECK_CONFIG", str(config))
     monkeypatch.setenv("HERDECK_TG", "SECRET-TOKEN-VALUE")
     monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "missing.sock"))
+    import herdeck.doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_telegram_get_me", lambda token: None)  # no network
 
     checks = {check.name: check for check in collect_checks()}
 
@@ -441,3 +444,21 @@ async def test_probe_server_accepts_real_snapshot_greeting():
     finally:
         server.close()
         await server.wait_closed()
+
+
+def test_notifications_check_probes_telegram_token():
+    from herdeck.config import Notifications, TelegramConfig
+    from herdeck.doctor import check_notifications
+
+    n = Notifications(
+        enabled=True,
+        backends=["telegram"],
+        on=["blocked"],
+        telegram=TelegramConfig(token_env="TG", chat_id="1"),
+    )
+    ok_check = check_notifications(n, getenv=lambda k: "tok", telegram_probe=lambda t: None)
+    assert ok_check.ok and "telegram=reachable" in ok_check.detail
+    bad = check_notifications(
+        n, getenv=lambda k: "tok", telegram_probe=lambda t: "token rejected (401 Unauthorized)"
+    )
+    assert not bad.ok and "token rejected" in bad.detail

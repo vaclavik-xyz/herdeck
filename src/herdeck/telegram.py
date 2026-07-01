@@ -273,9 +273,11 @@ class TelegramInteractor:
                 message_thread_id=self._message_thread_id,
                 reply_markup=markup,
             )
-        except Exception:
+        except Exception as exc:
             self._store.discard(record.token)
-            log.debug("telegram blocked alert send failed", exc_info=True)
+            from .notify import _warn_failure
+
+            _warn_failure("telegram", exc)  # visible, rate-limited (was DEBUG-only)
             return
         try:
             message_id = int((result or {}).get("message_id", -1))

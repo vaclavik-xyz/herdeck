@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
@@ -12,6 +13,30 @@ from typing import Protocol
 from .model import AgentState
 
 log = logging.getLogger("herdeck.notify")
+
+# Identical delivery failures re-log at WARNING at most this often; the
+# repeats stay at DEBUG so a flaky network cannot spam the log.
+_WARN_EVERY_S = 300.0
+_last_warned: dict[str, tuple[str, float]] = {}
+_monotonic = time.monotonic  # test seam
+
+
+def _warn_failure(context: str, exc: Exception) -> None:
+    """Surface a notification delivery failure. The whole point of
+    notifications is being away from the deck — a wrong bot token or revoked
+    bot must not disappear at DEBUG while blocked agents sit unanswered."""
+    reason = str(exc) or type(exc).__name__
+    prev = _last_warned.get(context)
+    now = _monotonic()
+    if prev is not None and prev[0] == reason and now - prev[1] < _WARN_EVERY_S:
+        log.debug("notify via %s failed again: %s", context, reason)
+        return
+    _last_warned[context] = (reason, now)
+    log.warning("notify via %s failed: %s", context, reason)
+
+
+def _sink_name(sink) -> str:
+    return getattr(sink, "_notify_name", None) or getattr(sink, "__name__", "sink")
 
 
 def escape_applescript(s: str) -> str:
@@ -58,6 +83,7 @@ def make_telegram_sink(
             fields["message_thread_id"] = str(message_thread_id)
         post(url, fields)
 
+    sink._notify_name = "telegram"
     return sink
 
 
@@ -70,8 +96,8 @@ def composite_sink(
         for s in sinks:
             try:
                 s(title, body, sound)
-            except Exception:
-                log.debug("notify sink failed", exc_info=True)
+            except Exception as exc:
+                _warn_failure(_sink_name(s), exc)
 
     return sink
 
@@ -85,8 +111,8 @@ class Notifier:
     def notify(self, title: str, body: str, sound: bool = False) -> None:
         try:
             self._sink(title, body, sound)
-        except Exception:
-            log.debug("notify failed", exc_info=True)
+        except Exception as exc:
+            _warn_failure(_sink_name(self._sink), exc)
 
 
 class NoopNotifier(Notifier):

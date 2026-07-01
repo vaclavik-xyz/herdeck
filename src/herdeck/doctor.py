@@ -128,7 +128,27 @@ def check_deck(lib_available: Callable[[str], bool]) -> Check:
     )
 
 
-def check_notifications(notifications: Notifications, getenv=get_secret) -> Check:
+def _telegram_get_me(token: str) -> str | None:
+    """None if the Bot API accepts the token, else a short reason."""
+    import json
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(
+            f"https://api.telegram.org/bot{token}/getMe", timeout=2
+        ) as r:
+            data = json.loads(r.read().decode())
+        return None if data.get("ok") else str(data.get("description", "rejected"))
+    except Exception as exc:
+        status = getattr(exc, "code", None)
+        if status == 401:
+            return "token rejected (401 Unauthorized)"
+        return str(exc) or type(exc).__name__
+
+
+def check_notifications(
+    notifications: Notifications, getenv=get_secret, telegram_probe=None
+) -> Check:
     if not notifications.enabled:
         return Check("notifications", True, "disabled")
     supported = {"macos", "telegram"}
@@ -151,6 +171,15 @@ def check_notifications(notifications: Notifications, getenv=get_secret) -> Chec
             chat_present = bool(tg.chat_id)
             parts.append(f"token_env={'present' if token_present else 'missing'}")
             parts.append(f"chat_id={'present' if chat_present else 'missing'}")
+            if token_present and telegram_probe is not None:
+                # a PRESENT token says nothing about a wrong/revoked one — the
+                # user finds out only when an agent sat blocked for an hour
+                probe_error = telegram_probe(getenv(tg.token_env))
+                if probe_error is None:
+                    parts.append("telegram=reachable")
+                else:
+                    parts.append(f"telegram={probe_error}")
+                    ok = False
             if token_present and chat_present:
                 usable += 1
                 if tg.interactive:
@@ -187,7 +216,9 @@ def _read_notifications(config_path: str | None) -> Notifications:
 
 def _check_configured_notifications(config_path: str | None) -> Check:
     try:
-        return check_notifications(_read_notifications(config_path))
+        return check_notifications(
+            _read_notifications(config_path), telegram_probe=_telegram_get_me
+        )
     except ConfigError as exc:
         return Check("notifications", False, f"invalid config ({exc})")
 
