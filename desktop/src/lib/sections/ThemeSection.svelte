@@ -1,5 +1,5 @@
 <script lang="ts">
-  import TextField from "../fields/TextField.svelte";
+  import ColorSelectField from "../fields/ColorSelectField.svelte";
   import ListField from "../fields/ListField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
@@ -59,12 +59,12 @@
   {#if overlay}
     {#each STATUS as key (key)}
       <OverrideField label={key} state={colorState(key)} inheritedDisplay={colorInheritedHint(key)} onstate={(s) => setColorState(key, s)}>
-        <TextField label="" value={colorValue(key)} oninput={(v) => setColor(key, v)} />
+        <ColorSelectField label="" value={colorValue(key)} allowEmpty={false} onchange={(v) => setColor(key, v)} />
       </OverrideField>
     {/each}
   {:else}
     {#each STATUS as key (key)}
-      <TextField label={key} value={baseColorOf(key)} oninput={(v) => setBaseColor(key, v)} />
+      <ColorSelectField label={key} value={baseColorOf(key)} onchange={(v) => setBaseColor(key, v)} />
     {/each}
   {/if}
 </fieldset>
