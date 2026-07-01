@@ -160,6 +160,7 @@
   :global(html, body) {
     margin: 0;
     background: #0b0b0d;
+    color-scheme: dark; /* dark native widgets + scrollbars (WebKit) */
   }
   :global(html[data-window-mode="floating"]),
   :global(html[data-window-mode="floating"] body),

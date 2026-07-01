@@ -294,9 +294,13 @@
 </main>
 
 <style>
-  :global(html, body) { margin: 0; background: #0b0b0d; color: #e8e8ea; font: 13px system-ui; }
+  /* color-scheme keeps NATIVE widgets (selects + their popup menus, checkboxes,
+     number spinners, scrollbars) dark — without it WebKit renders them in light
+     mode against the dark theme. */
+  :global(html, body) { margin: 0; background: #0b0b0d; color: #e8e8ea; font: 13px system-ui; color-scheme: dark; accent-color: #2563eb; }
   main { display: flex; flex-direction: column; height: 100vh; }
   .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid #222; }
+  .topbar select { background: #1b1b1f; color: #e8e8ea; border: 1px solid #2a2a2e; border-radius: 6px; padding: 3px 6px; font: inherit; }
   .dirty { color: #e0a030; margin-left: auto; }
   .body { flex: 1; display: grid; grid-template-columns: 160px 1fr 220px; min-height: 0; }
   .sidebar { display: flex; flex-direction: column; border-right: 1px solid #222; overflow: auto; }
@@ -306,7 +310,8 @@
   .preview { border-left: 1px solid #222; padding: 8px; overflow: auto; }
   .hint { color: #888; }
   .savebar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid #222; }
-  .savebar button { margin: 0; }
+  .savebar button { margin: 0; padding: 6px 14px; border: 1px solid #2a2a2e; border-radius: 7px; background: #1b1b1f; color: #e8e8ea; font: inherit; cursor: pointer; }
+  .savebar button:disabled { opacity: 0.5; cursor: default; }
   .spacer { flex: 1; }
   .errcount { background: none; border: 0; cursor: pointer; color: #e05050; }
   .errlist { border-top: 1px solid #3a1d1d; background: #171012; color: #e08080; max-height: 120px; overflow: auto; padding: 6px 12px; font-size: 12px; }
