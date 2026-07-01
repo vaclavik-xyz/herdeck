@@ -336,8 +336,9 @@ def test_event_unblocking_drilled_pane_clears_stale_prompt():
     # fresh read (had the prompt lingered, press 0 would still send an act).
     src._on_event(server.id, agent(server.id, "p0", Status.IDLE))
     src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))
+    runner.sent.clear()  # ignore the reblock's fresh current-episode read; isolate the press
     app.press(0)
-    assert runner.sent == []
+    assert runner.sent == []  # no stale act: options were dropped on unblock, none seeded yet
 
 
 def test_snapshot_unblocking_drilled_pane_clears_stale_prompt():
@@ -347,8 +348,9 @@ def test_snapshot_unblocking_drilled_pane_clears_stale_prompt():
     _drill_with_detection(app, src, server, runner)
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.IDLE)])
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    runner.sent.clear()  # ignore the reblock's fresh current-episode read; isolate the press
     app.press(0)
-    assert runner.sent == []
+    assert runner.sent == []  # no stale act: options were dropped on unblock, none seeded yet
 
 
 def test_cosmetic_change_keeps_detection_while_blocked():
@@ -414,17 +416,35 @@ def test_preread_issued_once_while_blocked():
     assert _reads(runner) == []
 
 
-def test_preread_not_reissued_for_drilled_pane_after_reblock():
-    # The drilled pane owns its own read (fired on press); it must not also get a
-    # background pre-read — even after an unblock drops its cache and it re-blocks.
+def test_blocked_drill_not_double_read_when_press_registered_it():
+    # Pressing a BLOCKED pane fires (and registers) the drill's own read, so a later
+    # snapshot with the pane still blocked must not issue a second background read.
     app, src, server, runner = make_live()
     src._on_connection(server.id, True)
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
-    app.press(0)  # drill p0 (still the drilled pane below)
-    src._on_snapshot(server.id, [agent(server.id, "p0", Status.IDLE)])  # unblock -> cache dropped
+    app.press(0)  # drill -> the drill read registers the episode
     runner.sent.clear()
-    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])  # re-block while drilled
-    assert _reads(runner) == []
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])  # still blocked
+    assert _reads(runner) == []  # its current-episode read is already out
+
+
+def test_drilled_working_pane_that_blocks_gets_fresh_read_and_options():
+    # A pane drilled while WORKING that then blocks (still drilled) had only a
+    # pre-block read, which is rejected. It must get a fresh current-episode read so
+    # the block prompt's options appear without the user backing out and re-drilling.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    app.press(0)  # drill working -> pre-block read (not registered for the episode)
+    runner.sent.clear()
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))  # blocks while drilled
+    fresh = _reads(runner)
+    assert len(fresh) == 1 and fresh[0]["pane_id"] == "p0"
+    src._on_result(fresh[0]["req"], {"text": "1. Approve\n2. Deny", "pane_id": "p0"})
+    assert app._orch._detection == "1. Approve\n2. Deny"  # options now surface on the drill
+    runner.sent.clear()
+    app.press(0)  # the first option is actionable
+    assert runner.sent and runner.sent[0]["type"] == "act" and runner.sent[0]["keys"] == ["1"]
 
 
 def test_preread_makes_drill_instant():

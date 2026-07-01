@@ -280,13 +280,17 @@ class LiveSource(StateSource):
     def _reconcile_prereads(self) -> None:
         """Keep the pre-read cache in step with the fleet: drop entries for panes no
         longer blocked (their prompt is stale), and issue one background read for each
-        newly-blocked pane that is not the drilled pane (the drill owns its own read).
+        blocked pane that has no current-episode read yet.
+
+        This includes the drilled pane: pressing a BLOCKED pane registers its own read
+        (so no second read is issued there), but a pane drilled while WORKING that then
+        blocks has only a rejected pre-block read — it needs a fresh episode read here
+        or its blocked drill would stay blank until the user backs out and re-drills.
 
         Runs inside a mutate() (deck lock held); ``self._lock`` guards the cache +
         buffer. Sends fire after releasing ``self._lock`` — ``runner.send`` is
         fire-and-forget and never blocks."""
         runner = self._runner
-        drilled = self._drilled_key()
         reads: list[tuple[str, AgentKey]] = []
         with self._lock:
             blocked = {k for k, s in self._agents.items() if s.status is Status.BLOCKED}
@@ -295,8 +299,8 @@ class LiveSource(StateSource):
                     self._preread.pop(key, None)
                     self._preread_req.pop(key, None)
             for key in blocked:
-                if key in self._preread_req or key == drilled:
-                    continue  # a read is already out for this episode, or the drill reads it
+                if key in self._preread_req:
+                    continue  # a current-episode read is already out (pre-read or drill read)
                 self._bg_req += 1
                 bg_req = f"p{self._bg_req}"
                 self._preread_req[key] = bg_req  # register so the poll won't re-issue
