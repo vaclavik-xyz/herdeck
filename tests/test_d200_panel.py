@@ -322,8 +322,9 @@ def test_d200_working_write_updates_diff_state(tmp_path):
 
 
 def test_d200_periodic_resync_resends_all_tiles(tmp_path):
-    # After RESYNC_INTERVAL, every tile is re-sent (one small write each) even with
-    # no content change, so a dropped async USB write self-heals within the interval.
+    # After RESYNC_INTERVAL, all tiles are re-sent in ONE combined write (not one per
+    # tile), so a dropped async USB write self-heals without 13 separate USB round-trips
+    # draining in one batch (~6s) — which would starve the keep-alive and blank the deck.
     dev = _FakeDev()
     before = os.getcwd()
     driver = _make_driver(tmp_path, dev)
@@ -335,23 +336,28 @@ def test_d200_periodic_resync_resends_all_tiles(tmp_path):
         time.sleep(0.15)
         assert len(dev.calls) == 1
         driver._last_full_ts -= driver.RESYNC_INTERVAL + 1  # force the re-sync window open
-        driver.render(tiles)  # identical content, but re-sync re-sends every tile
-        assert _wait_until(lambda: len(dev.calls) == 3)  # +2: one small write per tile
-        resync = dev.calls[1:]
-        assert {next(iter(b)) for b, _ in resync} == {0, 1}
-        assert all(update_only for _, update_only in resync)
+        driver.render(tiles)  # identical content, but re-sync re-sends all tiles at once
+        assert _wait_until(lambda: len(dev.calls) == 2)  # +1: ONE combined re-sync write
+        resync_buttons, update_only = dev.calls[1]
+        assert set(resync_buttons) == {0, 1}  # every tile in the single write
+        assert update_only is True
     finally:
         driver.close()
         os.chdir(before)
 
 
-def test_d200_resync_window_stays_open_on_partial_failure(tmp_path):
-    # If a per-tile resync write fails, _last_full_ts must NOT advance, so the next
+def test_d200_resync_window_stays_open_on_failure(tmp_path):
+    # If the combined resync write fails, _last_full_ts must NOT advance, so the next
     # render retries the resync instead of waiting the full RESYNC_INTERVAL.
     class _ResyncFailDev(_FakeDev):
+        def __init__(self):
+            super().__init__()
+            self.fail_next_update = True
+
         def set_buttons(self, buttons, update_only=False):
-            # fail only the single-tile resync write for index 1
-            if update_only and len(buttons) == 1 and 1 in buttons:
+            # fail the first update_only write (the resync) once; succeed thereafter
+            if update_only and self.fail_next_update:
+                self.fail_next_update = False
                 raise RuntimeError("usb boom")
             super().set_buttons(buttons, update_only)
 
@@ -360,13 +366,16 @@ def test_d200_resync_window_stays_open_on_partial_failure(tmp_path):
     driver = _make_driver(tmp_path, dev)
     tiles = [TileView(0, "a", "blue"), TileView(1, "b", "green")]
     try:
-        driver.render(tiles)  # first paint: both tiles in one update_only=False write
+        driver.render(tiles)  # first paint (update_only=False) -> lands + recorded
         assert _wait_until(lambda: len(dev.calls) == 1)
         driver._last_full_ts -= driver.RESYNC_INTERVAL + 1  # open the resync window
-        driver.render(tiles)  # resync: index 0 ok, index 1 raises -> window stays open
-        assert _wait_until(lambda: len(dev.calls) == 2)  # only index 0's write landed
-        driver.render(tiles)  # window still open -> resync retried -> index 0 re-sent again
-        assert _wait_until(lambda: len(dev.calls) == 3)
+        driver.render(tiles)  # resync combined write RAISES -> window stays open, nothing lands
+        assert _wait_until(lambda: dev.fail_next_update is False)  # the failing resync ran
+        assert len(dev.calls) == 1  # the failed resync write did not land
+        driver.render(tiles)  # window still open -> resync retried -> now succeeds
+        assert _wait_until(lambda: len(dev.calls) == 2)
+        resync_buttons, update_only = dev.calls[1]
+        assert set(resync_buttons) == {0, 1} and update_only is True
     finally:
         driver.close()
         os.chdir(before)
