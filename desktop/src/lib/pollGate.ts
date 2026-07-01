@@ -32,6 +32,7 @@ export function visibilityGatedLoop(
 ): GatedLoop {
   let stopped = false;
   let running = false;
+  let kickPending = false; // a kick that arrived while a step was in flight
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   async function run(): Promise<void> {
@@ -42,7 +43,18 @@ export function visibilityGatedLoop(
     } finally {
       running = false;
     }
-    if (!stopped && !doc.hidden) timer = setTimeout(() => void run(), intervalMs());
+    if (stopped || doc.hidden) {
+      kickPending = false;
+      return;
+    }
+    if (kickPending) {
+      // e.g. a press completed while the scheduled poll was in flight — the
+      // in-flight result predates the press, so refresh immediately.
+      kickPending = false;
+      void run();
+      return;
+    }
+    timer = setTimeout(() => void run(), intervalMs());
   }
 
   function onVisibility(): void {
@@ -55,6 +67,10 @@ export function visibilityGatedLoop(
 
   function kick(): void {
     if (stopped || doc.hidden) return;
+    if (running) {
+      kickPending = true; // honoured the moment the in-flight step resolves
+      return;
+    }
     if (timer) {
       clearTimeout(timer);
       timer = undefined;

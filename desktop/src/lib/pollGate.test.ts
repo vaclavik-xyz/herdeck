@@ -153,3 +153,31 @@ describe("kick", () => {
     loop.stop();
   });
 });
+
+describe("kick during an in-flight step", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("queues the kick and runs a fresh step right after (roborev 177143a)", async () => {
+    const doc = new FakeDoc();
+    let steps = 0;
+    let release: () => void = () => {};
+    let gate = new Promise<void>((r) => (release = r));
+    const loop = visibilityGatedLoop(
+      async () => {
+        steps++;
+        await gate;
+      },
+      () => 300,
+      doc,
+    );
+    await flush();
+    expect(steps).toBe(1);
+    loop.kick(); // press completed while the poll is still in flight
+    gate = Promise.resolve(); // subsequent steps resolve immediately
+    release(); // the stale in-flight poll finishes now
+    await flush();
+    expect(steps).toBe(2); // the kicked refresh ran immediately, no interval wait
+    loop.stop();
+  });
+});
