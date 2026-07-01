@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import threading
 
 from .deckapp.discovery import clear_runtime_file, runtime_file_path, write_runtime_file
@@ -82,10 +83,10 @@ def main() -> int:
     app, sink, info, path = build_runtime(host="127.0.0.1", port=port)
     print(json.dumps(info), flush=True)  # stdout discovery fallback (parity with the sidecar)
     stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
     try:
         stop.wait()
-    except KeyboardInterrupt:
-        pass
     finally:
         clear_runtime_file(path)
         if sink is not None:
