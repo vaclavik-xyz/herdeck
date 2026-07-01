@@ -385,6 +385,10 @@ class Orchestrator:
                     actions.append(
                         {
                             "id": action_id,
+                            # Confirmation identity: two options can share an id
+                            # (e.g. two "No…" deny variants) but must arm and
+                            # confirm independently.
+                            "confirm_key": f"opt:{opt.key}",
                             "label": opt.key,
                             "subtext": opt.label,
                             # A numbered menu selects on the digit but only submits on
@@ -411,6 +415,7 @@ class Orchestrator:
                     actions.append(
                         {
                             "id": action_id,
+                            "confirm_key": f"fb:{action_id}",
                             "label": label,
                             "make": (
                                 lambda key, ks=keys: Command(
@@ -463,7 +468,7 @@ class Orchestrator:
         for i in range(self.slots):
             if i < len(actions):
                 label = actions[i]["label"]
-                if armed is not None and actions[i].get("id") == armed:
+                if armed is not None and actions[i].get("confirm_key") == armed:
                     label = "Sure?"
                 color = _ACTION_COLORS.get(actions[i].get("id"), "blue")
                 tiles.append(TileView(i, label, color, subtext=actions[i].get("subtext"), section="answer_profiles"))
@@ -617,11 +622,12 @@ class Orchestrator:
             return [cmd]
         if index < len(actions):  # send option number or macro text
             action_id = actions[index].get("id")
+            confirm_key = actions[index].get("confirm_key") or f"idx:{index}"
             if (
                 action_id in self.config.safety.require_confirm_for
-                and not self._confirm_armed(action_id, key)
+                and not self._confirm_armed(confirm_key, key)
             ):
-                self._arm_confirm(action_id, key)  # (re-)arm; an expired arm never fires
+                self._arm_confirm(confirm_key, key)  # (re-)arm; an expired arm never fires
                 return []
             self._pending_confirm = None
             cmd = actions[index]["make"](key)

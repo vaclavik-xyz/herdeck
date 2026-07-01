@@ -643,3 +643,23 @@ def test_press_on_freshly_reshuffled_slot_is_swallowed():
     clk[0] += 0.5
     cmds = o.on_press(0)  # deliberate second press drills the visible agent
     assert cmds and cmds[0].pane_id == "p2"
+
+
+def test_duplicate_deny_options_confirm_independently():
+    """Two parsed options can share an action id (two 'No…' variants); arming
+    one must not arm — or fire — the other (roborev 8781538/01e2201)."""
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["deny"]
+    # the default profile has no digit keys, so both "No…" options classify
+    # purely by label -> both get the shared "deny" action id
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="codex")])
+    o.on_press(0)
+    o.set_detection(
+        "Proceed?\n1. Yes\n2. No\n3. No, and tell Claude what to do differently"
+    )
+    assert o.on_press(1) == []  # arms option 2 only
+    tiles = o.render().tiles
+    assert tiles[1].label == "Sure?"
+    assert tiles[2].label == "3"  # the sibling deny option is NOT armed
+    assert o.on_press(2) == []  # pressing the sibling arms IT instead of firing
+    assert o.on_press(2) == [Command("act_if_blocked", "dev", "p1", keys=["3", "enter"])]
