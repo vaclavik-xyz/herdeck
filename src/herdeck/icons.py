@@ -134,7 +134,8 @@ _GLYPH_FONT_SIZE = 120
 _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default)
 
 # Bump when tile composition changes so stale cached tile PNGs are ignored.
-TILE_VERSION = 1
+# 2: tile_fill (none/tint/solid) — solid contrast + solid-sweep composition.
+TILE_VERSION = 2
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
