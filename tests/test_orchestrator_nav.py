@@ -115,6 +115,8 @@ def test_stop_works_even_when_not_blocked_and_returns_to_overview():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.WORKING)])
     o.on_press(0)
+    # Stop is confirm-guarded by default now: the first press arms, the second fires.
+    assert o.on_press(11) == []
     assert o.on_press(11) == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
     assert not o.is_drilling()
 

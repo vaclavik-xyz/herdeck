@@ -556,3 +556,20 @@ def test_profile_view_overlay_merges_tile_primary():
     }
     merged, _ = _merged_sections(data, "solo")
     assert merged["view"] == {"tile_fields": ["repo"], "tile_primary": ["workspace"]}
+
+
+def test_safety_default_requires_confirm_for_stop(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    """Absent [safety] key -> confirm-Stop default; explicit [] opts out
+    (audit: stop-confirm-default)."""
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid = "dev"\nurl = "ws://x"\ntoken_env = "TOK"\n')
+    snapshot = load_settings(cfg, None)
+    assert resolve_profile(snapshot).config.safety.require_confirm_for == ["act_force"]
+
+    cfg.write_text(
+        '[[servers]]\nid = "dev"\nurl = "ws://x"\ntoken_env = "TOK"\n'
+        "[safety]\nrequire_confirm_for = []\n"
+    )
+    snapshot = load_settings(cfg, None)
+    assert resolve_profile(snapshot).config.safety.require_confirm_for == []
