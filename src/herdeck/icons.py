@@ -135,7 +135,8 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 
 # Bump when tile composition changes so stale cached tile PNGs are ignored.
 # 2: tile_fill (none/tint/solid) — solid contrast + solid-sweep composition.
-TILE_VERSION = 2
+# 3: readable subtext (branch/time) on solid dark-colour fills (e.g. blue).
+TILE_VERSION = 3
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -150,6 +151,23 @@ def _tint_bg(accent: tuple[int, int, int]) -> tuple[int, int, int]:
     for tile_fill='tint' — clearly coloured but dark enough that the light text
     stays readable."""
     return tuple(int(c * 0.34) for c in accent)
+
+
+def _tile_text_colors(fill, bg_col, accent):
+    """(repo, branch, time, status-word) colours for an agent tile, picked for
+    contrast against the fill background.
+
+    none/tint sit on a dark background -> white repo + dim-grey subtext, and the
+    status word keeps the accent colour. A solid fill flips by background
+    brightness: a bright colour (green/amber/cyan) takes dark text; a darker
+    colour (e.g. blue) keeps light text but with a near-white subtext so the
+    branch + elapsed time stay readable on the colour instead of washing out."""
+    solid = fill == "solid"
+    if solid and _lum(bg_col) > 120:  # bright colour -> dark text
+        return (18, 18, 22), (45, 45, 50), (55, 55, 60), (18, 18, 22)
+    if solid:  # darker colour -> light text, brighter subtext than on the dark bg
+        return (255, 255, 255), (230, 230, 236), (215, 215, 222), (255, 255, 255)
+    return (255, 255, 255), (180, 180, 188), (165, 165, 170), accent  # none / tint
 
 
 
@@ -474,13 +492,8 @@ class IconProvider:
             bg_col = TILE_BG
         bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), bg_col + (255,))
         d = ImageDraw.Draw(bg)
-        # On a bright solid fill, flip text + status word to dark for contrast;
-        # every other case (none, tint, solid-on-a-dark-colour) keeps light text.
-        bright = fill == "solid" and _lum(bg_col) > 120
-        repo_fill = (18, 18, 22) if bright else (255, 255, 255)
-        branch_fill = (40, 40, 46) if bright else (180, 180, 188)
-        time_fill = (55, 55, 60) if bright else (165, 165, 170)
-        word_fill = repo_fill if fill == "solid" else accent
+        # text colours chosen for contrast against the fill (see _tile_text_colors)
+        repo_fill, branch_fill, time_fill, word_fill = _tile_text_colors(fill, bg_col, accent)
         anim = getattr(tile, "working_animation", "spin")
         working = spinner is not None
         # logo top-left; while working it animates per the chosen style

@@ -387,6 +387,23 @@ def test_solid_fill_paints_whole_tile_the_status_colour(tmp_path):
     assert img.getpixel((2, 2)) == COLORS["cyan"]  # top-left bg = full status colour
 
 
+def test_solid_dark_fill_keeps_subtext_readable():
+    from herdeck.driver.base import COLORS
+    from herdeck.icons import _tile_text_colors
+
+    # blue idle solid: light text, and the branch + elapsed time must be near-white
+    # (not the dim grey used on the dark default background) so they read on blue.
+    repo, branch, time_c, word = _tile_text_colors("solid", COLORS["blue"], COLORS["blue"])
+    assert word == (255, 255, 255)
+    assert min(branch) > 200 and min(time_c) > 200  # bright subtext on the colour
+    # a bright solid (green) flips to dark text instead
+    _, gbranch, _, gword = _tile_text_colors("solid", COLORS["green"], COLORS["green"])
+    assert max(gword) < 60 and max(gbranch) < 80  # dark text on the bright fill
+    # none keeps the dim-grey subtext + accent status word for the dark background
+    _, nbranch, ntime, nword = _tile_text_colors("none", (26, 26, 30), COLORS["green"])
+    assert nbranch == (180, 180, 188) and nword == COLORS["green"]
+
+
 def test_solid_fill_sweep_still_animates(tmp_path):
     p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
     # solid drops the static bottom bar, but a sweeping working tile must still
