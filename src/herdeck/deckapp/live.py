@@ -73,9 +73,12 @@ class LiveSource(StateSource):
         self._active_read_req: str | None = None
         # Pre-read cache: the last-read prompt per BLOCKED pane, read in the
         # background so a drill paints its options in one frame (no read round-trip,
-        # no empty flash). ``None`` = a read is in flight; a str = the cached prompt.
-        # An entry is dropped when the pane leaves BLOCKED (its prompt is now stale).
-        self._preread: dict[AgentKey, str | None] = {}
+        # no empty flash). ``_preread`` holds the cached prompt text; ``_preread_req``
+        # holds the request id of the in-flight read for the pane's CURRENT block
+        # episode. Both are dropped when the pane leaves BLOCKED, so a result from a
+        # prior episode (an old req) can never repopulate the cache after a re-block.
+        self._preread: dict[AgentKey, str] = {}
+        self._preread_req: dict[AgentKey, str] = {}
         self._orch: Orchestrator | None = None
         self._deck_lock = None
         self._refresh_locked_cb = None
@@ -231,7 +234,7 @@ class LiveSource(StateSource):
         pane_id = data.get("pane_id")
 
         def mutate():
-            self._cache_preread(pane_id, text)
+            self._cache_preread(pane_id, text, req)
             orch = self._orch
             if orch is None:
                 return False
@@ -277,15 +280,17 @@ class LiveSource(StateSource):
         reads: list[tuple[str, AgentKey]] = []
         with self._lock:
             blocked = {k for k, s in self._agents.items() if s.status is Status.BLOCKED}
-            for key in list(self._preread):
-                if key not in blocked:
-                    del self._preread[key]  # left BLOCKED -> prompt is stale
+            for key in set(self._preread) | set(self._preread_req):
+                if key not in blocked:  # left BLOCKED -> prompt + pending read are stale
+                    self._preread.pop(key, None)
+                    self._preread_req.pop(key, None)
             for key in blocked:
-                if key in self._preread or key == drilled:
-                    continue  # already read/pending, or the drill will read it
-                self._preread[key] = None  # mark pending so the poll won't re-issue
+                if key in self._preread_req or key == drilled:
+                    continue  # a read is already out for this episode, or the drill reads it
                 self._bg_req += 1
-                reads.append((f"p{self._bg_req}", key))
+                bg_req = f"p{self._bg_req}"
+                self._preread_req[key] = bg_req  # register so the poll won't re-issue
+                reads.append((bg_req, key))
         if runner is None:
             return
         for bg_req, key in reads:
@@ -295,16 +300,23 @@ class LiveSource(StateSource):
                 )
             )
 
-    def _cache_preread(self, pane_id: str | None, text: str) -> None:
+    def _cache_preread(self, pane_id: str | None, text: str, req: str | None) -> None:
         """Store a read result as the pane's cached prompt — only while the pane is
-        still BLOCKED, so a result arriving after an unblock does not resurrect a
-        stale entry. Caller holds the deck lock."""
+        still BLOCKED and only if ``req`` matches the read we issued for the CURRENT
+        block episode. A late result from a prior episode (unblock + re-block issues a
+        fresh req) is rejected, so a stale prompt can never seed the next drill.
+        Caller holds the deck lock."""
         if pane_id is None:
             return
         key = AgentKey(self._server.id, pane_id)
         with self._lock:
             state = self._agents.get(key)
-            if state is not None and state.status is Status.BLOCKED:
+            if (
+                state is not None
+                and state.status is Status.BLOCKED
+                and req is not None
+                and req == self._preread_req.get(key)
+            ):
                 self._preread[key] = text
 
     # --- read invalidation (callers hold the deck lock) ---

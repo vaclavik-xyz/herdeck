@@ -479,6 +479,21 @@ def test_preread_result_does_not_render_overview():
     assert app._orch._detection == ""
 
 
+def test_late_preread_from_prior_episode_is_rejected():
+    # A pre-read issued for one block episode must not repopulate the cache after the
+    # pane unblocked and re-blocked: the prompt it carries is stale. Only a result
+    # matching the current episode's read is accepted.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])  # episode A
+    stale = _reads(runner)[-1]
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.IDLE)])  # unblock -> drop
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])  # episode B
+    src._on_result(stale["req"], {"text": "1. STALE", "pane_id": "p0"})  # episode A's late read
+    app.press(0)  # drill episode B
+    assert app._orch._detection == ""  # the stale prompt never seeded the drill
+
+
 def test_unblock_clears_preread_cache_then_reblock_rereads():
     # The cached prompt is dropped when the pane leaves BLOCKED; a re-block reads
     # afresh so a stale prompt never seeds the next drill.
