@@ -387,6 +387,19 @@ def test_solid_fill_paints_whole_tile_the_status_colour(tmp_path):
     assert img.getpixel((2, 2)) == COLORS["cyan"]  # top-left bg = full status colour
 
 
+def test_solid_fill_sweep_still_animates(tmp_path):
+    p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
+    # solid drops the static bottom bar, but a sweeping working tile must still
+    # animate — the sweep is drawn in contrasting colours over the solid fill.
+    a = p.render_tile_bytes(_agent_tile(tile_fill="solid", working_animation="sweep", spinner=1))
+    b = p.render_tile_bytes(_agent_tile(tile_fill="solid", working_animation="sweep", spinner=4))
+    idle = p.render_tile_bytes(
+        _agent_tile(tile_fill="solid", working_animation="sweep", spinner=None)
+    )
+    assert a != b  # moves across phases
+    assert a != idle  # and differs from the static (non-working) tile
+
+
 def test_none_working_matches_static_idle_and_differs_from_spin(tmp_path):
     p = _anim_provider(tmp_path / "c", _assets_dir(tmp_path, "a", "claude.svg"))
     none_working = p.render_tile_bytes(_agent_tile(working_animation="none", spinner=1))

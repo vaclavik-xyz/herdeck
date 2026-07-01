@@ -7,7 +7,8 @@ class FakeIcons:
     """Renders a tile to deterministic bytes encoding its visible content."""
 
     def render_tile_bytes(self, tile) -> bytes:
-        return f"{tile.label}|{tile.color}|{tile.status_text}|{tile.repo}".encode()
+        fill = getattr(tile, "tile_fill", "none")
+        return f"{tile.label}|{tile.color}|{tile.status_text}|{tile.repo}|{fill}".encode()
 
 
 def make_config():
@@ -58,6 +59,15 @@ def test_render_honors_theme_color_overrides():
     assert b"lime" in sess.render_all()["s0"].image_png  # custom status color
     sess.set_connection("dev", False)
     assert b"black" in sess.render_all()["s0"].image_png  # custom offline color
+
+
+def test_render_honors_tile_fill_setting():
+    cfg = make_config()
+    cfg.view.tile_fill = "solid"
+    sess = ElgatoSession(cfg, FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING, "alpha")])
+    assert b"|solid" in sess.render_all()["s0"].image_png  # tile_fill reaches the tile
 
 
 def test_single_blocked_agent_is_auto_selected():

@@ -475,7 +475,7 @@ class IconProvider:
         d = ImageDraw.Draw(bg)
         # On a bright solid fill, flip text + status word to dark for contrast;
         # every other case (none, tint, solid-on-a-dark-colour) keeps light text.
-        bright = fill == "solid" and _lum(bg_col) > 140
+        bright = fill == "solid" and _lum(bg_col) > 120
         repo_fill = (18, 18, 22) if bright else (255, 255, 255)
         branch_fill = (40, 40, 46) if bright else (180, 180, 188)
         time_fill = (55, 55, 60) if bright else (165, 165, 170)
@@ -542,19 +542,25 @@ class IconProvider:
             d.rounded_rectangle([x, y, x + chip_w, y + chip_h], radius=4, fill=chip_fill)
             text_y = y + (chip_h - (bb[3] - bb[1])) / 2 - bb[1]
             d.text((x + pad_x, text_y), tag, font=fc, fill=(255, 255, 255))
-        # accent bar — "sweep" slides a bright segment along a dimmed bar. On a
-        # solid fill the whole tile is already the status colour, so a bar would be
-        # invisible: skip it (the logo carries the working animation there).
-        if fill != "solid":
-            y0 = ICON_SIZE - 8
-            if working and anim == "sweep":
-                dim = tuple(int(c * 0.4) for c in accent)
-                d.rectangle([0, y0, ICON_SIZE, ICON_SIZE], fill=dim)
-                seg_w = ICON_SIZE // 4
-                left = int((spinner / SPINNER_FRAMES) * ICON_SIZE)
-                d.rectangle([left, y0, min(left + seg_w, ICON_SIZE), ICON_SIZE], fill=accent)
-                if left + seg_w > ICON_SIZE:  # wrap the bright segment past the right edge
-                    d.rectangle([0, y0, (left + seg_w) - ICON_SIZE, ICON_SIZE], fill=accent)
+        # bottom accent bar. "sweep" is a moving segment along the bottom edge; it
+        # must stay visible on any fill, so its colours adapt — on a solid tile
+        # (background already = accent) it uses a dark base + a bright segment; on
+        # none/tint a dimmed base + the accent segment. The plain static bar is
+        # drawn only when the fill isn't solid (on solid it would be invisible).
+        y0 = ICON_SIZE - 8
+        if working and anim == "sweep":
+            if fill == "solid":
+                base = tuple(int(c * 0.45) for c in accent)
+                seg_col = tuple(min(255, c + 90) for c in accent)
             else:
-                d.rectangle([0, y0, ICON_SIZE, ICON_SIZE], fill=accent)
+                base = tuple(int(c * 0.4) for c in accent)
+                seg_col = accent
+            d.rectangle([0, y0, ICON_SIZE, ICON_SIZE], fill=base)
+            seg_w = ICON_SIZE // 4
+            left = int((spinner / SPINNER_FRAMES) * ICON_SIZE)
+            d.rectangle([left, y0, min(left + seg_w, ICON_SIZE), ICON_SIZE], fill=seg_col)
+            if left + seg_w > ICON_SIZE:  # wrap the bright segment past the right edge
+                d.rectangle([0, y0, (left + seg_w) - ICON_SIZE, ICON_SIZE], fill=seg_col)
+        elif fill != "solid":
+            d.rectangle([0, y0, ICON_SIZE, ICON_SIZE], fill=accent)
         return bg
