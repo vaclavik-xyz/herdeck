@@ -319,19 +319,41 @@ class HerdrEvents:
             await asyncio.sleep(0.3)  # brief backoff before re-subscribe
 
 
+# A client whose TCP buffer is full (e.g. a laptop that closed its lid with the
+# desktop window attached) blocks ws.send until the keepalive ping times it out
+# (~40s). Broadcasts must never let one such client starve the others.
+_BROADCAST_SEND_TIMEOUT = 2.0
+
+
+async def _send_to_client(ws, msg: str, timeout: float | None = None) -> None:
+    if timeout is None:
+        timeout = _BROADCAST_SEND_TIMEOUT  # module-level so tests can shrink it
+    try:
+        await asyncio.wait_for(ws.send(msg), timeout=timeout)
+    except TimeoutError:
+        # Backpressured/half-open: drop the connection so the client reconnects
+        # cleanly (a reconnect resyncs with a full snapshot anyway).
+        try:
+            await ws.close(code=1011, reason="send timeout")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 async def _broadcast(snapshot_stream, clients: set, server_id: str) -> None:
     """Forward each changed full agent list to all clients as a snapshot.
 
     Snapshots (not per-pane events) are used so that removed/finished panes
     disappear from the deck instead of lingering until a manual refresh.
+    Clients are isolated from each other: sends fan out concurrently with a
+    short per-client timeout, so a stalled laptop cannot freeze status
+    updates for the physical deck.
     """
     async for panes in snapshot_stream:
         msg = encode({"type": "snapshot", "server_id": server_id, "panes": panes})
-        for ws in list(clients):
-            try:
-                await ws.send(msg)
-            except Exception:
-                pass
+        if clients:
+            await asyncio.gather(*(_send_to_client(ws, msg) for ws in list(clients)))
 
 
 class SocketHerdr:

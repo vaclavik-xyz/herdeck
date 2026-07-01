@@ -552,3 +552,45 @@ async def test_stream_refreshes_labels_by_age_when_wakes_starve_the_poll(monkeyp
     await asyncio.wait_for(gen.__anext__(), timeout=1.0)
     assert stub.label_calls == 2
     await gen.aclose()
+
+
+async def test_broadcast_stalled_client_does_not_starve_others():
+    """One backpressured client must not delay snapshots for everyone else
+    (audit: bridge-broadcast-isolate)."""
+    import asyncio
+
+    from herdeck.bridge import _broadcast
+
+    got = []
+
+    class FastWs:
+        async def send(self, msg):
+            got.append(msg)
+
+    class StalledWs:
+        def __init__(self):
+            self.closed = False
+
+        async def send(self, msg):
+            await asyncio.sleep(3600)  # full TCP buffer: send never returns
+
+        async def close(self, code=None, reason=None):
+            self.closed = True
+
+    async def stream():
+        yield [{"pane_id": "p1"}]
+        yield [{"pane_id": "p2"}]
+
+    stalled = StalledWs()
+    clients = {FastWs(), stalled}
+    # patch the per-client timeout small for the test
+    import herdeck.bridge as bridge_mod
+
+    orig = bridge_mod._BROADCAST_SEND_TIMEOUT
+    bridge_mod._BROADCAST_SEND_TIMEOUT = 0.05
+    try:
+        await asyncio.wait_for(_broadcast(stream(), clients, "s"), timeout=5.0)
+    finally:
+        bridge_mod._BROADCAST_SEND_TIMEOUT = orig
+    assert len(got) == 2  # the healthy client received every snapshot
+    assert stalled.closed  # the stalled one was dropped to reconnect cleanly
