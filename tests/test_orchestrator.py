@@ -239,3 +239,19 @@ def test_overview_tile_lines_fall_back_to_tile_fields():
 
     assert tile.repo == "repo"
     assert tile.branch == ""
+
+
+def test_elapsed_seconds_quantized_to_5s_buckets():
+    """Sub-minute elapsed is bucketed so the tile render cache is not defeated
+    by a fresh signature every second (audit: elapsed-quantize)."""
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
+    s = AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)
+    s.repo = "api"
+    o.apply_snapshot("dev", [s])
+    clk[0] = 1000.0 + 23
+    assert o.render().tiles[0].time_text == "20s"
+    clk[0] = 1000.0 + 24  # same bucket -> same text -> cache reuse
+    assert o.render().tiles[0].time_text == "20s"
+    clk[0] = 1000.0 + 25
+    assert o.render().tiles[0].time_text == "25s"

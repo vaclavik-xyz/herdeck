@@ -80,7 +80,11 @@ class Orchestrator:
             return ""
         s = int(max(0, self._clock() - rec[1]))
         if s < 60:
-            return f"{s}s"
+            # 5s buckets: the text is part of the baked tile's render signature,
+            # so per-second granularity minted a fresh cache entry (full PIL
+            # compose + PNG encode + disk write) nearly every tick during an
+            # agent's whole first minute in a status.
+            return f"{s - s % 5}s"
         if s < 3600:
             return f"{s // 60}m"
         return f"{s // 3600}h"
