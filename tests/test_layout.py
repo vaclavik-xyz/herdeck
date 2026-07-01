@@ -21,7 +21,7 @@ def _astate(repo="herdeck", branch="main", workspace="herdeck", tab="2", label="
 
 
 def test_compose_line_joins_tokens_with_separator():
-    assert compose_line(_astate(), ["tab", "branch"]) == "▸2 · main"
+    assert compose_line(_astate(), ["tab", "branch"]) == "›2 · main"
 
 
 def test_compose_line_omits_empty_values():
@@ -31,7 +31,7 @@ def test_compose_line_omits_empty_values():
 
 def test_compose_line_tab_only_when_present():
     assert compose_line(_astate(tab=""), ["tab", "branch"]) == "main"
-    assert compose_line(_astate(tab="3"), ["tab"]) == "▸3"
+    assert compose_line(_astate(tab="3"), ["tab"]) == "›3"
 
 
 def test_compose_line_repo_falls_back_to_label():
@@ -146,7 +146,7 @@ def test_panel_overview_offline_takes_priority():
 
 def test_panel_overview_blocked_spotlight():
     pv = panel_overview(Counts(1, 3, 6, 0), 0, 1, set(), 11, ("macdoktor-crm", "4m"))
-    assert pv.title == "⚠ needs you"
+    assert pv.title == "▲ needs you"
     assert pv.lines[0] == "macdoktor-crm"
     assert pv.lines[1] == "blocked 4m"
     assert pv.color == "amber"

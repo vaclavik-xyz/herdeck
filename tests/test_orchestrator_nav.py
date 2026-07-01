@@ -384,7 +384,7 @@ def test_overview_panel_spotlights_oldest_blocked():
     orch.apply_event("s", AgentState(AgentKey("s", "p2"), "claude", "newer", Status.BLOCKED))
     now[0] = 260.0
     panel = orch.render().panel
-    assert panel.title == "⚠ needs you"
+    assert panel.title == "▲ needs you"
     assert panel.lines[0] == "older"  # entered BLOCKED earliest
 
 

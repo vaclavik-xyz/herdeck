@@ -73,7 +73,7 @@ def test_overview_panel_summary():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED), state("p2", Status.WORKING)])
     rs = o.render()
-    assert rs.panel.title == "⚠ needs you"
+    assert rs.panel.title == "▲ needs you"
     assert rs.panel.lines[0] == "api"
     assert rs.panel.lines[1].startswith("blocked ")
 
@@ -223,7 +223,7 @@ def test_overview_renders_configured_tile_lines():
     tile = o.render().tiles[0]
 
     assert tile.repo == "herdeck"        # primary = workspace, NOT repo "api"
-    assert tile.branch == "▸2 · main"    # secondary = tab + branch
+    assert tile.branch == "›2 · main"    # secondary = tab + branch
 
 
 def test_overview_tile_lines_fall_back_to_tile_fields():

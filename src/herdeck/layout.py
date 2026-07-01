@@ -46,7 +46,7 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
     """Render an agent-tile text line from a token list.
 
     Tokens map to AgentState values; empty values are dropped and the rest are
-    joined with " · ". `tab` is shown only when present, prefixed with ▸.
+    joined with " · ". `tab` is shown only when present, prefixed with ›.
     """
     parts: list[str] = []
     for token in tokens:
@@ -57,7 +57,7 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
         elif token == "workspace":
             value = state.workspace
         elif token == "tab":
-            value = f"▸{state.tab}" if state.tab else ""
+            value = f"›{state.tab}" if state.tab else ""
         elif token == "agent":
             value = state.agent_type
         else:
@@ -133,7 +133,7 @@ def panel_overview(
         title, lines, color = "OFFLINE", ["reconnecting…"], "red"
     elif spotlight is not None:
         label, elapsed = spotlight
-        title = "⚠ needs you"
+        title = "▲ needs you"
         lines = [label, f"blocked {elapsed}".rstrip()]
         color = "amber"
     else:

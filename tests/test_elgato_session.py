@@ -371,7 +371,7 @@ def test_slot_tile_renders_configured_lines():
     tile = sess._slot_tile(0)
 
     assert tile.repo == "herdeck"        # primary = workspace, NOT repo "api"
-    assert tile.branch == "▸2 · main"    # secondary = tab + branch
+    assert tile.branch == "›2 · main"    # secondary = tab + branch
 
 
 def test_slot_tile_fallback_is_fixed_repo_branch_ignoring_tile_fields():

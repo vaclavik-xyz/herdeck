@@ -41,7 +41,7 @@ def test_snapshot_renders_tiles_and_panel():
     app = App(make_config(), deck, send=lambda c: None)
     app.handle_snapshot("dev", [blocked("p1")])
     assert deck.last[0].color == "amber"
-    assert deck.last_panel is not None and deck.last_panel.title == "⚠ needs you"
+    assert deck.last_panel is not None and deck.last_panel.title == "▲ needs you"
 
 
 def test_press_forwards_commands():
