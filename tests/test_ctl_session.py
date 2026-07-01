@@ -258,6 +258,10 @@ async def test_open_proceeds_with_a_partial_fleet():
     assert "down" in sess.unavailable  # ...and the failure is surfaced
     with pytest.raises(ConnectionLost):
         await sess.request(Command("focus", "down", "p9"), timeout=0.1)
+    assert conns["down"].sent == []  # nothing was sent to the silent server
+    # a late snapshot recovers it
+    conns["down"].on_snapshot("down", [])
+    assert "down" not in sess.unavailable
     await sess.close()
 
 

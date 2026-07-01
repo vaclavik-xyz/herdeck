@@ -60,7 +60,11 @@ class CtlSession:
         self.unavailable: dict[str, str | None] = {}
 
     # --- Connector callbacks (sync, on this loop) ---
+    def _mark_available(self, sid: str) -> None:
+        self.unavailable.pop(sid, None)  # a late snapshot recovers the server
+
     def _on_snapshot(self, sid: str, states: list[AgentState]) -> None:
+        self._mark_available(sid)
         self.agents = {k: v for k, v in self.agents.items() if k.server_id != sid}
         for s in states:
             self.agents[s.key] = s
@@ -136,6 +140,10 @@ class CtlSession:
     async def request(self, cmd: Command, *, timeout: float) -> dict:
         if cmd.kind == "list":
             raise ValueError("list has no request/response; read agents from open() snapshot")
+        if cmd.server_id in self.unavailable:
+            # Connected-but-silent (no first snapshot) is still unavailable — a
+            # command would only die by result timeout.
+            raise ConnectionLost(f"{cmd.server_id} unavailable (no snapshot)")
         if not self._conn_up.get(cmd.server_id, False):
             raise ConnectionLost(f"{cmd.server_id} not connected")
         self._req += 1
