@@ -20,6 +20,7 @@ from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
 from herdeck.deckapp import DeckApp
 from herdeck.deckapp.live import LiveSource, build_live_source
 from herdeck.deckapp.server import create_app, create_live_app, select_live
+from herdeck.deckapp.sinks import RenderFrame  # noqa: F401
 from herdeck.model import AgentKey, AgentState, Status
 from herdeck.orchestrator import Orchestrator
 
@@ -36,6 +37,18 @@ class StubIcons:
         c = sum(sig.encode()) % 256
         Image.new("RGB", (4, 4), (c, c, c)).save(buf, "PNG")
         return buf.getvalue()
+
+
+class RecordingSink:
+    def __init__(self):
+        self.frames = []
+        self.closed = False
+
+    def deliver(self, frame):
+        self.frames.append(frame)
+
+    def close(self):
+        self.closed = True
 
 
 class SpinIcons:
@@ -657,3 +670,129 @@ def test_create_live_app_enables_ticker_from_config():
     app = create_live_app(config, server, serve=False, connector_factory=FakeConnector)
     assert app._tick_interval == config.hardware.tick_interval
     assert config.hardware.tick_interval == 0.4  # the live default that drives animation
+
+
+# --- render-sink fan-out (Task 1: herdeck-runtime-slice-b) -------------------
+
+
+def test_add_sink_delivers_initial_full_frame():
+    app, src, server = make_live_icons(StubIcons())
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    app.refresh()
+    sink = RecordingSink()
+    app.add_sink(sink)
+    assert len(sink.frames) == 1
+    assert sink.frames[0].full is True
+    assert sink.frames[0].render is not None  # the RenderState was handed over
+
+
+def test_press_delivers_full_frame_to_sink():
+    app, src, server = make_live_icons(StubIcons())
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.IDLE)])
+    sink = RecordingSink()
+    app.add_sink(sink)
+    sink.frames.clear()
+    app.press(0)
+    assert sink.frames and sink.frames[-1].full is True
+
+
+def test_tick_delivers_working_frame_with_indices():
+    app, src, server = make_live_icons(StubIcons())
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    sink = RecordingSink()
+    app.add_sink(sink)
+    sink.frames.clear()
+    app._tick_once()
+    frame = sink.frames[-1]
+    assert frame.full is False
+    assert frame.working == [0]  # the single working agent is tile 0
+
+
+def test_full_refresh_tick_delivers_exactly_one_full_frame():
+    app, src, server = make_live_icons(StubIcons())
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    sink = RecordingSink()
+    app.add_sink(sink)
+    sink.frames.clear()
+    for _ in range(app.FULL_REFRESH_TICKS):
+        app._tick_once()
+    fulls = [f for f in sink.frames if f.full]
+    assert len(fulls) == 1  # one full frame at the Nth tick, working frames otherwise
+
+
+def test_failing_sink_does_not_break_http_or_other_sinks():
+    app, src, server = make_live_icons(StubIcons())
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+
+    class BoomSink:
+        def deliver(self, frame):
+            raise RuntimeError("boom")
+
+        def close(self):
+            pass
+
+    good = RecordingSink()
+    app.add_sink(BoomSink())
+    app.add_sink(good)
+    good.frames.clear()
+    v = app._state()["version"]
+    app._tick_once()  # must NOT raise despite BoomSink
+    assert app._state()["version"] >= v  # HTTP buffer still advanced
+    assert good.frames  # the healthy sink still got its frame
+
+
+def test_close_closes_sinks():
+    app, src, server = make_live_icons(StubIcons())
+    sink = RecordingSink()
+    app.add_sink(sink)
+    app.close()
+    assert sink.closed is True
+
+
+def test_swap_source_fans_full_frame_to_sinks():
+    """swap_source must immediately repaint every registered sink (Finding 1)."""
+    app, src, server = make_live_icons(StubIcons())
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    sink = RecordingSink()
+    app.add_sink(sink)
+    sink.frames.clear()  # discard the initial paint from add_sink
+
+    # Build a second live source the same way make_live_icons does.
+    config2, server2 = live_config()
+    new_src = LiveSource(config2, server2)
+    new_src.attach_runner(FakeRunner())
+
+    app.swap_source(new_src)
+    assert sink.frames, "swap_source must fan out at least one frame"
+    assert sink.frames[-1].full is True
+
+
+def test_close_detaches_sinks_before_closing():
+    # Prove the ORDERING: when a sink's close() runs, the sink list has already
+    # been detached (emptied) under the lock. With the old broken order (close
+    # sinks, THEN clear) app._sinks would still hold the sink here.
+    app, src, server = make_live_icons(StubIcons())
+    seen = {}
+
+    class OrderSink:
+        def __init__(self):
+            self.closed = False
+
+        def deliver(self, frame):
+            pass
+
+        def close(self):
+            seen["sinks_at_close"] = list(app._sinks)
+            self.closed = True
+
+    sink = OrderSink()
+    app.add_sink(sink)
+    app.close()
+    assert sink.closed is True
+    assert seen["sinks_at_close"] == []  # detached before close() ran
