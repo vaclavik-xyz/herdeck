@@ -543,3 +543,33 @@ def test_armed_option_confirmation_marks_only_that_option_tile():
     assert tiles[1].label == "Sure?"
     assert tiles[0].label != "Sure?"
     assert o.render().panel.lines[0] == "press again to confirm"
+
+
+# --- drill action colour semantics (audit: drill-option-colors) --------------
+
+
+def test_drill_option_tiles_carry_action_colors():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    tiles = o.render().tiles
+    assert tiles[0].color == "green"  # 1. Yes -> approve
+    assert tiles[1].color == "amber"  # 2. Yes, and don't ask again -> caution
+    assert tiles[2].color == "red"  # 3. No -> deny
+
+
+def test_drill_fallback_actions_carry_action_colors():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection("Proceed? (y/n)")
+    tiles = o.render().tiles
+    assert [tiles[0].color, tiles[1].color, tiles[2].color] == ["green", "amber", "red"]
+
+
+def test_drill_macro_tiles_stay_blue():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)
+    assert o.render().tiles[0].color == "blue"  # macros carry no action semantics

@@ -16,6 +16,10 @@ _CONFIRM_TTL_S = 5.0
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 _MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
 _APPROVE_ALWAYS_HINTS = ("always", "don't ask", "dont ask", "do not ask")
+# Colour semantics for drill actions: the deck already teaches green=go,
+# amber=caution, red=stop — the approve/deny press is the highest-stakes
+# interaction, so it must not be a wall of identical blue tiles.
+_ACTION_COLORS = {"approve": "green", "approve_always": "amber", "deny": "red"}
 # Config section a management action's tile jumps to (klik-to-jump).
 _MGMT_SECTION = {"profiles": "profiles", "new_agent": "start_profiles"}
 
@@ -29,6 +33,13 @@ def server_accent(server_id: str, accents: list[str] | None = None) -> str:
 def _looks_like_approve_always(label: str) -> bool:
     normalized = label.lower().replace("\u2019", "'")
     return any(hint in normalized for hint in _APPROVE_ALWAYS_HINTS)
+
+
+def _looks_like_deny(label: str) -> bool:
+    """A numbered option whose label starts with a bare 'No' is a denial (e.g.
+    'No' / 'No, and tell Claude what to do differently')."""
+    normalized = label.lower().strip()
+    return normalized == "no" or normalized.startswith(("no,", "no "))
 
 
 @dataclass
@@ -409,7 +420,8 @@ class Orchestrator:
                 label = actions[i]["label"]
                 if armed is not None and actions[i].get("id") == armed:
                     label = "Sure?"
-                tiles.append(TileView(i, label, "blue", subtext=actions[i].get("subtext"), section="answer_profiles"))
+                color = _ACTION_COLORS.get(actions[i].get("id"), "blue")
+                tiles.append(TileView(i, label, color, subtext=actions[i].get("subtext"), section="answer_profiles"))
             elif i == stop_i:
                 stop_label = "Sure?" if armed == "act_force" else "Stop"
                 tiles.append(TileView(i, stop_label, "red", section="answer_profiles"))
@@ -438,6 +450,8 @@ class Orchestrator:
         if profile.approve_always and option_key == profile.approve_always[0]:
             return "approve_always"
         if profile.deny and option_key == profile.deny[0]:
+            return "deny"
+        if _looks_like_deny(option_label):
             return "deny"
         return None
 
