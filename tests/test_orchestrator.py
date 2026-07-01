@@ -41,6 +41,24 @@ def test_overview_orders_blocked_first_and_colors():
     assert isinstance(rs.panel, PanelView)
 
 
+def test_done_sorts_above_working_and_renders_cyan():
+    # done = finished but unseen -> surfaces at the top (below blocked, above
+    # working/idle) as its own cyan tile, not buried after the idle agents.
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot(
+        "dev",
+        [
+            state("p1", Status.IDLE),
+            state("p2", Status.WORKING),
+            state("p3", Status.DONE),
+        ],
+    )
+    rs = o.render()
+    assert rs.tiles[0].color == "cyan" and rs.tiles[0].status_text == "DONE"  # done first
+    assert rs.tiles[1].color == "green"  # working next
+    assert rs.tiles[2].color == "blue"  # idle last
+
+
 def test_overview_panel_summary():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED), state("p2", Status.WORKING)])

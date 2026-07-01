@@ -80,7 +80,9 @@ def a(pane, status, agent_type="claude", label="p", server="dev"):
     return AgentState(AgentKey(server, pane), agent_type, label, status)
 
 
-def test_order_blocked_then_working_then_idle_then_done():
+def test_order_blocked_then_done_then_working_then_idle():
+    # done = finished but unseen -> sorts to the top (just below blocked, above
+    # working) so a completed agent surfaces where the eye is, not off-page.
     agents = [
         a("p1", Status.IDLE),
         a("p2", Status.BLOCKED),
@@ -88,7 +90,7 @@ def test_order_blocked_then_working_then_idle_then_done():
         a("p4", Status.WORKING),
     ]
     ordered = order_agents(agents, ["dev"])
-    assert [s.status for s in ordered] == [Status.BLOCKED, Status.WORKING, Status.IDLE, Status.DONE]
+    assert [s.status for s in ordered] == [Status.BLOCKED, Status.DONE, Status.WORKING, Status.IDLE]
 
 
 def test_order_stable_by_pane_within_status():
@@ -125,7 +127,7 @@ def test_status_color():
     assert status_color(Status.BLOCKED) == "amber"
     assert status_color(Status.WORKING) == "green"
     assert status_color(Status.IDLE) == "blue"
-    assert status_color(Status.DONE) == "dim"
+    assert status_color(Status.DONE) == "cyan"
     assert status_color(Status.UNKNOWN) == "grey"
 
 

@@ -55,7 +55,7 @@ DEFAULT_STATUS_COLORS: dict[str, str] = {
     "working": "green",
     "idle": "blue",
     "blocked": "amber",
-    "done": "dim",
+    "done": "cyan",
     "unknown": "grey",
     "offline": "red",
 }
