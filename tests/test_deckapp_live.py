@@ -291,7 +291,7 @@ def test_read_result_enables_approve_on_blocked_agent():
     msg = runner.sent[0]
     assert msg["type"] == "act"
     assert msg["pane_id"] == "p0"
-    assert msg["keys"] == ["1"]
+    assert msg["keys"] == ["1", "enter"]
     assert msg["guard"] is True  # act_if_blocked -> guarded send
 
 
@@ -366,7 +366,7 @@ def test_cosmetic_change_keeps_detection_while_blocked():
     app.press(0)  # options stay live -> first option still acts
     assert len(runner.sent) == 1
     assert runner.sent[0]["type"] == "act"
-    assert runner.sent[0]["keys"] == ["1"]
+    assert runner.sent[0]["keys"] == ["1", "enter"]
 
 
 def test_snapshot_not_changing_drilled_pane_keeps_detection():
@@ -382,7 +382,7 @@ def test_snapshot_not_changing_drilled_pane_keeps_detection():
     app.press(0)
     assert len(runner.sent) == 1
     assert runner.sent[0]["type"] == "act"
-    assert runner.sent[0]["keys"] == ["1"]
+    assert runner.sent[0]["keys"] == ["1", "enter"]
 
 
 # --- pre-read: warm the blocked prompt in the background for an instant drill ----
@@ -444,7 +444,7 @@ def test_drilled_working_pane_that_blocks_gets_fresh_read_and_options():
     assert app._orch._detection == "1. Approve\n2. Deny"  # options now surface on the drill
     runner.sent.clear()
     app.press(0)  # the first option is actionable
-    assert runner.sent and runner.sent[0]["type"] == "act" and runner.sent[0]["keys"] == ["1"]
+    assert runner.sent and runner.sent[0]["type"] == "act" and runner.sent[0]["keys"] == ["1", "enter"]
 
 
 def test_preread_makes_drill_instant():
@@ -460,7 +460,7 @@ def test_preread_makes_drill_instant():
     app.press(0)  # press the first option
     assert len(runner.sent) == 1
     assert runner.sent[0]["type"] == "act"
-    assert runner.sent[0]["keys"] == ["1"]
+    assert runner.sent[0]["keys"] == ["1", "enter"]
 
 
 def test_drill_seeds_detection_from_cache():

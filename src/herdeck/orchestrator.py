@@ -323,9 +323,12 @@ class Orchestrator:
                             "id": action_id,
                             "label": opt.key,
                             "subtext": opt.label,
+                            # A numbered menu selects on the digit but only submits on
+                            # Enter (the digit alone just moves the cursor), so send
+                            # both — matching the profiles' "<digit>, enter" approve keys.
                             "make": (
                                 lambda key, k=opt.key: Command(
-                                    "act_if_blocked", key.server_id, key.pane_id, keys=[k]
+                                    "act_if_blocked", key.server_id, key.pane_id, keys=[k, "enter"]
                                 )
                             ),
                         }
