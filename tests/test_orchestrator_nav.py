@@ -573,3 +573,73 @@ def test_drill_macro_tiles_stay_blue():
     o.apply_snapshot("dev", [st("p1", Status.WORKING)])
     o.on_press(0)
     assert o.render().tiles[0].color == "blue"  # macros carry no action semantics
+
+
+# --- ordering hysteresis (audit: resort-hysteresis) ---------------------------
+
+
+def _clocked(clk):
+    return Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
+
+
+def test_order_holds_positions_until_target_settles():
+    clk = [1000.0]
+    o = _clocked(clk)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
+    assert [t.label for t in o.render().tiles[:2]] == ["one", "two"]
+    o.apply_event("dev", st("p2", Status.BLOCKED, label="two"))
+    # blocked would sort first, but tiles must not shuffle under the finger
+    assert [t.label for t in o.render().tiles[:2]] == ["one", "two"]
+    clk[0] += 2.5  # target stable past the settle window -> adopt the sort
+    assert [t.label for t in o.render().tiles[:2]] == ["two", "one"]
+
+
+def test_new_agent_appends_at_end_until_settle():
+    clk = [1000.0]
+    o = _clocked(clk)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
+    o.render()
+    o.apply_snapshot(
+        "dev",
+        [
+            st("p1", Status.WORKING, label="one"),
+            st("p2", Status.IDLE, label="two"),
+            st("p3", Status.BLOCKED, label="three"),
+        ],
+    )
+    assert [t.label for t in o.render().tiles[:3]] == ["one", "two", "three"]
+    clk[0] += 2.5
+    assert [t.label for t in o.render().tiles[:3]] == ["three", "one", "two"]
+
+
+def test_removed_agent_drops_immediately_while_positions_hold():
+    clk = [1000.0]
+    o = _clocked(clk)
+    o.apply_snapshot(
+        "dev",
+        [
+            st("p1", Status.WORKING, label="one"),
+            st("p2", Status.WORKING, label="two"),
+            st("p3", Status.IDLE, label="three"),
+        ],
+    )
+    o.render()
+    o.apply_snapshot(
+        "dev", [st("p1", Status.WORKING, label="one"), st("p3", Status.IDLE, label="three")]
+    )
+    assert [t.label for t in o.render().tiles[:2]] == ["one", "three"]
+
+
+def test_press_on_freshly_reshuffled_slot_is_swallowed():
+    clk = [1000.0]
+    o = _clocked(clk)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
+    o.render()
+    o.apply_event("dev", st("p2", Status.BLOCKED, label="two"))
+    o.render()  # production refreshes on every event; the settle timer starts here
+    clk[0] += 2.5
+    o.render()  # adoption: slot 0 repopulates (one -> two) right now
+    assert o.on_press(0) == []  # press lands within the guard window -> swallowed
+    clk[0] += 0.5
+    cmds = o.on_press(0)  # deliberate second press drills the visible agent
+    assert cmds and cmds[0].pane_id == "p2"

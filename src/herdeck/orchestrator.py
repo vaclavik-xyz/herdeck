@@ -13,6 +13,13 @@ _OPTION_LABEL_MAX = 14
 # An armed destructive-action confirmation expires after this long, so a stale
 # arm from minutes ago can never be completed by a later single press.
 _CONFIRM_TTL_S = 5.0
+# Ordering hysteresis: the fresh status-priority sort is adopted only after the
+# target order has been stable this long, so tiles do not shuffle under the
+# user's finger on every status flip.
+_ORDER_SETTLE_S = 2.0
+# Ignore a press on a slot whose occupant changed within this window — the
+# press was almost certainly aimed at the previous occupant.
+_SLOT_PRESS_GUARD_S = 0.3
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 _MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
 _APPROVE_ALWAYS_HINTS = ("always", "don't ask", "dont ask", "do not ask")
@@ -68,6 +75,11 @@ class Orchestrator:
         self._profile_menu_origin: str = "overview"
         self._pending_confirm: tuple[str, AgentKey] | None = None
         self._pending_confirm_at: float = 0.0
+        # Ordering hysteresis state (see _ordered).
+        self._display_order: list[AgentKey] = []
+        self._target_keys: list[AgentKey] = []
+        self._target_since: float = 0.0
+        self._slot_changed_at: dict[int, float] = {}
 
     def _agent_slots(self) -> int:
         """Overview tiles available for agents (the last tile is the launcher)."""
@@ -156,8 +168,41 @@ class Orchestrator:
         return self._drill is not None
 
     # --- render ---
+    def _resettle(self) -> None:
+        """Adopt the fresh sort on the next render — view transitions (paging,
+        entering/leaving drill or menus) are safe moments to move tiles."""
+        self._display_order = []
+        self._slot_changed_at.clear()
+
     def _ordered(self) -> list[AgentState]:
-        return layout.order_agents(self._agents.values(), self.config.overview_order)
+        """Agents in DISPLAY order: the status-priority sort with hysteresis.
+
+        A live re-sort on every event shuffles tiles under the user's finger —
+        an agent unblocked from the phone mid-reach makes the press drill a
+        different agent (and focus its pane on screen). Instead, tiles KEEP
+        their positions while the fleet is changing; the fresh sort is adopted
+        only once the target order has been stable for _ORDER_SETTLE_S, or at
+        view transitions (_resettle). Removed agents drop out immediately; new
+        agents append at the end until the next adoption."""
+        target = layout.order_agents(self._agents.values(), self.config.overview_order)
+        target_keys = [s.key for s in target]
+        now = self._clock()
+        if target_keys != self._target_keys:
+            self._target_keys = target_keys
+            self._target_since = now
+        by_key = {s.key: s for s in target}
+        if not self._display_order or now - self._target_since >= _ORDER_SETTLE_S:
+            display = list(target_keys)
+        else:
+            display = [k for k in self._display_order if k in by_key]
+            display += [k for k in target_keys if k not in display]
+        if display != self._display_order:
+            old = self._display_order
+            for i, key in enumerate(display):
+                if i < len(old) and old[i] != key:
+                    self._slot_changed_at[i] = now  # repopulated under a possible finger
+            self._display_order = display
+        return [by_key[k] for k in display]
 
     def _agent_color(self, s: AgentState) -> str:
         if s.key.server_id in self._down:
@@ -467,6 +512,7 @@ class Orchestrator:
     def _press_overview(self, index: int) -> list[Command]:
         if index in self._panel_indices():
             self._page += 1
+            self._resettle()  # a page flip is a safe moment to adopt the fresh sort
             return []
         management = self._management_indices()
         if index in management:
@@ -477,18 +523,28 @@ class Orchestrator:
             elif action == "new_agent":
                 self._launcher = True
             self._pending_confirm = None
+            self._resettle()
             return []
         if self.config.view.management != "bottom_row" and index == self.slots - 1:
             self._launcher = True
             self._pending_confirm = None
+            self._resettle()
             return []
+        agent_slots = self._agent_slots()
         ordered = self._ordered()
-        shown, _ = layout.page(ordered, self._page, self._agent_slots())
+        shown, pages = layout.page(ordered, self._page, agent_slots)
         if index < len(shown):
+            # The occupant of this slot changed a moment ago — the press was
+            # almost certainly aimed at the previous occupant. Swallow it; the
+            # user sees the new tile and can press again deliberately.
+            pos = (self._page % pages) * agent_slots + index
+            if self._clock() - self._slot_changed_at.get(pos, float("-inf")) < _SLOT_PRESS_GUARD_S:
+                return []
             key = shown[index].key
             self._drill = key
             self._detection = ""
             self._pending_confirm = None
+            self._resettle()  # returning from drill re-sorts anyway
             # Focus the agent in the on-screen herdr session AND read its prompt.
             return [
                 Command("focus", key.server_id, key.pane_id),
@@ -502,6 +558,7 @@ class Orchestrator:
         back_i = self.slots - 1
         if index == back_i:
             self._launcher = False
+            self._resettle()
             return []
         if index < len(entries) and index < back_i:
             name = entries[index]
@@ -522,6 +579,7 @@ class Orchestrator:
         if index == back_i:
             self._profile_menu = False
             self._launcher = self._profile_menu_origin == "launcher"
+            self._resettle()
             return []
         if index < len(names) and index < back_i:
             name = names[index]
@@ -537,10 +595,12 @@ class Orchestrator:
         if index == back_i:  # Back to overview
             self._drill = None
             self._pending_confirm = None
+            self._resettle()
             return []
         if key not in self._agents:
             self._drill = None
             self._pending_confirm = None
+            self._resettle()
             return []
         if index == stop_i:  # Stop — always, unconditional
             action = "act_force"
@@ -553,6 +613,7 @@ class Orchestrator:
             self._pending_confirm = None
             cmd = Command("act_force", key.server_id, key.pane_id, keys=self._profile_for(key).stop)
             self._drill = None  # return to the fleet overview
+            self._resettle()
             return [cmd]
         if index < len(actions):  # send option number or macro text
             action_id = actions[index].get("id")
@@ -565,6 +626,7 @@ class Orchestrator:
             self._pending_confirm = None
             cmd = actions[index]["make"](key)
             self._drill = None  # return to the fleet overview
+            self._resettle()
             return [cmd]
         return []  # blank tile
 
@@ -585,6 +647,7 @@ class Orchestrator:
         self._detection = ""
         self._page = 0
         self._pending_confirm = None
+        self._resettle()
 
     def clear_server_state(self, server_ids) -> None:
         server_ids = set(server_ids)
@@ -598,3 +661,4 @@ class Orchestrator:
             self._drill = None
             self._detection = ""
             self._pending_confirm = None
+        self._resettle()
