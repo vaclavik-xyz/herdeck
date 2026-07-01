@@ -91,21 +91,29 @@ def _wire_panes(
     return [_herdr_pane_to_wire(p, wt_by_ws, ws_by_id, tab_by_id) for p in raw if _is_agent_pane(p)]
 
 
+async def _fetch_labels(herdr: HerdrClient) -> tuple[list, list, list]:
+    """The worktree/workspace/tab label lists, fetched CONCURRENTLY (herdr accepts
+    concurrent one-shot connections, so latency is max instead of sum — the
+    code's own measurement has worktree.list alone spiking to ~130ms). Any
+    failing lookup degrades to an empty list; labels are cosmetic."""
+
+    async def safe(method_name: str) -> list:
+        try:
+            return await getattr(herdr, method_name)()
+        except Exception:
+            return []
+
+    worktrees, workspaces, tabs = await asyncio.gather(
+        safe("worktrees"), safe("workspaces"), safe("tabs")
+    )
+    return worktrees, workspaces, tabs
+
+
 async def _wired_snapshot(herdr: HerdrClient) -> list[dict]:
-    """Fetch panes + worktrees + workspaces + tabs from herdr and build the wire snapshot."""
-    raw = await herdr.list_panes()
-    try:
-        worktrees = await herdr.worktrees()
-    except Exception:
-        worktrees = []
-    try:
-        workspaces = await herdr.workspaces()
-    except Exception:
-        workspaces = []
-    try:
-        tabs = await herdr.tabs()
-    except Exception:
-        tabs = []
+    """Fetch panes + label lists from herdr concurrently and build the wire snapshot."""
+    raw, (worktrees, workspaces, tabs) = await asyncio.gather(
+        herdr.list_panes(), _fetch_labels(herdr)
+    )
     return _wire_panes(raw, worktrees, workspaces, tabs)
 
 
@@ -212,6 +220,11 @@ class HerdrEvents:
         self._socket_path = socket_path
         self._interval = poll_interval
         self._wake = asyncio.Event()
+        # Cached worktree/workspace/tab label lists. A pane.agent_status_changed
+        # wake cannot change them, so status wakes reuse the cache and pay for
+        # pane.list only; fleet events (_listen) and the slow poll mark it stale.
+        self._labels: tuple[list, list, list] | None = None
+        self._labels_stale = True
 
     async def stream(self):
         listener = asyncio.create_task(self._listen()) if self._socket_path else None
@@ -219,7 +232,15 @@ class HerdrEvents:
         try:
             while True:
                 try:
-                    cur = await _wired_snapshot(self._herdr)
+                    if self._labels is None or self._labels_stale:
+                        raw, labels = await asyncio.gather(
+                            self._herdr.list_panes(), _fetch_labels(self._herdr)
+                        )
+                        self._labels = labels
+                        self._labels_stale = False
+                    else:
+                        raw = await self._herdr.list_panes()
+                    cur = _wire_panes(raw, *self._labels)
                 except Exception:
                     cur = None
                 if cur is not None:
@@ -229,7 +250,7 @@ class HerdrEvents:
                 try:  # wake on a push event, else slow poll
                     await asyncio.wait_for(self._wake.wait(), timeout=self._interval)
                 except TimeoutError:
-                    pass
+                    self._labels_stale = True  # slow-poll safety net refreshes labels too
                 self._wake.clear()
         finally:
             if listener is not None:
@@ -270,6 +291,7 @@ class HerdrEvents:
                     except Exception:
                         name = None
                     if name in _FLEET_EVENT_NAMES:
+                        self._labels_stale = True  # membership changed -> refetch labels
                         break  # fleet changed -> re-subscribe panes
             except Exception:
                 pass
@@ -303,53 +325,52 @@ class SocketHerdr:
 
     def __init__(self, socket_path: str):
         self._path = socket_path
-        self._lock = asyncio.Lock()
 
     async def _rpc(self, method: str, params: dict, *, retry: bool = True) -> dict:
         # herdr closes the unix socket after each request (one-shot), so we open
         # a fresh connection per RPC instead of reusing one — reuse fails on the
         # second call of a burst (e.g. act = get_pane + send_keys) as the
         # server-side close isn't detected before the next write.
-        # self._lock serializes RPCs, so the fixed request id "b" is safe.
-        async with self._lock:
-            attempts = 2 if retry else 1
-            last_exc: Exception | None = None
-            for _ in range(attempts):
-                reader = writer = None
-                try:
-                    reader, writer = await asyncio.open_unix_connection(self._path)
-                    writer.write(
-                        (
-                            json.dumps({"id": "b", "method": method, "params": params}) + "\n"
-                        ).encode()
-                    )
-                    await writer.drain()
-                    line = await reader.readline()
-                    if not line:  # EOF before a response
-                        raise ConnectionError("herdr socket closed")
-                    res = json.loads(line.decode())
-                    if not isinstance(res, dict):
-                        raise RuntimeError(f"herdr RPC {method} returned non-object response")
-                    if "error" in res:
-                        err = res["error"]
-                        if isinstance(err, dict):
-                            message = err.get("message", str(err))
-                        else:
-                            message = str(err)
-                        raise RuntimeError(f"herdr RPC {method} failed: {message}")
-                    if "result" not in res:
-                        raise RuntimeError(f"herdr RPC {method} missing result")
-                    return res
-                except (OSError, ConnectionError) as exc:
-                    last_exc = exc
-                finally:
-                    if writer is not None:
-                        writer.close()
-                        try:
-                            await writer.wait_closed()
-                        except Exception:
-                            pass
-            raise last_exc
+        # RPCs are NOT serialized: each call reads from its own connection, so the
+        # fixed request id "b" cannot cross-talk, and herdr accepts concurrent
+        # one-shot connections — this is what lets a snapshot fetch its four
+        # lists in parallel (latency = max instead of sum).
+        attempts = 2 if retry else 1
+        last_exc: Exception | None = None
+        for _ in range(attempts):
+            reader = writer = None
+            try:
+                reader, writer = await asyncio.open_unix_connection(self._path)
+                writer.write(
+                    (json.dumps({"id": "b", "method": method, "params": params}) + "\n").encode()
+                )
+                await writer.drain()
+                line = await reader.readline()
+                if not line:  # EOF before a response
+                    raise ConnectionError("herdr socket closed")
+                res = json.loads(line.decode())
+                if not isinstance(res, dict):
+                    raise RuntimeError(f"herdr RPC {method} returned non-object response")
+                if "error" in res:
+                    err = res["error"]
+                    if isinstance(err, dict):
+                        message = err.get("message", str(err))
+                    else:
+                        message = str(err)
+                    raise RuntimeError(f"herdr RPC {method} failed: {message}")
+                if "result" not in res:
+                    raise RuntimeError(f"herdr RPC {method} missing result")
+                return res
+            except (OSError, ConnectionError) as exc:
+                last_exc = exc
+            finally:
+                if writer is not None:
+                    writer.close()
+                    try:
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+        raise last_exc
 
     async def list_panes(self) -> list[dict]:
         res = await self._rpc("pane.list", {})
@@ -422,9 +443,9 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     import secrets
 
     token = secrets.token_urlsafe(32)
-    # Separate SocketHerdr for the event stream vs client requests: each serializes
-    # its own RPCs, so an on-demand read/focus/act never queues behind an in-flight
-    # fleet snapshot (see serve()). A test may inject a single stub for both.
+    # Separate SocketHerdr instances for the event stream vs client requests —
+    # RPCs are unserialized one-shot connections, so this split is organizational
+    # only (see serve()). A test may inject a single stub for both.
     events_herdr = herdr or SocketHerdr(socket_path)
     client_herdr = herdr or SocketHerdr(socket_path)
     events = HerdrEvents(events_herdr, socket_path=socket_path)
@@ -440,12 +461,10 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
 
 
 async def serve(socket_path: str, host: str, port: int, server_id: str, token: str):
-    # The event stream polls herdr constantly (pane.list + worktree/workspace/tab
-    # lists) under its SocketHerdr's RPC serialize-lock. Give client requests
-    # (read/focus/act) their OWN SocketHerdr so an on-demand read never waits for an
-    # in-progress snapshot — that queueing (worktree.list alone spikes to ~130ms)
-    # added a couple hundred ms per drill RPC. herdr accepts concurrent one-shot
-    # connections, so the two run in parallel.
+    # SocketHerdr RPCs are unserialized one-shot connections (herdr accepts them
+    # concurrently), so an on-demand read/focus/act never queues behind an
+    # in-flight fleet snapshot. Separate instances for the event stream vs client
+    # requests are kept for organizational clarity.
     events_herdr = SocketHerdr(socket_path)
     client_herdr = SocketHerdr(socket_path)
     events = HerdrEvents(events_herdr, socket_path=socket_path)  # push events + slow poll

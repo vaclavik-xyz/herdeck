@@ -425,3 +425,83 @@ async def test_list_snapshot_includes_workspace_and_tab():
     p = json.loads(out)["panes"][0]
     assert p["workspace"] == "herdeck"
     assert p["tab"] == "1"
+
+
+# --- snapshot RPC concurrency + label caching (audit: bridge-parallel-rpcs) --
+
+
+async def test_wired_snapshot_fetches_lists_concurrently():
+    import asyncio
+
+    from herdeck.bridge import _wired_snapshot
+
+    class SlowStub:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+
+        async def _slow(self, result):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            await asyncio.sleep(0.02)
+            self.active -= 1
+            return result
+
+        async def list_panes(self):
+            return await self._slow([])
+
+        async def worktrees(self):
+            return await self._slow([])
+
+        async def workspaces(self):
+            return await self._slow([])
+
+        async def tabs(self):
+            return await self._slow([])
+
+    stub = SlowStub()
+    await _wired_snapshot(stub)
+    # all four herdr lists must be in flight at once (latency = max, not sum)
+    assert stub.max_active == 4
+
+
+async def test_stream_caches_labels_across_status_wakes():
+    import asyncio
+
+    from herdeck.bridge import HerdrEvents
+
+    class CountingHerdr:
+        def __init__(self):
+            self.panes = [raw_pane("w1:p1", agent="claude", status="idle")]
+            self.label_calls = 0
+
+        async def list_panes(self):
+            return self.panes
+
+        async def worktrees(self):
+            self.label_calls += 1
+            return []
+
+        async def workspaces(self):
+            return []
+
+        async def tabs(self):
+            return []
+
+    stub = CountingHerdr()
+    ev = HerdrEvents(stub, poll_interval=100)  # would block without a wake
+    gen = ev.stream()
+    await gen.__anext__()
+    assert stub.label_calls == 1
+    # a status-change push wake must NOT refetch the label lists
+    stub.panes = [raw_pane("w1:p1", agent="claude", status="blocked")]
+    ev._wake.set()
+    await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert stub.label_calls == 1
+    # a fleet event (what _listen flags) marks labels stale -> refetched
+    stub.panes = stub.panes + [raw_pane("w1:p2", agent="codex", status="idle")]
+    ev._labels_stale = True
+    ev._wake.set()
+    await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert stub.label_calls == 2
+    await gen.aclose()
