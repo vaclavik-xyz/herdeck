@@ -41,10 +41,10 @@ herdeck-ctl send local:w1:p1 "run the tests"   # send text (submits immediately)
 ```
 
 Target an agent by `server:pane_id` or a fuzzy match on its label/repo/branch.
-Common options (`--json`, `--server`, `--config`) go **after** the subcommand;
-the connect `--timeout` is global and goes **before** it
-(`herdeck-ctl --timeout 5 ls`). `wait` has its own `--timeout` (default: no
-limit) that goes after, e.g. `wait --any --until blocked --timeout 60`.
+Common options (`--json`, `--server`, `--config`, `--timeout`) work before or
+after the subcommand. `wait` is the one exception: its own `--timeout` (max
+seconds to wait, default: no limit) goes after it, e.g.
+`wait --any --until blocked --timeout 60`.
 
 Exit codes: `0` ok · `2` usage · `3` skipped (agent not blocked) · `4`
 unknown/ambiguous agent · `5` connection/config error · `124` `wait` timed out.

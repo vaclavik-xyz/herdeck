@@ -106,3 +106,21 @@ async def test_dispatch_wait_any_returns_matched_agent(capsys):
     assert rc == EXIT_OK
     out = json.loads(capsys.readouterr().out)
     assert out == {"agent": "dev:p1", "status": "blocked"}
+
+
+def test_common_options_parse_in_either_position():
+    """`--json` / `--server` / `--timeout` must work before AND after the
+    subcommand (audit: ctl-arg-order — the README documented the trap)."""
+    p = build_parser()
+    assert p.parse_args(["ls", "--json"]).json is True
+    assert p.parse_args(["--json", "ls"]).json is True
+    assert p.parse_args(["ls"]).json is False
+    assert p.parse_args(["--server", "a", "ls"]).server == "a"
+    assert p.parse_args(["ls", "--server", "a"]).server == "a"
+    assert p.parse_args(["approve", "x", "--timeout", "5"]).timeout == 5.0
+    assert p.parse_args(["--timeout", "5", "approve", "x"]).timeout == 5.0
+    assert p.parse_args(["ls"]).timeout == 10.0
+    # wait keeps its OWN --timeout (max wait), independent of the connect knob
+    w = p.parse_args(["wait", "--any", "--until", "blocked", "--timeout", "60"])
+    assert w.wait_timeout == 60.0
+    assert w.timeout == 10.0

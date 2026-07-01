@@ -240,22 +240,40 @@ _STATUSES = ["blocked", "working", "idle", "done"]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    # Common options live on a parent parser so they work AFTER the subcommand
-    # (e.g. `herdeck-ctl ls --json`). They are intentionally NOT on the top
-    # parser: defining them in both places makes the subparser default clobber a
-    # value set before the subcommand.
+    # Common options are defined TWICE on purpose: on the top parser with real
+    # defaults, and on a parent parser with default=SUPPRESS. A subcommand
+    # occurrence then overrides the top-level value only when actually present
+    # (SUPPRESS keeps the subparser from clobbering it with a default), so BOTH
+    # `herdeck-ctl --json ls` and `herdeck-ctl ls --json` work — the arg-order
+    # trap the README used to document instead of fixing.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--json", action="store_true", help="machine-readable output")
-    common.add_argument("--server", help="restrict to one configured server id")
-    common.add_argument("--config", help="config path (default: $HERDECK_CONFIG / discovery)")
+    common.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS,
+        help="machine-readable output",
+    )
+    common.add_argument(
+        "--server", default=argparse.SUPPRESS, help="restrict to one configured server id"
+    )
+    common.add_argument(
+        "--config", default=argparse.SUPPRESS,
+        help="config path (default: $HERDECK_CONFIG / discovery)",
+    )
+    # The connect/request timeout is also accepted after the ACTION subcommands;
+    # `wait` keeps its own --timeout (max wait), so it does not get this parent.
+    timeout_common = argparse.ArgumentParser(add_help=False)
+    timeout_common.add_argument(
+        "--timeout", type=float, default=argparse.SUPPRESS,
+        help="connect/request timeout (s)",
+    )
 
     p = argparse.ArgumentParser(prog="herdeck-ctl", description="Control herdr agents.")
-    # Connect/request timeout: a global knob (use before the subcommand). Kept off
-    # the subparsers so it never collides with `wait`'s own --timeout below.
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.add_argument("--server", help="restrict to one configured server id")
+    p.add_argument("--config", help="config path (default: $HERDECK_CONFIG / discovery)")
     p.add_argument("--timeout", type=float, default=10.0, help="connect/request timeout (s)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    ls = sub.add_parser("ls", parents=[common], help="list agents")
+    ls = sub.add_parser("ls", parents=[common, timeout_common], help="list agents")
     ls.add_argument("--status", choices=_STATUSES)
 
     w = sub.add_parser("wait", parents=[common], help="block until an agent reaches a status")
@@ -268,7 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="max seconds to wait (default: no limit)")
 
     for name in ("approve", "deny"):
-        a = sub.add_parser(name, parents=[common], help=f"{name} a blocked agent")
+        a = sub.add_parser(name, parents=[common, timeout_common], help=f"{name} a blocked agent")
         a.add_argument("agent")
         a.add_argument("--force", action="store_true", help="ignore the blocked guard")
         a.add_argument("--settle", type=float, default=3.0)
@@ -276,16 +294,16 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "approve":
             a.add_argument("--always", action="store_true", help="approve-always profile")
 
-    st = sub.add_parser("stop", parents=[common], help="stop an agent (unconditional)")
+    st = sub.add_parser("stop", parents=[common, timeout_common], help="stop an agent (unconditional)")
     st.add_argument("agent")
     st.add_argument("--settle", type=float, default=3.0)
     st.add_argument("--no-settle", dest="settle", action="store_const", const=None)
 
-    se = sub.add_parser("send", parents=[common], help="send text to an agent (submits now)")
+    se = sub.add_parser("send", parents=[common, timeout_common], help="send text to an agent (submits now)")
     se.add_argument("agent")
     se.add_argument("text")
 
-    fo = sub.add_parser("focus", parents=[common], help="bring an agent's pane to the foreground")
+    fo = sub.add_parser("focus", parents=[common, timeout_common], help="bring an agent's pane to the foreground")
     fo.add_argument("agent")
     return p
 
