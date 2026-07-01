@@ -479,6 +479,23 @@ def test_preread_result_does_not_render_overview():
     assert app._orch._detection == ""
 
 
+def test_late_read_from_pre_block_drill_is_rejected():
+    # Drill a pane while it is WORKING; before its read returns the pane blocks. The
+    # read was issued pre-block, so it must not seed the block episode's prompt — and
+    # the newly-blocked pane still gets its own background pre-read.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    app.press(0)  # drill the working pane -> focus + read
+    pre_block_read = _reads(runner)[-1]
+    app.press(app._slots - 1)  # Back to overview
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])  # now blocks
+    assert _reads(runner)  # a fresh background pre-read is issued for the block episode
+    src._on_result(pre_block_read["req"], {"text": "1. STALE", "pane_id": "p0"})  # pre-block, late
+    app.press(0)  # drill the now-blocked pane
+    assert app._orch._detection == ""  # the pre-block read never seeded
+
+
 def test_late_drill_read_after_backout_and_reblock_is_rejected():
     # Drill a blocked pane, back out before its read returns, let the pane unblock
     # while on the overview and re-block. The late drill read from the prior episode

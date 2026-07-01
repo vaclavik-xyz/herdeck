@@ -361,8 +361,16 @@ class LiveSource(StateSource):
             req = f"r{self._req}"
             if cmd.kind == "read":
                 self._active_read_req = req
+                # Register the drill read as the episode's read ONLY when the pane is
+                # already BLOCKED. A read issued while the pane is WORKING/IDLE belongs
+                # to the pre-block state; letting its marker survive into a later block
+                # episode would both suppress the fresh pre-read and let a pre-block
+                # capture be accepted as the block prompt.
                 if cmd.pane_id is not None:
-                    self._preread_req[AgentKey(cmd.server_id, cmd.pane_id)] = req
+                    key = AgentKey(cmd.server_id, cmd.pane_id)
+                    state = self._agents.get(key)
+                    if state is not None and state.status is Status.BLOCKED:
+                        self._preread_req[key] = req
         return req
 
 
