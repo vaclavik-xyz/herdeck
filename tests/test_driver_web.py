@@ -10,6 +10,13 @@ from herdeck.driver.base import PanelView, TileView
 from herdeck.driver.web import WebDeck
 
 
+@pytest.fixture(autouse=True)
+def _isolated_token_state(tmp_path, monkeypatch):
+    """Serving decks persist their press token under XDG_STATE_HOME — keep
+    tests out of the user's real state dir."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+
 class StubIcons:
     def render_tile_bytes(self, tile):
         b = io.BytesIO()
@@ -220,7 +227,9 @@ def test_error_responses_are_browser_friendly_not_downloads():
             urllib.request.urlopen(f"http://{d.host}:{d.port}/", timeout=2)
         err = exc.value
         assert err.code == 403
-        assert err.headers.get("Content-Type", "").startswith("text/plain")
+        # "/" now serves a readable HTML explanation; the point stands:
+        # viewable text, never octet-stream.
+        assert err.headers.get("Content-Type", "").startswith("text/")
         assert "token" in err.read().decode().lower()
     finally:
         d.close()
@@ -327,3 +336,43 @@ def test_render_removing_a_tile_bumps_version_so_client_can_clear_it():
     assert st["version"] > v  # removal trips the client's gate
     assert 1 not in st["tiles"]  # its version is dropped
     assert d._tile_png(1) is None  # its bytes are gone
+
+
+# --- press-token persistence (audit: websim-token-persist) --------------------
+
+
+def test_token_persists_across_restarts(tmp_path):
+    token_file = tmp_path / "web-token"
+    a = WebDeck(slots=13, serve=False, icon_provider=StubIcons(), token_path=str(token_file))
+    b = WebDeck(slots=13, serve=False, icon_provider=StubIcons(), token_path=str(token_file))
+    assert a.press_token == b.press_token  # the phone's bookmarked URL survives
+    assert (token_file.stat().st_mode & 0o777) == 0o600
+
+
+def test_non_serving_deck_keeps_ephemeral_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))  # belt & braces isolation
+    a = WebDeck(slots=13, serve=False, icon_provider=StubIcons())
+    b = WebDeck(slots=13, serve=False, icon_provider=StubIcons())
+    assert a.press_token != b.press_token
+    assert not (tmp_path / "herdeck" / "web-token").exists()
+
+
+def test_root_403_serves_html_explanation(tmp_path):
+    import urllib.error
+    import urllib.request
+
+    d = WebDeck(
+        slots=4, host="127.0.0.1", port=0, serve=True,
+        icon_provider=StubIcons(), token_path=str(tmp_path / "web-token"),
+    )
+    try:
+        try:
+            urllib.request.urlopen(f"http://{d.host}:{d.port}/?token=wrong", timeout=5)
+            raise AssertionError("expected HTTP 403")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+            assert e.headers.get_content_type() == "text/html"
+            body = e.read().decode()
+            assert "token" in body.lower()
+    finally:
+        d.close()

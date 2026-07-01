@@ -15,6 +15,37 @@ from .base import DeckDriver, PanelView, TileView
 _PANEL_PRESS_INDEX = 13
 
 
+def _default_token_path() -> str:
+    import os
+
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(base, "herdeck", "web-token")
+
+
+def _load_or_create_token(path: str) -> str:
+    """A press token that SURVIVES restarts (0600 state file), so the phone's
+    bookmarked simulator URL keeps working across the constant restarts of a
+    dev loop instead of dead-ending on 403 after every restart."""
+    import os
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            token = fh.read().strip()
+        if token:
+            return token
+    except OSError:
+        pass
+    token = secrets.token_urlsafe(24)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(token)
+    except OSError:
+        pass  # an in-memory token still works for this run
+    return token
+
+
 class WebDeck(DeckDriver):
     """A browser-based D200 simulator.
 
@@ -32,6 +63,8 @@ class WebDeck(DeckDriver):
         icon_provider=None,
         icons_dir: str | None = None,
         serve: bool = True,
+        press_token: str | None = None,
+        token_path: str | None = None,
     ):
         self._slots = slots
         self._callback: Callable[[int], None] | None = None
@@ -41,7 +74,16 @@ class WebDeck(DeckDriver):
         self._panel: bytes | None = None
         self._panel_ver = 0
         self._version = 0
-        self._press_token = secrets.token_urlsafe(24)
+        # Serving decks persist the token across restarts (bookmarkable URL);
+        # an embedded/non-serving deck (tests) keeps an ephemeral one.
+        if press_token is not None:
+            self._press_token = press_token
+        elif token_path is not None:
+            self._press_token = _load_or_create_token(token_path)
+        elif serve:
+            self._press_token = _load_or_create_token(_default_token_path())
+        else:
+            self._press_token = secrets.token_urlsafe(24)
         if icon_provider is None:
             import os
             import tempfile
@@ -175,6 +217,14 @@ class WebDeck(DeckDriver):
             b"herdeck simulator: missing or invalid access token.\n"
             b"Open the full URL including the ?token=... part shown in herdeck's startup log.\n"
         )
+        forbidden_page = (
+            b"<!doctype html><meta charset=utf-8><title>herdeck simulator</title>"
+            b'<body style="background:#0b0b0d;color:#e7ecf3;'
+            b'font:14px/1.5 system-ui;padding:2em;max-width:32em">'
+            b"<h2>Missing or invalid access token</h2>"
+            b"<p>Open the full URL including the <code>?token=&hellip;</code> part "
+            b"printed in herdeck's startup log on the machine running the deck.</p>"
+        )
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *a):  # silence default request logging
@@ -206,7 +256,9 @@ class WebDeck(DeckDriver):
                 if path == "/":
                     token = self._query_token(url)
                     if not self._valid_token(token):
-                        self._send(403, forbidden)
+                        # A browser tab is the only consumer of "/": a readable
+                        # page beats a plaintext dead-end.
+                        self._send(403, forbidden_page, "text/html; charset=utf-8")
                         return
                     page = _PAGE.replace("__PRESS_TOKEN_JSON__", json.dumps(deck._press_token))
                     self._send(200, page.encode(), "text/html; charset=utf-8")
