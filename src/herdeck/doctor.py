@@ -137,8 +137,11 @@ def check_deck(lib_available: Callable[[str], bool]) -> Check:
 
 
 def _telegram_get_me(token: str) -> str | None:
-    """None if the Bot API accepts the token, else a short reason."""
+    """None if the Bot API accepts the token, else a short SANITIZED reason —
+    urllib errors can embed the request URL (which contains the token), so
+    only known-safe fields are ever echoed."""
     import json
+    import urllib.error
     import urllib.request
 
     try:
@@ -147,11 +150,15 @@ def _telegram_get_me(token: str) -> str | None:
         ) as r:
             data = json.loads(r.read().decode())
         return None if data.get("ok") else str(data.get("description", "rejected"))
-    except Exception as exc:
-        status = getattr(exc, "code", None)
-        if status == 401:
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
             return "token rejected (401 Unauthorized)"
-        return str(exc) or type(exc).__name__
+        return f"HTTP {exc.code}"
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", None)
+        return str(reason) if reason is not None else "unreachable"
+    except Exception as exc:
+        return type(exc).__name__  # e.g. a malformed token breaking the URL
 
 
 def check_notifications(

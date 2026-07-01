@@ -486,3 +486,14 @@ def test_optional_deps_cover_the_converged_runtime():
     assert "tomli_w=missing" in c.detail
     assert "keyring=missing" in c.detail
     assert "desktop/converged runtime needs" in c.detail
+
+
+def test_telegram_probe_never_echoes_the_token(monkeypatch):
+    """urllib errors can embed the request URL (which contains the token) —
+    the probe must sanitize (roborev 78c7cf0)."""
+    from herdeck.doctor import _telegram_get_me
+
+    token = "SECRET\nWITH-CONTROL-CHARS"
+    reason = _telegram_get_me(token)  # malformed token breaks URL construction
+    assert reason is not None
+    assert "SECRET" not in reason
