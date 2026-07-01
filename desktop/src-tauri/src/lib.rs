@@ -107,6 +107,19 @@ fn current_discovery(state: &tauri::State<'_, AppState>) -> Result<Discovery, St
         .ok_or_else(|| "sidecar not ready".to_string())
 }
 
+/// Run a blocking sidecar HTTP call off the invoking thread. The proxy commands
+/// are `async fn`s (so Tauri dispatches them on its async runtime instead of the
+/// main thread) and push their blocking TCP I/O onto the runtime's dedicated
+/// blocking pool — a slow or wedged sidecar can no longer freeze window drag,
+/// the tray, or the other webview for seconds per call.
+async fn run_blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("sidecar proxy task failed: {e}"))?
+}
+
 /// Probe an already-running headless runtime's token-authed `GET /health`
 /// (Rust-side, so the token never enters JS). `true` iff it responds — the
 /// signal that a `runtime.json` we found is live (not stale) and we should
@@ -126,176 +139,214 @@ fn probe_runtime_health(d: &Discovery) -> bool {
 /// access token never has to live in JS. `Err` if the sidecar isn't ready yet
 /// or is unreachable.
 #[tauri::command]
-fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let d = current_discovery(&state)?;
-    let body = http::http_get(
-        &d.host,
-        d.port,
-        &format!("/health?token={}", d.token),
-        SIDECAR_TIMEOUT,
-    )?;
-    serde_json::from_str::<serde_json::Value>(&body)
-        .map_err(|e| format!("invalid /health JSON from sidecar: {e}"))
+    run_blocking(move || {
+        let body = http::http_get(
+            &d.host,
+            d.port,
+            &format!("/health?token={}", d.token),
+            SIDECAR_TIMEOUT,
+        )?;
+        serde_json::from_str::<serde_json::Value>(&body)
+            .map_err(|e| format!("invalid /health JSON from sidecar: {e}"))
+    })
+    .await
 }
 
 /// Proxy `GET /state` (token injected Rust-side) → its JSON. This is the deck's
 /// poll endpoint; the WebView never sees the token.
 #[tauri::command]
-fn deck_state(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn deck_state(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let d = current_discovery(&state)?;
-    let body = http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT)?;
-    serde_json::from_str::<serde_json::Value>(&body)
-        .map_err(|e| format!("invalid /state JSON from sidecar: {e}"))
+    run_blocking(move || {
+        let body = http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT)?;
+        serde_json::from_str::<serde_json::Value>(&body)
+            .map_err(|e| format!("invalid /state JSON from sidecar: {e}"))
+    })
+    .await
 }
 
 /// Proxy `GET /tile/{index}` → a `data:image/png;base64,…` URL (or `None` if the
 /// tile is absent), so the WebView `<img>` renders it without touching the token.
 #[tauri::command]
-fn deck_tile(state: tauri::State<'_, AppState>, index: u32) -> Result<Option<String>, String> {
+async fn deck_tile(
+    state: tauri::State<'_, AppState>,
+    index: u32,
+) -> Result<Option<String>, String> {
     let d = current_discovery(&state)?;
-    http::fetch_image(
-        &d.host,
-        d.port,
-        &format!("/tile/{index}"),
-        &d.token,
-        SIDECAR_TIMEOUT,
-    )
+    run_blocking(move || {
+        http::fetch_image(
+            &d.host,
+            d.port,
+            &format!("/tile/{index}"),
+            &d.token,
+            SIDECAR_TIMEOUT,
+        )
+    })
+    .await
 }
 
 /// Proxy `GET /panel` → a `data:` PNG URL (or `None` if there is no panel yet).
 #[tauri::command]
-fn deck_panel(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+async fn deck_panel(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
     let d = current_discovery(&state)?;
-    http::fetch_image(&d.host, d.port, "/panel", &d.token, SIDECAR_TIMEOUT)
+    run_blocking(move || http::fetch_image(&d.host, d.port, "/panel", &d.token, SIDECAR_TIMEOUT))
+        .await
 }
 
 /// Proxy `POST /press/{index}` (token in the `X-Herdeck-Token` header) → the
 /// sidecar's HTTP status code (204 ok, 403 bad token, 400 bad index).
 #[tauri::command]
-fn deck_press(state: tauri::State<'_, AppState>, index: u32) -> Result<u16, String> {
+async fn deck_press(state: tauri::State<'_, AppState>, index: u32) -> Result<u16, String> {
     let d = current_discovery(&state)?;
-    http::send_press(&d.host, d.port, index, &d.token, SIDECAR_TIMEOUT)
+    run_blocking(move || http::send_press(&d.host, d.port, index, &d.token, SIDECAR_TIMEOUT)).await
 }
 
 /// Proxy `GET /config` (token as query param) → the redacted config JSON
 /// `{base, profiles, local, secrets}`. `Err` if the sidecar has no config
 /// service (404) or is unreachable.
 #[tauri::command]
-fn config_read(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn config_read(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let d = current_discovery(&state)?;
-    let body = http::http_get(
-        &d.host,
-        d.port,
-        &format!("/config?token={}", d.token),
-        SIDECAR_TIMEOUT,
-    )?;
-    serde_json::from_str(&body).map_err(|e| format!("invalid /config JSON from sidecar: {e}"))
+    run_blocking(move || {
+        let body = http::http_get(
+            &d.host,
+            d.port,
+            &format!("/config?token={}", d.token),
+            SIDECAR_TIMEOUT,
+        )?;
+        serde_json::from_str(&body).map_err(|e| format!("invalid /config JSON from sidecar: {e}"))
+    })
+    .await
 }
 
 /// Proxy `POST /config/validate` (header token) with the proposed config body →
 /// `{errors: [...]}`. The body is the JS `{base, profiles, local}` object.
 #[tauri::command]
-fn config_validate(
+async fn config_validate(
     state: tauri::State<'_, AppState>,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    config_post_json(&state, "/config/validate", &body)
+    let d = current_discovery(&state)?;
+    run_blocking(move || config_post_json(&d, "/config/validate", &body)).await
 }
 
 /// Proxy `POST /config` (header token) — atomic write + reload on the sidecar
 /// when `errors` is empty. Returns `{errors: [...]}`.
 #[tauri::command]
-fn config_write(
+async fn config_write(
     state: tauri::State<'_, AppState>,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    config_post_json(&state, "/config", &body)
+    let d = current_discovery(&state)?;
+    run_blocking(move || config_post_json(&d, "/config", &body)).await
 }
 
 /// Proxy `POST /profiles/active` (header token) → `{changed: bool}`. A 400
 /// (unknown/invalid profile name) surfaces as `Err` so the UI can show it.
 #[tauri::command]
-fn config_set_active(
+async fn config_set_active(
     state: tauri::State<'_, AppState>,
     name: String,
 ) -> Result<serde_json::Value, String> {
-    config_post_json(&state, "/profiles/active", &serde_json::json!({ "name": name }))
+    let d = current_discovery(&state)?;
+    run_blocking(move || {
+        config_post_json(&d, "/profiles/active", &serde_json::json!({ "name": name }))
+    })
+    .await
 }
 
 /// Proxy `POST /secret` (header token) — store `value` for `token_env` in the
 /// OS keychain. Returns the HTTP status (204 ok, 400 missing fields). The value
 /// is one-way: it is never read back.
 #[tauri::command]
-fn config_secret_set(
+async fn config_secret_set(
     state: tauri::State<'_, AppState>,
     token_env: String,
     value: String,
 ) -> Result<u16, String> {
     let d = current_discovery(&state)?;
-    let body = serde_json::json!({ "token_env": token_env, "value": value }).to_string();
-    let (code, _resp) = http::http_post_json(
-        &d.host,
-        d.port,
-        "/secret",
-        (HDR_TOKEN, &d.token),
-        &body,
-        SIDECAR_TIMEOUT,
-    )?;
-    Ok(code)
+    run_blocking(move || {
+        let body = serde_json::json!({ "token_env": token_env, "value": value }).to_string();
+        let (code, _resp) = http::http_post_json(
+            &d.host,
+            d.port,
+            "/secret",
+            (HDR_TOKEN, &d.token),
+            &body,
+            SIDECAR_TIMEOUT,
+        )?;
+        Ok(code)
+    })
+    .await
 }
 
 /// Proxy `DELETE /secret/{token_env}` (header token) → status (204 ok).
 #[tauri::command]
-fn config_secret_clear(
+async fn config_secret_clear(
     state: tauri::State<'_, AppState>,
     token_env: String,
 ) -> Result<u16, String> {
     let d = current_discovery(&state)?;
-    http::http_delete(
-        &d.host,
-        d.port,
-        &format!("/secret/{}", http::percent_encode_segment(&token_env)),
-        (HDR_TOKEN, &d.token),
-        SIDECAR_TIMEOUT,
-    )
+    run_blocking(move || {
+        http::http_delete(
+            &d.host,
+            d.port,
+            &format!("/secret/{}", http::percent_encode_segment(&token_env)),
+            (HDR_TOKEN, &d.token),
+            SIDECAR_TIMEOUT,
+        )
+    })
+    .await
 }
 
 /// Proxy `GET /setup` (token as query param) → the first-run status JSON.
 #[tauri::command]
-fn setup_status(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn setup_status(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let d = current_discovery(&state)?;
-    let body = http::fetch_setup(&d.host, d.port, &d.token, SIDECAR_TIMEOUT)?;
-    serde_json::from_str(&body).map_err(|e| format!("invalid /setup JSON from sidecar: {e}"))
+    run_blocking(move || {
+        let body = http::fetch_setup(&d.host, d.port, &d.token, SIDECAR_TIMEOUT)?;
+        serde_json::from_str(&body).map_err(|e| format!("invalid /setup JSON from sidecar: {e}"))
+    })
+    .await
 }
 
 /// Proxy `POST /setup/connect` (header token) → the connect result `{ok, …}`. Uses a
 /// dedicated timeout longer than the sidecar's remote probe. The typed token VALUE is
-/// in the forwarded body; it is never read back.
+/// in the forwarded body; it is never read back. Runs off the main thread — the old
+/// sync version blocked the UI for up to 15 s on the very first user interaction.
 #[tauri::command]
-fn setup_connect(
+async fn setup_connect(
     state: tauri::State<'_, AppState>,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let d = current_discovery(&state)?;
-    let (code, resp) = http::post_setup_connect(
-        &d.host, d.port, &d.token, &body.to_string(), SETUP_CONNECT_TIMEOUT,
-    )?;
-    if code == 200 {
-        serde_json::from_str(&resp).map_err(|e| format!("invalid /setup/connect JSON: {e}"))
-    } else {
-        Err(format!("sidecar returned HTTP {code} for /setup/connect"))
-    }
+    run_blocking(move || {
+        let (code, resp) = http::post_setup_connect(
+            &d.host,
+            d.port,
+            &d.token,
+            &body.to_string(),
+            SETUP_CONNECT_TIMEOUT,
+        )?;
+        if code == 200 {
+            serde_json::from_str(&resp).map_err(|e| format!("invalid /setup/connect JSON: {e}"))
+        } else {
+            Err(format!("sidecar returned HTTP {code} for /setup/connect"))
+        }
+    })
+    .await
 }
 
 /// Shared POST-JSON-and-parse for the config routes that return a JSON object on
 /// 200. A non-200 (e.g. 400 for a malformed body / bad profile name) is an `Err`
-/// the command surfaces to JS.
+/// the command surfaces to JS. Blocking — call inside `run_blocking`.
 fn config_post_json(
-    state: &tauri::State<'_, AppState>,
+    d: &Discovery,
     path: &str,
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let d = current_discovery(state)?;
     let (code, resp) = http::http_post_json(
         &d.host,
         d.port,
@@ -472,10 +523,16 @@ fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) {
 /// Re-read `/config` and re-register the deck-toggle hotkey (the editor calls
 /// this after a successful config write so a changed accelerator takes effect).
 #[tauri::command]
-fn reload_hotkey(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn reload_hotkey(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     let d = current_discovery(&state)?;
-    register_toggle_hotkey(&app, &d);
-    Ok(())
+    run_blocking(move || {
+        register_toggle_hotkey(&app, &d);
+        Ok(())
+    })
+    .await
 }
 
 /// The three window-mode tray checkboxes. There is no native radio group, so we
