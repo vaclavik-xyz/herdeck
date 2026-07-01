@@ -14,7 +14,7 @@
 
 - Comms in Czech; code, comments, identifiers, and commit messages in English.
 - Conventional Commits; NO `Co-Authored-By` trailer; never squash-merge. After each commit check `roborev show <sha>` and fix findings.
-- Rust gate before "done": `cd desktop/src-tauri && cargo test` green AND `cargo clippy --all-targets -- -D warnings` clean AND `cargo fmt --check` clean.
+- Rust gate before "done": `cd desktop/src-tauri && ~/.cargo/bin/cargo test` green AND `~/.cargo/bin/cargo build` clean. (`cargo` is at `~/.cargo/bin`, NOT on PATH.) The repo does NOT enforce crate-wide fmt/clippy (no `rustfmt.toml`, no CI lint) — do NOT run `cargo fmt`/`cargo clippy --fix` across the crate or touch files this task does not modify; keep only the touched file tidy. `cargo clippy` on the touched file is advisory, not a blocking gate.
 - **Attach reuses `SidecarPlan::External`** — it MUST NOT spawn or supervise anything and MUST NOT register a child (so the window-quit / `ExitRequested` handler never kills the launchd runtime we merely attached to).
 - **Discovery contract:** the runtime.json the window reads is exactly `{url, host, port, token, source}` — the SAME shape `sidecar::Discovery` already deserializes (written by Slice B's `herdeck.deckapp.discovery`). Reuse `Discovery::parse`; do not define a second struct.
 - **Token stays Rust-side:** the `/health` probe and all sidecar calls inject the token in Rust (`http::http_get(... "/health?token=" ...)`); the token never enters JS. Do not log it.
@@ -160,12 +160,12 @@ where
 Run: `cd desktop/src-tauri && cargo test runtime`
 Expected: PASS (the 5 new tests: `runtime_file_path_from_honors_dir_then_home`, `read_runtime_discovery_round_trips`, `read_runtime_discovery_none_when_missing`, `read_runtime_discovery_none_when_malformed`, `decide_runtime_attach_attaches_only_when_present_and_healthy`).
 
-- [ ] **Step 5: Full sidecar test run + clippy + fmt**
+- [ ] **Step 5: Full sidecar test run + build**
 
-Run: `cd desktop/src-tauri && cargo test`
+Run: `cd desktop/src-tauri && ~/.cargo/bin/cargo test`
 Expected: PASS (all sidecar + http tests, no regression).
-Run: `cd desktop/src-tauri && cargo clippy --all-targets -- -D warnings && cargo fmt --check`
-Expected: clean.
+Run: `cd desktop/src-tauri && ~/.cargo/bin/cargo build`
+Expected: compiles clean. (Do NOT crate-wide `cargo fmt`/`clippy --fix` — the repo doesn't enforce them; keep only `sidecar.rs` tidy.)
 
 - [ ] **Step 6: Commit**
 
@@ -232,10 +232,10 @@ In `desktop/src-tauri/src/lib.rs`, in `resolve_plan` (starts ~line 343), insert 
 
 - [ ] **Step 3: Build + clippy + fmt**
 
-Run: `cd desktop/src-tauri && cargo build`
+Run: `cd desktop/src-tauri && ~/.cargo/bin/cargo build`
 Expected: compiles clean (the new `sidecar::` paths resolve; `probe_runtime_health` is used by `resolve_plan`, so no dead-code warning).
-Run: `cd desktop/src-tauri && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check`
-Expected: tests PASS (Task 1's, unaffected), clippy clean, fmt clean.
+Run: `cd desktop/src-tauri && ~/.cargo/bin/cargo test`
+Expected: tests PASS (Task 1's, unaffected). (Do NOT crate-wide `cargo fmt`/`clippy --fix`; keep only `lib.rs` tidy — the repo enforces neither.)
 
 - [ ] **Step 4: Frontend regression (no change expected, just confirm green)**
 

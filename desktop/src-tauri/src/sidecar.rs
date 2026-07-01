@@ -45,6 +45,47 @@ impl Discovery {
     }
 }
 
+/// Resolve the runtime.json path, mirroring the Python side
+/// (`herdeck.deckapp.discovery.runtime_file_path`): `HERDECK_RUNTIME_DIR` or
+/// `~/.cache/herdeck`. The `_from` form is split out so it is unit-testable
+/// without mutating process env (which would race parallel tests).
+fn runtime_file_path_from(runtime_dir: Option<String>, home: &str) -> PathBuf {
+    let base = runtime_dir
+        .filter(|d| !d.is_empty()) // empty HERDECK_RUNTIME_DIR == unset (matches Python's `or`)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(home).join(".cache").join("herdeck"));
+    base.join("runtime.json")
+}
+
+/// The runtime.json discovery path for the current environment.
+pub fn runtime_file_path() -> PathBuf {
+    runtime_file_path_from(
+        std::env::var("HERDECK_RUNTIME_DIR").ok(),
+        &std::env::var("HOME").unwrap_or_default(),
+    )
+}
+
+/// Read + parse the headless runtime's discovery file. `None` when the file is
+/// absent or its contents are not a valid discovery object — so a missing or
+/// stale/corrupt file cleanly falls through to spawning our own sidecar.
+pub fn read_runtime_discovery(path: &Path) -> Option<Discovery> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    Discovery::parse(&contents).ok()
+}
+
+/// Decide whether to ATTACH to an already-running runtime: attach only when a
+/// discovery file was found AND its `/health` responds (via the injected probe).
+/// A missing file or a failed probe (stale file) returns `None` → spawn instead.
+pub fn decide_runtime_attach<F>(runtime_disco: Option<Discovery>, healthy: F) -> Option<Discovery>
+where
+    F: Fn(&Discovery) -> bool,
+{
+    match runtime_disco {
+        Some(d) if healthy(&d) => Some(d),
+        _ => None,
+    }
+}
+
 /// A fully-resolved spawn recipe for the sidecar. Kept as plain data so callers
 /// (and tests) can inspect it before turning it into a `std::process::Command`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,10 +186,7 @@ fn spawn_piped(spec: &CommandSpec) -> Result<Child, String> {
 /// never blocks on a full pipe); the caller bounds the wait with `timeout`.
 /// Takes the detached stdout by value so the caller can keep the `Child` handle
 /// registered for the quit path while this blocks.
-fn read_discovery_from_stdout(
-    stdout: ChildStdout,
-    timeout: Duration,
-) -> Result<Discovery, String> {
+fn read_discovery_from_stdout(stdout: ChildStdout, timeout: Duration) -> Result<Discovery, String> {
     let (tx, rx) = mpsc::channel::<Result<String, String>>();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -399,7 +437,9 @@ mod tests {
         assert!(Discovery::parse("   \n").is_err());
         assert!(Discovery::parse("not json").is_err());
         // missing the required `token` field
-        assert!(Discovery::parse(r#"{"url":"http://x","host":"h","port":1,"source":"mock"}"#).is_err());
+        assert!(
+            Discovery::parse(r#"{"url":"http://x","host":"h","port":1,"source":"mock"}"#).is_err()
+        );
         // port as a string is not a u16
         assert!(Discovery::parse(
             r#"{"url":"http://x","host":"h","port":"nope","token":"t","source":"mock"}"#
@@ -410,8 +450,14 @@ mod tests {
     #[test]
     fn next_backoff_doubles_then_caps() {
         let max = Duration::from_secs(30);
-        assert_eq!(next_backoff(Duration::from_millis(500), max), Duration::from_secs(1));
-        assert_eq!(next_backoff(Duration::from_secs(1), max), Duration::from_secs(2));
+        assert_eq!(
+            next_backoff(Duration::from_millis(500), max),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            next_backoff(Duration::from_secs(1), max),
+            Duration::from_secs(2)
+        );
         assert_eq!(next_backoff(Duration::from_secs(20), max), max); // 40 -> capped
         assert_eq!(next_backoff(max, max), max);
     }
@@ -421,7 +467,10 @@ mod tests {
         let root = Path::new("/repo");
         let spec = resolve_dev_sidecar(root);
         assert!(spec.program.ends_with("/.venv/bin/python"));
-        assert_eq!(spec.args, vec!["-m".to_string(), "herdeck.deckapp".to_string()]);
+        assert_eq!(
+            spec.args,
+            vec!["-m".to_string(), "herdeck.deckapp".to_string()]
+        );
         assert_eq!(spec.cwd.as_deref(), Some(Path::new("/repo")));
         assert_eq!(
             spec.envs,
@@ -439,7 +488,71 @@ mod tests {
         };
         let cmd = spec.to_command();
         assert_eq!(cmd.get_program().to_string_lossy(), "/bin/echo");
-        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         assert_eq!(args, vec!["hi".to_string()]);
+    }
+
+    fn sample_discovery() -> Discovery {
+        Discovery {
+            url: "http://127.0.0.1:8800".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 8800,
+            token: "t0ken".to_string(),
+            source: "live".to_string(),
+        }
+    }
+
+    #[test]
+    fn runtime_file_path_from_honors_dir_then_home() {
+        let with_dir = runtime_file_path_from(Some("/run/hd".to_string()), "/home/x");
+        assert_eq!(with_dir, Path::new("/run/hd/runtime.json"));
+        let with_home = runtime_file_path_from(None, "/home/x");
+        assert_eq!(with_home, Path::new("/home/x/.cache/herdeck/runtime.json"));
+    }
+
+    #[test]
+    fn runtime_file_path_from_treats_empty_dir_as_unset() {
+        // Matches the Python writer: an empty HERDECK_RUNTIME_DIR falls back to home.
+        let p = runtime_file_path_from(Some("".to_string()), "/home/x");
+        assert_eq!(p, Path::new("/home/x/.cache/herdeck/runtime.json"));
+    }
+
+    #[test]
+    fn read_runtime_discovery_round_trips() {
+        let dir = scratch("runtime-read");
+        let path = dir.join("runtime.json");
+        std::fs::write(
+            &path,
+            r#"{"url":"http://127.0.0.1:8800","host":"127.0.0.1","port":8800,"token":"t0ken","source":"live"}"#,
+        )
+        .unwrap();
+        let d = read_runtime_discovery(&path).expect("should parse");
+        assert_eq!(d.port, 8800);
+        assert_eq!(d.token, "t0ken");
+        assert_eq!(d.source, "live");
+    }
+
+    #[test]
+    fn read_runtime_discovery_none_when_missing() {
+        let dir = scratch("runtime-missing");
+        assert!(read_runtime_discovery(&dir.join("runtime.json")).is_none());
+    }
+
+    #[test]
+    fn read_runtime_discovery_none_when_malformed() {
+        let dir = scratch("runtime-malformed");
+        let path = dir.join("runtime.json");
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(read_runtime_discovery(&path).is_none());
+    }
+
+    #[test]
+    fn decide_runtime_attach_attaches_only_when_present_and_healthy() {
+        assert!(decide_runtime_attach(Some(sample_discovery()), |_| true).is_some());
+        assert!(decide_runtime_attach(Some(sample_discovery()), |_| false).is_none());
+        assert!(decide_runtime_attach(None, |_| true).is_none());
     }
 }
