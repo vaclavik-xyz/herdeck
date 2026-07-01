@@ -41,6 +41,22 @@ TICK_INTERVAL = 0.4
 # Every Nth tick, fully re-render so elapsed-time text on non-working tiles
 # (idle/blocked/done) advances even without a status change. 25 * 0.4s ≈ 10s.
 FULL_REFRESH_TICKS = 25
+# A status panel ("reload failed", "profile locked") stays visible this long —
+# without a hold the very next refresh overwrote it within one 0.4s tick and
+# the user never learned why their action had no effect.
+STATUS_PANEL_HOLD_S = 4.0
+
+# Module-level indirection so tests can fake the clock.
+_monotonic = None  # set lazily to time.monotonic (keeps import cost at top low)
+
+
+def _now() -> float:
+    global _monotonic
+    if _monotonic is None:
+        import time
+
+        _monotonic = time.monotonic
+    return _monotonic()
 
 log = logging.getLogger("herdeck")
 
@@ -215,6 +231,7 @@ class App:
         self._active_read_req: str | None = None
         self._ticks = 0
         self._status_panel: PanelView | None = None
+        self._status_panel_until = 0.0
 
     def _install_blocked_runtime(self, runtime: BlockedNotificationRuntime) -> None:
         self._notification_generation += 1
@@ -251,16 +268,25 @@ class App:
             self._active_read_req = req
         return req
 
+    def _held_status_panel(self) -> PanelView | None:
+        """The active status panel while its hold lasts, else None."""
+        if self._status_panel is not None and _now() < self._status_panel_until:
+            return self._status_panel
+        self._status_panel = None
+        return None
+
     def _refresh(self) -> None:
         rs = self.orch.render()
+        held = self._held_status_panel()
         try:
             self.deck.render(rs.tiles)
-            self.deck.render_panel(rs.panel)
+            self.deck.render_panel(held if held is not None else rs.panel)
         except Exception:
             pass  # a render failure must never freeze the loop
 
     def _set_status_panel(self, title: str, lines: list[str], color: str = "grey") -> None:
         self._status_panel = PanelView(title, lines, color)
+        self._status_panel_until = _now() + STATUS_PANEL_HOLD_S
         try:
             self.deck.render_panel(self._status_panel)
         except Exception:
@@ -422,6 +448,7 @@ class App:
         self._schedule(lambda: self._handle_press(index))
 
     def _handle_press(self, index: int) -> None:
+        self._status_panel = None  # any key press dismisses a held status panel
         cmds = self.orch.on_press(index)
         if log.isEnabledFor(logging.DEBUG):
             rs = self.orch.render()
