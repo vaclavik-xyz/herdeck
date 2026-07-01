@@ -410,19 +410,12 @@ class App:
     def handle_tick(self) -> None:
         working = self.orch.tick()
         self._ticks += 1
-        if self._ticks % FULL_REFRESH_TICKS == 0:
-            self._refresh()  # advance elapsed time on all tiles
-            return
-        if not working:
-            return
-        if hasattr(self.deck, "render_working"):
-            rs = self.orch.render()
-            tiles = [t for t in rs.tiles if t.index in set(working)]
-            try:
-                self.deck.render_working(tiles)
-            except Exception:
-                pass
-        else:
+        # Re-send the WHOLE frame whenever anything animates (or on the periodic
+        # elapsed refresh). A partial render_working write drops the cells it omits on
+        # the D200 firmware — blanking static/idle tiles + the panel, leaving only the
+        # working tiles lit — so never send a partial frame. A full render is cheap now
+        # that strmdck's retry sleep is neutralized (one combined write).
+        if working or self._ticks % FULL_REFRESH_TICKS == 0:
             self._refresh()
 
     def _on_press(self, index: int) -> None:

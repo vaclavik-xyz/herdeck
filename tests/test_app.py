@@ -241,7 +241,10 @@ def test_detection_survives_snapshot_that_keeps_pane_blocked():
     assert deck.last[0].label == "1" and deck.last[0].subtext == "Yes"
 
 
-def test_tick_uses_partial_render_when_available():
+def test_tick_full_render_never_partial():
+    # handle_tick must re-send the WHOLE frame (render), never a partial
+    # render_working: a partial write drops the cells it omits on the D200 firmware,
+    # blanking static/idle tiles + the panel and leaving only the working tiles lit.
     from herdeck.driver.fake import FakeRenderer
 
     class PartialFake(FakeRenderer):
@@ -255,8 +258,10 @@ def test_tick_uses_partial_render_when_available():
     deck = PartialFake(13)
     app = App(make_config(), deck, send=lambda c: None)
     app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
+    deck.last = []  # clear to detect the re-render
     app.handle_tick()
-    assert deck.partial and deck.partial[0].spinner is not None
+    assert deck.partial is None  # partial render_working is never used
+    assert deck.last and any(t.spinner is not None for t in deck.last)  # full frame re-sent
 
 
 def test_command_to_msg_focus():
