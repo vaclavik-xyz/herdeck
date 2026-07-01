@@ -404,3 +404,12 @@ def test_page_carries_stale_indicator_and_touch_feedback(tmp_path):
         assert "pollNow()" in page  # press triggers an immediate state poll
     finally:
         d.close()
+
+
+def test_existing_leaky_token_file_is_repaired_to_0600(tmp_path):
+    token_file = tmp_path / "web-token"
+    token_file.write_text("existing-token")
+    token_file.chmod(0o644)  # pre-existing world-readable file
+    d = WebDeck(slots=13, serve=False, icon_provider=StubIcons(), token_path=str(token_file))
+    assert d.press_token == "existing-token"  # bookmark keeps working
+    assert (token_file.stat().st_mode & 0o777) == 0o600  # ...but the leak is fixed

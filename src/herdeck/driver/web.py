@@ -29,6 +29,9 @@ def _load_or_create_token(path: str) -> str:
     import os
 
     try:
+        if os.stat(path).st_mode & 0o077:
+            # repair a leaky pre-existing file before trusting its token
+            os.chmod(path, 0o600)
         with open(path, encoding="utf-8") as fh:
             token = fh.read().strip()
         if token:
