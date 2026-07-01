@@ -15,12 +15,14 @@ _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _DETAIL_LINE_WIDTH = 36
 _DETAIL_MAX_LINES = 3
 
-# lower = higher priority (shown first)
+# lower = higher priority (shown first). done = finished-but-unseen ranks just
+# below blocked and above working, so a completed agent surfaces at the top of
+# the deck (where the eye is) instead of being buried after the idle agents.
 _STATUS_PRIORITY = {
     Status.BLOCKED: 0,
-    Status.WORKING: 1,
-    Status.IDLE: 2,
-    Status.DONE: 3,
+    Status.DONE: 1,
+    Status.WORKING: 2,
+    Status.IDLE: 3,
     Status.UNKNOWN: 4,
 }
 
@@ -28,7 +30,7 @@ STATUS_COLOR = {
     Status.WORKING: "green",
     Status.IDLE: "blue",
     Status.BLOCKED: "amber",
-    Status.DONE: "dim",
+    Status.DONE: "cyan",
     Status.UNKNOWN: "grey",
 }
 

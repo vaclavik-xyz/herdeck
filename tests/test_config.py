@@ -450,6 +450,7 @@ def test_runtime_customization_defaults_on_config():
 
     assert isinstance(cfg.theme, ThemeConfig)
     assert cfg.theme.colors["blocked"] == "amber"
+    assert cfg.theme.colors["done"] == "cyan"  # done = finished-unseen, its own visible colour
     assert cfg.theme.colors["offline"] == "red"
     assert cfg.theme.server_accents[:2] == ["teal", "violet"]
     assert isinstance(cfg.view, ViewConfig)

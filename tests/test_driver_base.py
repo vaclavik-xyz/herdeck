@@ -2,7 +2,7 @@ from herdeck.driver.base import COLORS, DeckDriver, PanelView, TileView
 
 
 def test_colors_cover_all_semantic_states():
-    for name in ("green", "blue", "amber", "dim", "red", "grey"):
+    for name in ("green", "blue", "amber", "cyan", "dim", "red", "grey"):
         assert name in COLORS and len(COLORS[name]) == 3
 
 
