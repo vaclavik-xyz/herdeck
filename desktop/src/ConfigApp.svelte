@@ -142,7 +142,8 @@
             "uklidit",
             () => void cleanupOrphans(orphans),
           );
-        } else {
+        } else if (banner == null) {
+          // load() surfaces its own warning on a failed refresh — never mask it
           setBanner("success", "uloženo");
         }
       } else {
