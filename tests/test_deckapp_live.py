@@ -479,6 +479,23 @@ def test_preread_result_does_not_render_overview():
     assert app._orch._detection == ""
 
 
+def test_drill_read_refreshes_cache_for_reentry():
+    # The drill's own fresh read keeps the cache current: if the prompt changed in
+    # place, backing out and re-drilling the still-blocked pane seeds the NEW prompt,
+    # not the prompt the background pre-read had cached.
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    preread = _reads(runner)[-1]
+    src._on_result(preread["req"], {"text": "1. OLD", "pane_id": "p0"})  # cache OLD
+    app.press(0)  # drill -> seeds OLD, fires a fresh read
+    drill_read = _reads(runner)[-1]
+    src._on_result(drill_read["req"], {"text": "1. NEW", "pane_id": "p0"})  # prompt changed
+    app.press(app._slots - 1)  # Back to overview
+    app.press(0)  # re-drill the still-blocked pane
+    assert app._orch._detection == "1. NEW"  # cache was refreshed by the drill read
+
+
 def test_late_preread_from_prior_episode_is_rejected():
     # A pre-read issued for one block episode must not repopulate the cache after the
     # pane unblocked and re-blocked: the prompt it carries is stale. Only a result

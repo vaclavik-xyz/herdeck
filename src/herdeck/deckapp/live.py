@@ -302,11 +302,14 @@ class LiveSource(StateSource):
 
     def _cache_preread(self, pane_id: str | None, text: str, req: str | None) -> None:
         """Store a read result as the pane's cached prompt — only while the pane is
-        still BLOCKED and only if ``req`` matches the read we issued for the CURRENT
-        block episode. A late result from a prior episode (unblock + re-block issues a
-        fresh req) is rejected, so a stale prompt can never seed the next drill.
-        Caller holds the deck lock."""
-        if pane_id is None:
+        still BLOCKED and only if ``req`` matches a read we issued for the pane's
+        CURRENT block episode: either the background pre-read (``_preread_req``) or the
+        active drill read (``_active_read_req``, which the drill fires and which is
+        cleared on unblock). Accepting the drill read keeps the cache fresh when a
+        prompt changes in place, so re-drilling seeds the new prompt; a late result
+        from a prior episode carries an old req and is rejected. Caller holds the
+        deck lock."""
+        if pane_id is None or req is None:
             return
         key = AgentKey(self._server.id, pane_id)
         with self._lock:
@@ -314,8 +317,7 @@ class LiveSource(StateSource):
             if (
                 state is not None
                 and state.status is Status.BLOCKED
-                and req is not None
-                and req == self._preread_req.get(key)
+                and req in (self._preread_req.get(key), self._active_read_req)
             ):
                 self._preread[key] = text
 
