@@ -116,8 +116,25 @@
     }
   }
 
+  // Live validation: the backend channel (POST /config/validate) existed but
+  // nothing called it — every mistake surfaced only at Apply. Debounced so a
+  // burst of keystrokes costs one request; results feed the same errors badge
+  // + expandable list the Apply path uses.
+  let validateTimer: ReturnType<typeof setTimeout> | undefined;
+
   function markDirty(): void {
     dirty = true;
+    if (validateTimer) clearTimeout(validateTimer);
+    validateTimer = setTimeout(() => void liveValidate(), 500);
+  }
+
+  async function liveValidate(): Promise<void> {
+    if (!payload || !dirty) return;
+    try {
+      errors = parseValidate(await cfg.validate(toWriteBody(payload)));
+    } catch {
+      /* sidecar hiccup — keep the previous result; Apply still validates */
+    }
   }
 
   async function apply(): Promise<void> {
@@ -223,6 +240,7 @@
     return () => {
       alive = false;
       unlisten?.();
+      if (validateTimer) clearTimeout(validateTimer);
       document.removeEventListener("visibilitychange", onVisible);
     };
   });
@@ -245,7 +263,11 @@
     {:else if dirty}
       <span class="hint">ulož nebo zahoď změny pro přepnutí profilu</span>
     {/if}
-    {#if dirty}<span class="dirty">● neuložené změny</span>{/if}
+    {#if dirty}
+      <span class="dirty" class:bad={errors.length > 0}>
+        ● neuložené změny{errors.length > 0 ? ` · ${errorCountLabel(errors.length)}` : ""}
+      </span>
+    {/if}
   </header>
 
   <div class="body">
@@ -323,6 +345,7 @@
   .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid #222; }
   .topbar select { background: #1b1b1f; color: #e8e8ea; border: 1px solid #2a2a2e; border-radius: 6px; padding: 3px 6px; font: inherit; }
   .dirty { color: #e0a030; margin-left: auto; }
+  .dirty.bad { color: #e05050; }
   .body { flex: 1; display: grid; grid-template-columns: 160px 1fr 220px; min-height: 0; }
   .sidebar { display: flex; flex-direction: column; border-right: 1px solid #222; overflow: auto; }
   .sidebar button { text-align: left; background: none; border: 0; color: inherit; padding: 8px 12px; cursor: pointer; }
