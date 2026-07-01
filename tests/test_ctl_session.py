@@ -273,3 +273,34 @@ async def test_open_still_fails_when_no_server_answers():
     with pytest.raises(ConnectionLost):
         await sess.open(timeout=0.05)
     await sess.close()
+
+
+@pytest.mark.asyncio
+async def test_wait_returns_target_exit_when_the_pane_vanishes():
+    """`wait <agent> --until done` must not hang forever when the pane closes
+    before reaching the status (audit: wait-vanished-pane)."""
+    import types
+
+    from herdeck.ctl import EXIT_TARGET, dispatch
+
+    fc = {}
+
+    def factory(**kw):
+        fc["c"] = FakeConnector(**kw)
+        return fc["c"]
+
+    sess = CtlSession(_config(), connector_factory=factory)
+    open_task = asyncio.create_task(sess.open(timeout=1))
+    await asyncio.sleep(0)
+    fc["c"].on_snapshot("dev", [_agent(Status.WORKING)])
+    await open_task
+    args = types.SimpleNamespace(
+        cmd="wait", agent="dev:p1", any_agent=False, until="done",
+        wait_timeout=None, json=False, status=None,
+    )
+    task = asyncio.create_task(dispatch(args, sess))
+    await asyncio.sleep(0)
+    fc["c"].on_snapshot("dev", [])  # the pane closed
+    rc = await asyncio.wait_for(task, timeout=1.0)
+    assert rc == EXIT_TARGET
+    await sess.close()

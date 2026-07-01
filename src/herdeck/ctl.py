@@ -354,10 +354,22 @@ async def dispatch(args, session) -> int:
         def pred():
             if fixed_key is not None:
                 a = session.agents.get(fixed_key)
-                return a if a and a.status is target_status else None
+                if a is None:
+                    # The pane closed while we waited (snapshots drop absent
+                    # keys): with the default no-limit timeout this predicate
+                    # could otherwise never match and the command would hang a
+                    # lead-agent script forever.
+                    return _GONE
+                return a if a.status is target_status else None
             return next((a for a in session.agents.values() if a.status is target_status), None)
 
         match = await session.wait(pred, timeout=args.wait_timeout)
+        if match is _GONE:
+            print(
+                f"agent {fixed_key.server_id}:{fixed_key.pane_id} vanished while waiting",
+                file=sys.stderr,
+            )
+            return EXIT_TARGET
         if match is None:
             print("wait timed out", file=sys.stderr)
             return EXIT_WAIT_TIMEOUT
