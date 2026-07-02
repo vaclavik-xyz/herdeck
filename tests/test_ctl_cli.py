@@ -151,3 +151,12 @@ async def test_amain_resolves_socket_from_the_loaded_config(tmp_path, monkeypatc
     rc = await _amain(args)  # no socket file + no servers -> clean error exit
     assert seen["hardware_socket"] == str(sock)  # the CONFIG override reached the resolver
     assert rc != 0
+
+
+def test_parser_accepts_waiting_status():
+    # WAITING is a real state the protocol can produce (herdwatch-held panes),
+    # so `ls --status waiting` / `wait --until waiting` must be accepted.
+    args = build_parser().parse_args(["ls", "--status", "waiting"])
+    assert args.status == "waiting"
+    args = build_parser().parse_args(["wait", "--any", "--until", "waiting"])
+    assert args.until == "waiting"

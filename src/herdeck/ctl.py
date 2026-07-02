@@ -244,7 +244,7 @@ class CtlSession:
 EXIT_OK, EXIT_USAGE, EXIT_SKIPPED = 0, 2, 3
 EXIT_TARGET, EXIT_CONN, EXIT_WAIT_TIMEOUT = 4, 5, 124
 
-_STATUSES = ["blocked", "working", "idle", "done"]
+_STATUSES = ["blocked", "working", "waiting", "idle", "done"]
 
 
 def build_parser() -> argparse.ArgumentParser:
