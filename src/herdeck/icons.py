@@ -4,6 +4,8 @@ import hashlib
 import math
 import os
 import re
+import time
+from collections import OrderedDict
 from collections.abc import Callable
 
 from PIL import Image, ImageDraw
@@ -18,6 +20,42 @@ SPINNER_FRAMES = 8
 # Bump when the rendered icon output changes so stale cached PNGs from older
 # versions are ignored, not reused.
 CACHE_VERSION = 3
+
+# Generated tile/icon PNGs are content-addressed (the filename encodes the full
+# render signature), so eviction is always safe — at worst the next render
+# recreates the file. Without eviction a 24/7 deck grows the cache dir without
+# bound: the elapsed-time text in the signature mints fresh filenames forever.
+PRUNE_MAX_AGE_S = 3600.0
+_PRUNE_EVERY_WRITES = 4096  # opportunistic prune cadence for long-running processes
+_BYTES_CACHE_MAX = 512  # in-memory PNG-bytes LRU entries (~a few MB)
+
+
+def prune_generated(cache_dir: str, max_age_s: float = PRUNE_MAX_AGE_S) -> int:
+    """Delete generated ``tile_*``/``icon_v*`` PNGs older than ``max_age_s``.
+
+    Only the content-addressed names this module writes are touched; anything
+    else in the dir (panel_left.png, user files) is left alone. Returns the
+    number of files removed."""
+    try:
+        entries = os.scandir(cache_dir)
+    except OSError:
+        return 0
+    cutoff = time.time() - max_age_s
+    removed = 0
+    with entries:
+        for entry in entries:
+            name = entry.name
+            if not name.endswith(".png"):
+                continue
+            if not (name.startswith("tile_") or name.startswith("icon_v")):
+                continue
+            try:
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    os.unlink(entry.path)
+                    removed += 1
+            except OSError:
+                pass  # raced/unreadable entry: skip
+    return removed
 
 # The agent mark is inset (not edge-to-edge) so the comet ring has clean room
 # around it and tiles look deliberate rather than cramped.
@@ -136,7 +174,12 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 # Bump when tile composition changes so stale cached tile PNGs are ignored.
 # 2: tile_fill (none/tint/solid) — solid contrast + solid-sweep composition.
 # 3: readable subtext (branch/time) on solid dark-colour fills (e.g. blue).
-TILE_VERSION = 3
+# 4: wrapped text marks a cut-off tail with an ellipsis.
+# 5: the agent mark flips dark on bright solid fills (like the text).
+# 6: larger type scale (repo 31px, sub-labels 18-19px) spread down the tile.
+# 7: the dark flip applies only to light-monochrome marks (colour overrides
+#    render as supplied again).
+TILE_VERSION = 7
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -144,6 +187,20 @@ SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 def _lum(c: tuple[int, int, int]) -> float:
     """Perceived luminance (Rec. 601) of an RGB colour, on a 0-255 scale."""
     return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+
+
+def _is_light_monochrome(img: Image.Image) -> bool:
+    """Is this glyph a white/near-white mark on transparency (the shape every
+    built-in mark has)? A full-colour user override must NOT be flattened to a
+    dark silhouette by the solid-fill contrast flip."""
+    from PIL import ImageStat
+
+    alpha = img.getchannel("A")
+    mask = alpha.point(lambda v: 255 if v > 32 else 0)
+    if not mask.getbbox():
+        return False  # fully transparent: nothing to recolour
+    means = ImageStat.Stat(img.convert("RGB"), mask=mask).mean
+    return min(means) > 180 and (max(means) - min(means)) < 40
 
 
 def _tint_bg(accent: tuple[int, int, int]) -> tuple[int, int, int]:
@@ -227,6 +284,23 @@ def _panel_bg(color: str) -> tuple[int, int, int]:
     return tuple(max(12, int(channel * 0.28)) for channel in rgb)
 
 
+_PANEL_BODY_LINES = 3
+
+
+def _panel_body_lines(draw, lines, font, max_w, max_lines=_PANEL_BODY_LINES) -> list[str]:
+    """Pixel-wrapped display lines for the panel body (<= max_lines total).
+
+    Panel lines are LOGICAL lines; wrapping them here with the actual font is
+    what keeps a long prompt readable — character-count wrapping upstream
+    systematically overflowed the pixel budget and ellipsized every full line."""
+    out: list[str] = []
+    for line in lines:
+        if len(out) == max_lines:
+            break
+        out.extend(_wrap(draw, line, font, max_w, max_lines - len(out)))
+    return out[:max_lines]
+
+
 def compose_panel(panel: PanelView) -> Image.Image:
     """Render a PanelView to a 392x196 image with large, readable text.
 
@@ -244,7 +318,8 @@ def compose_panel(panel: PanelView) -> Image.Image:
     )
     line_f = _font(24)
     y = 60
-    for line in panel.lines[:3]:
+    for line in _panel_body_lines(d, panel.lines, line_f, PANEL_W - 32):
+        # _truncate is a safety net for unbreakable tokens wider than the panel.
         d.text((16, y), _truncate(d, line, line_f, PANEL_W - 32), font=line_f, fill=(232, 232, 236))
         y += 40
     return img
@@ -259,10 +334,15 @@ def _truncate(draw, text, font, max_w):
 
 
 def _wrap(draw, text, font, max_w, max_lines=2):
-    """Wrap text (splitting on '/' too, for branch names) to <= max_lines."""
+    """Wrap text (splitting on '/' too, for branch names) to <= max_lines.
+
+    A cut-off tail is ALWAYS marked with an ellipsis: silently dropping words
+    turned e.g. the drill option "…don't ask again for rm commands in
+    /Users/admin/projects" into an apparent approval for "rm commands in /"."""
     words = text.replace("/", " / ").split()
     lines: list[str] = []
     cur = ""
+    truncated = False
     for w in words:
         test = (cur + " " + w).strip()
         if draw.textlength(test, font=font) <= max_w:
@@ -272,11 +352,18 @@ def _wrap(draw, text, font, max_w, max_lines=2):
                 lines.append(cur)
             cur = w
         if len(lines) == max_lines:
+            truncated = True  # cur (and any remaining words) no longer fit
             break
     if cur and len(lines) < max_lines:
         lines.append(cur)
     if lines:
-        lines[-1] = _truncate(draw, lines[-1], font, max_w)
+        if truncated:
+            last = lines[-1]
+            while last and draw.textlength(last + "…", font=font) > max_w:
+                last = last[:-1]
+            lines[-1] = last + "…"
+        else:
+            lines[-1] = _truncate(draw, lines[-1], font, max_w)
     return lines[:max_lines]
 
 
@@ -307,7 +394,10 @@ class IconProvider:
         # (e.g. an app upgrade that bundles new marks) invalidates stale tiles.
         self._asset_fp = _fingerprint_assets(assets_dir)
         os.makedirs(cache_dir, exist_ok=True)
+        prune_generated(cache_dir)
         self._glyph_cache: dict[str, Image.Image] = {}
+        self._bytes_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._writes_since_prune = 0
 
     def _base_glyph(self, agent_type: str) -> Image.Image:
         """A monochrome mark for an agent type.
@@ -400,14 +490,10 @@ class IconProvider:
         img.alpha_composite(self._comet_overlay(ICON_SIZE, phase, RING_INSET, RING_WIDTH))
 
     # --- rich tile rendering (full tile incl. text; device label left empty) ---
-    def render_tile(self, tile) -> str:
-        """Render a full TileView (logo, repo, branch, status, time) to a cached
-        PNG and return its filename. Agent tiles (tile.repo set) get the rich
-        layout; control tiles render their centred label on a colour."""
-        import hashlib
-
-        # Bound the rotation phase so the cache reuses a fixed set of frames
-        # instead of writing a new PNG on every tick.
+    def _tile_name(self, tile) -> tuple[str, int | None]:
+        """The content-addressed cache filename for a TileView (and its bounded
+        spinner phase). The rotation phase is bounded to SPINNER_FRAMES so the
+        cache reuses a fixed set of frames instead of minting a new PNG per tick."""
         spinner = None if tile.spinner is None else tile.spinner % SPINNER_FRAMES
         sig_parts = [
             TILE_VERSION,
@@ -428,9 +514,28 @@ class IconProvider:
         if tile.server_tag or tile.server_accent:
             sig_parts.extend([tile.server_tag, tile.server_accent])
         sig = "|".join(str(x) for x in sig_parts)
-        name = "tile_" + hashlib.sha1(sig.encode()).hexdigest()[:16] + ".png"
+        return "tile_" + hashlib.sha1(sig.encode()).hexdigest()[:16] + ".png", spinner
+
+    def render_tile(self, tile) -> str:
+        """Render a full TileView (logo, repo, branch, status, time) to a cached
+        PNG and return its filename. Agent tiles (tile.repo set) get the rich
+        layout; control tiles render their centred label on a colour."""
+        name, spinner = self._tile_name(tile)
         path = os.path.join(self._cache_dir, name)
-        if os.path.exists(path):
+        try:
+            st = os.stat(path)
+        except OSError:
+            st = None
+        if st is not None:
+            # Keep actively-served files out of prune's stale window: refresh a
+            # sufficiently old mtime on hit, so a filename already handed to the
+            # device path (strmdck reads it later, during set_buttons) can never
+            # be deleted by the opportunistic prune mid-batch.
+            if time.time() - st.st_mtime > PRUNE_MAX_AGE_S / 2:
+                try:
+                    os.utime(path)
+                except OSError:
+                    pass
             return name
         img = (
             self._compose_agent_tile(tile, spinner)
@@ -438,15 +543,49 @@ class IconProvider:
             else self._compose_label_tile(tile)
         )
         img.convert("RGB").save(path)
+        self._writes_since_prune += 1
+        if self._writes_since_prune >= _PRUNE_EVERY_WRITES:
+            self._writes_since_prune = 0
+            prune_generated(self._cache_dir)
         return name
 
     def render_tile_bytes(self, tile) -> bytes:
-        """Render a tile and return its PNG bytes (for the web simulator)."""
+        """Render a tile and return its PNG bytes (web simulator / HTTP state).
+
+        Served from a small in-memory LRU so the per-tick full-frame render
+        never touches the filesystem for tiles it has already produced."""
+        name, _ = self._tile_name(tile)
+        cached = self._bytes_cache.get(name)
+        if cached is not None:
+            self._bytes_cache.move_to_end(name)
+            return cached
         name = self.render_tile(tile)
         with open(os.path.join(self._cache_dir, name), "rb") as fh:
-            return fh.read()
+            data = fh.read()
+        self._bytes_cache[name] = data
+        while len(self._bytes_cache) > _BYTES_CACHE_MAX:
+            self._bytes_cache.popitem(last=False)
+        return data
 
     def _compose_label_tile(self, tile) -> Image.Image:
+        if tile.color == "launcher":
+            # A management tile, NOT a status: dark background + green accent
+            # label. The old full-green launcher was pixel-identical to a
+            # WORKING agent tile under solid fill — the deck read as having
+            # one more running agent than it had.
+            bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), TILE_BG + (255,))
+            d = ImageDraw.Draw(bg)
+            f = _font(30)
+            t = _truncate(d, tile.label, f, ICON_SIZE - 16)
+            w = d.textlength(t, font=f)
+            bb = d.textbbox((0, 0), t, font=f)
+            d.text(
+                ((ICON_SIZE - w) / 2, (ICON_SIZE - (bb[3] - bb[1])) / 2 - bb[1]),
+                t,
+                font=f,
+                fill=COLORS["green"],
+            )
+            return bg
         bg = Image.new(
             "RGBA", (ICON_SIZE, ICON_SIZE), COLORS.get(tile.color, COLORS["dim"]) + (255,)
         )
@@ -498,6 +637,15 @@ class IconProvider:
         working = spinner is not None
         # logo top-left; while working it animates per the chosen style
         base_logo = self._base_glyph(tile.agent_type or "default")
+        if fill == "solid" and _lum(bg_col) > 120 and _is_light_monochrome(base_logo):
+            # A white mark washes out on bright solid fills (amber 2.1:1, cyan
+            # 2.0:1 — below the 3:1 non-text minimum) while the text correctly
+            # flips dark. Recolour it via its alpha mask to the same dark ink.
+            # Full-colour user overrides are left as supplied (the flip would
+            # flatten them to a silhouette).
+            dark = Image.new("RGBA", base_logo.size, (18, 18, 22, 0))
+            dark.putalpha(base_logo.getchannel("A"))
+            base_logo = dark
         if working and anim == "pulse":
             # "breathe": scale the mark between ~0.82x and 1.0x by the spinner phase
             f = 0.82 + 0.18 * (0.5 + 0.5 * math.sin(2 * math.pi * spinner / SPINNER_FRAMES))
@@ -514,9 +662,12 @@ class IconProvider:
                 # thin comet ring orbiting the static mark; the 62px overlay is
                 # centred over the 46px logo box at (12,12) -> composite at (4,4)
                 bg.alpha_composite(self._comet_overlay(62, spinner, 2, 4), (4, 4))
-        # status word + elapsed time, top-right
+        # status word + elapsed time, top-right. Sizes were tuned for a screen,
+        # not a ~25mm physical key: the old 23px repo (~2.9mm cap height) and
+        # 15-16px sub-labels were legible only when leaning in, while the
+        # bottom ~40% of the tile sat empty.
         if tile.status_text:
-            fs = _font(16)
+            fs = _font(19)
             d.text(
                 (ICON_SIZE - 12 - d.textlength(tile.status_text, font=fs), 13),
                 tile.status_text,
@@ -524,27 +675,29 @@ class IconProvider:
                 fill=word_fill,
             )
         if tile.time_text:
-            ft = _font(15)
+            ft = _font(18)
             d.text(
-                (ICON_SIZE - 12 - d.textlength(tile.time_text, font=ft), 35),
+                (ICON_SIZE - 12 - d.textlength(tile.time_text, font=ft), 38),
                 tile.time_text,
                 font=ft,
                 fill=time_fill,
             )
-        # repo (primary) + branch (secondary, wrapped)
-        fr = _font(23)
+        # repo (primary) + branch (secondary, wrapped) — spread down the tile
+        # so the composition is optically centred between the logo row and the
+        # accent bar instead of leaving a dead band across the bottom third.
+        fr = _font(31)
         d.text(
-            (12, 68),
+            (12, 74),
             _truncate(d, tile.repo or "", fr, ICON_SIZE - 24),
             font=fr,
             fill=repo_fill,
         )
         if tile.branch:
-            fb = _font(16)
-            y = 98
+            fb = _font(18)
+            y = 112
             for line in _wrap(d, tile.branch, fb, ICON_SIZE - 24, 2):
                 d.text((12, y), line, font=fb, fill=branch_fill)
-                y += 20
+                y += 22
         if tile.server_tag:
             chip_fill = _rgb_color(tile.server_accent or "", (95, 95, 105))
             fc = _font(14)

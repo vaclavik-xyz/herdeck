@@ -121,3 +121,29 @@ def test_composite_sink_calls_all_even_if_one_raises():
     )
     sink("title", "body", True)
     assert calls == [("a", "title"), ("c", "title")]
+
+
+def test_delivery_failure_is_visible_and_rate_limited(monkeypatch, caplog):
+    """A wrong bot token must not vanish at DEBUG (audit: notify-failures-visible)."""
+    import logging
+
+    from herdeck import notify as notify_mod
+
+    t = [1000.0]
+    monkeypatch.setattr(notify_mod, "_monotonic", lambda: t[0])
+    monkeypatch.setattr(notify_mod, "_last_warned", {})
+
+    def failing(title, body, sound):
+        raise RuntimeError("Unauthorized")
+
+    failing._notify_name = "telegram"
+    n = Notifier(sink=failing)
+    with caplog.at_level(logging.WARNING, logger="herdeck.notify"):
+        n.notify("t", "b")
+        n.notify("t", "b")  # identical failure inside the window -> DEBUG only
+        t[0] += 600
+        n.notify("t", "b")  # window elapsed -> visible again
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2
+    assert "telegram" in warnings[0].getMessage()
+    assert "Unauthorized" in warnings[0].getMessage()

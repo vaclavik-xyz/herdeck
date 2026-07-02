@@ -41,10 +41,10 @@ herdeck-ctl send local:w1:p1 "run the tests"   # send text (submits immediately)
 ```
 
 Target an agent by `server:pane_id` or a fuzzy match on its label/repo/branch.
-Common options (`--json`, `--server`, `--config`) go **after** the subcommand;
-the connect `--timeout` is global and goes **before** it
-(`herdeck-ctl --timeout 5 ls`). `wait` has its own `--timeout` (default: no
-limit) that goes after, e.g. `wait --any --until blocked --timeout 60`.
+Common options (`--json`, `--server`, `--config`, `--timeout`) work before or
+after the subcommand. `wait` is the one exception: its own `--timeout` (max
+seconds to wait, default: no limit) goes after it, e.g.
+`wait --any --until blocked --timeout 60`.
 
 Exit codes: `0` ok · `2` usage · `3` skipped (agent not blocked) · `4`
 unknown/ambiguous agent · `5` connection/config error · `124` `wait` timed out.
@@ -148,8 +148,10 @@ prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).
 ## The deck (Ulanzi D200)
 The D200 has **13 buttons** (a 5×3 grid minus the small status window). The
 orchestrator takes the real button count from the driver: agent tiles fill the
-first N−3 slots; the last three are **Next** (jump to next blocked), **Refresh**,
-and **Link** (connection status). State is encoded by color: working = green,
+slots up to the reserved **+ New** launcher tile. With more agents than tiles,
+pressing the status window pages through them (the panel shows `· 1/2`), and a
+newly blocked agent automatically pulls the overview back to the first page
+where it sorts to the front. State is encoded by color: working = green,
 idle = blue, blocked = amber, done = cyan, error/disconnected = red. By default
 the colour shows in the status word and a bottom accent bar; set
 `[view].tile_fill` to `tint` (whole tile a darkened shade of the colour) or

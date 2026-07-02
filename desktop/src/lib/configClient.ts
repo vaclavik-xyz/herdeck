@@ -20,6 +20,8 @@ export interface ConfigPayload {
   envLocked: boolean;
   /** The effective active profile name (env > local > base > "default"). */
   activeProfile: string;
+  /** On-disk content revision the payload was loaded from (staleness guard). */
+  revision: string | null;
 }
 
 /** What `POST /config[/validate]` takes: the editable config minus `secrets`. */
@@ -27,6 +29,7 @@ export interface WriteBody {
   base: Record<string, unknown>;
   profiles: Record<string, Record<string, unknown>>;
   local: Record<string, unknown>;
+  revision?: string;
 }
 
 function obj(v: unknown): Record<string, unknown> {
@@ -52,7 +55,8 @@ export function parseConfig(raw: unknown): ConfigPayload | null {
   for (const [name, flag] of Object.entries(obj(v.secrets))) secrets[name] = parseSecretFlag(flag);
   const envLocked = v.env_locked === true;
   const activeProfile = typeof v.active_profile === "string" ? v.active_profile : "default";
-  return { base: obj(v.base), profiles, local: obj(v.local), secrets, envLocked, activeProfile };
+  const revision = typeof v.revision === "string" ? v.revision : null;
+  return { base: obj(v.base), profiles, local: obj(v.local), secrets, envLocked, activeProfile, revision };
 }
 
 /** Extract the `errors` string list from a `{errors: [...]}` reply, dropping
@@ -86,11 +90,18 @@ function clone<T>(v: T): T {
 /** The editable config (no secrets), deep-copied so edits never alias the
  *  fetched payload. This is exactly what `POST /config[/validate]` takes. */
 export function toWriteBody(payload: ConfigPayload): WriteBody {
-  return {
+  const body: WriteBody = {
     base: clone(payload.base),
     profiles: clone(payload.profiles),
     local: clone(payload.local),
   };
+  if (payload.revision != null) body.revision = payload.revision;
+  return body;
+}
+
+/** Is this validation error the write-rejected-as-stale signal? */
+export function isStaleRevisionError(error: string): boolean {
+  return error.startsWith("stale_revision");
 }
 
 /** The base value a profile overlay inherits for `section.key`, or undefined. */
@@ -883,4 +894,11 @@ export function commandTransport(invoke: InvokeFn): ConfigTransport {
       return asCode(await invoke("config_secret_clear", { tokenEnv }));
     },
   };
+}
+
+/** Czech-pluralized validation-error count for the savebar badge. */
+export function errorCountLabel(n: number): string {
+  if (n === 1) return "1 chyba";
+  if (n >= 2 && n <= 4) return `${n} chyby`;
+  return `${n} chyb`;
 }

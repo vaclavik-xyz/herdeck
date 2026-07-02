@@ -284,7 +284,7 @@ class ElgatoSession:
     def _slot_tile(self, ordinal: int) -> TileView:
         key = self._leases.assignment().get(ordinal)
         if key is None:
-            return TileView(ordinal, "", "dim")
+            return TileView(ordinal, "", "empty")
         s = self._agents[key]
         down = s.key.server_id in self._down
         # Elgato never honored tile_fields -> fixed repo/branch fallback.

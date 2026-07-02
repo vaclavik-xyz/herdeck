@@ -12,6 +12,7 @@
     shouldOnboard,
     type SetupStatus,
   } from "./lib/onboardingClient";
+  import { visibilityGatedLoop } from "./lib/pollGate";
 
   // Window mode is injected on <html data-window-mode> by Rust BEFORE first paint
   // (initialization_script), so the borderless CSS applies with no FOUC. Falls
@@ -86,12 +87,14 @@
       }
     })();
 
-    void (async () => {
-      while (alive) {
+    // Visibility-gated: the setup poll parks while the window is hidden (the
+    // deck lives in the tray) and refreshes immediately on show.
+    const setupPoll = visibilityGatedLoop(
+      async () => {
         if (setup) status = await setup.status();
-        await new Promise((r) => setTimeout(r, status ? 2500 : 600));
-      }
-    })();
+      },
+      () => (status ? 2500 : 600),
+    );
 
     // Borderless content-fit: observe the shell's intrinsic height and resize the
     // window to match. rAF-batched so a burst of mutations triggers one setSize.
@@ -111,6 +114,7 @@
 
     return () => {
       alive = false;
+      setupPoll.stop();
       ro?.disconnect();
     };
   });
@@ -125,7 +129,11 @@
 
 <main class:borderless>
   <div class="shell" bind:this={shell}>
-    {#if borderless}<div class="drag" data-tauri-drag-region></div>{/if}
+    {#if borderless}
+      <div class="drag" data-tauri-drag-region>
+        <span class="grabber" data-tauri-drag-region></span>
+      </div>
+    {/if}
     {#if view === "deck"}
       <DeckView {transport} />
       <!-- Re-onboarding affordance, in document flow so content-fit measures it
@@ -156,6 +164,7 @@
   :global(html, body) {
     margin: 0;
     background: #0b0b0d;
+    color-scheme: dark; /* dark native widgets + scrollbars (WebKit) */
   }
   :global(html[data-window-mode="floating"]),
   :global(html[data-window-mode="floating"] body),
@@ -178,9 +187,28 @@
     border-radius: 12px;
     overflow: hidden;
   }
+  /* The drag strip is the ONLY way to move the borderless window — give it a
+     visible grabber pill instead of an 18px invisible blind target. */
   .drag {
     height: 18px;
     width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+  }
+  .drag:active {
+    cursor: grabbing;
+  }
+  .grabber {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: #2a2a2e;
+    transition: background 0.15s;
+  }
+  .drag:hover .grabber {
+    background: #4a4a52;
   }
   .tools {
     display: flex;

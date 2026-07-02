@@ -410,3 +410,31 @@ def test_neutralize_retry_sleep_is_failsafe_when_strmdck_missing(monkeypatch):
     from herdeck.driver.d200 import _neutralize_retry_sleep
 
     _neutralize_retry_sleep()  # must not raise
+
+
+def test_d200_unchanged_panel_skips_recompose_but_still_writes(tmp_path, monkeypatch):
+    import herdeck.driver.d200 as d200_mod
+
+    calls = {"n": 0}
+    real = d200_mod.compose_panel
+
+    def counting(panel):
+        calls["n"] += 1
+        return real(panel)
+
+    monkeypatch.setattr(d200_mod, "compose_panel", counting)
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        driver.render_panel(PanelView("t", ["a"], "grey"))
+        assert _wait_until(lambda: len(dev.calls) == 1)
+        driver.render_panel(PanelView("t", ["a"], "grey"))
+        assert _wait_until(lambda: len(dev.calls) == 2)  # device write still issued
+        assert calls["n"] == 1  # identical content composed only once
+        driver.render_panel(PanelView("t2", ["a"], "grey"))
+        assert _wait_until(lambda: len(dev.calls) == 3)
+        assert calls["n"] == 2
+    finally:
+        driver.close()
+        os.chdir(before)

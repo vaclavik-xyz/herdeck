@@ -41,7 +41,7 @@ def test_snapshot_renders_tiles_and_panel():
     app = App(make_config(), deck, send=lambda c: None)
     app.handle_snapshot("dev", [blocked("p1")])
     assert deck.last[0].color == "amber"
-    assert deck.last_panel is not None and deck.last_panel.title == "⚠ needs you"
+    assert deck.last_panel is not None and deck.last_panel.title == "▲ needs you"
 
 
 def test_press_forwards_commands():
@@ -1184,3 +1184,51 @@ def test_reload_from_disk_malformed_file_shows_panel(tmp_path):
 
     assert app.config is old_config  # current config kept
     assert deck.last_panel is not None and deck.last_panel.title == "reload failed"
+
+
+def test_status_panel_survives_refreshes_until_hold_expires(monkeypatch):
+    """'reload failed' / 'profile locked' used to be overwritten by the very
+    next refresh within one tick (audit: status-panel-hold)."""
+    from herdeck import app as app_mod
+
+    t = [1000.0]
+    monkeypatch.setattr(app_mod, "_monotonic", lambda: t[0])
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app.handle_snapshot("dev", [blocked("p1")])
+    app._set_status_panel("reload failed", ["bad toml"], "amber")
+    assert deck.last_panel.title == "reload failed"
+    app._refresh()  # a routine refresh must NOT wipe the held panel
+    assert deck.last_panel.title == "reload failed"
+    t[0] += 5.0  # hold expired -> the normal orchestrator panel returns
+    app._refresh()
+    assert deck.last_panel.title != "reload failed"
+
+
+def test_key_press_dismisses_a_held_status_panel(monkeypatch):
+    from herdeck import app as app_mod
+
+    t = [1000.0]
+    monkeypatch.setattr(app_mod, "_monotonic", lambda: t[0])
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app.handle_snapshot("dev", [blocked("p1")])
+    app._set_status_panel("profile locked", ["work"], "amber")
+    deck.simulate_press(0)  # the user acted; the notice is acknowledged
+    assert deck.last_panel.title != "profile locked"
+
+
+def test_successful_apply_clears_a_held_reload_failed_panel(monkeypatch):
+    """failed reload -> fixed file -> successful reload must not keep showing
+    'reload failed' for the hold window (roborev c2d807f)."""
+    from herdeck import app as app_mod
+
+    t = [1000.0]
+    monkeypatch.setattr(app_mod, "_monotonic", lambda: t[0])
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    app.handle_snapshot("dev", [blocked("p1")])
+    app._set_status_panel("reload failed", ["bad toml"], "amber")
+    assert deck.last_panel.title == "reload failed"
+    app._apply_config(make_config())  # the next reload succeeded
+    assert deck.last_panel.title != "reload failed"

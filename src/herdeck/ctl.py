@@ -54,9 +54,17 @@ class CtlSession:
         self._conn_up: dict[str, bool] = {}
         self._changed = asyncio.Event()
         self._req = 0
+        # Servers that produced no first snapshot within open()'s timeout,
+        # mapped to the connector's failure reason (None if unknown). A partial
+        # fleet proceeds; callers surface this as a warning.
+        self.unavailable: dict[str, str | None] = {}
 
     # --- Connector callbacks (sync, on this loop) ---
+    def _mark_available(self, sid: str) -> None:
+        self.unavailable.pop(sid, None)  # a late snapshot recovers the server
+
     def _on_snapshot(self, sid: str, states: list[AgentState]) -> None:
+        self._mark_available(sid)
         self.agents = {k: v for k, v in self.agents.items() if k.server_id != sid}
         for s in states:
             self.agents[s.key] = s
@@ -108,11 +116,34 @@ class CtlSession:
                 timeout=timeout,
             )
         except TimeoutError as exc:
-            raise ConnectionLost("timed out waiting for first snapshot") from exc
+            # Name the servers that never answered — and why, when the
+            # connector knows (e.g. "token rejected", "connection refused").
+            missing: dict[str, str | None] = {}
+            for server in self.servers:
+                if self._snapshots[server.id].is_set():
+                    continue
+                conn = self._connectors.get(server.id)
+                missing[server.id] = getattr(conn, "last_connect_error", None)
+            if len(missing) >= len(self.servers):
+                parts = [
+                    f"'{sid}'" + (f" ({reason})" if reason else "")
+                    for sid, reason in missing.items()
+                ]
+                detail = f" from {', '.join(parts)}" if parts else ""
+                raise ConnectionLost(f"timed out waiting for first snapshot{detail}") from exc
+            # A PARTIAL fleet proceeds: one dead bridge must not brick a
+            # command aimed at a healthy server (`ls`, or approve of an agent
+            # that answered). Actions targeting an unavailable server still
+            # fail cleanly in request()/resolution.
+            self.unavailable = missing
 
     async def request(self, cmd: Command, *, timeout: float) -> dict:
         if cmd.kind == "list":
             raise ValueError("list has no request/response; read agents from open() snapshot")
+        if cmd.server_id in self.unavailable:
+            # Connected-but-silent (no first snapshot) is still unavailable — a
+            # command would only die by result timeout.
+            raise ConnectionLost(f"{cmd.server_id} unavailable (no snapshot)")
         if not self._conn_up.get(cmd.server_id, False):
             raise ConnectionLost(f"{cmd.server_id} not connected")
         self._req += 1
@@ -217,22 +248,40 @@ _STATUSES = ["blocked", "working", "idle", "done"]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    # Common options live on a parent parser so they work AFTER the subcommand
-    # (e.g. `herdeck-ctl ls --json`). They are intentionally NOT on the top
-    # parser: defining them in both places makes the subparser default clobber a
-    # value set before the subcommand.
+    # Common options are defined TWICE on purpose: on the top parser with real
+    # defaults, and on a parent parser with default=SUPPRESS. A subcommand
+    # occurrence then overrides the top-level value only when actually present
+    # (SUPPRESS keeps the subparser from clobbering it with a default), so BOTH
+    # `herdeck-ctl --json ls` and `herdeck-ctl ls --json` work — the arg-order
+    # trap the README used to document instead of fixing.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--json", action="store_true", help="machine-readable output")
-    common.add_argument("--server", help="restrict to one configured server id")
-    common.add_argument("--config", help="config path (default: $HERDECK_CONFIG / discovery)")
+    common.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS,
+        help="machine-readable output",
+    )
+    common.add_argument(
+        "--server", default=argparse.SUPPRESS, help="restrict to one configured server id"
+    )
+    common.add_argument(
+        "--config", default=argparse.SUPPRESS,
+        help="config path (default: $HERDECK_CONFIG / discovery)",
+    )
+    # The connect/request timeout is also accepted after the ACTION subcommands;
+    # `wait` keeps its own --timeout (max wait), so it does not get this parent.
+    timeout_common = argparse.ArgumentParser(add_help=False)
+    timeout_common.add_argument(
+        "--timeout", type=float, default=argparse.SUPPRESS,
+        help="connect/request timeout (s)",
+    )
 
     p = argparse.ArgumentParser(prog="herdeck-ctl", description="Control herdr agents.")
-    # Connect/request timeout: a global knob (use before the subcommand). Kept off
-    # the subparsers so it never collides with `wait`'s own --timeout below.
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.add_argument("--server", help="restrict to one configured server id")
+    p.add_argument("--config", help="config path (default: $HERDECK_CONFIG / discovery)")
     p.add_argument("--timeout", type=float, default=10.0, help="connect/request timeout (s)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    ls = sub.add_parser("ls", parents=[common], help="list agents")
+    ls = sub.add_parser("ls", parents=[common, timeout_common], help="list agents")
     ls.add_argument("--status", choices=_STATUSES)
 
     w = sub.add_parser("wait", parents=[common], help="block until an agent reaches a status")
@@ -245,7 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="max seconds to wait (default: no limit)")
 
     for name in ("approve", "deny"):
-        a = sub.add_parser(name, parents=[common], help=f"{name} a blocked agent")
+        a = sub.add_parser(name, parents=[common, timeout_common], help=f"{name} a blocked agent")
         a.add_argument("agent")
         a.add_argument("--force", action="store_true", help="ignore the blocked guard")
         a.add_argument("--settle", type=float, default=3.0)
@@ -253,16 +302,16 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "approve":
             a.add_argument("--always", action="store_true", help="approve-always profile")
 
-    st = sub.add_parser("stop", parents=[common], help="stop an agent (unconditional)")
+    st = sub.add_parser("stop", parents=[common, timeout_common], help="stop an agent (unconditional)")
     st.add_argument("agent")
     st.add_argument("--settle", type=float, default=3.0)
     st.add_argument("--no-settle", dest="settle", action="store_const", const=None)
 
-    se = sub.add_parser("send", parents=[common], help="send text to an agent (submits now)")
+    se = sub.add_parser("send", parents=[common, timeout_common], help="send text to an agent (submits now)")
     se.add_argument("agent")
     se.add_argument("text")
 
-    fo = sub.add_parser("focus", parents=[common], help="bring an agent's pane to the foreground")
+    fo = sub.add_parser("focus", parents=[common, timeout_common], help="bring an agent's pane to the foreground")
     fo.add_argument("agent")
     return p
 
@@ -313,10 +362,22 @@ async def dispatch(args, session) -> int:
         def pred():
             if fixed_key is not None:
                 a = session.agents.get(fixed_key)
-                return a if a and a.status is target_status else None
+                if a is None:
+                    # The pane closed while we waited (snapshots drop absent
+                    # keys): with the default no-limit timeout this predicate
+                    # could otherwise never match and the command would hang a
+                    # lead-agent script forever.
+                    return _GONE
+                return a if a.status is target_status else None
             return next((a for a in session.agents.values() if a.status is target_status), None)
 
         match = await session.wait(pred, timeout=args.wait_timeout)
+        if match is _GONE:
+            print(
+                f"agent {fixed_key.server_id}:{fixed_key.pane_id} vanished while waiting",
+                file=sys.stderr,
+            )
+            return EXIT_TARGET
         if match is None:
             print("wait timed out", file=sys.stderr)
             return EXIT_WAIT_TIMEOUT
@@ -359,7 +420,12 @@ async def dispatch(args, session) -> int:
 async def _amain(args) -> int:
     config_path = args.config or _discover_config_path()
     file_config = load_config(config_path) if config_path else None
-    socket_path = os.path.expanduser(os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock"))
+    # The shared resolver honours HERDR_SOCKET > [hardware].herdr_socket > XDG —
+    # the deck already did; ctl hardcoding env-or-default made a config-set
+    # socket work in `herdeck` but fail in `herdeck-ctl`.
+    from .bootstrap import resolve_socket_path
+
+    socket_path = resolve_socket_path(file_config)
     mode = resolve_mode(mock=False, config_path=config_path,
                         config_has_servers=bool(file_config and file_config.servers),
                         socket_path=socket_path, socket_exists=os.path.exists(socket_path))
@@ -370,6 +436,9 @@ async def _amain(args) -> int:
     session = CtlSession(config, server_filter=args.server)
     try:
         await session.open(timeout=args.timeout)
+        for sid, reason in session.unavailable.items():
+            suffix = f": {reason}" if reason else ""
+            print(f"warning: server '{sid}' unavailable{suffix}", file=sys.stderr)
         return await dispatch(args, session)
     except ConnectionLost as e:
         print(f"connection error: {e}", file=sys.stderr)

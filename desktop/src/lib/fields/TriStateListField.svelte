@@ -57,7 +57,7 @@
 </div>
 
 <style>
-  .tristate { display: grid; grid-template-columns: 120px 1fr; align-items: start; gap: 8px; margin: 6px 0; }
+  .tristate { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr; align-items: start; gap: 8px; margin: 6px 0; }
   .label { color: #aaa; padding-top: 4px; }
   .body { display: flex; flex-direction: column; gap: 4px; }
   .seg { display: inline-flex; align-self: flex-start; border: 1px solid #2a2a30; border-radius: 4px; overflow: hidden; }

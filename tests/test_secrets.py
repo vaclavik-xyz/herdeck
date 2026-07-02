@@ -125,6 +125,6 @@ def test_doctor_read_config_facts_keychain_token_unmasks_real_error(tmp_path, mo
     monkeypatch.delenv("TOK", raising=False)
     cfg = tmp_path / "config.toml"
     cfg.write_text('[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="bad"\n')
-    has_servers, token_envs, err = _read_config_facts(str(cfg))
+    has_servers, token_envs, err, _servers = _read_config_facts(str(cfg))
     assert token_envs == ["TOK"]
     assert err is not None and "invalid config" in err.detail  # real error not masked

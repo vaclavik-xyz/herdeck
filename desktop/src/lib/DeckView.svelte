@@ -12,6 +12,7 @@
     type DeckTransport,
     type DeckViewModel,
   } from "./deckClient";
+  import { visibilityGatedLoop, type GatedLoop } from "./pollGate";
 
   let {
     transport,
@@ -28,6 +29,7 @@
   let view = $state<DeckViewModel>(initialView());
   let active = $state<number | null>(null); // last-pressed cell, for the outline
   let differ = new DeckDiffer();
+  let loop: GatedLoop | null = null; // the poll loop handle (kick after a press)
 
   async function step(): Promise<void> {
     if (!transport) {
@@ -49,6 +51,10 @@
     }
     if (!r.ok) return;
     active = i;
+    // The sidecar re-renders synchronously inside the POST handler, so the
+    // updated frame already exists — show it now instead of waiting out the
+    // 300ms poll (up to half a second of dead time on the primary interaction).
+    loop?.kick();
   }
 
   // Config-window preview passes onJump → "jump mode": a tile click switches the editor
@@ -88,22 +94,16 @@
   });
 
   onMount(() => {
-    // Self-scheduling loop (web.py's pattern): schedule the next poll only AFTER
-    // the current step's fetch resolves, so steps never overlap. setInterval
-    // would let a slow poll finish after a newer one and move the version gate
-    // backwards / clobber the view.
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    async function loop(): Promise<void> {
-      if (stopped) return;
-      await step();
-      if (!stopped) timer = setTimeout(() => void loop(), pollMs);
-    }
-    void loop();
+    // Visibility-gated self-scheduling loop (web.py's pattern + tray-app gating):
+    // the next poll is scheduled only AFTER the current step resolves (steps
+    // never overlap), and the loop parks entirely while the window is hidden —
+    // the deck lives in the tray, so hidden webviews must not keep polling and
+    // refetching tile PNGs nobody sees. One immediate step fires on show.
+    loop = visibilityGatedLoop(step, () => pollMs);
     window.addEventListener("keydown", onKey);
     return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
+      loop?.stop();
+      loop = null;
       window.removeEventListener("keydown", onKey);
     };
   });

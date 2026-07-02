@@ -94,10 +94,17 @@ class ViewConfig:
     tile_fill: str = "none"
 
 
+# Actions that need a second confirming press by default. Stop (act_force) is an
+# unconditional interrupt sitting one key away from Back on the drill view, so a
+# single mis-aimed press must not kill an agent's work; the Elgato plugin's Stop
+# has always been two-step. Set `require_confirm_for = []` to opt out.
+DEFAULT_REQUIRE_CONFIRM: tuple[str, ...] = ("act_force",)
+
+
 @dataclass
 class SafetyConfig:
     approve_always: bool = True
-    require_confirm_for: list[str] = field(default_factory=list)
+    require_confirm_for: list[str] = field(default_factory=lambda: list(DEFAULT_REQUIRE_CONFIRM))
 
 
 @dataclass

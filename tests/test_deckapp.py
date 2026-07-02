@@ -5,6 +5,7 @@ reuses the core Orchestrator + icons), and the token-authed loopback HTTP API.
 Network is never touched: tests inject a StubIcons provider.
 """
 
+import http.client
 import io
 import json
 import urllib.error
@@ -293,6 +294,73 @@ def test_http_press_non_integer_index_returns_400():
         with pytest.raises(urllib.error.HTTPError) as exc:
             urllib.request.urlopen(req, timeout=2)
         assert exc.value.code == 400
+    finally:
+        app.close()
+
+
+def test_keepalive_rejected_post_with_unread_body_closes_connection():
+    """Handler instances persist across HTTP/1.1 keep-alive requests: the
+    body-consumed flag must reset per request, or a rejected POST following a
+    body-consuming POST on the same connection would skip the close guard and
+    leave its unread body to be parsed as the next request."""
+    app = _serving_app()
+    try:
+        conn = http.client.HTTPConnection(app.host, app.port, timeout=2)
+        # request 1: body IS consumed (unknown choice -> 400 after _json_body)
+        conn.request(
+            "POST",
+            "/setup/connect",
+            body=b'{"choice": "nope"}',
+            headers={"X-Herdeck-Token": app.token, "Content-Type": "application/json"},
+        )
+        r1 = conn.getresponse()
+        assert r1.status == 400
+        r1.read()
+        # request 2 on the SAME connection: rejected before its body is read.
+        # This also proves request 1 kept the connection alive (a closed socket
+        # would raise on getresponse here).
+        conn.request(
+            "POST",
+            "/press/0",
+            body=b'{"leftover": true}',
+            headers={"X-Herdeck-Token": "nope", "Content-Type": "application/json"},
+        )
+        r2 = conn.getresponse()
+        assert r2.status == 403
+        r2.read()
+        # the server must close the connection (unread body): EOF, or RST if
+        # the kernel discards the unread bytes on close
+        try:
+            leftover = conn.sock.recv(1)
+        except ConnectionResetError:
+            leftover = b""
+        assert leftover == b""
+        conn.close()
+    finally:
+        app.close()
+
+
+def test_keepalive_consumed_body_posts_share_a_connection():
+    """The inverse guard: consecutive POSTs whose bodies ARE read must reuse
+    the persistent connection (the close guard must not fire falsely)."""
+    app = _serving_app()
+    try:
+        conn = http.client.HTTPConnection(app.host, app.port, timeout=2)
+        for _ in range(2):
+            conn.request(
+                "POST",
+                "/setup/connect",
+                body=b'{"choice": "nope"}',
+                headers={"X-Herdeck-Token": app.token, "Content-Type": "application/json"},
+            )
+            r = conn.getresponse()
+            assert r.status == 400
+            r.read()
+        # still open: no EOF waiting on the socket
+        conn.sock.settimeout(0.2)
+        with pytest.raises(TimeoutError):
+            conn.sock.recv(1)
+        conn.close()
     finally:
         app.close()
 
@@ -678,3 +746,118 @@ def test_state_exposes_tile_sections():
     # only the documented section keys ever appear; empty/None tiles are omitted
     assert all(v in {"view", "start_profiles", "answer_profiles", "profiles"} for v in sections.values())
     assert all(isinstance(k, int) for k in sections)
+
+
+# --- idle ticks skip rendering entirely (audit: idle-tick-early-out) --------
+
+
+class _RecordingSink:
+    def __init__(self):
+        self.frames = []
+
+    def deliver(self, frame):
+        self.frames.append(frame)
+
+
+def test_idle_ticks_skip_render_and_fanout():
+    src = MockSource()
+    for a in src._agents:
+        a.status = Status.IDLE
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    sink = _RecordingSink()
+    app.add_sink(sink)  # paints one initial full frame
+    base_frames = len(sink.frames)
+    for _ in range(app.FULL_REFRESH_TICKS - 1):
+        app._tick_once()
+    # nothing animates -> no render, no fan-out, no device work
+    assert len(sink.frames) == base_frames
+    app._tick_once()  # the FULL_REFRESH_TICKS-th tick still resyncs every sink
+    assert len(sink.frames) == base_frames + 1
+    assert sink.frames[-1].full is True
+
+
+def test_working_ticks_still_fan_out_frames():
+    app = make_app()  # demo fleet includes WORKING agents
+    sink = _RecordingSink()
+    app.add_sink(sink)
+    base = len(sink.frames)
+    app._tick_once()
+    assert len(sink.frames) == base + 1
+
+
+def test_unchanged_panel_is_encoded_once(monkeypatch):
+    import herdeck.icons as icons_mod
+
+    calls = {"n": 0}
+    real = icons_mod.compose_panel
+
+    def counting(panel):
+        calls["n"] += 1
+        return real(panel)
+
+    monkeypatch.setattr(icons_mod, "compose_panel", counting)
+    app = make_app()  # initial refresh composes once
+    base = calls["n"]
+    app.refresh()
+    app.refresh()
+    assert calls["n"] == base  # identical panel content -> memoized bytes reused
+    app.press(0)  # cycles an agent status -> summary counts change
+    assert calls["n"] > base
+
+
+def test_config_post_resyncs_watcher_so_it_does_not_reload_twice(tmp_path, monkeypatch):
+    """The route-driven reload already applied the write; the watcher must adopt
+    it as its baseline instead of re-firing a SECOND full source swap
+    (audit: config-save-double-reload)."""
+    from herdeck.deckapp.config_service import ConfigService
+
+    monkeypatch.setenv("TOK", "real")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n[deck]\ngrid="5x3"\n')
+    svc = ConfigService(cfg, tmp_path / "local.toml")
+    reloaded = []
+    app = create_mock_app(port=0, config_service=svc, reloader=lambda: reloaded.append(1))
+
+    class _Watcher:
+        def __init__(self):
+            self.resyncs = 0
+
+        def resync(self):
+            self.resyncs += 1
+
+        def close(self):
+            pass
+
+    app._watcher = _Watcher()
+    try:
+        body = {"base": {"servers": [{"id": "local", "url": "ws://x", "token_env": "TOK"}],
+                         "deck": {"grid": "4x3"}}, "profiles": {}, "local": {}}
+        resp = _post(app, "/config", body, token=app.token)
+        assert json.loads(resp.read())["errors"] == []
+        assert reloaded == [1]  # exactly one reload (route-driven)
+        assert app._watcher.resyncs == 1  # watcher adopted our write as baseline
+    finally:
+        app.close()
+
+
+def test_watcher_reload_skips_when_files_match_baseline(tmp_path, monkeypatch):
+    """A watcher callback queued mid-transaction (route already reloaded and
+    resynced) must not replay the reload; a genuinely dirty file still does
+    (roborev a59985b)."""
+    from herdeck.deckapp.watcher import ConfigWatcher
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("x = 1\n")
+    reloads = []
+    app = create_mock_app(port=0, serve=False, reloader=lambda: reloads.append(1))
+    app._watcher = ConfigWatcher([cfg], app._watcher_reload, adopt_before_fire=False)
+    try:
+        app._watcher_reload()  # baseline matches -> the stale callback is a no-op
+        assert reloads == []
+        cfg.write_text("x = 2\n")  # a real external edit
+        app._watcher_reload()
+        assert reloads == [1]
+        app._watcher_reload()  # handled + resynced -> quiet again
+        assert reloads == [1]
+    finally:
+        app.close()

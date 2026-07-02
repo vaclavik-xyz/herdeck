@@ -41,6 +41,22 @@ TICK_INTERVAL = 0.4
 # Every Nth tick, fully re-render so elapsed-time text on non-working tiles
 # (idle/blocked/done) advances even without a status change. 25 * 0.4s ≈ 10s.
 FULL_REFRESH_TICKS = 25
+# A status panel ("reload failed", "profile locked") stays visible this long —
+# without a hold the very next refresh overwrote it within one 0.4s tick and
+# the user never learned why their action had no effect.
+STATUS_PANEL_HOLD_S = 4.0
+
+# Module-level indirection so tests can fake the clock.
+_monotonic = None  # set lazily to time.monotonic (keeps import cost at top low)
+
+
+def _now() -> float:
+    global _monotonic
+    if _monotonic is None:
+        import time
+
+        _monotonic = time.monotonic
+    return _monotonic()
 
 log = logging.getLogger("herdeck")
 
@@ -215,6 +231,7 @@ class App:
         self._active_read_req: str | None = None
         self._ticks = 0
         self._status_panel: PanelView | None = None
+        self._status_panel_until = 0.0
 
     def _install_blocked_runtime(self, runtime: BlockedNotificationRuntime) -> None:
         self._notification_generation += 1
@@ -251,16 +268,25 @@ class App:
             self._active_read_req = req
         return req
 
+    def _held_status_panel(self) -> PanelView | None:
+        """The active status panel while its hold lasts, else None."""
+        if self._status_panel is not None and _now() < self._status_panel_until:
+            return self._status_panel
+        self._status_panel = None
+        return None
+
     def _refresh(self) -> None:
         rs = self.orch.render()
+        held = self._held_status_panel()
         try:
             self.deck.render(rs.tiles)
-            self.deck.render_panel(rs.panel)
+            self.deck.render_panel(held if held is not None else rs.panel)
         except Exception:
             pass  # a render failure must never freeze the loop
 
     def _set_status_panel(self, title: str, lines: list[str], color: str = "grey") -> None:
         self._status_panel = PanelView(title, lines, color)
+        self._status_panel_until = _now() + STATUS_PANEL_HOLD_S
         try:
             self.deck.render_panel(self._status_panel)
         except Exception:
@@ -422,6 +448,7 @@ class App:
         self._schedule(lambda: self._handle_press(index))
 
     def _handle_press(self, index: int) -> None:
+        self._status_panel = None  # any key press dismisses a held status panel
         cmds = self.orch.on_press(index)
         if log.isEnabledFor(logging.DEBUG):
             rs = self.orch.render()
@@ -459,6 +486,8 @@ class App:
         self._apply_config(new_config)
 
     def _apply_config(self, new_config: Config) -> None:
+        # A successful apply supersedes any held "reload failed" notice.
+        self._status_panel = None
         self.config = new_config
         if self._runtime_control is not None:
             self._runtime_control.update_config(new_config)
@@ -815,6 +844,40 @@ async def _run(
         manager.stop_all()
 
 
+def _iface_addr(probe_host: str) -> str | None:
+    """The local source address the OS would route to ``probe_host`` (UDP
+    connect — no packet is sent). Used to discover the Tailscale / LAN
+    interface addresses for the simulator announcement."""
+    import socket
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((probe_host, 53))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+def _simulator_urls(host: str, port: int, token: str) -> list[str]:
+    """URLs worth printing for the simulator. A wildcard bind is literally
+    unroutable (http://0.0.0.0:…) and the README's primary workflow opens the
+    page from a phone over Tailscale — so for wildcard binds the Tailscale
+    (100.64/10) and default-route addresses are announced too."""
+    if host not in ("0.0.0.0", "::"):
+        return [f"http://{host}:{port}/?token={token}"]
+    urls: list[str] = []
+    tailscale = _iface_addr("100.100.100.100")  # MagicDNS resolver -> ts iface
+    if tailscale and tailscale.startswith("100."):
+        urls.append(f"http://{tailscale}:{port}/?token={token}")
+    lan = _iface_addr("1.1.1.1")
+    if lan and f"http://{lan}:{port}/?token={token}" not in urls:
+        urls.append(f"http://{lan}:{port}/?token={token}")
+    urls.append(f"http://127.0.0.1:{port}/?token={token}")
+    return urls
+
+
 def _resolve_deck_kind(config: Config | None, *, getenv=os.environ.get):
     env_kind = getenv("HERDECK_DECK")
     if env_kind:
@@ -839,6 +902,7 @@ def make_deck(
     slots,
     *,
     hardware=None,
+    cols=5,
     d200_factory=None,
     elgato_factory=None,
     web_factory=None,
@@ -856,17 +920,26 @@ def make_deck(
         raw_port = env_port if env_port is not None else hardware.web_port
         port = int(raw_port if raw_port is not None else 8800)
         try:
+            return web_factory(host=host, port=port, cols=cols)
+        except TypeError:
+            pass
+        try:
             return web_factory(host=host, port=port)
         except TypeError:
             return web_factory()
 
     if web_factory is None:
 
-        def web_factory(host=None, port=None):
+        def web_factory(host=None, port=None, cols=5):
             from .driver.web import WebDeck
 
-            d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir)
-            print(f"herdeck web simulator on http://{d.host}:{d.port}/?token={d.press_token}")
+            try:
+                d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir, cols=cols)
+            except TypeError:
+                # injected test doubles may predate the cols parameter
+                d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir)
+            for url in _simulator_urls(d.host, d.port, d.press_token):
+                print(f"herdeck web simulator on {url}")
             return d
 
     if d200_factory is None:
@@ -996,7 +1069,9 @@ def main() -> None:
         sock, token = discover_ipc()
         asyncio.run(_amain_elgato(mode, file_config, sock, token))
         return
-    deck = make_deck(kind, slots, hardware=file_config.hardware if file_config else None)
+    deck = make_deck(
+        kind, slots, hardware=file_config.hardware if file_config else None, cols=grid[0]
+    )
     try:
         if mode[0] == "mock":
             asyncio.run(_run_mock(_mock_config(), deck))

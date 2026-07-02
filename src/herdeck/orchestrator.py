@@ -10,9 +10,26 @@ from .driver.base import PanelView, TileView
 from .model import AgentKey, AgentState, Status
 
 _OPTION_LABEL_MAX = 14
+# An armed destructive-action confirmation expires after this long, so a stale
+# arm from minutes ago can never be completed by a later single press.
+_CONFIRM_TTL_S = 5.0
+# Ordering hysteresis: the fresh status-priority sort is adopted only after the
+# target order has been stable this long, so tiles do not shuffle under the
+# user's finger on every status flip.
+_ORDER_SETTLE_S = 2.0
+# Ignore a press on a slot whose occupant changed within this window — the
+# press was almost certainly aimed at the previous occupant.
+_SLOT_PRESS_GUARD_S = 0.3
+# The overview panel acknowledges a just-sent drill action this long, so
+# returning to an unchanged amber tile doesn't read as "my press was lost".
+_SENT_NOTE_TTL_S = 3.0
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 _MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
 _APPROVE_ALWAYS_HINTS = ("always", "don't ask", "dont ask", "do not ask")
+# Colour semantics for drill actions: the deck already teaches green=go,
+# amber=caution, red=stop — the approve/deny press is the highest-stakes
+# interaction, so it must not be a wall of identical blue tiles.
+_ACTION_COLORS = {"approve": "green", "approve_always": "amber", "deny": "red"}
 # Config section a management action's tile jumps to (klik-to-jump).
 _MGMT_SECTION = {"profiles": "profiles", "new_agent": "start_profiles"}
 
@@ -26,6 +43,13 @@ def server_accent(server_id: str, accents: list[str] | None = None) -> str:
 def _looks_like_approve_always(label: str) -> bool:
     normalized = label.lower().replace("\u2019", "'")
     return any(hint in normalized for hint in _APPROVE_ALWAYS_HINTS)
+
+
+def _looks_like_deny(label: str) -> bool:
+    """A numbered option whose label starts with a bare 'No' is a denial (e.g.
+    'No' / 'No, and tell Claude what to do differently')."""
+    normalized = label.lower().strip()
+    return normalized == "no" or normalized.startswith(("no,", "no "))
 
 
 @dataclass
@@ -53,6 +77,14 @@ class Orchestrator:
         self._profile_menu: bool = False
         self._profile_menu_origin: str = "overview"
         self._pending_confirm: tuple[str, AgentKey] | None = None
+        self._pending_confirm_at: float = 0.0
+        self._sent_note: tuple[str, float] | None = None  # (agent label, sent at)
+        # Ordering hysteresis state (see _ordered).
+        self._display_order: list[AgentKey] = []
+        self._target_keys: list[AgentKey] = []
+        self._target_since: float = 0.0
+        self._force_adopt: bool = False  # one-shot: adopt on next render, slot-guarded
+        self._slot_changed_at: dict[int, float] = {}
 
     def _agent_slots(self) -> int:
         """Overview tiles available for agents (the last tile is the launcher)."""
@@ -68,11 +100,14 @@ class Orchestrator:
         """
         return (self.slots, self.slots + 1)
 
-    def _touch(self, state: AgentState) -> None:
-        """Record when a pane entered its current status (for elapsed time)."""
+    def _touch(self, state: AgentState) -> bool:
+        """Record when a pane entered its current status (for elapsed time).
+        Returns True when this starts a NEW blocked episode."""
         prev = self._since.get(state.key)
         if prev is None or prev[0] is not state.status:
             self._since[state.key] = (state.status, self._clock())
+            return state.status is Status.BLOCKED
+        return False
 
     def _elapsed_text(self, key: AgentKey) -> str:
         rec = self._since.get(key)
@@ -80,7 +115,11 @@ class Orchestrator:
             return ""
         s = int(max(0, self._clock() - rec[1]))
         if s < 60:
-            return f"{s}s"
+            # 5s buckets: the text is part of the baked tile's render signature,
+            # so per-second granularity minted a fresh cache entry (full PIL
+            # compose + PNG encode + disk write) nearly every tick during an
+            # agent's whole first minute in a status.
+            return f"{s - s % 5}s"
         if s < 3600:
             return f"{s // 60}m"
         return f"{s // 3600}h"
@@ -93,9 +132,12 @@ class Orchestrator:
             else None
         )
         self._agents = {k: v for k, v in self._agents.items() if k.server_id != server_id}
+        new_blocks = False
         for s in states:
             self._agents[s.key] = s
-            self._touch(s)
+            new_blocks = self._touch(s) or new_blocks
+        if new_blocks:
+            self._on_new_block()
         live = set(self._agents)
         self._since = {k: v for k, v in self._since.items() if k in live}
         if self._drill is not None and self._drill.server_id == server_id:
@@ -106,10 +148,17 @@ class Orchestrator:
         if self._drill == state.key and self._agents.get(state.key) != state:
             self._pending_confirm = None
         self._agents[state.key] = state
-        self._touch(state)
+        if self._touch(state):
+            self._on_new_block()
 
     def set_connection(self, server_id: str, up: bool) -> None:
         self._down.discard(server_id) if up else self._down.add(server_id)
+        if not up and self._pending_confirm is not None:
+            # An armed confirmation must not survive an outage: the offline
+            # drill hides it, so after a quick reconnect a single press could
+            # complete a confirmation the user no longer sees as armed.
+            if self._pending_confirm[1].server_id == server_id:
+                self._pending_confirm = None
 
     def set_detection(self, text: str) -> None:
         if text != self._detection:
@@ -136,9 +185,64 @@ class Orchestrator:
     def is_drilling(self) -> bool:
         return self._drill is not None
 
+    def _on_new_block(self) -> None:
+        """A new blocked episode needs attention: jump the overview to the top
+        page and adopt the fresh sort NOW (blocked sorts first), instead of
+        leaving the amber tile stranded on a page the user must hunt for. The
+        adoption keeps the old display for slot-change tracking, so the press
+        guard covers a finger already in flight. A drill/menu is never yanked —
+        the overview re-sorts on exit anyway."""
+        if self._drill is not None or self._launcher or self._profile_menu:
+            return
+        if self._page % max(1, -(-len(self._agents) // self._agent_slots())) != 0:
+            # The jump swaps every visible tile even when the ORDER is
+            # unchanged (e.g. the blocker already sorted first), which the
+            # display-diff guard cannot see — guard the whole first page.
+            now = self._clock()
+            for i in range(self._agent_slots()):
+                self._slot_changed_at[i] = now
+        self._page = 0
+        self._force_adopt = True  # adopt on next render, WITH slot guards
+
     # --- render ---
+    def _resettle(self) -> None:
+        """Adopt the fresh sort on the next render — view transitions (paging,
+        entering/leaving drill or menus) are safe moments to move tiles."""
+        self._display_order = []
+        self._slot_changed_at.clear()
+
     def _ordered(self) -> list[AgentState]:
-        return layout.order_agents(self._agents.values(), self.config.overview_order)
+        """Agents in DISPLAY order: the status-priority sort with hysteresis.
+
+        A live re-sort on every event shuffles tiles under the user's finger —
+        an agent unblocked from the phone mid-reach makes the press drill a
+        different agent (and focus its pane on screen). Instead, tiles KEEP
+        their positions while the fleet is changing; the fresh sort is adopted
+        only once the target order has been stable for _ORDER_SETTLE_S, at
+        view transitions (_resettle), or when a NEW BLOCK force-adopts
+        (attention beats stability there — see _on_new_block; the slot press
+        guard still protects a finger in flight). Removed agents drop out
+        immediately; new agents append at the end until the next adoption."""
+        target = layout.order_agents(self._agents.values(), self.config.overview_order)
+        target_keys = [s.key for s in target]
+        now = self._clock()
+        if target_keys != self._target_keys:
+            self._target_keys = target_keys
+            self._target_since = now
+        by_key = {s.key: s for s in target}
+        if not self._display_order or self._force_adopt or now - self._target_since >= _ORDER_SETTLE_S:
+            display = list(target_keys)
+            self._force_adopt = False
+        else:
+            display = [k for k in self._display_order if k in by_key]
+            display += [k for k in target_keys if k not in display]
+        if display != self._display_order:
+            old = self._display_order
+            for i, key in enumerate(display):
+                if i < len(old) and old[i] != key:
+                    self._slot_changed_at[i] = now  # repopulated under a possible finger
+            self._display_order = display
+        return [by_key[k] for k in display]
 
     def _agent_color(self, s: AgentState) -> str:
         if s.key.server_id in self._down:
@@ -169,6 +273,11 @@ class Orchestrator:
             "theme": "Theme",
             "new_agent": "+ New",
         }.get(action, action)
+
+    def _note_sent(self, key: AgentKey) -> None:
+        agent = self._agents.get(key)
+        if agent is not None:
+            self._sent_note = (agent.label, self._clock())
 
     def _blocked_spotlight(self) -> tuple[str, str] | None:
         """The longest-waiting BLOCKED agent as (label, elapsed), or None."""
@@ -210,7 +319,9 @@ class Orchestrator:
             if i in management:
                 tiles.append(TileView(i, self._management_label(management[i]), "grey", section=_MGMT_SECTION.get(management[i])))
             elif not management_mode and i == self.slots - 1:  # reserved launcher tile
-                tiles.append(TileView(i, "+ New", "green", section="start_profiles"))
+                # "launcher" renders dark with a green label — full status-green
+                # here read as one more WORKING agent under solid fill.
+                tiles.append(TileView(i, "+ New", "launcher", section="start_profiles"))
             elif i < len(shown):
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
@@ -245,7 +356,7 @@ class Orchestrator:
                     )
                 )
             else:
-                tiles.append(TileView(i, "", "dim"))
+                tiles.append(TileView(i, "", "empty"))
         panel = layout.panel_overview(
             layout.summary(ordered),
             self._page % pages,
@@ -258,6 +369,14 @@ class Orchestrator:
             panel.color = self.config.theme.colors.get("offline", panel.color)
         elif panel.color == "amber":
             panel.color = self.config.theme.colors.get("blocked", panel.color)
+        if self._sent_note is not None:
+            label, at = self._sent_note
+            if self._clock() - at <= _SENT_NOTE_TTL_S:
+                # acknowledge the action while its status change propagates —
+                # the tile stays amber until the bridge round-trip completes
+                panel.lines = [f"sent › {label}", *panel.lines]
+            else:
+                self._sent_note = None
         return RenderState(tiles, panel)
 
     def _render_profile_menu(self) -> RenderState:
@@ -272,7 +391,7 @@ class Orchestrator:
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
-                tiles.append(TileView(i, "", "dim"))
+                tiles.append(TileView(i, "", "empty"))
         locked = "locked by env" if self.config.meta.env_locked_profile else "pick a profile"
         return RenderState(tiles, PanelView("profiles", [locked], "grey"))
 
@@ -289,15 +408,28 @@ class Orchestrator:
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
-                tiles.append(TileView(i, "", "dim"))
+                tiles.append(TileView(i, "", "empty"))
         return RenderState(tiles, PanelView("new agent", ["pick a type"], "grey"))
 
     def tick(self) -> list[int]:
-        """Advance the spinner phase; return overview tile indices that are working."""
+        """Advance the spinner phase; return overview tile indices that are working.
+
+        Uses a READ-ONLY view of the current display order: order adoption is a
+        visible change, so it may only happen where a frame is produced
+        (render) or a press is being resolved (slot-guarded) — an idle tick
+        that skips rendering must not silently move the order presses resolve
+        against."""
         if self._drill is not None or self._launcher or self._profile_menu:
             return []
         self._phase += 1
-        shown, _ = layout.page(self._ordered(), self._page, self._agent_slots())
+        by_key = {s.key: s for s in self._agents.values()}
+        display = [k for k in self._display_order if k in by_key]
+        if not display:
+            display = [
+                s.key
+                for s in layout.order_agents(self._agents.values(), self.config.overview_order)
+            ]
+        shown, _ = layout.page([by_key[k] for k in display], self._page, self._agent_slots())
         return [i for i, s in enumerate(shown) if s.status is Status.WORKING]
 
     def _drill_layout(self) -> tuple[list, int, int]:
@@ -321,6 +453,10 @@ class Orchestrator:
                     actions.append(
                         {
                             "id": action_id,
+                            # Confirmation identity: two options can share an id
+                            # (e.g. two "No…" deny variants) but must arm and
+                            # confirm independently.
+                            "confirm_key": f"opt:{opt.key}",
                             "label": opt.key,
                             "subtext": opt.label,
                             # A numbered menu selects on the digit but only submits on
@@ -347,6 +483,7 @@ class Orchestrator:
                     actions.append(
                         {
                             "id": action_id,
+                            "confirm_key": f"fb:{action_id}",
                             "label": label,
                             "make": (
                                 lambda key, ks=keys: Command(
@@ -369,24 +506,65 @@ class Orchestrator:
                 )
         return actions[:stop_i], stop_i, back_i
 
+    def _armed_action(self) -> str | None:
+        """The armed (fresh, for the drilled agent) confirm action id, or None."""
+        if self._drill is None or self._pending_confirm is None:
+            return None
+        action, key = self._pending_confirm
+        if key != self._drill or self._clock() - self._pending_confirm_at > _CONFIRM_TTL_S:
+            return None
+        return action
+
+    def _arm_confirm(self, action: str, key: AgentKey) -> None:
+        self._pending_confirm = (action, key)
+        self._pending_confirm_at = self._clock()
+
+    def _confirm_armed(self, action: str, key: AgentKey) -> bool:
+        return (
+            self._pending_confirm == (action, key)
+            and self._clock() - self._pending_confirm_at <= _CONFIRM_TTL_S
+        )
+
+    def _drill_down(self) -> bool:
+        """Is the drilled agent's server currently disconnected?"""
+        return self._drill is not None and self._drill.server_id in self._down
+
     def _render_drill(self) -> RenderState:
         agent = self._agents.get(self._drill)
         actions, stop_i, back_i = self._drill_layout()
+        # The overview marks a down server everywhere; the drill must too —
+        # otherwise the option tiles stay colourful and pressable while the
+        # dead connector silently drops every command.
+        down = self._drill_down()
+        # An armed confirmation must be visible: without feedback the first press
+        # looks like a dead button and the natural "retry" press completes a
+        # confirmation the user never knew was armed.
+        armed = self._armed_action() if not down else None
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i < len(actions):
-                tiles.append(TileView(i, actions[i]["label"], "blue", subtext=actions[i].get("subtext"), section="answer_profiles"))
+                label = actions[i]["label"]
+                if armed is not None and actions[i].get("confirm_key") == armed:
+                    label = "Sure?"
+                color = "grey" if down else _ACTION_COLORS.get(actions[i].get("id"), "blue")
+                tiles.append(TileView(i, label, color, subtext=actions[i].get("subtext"), section="answer_profiles"))
             elif i == stop_i:
-                tiles.append(TileView(i, "Stop", "red", section="answer_profiles"))
+                stop_label = "Sure?" if armed == "act_force" else "Stop"
+                tiles.append(TileView(i, stop_label, "grey" if down else "red", section="answer_profiles"))
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
-                tiles.append(TileView(i, "", "dim"))
+                tiles.append(TileView(i, "", "empty"))
         panel = (
             layout.panel_detail(agent, self._detection)
             if agent is not None
             else PanelView("", [], "grey")
         )
+        if down:
+            offline = self.config.theme.colors.get("offline", "red")
+            panel = PanelView(panel.title, ["OFFLINE — reconnecting…"], offline)
+        elif armed is not None and agent is not None:
+            panel = PanelView(panel.title, ["press again to confirm", *panel.lines], panel.color)
         return RenderState(tiles, panel)
 
     # --- presses ---
@@ -402,6 +580,8 @@ class Orchestrator:
             return "approve_always"
         if profile.deny and option_key == profile.deny[0]:
             return "deny"
+        if _looks_like_deny(option_label):
+            return "deny"
         return None
 
     def on_press(self, index: int) -> list[Command]:
@@ -416,6 +596,7 @@ class Orchestrator:
     def _press_overview(self, index: int) -> list[Command]:
         if index in self._panel_indices():
             self._page += 1
+            self._resettle()  # a page flip is a safe moment to adopt the fresh sort
             return []
         management = self._management_indices()
         if index in management:
@@ -426,18 +607,28 @@ class Orchestrator:
             elif action == "new_agent":
                 self._launcher = True
             self._pending_confirm = None
+            self._resettle()
             return []
         if self.config.view.management != "bottom_row" and index == self.slots - 1:
             self._launcher = True
             self._pending_confirm = None
+            self._resettle()
             return []
+        agent_slots = self._agent_slots()
         ordered = self._ordered()
-        shown, _ = layout.page(ordered, self._page, self._agent_slots())
+        shown, pages = layout.page(ordered, self._page, agent_slots)
         if index < len(shown):
+            # The occupant of this slot changed a moment ago — the press was
+            # almost certainly aimed at the previous occupant. Swallow it; the
+            # user sees the new tile and can press again deliberately.
+            pos = (self._page % pages) * agent_slots + index
+            if self._clock() - self._slot_changed_at.get(pos, float("-inf")) < _SLOT_PRESS_GUARD_S:
+                return []
             key = shown[index].key
             self._drill = key
             self._detection = ""
             self._pending_confirm = None
+            self._resettle()  # returning from drill re-sorts anyway
             # Focus the agent in the on-screen herdr session AND read its prompt.
             return [
                 Command("focus", key.server_id, key.pane_id),
@@ -451,6 +642,7 @@ class Orchestrator:
         back_i = self.slots - 1
         if index == back_i:
             self._launcher = False
+            self._resettle()
             return []
         if index < len(entries) and index < back_i:
             name = entries[index]
@@ -471,6 +663,7 @@ class Orchestrator:
         if index == back_i:
             self._profile_menu = False
             self._launcher = self._profile_menu_origin == "launcher"
+            self._resettle()
             return []
         if index < len(names) and index < back_i:
             name = names[index]
@@ -486,34 +679,45 @@ class Orchestrator:
         if index == back_i:  # Back to overview
             self._drill = None
             self._pending_confirm = None
+            self._resettle()
             return []
         if key not in self._agents:
             self._drill = None
             self._pending_confirm = None
+            self._resettle()
+            return []
+        if self._drill_down():
+            # The connector is down: a command would be dropped silently. Only
+            # Back (handled above) works until the server reconnects.
             return []
         if index == stop_i:  # Stop — always, unconditional
             action = "act_force"
             if (
                 action in self.config.safety.require_confirm_for
-                and self._pending_confirm != (action, key)
+                and not self._confirm_armed(action, key)
             ):
-                self._pending_confirm = (action, key)
+                self._arm_confirm(action, key)  # (re-)arm; an expired arm never fires
                 return []
             self._pending_confirm = None
             cmd = Command("act_force", key.server_id, key.pane_id, keys=self._profile_for(key).stop)
+            self._note_sent(key)
             self._drill = None  # return to the fleet overview
+            self._resettle()
             return [cmd]
         if index < len(actions):  # send option number or macro text
             action_id = actions[index].get("id")
+            confirm_key = actions[index].get("confirm_key") or f"idx:{index}"
             if (
                 action_id in self.config.safety.require_confirm_for
-                and self._pending_confirm != (action_id, key)
+                and not self._confirm_armed(confirm_key, key)
             ):
-                self._pending_confirm = (action_id, key)
+                self._arm_confirm(confirm_key, key)  # (re-)arm; an expired arm never fires
                 return []
             self._pending_confirm = None
             cmd = actions[index]["make"](key)
+            self._note_sent(key)
             self._drill = None  # return to the fleet overview
+            self._resettle()
             return [cmd]
         return []  # blank tile
 
@@ -534,6 +738,7 @@ class Orchestrator:
         self._detection = ""
         self._page = 0
         self._pending_confirm = None
+        self._resettle()
 
     def clear_server_state(self, server_ids) -> None:
         server_ids = set(server_ids)
@@ -547,3 +752,4 @@ class Orchestrator:
             self._drill = None
             self._detection = ""
             self._pending_confirm = None
+        self._resettle()

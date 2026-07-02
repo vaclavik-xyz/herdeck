@@ -73,7 +73,7 @@ def test_overview_panel_summary():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED), state("p2", Status.WORKING)])
     rs = o.render()
-    assert rs.panel.title == "⚠ needs you"
+    assert rs.panel.title == "▲ needs you"
     assert rs.panel.lines[0] == "api"
     assert rs.panel.lines[1].startswith("blocked ")
 
@@ -88,11 +88,13 @@ def test_disconnected_colors_red_and_panel_offline():
     assert rs.panel.lines == ["reconnecting…"]
 
 
-def test_empty_slots_are_dim():
+def test_empty_slots_are_near_background():
+    # "dim" (70,70,70) rendered vacant slots BRIGHTER than occupied tiles on
+    # fill="none" — vacant must never outrank occupied (audit: empty-slot).
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
     rs = o.render()
-    assert rs.tiles[1].color == "dim" and rs.tiles[1].label == ""
+    assert rs.tiles[1].color == "empty" and rs.tiles[1].label == ""
 
 
 def test_event_updates_tile():
@@ -223,7 +225,7 @@ def test_overview_renders_configured_tile_lines():
     tile = o.render().tiles[0]
 
     assert tile.repo == "herdeck"        # primary = workspace, NOT repo "api"
-    assert tile.branch == "▸2 · main"    # secondary = tab + branch
+    assert tile.branch == "›2 · main"    # secondary = tab + branch
 
 
 def test_overview_tile_lines_fall_back_to_tile_fields():
@@ -239,3 +241,19 @@ def test_overview_tile_lines_fall_back_to_tile_fields():
 
     assert tile.repo == "repo"
     assert tile.branch == ""
+
+
+def test_elapsed_seconds_quantized_to_5s_buckets():
+    """Sub-minute elapsed is bucketed so the tile render cache is not defeated
+    by a fresh signature every second (audit: elapsed-quantize)."""
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
+    s = AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)
+    s.repo = "api"
+    o.apply_snapshot("dev", [s])
+    clk[0] = 1000.0 + 23
+    assert o.render().tiles[0].time_text == "20s"
+    clk[0] = 1000.0 + 24  # same bucket -> same text -> cache reuse
+    assert o.render().tiles[0].time_text == "20s"
+    clk[0] = 1000.0 + 25
+    assert o.render().tiles[0].time_text == "25s"

@@ -106,3 +106,48 @@ async def test_dispatch_wait_any_returns_matched_agent(capsys):
     assert rc == EXIT_OK
     out = json.loads(capsys.readouterr().out)
     assert out == {"agent": "dev:p1", "status": "blocked"}
+
+
+def test_common_options_parse_in_either_position():
+    """`--json` / `--server` / `--timeout` must work before AND after the
+    subcommand (audit: ctl-arg-order — the README documented the trap)."""
+    p = build_parser()
+    assert p.parse_args(["ls", "--json"]).json is True
+    assert p.parse_args(["--json", "ls"]).json is True
+    assert p.parse_args(["ls"]).json is False
+    assert p.parse_args(["--server", "a", "ls"]).server == "a"
+    assert p.parse_args(["ls", "--server", "a"]).server == "a"
+    assert p.parse_args(["approve", "x", "--timeout", "5"]).timeout == 5.0
+    assert p.parse_args(["--timeout", "5", "approve", "x"]).timeout == 5.0
+    assert p.parse_args(["ls"]).timeout == 10.0
+    # wait keeps its OWN --timeout (max wait), independent of the connect knob
+    w = p.parse_args(["wait", "--any", "--until", "blocked", "--timeout", "60"])
+    assert w.wait_timeout == 60.0
+    assert w.timeout == 10.0
+
+
+@pytest.mark.asyncio
+async def test_amain_resolves_socket_from_the_loaded_config(tmp_path, monkeypatch):
+    """herdeck-ctl must honour [hardware].herdr_socket like the deck does
+    (roborev 5d162de)."""
+    import herdeck.bootstrap as bootstrap_mod
+    from herdeck.ctl import _amain
+
+    sock = tmp_path / "custom.sock"
+    config = tmp_path / "config.toml"
+    config.write_text("")  # serverless config; the socket override lives in local.toml
+    (tmp_path / "local.toml").write_text(f'[local]\nherdr_socket = "{sock}"\n')
+    monkeypatch.delenv("HERDR_SOCKET", raising=False)
+    monkeypatch.delenv("HERDECK_LOCAL_CONFIG", raising=False)
+    seen = {}
+    real = bootstrap_mod.resolve_socket_path
+
+    def recording(cfg=None, **kw):
+        seen["hardware_socket"] = cfg.hardware.herdr_socket if cfg else None
+        return real(cfg, **kw)
+
+    monkeypatch.setattr(bootstrap_mod, "resolve_socket_path", recording)
+    args = build_parser().parse_args(["--config", str(config), "ls"])
+    rc = await _amain(args)  # no socket file + no servers -> clean error exit
+    assert seen["hardware_socket"] == str(sock)  # the CONFIG override reached the resolver
+    assert rc != 0

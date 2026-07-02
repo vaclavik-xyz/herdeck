@@ -82,6 +82,7 @@ class DeckApp:
         self._setup_lock = threading.RLock()  # shared mutation lock (/setup/connect + config-write routes + reload); RLock because the config routes call reload() while holding it
 
         self._lock = threading.Lock()
+        self._panel_memo: tuple[tuple, bytes] | None = None  # (panel content key, png)
         self._tiles: dict[int, bytes] = {}
         self._tile_ver: dict[int, int] = {}
         self._tile_sections: dict[int, str] = {}
@@ -153,8 +154,9 @@ class DeckApp:
     def _render_locked(self, source, orch, slots):
         """Render `source` through `orch` → (tiles, panel_png, sections). This is the
         FALLIBLE part of a refresh (apply_to / orchestrator render / icon raster / panel
-        compose); it mutates no self state, so it can run on a throwaway orchestrator in
-        `_prepare_swap` or on the live deck inside `_refresh_locked`."""
+        compose); apart from the value-keyed panel memo it mutates no self state, so it
+        can run on a throwaway orchestrator in `_prepare_swap` or on the live deck
+        inside `_refresh_locked`."""
         import io
 
         from ..icons import compose_panel
@@ -162,10 +164,20 @@ class DeckApp:
         source.apply_to(orch)
         rs = orch.render()
         tiles = {t.index: self._icons.render_tile_bytes(t) for t in rs.tiles if t.index < slots}
-        buf = io.BytesIO()
-        compose_panel(rs.panel).convert("RGB").save(buf, "PNG")
+        # Memoize the encoded panel by content: panel text changes every few
+        # seconds at most, while refreshes run per tick — recomposing + PNG-encoding
+        # an identical panel dominated the steady-state tick cost.
+        panel_key = (rs.panel.title, tuple(rs.panel.lines), rs.panel.color)
+        memo = self._panel_memo
+        if memo is not None and memo[0] == panel_key:
+            panel_png = memo[1]
+        else:
+            buf = io.BytesIO()
+            compose_panel(rs.panel).convert("RGB").save(buf, "PNG")
+            panel_png = buf.getvalue()
+            self._panel_memo = (panel_key, panel_png)
         sections = {t.index: t.section for t in rs.tiles if t.index < slots and t.section}
-        return rs, tiles, buf.getvalue(), sections
+        return rs, tiles, panel_png, sections
 
     def _apply_rendered_locked(self, tiles, panel_png, sections):
         """Assign pre-rendered tiles/panel/sections with version bumps — pure dict/int ops
@@ -212,17 +224,19 @@ class DeckApp:
             self._refresh_locked(working=None, full=True)
 
     def _tick_once(self) -> None:
-        """Advance the spinner phase and re-render once, atomically w.r.t. presses
-        and bridge updates (same lock). Most ticks fan out a WORKING-only frame
-        (cheap on the D200); every FULL_REFRESH_TICKS-th tick is a full frame so
-        idle elapsed advances on every sink. The HTTP buffer is fully re-rendered
-        and version-diffed every tick regardless (idle tiles stay quiet via the diff)."""
+        """Advance the spinner phase and re-render, atomically w.r.t. presses
+        and bridge updates (same lock). A tick renders only when something
+        actually animates (a WORKING tile) or on the periodic full refresh —
+        bridge updates and presses trigger their own refresh, so an idle deck
+        does no per-tick render/encode/device work at all (matching the legacy
+        App.handle_tick). Every FULL_REFRESH_TICKS-th tick is a full frame so
+        idle elapsed text advances and every sink resyncs."""
         with self._lock:
             working = self._orch.tick()
             self._ticks += 1
             if self._ticks % self.FULL_REFRESH_TICKS == 0:
                 self._refresh_locked(working=None, full=True)
-            else:
+            elif working:
                 self._refresh_locked(working=working, full=False)
 
     def _ticker_loop(self) -> None:
@@ -349,6 +363,26 @@ class DeckApp:
             if self._reloader is not None:
                 self._reloader()
 
+    def _watcher_reload(self) -> None:
+        """ConfigWatcher entry point: reload only if the files REALLY differ
+        from the adopted baseline once the transaction lock is held. A poll
+        that fired mid-transaction (after a route write changed the mtime but
+        before that route's reload+resync finished) queues a callback that
+        must NOT replay the reload — resync() cannot cancel a callback
+        already in flight (roborev a59985b)."""
+        if getattr(self, "_suppress_reload", False):
+            return
+        with self._setup_lock:
+            if getattr(self, "_suppress_reload", False):
+                return
+            watcher = getattr(self, "_watcher", None)
+            if watcher is not None:
+                if not watcher.dirty():
+                    return  # already handled by the route that held the lock
+                watcher.resync()  # adopt BEFORE reloading (this callback owns it)
+            if self._reloader is not None:
+                self._reloader()
+
     # --- state snapshots ---
     def _state(self) -> dict:
         with self._lock:
@@ -420,10 +454,25 @@ class DeckApp:
         app = self
 
         class Handler(BaseHTTPRequestHandler):
+            # HTTP/1.1 keep-alive: the desktop polls every 300ms and fetches
+            # each changed tile separately — HTTP/1.0's close-per-response
+            # churned a fresh TCP connection + server thread for every one.
+            # Safe because _send always emits Content-Length.
+            protocol_version = "HTTP/1.1"
+
             def log_message(self, *a):  # never log requests (could carry the token)
                 pass
 
             def _send(self, code, body=b"", ctype="text/plain; charset=utf-8"):
+                # keep-alive safety: a rejected POST (bad token, 404) may leave
+                # its request body unread on the persistent connection — the
+                # next request would be parsed from those leftover bytes.
+                if (
+                    self.command == "POST"
+                    and not getattr(self, "_body_consumed", False)
+                    and int(self.headers.get("Content-Length") or 0) > 0
+                ):
+                    self.close_connection = True
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
@@ -485,6 +534,10 @@ class DeckApp:
                 else:
                     self._send(404)
 
+            def _read_body(self, length):
+                self._body_consumed = True
+                return self.rfile.read(length)
+
             def _json_body(self):
                 """Parse the request body as a JSON object (dict).
 
@@ -499,7 +552,7 @@ class DeckApp:
                 except (TypeError, ValueError):
                     self._send(400)
                     return _BAD_BODY
-                raw = self.rfile.read(length) if length else b""
+                raw = self._read_body(length) if length else b""
                 try:
                     result = json.loads(raw or b"{}")
                 except (json.JSONDecodeError, ValueError):
@@ -511,6 +564,10 @@ class DeckApp:
                 return result
 
             def do_POST(self):
+                # handler instances persist across keep-alive requests: the
+                # consumed flag must reset per request or a later rejected
+                # POST on the same connection would skip the close guard
+                self._body_consumed = False
                 path = urlsplit(self.path).path
                 if path.startswith("/press/"):
                     if not self._require_header_token():
@@ -542,7 +599,13 @@ class DeckApp:
                         body = self._json_body()
                         if body is _BAD_BODY:
                             return
-                        errors = app._config_service.validate(body)
+                        # Same semantics as write(): structural only, so live
+                        # validation never flags a missing secret Apply accepts.
+                        # Under _setup_lock: the structural pass temporarily
+                        # placeholders token envs in os.environ, which must not
+                        # race a concurrent write/connect/reload.
+                        with app._setup_lock:
+                            errors = app._config_service.validate_for_write(body)
                         self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
                     elif path == "/config":
                         body = self._json_body()
@@ -552,6 +615,13 @@ class DeckApp:
                             errors = app._config_service.write(body)
                             if not errors:
                                 app.reload()
+                                # Adopt our own write as the watcher baseline so it
+                                # does not re-fire on the mtime change and reload a
+                                # SECOND time (two source swaps = two reconnects and
+                                # a double disconnected/empty flash per editor save).
+                                watcher = getattr(app, "_watcher", None)
+                                if watcher is not None:
+                                    watcher.resync()
                         self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
                     elif path == "/profiles/active":
                         body = self._json_body()
@@ -853,13 +923,38 @@ def _start_local_bridge(socket_path, *, runner_factory=None):
     return config, config.servers[0], runner
 
 
+def _local_reloader(app):
+    """LOCAL-mode reloader: rebuild the live source against the RUNNING embedded
+    bridge (same port/token — the bridge itself is never restarted or swapped
+    out by a reload), so an editor Apply / on-disk edit actually reaches the
+    deck. The old no-op silently ignored every Apply on the primary
+    ('herdr běží lokálně') onboarding path."""
+    from ..bootstrap import local_config
+
+    def reload_() -> None:
+        runner = getattr(app, "_local_bridge", None)
+        bound = runner.bound if runner is not None else None
+        if bound is None:
+            return  # defensive: no live bridge to rebuild against
+        _host, port, token = bound
+        config = local_config(port, token, _load_partial_config())
+        new_source = build_live_source_for_connect(config, config.servers[0])
+        try:
+            app.swap_source(new_source)
+        except Exception:
+            new_source.close()  # don't leak the built source / its connector runner
+            raise
+
+    return reload_
+
+
 def _reloader_for(app, kind, select_source):
-    """The config-watch reloader for the built source. In LOCAL mode the embedded
-    bridge's lifecycle is owned by create_app startup + /setup/connect, so a
-    config-watch reload must be a no-op — re-selecting would swap the bridge source
-    out (back to mock) and orphan the running LocalBridgeRunner."""
+    """The config-watch reloader for the built source. LOCAL mode rebuilds the
+    live source against the running embedded bridge (the bridge lifecycle stays
+    owned by create_app startup + /setup/connect); mock/remote re-select from
+    disk."""
     if kind[0] == "local":
-        return lambda: None
+        return _local_reloader(app)
     return lambda: app.swap_source(select_source())
 
 
@@ -1237,7 +1332,12 @@ def create_app(
 
     # Watch the config files; fire the reloader when any changes on disk.
     # Filter out None (local path is absent when no local override exists).
+    # adopt_before_fire=False: _watcher_reload re-checks dirtiness under the
+    # transaction lock and owns baseline adoption, so a poll that fired during
+    # a route write/reload transaction cannot replay the reload.
     watch_paths = [p for p in (cfg_path, local_path) if p is not None]
-    app._watcher = ConfigWatcher(watch_paths, app.reload, interval=1.0)
+    app._watcher = ConfigWatcher(
+        watch_paths, app._watcher_reload, interval=1.0, adopt_before_fire=False
+    )
     app._watcher.start()
     return app

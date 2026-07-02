@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .commands import Command, build_action_command, profile_for
 from .config import Config
 from .model import AgentKey, AgentState
+
+# An armed confirmation ("confirmation required" reply) expires after this
+# long. Telegram round-trips are slow, so the window is generous compared to
+# the deck's 5s — but still bounded, so a Stop tap from an hour ago can never
+# be completed by a later single tap in a different context.
+_CONFIRM_TTL_S = 60.0
 
 
 @dataclass
@@ -23,13 +30,16 @@ class RuntimeAgentControl:
         *,
         send: Callable[[Command, str], Awaitable[None]],
         current_agent: Callable[[AgentKey], AgentState | None],
+        clock=None,
     ):
         self._config = config
         self._send = send
         self._current_agent = current_agent
+        self._clock = clock or time.monotonic
         self._req = 0
         self._pending: dict[str, tuple[asyncio.Future, Command]] = {}
         self._pending_confirm: tuple[str, AgentKey] | None = None
+        self._pending_confirm_at = 0.0
 
     def update_config(self, config: Config) -> None:
         self._config = config
@@ -114,8 +124,13 @@ class RuntimeAgentControl:
             return ActionResult(False, message="agent is no longer available")
         action_id = self._action_id(action, force=force, always=always)
         if action_id in self._config.safety.require_confirm_for:
-            if self._pending_confirm != (action_id, key):
+            armed = (
+                self._pending_confirm == (action_id, key)
+                and self._clock() - self._pending_confirm_at <= _CONFIRM_TTL_S
+            )
+            if not armed:
                 self._pending_confirm = (action_id, key)
+                self._pending_confirm_at = self._clock()
                 return ActionResult(False, message="confirmation required")
         self._pending_confirm = None
         command = build_action_command(

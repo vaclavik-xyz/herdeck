@@ -21,7 +21,7 @@ def _astate(repo="herdeck", branch="main", workspace="herdeck", tab="2", label="
 
 
 def test_compose_line_joins_tokens_with_separator():
-    assert compose_line(_astate(), ["tab", "branch"]) == "▸2 · main"
+    assert compose_line(_astate(), ["tab", "branch"]) == "›2 · main"
 
 
 def test_compose_line_omits_empty_values():
@@ -31,7 +31,7 @@ def test_compose_line_omits_empty_values():
 
 def test_compose_line_tab_only_when_present():
     assert compose_line(_astate(tab=""), ["tab", "branch"]) == "main"
-    assert compose_line(_astate(tab="3"), ["tab"]) == "▸3"
+    assert compose_line(_astate(tab="3"), ["tab"]) == "›3"
 
 
 def test_compose_line_repo_falls_back_to_label():
@@ -146,7 +146,7 @@ def test_panel_overview_offline_takes_priority():
 
 def test_panel_overview_blocked_spotlight():
     pv = panel_overview(Counts(1, 3, 6, 0), 0, 1, set(), 11, ("macdoktor-crm", "4m"))
-    assert pv.title == "⚠ needs you"
+    assert pv.title == "▲ needs you"
     assert pv.lines[0] == "macdoktor-crm"
     assert pv.lines[1] == "blocked 4m"
     assert pv.color == "amber"
@@ -194,18 +194,13 @@ def test_panel_detail_shows_question_not_option_lines():
     assert panel.lines == ["Do you want to proceed?"]
 
 
-def test_panel_detail_wraps_long_question_before_options():
+def test_panel_detail_keeps_long_question_as_one_logical_line():
+    # Wrapping happens at render time (compose_panel) by PIXEL width — the old
+    # 36-character wrap overflowed the panel's 360px budget on every full line.
     agent = AgentState(AgentKey("s", "p"), "claude", "api", Status.BLOCKED)
-    panel = panel_detail(
-        agent,
-        "Allow this long filesystem edit request that needs more room to be readable?\n"
-        "1. Yes\n"
-        "2. No",
-    )
-    assert len(panel.lines) > 1
-    assert len(panel.lines) <= 3
-    assert all(len(line) <= 36 for line in panel.lines)
-    assert all(not line.startswith(("1.", "2.")) for line in panel.lines)
+    q = "Allow this long filesystem edit request that needs more room to be readable?"
+    panel = panel_detail(agent, q + "\n1. Yes\n2. No")
+    assert panel.lines == [q]
 
 
 def test_panel_detail_strips_ansi_and_still_skips_options():
@@ -280,3 +275,19 @@ def test_parse_options_none():
 
     assert parse_options("just some text, no options") == []
     assert parse_options("") == []
+
+
+def test_spotlight_title_carries_the_blocked_count():
+    """Three blocked agents must not look identical to one
+    (audit: blocked-count-spotlight)."""
+    pv = panel_overview(Counts(3, 1, 0, 0), 0, 1, set(), 4, ("api", "5m"))
+    assert pv.title == "▲ 3 need you"
+    assert pv.lines[0] == "api"  # the oldest blocked agent stays spotlighted
+    single = panel_overview(Counts(1, 1, 0, 0), 0, 1, set(), 2, ("api", "5m"))
+    assert single.title == "▲ needs you"
+
+
+def test_offline_panel_still_reports_blocked_agents():
+    pv = panel_overview(Counts(2, 0, 0, 0), 0, 1, {"down-server"}, 2, ("api", "5m"))
+    assert pv.title == "OFFLINE"
+    assert "▲ 2 blocked" in pv.lines

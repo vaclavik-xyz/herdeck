@@ -14,11 +14,18 @@ from pathlib import Path
 
 class ConfigWatcher:
     def __init__(self, paths, on_change: Callable[[], None], *, interval: float = 1.0,
-                 clock=time.monotonic):
+                 clock=time.monotonic, adopt_before_fire: bool = True):
         self._paths = [Path(p) for p in paths]
         self._on_change = on_change
         self._interval = interval
         self._clock = clock
+        # adopt_before_fire=False leaves baseline adoption to the CALLBACK
+        # (via dirty()/resync() under its own lock) — required when the
+        # callback must distinguish a genuine external edit from a route
+        # write that already reloaded and resynced (the duplicate-reload
+        # race). Such a callback must resync() on handled changes, else the
+        # watcher re-fires every interval while the files stay dirty.
+        self._adopt_before_fire = adopt_before_fire
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="herdeck-config-watch", daemon=True)
         self._last = self._snapshot()
@@ -35,11 +42,16 @@ class ConfigWatcher:
     def start(self) -> None:
         self._thread.start()
 
+    def dirty(self) -> bool:
+        """Do the current file mtimes differ from the adopted baseline?"""
+        return self._snapshot() != self._last
+
     def _run(self) -> None:
         while not self._stop.wait(self._interval):
             current = self._snapshot()
             if current != self._last:
-                self._last = current
+                if self._adopt_before_fire:
+                    self._last = current
                 try:
                     self._on_change()
                 except Exception:

@@ -332,3 +332,22 @@ def test_discover_none_when_nothing(monkeypatch, tmp_path):
     monkeypatch.delenv("HERDECK_CONFIG", raising=False)
     monkeypatch.setattr("os.path.exists", lambda p: False)
     assert _discover_config_path() is None
+
+
+def test_simulator_urls_expand_wildcard_binds(monkeypatch):
+    """http://0.0.0.0:8800 is literally unroutable; a wildcard bind announces
+    the Tailscale + default-route addresses instead (audit: websim-url-announce)."""
+    from herdeck import app as app_mod
+
+    def fake_iface(probe):
+        return {"100.100.100.100": "100.64.1.2", "1.1.1.1": "192.168.1.5"}[probe]
+
+    monkeypatch.setattr(app_mod, "_iface_addr", fake_iface)
+    urls = app_mod._simulator_urls("0.0.0.0", 8800, "tok")
+    assert urls[0] == "http://100.64.1.2:8800/?token=tok"  # Tailscale first
+    assert "http://192.168.1.5:8800/?token=tok" in urls
+    assert urls[-1] == "http://127.0.0.1:8800/?token=tok"
+    # explicit binds announce exactly what was bound
+    assert app_mod._simulator_urls("100.99.1.4", 8800, "t") == [
+        "http://100.99.1.4:8800/?token=t"
+    ]

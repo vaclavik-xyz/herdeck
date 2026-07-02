@@ -25,6 +25,8 @@
     toWriteBody,
     orphanedSecrets,
     referencedTokenEnvs,
+    errorCountLabel,
+    isStaleRevisionError,
     type ConfigPayload,
   } from "./lib/configClient";
 
@@ -51,6 +53,7 @@
   let active = $state("Servers");
   let dirty = $state(false);
   let errors = $state<string[]>([]);
+  let showErrors = $state(false); // expanded error list above the savebar
   let busy = $state(false);
   // A structured status banner (replaces the old plain `notice` string). Task 7
   // reuses the optional action for the orphaned-keychain-secret cleanup.
@@ -113,8 +116,25 @@
     }
   }
 
+  // Live validation: the backend channel (POST /config/validate) existed but
+  // nothing called it — every mistake surfaced only at Apply. Debounced so a
+  // burst of keystrokes costs one request; results feed the same errors badge
+  // + expandable list the Apply path uses.
+  let validateTimer: ReturnType<typeof setTimeout> | undefined;
+
   function markDirty(): void {
     dirty = true;
+    if (validateTimer) clearTimeout(validateTimer);
+    validateTimer = setTimeout(() => void liveValidate(), 500);
+  }
+
+  async function liveValidate(): Promise<void> {
+    if (!payload || !dirty) return;
+    try {
+      errors = parseValidate(await cfg.validate(toWriteBody(payload)));
+    } catch {
+      /* sidecar hiccup — keep the previous result; Apply still validates */
+    }
   }
 
   async function apply(): Promise<void> {
@@ -122,8 +142,21 @@
     busy = true;
     try {
       const res = parseValidate(await cfg.write(toWriteBody(payload)));
+      if (res.some(isStaleRevisionError)) {
+        // The files changed under the editor (re-onboarding, tray switch, hand
+        // edit): never resurrect the stale snapshot — offer a reload instead.
+        errors = [];
+        setBanner(
+          "warning",
+          "config se mezitím změnil na disku — načti novou verzi (neuložené změny se ztratí)",
+          "načíst",
+          () => void load(),
+        );
+        return;
+      }
       errors = res;
       if (res.length === 0) {
+        showErrors = false;
         // Capture orphans from the EDITED pre-reload payload (see Design note): the reloaded
         // payload.secrets only carries still-referenced token_envs, so a renamed/deleted old
         // key would vanish and post-load detection would miss it.
@@ -139,10 +172,19 @@
             "uklidit",
             () => void cleanupOrphans(orphans),
           );
+        } else if (banner == null) {
+          // load() surfaces its own warning on a failed refresh — never mask it
+          setBanner("success", "uloženo");
         }
+      } else {
+        // A rejected Apply must SHOW what is wrong, not just count it.
+        showErrors = true;
+        banner = null;
       }
     } catch (e) {
       errors = [String(e)];
+      showErrors = true;
+      banner = null;
     } finally {
       busy = false;
     }
@@ -177,6 +219,12 @@
     }).then((fn) => {
       unlisten = fn;
     });
+    // The config window is hidden on close, not destroyed — a payload can be
+    // days old when it reappears. Refresh a CLEAN editor on visibility.
+    const onVisible = (): void => {
+      if (!document.hidden && payload != null && !dirty) void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     void (async () => {
       while (alive && !discovery) {
         try {
@@ -192,6 +240,8 @@
     return () => {
       alive = false;
       unlisten?.();
+      if (validateTimer) clearTimeout(validateTimer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   });
 </script>
@@ -213,7 +263,11 @@
     {:else if dirty}
       <span class="hint">ulož nebo zahoď změny pro přepnutí profilu</span>
     {/if}
-    {#if dirty}<span class="dirty">● neuložené změny</span>{/if}
+    {#if dirty}
+      <span class="dirty" class:bad={errors.length > 0}>
+        ● neuložené změny{errors.length > 0 ? ` · ${errorCountLabel(errors.length)}` : ""}
+      </span>
+    {/if}
   </header>
 
   <div class="body">
@@ -261,19 +315,37 @@
     </aside>
   </div>
 
+  {#if showErrors && errors.length > 0}
+    <div class="errlist" role="alert">
+      <ul>
+        {#each errors as err}<li>{err}</li>{/each}
+      </ul>
+    </div>
+  {/if}
+
   <footer class="savebar">
     <button onclick={discard} disabled={!dirty || busy}>Discard</button>
     {#if banner}<Banner kind={banner.kind} message={banner.message} actionLabel={banner.actionLabel} onAction={banner.onAction} />{/if}
-    <span class="errcount" class:bad={errors.length > 0}>⚠ {errors.length} chyb</span>
+    <span class="spacer"></span>
+    {#if errors.length > 0}
+      <button class="errcount" onclick={() => (showErrors = !showErrors)}>
+        ⚠ {errorCountLabel(errors.length)} {showErrors ? "▾" : "▸"}
+      </button>
+    {/if}
     <button onclick={apply} disabled={!dirty || busy}>Apply</button>
   </footer>
 </main>
 
 <style>
-  :global(html, body) { margin: 0; background: #0b0b0d; color: #e8e8ea; font: 13px system-ui; }
+  /* color-scheme keeps NATIVE widgets (selects + their popup menus, checkboxes,
+     number spinners, scrollbars) dark — without it WebKit renders them in light
+     mode against the dark theme. */
+  :global(html, body) { margin: 0; background: #0b0b0d; color: #e8e8ea; font: 13px system-ui; color-scheme: dark; accent-color: #2563eb; }
   main { display: flex; flex-direction: column; height: 100vh; }
   .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid #222; }
+  .topbar select { background: #1b1b1f; color: #e8e8ea; border: 1px solid #2a2a2e; border-radius: 6px; padding: 3px 6px; font: inherit; }
   .dirty { color: #e0a030; margin-left: auto; }
+  .dirty.bad { color: #e05050; }
   .body { flex: 1; display: grid; grid-template-columns: 160px 1fr 220px; min-height: 0; }
   .sidebar { display: flex; flex-direction: column; border-right: 1px solid #222; overflow: auto; }
   .sidebar button { text-align: left; background: none; border: 0; color: inherit; padding: 8px 12px; cursor: pointer; }
@@ -282,7 +354,11 @@
   .preview { border-left: 1px solid #222; padding: 8px; overflow: auto; }
   .hint { color: #888; }
   .savebar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid #222; }
-  .savebar button { margin: 0; }
-  .errcount { margin-left: auto; color: #888; }
-  .errcount.bad { color: #e05050; }
+  .savebar button { margin: 0; padding: 6px 14px; border: 1px solid #2a2a2e; border-radius: 7px; background: #1b1b1f; color: #e8e8ea; font: inherit; cursor: pointer; }
+  .savebar button:disabled { opacity: 0.5; cursor: default; }
+  .spacer { flex: 1; }
+  .errcount { background: none; border: 0; cursor: pointer; color: #e05050; }
+  .errlist { border-top: 1px solid #3a1d1d; background: #171012; color: #e08080; max-height: 120px; overflow: auto; padding: 6px 12px; font-size: 12px; }
+  .errlist ul { margin: 0; padding-left: 18px; }
+  .errlist li { margin: 2px 0; }
 </style>

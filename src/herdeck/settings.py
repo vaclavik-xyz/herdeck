@@ -9,6 +9,7 @@ from pathlib import Path
 from .config import (
     DEFAULT_MACROS,
     DEFAULT_PROFILES,
+    DEFAULT_REQUIRE_CONFIRM,
     DEFAULT_START_PROFILES,
     TILE_FILLS,
     TILE_LINE_TOKENS,
@@ -253,7 +254,9 @@ def _safety_config(raw: dict | None) -> SafetyConfig:
     raw = raw or {}
     return SafetyConfig(
         approve_always=raw.get("approve_always", True),
-        require_confirm_for=list(raw.get("require_confirm_for", [])),
+        # An explicit empty list in the file opts out; only an ABSENT key falls
+        # back to the confirm-Stop default.
+        require_confirm_for=list(raw.get("require_confirm_for", DEFAULT_REQUIRE_CONFIRM)),
     )
 
 

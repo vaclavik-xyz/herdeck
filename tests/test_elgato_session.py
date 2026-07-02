@@ -47,7 +47,7 @@ def test_empty_slot_renders_blank():
     sess.set_slots([("s0", (0, 0)), ("s1", (1, 0))])
     sess.apply_snapshot("dev", [state("p1", Status.IDLE)])
     rendered = sess.render_all()
-    assert b"|dim|" in rendered["s1"].image_png  # ordinal 1 unleased -> blank/dim
+    assert b"|empty|" in rendered["s1"].image_png  # unleased -> near-background blank
 
 
 def test_render_honors_theme_color_overrides():
@@ -371,7 +371,7 @@ def test_slot_tile_renders_configured_lines():
     tile = sess._slot_tile(0)
 
     assert tile.repo == "herdeck"        # primary = workspace, NOT repo "api"
-    assert tile.branch == "▸2 · main"    # secondary = tab + branch
+    assert tile.branch == "›2 · main"    # secondary = tab + branch
 
 
 def test_slot_tile_fallback_is_fixed_repo_branch_ignoring_tile_fields():

@@ -17,6 +17,9 @@ COLORS: dict[str, tuple[int, int, int]] = {
     "orange": (220, 115, 35),
     "pink": (215, 80, 135),
     "lime": (125, 175, 45),
+    # Vacant slots: barely above the tile background — the old "dim" (70,70,70)
+    # rendered empty slots BRIGHTER than occupied agent tiles on fill="none".
+    "empty": (32, 32, 36),
 }
 
 

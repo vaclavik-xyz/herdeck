@@ -230,3 +230,81 @@ async def test_act_skipped_by_guard_no_settle():
     fc["c"].on_result(fc["c"].sent[-1]["req"], {"skipped": True})
     assert await act_task == {"result": "skipped", "settled": True}
     await sess.close()
+
+
+@pytest.mark.asyncio
+async def test_open_proceeds_with_a_partial_fleet():
+    """One dead bridge must not brick commands aimed at the healthy server
+    (audit: ctl-partial-connect)."""
+    config = Config(
+        servers=[ServerConfig("up", "ws://a", "t"), ServerConfig("down", "ws://b", "t")],
+        profiles={},
+        overview_order=[],
+        grid=(5, 3),
+    )
+    conns = {}
+
+    def factory(**kw):
+        c = FakeConnector(**kw)
+        conns[kw["server"].id] = c
+        return c
+
+    sess = CtlSession(config, connector_factory=factory)
+    open_task = asyncio.create_task(sess.open(timeout=0.1))
+    await asyncio.sleep(0)
+    conns["up"].on_snapshot("up", [AgentState(AgentKey("up", "p1"), "claude", "x", Status.IDLE)])
+    await open_task  # 'down' never answered — open() still succeeds
+    assert AgentKey("up", "p1") in sess.agents
+    assert "down" in sess.unavailable  # ...and the failure is surfaced
+    with pytest.raises(ConnectionLost):
+        await sess.request(Command("focus", "down", "p9"), timeout=0.1)
+    assert conns["down"].sent == []  # nothing was sent to the silent server
+    # a late snapshot recovers it
+    conns["down"].on_snapshot("down", [])
+    assert "down" not in sess.unavailable
+    await sess.close()
+
+
+@pytest.mark.asyncio
+async def test_open_still_fails_when_no_server_answers():
+    config = Config(
+        servers=[ServerConfig("a", "ws://a", "t"), ServerConfig("b", "ws://b", "t")],
+        profiles={},
+        overview_order=[],
+        grid=(5, 3),
+    )
+    sess = CtlSession(config, connector_factory=lambda **kw: FakeConnector(**kw))
+    with pytest.raises(ConnectionLost):
+        await sess.open(timeout=0.05)
+    await sess.close()
+
+
+@pytest.mark.asyncio
+async def test_wait_returns_target_exit_when_the_pane_vanishes():
+    """`wait <agent> --until done` must not hang forever when the pane closes
+    before reaching the status (audit: wait-vanished-pane)."""
+    import types
+
+    from herdeck.ctl import EXIT_TARGET, dispatch
+
+    fc = {}
+
+    def factory(**kw):
+        fc["c"] = FakeConnector(**kw)
+        return fc["c"]
+
+    sess = CtlSession(_config(), connector_factory=factory)
+    open_task = asyncio.create_task(sess.open(timeout=1))
+    await asyncio.sleep(0)
+    fc["c"].on_snapshot("dev", [_agent(Status.WORKING)])
+    await open_task
+    args = types.SimpleNamespace(
+        cmd="wait", agent="dev:p1", any_agent=False, until="done",
+        wait_timeout=None, json=False, status=None,
+    )
+    task = asyncio.create_task(dispatch(args, sess))
+    await asyncio.sleep(0)
+    fc["c"].on_snapshot("dev", [])  # the pane closed
+    rc = await asyncio.wait_for(task, timeout=1.0)
+    assert rc == EXIT_TARGET
+    await sess.close()

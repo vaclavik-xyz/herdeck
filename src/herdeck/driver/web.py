@@ -15,6 +15,40 @@ from .base import DeckDriver, PanelView, TileView
 _PANEL_PRESS_INDEX = 13
 
 
+def _default_token_path() -> str:
+    import os
+
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(base, "herdeck", "web-token")
+
+
+def _load_or_create_token(path: str) -> str:
+    """A press token that SURVIVES restarts (0600 state file), so the phone's
+    bookmarked simulator URL keeps working across the constant restarts of a
+    dev loop instead of dead-ending on 403 after every restart."""
+    import os
+
+    try:
+        if os.stat(path).st_mode & 0o077:
+            # repair a leaky pre-existing file before trusting its token
+            os.chmod(path, 0o600)
+        with open(path, encoding="utf-8") as fh:
+            token = fh.read().strip()
+        if token:
+            return token
+    except OSError:
+        pass
+    token = secrets.token_urlsafe(24)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(token)
+    except OSError:
+        pass  # an in-memory token still works for this run
+    return token
+
+
 class WebDeck(DeckDriver):
     """A browser-based D200 simulator.
 
@@ -32,16 +66,31 @@ class WebDeck(DeckDriver):
         icon_provider=None,
         icons_dir: str | None = None,
         serve: bool = True,
+        press_token: str | None = None,
+        token_path: str | None = None,
+        cols: int = 5,
     ):
         self._slots = slots
+        self._cols = max(1, cols)  # grid width; the page lays cells out with it
         self._callback: Callable[[int], None] | None = None
         self._lock = threading.Lock()
+        # Long-poll support: /state?since=<version> HOLDS until _bump() fires.
+        self._changed = threading.Condition(self._lock)
         self._tiles: dict[int, bytes] = {}  # index -> PNG bytes
         self._tile_ver: dict[int, int] = {}  # index -> last-changed version
         self._panel: bytes | None = None
         self._panel_ver = 0
         self._version = 0
-        self._press_token = secrets.token_urlsafe(24)
+        # Serving decks persist the token across restarts (bookmarkable URL);
+        # an embedded/non-serving deck (tests) keeps an ephemeral one.
+        if press_token is not None:
+            self._press_token = press_token
+        elif token_path is not None:
+            self._press_token = _load_or_create_token(token_path)
+        elif serve:
+            self._press_token = _load_or_create_token(_default_token_path())
+        else:
+            self._press_token = secrets.token_urlsafe(24)
         if icon_provider is None:
             import os
             import tempfile
@@ -72,9 +121,14 @@ class WebDeck(DeckDriver):
     def press_token(self) -> str:
         return self._press_token
 
+    # How long a since-matched /state request is held before answering with
+    # the unchanged state (the client just re-polls).
+    LONG_POLL_TIMEOUT = 25.0
+
     def _bump(self) -> int:
         """Assign the next monotonic version. Call while holding self._lock."""
         self._version += 1
+        self._changed.notify_all()  # release any held long-polls
         return self._version
 
     def render(self, tiles: list[TileView]) -> None:
@@ -133,6 +187,8 @@ class WebDeck(DeckDriver):
             self._callback(index)
 
     def close(self) -> None:
+        with self._lock:
+            self._changed.notify_all()  # release held long-polls before shutdown
         server = self._server
         if server is not None:
             try:
@@ -150,15 +206,29 @@ class WebDeck(DeckDriver):
         self._thread = None
 
     # --- state snapshot for the browser ---
-    def _state(self) -> dict:
+    def _state_locked(self) -> dict:
+        return {
+            "version": self._version,
+            "slots": self._slots,
+            "cols": self._cols,
+            "has_panel": self._panel is not None,
+            "panel": self._panel_ver,
+            "tiles": dict(self._tile_ver),
+        }
+
+    def _state(self, since=None) -> dict:
+        """The state snapshot; with `since` equal to the current version the
+        request is HELD until something changes (long poll) or the timeout
+        lapses. Idle phone traffic drops from 3.3 req/s to ~2 req/min and a
+        change arrives at network latency instead of poll latency."""
+        try:
+            since_v = int(since)
+        except (TypeError, ValueError):
+            since_v = None
         with self._lock:
-            return {
-                "version": self._version,
-                "slots": self._slots,
-                "has_panel": self._panel is not None,
-                "panel": self._panel_ver,
-                "tiles": dict(self._tile_ver),
-            }
+            if since_v is not None and self._version == since_v:
+                self._changed.wait(timeout=self.LONG_POLL_TIMEOUT)
+            return self._state_locked()
 
     def _tile_png(self, index: int) -> bytes | None:
         with self._lock:
@@ -174,6 +244,14 @@ class WebDeck(DeckDriver):
         forbidden = (
             b"herdeck simulator: missing or invalid access token.\n"
             b"Open the full URL including the ?token=... part shown in herdeck's startup log.\n"
+        )
+        forbidden_page = (
+            b"<!doctype html><meta charset=utf-8><title>herdeck simulator</title>"
+            b'<body style="background:#0b0b0d;color:#e7ecf3;'
+            b'font:14px/1.5 system-ui;padding:2em;max-width:32em">'
+            b"<h2>Missing or invalid access token</h2>"
+            b"<p>Open the full URL including the <code>?token=&hellip;</code> part "
+            b"printed in herdeck's startup log on the machine running the deck.</p>"
         )
 
         class Handler(BaseHTTPRequestHandler):
@@ -206,14 +284,17 @@ class WebDeck(DeckDriver):
                 if path == "/":
                     token = self._query_token(url)
                     if not self._valid_token(token):
-                        self._send(403, forbidden)
+                        # A browser tab is the only consumer of "/": a readable
+                        # page beats a plaintext dead-end.
+                        self._send(403, forbidden_page, "text/html; charset=utf-8")
                         return
                     page = _PAGE.replace("__PRESS_TOKEN_JSON__", json.dumps(deck._press_token))
                     self._send(200, page.encode(), "text/html; charset=utf-8")
                 elif path == "/state":
                     if not self._require_token(url):
                         return
-                    self._send(200, json.dumps(deck._state()).encode(), "application/json")
+                    since = parse_qs(url.query).get("since", [None])[0]
+                    self._send(200, json.dumps(deck._state(since)).encode(), "application/json")
                 elif path == "/panel":
                     if not self._require_token(url):
                         return
@@ -254,20 +335,35 @@ _PAGE = """<!doctype html><meta charset=utf-8>
 <style>
  body{background:#0b0b0d;margin:0;font-family:-apple-system,sans-serif;
    display:flex;align-items:center;justify-content:center;min-height:100vh}
- #deck{background:#2a2a2e;padding:18px;border-radius:18px;
-   display:grid;grid-template-columns:repeat(5,min(17vw,150px));gap:10px}
- .cell{width:min(17vw,150px);height:min(17vw,150px);border-radius:8px;background:#111;cursor:pointer;
-   overflow:hidden;border:none;padding:0}
+ /* cell size lives in --cell so JS can set the COLUMN COUNT from /state.cols
+    (repeat() does not accept var() for its count) — the layout follows the
+    configured [deck] grid instead of hardcoding the 5-wide D200 */
+ /* --cell derives from the COLUMN COUNT with the padding and gaps included in
+    the 96vw budget (2*pad + cols*cell + (cols-1)*gap <= 96vw), so any
+    configured grid fits a narrow viewport instead of overflowing sideways. */
+ #deck{--cols:5;--gap:10px;--pad:18px;
+   --cell:min(calc((96vw - 2*var(--pad) - (var(--cols) - 1)*var(--gap))/var(--cols)),150px);
+   background:#2a2a2e;padding:var(--pad);border-radius:18px;
+   display:grid;grid-template-columns:repeat(5,var(--cell));gap:var(--gap)}
+ .cell{width:var(--cell);height:var(--cell);border-radius:8px;background:#111;cursor:pointer;
+   overflow:hidden;border:none;padding:0;
+   touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+ .cell:active{transform:scale(.95);filter:brightness(1.3)} /* instant, local press feedback */
  .cell.active{outline:3px solid #5af}
  .cell img{width:100%;height:100%;display:block}
- #panel{grid-column:4 / 6;width:calc(min(17vw,150px)*2 + 10px);height:min(17vw,150px);border-radius:8px;
-   overflow:hidden;cursor:pointer;background:#111}
+ #panel{grid-column:4 / 6;width:calc(var(--cell)*2 + var(--gap));height:var(--cell);border-radius:8px;
+   overflow:hidden;cursor:pointer;background:#111;
+   touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+ #panel:active{filter:brightness(1.3)}
  #panel img{width:100%;height:100%;display:block}
- /* phone portrait: width is the constraint, so shrink the 5-wide deck */
+ #deck.stale{filter:grayscale(1) opacity(.5);transition:filter .2s}
+ #note{position:fixed;left:50%;top:10px;transform:translateX(-50%);max-width:90vw;
+   background:#3a1d1d;color:#f0a0a0;padding:6px 12px;border-radius:8px;
+   font:13px system-ui;display:none;z-index:9}
+ /* phone portrait: width is the constraint, so shrink the deck */
  @media (max-width:560px){
-   #deck{grid-template-columns:repeat(5,min(17vw,110px));gap:6px;padding:10px}
-   .cell{width:min(17vw,110px);height:min(17vw,110px)}
-   #panel{width:calc(min(17vw,110px)*2 + 6px);height:min(17vw,110px)}
+   #deck{--gap:6px;--pad:10px;
+     --cell:min(calc((96vw - 2*var(--pad) - (var(--cols) - 1)*var(--gap))/var(--cols)),110px)}
  }
  /* phone landscape: HEIGHT is the constraint (3 rows), so size cells by viewport
     height — but also keep the 17vw width cap so a short AND narrow viewport
@@ -275,29 +371,44 @@ _PAGE = """<!doctype html><meta charset=utf-8>
     sideways. The deck stays within both the short (e.g. 667x375) viewport's
     height and a narrow viewport's width. */
  @media (max-height:430px){
-   #deck{grid-template-columns:repeat(5,min(17vw,22vh,110px));gap:6px;padding:10px}
-   .cell{width:min(17vw,22vh,110px);height:min(17vw,22vh,110px)}
-   #panel{width:calc(min(17vw,22vh,110px)*2 + 6px);height:min(17vw,22vh,110px)}
+   #deck{--gap:6px;--pad:10px;
+     --cell:min(calc((96vw - 2*var(--pad) - (var(--cols) - 1)*var(--gap))/var(--cols)),22vh,110px)}
  }
 </style>
 <div id=deck></div>
 <script>
 const deck=document.getElementById('deck');
+const note=document.createElement('div');note.id='note';document.body.appendChild(note);
 const pressToken=__PRESS_TOKEN_JSON__;
 let cells=[]; const btns=[]; let slotCount=0;
 function auth(path){
   return path+(path.includes('?')?'&':'?')+'token='+encodeURIComponent(pressToken);
 }
+// Stale-state indication: a control surface silently showing dead state is
+// actively misleading — a 'blocked' tile may have been resolved minutes ago.
+let fails=0, lastOk=Date.now();
+function setStale(msg){deck.classList.add('stale');note.textContent=msg;note.style.display='block';}
+function clearStale(){fails=0;lastOk=Date.now();deck.classList.remove('stale');note.style.display='none';}
 // one press path for clicks and keys: post the press, outline the pressed cell.
 async function press(i){
   let r;
   try{
     r=await fetch('/press/'+i,{method:'POST',headers:{'X-Herdeck-Token':pressToken}});
-  }catch(e){ return; }
-  if(r.status===403) location.reload();
+  }catch(e){
+    setStale('press failed — disconnected?');
+    return;
+  }
+  if(r.status===403){ setStale('token expired — open the fresh URL from the startup log'); return; }
   if(!r.ok) return;
   btns.forEach(b=>b.classList.remove('active'));   // clear any stale outline first
-  if(btns[i]) btns[i].classList.add('active');     // panel (no button) leaves none active
+  if(btns[i]){
+    // transient "press registered" flash — a persistent outline ended up
+    // highlighting a completely different tile after the view changed
+    btns[i].classList.add('active');
+    const b=btns[i];
+    setTimeout(()=>b.classList.remove('active'),350);
+  }
+  pollNow();  // the press already re-rendered server-side; don't wait 300ms
 }
 function addCell(i){
   const b=document.createElement('button');b.className='cell';
@@ -308,6 +419,14 @@ function addCell(i){
 const panel=document.createElement('div');panel.id='panel';
 panel.onclick=()=>press(slotCount);
 const pimg=document.createElement('img');panel.appendChild(pimg);
+let curCols=5;
+function applyGrid(cols){
+  if(!cols||cols===curCols) return;
+  curCols=cols;
+  deck.style.setProperty('--cols',cols);  // cell width shrinks with more columns
+  deck.style.gridTemplateColumns='repeat('+cols+', var(--cell))';
+  panel.style.gridColumn=(cols-1)+' / '+(cols+1);
+}
 function ensureCells(count){
   if(count===slotCount) return;
   while(btns.length<count) addCell(btns.length);
@@ -326,10 +445,28 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='0') press(9);
 });
 let lastV=-1; const tv={}; let pv=-1;
+let pollTimer=null, inFlight=false, pollDelay=100;
 async function poll(){
+  if(inFlight) return;             // the in-flight poll reschedules; never overlap
+  if(document.hidden){             // parked while hidden; visibilitychange resumes
+    pollTimer=setTimeout(poll,1000);
+    return;
+  }
+  inFlight=true;
+  pollDelay=100;                   // the server paces successes via the long poll
   try{
-    const s=await (await fetch(auth('/state'))).json();
+    // long poll: the server holds the request until the version advances, so
+    // idle traffic is ~2 req/min and changes arrive at network latency
+    const r=await fetch(auth(lastV>=0?'/state?since='+lastV:'/state'));
+    if(r.status===403){
+      setStale('token expired — open the fresh URL from the startup log');
+      pollDelay=2000;              // a stale bookmark must not hammer at 10/s
+      return;                      // rescheduled in finally; keeps checking
+    }
+    const s=await r.json();
+    clearStale();
     ensureCells(s.slots);
+    applyGrid(s.cols);
     if(s.version!==lastV){          // cheap gate: nothing changed at all
       lastV=s.version;
       const t=s.tiles||{};
@@ -341,9 +478,19 @@ async function poll(){
       }
       if(s.has_panel && s.panel!==pv){ pv=s.panel; pimg.src=auth('/panel?v='+pv); }
     }
-  }catch(e){}
-  setTimeout(poll,300);
+  }catch(e){
+    fails++;
+    if(fails>=2) setStale('disconnected — last update '+Math.max(1,Math.round((Date.now()-lastOk)/1000))+'s ago');
+    pollDelay=1000;                // errors are not server-paced: back off
+  }finally{
+    inFlight=false;
+    clearTimeout(pollTimer);
+    pollTimer=setTimeout(poll,pollDelay);
+  }
 }
+function pollNow(){ clearTimeout(pollTimer); void poll(); }
+// a woken phone should refresh immediately, not after the next timer tick
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) pollNow(); });
 poll();
 </script>
 """

@@ -357,3 +357,36 @@ async def test_runtime_agent_control_uses_bounded_default_timeout(monkeypatch):
     assert timeouts == [3.0]
     assert sender.sent
     assert control._pending == {}
+
+
+@pytest.mark.asyncio
+async def test_runtime_control_confirmation_expires_after_ttl():
+    """A stale Telegram 'confirmation required' arm must not complete an
+    act_force much later (roborev 058bcca)."""
+    from herdeck.app_control import RuntimeAgentControl
+    from herdeck.config import AnswerProfile, Config
+
+    sender = FakeSender()
+    key = AgentKey("local", "p1")
+    cfg = Config(
+        servers=[],
+        profiles={"default": AnswerProfile(["y"], ["n"], ["ctrl+c"], ["y"])},
+        overview_order=["local"],
+        grid=(5, 3),
+    )
+    cfg.safety.require_confirm_for = ["act_force"]
+    agent = AgentState(key, "default", "herdeck", Status.BLOCKED)
+    clk = [1000.0]
+    control = RuntimeAgentControl(
+        cfg,
+        send=sender.send,
+        current_agent=lambda k: agent if k == key else None,
+        clock=lambda: clk[0],
+    )
+    first = await control.stop(key)
+    assert first.message == "confirmation required"
+    clk[0] += 120  # far past the TTL: the second tap must re-arm, not fire
+    second = await control.stop(key)
+    assert second.sent is False
+    assert second.message == "confirmation required"
+    assert sender.sent == []

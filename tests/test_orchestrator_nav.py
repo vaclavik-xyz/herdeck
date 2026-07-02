@@ -115,6 +115,8 @@ def test_stop_works_even_when_not_blocked_and_returns_to_overview():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.WORKING)])
     o.on_press(0)
+    # Stop is confirm-guarded by default now: the first press arms, the second fires.
+    assert o.on_press(11) == []
     assert o.on_press(11) == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
     assert not o.is_drilling()
 
@@ -382,7 +384,7 @@ def test_overview_panel_spotlights_oldest_blocked():
     orch.apply_event("s", AgentState(AgentKey("s", "p2"), "claude", "newer", Status.BLOCKED))
     now[0] = 260.0
     panel = orch.render().panel
-    assert panel.title == "⚠ needs you"
+    assert panel.title == "▲ 2 need you"  # count included with 2+ blocked
     assert panel.lines[0] == "older"  # entered BLOCKED earliest
 
 
@@ -507,3 +509,304 @@ def test_update_config_prunes_removed_server_state():
     o.update_config(next_cfg)
 
     assert "old agent" not in [t.label for t in o.render().tiles]
+
+
+# --- armed-confirmation visibility + expiry (audit: armed-confirm-feedback) --
+
+
+def test_armed_stop_confirmation_is_visible_and_expires():
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
+    o.config.safety.require_confirm_for = ["act_force"]
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)
+    stop_i = o.slots - 2
+    assert o.render().tiles[stop_i].label == "Stop"
+    assert o.on_press(stop_i) == []  # first press arms
+    rs = o.render()
+    assert rs.tiles[stop_i].label == "Sure?"  # armed state is visible
+    assert rs.panel.lines[0] == "press again to confirm"
+    clk[0] += 10  # TTL expired: the stale arm must not complete
+    assert o.render().tiles[stop_i].label == "Stop"  # visual arm cleared
+    assert o.on_press(stop_i) == []  # re-arms instead of firing
+    assert o.on_press(stop_i) == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
+
+
+def test_armed_option_confirmation_marks_only_that_option_tile():
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["approve_always"]
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    assert o.on_press(1) == []  # arms the approve_always option
+    tiles = o.render().tiles
+    assert tiles[1].label == "Sure?"
+    assert tiles[0].label != "Sure?"
+    assert o.render().panel.lines[0] == "press again to confirm"
+
+
+# --- drill action colour semantics (audit: drill-option-colors) --------------
+
+
+def test_drill_option_tiles_carry_action_colors():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    tiles = o.render().tiles
+    assert tiles[0].color == "green"  # 1. Yes -> approve
+    assert tiles[1].color == "amber"  # 2. Yes, and don't ask again -> caution
+    assert tiles[2].color == "red"  # 3. No -> deny
+
+
+def test_drill_fallback_actions_carry_action_colors():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="claude")])
+    o.on_press(0)
+    o.set_detection("Proceed? (y/n)")
+    tiles = o.render().tiles
+    assert [tiles[0].color, tiles[1].color, tiles[2].color] == ["green", "amber", "red"]
+
+
+def test_drill_macro_tiles_stay_blue():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)
+    assert o.render().tiles[0].color == "blue"  # macros carry no action semantics
+
+
+# --- ordering hysteresis (audit: resort-hysteresis) ---------------------------
+
+
+def _clocked(clk):
+    return Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
+
+
+def test_order_holds_positions_until_target_settles():
+    # A DONE transition re-sorts (done ranks above working) but must not
+    # shuffle tiles under the finger. (A NEW BLOCK adopts immediately by
+    # design — that is the paging-autojump attention path.)
+    clk = [1000.0]
+    o = _clocked(clk)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
+    assert [t.label for t in o.render().tiles[:2]] == ["one", "two"]
+    o.apply_event("dev", st("p2", Status.DONE, label="two"))
+    assert [t.label for t in o.render().tiles[:2]] == ["one", "two"]
+    clk[0] += 2.5  # target stable past the settle window -> adopt the sort
+    assert [t.label for t in o.render().tiles[:2]] == ["two", "one"]
+
+
+def test_new_agent_appends_at_end_until_settle():
+    clk = [1000.0]
+    o = _clocked(clk)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
+    o.render()
+    o.apply_snapshot(
+        "dev",
+        [
+            st("p1", Status.WORKING, label="one"),
+            st("p2", Status.IDLE, label="two"),
+            st("p3", Status.DONE, label="three"),
+        ],
+    )
+    assert [t.label for t in o.render().tiles[:3]] == ["one", "two", "three"]
+    clk[0] += 2.5
+    assert [t.label for t in o.render().tiles[:3]] == ["three", "one", "two"]
+
+
+def test_removed_agent_drops_immediately_while_positions_hold():
+    clk = [1000.0]
+    o = _clocked(clk)
+    o.apply_snapshot(
+        "dev",
+        [
+            st("p1", Status.WORKING, label="one"),
+            st("p2", Status.WORKING, label="two"),
+            st("p3", Status.IDLE, label="three"),
+        ],
+    )
+    o.render()
+    o.apply_snapshot(
+        "dev", [st("p1", Status.WORKING, label="one"), st("p3", Status.IDLE, label="three")]
+    )
+    assert [t.label for t in o.render().tiles[:2]] == ["one", "three"]
+
+
+def test_press_on_freshly_reshuffled_slot_is_swallowed():
+    clk = [1000.0]
+    o = _clocked(clk)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
+    o.render()
+    o.apply_event("dev", st("p2", Status.DONE, label="two"))
+    o.render()  # production refreshes on every event; the settle timer starts here
+    clk[0] += 2.5
+    o.render()  # adoption: slot 0 repopulates (one -> two) right now
+    assert o.on_press(0) == []  # press lands within the guard window -> swallowed
+    clk[0] += 0.5
+    cmds = o.on_press(0)  # deliberate second press drills the visible agent
+    assert cmds and cmds[0].pane_id == "p2"
+
+
+def test_duplicate_deny_options_confirm_independently():
+    """Two parsed options can share an action id (two 'No…' variants); arming
+    one must not arm — or fire — the other (roborev 8781538/01e2201)."""
+    o = Orchestrator(make_config(), slots=13)
+    o.config.safety.require_confirm_for = ["deny"]
+    # the default profile has no digit keys, so both "No…" options classify
+    # purely by label -> both get the shared "deny" action id
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED, agent_type="codex")])
+    o.on_press(0)
+    o.set_detection(
+        "Proceed?\n1. Yes\n2. No\n3. No, and tell Claude what to do differently"
+    )
+    assert o.on_press(1) == []  # arms option 2 only
+    tiles = o.render().tiles
+    assert tiles[1].label == "Sure?"
+    assert tiles[2].label == "3"  # the sibling deny option is NOT armed
+    assert o.on_press(2) == []  # pressing the sibling arms IT instead of firing
+    assert o.on_press(2) == [Command("act_if_blocked", "dev", "p1", keys=["3", "enter"])]
+
+
+def test_idle_tick_does_not_adopt_the_new_order(monkeypatch):
+    """An idle tick produces no frame, so it must not adopt the settled sort —
+    otherwise presses resolve against an order the user has never seen
+    (roborev 0e4d730)."""
+    clk = [1000.0]
+    o = _clocked(clk)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
+    o.render()
+    o.apply_event("dev", st("p2", Status.DONE, label="two"))
+    o.render()  # settle timer starts (production refreshes on every event)
+    clk[0] += 2.5
+    o.tick()  # idle tick past the settle window — must stay read-only
+    assert [k.pane_id for k in o._display_order] == ["p1", "p2"]
+    clk[0] += 1.0  # long past the press guard IF the tick had adopted
+    assert o.on_press(0) == []  # adoption happens IN the press -> guard swallows
+    clk[0] += 0.5
+    cmds = o.on_press(0)
+    assert cmds and cmds[0].pane_id == "p2"  # now the user has seen the new order
+
+
+def test_drill_goes_inert_and_shows_offline_when_server_drops():
+    """Drill was blind to a server disconnect: option tiles stayed colourful
+    and pressable while the dead connector dropped every command
+    (audit: drill-offline-guard)."""
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    o.set_connection("dev", False)
+    rs = o.render()
+    assert all(t.color == "grey" for t in rs.tiles[:3])  # options inert
+    assert rs.tiles[11].color == "grey"  # Stop inert too
+    assert rs.panel.lines == ["OFFLINE — reconnecting…"]
+    assert o.on_press(0) == []  # an action press is swallowed, not dropped silently
+    assert o.on_press(11) == []  # Stop as well
+    assert o.on_press(12) == []  # ...but Back still leaves the drill
+    assert not o.is_drilling()
+
+
+def test_drill_recovers_when_server_reconnects():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    o.set_connection("dev", False)
+    o.set_connection("dev", True)
+    rs = o.render()
+    assert rs.tiles[0].color == "green"  # approve colour back
+    assert o.on_press(0) == [Command("act_if_blocked", "dev", "p1", keys=["1", "enter"])]
+
+
+def test_new_block_jumps_overview_to_front_page():
+    """A new blocked episode must not sit stranded on another page while the
+    panel shows '▲ needs you' over non-blocked tiles (audit: paging-autojump)."""
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=3, clock=lambda: clk[0])  # 2 agent slots
+    o.apply_snapshot(
+        "dev",
+        [st("p1", Status.IDLE), st("p2", Status.IDLE), st("p3", Status.IDLE, label="late")],
+    )
+    o.render()
+    o.on_press(3)  # panel press -> page 2 (shows p3)
+    assert o.render().tiles[0].label == "late"
+    o.apply_event("dev", st("p3", Status.BLOCKED, label="late"))
+    rs = o.render()  # jumped back to page 1 with the blocked agent adopted first
+    assert rs.tiles[0].label == "late" and rs.tiles[0].color == "amber"
+    assert o.render().panel.title == "▲ needs you"
+    # the jump repopulated slots under a possible finger -> guard applies
+    assert o.on_press(0) == []
+    clk[0] += 0.5
+    assert o.on_press(0)[0].pane_id == "p3"
+
+
+def test_new_block_never_yanks_an_open_drill():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)  # drill p1
+    o.apply_event("dev", st("p2", Status.BLOCKED))
+    assert o.is_drilling()  # still inside the drill
+    assert o.render().tiles[12].label == "Back"
+
+
+def test_armed_confirm_does_not_survive_a_disconnect():
+    """arm -> server drops -> quick reconnect: a single press must NOT complete
+    the stale confirmation (roborev b866632)."""
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.WORKING)])
+    o.on_press(0)
+    assert o.on_press(11) == []  # arms Stop
+    o.set_connection("dev", False)
+    o.set_connection("dev", True)
+    assert o.on_press(11) == []  # re-arms; does NOT fire the stale confirmation
+    assert o.on_press(11) == [Command("act_force", "dev", "p1", keys=["ctrl+c"])]
+
+
+def test_page_jump_guards_presses_even_when_order_is_unchanged():
+    """The auto page jump swaps every visible tile; an in-flight press must be
+    swallowed even if the blocker already sorted first (roborev 6906bfa)."""
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=3, clock=lambda: clk[0])  # 2 agent slots
+    o.apply_snapshot(
+        "dev",
+        [st("p1", Status.DONE, label="first"), st("p2", Status.IDLE), st("p3", Status.IDLE)],
+    )
+    o.render()
+    o.on_press(3)  # page 2
+    o.render()
+    # p1 blocks: it ALREADY sorted first, so the display order is unchanged —
+    # only the page jump changes what is visible
+    o.apply_event("dev", st("p1", Status.BLOCKED, label="first"))
+    o.render()
+    assert o.on_press(0) == []  # swallowed: the tile under the finger changed
+    clk[0] += 0.5
+    assert o.on_press(0)[0].pane_id == "p1"
+
+
+def test_launcher_tile_carries_the_management_colour():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.IDLE)])
+    tile = o.render().tiles[12]
+    assert tile.label == "+ New"
+    assert tile.color == "launcher"  # dark + green label, not status green
+
+
+def test_drill_action_acknowledges_on_the_overview_panel():
+    """Returning to a still-amber tile read as 'my press was lost' — the panel
+    now acknowledges the send until the round-trip lands
+    (audit: action-sent-ack)."""
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    assert o.on_press(0)  # sends option 1, returns to overview
+    assert o.render().panel.lines[0] == "sent › api"
+    clk[0] += 5.0  # note expired
+    assert not o.render().panel.lines[0].startswith("sent")
+
+
+def test_empty_slots_render_darker_than_agent_tiles():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.IDLE)])
+    assert o.render().tiles[1].color == "empty"  # near-background, not dim grey

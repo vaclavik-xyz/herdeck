@@ -122,3 +122,52 @@ export function setupTransport(invoke: InvokeFn): SetupTransport {
     },
   };
 }
+
+/**
+ * Localized, actionable message for a connect failure. The backend returns
+ * stable machine codes (probe reasons) or terse English sentences; a Czech
+ * first-run card showing raw 'bad_token' gives no guidance. Unknown strings
+ * pass through verbatim — never hide information.
+ */
+export function connectErrorMessage(
+  error: string | null | undefined,
+  socketPath?: string | null,
+): string {
+  if (!error) return "Připojení selhalo.";
+  if (error === "bad_token")
+    return "Token nesedí — zkontroluj hodnotu tokenu na serveru (herdeck-bridge).";
+  if (error === "unreachable")
+    return "Server neodpovídá — zkontroluj URL a port (běží tam herdeck-bridge?).";
+  if (error.startsWith("herdr socket not found"))
+    return socketPath
+      ? `herdr socket nenalezen (${socketPath}) — spusť herdr a zkus to znovu.`
+      : "herdr socket nenalezen — spusť herdr a zkus to znovu.";
+  if (error === "could not start local source")
+    return "Lokální připojení selhalo — běží herdr? Zkus to znovu.";
+  if (error === "could not switch to demo") return "Přepnutí do demo režimu selhalo.";
+  if (error === "no saved connection") return "Uložené spojení nebylo nalezeno.";
+  if (error === "existing config is unreadable — fix it in Settings")
+    return "Stávající config nejde přečíst — oprav ho v nastavení (Config).";
+  if (error === "existing config is malformed (servers) — fix it in Settings")
+    return "Stávající config má poškozenou sekci serverů — oprav ho v nastavení (Config).";
+  return error;
+}
+
+/**
+ * Should the card auto-connect to local herdr without a click? True when the
+ * user's PERSISTED choice is local (or the card is the reconnect view) and the
+ * socket is back — but never during a manual re-onboarding session (`manual`),
+ * which is the user's explicit request to change things, and never twice.
+ */
+export function shouldAutoReconnect(args: {
+  view: "welcome" | "reconnect";
+  choice: string | null;
+  localAvailable: boolean;
+  busy: boolean;
+  tried: boolean;
+  manual: boolean;
+}): boolean {
+  if (args.manual || args.busy || args.tried) return false;
+  if (!args.localAvailable) return false;
+  return args.view === "reconnect" || args.choice === "local";
+}

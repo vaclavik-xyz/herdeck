@@ -26,6 +26,12 @@ class LocalBridgeRunner:
         self._handle = None  # (server, btask)
         self._error: BaseException | None = None
 
+    @property
+    def bound(self) -> tuple[str, int, str] | None:
+        """(host, port, token) once the bridge has bound, else None. Lets the
+        local-mode reloader rebuild the live source against the RUNNING bridge."""
+        return self._bound
+
     def start(self) -> tuple[str, int, str]:
         self._thread.start()
         self._ready.wait(timeout=10)

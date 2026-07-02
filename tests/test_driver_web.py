@@ -10,6 +10,13 @@ from herdeck.driver.base import PanelView, TileView
 from herdeck.driver.web import WebDeck
 
 
+@pytest.fixture(autouse=True)
+def _isolated_token_state(tmp_path, monkeypatch):
+    """Serving decks persist their press token under XDG_STATE_HOME — keep
+    tests out of the user's real state dir."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+
 class StubIcons:
     def render_tile_bytes(self, tile):
         b = io.BytesIO()
@@ -47,7 +54,8 @@ def test_page_guards_key_repeat_and_panel_clears_highlight():
     assert "e.repeat" in page
     # clearing the highlight is unconditional; only the add is guarded by btns[i],
     # so a panel press (no button) still clears any stale tile outline
-    assert "if(btns[i]) btns[i].classList.add('active')" in page
+    assert "btns.forEach(b=>b.classList.remove('active'))" in page
+    assert "if(btns[i]){" in page  # the transient flash is still tile-only
 
 
 def test_page_uses_state_slot_count_for_cells_and_panel_index():
@@ -65,7 +73,9 @@ def test_page_only_highlights_after_successful_press():
     from herdeck.driver import web
 
     page = web._PAGE
-    assert "if(r.status===403) location.reload()" in page
+    # a 403 press no longer blind-reloads (that landed on the plaintext 403);
+    # it surfaces the token problem in-page instead
+    assert "if(r.status===403){ setStale(" in page
     assert "if(!r.ok) return" in page
     assert page.index("await fetch") < page.index("btns.forEach")
 
@@ -92,7 +102,7 @@ def test_page_landscape_rule_sizes_deck_for_short_height():
                 break
     block = page[start : end + 1]
     assert "vh" in block  # cells sized by viewport height, not just width
-    assert ".cell" in block  # the tiles themselves are resized
+    assert "--cell" in block  # tiles resize via the shared cell variable
     # a short viewport may also be narrow (e.g. 320x400) where this rule overrides
     # the portrait one, so it must constrain width too or the deck overflows sideways
     assert "vw" in block
@@ -102,11 +112,14 @@ def test_page_uses_readable_desktop_scale():
     from herdeck.driver import web
 
     page = web._PAGE
-    assert "grid-template-columns:repeat(5,min(17vw,150px))" in page
-    assert ".cell{width:min(17vw,150px);height:min(17vw,150px);" in page
+    # the desktop scale lives in --cell, derived from the column count with
+    # padding + gaps inside the budget (no sideways overflow on any grid)
+    assert "2*var(--pad) - (var(--cols) - 1)*var(--gap))/var(--cols)),150px)" in page
+    assert "grid-template-columns:repeat(5,var(--cell))" in page
+    assert ".cell{width:var(--cell);height:var(--cell);" in page
     assert (
-        "#panel{grid-column:4 / 6;width:calc(min(17vw,150px)*2 + 10px);"
-        "height:min(17vw,150px);"
+        "#panel{grid-column:4 / 6;width:calc(var(--cell)*2 + var(--gap));"
+        "height:var(--cell);"
     ) in page
 
 
@@ -220,7 +233,9 @@ def test_error_responses_are_browser_friendly_not_downloads():
             urllib.request.urlopen(f"http://{d.host}:{d.port}/", timeout=2)
         err = exc.value
         assert err.code == 403
-        assert err.headers.get("Content-Type", "").startswith("text/plain")
+        # "/" now serves a readable HTML explanation; the point stands:
+        # viewable text, never octet-stream.
+        assert err.headers.get("Content-Type", "").startswith("text/")
         assert "token" in err.read().decode().lower()
     finally:
         d.close()
@@ -327,3 +342,156 @@ def test_render_removing_a_tile_bumps_version_so_client_can_clear_it():
     assert st["version"] > v  # removal trips the client's gate
     assert 1 not in st["tiles"]  # its version is dropped
     assert d._tile_png(1) is None  # its bytes are gone
+
+
+# --- press-token persistence (audit: websim-token-persist) --------------------
+
+
+def test_token_persists_across_restarts(tmp_path):
+    token_file = tmp_path / "web-token"
+    a = WebDeck(slots=13, serve=False, icon_provider=StubIcons(), token_path=str(token_file))
+    b = WebDeck(slots=13, serve=False, icon_provider=StubIcons(), token_path=str(token_file))
+    assert a.press_token == b.press_token  # the phone's bookmarked URL survives
+    assert (token_file.stat().st_mode & 0o777) == 0o600
+
+
+def test_non_serving_deck_keeps_ephemeral_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))  # belt & braces isolation
+    a = WebDeck(slots=13, serve=False, icon_provider=StubIcons())
+    b = WebDeck(slots=13, serve=False, icon_provider=StubIcons())
+    assert a.press_token != b.press_token
+    assert not (tmp_path / "herdeck" / "web-token").exists()
+
+
+def test_root_403_serves_html_explanation(tmp_path):
+    import urllib.error
+    import urllib.request
+
+    d = WebDeck(
+        slots=4, host="127.0.0.1", port=0, serve=True,
+        icon_provider=StubIcons(), token_path=str(tmp_path / "web-token"),
+    )
+    try:
+        try:
+            urllib.request.urlopen(f"http://{d.host}:{d.port}/?token=wrong", timeout=5)
+            raise AssertionError("expected HTTP 403")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+            assert e.headers.get_content_type() == "text/html"
+            body = e.read().decode()
+            assert "token" in body.lower()
+    finally:
+        d.close()
+
+
+def test_page_carries_stale_indicator_and_touch_feedback(tmp_path):
+    """Smoke-level guards for the embedded page: stale-state indication,
+    explicit 403 handling, wake-refresh and touch affordances
+    (audit: websim-stale-indicator + websim-touch-feedback)."""
+    import urllib.request
+
+    d = WebDeck(
+        slots=4, host="127.0.0.1", port=0, serve=True,
+        icon_provider=StubIcons(), token_path=str(tmp_path / "web-token"),
+    )
+    try:
+        with urllib.request.urlopen(
+            f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=5
+        ) as r:
+            page = r.read().decode()
+        assert "setStale" in page and "disconnected — last update" in page
+        assert "token expired" in page  # explicit 403 handling, no silent freeze
+        assert "visibilitychange" in page  # immediate poll on phone wake
+        assert "touch-action:manipulation" in page
+        assert "-webkit-tap-highlight-color" in page
+        assert ".cell:active" in page  # instant local press feedback
+        assert "pollNow()" in page  # press triggers an immediate state poll
+    finally:
+        d.close()
+
+
+def test_existing_leaky_token_file_is_repaired_to_0600(tmp_path):
+    token_file = tmp_path / "web-token"
+    token_file.write_text("existing-token")
+    token_file.chmod(0o644)  # pre-existing world-readable file
+    d = WebDeck(slots=13, serve=False, icon_provider=StubIcons(), token_path=str(token_file))
+    assert d.press_token == "existing-token"  # bookmark keeps working
+    assert (token_file.stat().st_mode & 0o777) == 0o600  # ...but the leak is fixed
+
+
+def _get_json(d, path):
+    import json as _json
+    import urllib.request
+
+    sep = "&" if "?" in path else "?"
+    with urllib.request.urlopen(
+        f"http://{d.host}:{d.port}{path}{sep}token={d.press_token}", timeout=10
+    ) as r:
+        return _json.loads(r.read().decode())
+
+
+def test_state_long_poll_holds_until_a_change(tmp_path):
+    """/state?since=<current> must hold until the version advances
+    (audit: websim-long-poll)."""
+    import threading
+    import time as _time
+
+    d = WebDeck(
+        slots=4, host="127.0.0.1", port=0, serve=True,
+        icon_provider=VaryingIcons(), token_path=str(tmp_path / "web-token"),
+    )
+    try:
+        d.render([TileView(0, "a", "green")])
+        v = _get_json(d, "/state")["version"]
+        result = {}
+
+        def held():
+            t0 = _time.monotonic()
+            result["state"] = _get_json(d, f"/state?since={v}")
+            result["elapsed"] = _time.monotonic() - t0
+
+        t = threading.Thread(target=held)
+        t.start()
+        _time.sleep(0.2)
+        d.render([TileView(0, "a", "amber")])  # version bumps -> poll releases
+        t.join(timeout=5)
+        assert result["state"]["version"] > v
+        assert 0.1 < result["elapsed"] < 5  # held, then released by the change
+    finally:
+        d.close()
+
+
+def test_state_long_poll_times_out_unchanged(tmp_path):
+    d = WebDeck(
+        slots=4, host="127.0.0.1", port=0, serve=True,
+        icon_provider=StubIcons(), token_path=str(tmp_path / "web-token"),
+    )
+    d.LONG_POLL_TIMEOUT = 0.1
+    try:
+        d.render([TileView(0, "a", "green")])
+        v = _get_json(d, "/state")["version"]
+        state = _get_json(d, f"/state?since={v}")
+        assert state["version"] == v  # answered with the unchanged state
+    finally:
+        d.close()
+
+
+def test_state_carries_grid_cols_and_page_applies_them(tmp_path):
+    """The page hardcoded a 5-wide grid while slots follow [deck].grid
+    (audit: websim-grid-var)."""
+    d = WebDeck(
+        slots=6, cols=4, host="127.0.0.1", port=0, serve=True,
+        icon_provider=StubIcons(), token_path=str(tmp_path / "web-token"),
+    )
+    try:
+        assert _get_json(d, "/state")["cols"] == 4
+        import urllib.request
+
+        with urllib.request.urlopen(
+            f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=5
+        ) as r:
+            page = r.read().decode()
+        assert "applyGrid(s.cols)" in page
+        assert "setTimeout(()=>b.classList.remove('active'),350)" in page  # transient outline
+    finally:
+        d.close()

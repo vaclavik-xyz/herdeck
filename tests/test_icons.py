@@ -445,3 +445,142 @@ def test_idle_tile_cache_key_ignores_animation(tmp_path):
     a = p.render_tile(_agent_tile(working_animation="spin", spinner=None))
     b = p.render_tile(_agent_tile(working_animation="pulse", spinner=None))
     assert a == b  # idle tiles share one cache key regardless of style (no churn)
+
+
+# --- cache eviction + in-memory bytes cache (audit: cache-unbounded) ---
+
+
+def test_init_prunes_stale_generated_pngs(tmp_path):
+    import time as _time
+
+    stale_tile = tmp_path / "tile_deadbeef.png"
+    stale_icon = tmp_path / "icon_v2_0_stale_green.png"
+    fresh_tile = tmp_path / "tile_fresh.png"
+    foreign = tmp_path / "panel_left.png"
+    for f in (stale_tile, stale_icon, fresh_tile, foreign):
+        f.write_bytes(b"png")
+    old = _time.time() - 48 * 3600
+    for f in (stale_tile, stale_icon, foreign):
+        os.utime(f, (old, old))
+    make_provider(tmp_path)
+    assert not stale_tile.exists()
+    assert not stale_icon.exists()
+    assert fresh_tile.exists()  # fresh generated files survive the age cutoff
+    assert foreign.exists()  # non-generated names are never touched, however old
+
+
+def test_render_tile_bytes_serves_from_memory_without_recreating_file(tmp_path):
+    p = make_provider(tmp_path)
+    tile = _tile_ns()
+    first = p.render_tile_bytes(tile)
+    for f in tmp_path.glob("tile_*.png"):
+        f.unlink()
+    assert p.render_tile_bytes(tile) == first
+    # memory-cache hit must not touch the disk cache at all
+    assert not list(tmp_path.glob("tile_*.png"))
+
+
+def test_render_tile_recreates_pruned_file_for_device_path(tmp_path):
+    p = make_provider(tmp_path)
+    tile = _tile_ns()
+    name = p.render_tile(tile)
+    (tmp_path / name).unlink()
+    assert p.render_tile(tile) == name
+    assert (tmp_path / name).exists()  # strmdck reads the file by name
+
+
+def test_cache_hit_refreshes_old_mtime_so_active_files_survive_prune(tmp_path):
+    import time as _time
+
+    from herdeck.icons import prune_generated
+
+    p = make_provider(tmp_path)
+    tile = _tile_ns()
+    name = p.render_tile(tile)
+    path = tmp_path / name
+    old = _time.time() - 2 * 3600
+    os.utime(path, (old, old))
+    assert p.render_tile(tile) == name  # cache hit on a stale-mtime file
+    assert prune_generated(str(tmp_path)) == 0  # hit refreshed mtime -> not stale
+    assert path.exists()
+
+
+def test_wrap_marks_cut_tail_with_ellipsis():
+    """Dropping words beyond max_lines must be visible — an unmarked truncation
+    of a permission scope reads as the complete text (audit: wrap-ellipsis)."""
+    from PIL import Image, ImageDraw
+
+    from herdeck.icons import _font, _wrap
+
+    d = ImageDraw.Draw(Image.new("RGB", (196, 196)))
+    f = _font(22)
+    cut = _wrap(d, "Yes, and don't ask again for rm commands in /Users/admin/projects", f, 180, 3)
+    assert len(cut) == 3
+    assert cut[-1].endswith("…")
+    intact = _wrap(d, "Yes", f, 180, 3)
+    assert intact == ["Yes"]  # nothing cut -> no spurious ellipsis
+
+
+def test_panel_body_lines_wrap_by_pixel_width_without_losing_words():
+    """The panel body wraps logical lines with the ACTUAL font and pixel budget
+    (audit: panel-pixel-wrap)."""
+    from PIL import Image, ImageDraw
+
+    from herdeck.icons import PANEL_W, _font, _panel_body_lines
+
+    d = ImageDraw.Draw(Image.new("RGB", (PANEL_W, 196)))
+    f = _font(24)
+    text = "Claude needs your permission to run the following command right now"
+    lines = _panel_body_lines(d, [text], f, PANEL_W - 32)
+    assert len(lines) >= 2
+    for line in lines:
+        assert d.textlength(line, font=f) <= PANEL_W - 32
+    assert " ".join(lines) == text  # nothing silently dropped between lines
+    overflow = text + " and then some more words that cannot possibly fit on this panel"
+    lines = _panel_body_lines(d, [overflow], f, PANEL_W - 32)
+    assert len(lines) == 3 and lines[-1].endswith("…")
+
+
+def test_solid_bright_fill_darkens_the_agent_mark(tmp_path):
+    """The white mark washed out on bright solid fills (amber 2.1:1) while the
+    text flipped dark (audit: solid-mark-contrast)."""
+    import io
+
+    p = make_provider(tmp_path)
+    bright = _tile_ns(color="amber", tile_fill="solid")
+    img = Image.open(io.BytesIO(p.render_tile_bytes(bright))).convert("RGB")
+    assert sum(img.getpixel((35, 35))) < 200  # dark ink inside the mark's box
+    normal = _tile_ns(color="amber", tile_fill="none")
+    img2 = Image.open(io.BytesIO(p.render_tile_bytes(normal))).convert("RGB")
+    assert sum(img2.getpixel((35, 35))) > 500  # stays white on the dark bg
+
+
+def test_launcher_tile_renders_dark_not_status_green(tmp_path):
+    """The full-green launcher was pixel-identical to a WORKING agent tile
+    under solid fill (audit: launcher-distinct-color)."""
+    import io
+    from types import SimpleNamespace
+
+    p = make_provider(tmp_path)
+    launcher = SimpleNamespace(
+        color="launcher", label="+ New", subtext=None, agent_type=None, spinner=None,
+        repo=None, branch=None, status_text=None, time_text=None,
+        server_tag=None, server_accent=None,
+    )
+    img = Image.open(io.BytesIO(p.render_tile_bytes(launcher))).convert("RGB")
+    assert img.getpixel((5, 5)) == (26, 26, 30)  # dark management background
+
+
+def test_colour_override_marks_are_not_flattened_on_bright_solid(tmp_path):
+    """A full-colour user override must render as supplied — only white
+    mark-style glyphs get the solid-fill contrast flip (roborev 8280ace)."""
+    import io
+
+    overrides = tmp_path / "ov"
+    overrides.mkdir()
+    Image.new("RGBA", (196, 196), (200, 30, 30, 255)).save(overrides / "claude.png")
+    p = make_provider(tmp_path / "cache", overrides=overrides)
+    tile = _tile_ns(color="amber", tile_fill="solid")
+    img = Image.open(io.BytesIO(p.render_tile_bytes(tile))).convert("RGB")
+    r, g, b = img.getpixel((35, 35))
+    assert r > 150 and g < 90  # the red override survived, no dark silhouette

@@ -425,3 +425,172 @@ async def test_list_snapshot_includes_workspace_and_tab():
     p = json.loads(out)["panes"][0]
     assert p["workspace"] == "herdeck"
     assert p["tab"] == "1"
+
+
+# --- snapshot RPC concurrency + label caching (audit: bridge-parallel-rpcs) --
+
+
+async def test_wired_snapshot_fetches_lists_concurrently():
+    import asyncio
+
+    from herdeck.bridge import _wired_snapshot
+
+    class SlowStub:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+
+        async def _slow(self, result):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            await asyncio.sleep(0.02)
+            self.active -= 1
+            return result
+
+        async def list_panes(self):
+            return await self._slow([])
+
+        async def worktrees(self):
+            return await self._slow([])
+
+        async def workspaces(self):
+            return await self._slow([])
+
+        async def tabs(self):
+            return await self._slow([])
+
+    stub = SlowStub()
+    await _wired_snapshot(stub)
+    # all four herdr lists must be in flight at once (latency = max, not sum)
+    assert stub.max_active == 4
+
+
+async def test_stream_caches_labels_across_status_wakes():
+    import asyncio
+
+    from herdeck.bridge import HerdrEvents
+
+    class CountingHerdr:
+        def __init__(self):
+            self.panes = [raw_pane("w1:p1", agent="claude", status="idle")]
+            self.label_calls = 0
+
+        async def list_panes(self):
+            return self.panes
+
+        async def worktrees(self):
+            self.label_calls += 1
+            return []
+
+        async def workspaces(self):
+            return []
+
+        async def tabs(self):
+            return []
+
+    stub = CountingHerdr()
+    ev = HerdrEvents(stub, poll_interval=100)  # would block without a wake
+    gen = ev.stream()
+    await gen.__anext__()
+    assert stub.label_calls == 1
+    # a status-change push wake must NOT refetch the label lists
+    stub.panes = [raw_pane("w1:p1", agent="claude", status="blocked")]
+    ev._wake.set()
+    await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert stub.label_calls == 1
+    # a fleet event (what _listen flags) marks labels stale -> refetched
+    stub.panes = stub.panes + [raw_pane("w1:p2", agent="codex", status="idle")]
+    ev._labels_stale = True
+    ev._wake.set()
+    await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert stub.label_calls == 2
+    await gen.aclose()
+
+
+async def test_stream_refreshes_labels_by_age_when_wakes_starve_the_poll(monkeypatch):
+    """Constant status wakes keep the slow-poll timeout from firing; labels must
+    still refresh once they are older than poll_interval (roborev 8847c23)."""
+    import asyncio
+
+    from herdeck import bridge as bridge_mod
+    from herdeck.bridge import HerdrEvents
+
+    t = [0.0]
+    monkeypatch.setattr(bridge_mod, "_monotonic", lambda: t[0])
+
+    class CountingHerdr:
+        def __init__(self):
+            self.panes = [raw_pane("w1:p1", agent="claude", status="idle")]
+            self.label_calls = 0
+
+        async def list_panes(self):
+            return self.panes
+
+        async def worktrees(self):
+            self.label_calls += 1
+            return []
+
+        async def workspaces(self):
+            return []
+
+        async def tabs(self):
+            return []
+
+    stub = CountingHerdr()
+    ev = HerdrEvents(stub, poll_interval=5.0)
+    gen = ev.stream()
+    await gen.__anext__()  # labels fetched at t=0
+    assert stub.label_calls == 1
+    stub.panes = [raw_pane("w1:p1", agent="claude", status="blocked")]
+    t[0] = 1.0
+    ev._wake.set()  # young cache + status wake -> no label refetch
+    await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert stub.label_calls == 1
+    stub.panes = [raw_pane("w1:p1", agent="claude", status="working")]
+    t[0] = 6.0  # cache older than poll_interval; wake is still a status event
+    ev._wake.set()
+    await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert stub.label_calls == 2
+    await gen.aclose()
+
+
+async def test_broadcast_stalled_client_does_not_starve_others():
+    """One backpressured client must not delay snapshots for everyone else
+    (audit: bridge-broadcast-isolate)."""
+    import asyncio
+
+    from herdeck.bridge import _broadcast
+
+    got = []
+
+    class FastWs:
+        async def send(self, msg):
+            got.append(msg)
+
+    class StalledWs:
+        def __init__(self):
+            self.closed = False
+
+        async def send(self, msg):
+            await asyncio.sleep(3600)  # full TCP buffer: send never returns
+
+        async def close(self, code=None, reason=None):
+            self.closed = True
+
+    async def stream():
+        yield [{"pane_id": "p1"}]
+        yield [{"pane_id": "p2"}]
+
+    stalled = StalledWs()
+    clients = {FastWs(), stalled}
+    # patch the per-client timeout small for the test
+    import herdeck.bridge as bridge_mod
+
+    orig = bridge_mod._BROADCAST_SEND_TIMEOUT
+    bridge_mod._BROADCAST_SEND_TIMEOUT = 0.05
+    try:
+        await asyncio.wait_for(_broadcast(stream(), clients, "s"), timeout=5.0)
+    finally:
+        bridge_mod._BROADCAST_SEND_TIMEOUT = orig
+    assert len(got) == 2  # the healthy client received every snapshot
+    assert stalled.closed  # the stalled one was dropped to reconnect cleanly

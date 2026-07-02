@@ -43,6 +43,8 @@ import {
   windowMode,
   setWindowMode,
   type ConfigPayload,
+  errorCountLabel,
+  isStaleRevisionError,
 } from "./configClient";
 
 function rawConfig(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -74,6 +76,7 @@ describe("parseConfig", () => {
       secrets: {},
       envLocked: false,
       activeProfile: "default",
+      revision: null,
     });
   });
 
@@ -834,5 +837,40 @@ describe("window mode", () => {
 
   it("exposes exactly the three modes", () => {
     expect(WINDOW_MODES).toEqual(["normal", "floating", "always_on_top"]);
+  });
+});
+
+describe("errorCountLabel", () => {
+  it("pluralizes Czech counts", () => {
+    expect(errorCountLabel(1)).toBe("1 chyba");
+    expect(errorCountLabel(2)).toBe("2 chyby");
+    expect(errorCountLabel(4)).toBe("4 chyby");
+    expect(errorCountLabel(5)).toBe("5 chyb");
+    expect(errorCountLabel(11)).toBe("11 chyb");
+  });
+});
+
+describe("revision staleness guard", () => {
+  it("round-trips the revision through parse and write body", () => {
+    const payload = parseConfig({
+      base: {}, profiles: {}, local: {}, secrets: {},
+      env_locked: false, active_profile: "default", revision: "abc123",
+    });
+    expect(payload?.revision).toBe("abc123");
+    expect(toWriteBody(payload!).revision).toBe("abc123");
+  });
+
+  it("omits an unknown revision (older sidecars)", () => {
+    const payload = parseConfig({
+      base: {}, profiles: {}, local: {}, secrets: {},
+      env_locked: false, active_profile: "default",
+    });
+    expect(payload?.revision).toBeNull();
+    expect("revision" in toWriteBody(payload!)).toBe(false);
+  });
+
+  it("classifies the stale error", () => {
+    expect(isStaleRevisionError("stale_revision: config changed on disk")).toBe(true);
+    expect(isStaleRevisionError("grid must be WxH")).toBe(false);
   });
 });

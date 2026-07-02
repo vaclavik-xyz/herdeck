@@ -9,6 +9,7 @@
     SetupTransport,
     ConnectRequest,
   } from "./onboardingClient";
+  import { connectErrorMessage, shouldAutoReconnect } from "./onboardingClient";
 
   let {
     view,
@@ -28,33 +29,66 @@
   let url = $state("");
   let token = $state("");
   let serverId = $state("");
-  let busy = $state(false);
+  // WHICH action is connecting — the pressed button shows "Připojuji…" instead
+  // of the whole card just greying out for a multi-second probe.
+  let busyAction = $state<string | null>(null);
+  const busy = $derived(busyAction != null);
   let error = $state<string | null>(null);
 
   const localAvailable = $derived(status?.localHerdrAvailable === true);
   const savedAvailable = $derived(status?.savedRemoteAvailable === true);
 
-  async function run(req: ConnectRequest): Promise<void> {
+  // Latch (not derive) the remote form open when there is no local herdr: a
+  // derived condition made the form vanish mid-typing when herdr appeared
+  // during the 2.5s /setup poll.
+  $effect(() => {
+    if (view === "welcome" && status != null && !localAvailable) showRemote = true;
+  });
+
+  // The user already CHOSE local — when herdr (re)appears, reconnect without
+  // demanding a click. Gated on the PERSISTED choice rather than the current
+  // view: the moment the socket exists the backend reports reason=first_run,
+  // so the parent flips this card to "welcome" before a view-gated effect
+  // could ever fire. A manual re-onboarding session (onDismiss present) is
+  // the user's explicit request to change things — never auto-connect there.
+  let autoReconnectTried = $state(false);
+  $effect(() => {
+    if (
+      shouldAutoReconnect({
+        view,
+        choice: status?.choice ?? null,
+        localAvailable,
+        busy,
+        tried: autoReconnectTried,
+        manual: onDismiss != null,
+      })
+    ) {
+      autoReconnectTried = true;
+      connectLocal();
+    }
+  });
+
+  async function run(req: ConnectRequest, action: string): Promise<void> {
     if (!transport || busy) return;
-    busy = true;
+    busyAction = action;
     error = null;
     const r = await transport.connect(req);
-    busy = false;
+    busyAction = null;
     if (r.ok) {
       onConnected();
     } else {
-      error = r.error ?? "Připojení selhalo.";
+      error = connectErrorMessage(r.error, status?.socketPath);
     }
   }
 
   function connectLocal(): void {
-    void run({ choice: "local" });
+    void run({ choice: "local" }, "local");
   }
   function connectDemo(): void {
-    void run({ choice: "demo" });
+    void run({ choice: "demo" }, "demo");
   }
   function connectSaved(): void {
-    void run({ choice: "saved" });
+    void run({ choice: "saved" }, "saved");
   }
   function connectRemote(): void {
     const u = url.trim();
@@ -65,71 +99,94 @@
     const req: ConnectRequest = { choice: "remote", url: u, token };
     const id = serverId.trim();
     if (id) (req as { id?: string }).id = id;
-    void run(req);
+    void run(req, "remote");
   }
+
+  function focusOnMount(node: HTMLInputElement): void {
+    node.focus();
+  }
+
+  const label = (idle: string, action: string): string =>
+    busyAction === action ? "Připojuji…" : idle;
 </script>
 
 <section class="onboarding">
   {#if view === "reconnect"}
     <h1>herdr neběží</h1>
     <p class="lead">Lokální připojení je zapamatované, ale herdr teď neběží.</p>
-    {#if savedAvailable}
-      <p class="lead">Máš uložené spojení.</p>
-      <div class="actions">
-        <button class="primary" disabled={busy} onclick={connectSaved}>Připojit k uloženému spojení</button>
-      </div>
-    {/if}
+    <p class="hint">
+      Spusť <code>herdr</code> v terminálu (socket: <code>{status?.socketPath ?? "?"}</code>).
+      Jakmile naběhne, připojím se automaticky.
+    </p>
     <div class="actions">
-      <button class="primary" disabled={busy} onclick={connectLocal}>Zkusit znovu</button>
+      <button class="primary" disabled={busy} onclick={connectLocal}>
+        {label("Zkusit znovu", "local")}
+      </button>
+      {#if savedAvailable}
+        <button class="ghost" disabled={busy} onclick={connectSaved}>
+          {label("Připojit k uloženému spojení", "saved")}
+        </button>
+      {/if}
       <button class="link" disabled={busy} onclick={() => (showRemote = !showRemote)}>
         Připojit vzdáleně…
       </button>
     </div>
   {:else}
     <h1>Připojit herdeck</h1>
-    {#if savedAvailable}
-      <p class="lead">Máš uložené spojení.</p>
-      <div class="actions">
-        <button class="primary" disabled={busy} onclick={connectSaved}>Připojit k uloženému spojení</button>
-      </div>
-    {/if}
     {#if localAvailable}
       <p class="lead ok">✓ herdr běží lokálně</p>
       <div class="actions">
-        <button class="primary" disabled={busy} onclick={connectLocal}>Připojit</button>
+        {#if savedAvailable}
+          <button class="primary" disabled={busy} onclick={connectSaved}>
+            {label("Připojit k uloženému spojení", "saved")}
+          </button>
+          <button class="ghost" disabled={busy} onclick={connectLocal}>
+            {label("Připojit lokálně", "local")}
+          </button>
+        {:else}
+          <button class="primary" disabled={busy} onclick={connectLocal}>
+            {label("Připojit", "local")}
+          </button>
+        {/if}
         <button class="link" disabled={busy} onclick={() => (showRemote = !showRemote)}>
           Vzdálený herdr…
         </button>
       </div>
     {:else}
-      <p class="lead">herdr nebyl lokálně nalezen — spusť ho, nebo se připoj vzdáleně.</p>
-      <div class="actions">
-        <button class="primary" disabled={busy} onclick={() => (showRemote = true)}>
-          Vzdálený herdr…
-        </button>
-      </div>
+      <p class="lead">herdr nebyl lokálně nalezen — spusť ho, nebo se připoj vzdáleně níže.</p>
+      {#if savedAvailable}
+        <div class="actions">
+          <button class="ghost" disabled={busy} onclick={connectSaved}>
+            {label("Připojit k uloženému spojení", "saved")}
+          </button>
+        </div>
+      {/if}
+      <!-- the latched-open remote form below IS the primary action here — the
+           old extra 'Vzdálený herdr…' primary above it visibly did nothing -->
     {/if}
   {/if}
 
-  {#if showRemote || (view === "welcome" && !localAvailable)}
+  {#if showRemote || (view === "welcome" && status != null && !localAvailable)}
     <form class="remote" onsubmit={(e) => { e.preventDefault(); connectRemote(); }}>
-      <label>URL<input type="text" placeholder="ws(s)://host:8788" bind:value={url} /></label>
+      <label>URL<input type="text" placeholder="ws(s)://host:8788" bind:value={url} use:focusOnMount /></label>
       <label>Token<input type="password" bind:value={token} /></label>
       <label class="adv">ID (volitelné)<input type="text" placeholder="herdr" bind:value={serverId} /></label>
-      <button class="primary" type="submit" disabled={busy}>Připojit</button>
+      <button class="primary" type="submit" disabled={busy}>
+        {label("Připojit", "remote")}
+      </button>
     </form>
   {/if}
 
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
+
   <div class="footer">
-    {#if view === "welcome"}
-      <button class="link" disabled={busy} onclick={connectDemo}>Prozkoumat demo</button>
-    {/if}
+    <button class="link" disabled={busy} onclick={connectDemo}>
+      {label("Prozkoumat demo", "demo")}
+    </button>
     {#if onDismiss}
       <button class="link dismiss" disabled={busy} onclick={onDismiss}>← zpět na deck</button>
     {/if}
   </div>
-
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
 </section>
 
 <style>
@@ -153,6 +210,17 @@
   }
   .lead.ok {
     color: #3fb950;
+  }
+  .hint {
+    margin: 0;
+    color: #6b7785;
+    font-size: 12px;
+  }
+  .hint code {
+    color: #8b97a4;
+    background: #17171b;
+    padding: 1px 4px;
+    border-radius: 4px;
   }
   .actions,
   .footer {
@@ -194,6 +262,19 @@
     cursor: pointer;
   }
   button.primary:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  button.ghost {
+    padding: 6px 13px;
+    border: 1px solid #2a3f66;
+    border-radius: 7px;
+    background: none;
+    color: #9db8e8;
+    font: inherit;
+    cursor: pointer;
+  }
+  button.ghost:disabled {
     opacity: 0.5;
     cursor: default;
   }

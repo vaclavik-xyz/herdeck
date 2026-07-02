@@ -323,3 +323,73 @@ describe("stepDeck — folds a poll into the render model", () => {
     expect(view.online).toBe(true);
   });
 });
+
+describe("stepDeck idle no-op (audit: stepdeck-noop-return)", () => {
+  function idleTransport(states: unknown[]): DeckTransport {
+    let i = 0;
+    return {
+      async fetchState() {
+        const s = states[Math.min(i, states.length - 1)];
+        i += 1;
+        return s;
+      },
+      tileImage: async (index, version) => `tile-${index}-v${version}`,
+      panelImage: async (version) => `panel-v${version}`,
+      press: async () => ({ ok: true, status: 204, forbidden: false }),
+    };
+  }
+
+  it("returns the SAME view object when nothing changed", async () => {
+    const t = idleTransport([
+      rawState({ version: 1, tiles: { "0": 1 }, panel: 0 }),
+      rawState({ version: 1, tiles: { "0": 1 }, panel: 0 }),
+    ]);
+    const differ = new DeckDiffer();
+    const first = await stepDeck(t, differ, initialView());
+    const second = await stepDeck(t, differ, first);
+    expect(second).toBe(first); // identity: the $state assignment is a no-op
+  });
+
+  it("returns a fresh object when a tile version advances", async () => {
+    const t = idleTransport([
+      rawState({ version: 1, tiles: { "0": 1 }, panel: 0 }),
+      rawState({ version: 2, tiles: { "0": 2 }, panel: 0 }),
+    ]);
+    const differ = new DeckDiffer();
+    const first = await stepDeck(t, differ, initialView());
+    const second = await stepDeck(t, differ, first);
+    expect(second).not.toBe(first);
+    expect(second.tiles[0]).toBe("tile-0-v2");
+  });
+});
+
+describe("panel fetch parallelism (roborev 5a1faa6)", () => {
+  it("starts tile AND panel requests before either resolves", async () => {
+    const started: string[] = [];
+    let releaseTile: (v: string) => void = () => {};
+    let releasePanel: (v: string) => void = () => {};
+    const t: DeckTransport = {
+      fetchState: async () =>
+        rawState({ version: 1, tiles: { "0": 1 }, panel: 1, has_panel: true }),
+      tileImage: (index, version) => {
+        started.push("tile");
+        return new Promise((r) => (releaseTile = () => r(`tile-${index}-v${version}`)));
+      },
+      panelImage: (version) => {
+        started.push("panel");
+        return new Promise((r) => (releasePanel = () => r(`panel-v${version}`)));
+      },
+      press: async () => ({ ok: true, status: 204, forbidden: false }),
+    };
+    const pending = stepDeck(t, new DeckDiffer(), initialView());
+    await new Promise((r) => setTimeout(r, 0)); // let the fetches be issued
+    // BOTH requests are in flight before either resolved — a serial
+    // panel-after-tiles (or tiles-after-panel) implementation fails here
+    expect(started.sort()).toEqual(["panel", "tile"]);
+    releaseTile("");
+    releasePanel("");
+    const view = await pending;
+    expect(view.panel).toBe("panel-v1");
+    expect(view.tiles[0]).toBe("tile-0-v1");
+  });
+});

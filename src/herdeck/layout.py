@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import re
-import textwrap
 from dataclasses import dataclass
 
 from .driver.base import PanelView
@@ -15,7 +14,6 @@ _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 # A box-drawing run (U+2500–U+257F) and everything after it: a side panel drawn
 # in the same terminal row as an option, to be trimmed off the option's label.
 _BOX_DRAWING_RE = re.compile("\\s*[─-╿].*$")
-_DETAIL_LINE_WIDTH = 36
 _DETAIL_MAX_LINES = 3
 
 # lower = higher priority (shown first). done = finished-but-unseen ranks just
@@ -46,7 +44,7 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
     """Render an agent-tile text line from a token list.
 
     Tokens map to AgentState values; empty values are dropped and the rest are
-    joined with " · ". `tab` is shown only when present, prefixed with ▸.
+    joined with " · ". `tab` is shown only when present, prefixed with ›.
     """
     parts: list[str] = []
     for token in tokens:
@@ -57,7 +55,7 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
         elif token == "workspace":
             value = state.workspace
         elif token == "tab":
-            value = f"▸{state.tab}" if state.tab else ""
+            value = f"›{state.tab}" if state.tab else ""
         elif token == "agent":
             value = state.agent_type
         else:
@@ -131,9 +129,14 @@ def panel_overview(
 ) -> PanelView:
     if down:
         title, lines, color = "OFFLINE", ["reconnecting…"], "red"
+        if counts.blocked:
+            # one dead server must not hide that agents are waiting for input
+            lines.append(f"▲ {counts.blocked} blocked")
     elif spotlight is not None:
         label, elapsed = spotlight
-        title = "⚠ needs you"
+        # With several agents blocked the deck must not look like just one:
+        # the spotlight names the oldest, the title carries the count.
+        title = "▲ needs you" if counts.blocked <= 1 else f"▲ {counts.blocked} need you"
         lines = [label, f"blocked {elapsed}".rstrip()]
         color = "amber"
     else:
@@ -185,6 +188,11 @@ def parse_options(text: str) -> list[Option]:
 
 
 def _detail_lines(text: str) -> tuple[list[str], list[str]]:
+    """(all cleaned lines, the first non-option LOGICAL lines).
+
+    Wrapping to the panel's width happens at render time (compose_panel) with
+    the actual font — the old 36-character wrap systematically overflowed the
+    360px pixel budget, so nearly every full line lost its tail mid-sentence."""
     raw_lines = [
         _ANSI_RE.sub("", ln).strip()
         for ln in text.splitlines()
@@ -196,24 +204,17 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
         match = _OPTION_RE.match(line)
         if match and match.group(1) in option_keys:
             continue
-        wrapped = textwrap.wrap(
-            line,
-            width=_DETAIL_LINE_WIDTH,
-            break_long_words=True,
-            break_on_hyphens=False,
-        ) or [line[:_DETAIL_LINE_WIDTH]]
-        for wrapped_line in wrapped:
-            lines.append(wrapped_line)
-            if len(lines) == _DETAIL_MAX_LINES:
-                return raw_lines, lines
+        lines.append(line)
+        if len(lines) == _DETAIL_MAX_LINES:
+            break
     if raw_lines and not lines:
-        lines = textwrap.wrap(raw_lines[0], width=_DETAIL_LINE_WIDTH)[:_DETAIL_MAX_LINES]
+        lines = [raw_lines[0]]
     return raw_lines, lines
 
 
 def panel_detail(agent: AgentState, text: str) -> PanelView:
-    # Split into bounded display lines so embedded newlines and long prompts do
-    # not reach the small panel as one unreadable blob.
+    # Logical prompt lines (options stripped); the renderer wraps them to the
+    # panel's pixel width so long prompts stay readable without losing words.
     raw_lines, lines = _detail_lines(text) if text else ([], [])
     if agent.status is Status.BLOCKED and not raw_lines:
         lines = ["reading prompt..."]

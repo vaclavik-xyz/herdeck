@@ -1059,3 +1059,27 @@ def test_close_detaches_sinks_before_closing():
     app.close()
     assert sink.closed is True
     assert seen["sinks_at_close"] == []  # detached before close() ran
+
+
+def test_reconnect_reissues_prereads_for_still_blocked_panes():
+    """In-flight pre-reads die with the connection; after a reconnect the
+    still-blocked panes must get a FRESH episode read, or instant drill stays
+    dark until each pane re-blocks (audit: preread-reissue)."""
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.BLOCKED)])
+    reads = [m for m in runner.sent if m.get("type") == "read"]
+    assert len(reads) == 1  # the background pre-read went out
+    # bridge drops (mac sleep); the in-flight read is lost with it
+    src._on_connection(server.id, False)
+    src._on_connection(server.id, True)
+    # no read yet: reissuing must wait for the RESYNC snapshot (fresh fleet),
+    # not fire against the stale pre-disconnect agents
+    reads = [m for m in runner.sent if m.get("type") == "read"]
+    assert len(reads) == 1
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.BLOCKED)])
+    reads = [m for m in runner.sent if m.get("type") == "read"]
+    assert len(reads) == 2  # fresh episode read for the still-blocked pane
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.BLOCKED)])
+    reads = [m for m in runner.sent if m.get("type") == "read"]
+    assert len(reads) == 2  # no double-issue for the same episode

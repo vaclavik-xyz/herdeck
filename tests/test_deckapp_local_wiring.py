@@ -6,12 +6,35 @@ from herdeck.deckapp import server as srv
 from herdeck.deckapp.local_bridge import LocalBridgeRunner
 
 
-def test_reloader_is_noop_in_local_mode():
-    calls = []
-    fake_app = types.SimpleNamespace(swap_source=lambda s: calls.append(s))
+def test_local_reloader_rebuilds_source_against_running_bridge(monkeypatch):
+    """An editor Apply / on-disk edit in LOCAL mode must reach the deck: the
+    reloader rebuilds the live source against the RUNNING bridge's port/token
+    (never restarting the bridge). The old no-op silently ignored every Apply
+    (audit: local-apply-reload)."""
+    captured = {}
+
+    def fake_build(config, server):
+        captured["server"] = server
+        return "REBUILT"
+
+    monkeypatch.setattr(srv, "build_live_source_for_connect", fake_build)
+    swaps = []
+    fake_runner = types.SimpleNamespace(bound=("127.0.0.1", 4242, "tok"))
+    fake_app = types.SimpleNamespace(
+        swap_source=lambda s: swaps.append(s), _local_bridge=fake_runner
+    )
     reload = srv._reloader_for(fake_app, ("local", "/s.sock"), lambda: "NEWSRC")
     reload()
-    assert calls == []  # local reload must NOT swap (would orphan the bridge)
+    assert swaps == ["REBUILT"]
+    assert captured["server"].url == "ws://127.0.0.1:4242"
+    assert captured["server"].token == "tok"
+
+
+def test_local_reloader_is_noop_without_a_running_bridge():
+    swaps = []
+    fake_app = types.SimpleNamespace(swap_source=lambda s: swaps.append(s), _local_bridge=None)
+    srv._reloader_for(fake_app, ("local", "/s.sock"), lambda: "NEWSRC")()
+    assert swaps == []  # nothing to rebuild against; keep the current source
 
 
 def test_reloader_swaps_in_mock_or_remote_mode():

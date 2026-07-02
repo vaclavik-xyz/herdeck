@@ -34,7 +34,9 @@ sound = true
 
 [safety]
 approve_always = true
-require_confirm_for = []
+# Stop (act_force) needs a second confirming press by default — it is an
+# unconditional interrupt one key away from Back. Set to [] to opt out.
+require_confirm_for = ["act_force"]
 
 [[macros]]
 label = "continue"
