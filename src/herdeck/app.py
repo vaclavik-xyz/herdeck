@@ -844,6 +844,40 @@ async def _run(
         manager.stop_all()
 
 
+def _iface_addr(probe_host: str) -> str | None:
+    """The local source address the OS would route to ``probe_host`` (UDP
+    connect — no packet is sent). Used to discover the Tailscale / LAN
+    interface addresses for the simulator announcement."""
+    import socket
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((probe_host, 53))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+def _simulator_urls(host: str, port: int, token: str) -> list[str]:
+    """URLs worth printing for the simulator. A wildcard bind is literally
+    unroutable (http://0.0.0.0:…) and the README's primary workflow opens the
+    page from a phone over Tailscale — so for wildcard binds the Tailscale
+    (100.64/10) and default-route addresses are announced too."""
+    if host not in ("0.0.0.0", "::"):
+        return [f"http://{host}:{port}/?token={token}"]
+    urls: list[str] = []
+    tailscale = _iface_addr("100.100.100.100")  # MagicDNS resolver -> ts iface
+    if tailscale and tailscale.startswith("100."):
+        urls.append(f"http://{tailscale}:{port}/?token={token}")
+    lan = _iface_addr("1.1.1.1")
+    if lan and f"http://{lan}:{port}/?token={token}" not in urls:
+        urls.append(f"http://{lan}:{port}/?token={token}")
+    urls.append(f"http://127.0.0.1:{port}/?token={token}")
+    return urls
+
+
 def _resolve_deck_kind(config: Config | None, *, getenv=os.environ.get):
     env_kind = getenv("HERDECK_DECK")
     if env_kind:
@@ -868,6 +902,7 @@ def make_deck(
     slots,
     *,
     hardware=None,
+    cols=5,
     d200_factory=None,
     elgato_factory=None,
     web_factory=None,
@@ -885,17 +920,26 @@ def make_deck(
         raw_port = env_port if env_port is not None else hardware.web_port
         port = int(raw_port if raw_port is not None else 8800)
         try:
+            return web_factory(host=host, port=port, cols=cols)
+        except TypeError:
+            pass
+        try:
             return web_factory(host=host, port=port)
         except TypeError:
             return web_factory()
 
     if web_factory is None:
 
-        def web_factory(host=None, port=None):
+        def web_factory(host=None, port=None, cols=5):
             from .driver.web import WebDeck
 
-            d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir)
-            print(f"herdeck web simulator on http://{d.host}:{d.port}/?token={d.press_token}")
+            try:
+                d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir, cols=cols)
+            except TypeError:
+                # injected test doubles may predate the cols parameter
+                d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir)
+            for url in _simulator_urls(d.host, d.port, d.press_token):
+                print(f"herdeck web simulator on {url}")
             return d
 
     if d200_factory is None:
@@ -1025,7 +1069,9 @@ def main() -> None:
         sock, token = discover_ipc()
         asyncio.run(_amain_elgato(mode, file_config, sock, token))
         return
-    deck = make_deck(kind, slots, hardware=file_config.hardware if file_config else None)
+    deck = make_deck(
+        kind, slots, hardware=file_config.hardware if file_config else None, cols=grid[0]
+    )
     try:
         if mode[0] == "mock":
             asyncio.run(_run_mock(_mock_config(), deck))

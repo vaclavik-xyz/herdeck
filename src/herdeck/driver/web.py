@@ -68,8 +68,10 @@ class WebDeck(DeckDriver):
         serve: bool = True,
         press_token: str | None = None,
         token_path: str | None = None,
+        cols: int = 5,
     ):
         self._slots = slots
+        self._cols = max(1, cols)  # grid width; the page lays cells out with it
         self._callback: Callable[[int], None] | None = None
         self._lock = threading.Lock()
         # Long-poll support: /state?since=<version> HOLDS until _bump() fires.
@@ -208,6 +210,7 @@ class WebDeck(DeckDriver):
         return {
             "version": self._version,
             "slots": self._slots,
+            "cols": self._cols,
             "has_panel": self._panel is not None,
             "panel": self._panel_ver,
             "tiles": dict(self._tile_ver),
@@ -332,15 +335,18 @@ _PAGE = """<!doctype html><meta charset=utf-8>
 <style>
  body{background:#0b0b0d;margin:0;font-family:-apple-system,sans-serif;
    display:flex;align-items:center;justify-content:center;min-height:100vh}
- #deck{background:#2a2a2e;padding:18px;border-radius:18px;
-   display:grid;grid-template-columns:repeat(5,min(17vw,150px));gap:10px}
- .cell{width:min(17vw,150px);height:min(17vw,150px);border-radius:8px;background:#111;cursor:pointer;
+ /* cell size lives in --cell so JS can set the COLUMN COUNT from /state.cols
+    (repeat() does not accept var() for its count) — the layout follows the
+    configured [deck] grid instead of hardcoding the 5-wide D200 */
+ #deck{--cell:min(17vw,150px);--gap:10px;background:#2a2a2e;padding:18px;border-radius:18px;
+   display:grid;grid-template-columns:repeat(5,var(--cell));gap:var(--gap)}
+ .cell{width:var(--cell);height:var(--cell);border-radius:8px;background:#111;cursor:pointer;
    overflow:hidden;border:none;padding:0;
    touch-action:manipulation;-webkit-tap-highlight-color:transparent}
  .cell:active{transform:scale(.95);filter:brightness(1.3)} /* instant, local press feedback */
  .cell.active{outline:3px solid #5af}
  .cell img{width:100%;height:100%;display:block}
- #panel{grid-column:4 / 6;width:calc(min(17vw,150px)*2 + 10px);height:min(17vw,150px);border-radius:8px;
+ #panel{grid-column:4 / 6;width:calc(var(--cell)*2 + var(--gap));height:var(--cell);border-radius:8px;
    overflow:hidden;cursor:pointer;background:#111;
    touch-action:manipulation;-webkit-tap-highlight-color:transparent}
  #panel:active{filter:brightness(1.3)}
@@ -349,11 +355,9 @@ _PAGE = """<!doctype html><meta charset=utf-8>
  #note{position:fixed;left:50%;top:10px;transform:translateX(-50%);max-width:90vw;
    background:#3a1d1d;color:#f0a0a0;padding:6px 12px;border-radius:8px;
    font:13px system-ui;display:none;z-index:9}
- /* phone portrait: width is the constraint, so shrink the 5-wide deck */
+ /* phone portrait: width is the constraint, so shrink the deck */
  @media (max-width:560px){
-   #deck{grid-template-columns:repeat(5,min(17vw,110px));gap:6px;padding:10px}
-   .cell{width:min(17vw,110px);height:min(17vw,110px)}
-   #panel{width:calc(min(17vw,110px)*2 + 6px);height:min(17vw,110px)}
+   #deck{--cell:min(17vw,110px);--gap:6px;padding:10px}
  }
  /* phone landscape: HEIGHT is the constraint (3 rows), so size cells by viewport
     height — but also keep the 17vw width cap so a short AND narrow viewport
@@ -361,9 +365,7 @@ _PAGE = """<!doctype html><meta charset=utf-8>
     sideways. The deck stays within both the short (e.g. 667x375) viewport's
     height and a narrow viewport's width. */
  @media (max-height:430px){
-   #deck{grid-template-columns:repeat(5,min(17vw,22vh,110px));gap:6px;padding:10px}
-   .cell{width:min(17vw,22vh,110px);height:min(17vw,22vh,110px)}
-   #panel{width:calc(min(17vw,22vh,110px)*2 + 6px);height:min(17vw,22vh,110px)}
+   #deck{--cell:min(17vw,22vh,110px);--gap:6px;padding:10px}
  }
 </style>
 <div id=deck></div>
@@ -392,7 +394,13 @@ async function press(i){
   if(r.status===403){ setStale('token expired — open the fresh URL from the startup log'); return; }
   if(!r.ok) return;
   btns.forEach(b=>b.classList.remove('active'));   // clear any stale outline first
-  if(btns[i]) btns[i].classList.add('active');     // panel (no button) leaves none active
+  if(btns[i]){
+    // transient "press registered" flash — a persistent outline ended up
+    // highlighting a completely different tile after the view changed
+    btns[i].classList.add('active');
+    const b=btns[i];
+    setTimeout(()=>b.classList.remove('active'),350);
+  }
   pollNow();  // the press already re-rendered server-side; don't wait 300ms
 }
 function addCell(i){
@@ -404,6 +412,13 @@ function addCell(i){
 const panel=document.createElement('div');panel.id='panel';
 panel.onclick=()=>press(slotCount);
 const pimg=document.createElement('img');panel.appendChild(pimg);
+let curCols=5;
+function applyGrid(cols){
+  if(!cols||cols===curCols) return;
+  curCols=cols;
+  deck.style.gridTemplateColumns='repeat('+cols+', var(--cell))';
+  panel.style.gridColumn=(cols-1)+' / '+(cols+1);
+}
 function ensureCells(count){
   if(count===slotCount) return;
   while(btns.length<count) addCell(btns.length);
@@ -441,6 +456,7 @@ async function poll(){
     const s=await r.json();
     clearStale();
     ensureCells(s.slots);
+    applyGrid(s.cols);
     if(s.version!==lastV){          // cheap gate: nothing changed at all
       lastV=s.version;
       const t=s.tiles||{};

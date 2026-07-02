@@ -54,7 +54,8 @@ def test_page_guards_key_repeat_and_panel_clears_highlight():
     assert "e.repeat" in page
     # clearing the highlight is unconditional; only the add is guarded by btns[i],
     # so a panel press (no button) still clears any stale tile outline
-    assert "if(btns[i]) btns[i].classList.add('active')" in page
+    assert "btns.forEach(b=>b.classList.remove('active'))" in page
+    assert "if(btns[i]){" in page  # the transient flash is still tile-only
 
 
 def test_page_uses_state_slot_count_for_cells_and_panel_index():
@@ -101,7 +102,7 @@ def test_page_landscape_rule_sizes_deck_for_short_height():
                 break
     block = page[start : end + 1]
     assert "vh" in block  # cells sized by viewport height, not just width
-    assert ".cell" in block  # the tiles themselves are resized
+    assert "--cell" in block  # tiles resize via the shared cell variable
     # a short viewport may also be narrow (e.g. 320x400) where this rule overrides
     # the portrait one, so it must constrain width too or the deck overflows sideways
     assert "vw" in block
@@ -111,11 +112,13 @@ def test_page_uses_readable_desktop_scale():
     from herdeck.driver import web
 
     page = web._PAGE
-    assert "grid-template-columns:repeat(5,min(17vw,150px))" in page
-    assert ".cell{width:min(17vw,150px);height:min(17vw,150px);" in page
+    # the desktop scale lives in --cell; the column count comes from /state.cols
+    assert "--cell:min(17vw,150px)" in page
+    assert "grid-template-columns:repeat(5,var(--cell))" in page
+    assert ".cell{width:var(--cell);height:var(--cell);" in page
     assert (
-        "#panel{grid-column:4 / 6;width:calc(min(17vw,150px)*2 + 10px);"
-        "height:min(17vw,150px);"
+        "#panel{grid-column:4 / 6;width:calc(var(--cell)*2 + var(--gap));"
+        "height:var(--cell);"
     ) in page
 
 
@@ -468,5 +471,26 @@ def test_state_long_poll_times_out_unchanged(tmp_path):
         v = _get_json(d, "/state")["version"]
         state = _get_json(d, f"/state?since={v}")
         assert state["version"] == v  # answered with the unchanged state
+    finally:
+        d.close()
+
+
+def test_state_carries_grid_cols_and_page_applies_them(tmp_path):
+    """The page hardcoded a 5-wide grid while slots follow [deck].grid
+    (audit: websim-grid-var)."""
+    d = WebDeck(
+        slots=6, cols=4, host="127.0.0.1", port=0, serve=True,
+        icon_provider=StubIcons(), token_path=str(tmp_path / "web-token"),
+    )
+    try:
+        assert _get_json(d, "/state")["cols"] == 4
+        import urllib.request
+
+        with urllib.request.urlopen(
+            f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=5
+        ) as r:
+            page = r.read().decode()
+        assert "applyGrid(s.cols)" in page
+        assert "setTimeout(()=>b.classList.remove('active'),350)" in page  # transient outline
     finally:
         d.close()
