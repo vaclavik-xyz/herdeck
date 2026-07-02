@@ -450,7 +450,7 @@ async def test_wired_snapshot_fetches_lists_concurrently():
         async def list_panes(self):
             return await self._slow([])
 
-        async def worktrees(self):
+        async def worktrees(self, workspace_ids=None):
             return await self._slow([])
 
         async def workspaces(self):
@@ -461,8 +461,9 @@ async def test_wired_snapshot_fetches_lists_concurrently():
 
     stub = SlowStub()
     await _wired_snapshot(stub)
-    # all four herdr lists must be in flight at once (latency = max, not sum)
-    assert stub.max_active == 4
+    # pane.list goes FIRST (worktree queries need the agent workspaces), then
+    # the three label lists fly concurrently (latency = panes + max(labels))
+    assert stub.max_active == 3
 
 
 async def test_stream_caches_labels_across_status_wakes():
@@ -594,3 +595,52 @@ async def test_broadcast_stalled_client_does_not_starve_others():
         bridge_mod._BROADCAST_SEND_TIMEOUT = orig
     assert len(got) == 2  # the healthy client received every snapshot
     assert stalled.closed  # the stalled one was dropped to reconnect cleanly
+
+
+async def test_wired_snapshot_queries_worktrees_for_agent_workspaces():
+    from herdeck.bridge import StubHerdr, _wired_snapshot
+
+    pane_a = raw_pane("wA:p1", agent="claude", status="working")
+    pane_a["workspace_id"] = "wA"
+    pane_b = raw_pane("wB:p1", agent="codex", status="idle")
+    pane_b["workspace_id"] = "wB"
+    stub = StubHerdr(
+        [pane_a, pane_b],
+        worktrees=[
+            {"open_workspace_id": "wA", "label": "repo-a", "branch": "main"},
+            {"open_workspace_id": "wB", "label": "repo-b", "branch": "fix/x"},
+        ],
+    )
+    panes = await _wired_snapshot(stub)
+    # worktrees were asked about exactly the agent workspaces (sorted, unique)
+    assert stub.worktree_queries == [["wA", "wB"]]
+    by_id = {p["pane_id"]: p for p in panes}
+    assert by_id["wA:p1"]["branch"] == "main"
+    assert by_id["wB:p1"]["branch"] == "fix/x"
+
+
+async def test_socket_herdr_merges_per_workspace_worktrees():
+    from herdeck.bridge import SocketHerdr
+
+    herdr = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params))
+        ws = params.get("workspace_id")
+        # the same repo open in two workspaces returns the same worktree rows
+        shared = {"path": "/r/a", "open_workspace_id": "wA", "branch": "main"}
+        per_ws = {
+            "wA": [shared],
+            "wB": [shared, {"path": "/r/b", "open_workspace_id": "wB", "branch": "dev"}],
+        }
+        return {"result": {"worktrees": per_ws.get(ws, [])}}
+
+    herdr._rpc = fake_rpc
+    merged = await herdr.worktrees(["wA", "wB"])
+    assert calls == [
+        ("worktree.list", {"workspace_id": "wA"}),
+        ("worktree.list", {"workspace_id": "wB"}),
+    ]
+    assert len(merged) == 2  # the shared row is de-duplicated
+    assert {w["branch"] for w in merged} == {"main", "dev"}
