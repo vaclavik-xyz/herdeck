@@ -129,7 +129,11 @@
 
 <main class:borderless>
   <div class="shell" bind:this={shell}>
-    {#if borderless}<div class="drag" data-tauri-drag-region></div>{/if}
+    {#if borderless}
+      <div class="drag" data-tauri-drag-region>
+        <span class="grabber" data-tauri-drag-region></span>
+      </div>
+    {/if}
     {#if view === "deck"}
       <DeckView {transport} />
       <!-- Re-onboarding affordance, in document flow so content-fit measures it
@@ -183,9 +187,28 @@
     border-radius: 12px;
     overflow: hidden;
   }
+  /* The drag strip is the ONLY way to move the borderless window — give it a
+     visible grabber pill instead of an 18px invisible blind target. */
   .drag {
     height: 18px;
     width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+  }
+  .drag:active {
+    cursor: grabbing;
+  }
+  .grabber {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: #2a2a2e;
+    transition: background 0.15s;
+  }
+  .drag:hover .grabber {
+    background: #4a4a52;
   }
   .tools {
     display: flex;
