@@ -396,6 +396,7 @@ class DeckApp:
                 "summary": self._source.summary(),
                 "source": self._source.source_name,
                 "connected": self._source.connected,
+                "language": getattr(self._source, "language", "en"),
             }
 
     def _health(self) -> dict:

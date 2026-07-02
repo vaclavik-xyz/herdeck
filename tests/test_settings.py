@@ -573,3 +573,21 @@ def test_safety_default_requires_confirm_for_stop(tmp_path, monkeypatch):
     )
     snapshot = load_settings(cfg, None)
     assert resolve_profile(snapshot).config.safety.require_confirm_for == []
+
+
+# ---------------------------------------------------------------------------
+# [view] language
+# ---------------------------------------------------------------------------
+
+
+def test_view_config_language_defaults_to_english():
+    assert _view_config({}).language == "en"
+
+
+def test_view_config_parses_language():
+    assert _view_config({"language": "cs"}).language == "cs"
+
+
+def test_view_config_rejects_unknown_language():
+    with pytest.raises(ConfigError):
+        _view_config({"language": "klingon"})

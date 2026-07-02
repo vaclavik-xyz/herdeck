@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 
 from .driver.base import PanelView
+from .i18n import tr
 from .model import AgentState, Status
 
 # A numbered choice line in an agent prompt, e.g. "❯ 1. Yes" or "2. Cenotvorba".
@@ -126,22 +127,27 @@ def panel_overview(
     down: set[str],
     total: int,
     spotlight: tuple[str, str] | None,
+    lang: str = "en",
 ) -> PanelView:
     if down:
-        title, lines, color = "OFFLINE", ["reconnecting…"], "red"
+        title, lines, color = tr(lang, "offline_title"), [tr(lang, "reconnecting")], "red"
         if counts.blocked:
             # one dead server must not hide that agents are waiting for input
-            lines.append(f"▲ {counts.blocked} blocked")
+            lines.append(tr(lang, "blocked_count", n=counts.blocked))
     elif spotlight is not None:
         label, elapsed = spotlight
         # With several agents blocked the deck must not look like just one:
         # the spotlight names the oldest, the title carries the count.
-        title = "▲ needs you" if counts.blocked <= 1 else f"▲ {counts.blocked} need you"
-        lines = [label, f"blocked {elapsed}".rstrip()]
+        title = (
+            tr(lang, "needs_you_one")
+            if counts.blocked <= 1
+            else tr(lang, "needs_you_many", n=counts.blocked)
+        )
+        lines = [label, tr(lang, "blocked_for", elapsed=elapsed).rstrip()]
         color = "amber"
     else:
-        title = f"{total} agents"
-        lines = [f"W{counts.working} · I{counts.idle} · D{counts.done}", "online"]
+        title = tr(lang, "agents_total", n=total)
+        lines = [f"W{counts.working} · I{counts.idle} · D{counts.done}", tr(lang, "online")]
         color = "grey"
     if page_count > 1 and lines:
         lines[-1] = f"{lines[-1]} · {page_index + 1}/{page_count}"
@@ -212,12 +218,12 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
     return raw_lines, lines
 
 
-def panel_detail(agent: AgentState, text: str) -> PanelView:
+def panel_detail(agent: AgentState, text: str, lang: str = "en") -> PanelView:
     # Logical prompt lines (options stripped); the renderer wraps them to the
     # panel's pixel width so long prompts stay readable without losing words.
     raw_lines, lines = _detail_lines(text) if text else ([], [])
     if agent.status is Status.BLOCKED and not raw_lines:
-        lines = ["reading prompt..."]
+        lines = [tr(lang, "reading_prompt")]
     return PanelView(
         title=f"{agent.agent_type}: {agent.label}",
         lines=lines,

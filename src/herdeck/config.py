@@ -92,6 +92,8 @@ class ViewConfig:
     tile_secondary: list[str] | None = None
     working_animation: str = "spin"
     tile_fill: str = "none"
+    # Language of RENDERED deck text (tiles, panel, websim) and the desktop UI.
+    language: str = "en"
 
 
 # Actions that need a second confirming press by default. Stop (act_force) is an

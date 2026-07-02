@@ -903,6 +903,7 @@ def make_deck(
     *,
     hardware=None,
     cols=5,
+    language="en",
     d200_factory=None,
     elgato_factory=None,
     web_factory=None,
@@ -934,9 +935,16 @@ def make_deck(
             from .driver.web import WebDeck
 
             try:
-                d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir, cols=cols)
+                d = WebDeck(
+                    slots,
+                    host=host,
+                    port=port,
+                    icons_dir=hardware.icons_dir,
+                    cols=cols,
+                    language=language,
+                )
             except TypeError:
-                # injected test doubles may predate the cols parameter
+                # injected test doubles may predate the cols/language parameters
                 d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir)
             for url in _simulator_urls(d.host, d.port, d.press_token):
                 print(f"herdeck web simulator on {url}")
@@ -1070,7 +1078,11 @@ def main() -> None:
         asyncio.run(_amain_elgato(mode, file_config, sock, token))
         return
     deck = make_deck(
-        kind, slots, hardware=file_config.hardware if file_config else None, cols=grid[0]
+        kind,
+        slots,
+        hardware=file_config.hardware if file_config else None,
+        cols=grid[0],
+        language=file_config.view.language if file_config else "en",
     )
     try:
         if mode[0] == "mock":
