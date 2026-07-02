@@ -781,3 +781,11 @@ def test_page_jump_guards_presses_even_when_order_is_unchanged():
     assert o.on_press(0) == []  # swallowed: the tile under the finger changed
     clk[0] += 0.5
     assert o.on_press(0)[0].pane_id == "p1"
+
+
+def test_launcher_tile_carries_the_management_colour():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.IDLE)])
+    tile = o.render().tiles[12]
+    assert tile.label == "+ New"
+    assert tile.color == "launcher"  # dark + green label, not status green

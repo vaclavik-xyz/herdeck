@@ -310,7 +310,9 @@ class Orchestrator:
             if i in management:
                 tiles.append(TileView(i, self._management_label(management[i]), "grey", section=_MGMT_SECTION.get(management[i])))
             elif not management_mode and i == self.slots - 1:  # reserved launcher tile
-                tiles.append(TileView(i, "+ New", "green", section="start_profiles"))
+                # "launcher" renders dark with a green label — full status-green
+                # here read as one more WORKING agent under solid fill.
+                tiles.append(TileView(i, "+ New", "launcher", section="start_profiles"))
             elif i < len(shown):
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None

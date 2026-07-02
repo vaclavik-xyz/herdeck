@@ -553,3 +553,19 @@ def test_solid_bright_fill_darkens_the_agent_mark(tmp_path):
     normal = _tile_ns(color="amber", tile_fill="none")
     img2 = Image.open(io.BytesIO(p.render_tile_bytes(normal))).convert("RGB")
     assert sum(img2.getpixel((35, 35))) > 500  # stays white on the dark bg
+
+
+def test_launcher_tile_renders_dark_not_status_green(tmp_path):
+    """The full-green launcher was pixel-identical to a WORKING agent tile
+    under solid fill (audit: launcher-distinct-color)."""
+    import io
+    from types import SimpleNamespace
+
+    p = make_provider(tmp_path)
+    launcher = SimpleNamespace(
+        color="launcher", label="+ New", subtext=None, agent_type=None, spinner=None,
+        repo=None, branch=None, status_text=None, time_text=None,
+        server_tag=None, server_accent=None,
+    )
+    img = Image.open(io.BytesIO(p.render_tile_bytes(launcher))).convert("RGB")
+    assert img.getpixel((5, 5)) == (26, 26, 30)  # dark management background

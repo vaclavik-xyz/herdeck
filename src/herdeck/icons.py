@@ -551,6 +551,24 @@ class IconProvider:
         return data
 
     def _compose_label_tile(self, tile) -> Image.Image:
+        if tile.color == "launcher":
+            # A management tile, NOT a status: dark background + green accent
+            # label. The old full-green launcher was pixel-identical to a
+            # WORKING agent tile under solid fill — the deck read as having
+            # one more running agent than it had.
+            bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), TILE_BG + (255,))
+            d = ImageDraw.Draw(bg)
+            f = _font(30)
+            t = _truncate(d, tile.label, f, ICON_SIZE - 16)
+            w = d.textlength(t, font=f)
+            bb = d.textbbox((0, 0), t, font=f)
+            d.text(
+                ((ICON_SIZE - w) / 2, (ICON_SIZE - (bb[3] - bb[1])) / 2 - bb[1]),
+                t,
+                font=f,
+                fill=COLORS["green"],
+            )
+            return bg
         bg = Image.new(
             "RGBA", (ICON_SIZE, ICON_SIZE), COLORS.get(tile.color, COLORS["dim"]) + (255,)
         )
