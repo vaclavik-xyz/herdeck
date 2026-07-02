@@ -564,6 +564,10 @@ class DeckApp:
                 return result
 
             def do_POST(self):
+                # handler instances persist across keep-alive requests: the
+                # consumed flag must reset per request or a later rejected
+                # POST on the same connection would skip the close guard
+                self._body_consumed = False
                 path = urlsplit(self.path).path
                 if path.startswith("/press/"):
                     if not self._require_header_token():
