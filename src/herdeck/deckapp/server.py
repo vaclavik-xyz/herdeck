@@ -454,6 +454,12 @@ class DeckApp:
         app = self
 
         class Handler(BaseHTTPRequestHandler):
+            # HTTP/1.1 keep-alive: the desktop polls every 300ms and fetches
+            # each changed tile separately — HTTP/1.0's close-per-response
+            # churned a fresh TCP connection + server thread for every one.
+            # Safe because _send always emits Content-Length.
+            protocol_version = "HTTP/1.1"
+
             def log_message(self, *a):  # never log requests (could carry the token)
                 pass
 
