@@ -6,6 +6,7 @@ export const DEFAULT_STATUS_COLORS: Record<string, string> = {
   idle: "blue",
   blocked: "amber",
   done: "cyan",
+  waiting: "violet", // pane held pending background work (herdwatch)
   unknown: "grey",
   offline: "red",
 };

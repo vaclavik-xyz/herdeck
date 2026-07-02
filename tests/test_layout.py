@@ -326,3 +326,52 @@ def test_panel_overview_renders_czech_when_asked():
 def test_panel_overview_default_language_stays_english():
     pv = panel_overview(Counts(0, 1, 1, 0), 0, 1, set(), 2, None)
     assert pv.title == "2 agents"
+
+
+def test_waiting_ranks_between_working_and_idle():
+    from herdeck.layout import status_rank
+
+    assert (
+        status_rank(Status.BLOCKED)
+        < status_rank(Status.DONE)
+        < status_rank(Status.WORKING)
+        < status_rank(Status.WAITING)
+        < status_rank(Status.IDLE)
+        < status_rank(Status.UNKNOWN)
+    )
+
+
+def test_waiting_status_color_is_violet():
+    from herdeck.layout import status_color
+
+    assert status_color(Status.WAITING) == "violet"
+
+
+def test_waiting_status_text_uses_holder_label():
+    from herdeck.layout import waiting_status_text
+
+    assert waiting_status_text("⏳ ci") == "CI"
+    assert waiting_status_text("⏳ review +1") == "REVIEW +1"
+    assert waiting_status_text("") == "WAITING"  # fallback word
+    assert waiting_status_text("", lang="cs") == "V POZADÍ"
+    assert len(waiting_status_text("⏳ a-very-long-marker-name")) <= 12
+
+
+def test_panel_overview_counts_show_pending_only_when_nonzero():
+    pv = panel_overview(Counts(0, 2, 3, 1, waiting=1), 0, 1, set(), 7, None)
+    assert pv.lines[0] == "W2 · P1 · I3 · D1"
+    pv = panel_overview(Counts(0, 2, 3, 1), 0, 1, set(), 6, None)
+    assert pv.lines[0] == "W2 · I3 · D1"
+
+
+def test_panel_detail_leads_with_waiting_label():
+    from herdeck.layout import panel_detail
+
+    agent = AgentState(
+        AgentKey("dev", "p1"), "claude", "api", Status.WAITING, custom_status="⏳ review +1"
+    )
+    pv = panel_detail(agent, "", lang="en")
+    assert pv.lines[0] == "waiting on: review +1"
+    assert pv.color == "violet"
+    pv_cs = panel_detail(agent, "", lang="cs")
+    assert pv_cs.lines[0] == "čeká na: review +1"

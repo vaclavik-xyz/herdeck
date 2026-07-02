@@ -56,6 +56,7 @@ DEFAULT_STATUS_COLORS: dict[str, str] = {
     "idle": "blue",
     "blocked": "amber",
     "done": "cyan",
+    "waiting": "violet",  # pane held pending background work (herdwatch)
     "unknown": "grey",
     "offline": "red",
 }

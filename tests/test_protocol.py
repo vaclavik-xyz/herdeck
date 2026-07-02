@@ -97,3 +97,20 @@ def test_decode_snapshot_defaults_workspace_and_tab_to_empty():
     msg = decode_inbound(raw)
     assert msg.states[0].workspace == ""
     assert msg.states[0].tab == ""
+
+
+def test_working_pane_with_custom_status_derives_waiting():
+    from herdeck.model import Status
+    from herdeck.protocol import _pane_to_state
+
+    # herdwatch asserts `working` + a label while holding a pane on background
+    # work; herdeck surfaces that as the distinct WAITING state.
+    held = _pane_to_state("dev", {"pane_id": "p1", "status": "working", "custom_status": "⏳ ci"})
+    assert held.status is Status.WAITING
+    assert held.custom_status == "⏳ ci"
+    # genuinely working pane (no label) stays WORKING
+    plain = _pane_to_state("dev", {"pane_id": "p1", "status": "working"})
+    assert plain.status is Status.WORKING and plain.custom_status == ""
+    # a custom status on a non-working pane never flips the state
+    idle = _pane_to_state("dev", {"pane_id": "p1", "status": "idle", "custom_status": "⏳ x"})
+    assert idle.status is Status.IDLE

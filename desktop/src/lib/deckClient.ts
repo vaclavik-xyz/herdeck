@@ -16,6 +16,7 @@ export interface DeckSummary {
   working: number;
   idle: number;
   done: number;
+  waiting: number; // panes held pending background work (herdwatch)
 }
 
 /** The parsed `/state` snapshot. `tiles`/`panel` carry per-element *versions*
@@ -44,7 +45,7 @@ export interface DeckDiff {
 }
 
 export function emptySummary(): DeckSummary {
-  return { agents: 0, blocked: 0, working: 0, idle: 0, done: 0 };
+  return { agents: 0, blocked: 0, working: 0, idle: 0, done: 0, waiting: 0 };
 }
 
 function num(v: unknown, fallback = 0): number {
@@ -59,6 +60,7 @@ function parseSummary(raw: unknown): DeckSummary {
     working: num(v.working),
     idle: num(v.idle),
     done: num(v.done),
+    waiting: num(v.waiting),
   };
 }
 
@@ -117,6 +119,7 @@ export function summaryLabel(s: DeckSummary, lang: Lang = "en"): string {
   if (lang === "cs") {
     const parts: string[] = [`${s.agents} ${csAgents(s.agents)}`];
     if (s.working) parts.push(`${s.working} ${s.working === 1 ? "pracuje" : "pracují"}`);
+    if (s.waiting) parts.push(`${s.waiting} v pozadí`);
     if (s.idle) parts.push(`${s.idle} ${s.idle === 1 ? "nečinný" : "nečinní"}`);
     if (s.done) parts.push(`${s.done} hotovo`);
     if (s.blocked) parts.push(`⚠ ${s.blocked} ${s.blocked === 1 ? "blokován" : "blokováni"}`);
@@ -124,6 +127,7 @@ export function summaryLabel(s: DeckSummary, lang: Lang = "en"): string {
   }
   const parts: string[] = [`${s.agents} ${s.agents === 1 ? "agent" : "agents"}`];
   if (s.working) parts.push(`${s.working} working`);
+  if (s.waiting) parts.push(`${s.waiting} waiting`);
   if (s.idle) parts.push(`${s.idle} idle`);
   if (s.done) parts.push(`${s.done} done`);
   if (s.blocked) parts.push(`⚠ ${s.blocked} blocked`);

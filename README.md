@@ -152,7 +152,13 @@ slots up to the reserved **+ New** launcher tile. With more agents than tiles,
 pressing the status window pages through them (the panel shows `· 1/2`), and a
 newly blocked agent automatically pulls the overview back to the first page
 where it sorts to the front. State is encoded by color: working = green,
-idle = blue, blocked = amber, done = cyan, error/disconnected = red. By default
+idle = blue, blocked = amber, done = cyan, waiting = violet, error/disconnected
+= red. **Waiting** is derived from a pane held by
+[herdwatch](https://github.com/vaclavik-xyz/herdwatch) (or any source using
+`herdr pane report-agent --custom-status`): the agent itself is done but
+background work — CI, a review, a manual marker — is still pending; the tile
+shows the holder's label (`CI`, `REVIEW +1`) in place of the status word and
+does not animate. By default
 the colour shows in the status word and a bottom accent bar; set
 `[view].tile_fill` to `tint` (whole tile a darkened shade of the colour) or
 `solid` (whole tile the full colour) for more at-a-glance visibility.

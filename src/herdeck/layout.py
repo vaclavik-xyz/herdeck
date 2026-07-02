@@ -20,12 +20,15 @@ _DETAIL_MAX_LINES = 3
 # lower = higher priority (shown first). done = finished-but-unseen ranks just
 # below blocked and above working, so a completed agent surfaces at the top of
 # the deck (where the eye is) instead of being buried after the idle agents.
+# waiting (pane held pending background CI/review by herdwatch) sits between
+# working and idle: nothing to do there, but it isn't finished either.
 _STATUS_PRIORITY = {
     Status.BLOCKED: 0,
     Status.DONE: 1,
     Status.WORKING: 2,
-    Status.IDLE: 3,
-    Status.UNKNOWN: 4,
+    Status.WAITING: 3,
+    Status.IDLE: 4,
+    Status.UNKNOWN: 5,
 }
 
 
@@ -38,6 +41,7 @@ STATUS_COLOR = {
     Status.IDLE: "blue",
     Status.BLOCKED: "amber",
     Status.DONE: "cyan",
+    Status.WAITING: "violet",
     Status.UNKNOWN: "grey",
 }
 
@@ -109,6 +113,7 @@ class Counts:
     working: int
     idle: int
     done: int
+    waiting: int = 0
 
 
 def summary(agents) -> Counts:
@@ -122,6 +127,8 @@ def summary(agents) -> Counts:
             c.idle += 1
         elif s.status is Status.DONE:
             c.done += 1
+        elif s.status is Status.WAITING:
+            c.waiting += 1
     return c
 
 
@@ -154,7 +161,13 @@ def panel_overview(
         color = "amber"
     else:
         title = tr(lang, "agents_total", n=total)
-        lines = [f"W{counts.working} · I{counts.idle} · D{counts.done}", tr(lang, "online")]
+        # P = panes held pending on background work (herdwatch); shown only
+        # when non-zero — the state is empty most of the time.
+        pending = f" · P{counts.waiting}" if counts.waiting else ""
+        lines = [
+            f"W{counts.working}{pending} · I{counts.idle} · D{counts.done}",
+            tr(lang, "online"),
+        ]
         color = "grey"
         if usage_lines:
             # The calm panel has spare body lines: swap the (implicit) "online"
@@ -288,12 +301,27 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
     return raw_lines, lines
 
 
+def waiting_status_text(custom_status: str, lang: str = "en") -> str:
+    """Tile status word for a WAITING agent: the holder's label ('⏳ ci' ->
+    'CI') beats a generic word. The hourglass is stripped — the tile font has
+    no emoji glyphs (it would render as a tofu box)."""
+    text = (custom_status or "").replace("⏳", "").strip()
+    if not text:
+        return tr(lang, "status.waiting")
+    return text.upper()[:12]
+
+
 def panel_detail(agent: AgentState, text: str, lang: str = "en") -> PanelView:
     # Logical prompt lines (options stripped); the renderer wraps them to the
     # panel's pixel width so long prompts stay readable without losing words.
     raw_lines, lines = _detail_lines(text) if text else ([], [])
     if agent.status is Status.BLOCKED and not raw_lines:
         lines = [tr(lang, "reading_prompt")]
+    if agent.status is Status.WAITING and agent.custom_status:
+        # The full holder label leads the drill detail — the tile only fits
+        # the short status word.
+        label = agent.custom_status.replace("⏳", "").strip()
+        lines = [tr(lang, "waiting_on", label=label), *lines]
     return PanelView(
         title=f"{agent.agent_type}: {agent.label}",
         lines=lines,
