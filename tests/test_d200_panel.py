@@ -99,13 +99,29 @@ def test_d200_close_stops_worker_and_closes_device(tmp_path):
         os.chdir(before)
 
 
-def test_compose_panel_size():
+def test_compose_panel_is_native_small_window_size():
+    # The D200 small window is natively 458x196; composing at the old two-cell
+    # 392px let the firmware stretch the text ~17% wider.
     img = compose_panel(PanelView("page 1/2", ["B1 W4 I6", "online"], "grey"))
+    assert img.size == (458, 196)
+
+
+def test_compose_panel_two_cell_width_for_split_surfaces():
+    img = compose_panel(PanelView("page 1/2", ["B1 W4 I6"], "grey"), width=392)
     assert img.size == (392, 196)
 
 
 def test_split_panel_halves():
+    # Exact two-cell compose (the Elgato path): 1:1 halves, no resampling.
     img = Image.new("RGB", (392, 196), (0, 0, 0))
+    left, right = split_panel(img)
+    assert left.size == (196, 196) and right.size == (196, 196)
+
+
+def test_split_panel_squeezes_native_width_to_cells():
+    # Native 458px compose halved for the legacy two-cell fallback: each half
+    # is squeezed to the 196px cell (the firmware stretches it back).
+    img = Image.new("RGB", (458, 196), (0, 0, 0))
     left, right = split_panel(img)
     assert left.size == (196, 196) and right.size == (196, 196)
 
@@ -598,6 +614,90 @@ def test_frame_with_failed_panel_compose_never_blanks_the_panel(tmp_path, monkey
         driver.render_frame([TileView(0, "y", "green", time_text="9m")], PanelView("t2", ["l2"], "red"))
         assert _wait_until(lambda: len(dev.calls) == 2)
         assert dev.calls[1][0][13]["icon"] == stale_panel_icon
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_fast_path_manifest_marks_panel_slot_as_background(tmp_path, monkeypatch):
+    # The panel rides the 3_2 slot as ONE native 458x196 icon with
+    # SmallViewMode=2 (background): the firmware then gives the slot the small
+    # window's full width and displays the icon 1:1 — no stretched text. The
+    # 4_2 cell must NOT appear in the manifest (the window is one slot).
+    import json as _json
+    import sys
+    import types
+
+    import herdeck.driver.d200 as d200mod
+
+    # strmdck isn't installed here; fake the internals the fast path imports
+    fake_mod = types.ModuleType("strmdck.devices.ulanzi_d200")
+    fake_mod.PacketStruct = types.SimpleNamespace(build=lambda d: b"pkt")
+    fake_mod.CommandProtocol = types.SimpleNamespace(
+        OUT_SET_BUTTONS=types.SimpleNamespace(value=1),
+        OUT_PARTIALLY_UPDATE_BUTTONS=types.SimpleNamespace(value=13),
+    )
+    fake_devices = types.ModuleType("strmdck.devices")
+    fake_devices.ulanzi_d200 = fake_mod
+    fake_strmdck = types.ModuleType("strmdck")
+    fake_strmdck.devices = fake_devices
+    monkeypatch.setitem(sys.modules, "strmdck", fake_strmdck)
+    monkeypatch.setitem(sys.modules, "strmdck.devices", fake_devices)
+    monkeypatch.setitem(sys.modules, "strmdck.devices.ulanzi_d200", fake_mod)
+
+    captured = {}
+
+    def fake_zip(manifest_bytes, icons, *, rand=os.urandom):
+        captured["manifest"] = _json.loads(manifest_bytes)
+        captured["icons"] = dict(icons)
+        return b"zipdata"
+
+    monkeypatch.setattr(d200mod, "build_button_zip", fake_zip)
+
+    class _FastDev(_FakeDev):
+        BUTTON_COLS = 5
+
+        def _write_packet(self, packets):
+            pass
+
+    dev = _FastDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        driver.render_panel(PanelView("t", ["l"], "grey"))
+        assert _wait_until(lambda: "manifest" in captured)
+        manifest = captured["manifest"]
+        assert manifest["3_2"]["SmallViewMode"] == 2
+        icon = manifest["3_2"]["ViewParam"][0]["Icon"]
+        assert icon.startswith("icons/panel_")
+        assert "4_2" not in manifest
+        assert dev.calls == []  # the stock path was never used
+        # the composed panel PNG is the native small-window size
+        name = icon.split("/", 1)[1]
+        with Image.open(os.path.join(".cache", "icons", "_generated", name)) as im:
+            assert im.size == (458, 196)
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_stock_fallback_rewrites_panel_into_two_cells(tmp_path):
+    # Stock set_buttons cannot carry SmallViewMode, so the fallback write must
+    # arrive as the legacy pair of square cell icons (no unknown keys leaked).
+    dev = _FakeDev()  # no _write_packet -> the fast path fails permanently
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        driver.render_frame([TileView(0, "x", "blue")], PanelView("t", ["l"], "grey"))
+        assert _wait_until(lambda: dev.calls)
+        buttons, _ = dev.calls[0]
+        assert 13 in buttons and 14 in buttons
+        assert "small_view_mode" not in buttons[13] and "small_view_mode" not in buttons[14]
+        assert buttons[13]["icon"].endswith("_l.png")
+        assert buttons[14]["icon"].endswith("_r.png")
+        for i in (13, 14):
+            with Image.open(os.path.join(".cache", "icons", "_generated", buttons[i]["icon"])) as im:
+                assert im.size == (196, 196)
     finally:
         driver.close()
         os.chdir(before)

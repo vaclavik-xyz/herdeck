@@ -147,9 +147,11 @@ class ElgatoDriver(DeckDriver):
         if key == self._panel_key:
             return  # the two panel keys already show exactly this content
         from ..icons import compose_panel
-        from .d200 import split_panel
+        from .d200 import _CELL, split_panel
 
-        left, right = split_panel(compose_panel(panel))
+        # Compose at exactly two cells wide so the halves are 1:1 key images
+        # (the default width is the D200 window's native 458px).
+        left, right = split_panel(compose_panel(panel, width=2 * _CELL))
         base = self.slot_count()
         self._dev.set_key_image(base, self._native_resized(left))
         self._dev.set_key_image(base + 1, self._native_resized(right))

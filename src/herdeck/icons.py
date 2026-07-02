@@ -13,7 +13,10 @@ from PIL import Image, ImageDraw
 from .driver.base import COLORS, PanelView
 
 ICON_SIZE = 196
-PANEL_W, PANEL_H = 392, 196  # the D200 status window spans two 196px cells
+# The D200 small window's NATIVE resolution (one 3_2-slot background icon,
+# displayed 1:1 by the firmware). Composing at the old two-cell 392px and
+# letting the firmware stretch it to 458px made all panel text ~17% wider.
+PANEL_W, PANEL_H = 458, 196
 # The spinner has this many distinct frames; keep the cache bounded so a
 # long-running working tile reuses frames instead of writing forever.
 SPINNER_FRAMES = 8
@@ -187,7 +190,9 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 #    render as supplied again).
 # 8: pulse becomes a slow 4-state breath (its phase domain changed, so cached
 #    frames keyed by the old raw phase must not be served).
-TILE_VERSION = 8
+# 9: the panel composes at the small window's native 458px (was 392) and the
+#    D200 sends it as ONE 3_2 background icon instead of two stretched cells.
+TILE_VERSION = 9
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -324,26 +329,29 @@ def _anim_phase(raw_phase, animation: str):
     return raw_phase % SPINNER_FRAMES
 
 
-def compose_panel(panel: PanelView) -> Image.Image:
-    """Render a PanelView to a 392x196 image with large, readable text.
+def compose_panel(panel: PanelView, width: int = PANEL_W) -> Image.Image:
+    """Render a PanelView to a width x 196 image with large, readable text.
 
-    Shared by the D200 driver (split into two cells) and the web simulator.
+    The default width is the D200 small window's native 458px. The Elgato
+    driver composes at 392 so the image splits into two exact 196x196 key
+    images; the web simulator and desktop window display the PNG at its true
+    aspect either way.
     """
     bg = _panel_bg(panel.color)
-    img = Image.new("RGB", (PANEL_W, PANEL_H), bg)
+    img = Image.new("RGB", (width, PANEL_H), bg)
     d = ImageDraw.Draw(img)
     title_f = _font(30)
     d.text(
         (16, 12),
-        _truncate(d, panel.title, title_f, PANEL_W - 32),
+        _truncate(d, panel.title, title_f, width - 32),
         font=title_f,
         fill=(255, 255, 255),
     )
     line_f = _font(24)
     y = 60
-    for line in _panel_body_lines(d, panel.lines, line_f, PANEL_W - 32):
+    for line in _panel_body_lines(d, panel.lines, line_f, width - 32):
         # _truncate is a safety net for unbreakable tokens wider than the panel.
-        d.text((16, y), _truncate(d, line, line_f, PANEL_W - 32), font=line_f, fill=(232, 232, 236))
+        d.text((16, y), _truncate(d, line, line_f, width - 32), font=line_f, fill=(232, 232, 236))
         y += 40
     return img
 
