@@ -159,7 +159,7 @@ class DeckApp:
         inside `_refresh_locked`."""
         import io
 
-        from ..icons import compose_panel
+        from ..icons import PANEL_W_TWO_CELL, compose_panel
 
         source.apply_to(orch)
         rs = orch.render()
@@ -173,7 +173,9 @@ class DeckApp:
             panel_png = memo[1]
         else:
             buf = io.BytesIO()
-            compose_panel(rs.panel).convert("RGB").save(buf, "PNG")
+            # The desktop window shows the panel in a 2-cells-wide grid box, so
+            # compose at the two-cell width — the native 458px would be squeezed.
+            compose_panel(rs.panel, width=PANEL_W_TWO_CELL).convert("RGB").save(buf, "PNG")
             panel_png = buf.getvalue()
             self._panel_memo = (panel_key, panel_png)
         sections = {t.index: t.section for t in rs.tiles if t.index < slots and t.section}

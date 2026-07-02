@@ -17,6 +17,9 @@ ICON_SIZE = 196
 # displayed 1:1 by the firmware). Composing at the old two-cell 392px and
 # letting the firmware stretch it to 458px made all panel text ~17% wider.
 PANEL_W, PANEL_H = 458, 196
+# Two-cell composite width for surfaces that show the panel in a 2-cells-wide
+# box (Elgato's key pair, the web simulator, the desktop window grid).
+PANEL_W_TWO_CELL = 2 * ICON_SIZE
 # The spinner has this many distinct frames; keep the cache bounded so a
 # long-running working tile reuses frames instead of writing forever.
 SPINNER_FRAMES = 8

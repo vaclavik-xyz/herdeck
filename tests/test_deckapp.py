@@ -791,9 +791,9 @@ def test_unchanged_panel_is_encoded_once(monkeypatch):
     calls = {"n": 0}
     real = icons_mod.compose_panel
 
-    def counting(panel):
+    def counting(panel, **kwargs):
         calls["n"] += 1
-        return real(panel)
+        return real(panel, **kwargs)
 
     monkeypatch.setattr(icons_mod, "compose_panel", counting)
     app = make_app()  # initial refresh composes once
