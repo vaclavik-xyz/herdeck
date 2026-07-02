@@ -25,7 +25,7 @@
 </label>
 
 <style>
-  .field { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 8px; margin: 4px 0; }
+  .field { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr; align-items: center; gap: 8px; margin: 4px 0; }
   .field > span:first-child { color: #aaa; }
   .control { display: flex; align-items: center; gap: 8px; }
   .swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid #2a2a30; flex: none; }

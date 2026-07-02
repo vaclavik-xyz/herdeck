@@ -60,10 +60,10 @@
 {/if}
 
 <style>
-  .field { display: grid; grid-template-columns: 80px 1fr auto auto; align-items: center; gap: 8px; margin: 4px 0; }
+  .field { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr auto auto; align-items: center; gap: 8px; margin: 4px 0; }
   .field span:first-child { color: #aaa; }
   input { background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
   .ok { color: #4fa84f; } .missing { color: #e0a030; }
-  .setrow { display: flex; gap: 8px; margin: 4px 0 8px 88px; }
+  .setrow { display: flex; gap: 8px; margin: 4px 0 8px calc(var(--field-label-w, 120px) + 8px); }
   button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; cursor: pointer; }
 </style>

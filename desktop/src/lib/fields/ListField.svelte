@@ -29,7 +29,7 @@
 </div>
 
 <style>
-  .listfield { display: grid; grid-template-columns: 120px 1fr; align-items: start; gap: 8px; margin: 6px 0; }
+  .listfield { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr; align-items: start; gap: 8px; margin: 6px 0; }
   .label { color: #aaa; padding-top: 4px; }
   .rows { display: flex; flex-direction: column; gap: 4px; }
   .row { display: flex; gap: 6px; }
