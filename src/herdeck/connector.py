@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from collections.abc import Callable
 
@@ -151,16 +152,10 @@ class Connector:
         """
         if state.key.server_id == self.server.id:
             return state
-        return AgentState(
-            key=AgentKey(self.server.id, state.key.pane_id),
-            agent_type=state.agent_type,
-            label=state.label,
-            status=state.status,
-            project=state.project,
-            repo=state.repo,
-            branch=state.branch,
-            workspace=state.workspace,
-            tab=state.tab,
+        # Re-stamp ONLY the key; replace() copies every other field so a new
+        # AgentState field (e.g. custom_status) is never silently dropped here.
+        return dataclasses.replace(
+            state, key=AgentKey(self.server.id, state.key.pane_id)
         )
 
     def _dispatch(self, raw: str) -> None:
