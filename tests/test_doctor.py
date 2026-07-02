@@ -497,3 +497,23 @@ def test_telegram_probe_never_echoes_the_token(monkeypatch):
     reason = _telegram_get_me(token)  # malformed token breaks URL construction
     assert reason is not None
     assert "SECRET" not in reason
+
+
+def test_collect_checks_uses_the_config_socket_override(tmp_path, monkeypatch):
+    """doctor must resolve the socket like the deck does (roborev 5d162de)."""
+    import herdeck.doctor as doctor_mod
+    from herdeck.doctor import collect_checks
+
+    sock = tmp_path / "custom" / "herdr.sock"
+    sock.parent.mkdir()
+    sock.touch()
+    config = tmp_path / "config.toml"
+    config.write_text("")
+    (tmp_path / "local.toml").write_text(f'[local]\nherdr_socket = "{sock}"\n')
+    monkeypatch.setenv("HERDECK_CONFIG", str(config))
+    monkeypatch.delenv("HERDR_SOCKET", raising=False)
+    monkeypatch.delenv("HERDECK_LOCAL_CONFIG", raising=False)
+    monkeypatch.setattr(doctor_mod, "_probe_socket", lambda p: {"result": {"panes": []}})
+
+    checks = {c.name: c for c in collect_checks()}
+    assert checks["herdr socket"].ok is True  # found via [hardware].herdr_socket

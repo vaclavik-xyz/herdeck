@@ -362,3 +362,29 @@ describe("stepDeck idle no-op (audit: stepdeck-noop-return)", () => {
     expect(second.tiles[0]).toBe("tile-0-v2");
   });
 });
+
+describe("panel fetch parallelism (roborev 5a1faa6)", () => {
+  it("starts the panel request before the tile fetches resolve", async () => {
+    let panelStarted = false;
+    let releaseTile: () => void = () => {};
+    const tileGate = new Promise<void>((r) => (releaseTile = r));
+    const t: DeckTransport = {
+      fetchState: async () =>
+        rawState({ version: 1, tiles: { "0": 1 }, panel: 1, has_panel: true }),
+      tileImage: async (index, version) => {
+        await tileGate; // the tile hangs until the panel proves it started
+        return `tile-${index}-v${version}`;
+      },
+      panelImage: async (version) => {
+        panelStarted = true;
+        releaseTile();
+        return `panel-v${version}`;
+      },
+      press: async () => ({ ok: true, status: 204, forbidden: false }),
+    };
+    const view = await stepDeck(t, new DeckDiffer(), initialView());
+    expect(panelStarted).toBe(true);
+    expect(view.panel).toBe("panel-v1");
+    expect(view.tiles[0]).toBe("tile-0-v1");
+  });
+});
