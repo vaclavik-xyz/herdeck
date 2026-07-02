@@ -187,6 +187,20 @@ def _lum(c: tuple[int, int, int]) -> float:
     return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
 
 
+def _is_light_monochrome(img: Image.Image) -> bool:
+    """Is this glyph a white/near-white mark on transparency (the shape every
+    built-in mark has)? A full-colour user override must NOT be flattened to a
+    dark silhouette by the solid-fill contrast flip."""
+    from PIL import ImageStat
+
+    alpha = img.getchannel("A")
+    mask = alpha.point(lambda v: 255 if v > 32 else 0)
+    if not mask.getbbox():
+        return False  # fully transparent: nothing to recolour
+    means = ImageStat.Stat(img.convert("RGB"), mask=mask).mean
+    return min(means) > 180 and (max(means) - min(means)) < 40
+
+
 def _tint_bg(accent: tuple[int, int, int]) -> tuple[int, int, int]:
     """A darkened shade of the status colour, used as the whole-tile background
     for tile_fill='tint' — clearly coloured but dark enough that the light text
@@ -621,12 +635,12 @@ class IconProvider:
         working = spinner is not None
         # logo top-left; while working it animates per the chosen style
         base_logo = self._base_glyph(tile.agent_type or "default")
-        if fill == "solid" and _lum(bg_col) > 120:
-            # The always-white mark washes out on bright solid fills (amber
-            # 2.1:1, cyan 2.0:1 — below the 3:1 non-text minimum) while the
-            # text correctly flips dark. Recolour the mark via its alpha mask
-            # to the same dark ink the text uses. (Applies to user override
-            # marks too, for consistent contrast.)
+        if fill == "solid" and _lum(bg_col) > 120 and _is_light_monochrome(base_logo):
+            # A white mark washes out on bright solid fills (amber 2.1:1, cyan
+            # 2.0:1 — below the 3:1 non-text minimum) while the text correctly
+            # flips dark. Recolour it via its alpha mask to the same dark ink.
+            # Full-colour user overrides are left as supplied (the flip would
+            # flatten them to a silhouette).
             dark = Image.new("RGBA", base_logo.size, (18, 18, 22, 0))
             dark.putalpha(base_logo.getchannel("A"))
             base_logo = dark

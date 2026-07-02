@@ -569,3 +569,18 @@ def test_launcher_tile_renders_dark_not_status_green(tmp_path):
     )
     img = Image.open(io.BytesIO(p.render_tile_bytes(launcher))).convert("RGB")
     assert img.getpixel((5, 5)) == (26, 26, 30)  # dark management background
+
+
+def test_colour_override_marks_are_not_flattened_on_bright_solid(tmp_path):
+    """A full-colour user override must render as supplied — only white
+    mark-style glyphs get the solid-fill contrast flip (roborev 8280ace)."""
+    import io
+
+    overrides = tmp_path / "ov"
+    overrides.mkdir()
+    Image.new("RGBA", (196, 196), (200, 30, 30, 255)).save(overrides / "claude.png")
+    p = make_provider(tmp_path / "cache", overrides=overrides)
+    tile = _tile_ns(color="amber", tile_fill="solid")
+    img = Image.open(io.BytesIO(p.render_tile_bytes(tile))).convert("RGB")
+    r, g, b = img.getpixel((35, 35))
+    assert r > 150 and g < 90  # the red override survived, no dark silhouette
