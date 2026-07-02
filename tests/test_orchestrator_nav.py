@@ -789,3 +789,24 @@ def test_launcher_tile_carries_the_management_colour():
     tile = o.render().tiles[12]
     assert tile.label == "+ New"
     assert tile.color == "launcher"  # dark + green label, not status green
+
+
+def test_drill_action_acknowledges_on_the_overview_panel():
+    """Returning to a still-amber tile read as 'my press was lost' — the panel
+    now acknowledges the send until the round-trip lands
+    (audit: action-sent-ack)."""
+    clk = [1000.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+    assert o.on_press(0)  # sends option 1, returns to overview
+    assert o.render().panel.lines[0] == "sent › api"
+    clk[0] += 5.0  # note expired
+    assert not o.render().panel.lines[0].startswith("sent")
+
+
+def test_empty_slots_render_darker_than_agent_tiles():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.IDLE)])
+    assert o.render().tiles[1].color == "empty"  # near-background, not dim grey
