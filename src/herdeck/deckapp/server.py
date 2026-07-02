@@ -192,8 +192,11 @@ class DeckApp:
 
         from ..icons import PANEL_W_TWO_CELL, compose_panel
 
-        if self._usage_poller is not None:
-            orch.set_usage(self._usage_poller.snapshot())
+        # ALWAYS feed usage state (empty when off): the orchestrator may carry
+        # usage lines from before a swap that disabled [usage] — only an
+        # unconditional set clears them (roborev e0eeb95).
+        poller = self._usage_poller
+        orch.set_usage(poller.snapshot() if poller is not None else [])
         source.apply_to(orch)
         rs = orch.render()
         tiles = {t.index: self._icons.render_tile_bytes(t) for t in rs.tiles if t.index < slots}

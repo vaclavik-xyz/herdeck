@@ -869,3 +869,24 @@ def test_state_reports_language_defaulting_to_english():
         assert app._state()["language"] == "en"
     finally:
         app.close()
+
+
+def test_render_always_feeds_usage_state():
+    """A swap that disables [usage] must clear previously fed usage lines —
+    only an UNCONDITIONAL set_usage per render does (roborev e0eeb95)."""
+    from herdeck.usage import ProviderUsage, UsageWindow
+
+    class FakePoller:
+        def snapshot(self):
+            return [ProviderUsage("claude", [UsageWindow("5h", 10, None)])]
+
+        def close(self):
+            pass
+
+    app = make_app()
+    app._usage_poller = FakePoller()
+    app.refresh()
+    assert app._orch._usage  # fed from the poller
+    app._usage_poller = None  # [usage] disabled by a config swap
+    app.refresh()
+    assert app._orch._usage == []  # stale usage cleared, not left to linger
