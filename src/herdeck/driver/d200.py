@@ -402,6 +402,14 @@ class D200Driver(DeckDriver):
                 left.save(os.path.join(_ICON_DIR, names[0]))
                 right.save(os.path.join(_ICON_DIR, names[1]))
             except Exception:
+                # compose failed: a STALE panel (previous names, files intact) is
+                # better than none — a full set without the panel cells would
+                # blank them (the firmware drops omitted cells)
+                if paths_ok:
+                    return {
+                        _PANEL_LEFT_INDEX: {"name": "", "icon": names[0]},
+                        _PANEL_RIGHT_INDEX: {"name": "", "icon": names[1]},
+                    }
                 return None
             self._last_panel_key = key
             self._panel_names = names
@@ -423,8 +431,11 @@ class D200Driver(DeckDriver):
     def _write_frame(self, tiles: list[TileView], panel: PanelView) -> None:
         buttons = self._tile_buttons(tiles)
         panel_buttons = self._panel_buttons(panel)
-        if panel_buttons is not None:
-            buttons.update(panel_buttons)
+        if panel_buttons is None:
+            # no panel cells available at all (first-ever compose failed): a full
+            # set without them would BLANK the panel — skip this frame instead
+            return
+        buttons.update(panel_buttons)
         # Byte-identical frame (icon names are content-addressed): sending
         # NOTHING is safe — no set is issued, so the firmware drops nothing and
         # keeps displaying the current layout (keep-alive maintains it). This
@@ -441,6 +452,9 @@ class D200Driver(DeckDriver):
             return
         if self._timed_set_buttons("working", changed, update_only=True):
             self._record(changed)
+            # the partial write mutated the device behind the combined-frame
+            # cache — a later identical render_frame must NOT be skipped
+            self._last_frame_buttons = None
 
     def _keep_alive_write(self) -> None:
         with contextlib.suppress(Exception):
