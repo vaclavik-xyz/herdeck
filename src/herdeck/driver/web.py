@@ -338,11 +338,12 @@ _PAGE = """<!doctype html><meta charset=utf-8>
  /* cell size lives in --cell so JS can set the COLUMN COUNT from /state.cols
     (repeat() does not accept var() for its count) — the layout follows the
     configured [deck] grid instead of hardcoding the 5-wide D200 */
- /* --cell derives from the COLUMN COUNT (88vw budget / --cols ≈ the old 17vw
-    at five columns), so a wider configured grid shrinks cells instead of
-    overflowing a narrow viewport. */
- #deck{--cols:5;--cell:min(calc(88vw/var(--cols)),150px);--gap:10px;
-   background:#2a2a2e;padding:18px;border-radius:18px;
+ /* --cell derives from the COLUMN COUNT with the padding and gaps included in
+    the 96vw budget (2*pad + cols*cell + (cols-1)*gap <= 96vw), so any
+    configured grid fits a narrow viewport instead of overflowing sideways. */
+ #deck{--cols:5;--gap:10px;--pad:18px;
+   --cell:min(calc((96vw - 2*var(--pad) - (var(--cols) - 1)*var(--gap))/var(--cols)),150px);
+   background:#2a2a2e;padding:var(--pad);border-radius:18px;
    display:grid;grid-template-columns:repeat(5,var(--cell));gap:var(--gap)}
  .cell{width:var(--cell);height:var(--cell);border-radius:8px;background:#111;cursor:pointer;
    overflow:hidden;border:none;padding:0;
@@ -361,7 +362,8 @@ _PAGE = """<!doctype html><meta charset=utf-8>
    font:13px system-ui;display:none;z-index:9}
  /* phone portrait: width is the constraint, so shrink the deck */
  @media (max-width:560px){
-   #deck{--cell:min(calc(88vw/var(--cols)),110px);--gap:6px;padding:10px}
+   #deck{--gap:6px;--pad:10px;
+     --cell:min(calc((96vw - 2*var(--pad) - (var(--cols) - 1)*var(--gap))/var(--cols)),110px)}
  }
  /* phone landscape: HEIGHT is the constraint (3 rows), so size cells by viewport
     height — but also keep the 17vw width cap so a short AND narrow viewport
@@ -369,7 +371,8 @@ _PAGE = """<!doctype html><meta charset=utf-8>
     sideways. The deck stays within both the short (e.g. 667x375) viewport's
     height and a narrow viewport's width. */
  @media (max-height:430px){
-   #deck{--cell:min(calc(88vw/var(--cols)),22vh,110px);--gap:6px;padding:10px}
+   #deck{--gap:6px;--pad:10px;
+     --cell:min(calc((96vw - 2*var(--pad) - (var(--cols) - 1)*var(--gap))/var(--cols)),22vh,110px)}
  }
 </style>
 <div id=deck></div>
