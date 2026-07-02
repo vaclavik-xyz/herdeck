@@ -107,3 +107,23 @@ def test_start_reader_runs_the_driver_reader():
         assert drv.reader_ran.wait(timeout=2.0)  # the reader thread ran run_reader()
     finally:
         sink.close()
+
+
+class FrameDriver(FakeDriver):
+    """Driver double exposing the combined-frame API."""
+
+    def __init__(self):
+        super().__init__()
+        self.frames = []  # (tile indices, panel)
+
+    def render_frame(self, tiles, panel):
+        self.frames.append(([t.index for t in tiles], panel))
+
+
+def test_sink_prefers_the_combined_frame_write():
+    drv = FrameDriver()
+    sink = D200Sink(drv, on_press=lambda i: None, slots=13, start_reader=False)
+    rs = _RS([_Tile(0), _Tile(1), _Tile(13)], panel="P")
+    sink.deliver(RenderFrame(render=rs, working=None, full=True))
+    assert drv.frames == [([0, 1], "P")]  # one combined call, slots-clipped
+    assert drv.full_renders == [] and drv.panels == []  # legacy path untouched

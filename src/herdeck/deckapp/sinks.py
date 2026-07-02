@@ -78,8 +78,15 @@ class D200Sink:
         # that the strmdck retry sleep is neutralized. `frame.working` is ignored (the
         # animating tiles carry their new spinner phase in the full set anyway).
         rs = frame.render
-        self._driver.render([t for t in rs.tiles if t.index < self._slots])
-        self._driver.render_panel(rs.panel)
+        tiles = [t for t in rs.tiles if t.index < self._slots]
+        render_frame = getattr(self._driver, "render_frame", None)
+        if render_frame is not None:
+            # One combined tiles+panel set: atomic (no panel blink), half the
+            # zip/USB cost, and byte-identical frames are skipped in the driver.
+            render_frame(tiles, rs.panel)
+        else:  # injected test doubles may predate render_frame
+            self._driver.render(tiles)
+            self._driver.render_panel(rs.panel)
 
     def _run_reader(self) -> None:
         try:

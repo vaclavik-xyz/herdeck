@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import binascii
 import contextlib
+import hashlib
 import io
+import json
 import logging
 import os
 import time
+import zipfile
 from collections.abc import Callable
 
 from PIL import Image
 
-from ..icons import compose_panel
+from ..icons import TILE_VERSION, compose_panel
 from .base import DeckDriver, PanelView, TileView
 from .render_pump import RenderPump
 
@@ -58,6 +62,46 @@ def _neutralize_retry_sleep() -> None:
         log.warning("could not neutralize strmdck retry sleep; D200 spinner may stall")
 
 
+# The D200 firmware glitches when the byte at file offset 1016, 1016+1024, …
+# of the uploaded zip is one of these (packet-boundary bytes) — mirrored from
+# strmdck's _prepare_zip.
+_INVALID_CHUNK_BYTES = (0x00, 0x7C)
+_FIRST_CHUNK_DATA = 1016  # first packet carries chunk_size-8 payload bytes
+
+
+def _zip_chunk_bytes_valid(data: bytes) -> bool:
+    return all(
+        data[i] not in _INVALID_CHUNK_BYTES for i in range(_FIRST_CHUNK_DATA, len(data), 1024)
+    )
+
+
+def build_button_zip(manifest_bytes: bytes, icons: dict[str, bytes], *, rand=os.urandom) -> bytes:
+    """In-memory replica of strmdck's on-disk page build (_prepare_zip +
+    compress_folder): entries dummy.txt? → manifest.json → icons/<name>, deflate
+    level 1, retried with a growing random dummy entry until no packet-boundary
+    byte hits the firmware's invalid values. The stock implementation rebuilds
+    the whole folder ON DISK per attempt (rmtree + copyfile per icon + rezip),
+    which measured 280-530ms per frame (3.6s worst) and made the deck stutter;
+    in memory the same work is single-digit ms."""
+    dummy = b""
+    retries = 0
+    while True:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
+            if dummy:
+                z.writestr("dummy.txt", dummy.decode("ascii"))
+            z.writestr("manifest.json", manifest_bytes)
+            for name, blob in icons.items():
+                z.writestr(f"icons/{name}", blob)
+        data = buf.getvalue()
+        if _zip_chunk_bytes_valid(data):
+            return data
+        retries += 1
+        if retries > 64:  # never observed >~15 in the stock loop; guard runaway
+            raise RuntimeError("could not build a firmware-safe button zip")
+        dummy += binascii.hexlify(rand(4 * retries))
+
+
 def split_panel(img: Image.Image) -> tuple[Image.Image, Image.Image]:
     left = img.crop((0, 0, _CELL, _CELL))
     right = img.crop((PANEL_W - _CELL, 0, PANEL_W, _CELL))
@@ -89,6 +133,9 @@ class D200Driver(DeckDriver):
         self._last_write_count = 0
         self._last_icon: dict[int, str] = {}
         self._last_panel_key: tuple | None = None
+        self._panel_names: tuple[str, str] | None = None
+        self._last_frame_buttons: dict[int, dict] | None = None
+        self._fast_path_ok = True
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
         self._previous_cwd = os.getcwd()
@@ -177,6 +224,16 @@ class D200Driver(DeckDriver):
     def render(self, tiles: list[TileView]) -> None:
         self._submit("tiles", list(tiles))
 
+    def render_frame(self, tiles: list[TileView], panel: PanelView) -> None:
+        """Render tiles + panel as ONE full-set device write (indices 0-14).
+
+        The panel cells (13/14) share the button namespace with the tiles, so a
+        13-tile full set actually CLEARS them until the follow-up panel write
+        repaints them ~one transaction later — two zip preps + two USB uploads
+        per frame and a visible panel blink. One combined set is atomic, halves
+        the per-frame cost, and lets identical frames be skipped entirely."""
+        self._submit("frame", (list(tiles), panel))
+
     def render_panel(self, panel: PanelView) -> None:
         self._submit("panel", panel)
 
@@ -200,6 +257,9 @@ class D200Driver(DeckDriver):
             self._write_panel(payload)
         elif channel == "working":
             self._write_working(payload)
+        elif channel == "frame":
+            tiles, panel = payload
+            self._write_frame(tiles, panel)
 
     def _diff(self, buttons: dict[int, dict]) -> dict[int, dict]:
         """Keep only buttons whose icon filename differs from the last write."""
@@ -229,7 +289,7 @@ class D200Driver(DeckDriver):
         t0 = time.perf_counter()
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                self._dev.set_buttons(buttons, update_only=update_only)
+                self._set_buttons(buttons, update_only=update_only)
         except Exception:
             log.warning("d200 %s write failed (%d tiles)", channel, len(buttons))
             return False
@@ -249,6 +309,66 @@ class D200Driver(DeckDriver):
         )
         return True
 
+    def _set_buttons(self, buttons: dict[int, dict], *, update_only: bool) -> None:
+        """Prefer the in-memory zip build; on ANY failure fall back (permanently)
+        to strmdck's stock disk-based set_buttons, which is slow but proven."""
+        if self._fast_path_ok:
+            try:
+                self._fast_set_buttons(buttons, update_only=update_only)
+                return
+            except Exception:
+                self._fast_path_ok = False
+                log.warning(
+                    "d200 fast zip path failed; falling back to strmdck set_buttons",
+                    exc_info=True,
+                )
+        self._dev.set_buttons(buttons, update_only=update_only)
+
+    def _fast_set_buttons(self, buttons: dict[int, dict], *, update_only: bool) -> None:
+        """strmdck's set_buttons rebuilt in memory: identical manifest/zip layout
+        and packet framing, none of the per-frame rmtree/copyfile/rezip disk churn
+        (the measured 280-530ms per frame that made the deck stutter)."""
+        from strmdck.devices.ulanzi_d200 import CommandProtocol, PacketStruct
+
+        dev = self._dev
+        manifest: dict[str, dict] = {}
+        icons: dict[str, bytes] = {}
+        for button_index, button in buttons.items():
+            i = int(button_index)
+            row, col = divmod(i, dev.BUTTON_COLS)
+            entry: dict = {"State": 0, "ViewParam": [{}]}
+            if button:
+                if "name" in button:
+                    entry["ViewParam"][0]["Text"] = button["name"]
+                if "icon" in button:
+                    name = button["icon"]
+                    if name not in icons:
+                        with open(os.path.join(_ICON_DIR, name), "rb") as fp:
+                            icons[name] = fp.read()
+                    entry["ViewParam"][0]["Icon"] = f"icons/{name}"
+            manifest[f"{col}_{row}"] = entry
+        manifest_bytes = json.dumps(
+            manifest, sort_keys=True, separators=(",", ":"), indent=2
+        ).encode()
+        data = build_button_zip(manifest_bytes, icons)
+        command = (
+            CommandProtocol.OUT_PARTIALLY_UPDATE_BUTTONS
+            if update_only
+            else CommandProtocol.OUT_SET_BUTTONS
+        )
+        packets = [
+            PacketStruct.build(
+                dict(
+                    command_protocol=command.value,
+                    length=len(data),
+                    data=data[:_FIRST_CHUNK_DATA].ljust(_FIRST_CHUNK_DATA, b"\x00"),
+                )
+            )
+        ]
+        for i in range(_FIRST_CHUNK_DATA, len(data), 1024):
+            packets.append(data[i : i + 1024].ljust(1024, b"\x00"))
+        dev._write_packet(packets)
+
     def _write_tiles(self, tiles: list[TileView]) -> None:
         # Always a FULL set (update_only=False) of every tile. The D200 drops the
         # cells NOT included in a partial (update_only=True) write — so static tiles
@@ -259,32 +379,61 @@ class D200Driver(DeckDriver):
         # stall on a big zip; with that sleep neutralized a full set is cheap (~12ms
         # prepare, one USB write), so the optimization is no longer worth its cost.
         buttons = self._tile_buttons(tiles)
+        self._last_frame_buttons = None  # split-path write invalidates the frame signature
         if self._timed_set_buttons("tiles", buttons, update_only=False):
             self._record(buttons)
 
-    def _write_panel(self, panel: PanelView) -> None:
-        # Skip the compose/crop/save when the panel content is unchanged — the
-        # files on disk already hold these exact pixels. The device write below
-        # is still issued every time (unchanged behavior).
+    def _panel_buttons(self, panel: PanelView) -> dict[int, dict] | None:
+        """Compose the two panel-cell buttons, (re)saving their PNGs only when
+        the panel content changed. Names are content-keyed (panel key hash +
+        TILE_VERSION) so a frame with an unchanged panel is byte-identical to
+        the previous one (frame-skip) and a composition change re-bakes."""
         key = (panel.title, tuple(panel.lines), panel.color)
-        if key != self._last_panel_key:
+        names = self._panel_names
+        paths_ok = names is not None and all(
+            os.path.exists(os.path.join(_ICON_DIR, n)) for n in names
+        )
+        if key != self._last_panel_key or not paths_ok:
             try:
                 left, right = split_panel(compose_panel(panel))
                 os.makedirs(_ICON_DIR, exist_ok=True)
-                left.save(os.path.join(_ICON_DIR, "panel_left.png"))
-                right.save(os.path.join(_ICON_DIR, "panel_right.png"))
+                h = hashlib.sha1(f"{TILE_VERSION}|{key!r}".encode()).hexdigest()[:12]
+                names = (f"panel_l_{h}.png", f"panel_r_{h}.png")
+                left.save(os.path.join(_ICON_DIR, names[0]))
+                right.save(os.path.join(_ICON_DIR, names[1]))
             except Exception:
-                return
+                return None
             self._last_panel_key = key
+            self._panel_names = names
+        return {
+            _PANEL_LEFT_INDEX: {"name": "", "icon": names[0]},
+            _PANEL_RIGHT_INDEX: {"name": "", "icon": names[1]},
+        }
+
+    def _write_panel(self, panel: PanelView) -> None:
+        buttons = self._panel_buttons(panel)
+        if buttons is None:
+            return
+        # legacy split path: a later panel-only write means the combined-frame
+        # signature no longer reflects the device — drop it so the next frame writes
+        self._last_frame_buttons = None
         # update_only so refreshing the panel never clears the 13 tiles.
-        self._timed_set_buttons(
-            "panel",
-            {
-                _PANEL_LEFT_INDEX: {"name": "", "icon": "panel_left.png"},
-                _PANEL_RIGHT_INDEX: {"name": "", "icon": "panel_right.png"},
-            },
-            update_only=True,
-        )
+        self._timed_set_buttons("panel", buttons, update_only=True)
+
+    def _write_frame(self, tiles: list[TileView], panel: PanelView) -> None:
+        buttons = self._tile_buttons(tiles)
+        panel_buttons = self._panel_buttons(panel)
+        if panel_buttons is not None:
+            buttons.update(panel_buttons)
+        # Byte-identical frame (icon names are content-addressed): sending
+        # NOTHING is safe — no set is issued, so the firmware drops nothing and
+        # keeps displaying the current layout (keep-alive maintains it). This
+        # zeroes the per-tick zip+USB cost of an idle deck.
+        if buttons == self._last_frame_buttons:
+            return
+        if self._timed_set_buttons("frame", buttons, update_only=False):
+            self._last_frame_buttons = buttons
+            self._record(buttons)
 
     def _write_working(self, tiles: list[TileView]) -> None:
         changed = self._diff(self._tile_buttons(tiles))
