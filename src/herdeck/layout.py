@@ -28,6 +28,11 @@ _STATUS_PRIORITY = {
     Status.UNKNOWN: 4,
 }
 
+
+def status_rank(status: Status) -> int:
+    """Overview sort rank of a status (lower = shown first)."""
+    return _STATUS_PRIORITY.get(status, 99)
+
 STATUS_COLOR = {
     Status.WORKING: "green",
     Status.IDLE: "blue",

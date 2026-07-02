@@ -582,17 +582,17 @@ def _clocked(clk):
     return Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
 
 
-def test_order_holds_positions_until_target_settles():
-    # A DONE transition re-sorts (done ranks above working) but must not
-    # shuffle tiles under the finger. (A NEW BLOCK adopts immediately by
-    # design — that is the paging-autojump attention path.)
+def test_status_transition_adopts_the_new_order_immediately():
+    # A rank transition (idle -> done here; idle -> working, approve-unblock…)
+    # is a REAL change the user is watching — parking the tile in its old
+    # group for the 2s settle window read as lag. The slot press guard still
+    # protects a finger in flight (next test). Hysteresis keeps damping only
+    # same-rank reshuffles (see the idle-tick/new-agent tests).
     clk = [1000.0]
     o = _clocked(clk)
     o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
     assert [t.label for t in o.render().tiles[:2]] == ["one", "two"]
     o.apply_event("dev", st("p2", Status.DONE, label="two"))
-    assert [t.label for t in o.render().tiles[:2]] == ["one", "two"]
-    clk[0] += 2.5  # target stable past the settle window -> adopt the sort
     assert [t.label for t in o.render().tiles[:2]] == ["two", "one"]
 
 
@@ -638,9 +638,7 @@ def test_press_on_freshly_reshuffled_slot_is_swallowed():
     o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
     o.render()
     o.apply_event("dev", st("p2", Status.DONE, label="two"))
-    o.render()  # production refreshes on every event; the settle timer starts here
-    clk[0] += 2.5
-    o.render()  # adoption: slot 0 repopulates (one -> two) right now
+    o.render()  # rank change -> adoption NOW: slot 0 repopulates (one -> two)
     assert o.on_press(0) == []  # press lands within the guard window -> swallowed
     clk[0] += 0.5
     cmds = o.on_press(0)  # deliberate second press drills the visible agent
@@ -670,21 +668,30 @@ def test_duplicate_deny_options_confirm_independently():
 def test_idle_tick_does_not_adopt_the_new_order(monkeypatch):
     """An idle tick produces no frame, so it must not adopt the settled sort —
     otherwise presses resolve against an order the user has never seen
-    (roborev 0e4d730)."""
+    (roborev 0e4d730). Uses a NEW-AGENT append (no rank change of existing
+    agents), the case the settle window still governs."""
     clk = [1000.0]
     o = _clocked(clk)
     o.apply_snapshot("dev", [st("p1", Status.WORKING, label="one"), st("p2", Status.IDLE, label="two")])
     o.render()
-    o.apply_event("dev", st("p2", Status.DONE, label="two"))
-    o.render()  # settle timer starts (production refreshes on every event)
+    o.apply_snapshot(
+        "dev",
+        [
+            st("p1", Status.WORKING, label="one"),
+            st("p2", Status.IDLE, label="two"),
+            st("p3", Status.WORKING, label="three"),  # sorts before "two" in target
+        ],
+    )
+    o.render()  # new agent APPENDS until adoption; settle timer runs
+    assert [k.pane_id for k in o._display_order] == ["p1", "p2", "p3"]
     clk[0] += 2.5
     o.tick()  # idle tick past the settle window — must stay read-only
-    assert [k.pane_id for k in o._display_order] == ["p1", "p2"]
+    assert [k.pane_id for k in o._display_order] == ["p1", "p2", "p3"]
     clk[0] += 1.0  # long past the press guard IF the tick had adopted
-    assert o.on_press(0) == []  # adoption happens IN the press -> guard swallows
+    assert o.on_press(1) == []  # adoption happens IN the press -> guard swallows
     clk[0] += 0.5
-    cmds = o.on_press(0)
-    assert cmds and cmds[0].pane_id == "p2"  # now the user has seen the new order
+    cmds = o.on_press(1)
+    assert cmds and cmds[0].pane_id == "p3"  # now the user has seen the new order
 
 
 def test_drill_goes_inert_and_shows_offline_when_server_drops():
