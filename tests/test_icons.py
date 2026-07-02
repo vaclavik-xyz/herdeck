@@ -603,3 +603,25 @@ def test_animation_none_ignores_spinner_phase_in_the_cache_name(tmp_path):
     s1 = TileView(**base, spinner=1, working_animation="spin")
     s2 = TileView(**base, spinner=2, working_animation="spin")
     assert provider._tile_name(s1)[0] != provider._tile_name(s2)[0]
+
+
+def test_pulse_is_a_slow_low_churn_animation(tmp_path):
+    """Pulse advances once per PULSE_SLOWDOWN ticks through PULSE_STATES frames —
+    every animation frame is a full page reload on the D200, so the calm style
+    must also be the cheapest one."""
+    from herdeck.driver.base import TileView
+    from herdeck.icons import PULSE_SLOWDOWN, PULSE_STATES
+
+    provider = make_provider(tmp_path)
+    base = dict(index=0, label="repo", color="green", repo="repo", branch="main")
+
+    def name(phase):
+        return provider._tile_name(TileView(**base, spinner=phase, working_animation="pulse"))[0]
+
+    # within one slowdown window the name is stable (no per-tick churn)
+    assert name(0) == name(PULSE_SLOWDOWN - 1)
+    # across the window boundary it advances
+    assert name(0) != name(PULSE_SLOWDOWN)
+    # the whole cycle uses exactly PULSE_STATES distinct frames
+    distinct = {name(p) for p in range(PULSE_SLOWDOWN * PULSE_STATES * 2)}
+    assert len(distinct) == PULSE_STATES

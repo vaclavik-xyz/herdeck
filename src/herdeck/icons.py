@@ -17,6 +17,12 @@ PANEL_W, PANEL_H = 392, 196  # the D200 status window spans two 196px cells
 # The spinner has this many distinct frames; keep the cache bounded so a
 # long-running working tile reuses frames instead of writing forever.
 SPINNER_FRAMES = 8
+# pulse = a slow "breath": the phase advances once per PULSE_SLOWDOWN ticks
+# through PULSE_STATES frames (at the 0.4s default tick: a step every 2s, a
+# full breath every 8s). Every animation frame is a full page reload on the
+# D200, so the calmest style must also be the cheapest one.
+PULSE_SLOWDOWN = 5
+PULSE_STATES = 4
 # Bump when the rendered icon output changes so stale cached PNGs from older
 # versions are ignored, not reused.
 CACHE_VERSION = 3
@@ -179,7 +185,9 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 # 6: larger type scale (repo 31px, sub-labels 18-19px) spread down the tile.
 # 7: the dark flip applies only to light-monochrome marks (colour overrides
 #    render as supplied again).
-TILE_VERSION = 7
+# 8: pulse becomes a slow 4-state breath (its phase domain changed, so cached
+#    frames keyed by the old raw phase must not be served).
+TILE_VERSION = 8
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -299,6 +307,21 @@ def _panel_body_lines(draw, lines, font, max_w, max_lines=_PANEL_BODY_LINES) -> 
             break
         out.extend(_wrap(draw, line, font, max_w, max_lines - len(out)))
     return out[:max_lines]
+
+
+def _anim_phase(raw_phase, animation: str):
+    """The EFFECTIVE animation phase for a tile: what both the cache signature
+    and the composition must use (one source of truth, or pixel-identical
+    frames get distinct names — every one a full page reload on the D200).
+
+    none  -> None (no animation: the phase must not churn the signature)
+    pulse -> slow breath: advances once per PULSE_SLOWDOWN ticks, PULSE_STATES frames
+    other -> raw phase bounded to SPINNER_FRAMES (per-tick motion)"""
+    if raw_phase is None or animation == "none":
+        return None
+    if animation == "pulse":
+        return (raw_phase // PULSE_SLOWDOWN) % PULSE_STATES
+    return raw_phase % SPINNER_FRAMES
 
 
 def compose_panel(panel: PanelView) -> Image.Image:
@@ -494,16 +517,8 @@ class IconProvider:
         """The content-addressed cache filename for a TileView (and its bounded
         spinner phase). The rotation phase is bounded to SPINNER_FRAMES so the
         cache reuses a fixed set of frames instead of minting a new PNG per tick."""
-        # Style "none" renders NO spinner — the phase must not reach the
-        # signature, or a working tile mints a new (pixel-identical) filename
-        # every tick and the D200's identical-frame skip never fires (a full-set
-        # page reload per tick = the visible flicker).
         animation = getattr(tile, "working_animation", "spin")
-        spinner = (
-            None
-            if tile.spinner is None or animation == "none"
-            else tile.spinner % SPINNER_FRAMES
-        )
+        spinner = _anim_phase(tile.spinner, animation)
         sig_parts = [
             TILE_VERSION,
             self._asset_fp,
@@ -656,8 +671,10 @@ class IconProvider:
             dark.putalpha(base_logo.getchannel("A"))
             base_logo = dark
         if working and anim == "pulse":
-            # "breathe": scale the mark between ~0.82x and 1.0x by the spinner phase
-            f = 0.82 + 0.18 * (0.5 + 0.5 * math.sin(2 * math.pi * spinner / SPINNER_FRAMES))
+            # slow "breath": scale the mark between ~0.82x and 1.0x across the
+            # PULSE_STATES frames (the spinner here is already the SLOW phase
+            # from _anim_phase — one step per PULSE_SLOWDOWN ticks)
+            f = 0.82 + 0.18 * (0.5 + 0.5 * math.sin(2 * math.pi * spinner / PULSE_STATES))
             s = max(1, round(46 * f))
             logo = base_logo.resize((s, s), Image.LANCZOS)
             off = 12 + (46 - s) // 2  # keep the smaller mark centred in its 46px box
