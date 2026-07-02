@@ -72,6 +72,8 @@ class WebDeck(DeckDriver):
         self._slots = slots
         self._callback: Callable[[int], None] | None = None
         self._lock = threading.Lock()
+        # Long-poll support: /state?since=<version> HOLDS until _bump() fires.
+        self._changed = threading.Condition(self._lock)
         self._tiles: dict[int, bytes] = {}  # index -> PNG bytes
         self._tile_ver: dict[int, int] = {}  # index -> last-changed version
         self._panel: bytes | None = None
@@ -117,9 +119,14 @@ class WebDeck(DeckDriver):
     def press_token(self) -> str:
         return self._press_token
 
+    # How long a since-matched /state request is held before answering with
+    # the unchanged state (the client just re-polls).
+    LONG_POLL_TIMEOUT = 25.0
+
     def _bump(self) -> int:
         """Assign the next monotonic version. Call while holding self._lock."""
         self._version += 1
+        self._changed.notify_all()  # release any held long-polls
         return self._version
 
     def render(self, tiles: list[TileView]) -> None:
@@ -178,6 +185,8 @@ class WebDeck(DeckDriver):
             self._callback(index)
 
     def close(self) -> None:
+        with self._lock:
+            self._changed.notify_all()  # release held long-polls before shutdown
         server = self._server
         if server is not None:
             try:
@@ -195,15 +204,28 @@ class WebDeck(DeckDriver):
         self._thread = None
 
     # --- state snapshot for the browser ---
-    def _state(self) -> dict:
+    def _state_locked(self) -> dict:
+        return {
+            "version": self._version,
+            "slots": self._slots,
+            "has_panel": self._panel is not None,
+            "panel": self._panel_ver,
+            "tiles": dict(self._tile_ver),
+        }
+
+    def _state(self, since=None) -> dict:
+        """The state snapshot; with `since` equal to the current version the
+        request is HELD until something changes (long poll) or the timeout
+        lapses. Idle phone traffic drops from 3.3 req/s to ~2 req/min and a
+        change arrives at network latency instead of poll latency."""
+        try:
+            since_v = int(since)
+        except (TypeError, ValueError):
+            since_v = None
         with self._lock:
-            return {
-                "version": self._version,
-                "slots": self._slots,
-                "has_panel": self._panel is not None,
-                "panel": self._panel_ver,
-                "tiles": dict(self._tile_ver),
-            }
+            if since_v is not None and self._version == since_v:
+                self._changed.wait(timeout=self.LONG_POLL_TIMEOUT)
+            return self._state_locked()
 
     def _tile_png(self, index: int) -> bytes | None:
         with self._lock:
@@ -268,7 +290,8 @@ class WebDeck(DeckDriver):
                 elif path == "/state":
                     if not self._require_token(url):
                         return
-                    self._send(200, json.dumps(deck._state()).encode(), "application/json")
+                    since = parse_qs(url.query).get("since", [None])[0]
+                    self._send(200, json.dumps(deck._state(since)).encode(), "application/json")
                 elif path == "/panel":
                     if not self._require_token(url):
                         return
@@ -402,9 +425,15 @@ let lastV=-1; const tv={}; let pv=-1;
 let pollTimer=null, inFlight=false;
 async function poll(){
   if(inFlight) return;             // the in-flight poll reschedules; never overlap
+  if(document.hidden){             // parked while hidden; visibilitychange resumes
+    pollTimer=setTimeout(poll,1000);
+    return;
+  }
   inFlight=true;
   try{
-    const r=await fetch(auth('/state'));
+    // long poll: the server holds the request until the version advances, so
+    // idle traffic is ~2 req/min and changes arrive at network latency
+    const r=await fetch(auth(lastV>=0?'/state?since='+lastV:'/state'));
     if(r.status===403){
       setStale('token expired — open the fresh URL from the startup log');
       return;                      // rescheduled in finally; keeps checking
@@ -429,7 +458,7 @@ async function poll(){
   }finally{
     inFlight=false;
     clearTimeout(pollTimer);
-    pollTimer=setTimeout(poll,300);
+    pollTimer=setTimeout(poll,100);  // the server paces via the long poll
   }
 }
 function pollNow(){ clearTimeout(pollTimer); void poll(); }

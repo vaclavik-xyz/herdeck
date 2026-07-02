@@ -413,3 +413,60 @@ def test_existing_leaky_token_file_is_repaired_to_0600(tmp_path):
     d = WebDeck(slots=13, serve=False, icon_provider=StubIcons(), token_path=str(token_file))
     assert d.press_token == "existing-token"  # bookmark keeps working
     assert (token_file.stat().st_mode & 0o777) == 0o600  # ...but the leak is fixed
+
+
+def _get_json(d, path):
+    import json as _json
+    import urllib.request
+
+    sep = "&" if "?" in path else "?"
+    with urllib.request.urlopen(
+        f"http://{d.host}:{d.port}{path}{sep}token={d.press_token}", timeout=10
+    ) as r:
+        return _json.loads(r.read().decode())
+
+
+def test_state_long_poll_holds_until_a_change(tmp_path):
+    """/state?since=<current> must hold until the version advances
+    (audit: websim-long-poll)."""
+    import threading
+    import time as _time
+
+    d = WebDeck(
+        slots=4, host="127.0.0.1", port=0, serve=True,
+        icon_provider=VaryingIcons(), token_path=str(tmp_path / "web-token"),
+    )
+    try:
+        d.render([TileView(0, "a", "green")])
+        v = _get_json(d, "/state")["version"]
+        result = {}
+
+        def held():
+            t0 = _time.monotonic()
+            result["state"] = _get_json(d, f"/state?since={v}")
+            result["elapsed"] = _time.monotonic() - t0
+
+        t = threading.Thread(target=held)
+        t.start()
+        _time.sleep(0.2)
+        d.render([TileView(0, "a", "amber")])  # version bumps -> poll releases
+        t.join(timeout=5)
+        assert result["state"]["version"] > v
+        assert 0.1 < result["elapsed"] < 5  # held, then released by the change
+    finally:
+        d.close()
+
+
+def test_state_long_poll_times_out_unchanged(tmp_path):
+    d = WebDeck(
+        slots=4, host="127.0.0.1", port=0, serve=True,
+        icon_provider=StubIcons(), token_path=str(tmp_path / "web-token"),
+    )
+    d.LONG_POLL_TIMEOUT = 0.1
+    try:
+        d.render([TileView(0, "a", "green")])
+        v = _get_json(d, "/state")["version"]
+        state = _get_json(d, f"/state?since={v}")
+        assert state["version"] == v  # answered with the unchanged state
+    finally:
+        d.close()
