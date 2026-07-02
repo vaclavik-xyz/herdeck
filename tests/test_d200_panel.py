@@ -571,10 +571,19 @@ def test_frame_with_failed_panel_compose_never_blanks_the_panel(tmp_path, monkey
     driver = _make_driver(tmp_path, dev, icons=_ContentIcons())
     try:
         tiles = [TileView(0, "x", "blue", time_text="1m")]
-        # 1) first-ever frame with a broken panel compose -> NO write at all
-        monkeypatch.setattr(d200mod, "compose_panel", lambda p: (_ for _ in ()).throw(RuntimeError()))
+        # 1) first-ever frame with a broken panel compose -> NO write at all.
+        #    Synchronize on the stub actually RUNNING (a fixed sleep could pass
+        #    before the worker ever processed the failing frame).
+        composed = threading.Event()
+
+        def _boom(_panel):
+            composed.set()
+            raise RuntimeError()
+
+        monkeypatch.setattr(d200mod, "compose_panel", _boom)
         driver.render_frame(tiles, PanelView("t", ["l"], "grey"))
-        time.sleep(0.15)
+        assert composed.wait(2.0)
+        time.sleep(0.05)  # let _write_frame finish deciding after the raise
         assert dev.calls == []
         # 2) healthy frame paints tiles + panel
         monkeypatch.undo()
@@ -584,7 +593,7 @@ def test_frame_with_failed_panel_compose_never_blanks_the_panel(tmp_path, monkey
         stale_panel_icon = dev.calls[0][0][13]["icon"]
         # 3) panel compose breaks again for NEW content; tiles changed -> the
         #    frame still carries the STALE panel cells instead of omitting them
-        monkeypatch.setattr(d200mod, "compose_panel", lambda p: (_ for _ in ()).throw(RuntimeError()))
+        monkeypatch.setattr(d200mod, "compose_panel", _boom)
         driver.render_frame([TileView(0, "y", "green", time_text="9m")], PanelView("t2", ["l2"], "red"))
         assert _wait_until(lambda: len(dev.calls) == 2)
         assert dev.calls[1][0][13]["icon"] == stale_panel_icon
