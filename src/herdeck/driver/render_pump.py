@@ -20,7 +20,7 @@ class RenderPump:
     """
 
     # Paint order when several channels are pending in one cycle.
-    CHANNELS = ("tiles", "panel", "working")
+    CHANNELS = ("frame", "tiles", "panel", "working")
     SLOW_PAINT_MS = 250.0  # a worker-block longer than this gets a WARNING log
 
     def __init__(
@@ -81,7 +81,7 @@ class RenderPump:
                         return
                     batch = self._pending
                     self._pending = {}
-                if "tiles" in batch:
+                if "tiles" in batch or "frame" in batch:
                     # A full render repaints every tile, so a coalesced partial spinner
                     # update in the same batch is stale — drop it (would clobber fresh tiles).
                     batch.pop("working", None)

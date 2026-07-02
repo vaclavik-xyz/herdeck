@@ -438,3 +438,165 @@ def test_d200_unchanged_panel_skips_recompose_but_still_writes(tmp_path, monkeyp
     finally:
         driver.close()
         os.chdir(before)
+
+
+# --- combined frame write (tiles + panel in ONE set) ------------------------
+
+
+def test_render_frame_is_one_combined_full_set_write(tmp_path):
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        panel = PanelView("5 agents", ["online"], "grey")
+        driver.render_frame([TileView(0, "x", "blue"), TileView(1, "y", "green")], panel)
+        assert _wait_until(lambda: dev.calls)
+        assert len(dev.calls) == 1
+        buttons, update_only = dev.calls[0]
+        assert update_only is False  # full set: nothing for the firmware to drop
+        assert 0 in buttons and 1 in buttons
+        assert 13 in buttons and 14 in buttons  # panel cells ride the same set
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_render_frame_skips_byte_identical_frames(tmp_path):
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        panel = PanelView("t", ["l"], "grey")
+        tiles = [TileView(0, "x", "blue")]
+        driver.render_frame(tiles, panel)
+        assert _wait_until(lambda: len(dev.calls) == 1)
+        # identical content (same icon names, same panel key) -> no device write
+        driver.render_frame(tiles, panel)
+        time.sleep(0.1)
+        assert len(dev.calls) == 1
+        # any change (here: the panel) writes a fresh combined set
+        driver.render_frame(tiles, PanelView("t2", ["l"], "grey"))
+        assert _wait_until(lambda: len(dev.calls) == 2)
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_legacy_split_write_invalidates_the_frame_signature(tmp_path):
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        panel = PanelView("t", ["l"], "grey")
+        tiles = [TileView(0, "x", "blue")]
+        driver.render_frame(tiles, panel)
+        assert _wait_until(lambda: len(dev.calls) == 1)
+        driver.render(tiles)  # legacy path touches the device behind the frame cache
+        assert _wait_until(lambda: len(dev.calls) == 2)
+        driver.render_frame(tiles, panel)  # must NOT be skipped after a split write
+        assert _wait_until(lambda: len(dev.calls) == 3)
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+# --- in-memory zip builder ---------------------------------------------------
+
+
+def test_build_button_zip_layout_and_validity():
+    import io as _io
+    import zipfile as _zipfile
+
+    from herdeck.driver.d200 import _zip_chunk_bytes_valid, build_button_zip
+
+    manifest = b'{"0_0":{"State":0}}'
+    icons = {"a.png": b"PNGDATA-A", "b.png": b"PNGDATA-B"}
+    data = build_button_zip(manifest, icons)
+    assert _zip_chunk_bytes_valid(data)
+    with _zipfile.ZipFile(_io.BytesIO(data)) as z:
+        names = z.namelist()
+        assert names[0] == "manifest.json"  # no dummy on a clean first attempt
+        assert set(names) == {"manifest.json", "icons/a.png", "icons/b.png"}
+        assert z.read("manifest.json") == manifest
+        assert z.read("icons/a.png") == b"PNGDATA-A"
+
+
+def test_build_button_zip_retries_with_dummy_until_valid(monkeypatch):
+    import herdeck.driver.d200 as d200mod
+
+    real = d200mod._zip_chunk_bytes_valid
+    fails = {"n": 2}
+
+    def flaky(data):
+        if fails["n"] > 0:
+            fails["n"] -= 1
+            return False
+        return real(data)
+
+    monkeypatch.setattr(d200mod, "_zip_chunk_bytes_valid", flaky)
+    data = d200mod.build_button_zip(b"{}", {"a.png": b"x"}, rand=lambda n: b"\x42" * n)
+    import io as _io
+    import zipfile as _zipfile
+
+    with _zipfile.ZipFile(_io.BytesIO(data)) as z:
+        assert z.namelist()[0] == "dummy.txt"  # dummy leads the archive, like strmdck
+
+
+def test_working_write_invalidates_the_frame_signature(tmp_path):
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev, icons=_ContentIcons())
+    try:
+        panel = PanelView("t", ["l"], "grey")
+        tiles = [TileView(0, "x", "blue", time_text="1m")]
+        driver.render_frame(tiles, panel)
+        assert _wait_until(lambda: len(dev.calls) == 1)
+        # a partial spinner write mutates the device behind the frame cache
+        driver.render_working([TileView(0, "x", "blue", time_text="2m")])
+        assert _wait_until(lambda: len(dev.calls) == 2)
+        # the SAME full frame as before must repaint, not be skipped
+        driver.render_frame(tiles, panel)
+        assert _wait_until(lambda: len(dev.calls) == 3)
+        assert dev.calls[2][1] is False  # full set restored
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_frame_with_failed_panel_compose_never_blanks_the_panel(tmp_path, monkeypatch):
+    import herdeck.driver.d200 as d200mod
+
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev, icons=_ContentIcons())
+    try:
+        tiles = [TileView(0, "x", "blue", time_text="1m")]
+        # 1) first-ever frame with a broken panel compose -> NO write at all.
+        #    Synchronize on the stub actually RUNNING (a fixed sleep could pass
+        #    before the worker ever processed the failing frame).
+        composed = threading.Event()
+
+        def _boom(_panel):
+            composed.set()
+            raise RuntimeError()
+
+        monkeypatch.setattr(d200mod, "compose_panel", _boom)
+        driver.render_frame(tiles, PanelView("t", ["l"], "grey"))
+        assert composed.wait(2.0)
+        time.sleep(0.05)  # let _write_frame finish deciding after the raise
+        assert dev.calls == []
+        # 2) healthy frame paints tiles + panel
+        monkeypatch.undo()
+        driver.render_frame(tiles, PanelView("t", ["l"], "grey"))
+        assert _wait_until(lambda: len(dev.calls) == 1)
+        assert 13 in dev.calls[0][0] and 14 in dev.calls[0][0]
+        stale_panel_icon = dev.calls[0][0][13]["icon"]
+        # 3) panel compose breaks again for NEW content; tiles changed -> the
+        #    frame still carries the STALE panel cells instead of omitting them
+        monkeypatch.setattr(d200mod, "compose_panel", _boom)
+        driver.render_frame([TileView(0, "y", "green", time_text="9m")], PanelView("t2", ["l2"], "red"))
+        assert _wait_until(lambda: len(dev.calls) == 2)
+        assert dev.calls[1][0][13]["icon"] == stale_panel_icon
+    finally:
+        driver.close()
+        os.chdir(before)
