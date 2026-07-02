@@ -177,7 +177,9 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 # 4: wrapped text marks a cut-off tail with an ellipsis.
 # 5: the agent mark flips dark on bright solid fills (like the text).
 # 6: larger type scale (repo 31px, sub-labels 18-19px) spread down the tile.
-TILE_VERSION = 6
+# 7: the dark flip applies only to light-monochrome marks (colour overrides
+#    render as supplied again).
+TILE_VERSION = 7
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
