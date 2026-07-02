@@ -4,6 +4,7 @@
   import BooleanField from "../fields/BooleanField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import {
     getAt, setAt, listFieldState, setListField,
     inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
@@ -16,6 +17,7 @@
   const SEC = "view";
   const MANAGEMENT = ["launcher_menu", "bottom_row"];
   const WORKING_ANIMATIONS = ["spin", "comet", "pulse", "sweep", "none"];
+  const UI_LANGUAGES = ["en", "cs"];
   const TILE_FILLS = ["none", "tint", "solid"];
   const LIST_KEYS = ["bottom_row", "tile_fields", "tile_primary", "tile_secondary"] as const;
   const overlay = $derived(editProfile != null && editProfile !== "default");
@@ -24,19 +26,25 @@
   // Mirror of backend defaults (config.py ViewConfig) — keep in sync.
   const VIEW_DEFAULTS: Record<string, unknown> = { management: "launcher_menu", agent_slots: "max", show_profile_on_panel: false, working_animation: "spin", tile_fill: "none" };
 
-  // Czech tooltips for every field — required for each labelled field
-  // (enforced by sections.help.test.ts).
-  const HELP: Record<string, string> = {
-    management: "Rozložení ovládání: launcher_menu = dlaždice „+ New“ s menu, bottom_row = spodní řada tlačítek.",
-    agent_slots: "Počet dlaždic vyhrazených agentům („max“ = všechny volné); zatím se v aplikaci nepoužívá.",
-    show_profile_on_panel: "Ukáže název aktivního profilu na stavovém panelu; zatím se při vykreslování nepoužívá.",
-    working_animation: "Animace dlaždice u pracujícího agenta: spin, comet, pulse, sweep nebo none (bez animace).",
-    tile_fill: "Vyplnění dlaždice barvou stavu agenta: none = jen text a proužek, tint = ztmavený odstín, solid = plná barva.",
-    bottom_row: "Která tlačítka obsadí spodní řadu v režimu bottom_row; nyní fungují jen profiles a new_agent (+ New).",
-    tile_fields: "Které údaje dlaždice agenta zobrazí: repo, branch, status, time (doba ve stavu), server (štítek serveru).",
-    tile_primary: "První textový řádek dlaždice z polí repo/branch/workspace/tab/agent; nevyplněno = repo, prázdné = vypnuto.",
-    tile_secondary: "Druhý textový řádek dlaždice ze stejných polí; nevyplněno = branch, prázdný seznam řádek vypne.",
-  };
+  // Field tooltips in the current language — required for each labelled field
+  // (enforced by sections.help.test.ts); texts live in help.ts under "view".
+  const HELP = $derived(fieldHelp("view"));
+
+  const LM = defineMessages({
+    en: {
+      heading: "View",
+      none: "(none)",
+      inherit: "Inherit",
+      inherited_hint: "inherited: {value}",
+    },
+    cs: {
+      heading: "Zobrazení",
+      none: "(nic)",
+      inherit: "Zdědit",
+      inherited_hint: "zděděno: {value}",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
 
   // --- base mode (unchanged from α) ---
   const management = $derived((getAt(payload, "base", SEC, "management") as string) ?? "launcher_menu");
@@ -44,11 +52,12 @@
   const showProfile = $derived((getAt(payload, "base", SEC, "show_profile_on_panel") as boolean) ?? false);
   const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? "spin");
   const tileFill = $derived((getAt(payload, "base", SEC, "tile_fill") as string) ?? "none");
+  const uiLanguage = $derived((getAt(payload, "base", SEC, "language") as string) ?? "en");
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
 
   // --- overlay mode helpers ---
-  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? "(nic)" : String(v); }
+  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
   function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
   function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? (inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key]) : v; }
   function setScState(key: string, s: "inherit" | "override"): void {
@@ -63,7 +72,7 @@
   }
 </script>
 
-<h2>Zobrazení{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <OverrideField label="management" help={HELP.management} state={scState("management")} inheritedDisplay={hint("management")} onstate={(s) => setScState("management", s)}>
     <SelectField label="" value={String(scValue("management") ?? "")} options={MANAGEMENT} onchange={(v) => setSc("management", v)} />
@@ -81,7 +90,7 @@
     <SelectField label="" value={String(scValue("tile_fill") ?? "none")} options={TILE_FILLS} onchange={(v) => setSc("tile_fill", v)} />
   </OverrideField>
   {#each LIST_KEYS as key}
-    <TriStateListField label={key} help={HELP[key]} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint(key)}`} onchange={(s, l) => setOvList(key, s, l)} />
+    <TriStateListField label={key} help={HELP[key]} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint(key) })} onchange={(s, l) => setOvList(key, s, l)} />
   {/each}
 {:else}
   <SelectField label="management" help={HELP.management} value={management} options={MANAGEMENT} onchange={(v) => set("management", v)} />
@@ -89,6 +98,7 @@
   <BooleanField label="show_profile_on_panel" help={HELP.show_profile_on_panel} value={showProfile} onchange={(v) => set("show_profile_on_panel", v)} />
   <SelectField label="working_animation" help={HELP.working_animation} value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
   <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
+  <SelectField label="language" help={HELP.language} value={uiLanguage} options={UI_LANGUAGES} onchange={(v) => set("language", v)} />
   {#each LIST_KEYS as key}
     <TriStateListField label={key} help={HELP[key]} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? []} onchange={(s, l) => setBaseTri(key, s, l)} />
   {/each}

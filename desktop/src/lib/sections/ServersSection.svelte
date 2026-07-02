@@ -12,6 +12,7 @@
     type ConfigPayload,
     type ServerRecord,
   } from "../configClient";
+  import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
 
   let { payload = $bindable(), onChange, onError }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void } = $props();
@@ -20,13 +21,29 @@
 
   const servers = $derived(serversOf(payload));
 
-  // Czech tooltips for every field — required for each labelled field
-  // (enforced by sections.help.test.ts).
-  const HELP: Record<string, string> = {
-    id: "Jedinečný název serveru, podle kterého deck řadí, barví a směruje jeho agenty.",
-    url: "WebSocket adresa herdr mostu na serveru (např. ws://100.x.y.z:8788), ideálně Tailscale IP.",
-    token: "Název proměnné či položky klíčenky s přístupovým tokenem; hodnotu lze uložit rovnou do klíčenky.",
-  };
+  // Current-language tooltips for every field — required for each labelled
+  // field (enforced by sections.help.test.ts); texts live in help.ts.
+  const HELP = $derived(fieldHelp("servers"));
+
+  const LM = defineMessages({
+    en: {
+      heading: "Servers",
+      new_server: "(new server)",
+      remove_server: "Remove server",
+      add_server: "+ add server",
+      save_token_failed: "saving token '{name}' failed (HTTP {code})",
+      clear_token_failed: "clearing token '{name}' failed (HTTP {code})",
+    },
+    cs: {
+      heading: "Servery",
+      new_server: "(nový server)",
+      remove_server: "Odebrat server",
+      add_server: "+ přidat server",
+      save_token_failed: "uložení tokenu '{name}' selhalo (HTTP {code})",
+      clear_token_failed: "smazání tokenu '{name}' selhalo (HTTP {code})",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
 
   function set(i: number, field: "id" | "url" | "token_env", v: string): void {
     payload = updateServer(payload, i, field, v);
@@ -45,7 +62,7 @@
     if (code === 204) {
       payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: true, source: "keychain" } } };
     } else {
-      onError(`uložení tokenu '${name}' selhalo (HTTP ${code})`);
+      onError(fmt(lm.save_token_failed, { name, code }));
     }
   }
   async function clearSecret(name: string): Promise<void> {
@@ -53,19 +70,19 @@
     if (code === 204) {
       payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: false, source: null } } };
     } else {
-      onError(`smazání tokenu '${name}' selhalo (HTTP ${code})`);
+      onError(fmt(lm.clear_token_failed, { name, code }));
     }
   }
 </script>
 
-<h2>Servery</h2>
+<h2>{lm.heading}</h2>
 <!-- Index keying is correct here: this is an append / remove list (no row reordering),
      and the only per-row transient state (TokenSecretField's in-progress secret entry) is
      disposable. Editing a field keeps the same index → same DOM node → focus preserved.
      A stable-id apparatus would add complexity that 9 řez-4 sections would clone. -->
 {#each servers as s, i (i)}
   <fieldset>
-    <legend>{s.id || "(nový server)"} <button type="button" title="Odebrat server" onclick={() => remove(i)}>×</button></legend>
+    <legend>{s.id || lm.new_server} <button type="button" title={lm.remove_server} onclick={() => remove(i)}>×</button></legend>
     <TextField label="id" help={HELP.id} value={s.id} oninput={(v) => set(i, "id", v)} />
     <TextField label="url" help={HELP.url} value={s.url} oninput={(v) => set(i, "url", v)} />
     <TokenSecretField
@@ -79,7 +96,7 @@
     />
   </fieldset>
 {/each}
-<button type="button" onclick={add}>+ přidat server</button>
+<button type="button" onclick={add}>{lm.add_server}</button>
 
 <style>
   fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }

@@ -198,25 +198,32 @@ describe("setupTransport", () => {
 });
 
 describe("connectErrorMessage", () => {
-  it("maps known machine codes to actionable Czech text", () => {
-    expect(connectErrorMessage("bad_token")).toContain("Token nesedí");
-    expect(connectErrorMessage("unreachable")).toContain("Server neodpovídá");
+  it("maps known machine codes to actionable English text by default", () => {
+    expect(connectErrorMessage("bad_token")).toContain("token doesn't match");
+    expect(connectErrorMessage("unreachable")).toContain("not responding");
     expect(connectErrorMessage("could not start local source")).toContain("herdr");
-    expect(connectErrorMessage("no saved connection")).toContain("Uložené spojení");
+    expect(connectErrorMessage("no saved connection")).toContain("No saved connection");
+  });
+
+  it("speaks Czech when asked", () => {
+    expect(connectErrorMessage("bad_token", null, "cs")).toContain("Token nesedí");
+    expect(connectErrorMessage("unreachable", null, "cs")).toContain("Server neodpovídá");
+    expect(connectErrorMessage("no saved connection", null, "cs")).toContain("Uložené spojení");
   });
 
   it("includes the socket path in the local-socket message when known", () => {
-    const msg = connectErrorMessage(
-      "herdr socket not found at /tmp/h.sock",
-      "/tmp/h.sock",
-    );
-    expect(msg).toContain("/tmp/h.sock");
-    expect(msg).toContain("spusť herdr");
+    const en = connectErrorMessage("herdr socket not found at /tmp/h.sock", "/tmp/h.sock");
+    expect(en).toContain("/tmp/h.sock");
+    expect(en).toContain("start herdr");
+    const cs = connectErrorMessage("herdr socket not found at /tmp/h.sock", "/tmp/h.sock", "cs");
+    expect(cs).toContain("/tmp/h.sock");
+    expect(cs).toContain("spusť herdr");
   });
 
   it("passes unknown errors through verbatim and defaults when empty", () => {
     expect(connectErrorMessage("weird failure")).toBe("weird failure");
-    expect(connectErrorMessage(null)).toBe("Připojení selhalo.");
+    expect(connectErrorMessage(null)).toBe("Connection failed.");
+    expect(connectErrorMessage(null, null, "cs")).toBe("Připojení selhalo.");
   });
 });
 

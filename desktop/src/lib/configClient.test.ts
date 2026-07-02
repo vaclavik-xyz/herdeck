@@ -44,6 +44,7 @@ import {
   setWindowMode,
   type ConfigPayload,
   errorCountLabel,
+  effectiveLanguage,
   isStaleRevisionError,
 } from "./configClient";
 
@@ -840,13 +841,51 @@ describe("window mode", () => {
   });
 });
 
+describe("effectiveLanguage", () => {
+  const base = (lang?: string) => ({
+    base: { view: lang ? { language: lang } : {} },
+    profiles: {
+      night: { view: { language: "cs" } },
+      child: { extends: "night" },
+      plain: {},
+    },
+    local: {},
+    secrets: {},
+  });
+
+  it("reads base view.language when no profile is active (en default)", () => {
+    expect(effectiveLanguage(parseConfig(base())!)).toBe("en");
+    expect(effectiveLanguage(parseConfig(base("cs"))!)).toBe("cs");
+  });
+
+  it("prefers the active profile's own override", () => {
+    const p = parseConfig({ ...base("en"), active_profile: "night" })!;
+    expect(effectiveLanguage(p)).toBe("cs");
+  });
+
+  it("follows the extends chain for an inheriting profile", () => {
+    const p = parseConfig({ ...base("en"), active_profile: "child" })!;
+    expect(effectiveLanguage(p)).toBe("cs");
+  });
+
+  it("falls back to base for a profile without an override", () => {
+    const p = parseConfig({ ...base("cs"), active_profile: "plain" })!;
+    expect(effectiveLanguage(p)).toBe("cs");
+  });
+});
+
 describe("errorCountLabel", () => {
+  it("defaults to English", () => {
+    expect(errorCountLabel(1)).toBe("1 error");
+    expect(errorCountLabel(5)).toBe("5 errors");
+  });
+
   it("pluralizes Czech counts", () => {
-    expect(errorCountLabel(1)).toBe("1 chyba");
-    expect(errorCountLabel(2)).toBe("2 chyby");
-    expect(errorCountLabel(4)).toBe("4 chyby");
-    expect(errorCountLabel(5)).toBe("5 chyb");
-    expect(errorCountLabel(11)).toBe("11 chyb");
+    expect(errorCountLabel(1, "cs")).toBe("1 chyba");
+    expect(errorCountLabel(2, "cs")).toBe("2 chyby");
+    expect(errorCountLabel(4, "cs")).toBe("4 chyby");
+    expect(errorCountLabel(5, "cs")).toBe("5 chyb");
+    expect(errorCountLabel(11, "cs")).toBe("11 chyb");
   });
 });
 

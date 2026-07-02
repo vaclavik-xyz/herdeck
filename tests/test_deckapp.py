@@ -861,3 +861,11 @@ def test_watcher_reload_skips_when_files_match_baseline(tmp_path, monkeypatch):
         assert reloads == [1]
     finally:
         app.close()
+
+
+def test_state_reports_language_defaulting_to_english():
+    app = make_app()
+    try:
+        assert app._state()["language"] == "en"
+    finally:
+        app.close()

@@ -12,6 +12,7 @@
     type DeckTransport,
     type DeckViewModel,
   } from "./deckClient";
+  import { locale, setLang } from "./i18n.svelte";
   import { visibilityGatedLoop, type GatedLoop } from "./pollGate";
 
   let {
@@ -37,6 +38,9 @@
       return;
     }
     view = await stepDeck(transport, differ, view);
+    // The deck's [view].language leads; the window follows so tiles and chrome
+    // always speak the same language.
+    setLang(view.language);
   }
 
   // One press path for clicks and keys: POST the press, outline the cell. The
@@ -111,12 +115,16 @@
   const cells = $derived(Array.from({ length: view.slots }, (_, i) => i));
   const statusText = $derived(
     !view.online
-      ? "offline · připojuji znovu…"
+      ? locale.lang === "cs"
+        ? "offline · připojuji znovu…"
+        : "offline · reconnecting…"
       : view.source === "mock"
         ? "mock"
         : view.connected
           ? "live"
-          : "live · odpojeno",
+          : locale.lang === "cs"
+            ? "live · odpojeno"
+            : "live · disconnected",
   );
 </script>
 
@@ -127,7 +135,7 @@
         class="cell"
         class:active={active === i}
         onclick={() => clickTile(i)}
-        aria-label={`dlaždice ${i + 1}`}
+        aria-label={locale.lang === "cs" ? `dlaždice ${i + 1}` : `tile ${i + 1}`}
       >
         {#if view.tiles[i]}<img src={view.tiles[i]} alt="" />{/if}
       </button>
@@ -136,7 +144,7 @@
       class="panel"
       class:active={active === view.slots}
       onclick={() => { if (!onJump) void press(view.slots); }}
-      aria-label="stavový panel"
+      aria-label={locale.lang === "cs" ? "stavový panel" : "status panel"}
     >
       {#if view.panel}<img src={view.panel} alt="" />{/if}
     </button>
@@ -149,7 +157,7 @@
       class:mock={view.online && view.source === "mock"}
       class:warn={view.online && view.summary.blocked > 0}
     ></span>
-    <span class="counts">{summaryLabel(view.summary)}</span>
+    <span class="counts">{summaryLabel(view.summary, locale.lang)}</span>
     <span class="src">{statusText}</span>
   </footer>
 </section>

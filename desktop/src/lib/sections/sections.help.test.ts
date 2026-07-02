@@ -5,6 +5,8 @@
 // newly added field cannot ship without its vysvětlivka.
 import { describe, it, expect } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
+import { FIELD_HELP } from "../help";
+import { setLang, type Lang } from "../i18n.svelte";
 import { parseConfig, type ConfigPayload } from "../configClient";
 import ServersSection from "./ServersSection.svelte";
 import DeckSection from "./DeckSection.svelte";
@@ -46,26 +48,32 @@ function demoPayload(): ConfigPayload {
 
 type SectionSpec = {
   name: string;
+  key: string; // FIELD_HELP section key
   component: unknown;
   overlay: boolean; // supports editProfile
   reloadRev: boolean; // takes reloadRev
 };
 
 const SECTIONS: SectionSpec[] = [
-  { name: "ServersSection", component: ServersSection, overlay: false, reloadRev: false },
-  { name: "DeckSection", component: DeckSection, overlay: true, reloadRev: false },
-  { name: "ViewSection", component: ViewSection, overlay: true, reloadRev: false },
-  { name: "ThemeSection", component: ThemeSection, overlay: true, reloadRev: false },
-  { name: "MacrosSection", component: MacrosSection, overlay: true, reloadRev: false },
-  { name: "StartProfilesSection", component: StartProfilesSection, overlay: true, reloadRev: true },
-  { name: "NotificationsSection", component: NotificationsSection, overlay: true, reloadRev: false },
-  { name: "SafetySection", component: SafetySection, overlay: true, reloadRev: false },
-  { name: "AnswerProfilesSection", component: AnswerProfilesSection, overlay: true, reloadRev: true },
-  { name: "ProfilesSection", component: ProfilesSection, overlay: false, reloadRev: false },
-  { name: "DesktopSection", component: DesktopSection, overlay: false, reloadRev: false },
+  { name: "ServersSection", key: "servers", component: ServersSection, overlay: false, reloadRev: false },
+  { name: "DeckSection", key: "deck", component: DeckSection, overlay: true, reloadRev: false },
+  { name: "ViewSection", key: "view", component: ViewSection, overlay: true, reloadRev: false },
+  { name: "ThemeSection", key: "theme", component: ThemeSection, overlay: true, reloadRev: false },
+  { name: "MacrosSection", key: "macros", component: MacrosSection, overlay: true, reloadRev: false },
+  { name: "StartProfilesSection", key: "start_profiles", component: StartProfilesSection, overlay: true, reloadRev: true },
+  { name: "NotificationsSection", key: "notifications", component: NotificationsSection, overlay: true, reloadRev: false },
+  { name: "SafetySection", key: "safety", component: SafetySection, overlay: true, reloadRev: false },
+  { name: "AnswerProfilesSection", key: "answer_profiles", component: AnswerProfilesSection, overlay: true, reloadRev: true },
+  { name: "ProfilesSection", key: "profiles", component: ProfilesSection, overlay: false, reloadRev: false },
+  { name: "DesktopSection", key: "desktop", component: DesktopSection, overlay: false, reloadRev: false },
 ];
 
-function assertLabelsHaveHelp(spec: SectionSpec, editProfile: string | null): void {
+function assertLabelsHaveHelp(
+  spec: SectionSpec,
+  editProfile: string | null,
+  lang: Lang,
+): void {
+  setLang(lang);
   const target = document.createElement("div");
   document.body.appendChild(target);
   const props: Record<string, unknown> = {
@@ -83,10 +91,15 @@ function assertLabelsHaveHelp(spec: SectionSpec, editProfile: string | null): vo
     for (const el of labels) {
       const text = el.textContent?.trim() ?? "";
       if (text === "") continue; // inner field wrapped by OverrideField — label lives on the wrapper
-      expect(
-        el.getAttribute("title")?.trim() || null,
-        `${spec.name}${editProfile ? " (overlay)" : ""}: pole "${text}" nemá vysvětlivku (help prop)`,
-      ).toBeTruthy();
+      const title = el.getAttribute("title")?.trim() || null;
+      const ctx = `${spec.name}${editProfile ? " (overlay)" : ""} [${lang}]: pole "${text}"`;
+      expect(title, `${ctx} nemá vysvětlivku (help prop)`).toBeTruthy();
+      // When the label is a catalog key (possibly suffixed, e.g. "token (inherited)"),
+      // the tooltip must be the catalog text FOR THE MOUNTED LANGUAGE — a stale
+      // hardcoded single-language hint would pass a mere non-empty check.
+      const bare = text.replace(/ \(.*\)$/, "");
+      const expected = FIELD_HELP[lang][spec.key]?.[bare];
+      if (expected) expect(title, `${ctx}: tooltip není z katalogu pro '${lang}'`).toBe(expected);
     }
   } finally {
     unmount(instance);
@@ -95,14 +108,39 @@ function assertLabelsHaveHelp(spec: SectionSpec, editProfile: string | null): vo
 }
 
 describe("config editor help tooltips", () => {
-  for (const spec of SECTIONS) {
-    it(`${spec.name}: every labelled field has a help tooltip (base mode)`, () => {
-      assertLabelsHaveHelp(spec, null);
-    });
-    if (spec.overlay) {
-      it(`${spec.name}: every labelled field has a help tooltip (overlay mode)`, () => {
-        assertLabelsHaveHelp(spec, "night");
+  for (const lang of ["en", "cs"] as const) {
+    for (const spec of SECTIONS) {
+      it(`${spec.name} [${lang}]: every labelled field has a help tooltip (base mode)`, () => {
+        assertLabelsHaveHelp(spec, null, lang);
       });
+      if (spec.overlay) {
+        it(`${spec.name} [${lang}]: every labelled field has a help tooltip (overlay mode)`, () => {
+          assertLabelsHaveHelp(spec, "night", lang);
+        });
+      }
     }
   }
+});
+
+describe("field help catalog parity", () => {
+  it("en and cs carry exactly the same sections and field keys", () => {
+    expect(Object.keys(FIELD_HELP.cs).sort()).toEqual(Object.keys(FIELD_HELP.en).sort());
+    for (const [section, fields] of Object.entries(FIELD_HELP.en)) {
+      expect(
+        Object.keys(FIELD_HELP.cs[section]).sort(),
+        `section '${section}' keys diverge between en and cs`,
+      ).toEqual(Object.keys(fields).sort());
+    }
+  });
+
+  it("every hint is a non-empty single sentence of sane length", () => {
+    for (const lang of ["en", "cs"] as const) {
+      for (const [section, fields] of Object.entries(FIELD_HELP[lang])) {
+        for (const [key, hint] of Object.entries(fields)) {
+          expect(hint.trim().length, `${lang}/${section}/${key} empty`).toBeGreaterThan(10);
+          expect(hint.length, `${lang}/${section}/${key} too long`).toBeLessThan(140);
+        }
+      }
+    }
+  });
 });

@@ -11,6 +11,7 @@
     inheritedFor, inheritedForPath, overrideValue, overrideValuePath, overrideState,
     setOverride, clearOverride, setOverridePath, clearOverridePath,
   } from "../configClient";
+  import { defineMessages, fieldHelp, fmt, locale, t } from "../i18n.svelte";
 
   let { payload = $bindable(), onChange, onError, editProfile = null }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
@@ -24,16 +25,33 @@
   const NOTIF_DEFAULTS: Record<string, boolean> = { enabled: false, sound: true };
   const NOTIF_LIST_DEFAULTS: Record<string, string[]> = { on: ["blocked"], backends: ["macos"] };
 
-  // Czech tooltips for every field — required for each labelled field
-  // (enforced by sections.help.test.ts).
-  const HELP: Record<string, string> = {
-    enabled: "Hlavní vypínač upozornění — když je vypnutý, žádná oznámení se neposílají (výchozí: vypnuto).",
-    sound: "Zda upozornění zazní i zvukem; při vypnutí přijde na macOS tiché oznámení a na Telegram tichá zpráva.",
-    on: "Které stavy agenta spustí upozornění; zatím funguje jen „blocked“ (agent čeká na váš vstup).",
-    backends: "Kam se upozornění doručí: macos (oznamovací centrum) a/nebo telegram (zpráva botem, třeba na mobil).",
-    token: "Název, pod kterým je uložen token Telegram bota (proměnná prostředí či klíčenka) — ne token samotný.",
-    chat_id: "Číselné ID Telegram chatu či skupiny, kam bot posílá upozornění na zablokované agenty.",
-  };
+  // Tooltips for every field (current language) — required for each labelled
+  // field (enforced by sections.help.test.ts); catalog lives in help.ts.
+  const HELP = $derived(fieldHelp("notifications"));
+
+  const LM = defineMessages({
+    en: {
+      heading: "Notifications",
+      tg_hint: "Empty field = inherit (a token is never saved blank).",
+      none: "(none)",
+      origin_own: "custom",
+      origin_inherited: "inherited",
+      origin_unset: "unset",
+      save_token_failed: "saving token '{name}' failed (HTTP {code})",
+      clear_token_failed: "deleting token '{name}' failed (HTTP {code})",
+    },
+    cs: {
+      heading: "Notifikace",
+      tg_hint: "Prázdné pole = zdědit (token se nikdy neuloží prázdný).",
+      none: "(nic)",
+      origin_own: "vlastní",
+      origin_inherited: "zděděno",
+      origin_unset: "nenastaveno",
+      save_token_failed: "uložení tokenu '{name}' selhalo (HTTP {code})",
+      clear_token_failed: "smazání tokenu '{name}' selhalo (HTTP {code})",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
 
   const enabled = $derived((getAt(payload, "base", "notifications", "enabled") as boolean) ?? false);
   const sound = $derived((getAt(payload, "base", "notifications", "sound") as boolean) ?? true);
@@ -80,7 +98,7 @@
     if (code === 204) {
       payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: true, source: "keychain" } } };
     } else {
-      onError(`uložení tokenu '${name}' selhalo (HTTP ${code})`);
+      onError(fmt(lm.save_token_failed, { name, code }));
     }
   }
   async function clearSecret(name: string): Promise<void> {
@@ -88,7 +106,7 @@
     if (code === 204) {
       payload = { ...payload, secrets: { ...payload.secrets, [name]: { set: false, source: null } } };
     } else {
-      onError(`smazání tokenu '${name}' selhalo (HTTP ${code})`);
+      onError(fmt(lm.clear_token_failed, { name, code }));
     }
   }
 
@@ -103,7 +121,7 @@
   function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }
 
   // --- overlay list (on/backends) ---
-  function listHint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? NOTIF_LIST_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : "(nic)"; }
+  function listHint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? NOTIF_LIST_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : lm.none; }
   function ovList(key: string): string[] { const v = overrideValue(payload, prof, SEC, key); return Array.isArray(v) ? (v as string[]) : []; }
   function setOvList(key: string, state: ListFieldState, list: string[]): void {
     payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, state === "empty" ? [] : list) };
@@ -120,8 +138,8 @@
     return v !== undefined ? String(v) : String(inheritedForPath(payload, prof, tgPath(k)) ?? "");
   }
   function tgOrigin(k: string): string {
-    if (overrideValuePath(payload, prof, tgPath(k)) !== undefined) return "vlastní";
-    return inheritedForPath(payload, prof, tgPath(k)) != null ? "zděděno" : "nenastaveno";
+    if (overrideValuePath(payload, prof, tgPath(k)) !== undefined) return lm.origin_own;
+    return inheritedForPath(payload, prof, tgPath(k)) != null ? lm.origin_inherited : lm.origin_unset;
   }
   function setTg(k: string, v: string): void {
     payload = {
@@ -134,7 +152,7 @@
   }
 </script>
 
-<h2>Notifikace{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <OverrideField label="enabled" help={HELP.enabled} state={scState("enabled")} inheritedDisplay={scHint("enabled")} onstate={(s) => setScState("enabled", s)}>
     <BooleanField label="" value={scBool("enabled")} onchange={(v) => setSc("enabled", v)} />
@@ -142,11 +160,11 @@
   <OverrideField label="sound" help={HELP.sound} state={scState("sound")} inheritedDisplay={scHint("sound")} onstate={(s) => setScState("sound", s)}>
     <BooleanField label="" value={scBool("sound")} onchange={(v) => setSc("sound", v)} />
   </OverrideField>
-  <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} inheritLabel="Zdědit" inheritHint={`zděděno: ${listHint("on")}`} onchange={(s, l) => setOvList("on", s, l)} />
-  <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} inheritLabel="Zdědit" inheritHint={`zděděno: ${listHint("backends")}`} onchange={(s, l) => setOvList("backends", s, l)} />
+  <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} onchange={(s, l) => setOvList("on", s, l)} />
+  <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} onchange={(s, l) => setOvList("backends", s, l)} />
   <fieldset class="tg">
     <legend>Telegram</legend>
-    <p class="hint">Prázdné pole = zdědit (token se nikdy neuloží prázdný).</p>
+    <p class="hint">{lm.tg_hint}</p>
     <TokenSecretField
       label={`token (${tgOrigin("token_env")})`}
       help={HELP.token}

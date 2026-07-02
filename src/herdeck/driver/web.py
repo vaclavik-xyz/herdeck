@@ -9,6 +9,7 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from ..i18n import tr
 from .base import DeckDriver, PanelView, TileView
 
 # Panel press maps to this button index (the orchestrator pages on PANEL_INDICES).
@@ -69,7 +70,9 @@ class WebDeck(DeckDriver):
         press_token: str | None = None,
         token_path: str | None = None,
         cols: int = 5,
+        language: str = "en",
     ):
+        self._language = language
         self._slots = slots
         self._cols = max(1, cols)  # grid width; the page lays cells out with it
         self._callback: Callable[[int], None] | None = None
@@ -250,8 +253,7 @@ class WebDeck(DeckDriver):
             b'<body style="background:#0b0b0d;color:#e7ecf3;'
             b'font:14px/1.5 system-ui;padding:2em;max-width:32em">'
             b"<h2>Missing or invalid access token</h2>"
-            b"<p>Open the full URL including the <code>?token=&hellip;</code> part "
-            b"printed in herdeck's startup log on the machine running the deck.</p>"
+            + b"<p>" + tr(deck._language, "web.forbidden").encode() + b"</p>"
         )
 
         class Handler(BaseHTTPRequestHandler):
@@ -288,7 +290,17 @@ class WebDeck(DeckDriver):
                         # page beats a plaintext dead-end.
                         self._send(403, forbidden_page, "text/html; charset=utf-8")
                         return
-                    page = _PAGE.replace("__PRESS_TOKEN_JSON__", json.dumps(deck._press_token))
+                    page = _PAGE.replace("__PRESS_TOKEN_JSON__", json.dumps(deck._press_token)).replace(
+                "__L_JSON__",
+                json.dumps(
+                    {
+                        "pressFailed": tr(deck._language, "web.press_failed"),
+                        "tokenExpired": tr(deck._language, "web.token_expired"),
+                        "disconnected": tr(deck._language, "web.disconnected"),
+                    },
+                    ensure_ascii=False,  # keep em-dashes/diacritics readable in the page
+                ),
+            )
                     self._send(200, page.encode(), "text/html; charset=utf-8")
                 elif path == "/state":
                     if not self._require_token(url):
@@ -387,6 +399,7 @@ function auth(path){
 // Stale-state indication: a control surface silently showing dead state is
 // actively misleading — a 'blocked' tile may have been resolved minutes ago.
 let fails=0, lastOk=Date.now();
+const L=__L_JSON__;
 function setStale(msg){deck.classList.add('stale');note.textContent=msg;note.style.display='block';}
 function clearStale(){fails=0;lastOk=Date.now();deck.classList.remove('stale');note.style.display='none';}
 // one press path for clicks and keys: post the press, outline the pressed cell.
@@ -395,10 +408,10 @@ async function press(i){
   try{
     r=await fetch('/press/'+i,{method:'POST',headers:{'X-Herdeck-Token':pressToken}});
   }catch(e){
-    setStale('press failed — disconnected?');
+    setStale(L.pressFailed);
     return;
   }
-  if(r.status===403){ setStale('token expired — open the fresh URL from the startup log'); return; }
+  if(r.status===403){ setStale(L.tokenExpired); return; }
   if(!r.ok) return;
   btns.forEach(b=>b.classList.remove('active'));   // clear any stale outline first
   if(btns[i]){
@@ -459,7 +472,7 @@ async function poll(){
     // idle traffic is ~2 req/min and changes arrive at network latency
     const r=await fetch(auth(lastV>=0?'/state?since='+lastV:'/state'));
     if(r.status===403){
-      setStale('token expired — open the fresh URL from the startup log');
+      setStale(L.tokenExpired);
       pollDelay=2000;              // a stale bookmark must not hammer at 10/s
       return;                      // rescheduled in finally; keeps checking
     }
@@ -480,7 +493,7 @@ async function poll(){
     }
   }catch(e){
     fails++;
-    if(fails>=2) setStale('disconnected — last update '+Math.max(1,Math.round((Date.now()-lastOk)/1000))+'s ago');
+    if(fails>=2) setStale(L.disconnected.replace('{s}',Math.max(1,Math.round((Date.now()-lastOk)/1000))));
     pollDelay=1000;                // errors are not server-paced: back off
   }finally{
     inFlight=false;

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { t } from "../i18n.svelte";
+
   let { label, value, onchange, help = "" }:
     { label: string; value: string[]; onchange: (v: string[]) => void; help?: string } = $props();
 
@@ -21,10 +23,10 @@
     {#each items as item, i (i)}
       <div class="row">
         <input value={item} oninput={(e) => setItem(i, (e.target as HTMLInputElement).value)} />
-        <button type="button" onclick={() => remove(i)}>×</button>
+        <button type="button" title={t("widget.remove_row")} onclick={() => remove(i)}>×</button>
       </div>
     {/each}
-    <button type="button" class="add" onclick={add}>+ přidat</button>
+    <button type="button" class="add" onclick={add}>{t("widget.add")}</button>
   </div>
 </div>
 

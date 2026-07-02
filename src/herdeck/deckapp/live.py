@@ -90,6 +90,12 @@ class LiveSource(StateSource):
         return self._config
 
     @property
+    def language(self) -> str:
+        """Language of rendered deck text — /state exposes it so the desktop
+        window can switch its own UI language in lockstep."""
+        return self._config.view.language
+
+    @property
     def connected(self) -> bool:
         with self._lock:
             return self._connected

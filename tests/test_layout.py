@@ -291,3 +291,17 @@ def test_offline_panel_still_reports_blocked_agents():
     pv = panel_overview(Counts(2, 0, 0, 0), 0, 1, {"down-server"}, 2, ("api", "5m"))
     assert pv.title == "OFFLINE"
     assert "▲ 2 blocked" in pv.lines
+
+
+def test_panel_overview_renders_czech_when_asked():
+    pv = panel_overview(Counts(2, 1, 0, 0), 0, 1, set(), 3, ("api", "4m"), lang="cs")
+    assert pv.title == "▲ čeká: 2"
+    assert pv.lines[1] == "čeká 4m"
+    offline = panel_overview(Counts(1, 0, 0, 0), 0, 1, {"srv"}, 1, None, lang="cs")
+    assert offline.lines[0] == "připojuji…"
+    assert offline.lines[1] == "▲ blokováno: 1"
+
+
+def test_panel_overview_default_language_stays_english():
+    pv = panel_overview(Counts(0, 1, 1, 0), 0, 1, set(), 2, None)
+    assert pv.title == "2 agents"

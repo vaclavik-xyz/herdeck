@@ -1,6 +1,7 @@
 <script lang="ts">
   import TextField from "../fields/TextField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import {
     macrosOf, addMacro, removeMacro, updateMacro, macroRecords, inheritedMacros,
     overrideValuePath, overrideStatePath, setOverridePath, clearOverridePath,
@@ -13,13 +14,27 @@
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
-  // Czech tooltips for every field — required for each labelled field
-  // (enforced by sections.help.test.ts).
-  const HELP: Record<string, string> = {
-    macros: "Seznam rychlých zpráv v detailu neblokovaného agenta; profil přepisuje celý seznam najednou.",
-    label: "Krátký popisek makra na dlaždici v detailu agenta (zobrazí se max. 14 znaků).",
-    text: "Text, který se po stisku dlaždice pošle agentovi do terminálu, jako bys ho napsal sám.",
-  };
+  // Tooltips for every field come from the central catalog in the current
+  // language — required for each labelled field (enforced by sections.help.test.ts).
+  const HELP = $derived(fieldHelp("macros"));
+
+  const LM = defineMessages({
+    en: {
+      heading: "Macros",
+      new_macro: "(new macro)",
+      remove_macro: "Remove macro",
+      add_macro: "+ add macro",
+      n_macros: "{n} macros",
+    },
+    cs: {
+      heading: "Makra",
+      new_macro: "(nové makro)",
+      remove_macro: "Odebrat makro",
+      add_macro: "+ přidat makro",
+      n_macros: "{n} maker",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
 
   // --- base mode (unchanged) ---
   const macros = $derived(macrosOf(payload));
@@ -41,29 +56,29 @@
   function ovRemove(i: number): void { writeOv(ovMacros().filter((_, j) => j !== i)); }
 </script>
 
-<h2>Makra{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
-  <OverrideField label="macros" help={HELP.macros} state={ovState()} inheritedDisplay={`${inhMacros().length} maker`} onstate={setOvState}>
+  <OverrideField label="macros" help={HELP.macros} state={ovState()} inheritedDisplay={fmt(lm.n_macros, { n: inhMacros().length })} onstate={setOvState}>
     {#each ovMacros() as m, i (i)}
       <fieldset>
-        <legend>{m.label || "(nové makro)"} <button type="button" title="Odebrat makro" onclick={() => ovRemove(i)}>×</button></legend>
+        <legend>{m.label || lm.new_macro} <button type="button" title={lm.remove_macro} onclick={() => ovRemove(i)}>×</button></legend>
         <TextField label="label" help={HELP.label} value={m.label} oninput={(v) => ovSet(i, "label", v)} />
         <TextField label="text" help={HELP.text} value={m.text} oninput={(v) => ovSet(i, "text", v)} />
       </fieldset>
     {/each}
-    <button type="button" onclick={ovAdd}>+ přidat makro</button>
+    <button type="button" onclick={ovAdd}>{lm.add_macro}</button>
   </OverrideField>
 {:else}
   <!-- Index keying: append/remove list, no reordering, no per-row transient state. Same
        rationale as ServersSection — a stable-id apparatus would add needless complexity. -->
   {#each macros as m, i (i)}
     <fieldset>
-      <legend>{m.label || "(nové makro)"} <button type="button" title="Odebrat makro" onclick={() => remove(i)}>×</button></legend>
+      <legend>{m.label || lm.new_macro} <button type="button" title={lm.remove_macro} onclick={() => remove(i)}>×</button></legend>
       <TextField label="label" help={HELP.label} value={m.label} oninput={(v) => set(i, "label", v)} />
       <TextField label="text" help={HELP.text} value={m.text} oninput={(v) => set(i, "text", v)} />
     </fieldset>
   {/each}
-  <button type="button" onclick={add}>+ přidat makro</button>
+  <button type="button" onclick={add}>{lm.add_macro}</button>
 {/if}
 
 <style>

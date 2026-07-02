@@ -129,27 +129,50 @@ export function setupTransport(invoke: InvokeFn): SetupTransport {
  * first-run card showing raw 'bad_token' gives no guidance. Unknown strings
  * pass through verbatim — never hide information.
  */
+const CONNECT_ERRORS: Record<"en" | "cs", Record<string, string>> = {
+  en: {
+    generic: "Connection failed.",
+    bad_token: "The token doesn't match — check the token value on the server (herdeck-bridge).",
+    unreachable: "The server is not responding — check the URL and port (is herdeck-bridge running?).",
+    socket_with_path: "herdr socket not found ({path}) — start herdr and try again.",
+    socket: "herdr socket not found — start herdr and try again.",
+    local_failed: "Local connection failed — is herdr running? Try again.",
+    demo_failed: "Switching to demo mode failed.",
+    no_saved: "No saved connection found.",
+    config_unreadable: "The existing config is unreadable — fix it in Settings.",
+    config_malformed: "The existing config has a broken servers section — fix it in Settings.",
+  },
+  cs: {
+    generic: "Připojení selhalo.",
+    bad_token: "Token nesedí — zkontroluj hodnotu tokenu na serveru (herdeck-bridge).",
+    unreachable: "Server neodpovídá — zkontroluj URL a port (běží tam herdeck-bridge?).",
+    socket_with_path: "herdr socket nenalezen ({path}) — spusť herdr a zkus to znovu.",
+    socket: "herdr socket nenalezen — spusť herdr a zkus to znovu.",
+    local_failed: "Lokální připojení selhalo — běží herdr? Zkus to znovu.",
+    demo_failed: "Přepnutí do demo režimu selhalo.",
+    no_saved: "Uložené spojení nebylo nalezeno.",
+    config_unreadable: "Stávající config nejde přečíst — oprav ho v nastavení (Config).",
+    config_malformed: "Stávající config má poškozenou sekci serverů — oprav ho v nastavení (Config).",
+  },
+};
+
 export function connectErrorMessage(
   error: string | null | undefined,
   socketPath?: string | null,
+  lang: "en" | "cs" = "en",
 ): string {
-  if (!error) return "Připojení selhalo.";
-  if (error === "bad_token")
-    return "Token nesedí — zkontroluj hodnotu tokenu na serveru (herdeck-bridge).";
-  if (error === "unreachable")
-    return "Server neodpovídá — zkontroluj URL a port (běží tam herdeck-bridge?).";
+  const m = CONNECT_ERRORS[lang];
+  if (!error) return m.generic;
+  if (error === "bad_token") return m.bad_token;
+  if (error === "unreachable") return m.unreachable;
   if (error.startsWith("herdr socket not found"))
-    return socketPath
-      ? `herdr socket nenalezen (${socketPath}) — spusť herdr a zkus to znovu.`
-      : "herdr socket nenalezen — spusť herdr a zkus to znovu.";
-  if (error === "could not start local source")
-    return "Lokální připojení selhalo — běží herdr? Zkus to znovu.";
-  if (error === "could not switch to demo") return "Přepnutí do demo režimu selhalo.";
-  if (error === "no saved connection") return "Uložené spojení nebylo nalezeno.";
-  if (error === "existing config is unreadable — fix it in Settings")
-    return "Stávající config nejde přečíst — oprav ho v nastavení (Config).";
+    return socketPath ? m.socket_with_path.replace("{path}", socketPath) : m.socket;
+  if (error === "could not start local source") return m.local_failed;
+  if (error === "could not switch to demo") return m.demo_failed;
+  if (error === "no saved connection") return m.no_saved;
+  if (error === "existing config is unreadable — fix it in Settings") return m.config_unreadable;
   if (error === "existing config is malformed (servers) — fix it in Settings")
-    return "Stávající config má poškozenou sekci serverů — oprav ho v nastavení (Config).";
+    return m.config_malformed;
   return error;
 }
 

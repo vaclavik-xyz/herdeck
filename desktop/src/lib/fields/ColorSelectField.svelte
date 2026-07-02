@@ -2,6 +2,7 @@
   // A named-palette colour picker with a live swatch. Status colours resolve
   // strictly through the backend's named palette — a free-text typo ('ambre')
   // used to pass Apply and silently render as the empty-tile 'dim' grey.
+  import { t } from "../i18n.svelte";
   import { PALETTE, PALETTE_NAMES } from "../statusColors";
 
   let { label, value, onchange, allowEmpty = true, help = "" }:
@@ -21,7 +22,7 @@
          (transparent swatch), not as a working colour. -->
     <span class="swatch" style={`background:${PALETTE[value] ?? "transparent"}`}></span>
     <select value={value} onchange={(e) => onchange((e.target as HTMLSelectElement).value)}>
-      {#if allowEmpty}<option value="">(výchozí)</option>{/if}
+      {#if allowEmpty}<option value="">{t("widget.default_empty")}</option>{/if}
       {#each choices as o}<option value={o}>{o}</option>{/each}
     </select>
   </span>

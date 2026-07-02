@@ -495,3 +495,20 @@ def test_state_carries_grid_cols_and_page_applies_them(tmp_path):
         assert "setTimeout(()=>b.classList.remove('active'),350)" in page  # transient outline
     finally:
         d.close()
+
+
+def test_page_speaks_czech_when_configured(tmp_path):
+    d = WebDeck(
+        4, host="127.0.0.1", port=0,
+        icon_provider=StubIcons(), token_path=str(tmp_path / "web-token"),
+        language="cs",
+    )
+    try:
+        with urllib.request.urlopen(
+            f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=5
+        ) as r:
+            page = r.read().decode()
+        assert "stisk selhal — odpojeno?" in page
+        assert "token vypršel" in page
+    finally:
+        d.close()

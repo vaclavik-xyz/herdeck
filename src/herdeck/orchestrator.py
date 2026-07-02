@@ -7,6 +7,7 @@ from . import layout
 from .commands import Command, profile_for
 from .config import Config
 from .driver.base import PanelView, TileView
+from .i18n import tr
 from .model import AgentKey, AgentState, Status
 
 _OPTION_LABEL_MAX = 14
@@ -267,11 +268,11 @@ class Orchestrator:
 
     def _management_label(self, action: str) -> str:
         return {
-            "profiles": "Profiles",
-            "notifications": "Notify",
-            "safety": "Safety",
-            "theme": "Theme",
-            "new_agent": "+ New",
+            "profiles": self._tr("profiles_entry"),
+            "notifications": self._tr("mgmt.notifications"),
+            "safety": self._tr("mgmt.safety"),
+            "theme": self._tr("mgmt.theme"),
+            "new_agent": self._tr("new_agent"),
         }.get(action, action)
 
     def _note_sent(self, key: AgentKey) -> None:
@@ -321,7 +322,7 @@ class Orchestrator:
             elif not management_mode and i == self.slots - 1:  # reserved launcher tile
                 # "launcher" renders dark with a green label — full status-green
                 # here read as one more WORKING agent under solid fill.
-                tiles.append(TileView(i, "+ New", "launcher", section="start_profiles"))
+                tiles.append(TileView(i, self._tr("new_agent"), "launcher", section="start_profiles"))
             elif i < len(shown):
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
@@ -345,7 +346,9 @@ class Orchestrator:
                         repo=layout.compose_line(s, primary_tokens),
                         branch=layout.compose_line(s, secondary_tokens),
                         status_text=(
-                            "OFFLINE" if down else s.status.value.upper()
+                            self._tr("status.offline")
+                            if down
+                            else self._tr(f"status.{s.status.value}")
                         )
                         if "status" in fields
                         else None,
@@ -364,6 +367,7 @@ class Orchestrator:
             self._down,
             len(ordered),
             self._blocked_spotlight(),
+            lang=self.config.view.language,
         )
         if panel.color == "red":
             panel.color = self.config.theme.colors.get("offline", panel.color)
@@ -374,7 +378,7 @@ class Orchestrator:
             if self._clock() - at <= _SENT_NOTE_TTL_S:
                 # acknowledge the action while its status change propagates —
                 # the tile stays amber until the bridge round-trip completes
-                panel.lines = [f"sent › {label}", *panel.lines]
+                panel.lines = [self._tr("sent", label=label), *panel.lines]
             else:
                 self._sent_note = None
         return RenderState(tiles, panel)
@@ -389,11 +393,15 @@ class Orchestrator:
                 label = f"* {name}" if name == self.config.meta.active_profile else name
                 tiles.append(TileView(i, label[:_OPTION_LABEL_MAX], "blue", section="profiles"))
             elif i == back_i:
-                tiles.append(TileView(i, "Back", "grey"))
+                tiles.append(TileView(i, self._tr("back"), "grey"))
             else:
                 tiles.append(TileView(i, "", "empty"))
-        locked = "locked by env" if self.config.meta.env_locked_profile else "pick a profile"
-        return RenderState(tiles, PanelView("profiles", [locked], "grey"))
+        locked = (
+            self._tr("locked_by_env")
+            if self.config.meta.env_locked_profile
+            else self._tr("pick_profile")
+        )
+        return RenderState(tiles, PanelView(self._tr("profiles_title"), [locked], "grey"))
 
     def _render_launcher(self) -> RenderState:
         types = list(self.config.start_profiles)
@@ -404,12 +412,15 @@ class Orchestrator:
             if i < len(entries) and i < back_i:
                 entry = entries[i]
                 agent_type = entry if entry in self.config.start_profiles else None
-                tiles.append(TileView(i, entry, "blue", agent_type=agent_type, section=("start_profiles" if agent_type else "profiles")))
+                # "Profiles" is a logic sentinel matched by _press_launcher — translate
+                # only the rendered label, never the entries list.
+                label = self._tr("profiles_entry") if agent_type is None else entry
+                tiles.append(TileView(i, label, "blue", agent_type=agent_type, section=("start_profiles" if agent_type else "profiles")))
             elif i == back_i:
-                tiles.append(TileView(i, "Back", "grey"))
+                tiles.append(TileView(i, self._tr("back"), "grey"))
             else:
                 tiles.append(TileView(i, "", "empty"))
-        return RenderState(tiles, PanelView("new agent", ["pick a type"], "grey"))
+        return RenderState(tiles, PanelView(self._tr("new_agent_title"), [self._tr("pick_type")], "grey"))
 
     def tick(self) -> list[int]:
         """Advance the spinner phase; return overview tile indices that are working.
@@ -529,6 +540,9 @@ class Orchestrator:
         """Is the drilled agent's server currently disconnected?"""
         return self._drill is not None and self._drill.server_id in self._down
 
+    def _tr(self, key: str, **fmt: object) -> str:
+        return tr(self.config.view.language, key, **fmt)
+
     def _render_drill(self) -> RenderState:
         agent = self._agents.get(self._drill)
         actions, stop_i, back_i = self._drill_layout()
@@ -545,26 +559,26 @@ class Orchestrator:
             if i < len(actions):
                 label = actions[i]["label"]
                 if armed is not None and actions[i].get("confirm_key") == armed:
-                    label = "Sure?"
+                    label = self._tr("sure")
                 color = "grey" if down else _ACTION_COLORS.get(actions[i].get("id"), "blue")
                 tiles.append(TileView(i, label, color, subtext=actions[i].get("subtext"), section="answer_profiles"))
             elif i == stop_i:
-                stop_label = "Sure?" if armed == "act_force" else "Stop"
+                stop_label = self._tr("sure") if armed == "act_force" else self._tr("stop")
                 tiles.append(TileView(i, stop_label, "grey" if down else "red", section="answer_profiles"))
             elif i == back_i:
-                tiles.append(TileView(i, "Back", "grey"))
+                tiles.append(TileView(i, self._tr("back"), "grey"))
             else:
                 tiles.append(TileView(i, "", "empty"))
         panel = (
-            layout.panel_detail(agent, self._detection)
+            layout.panel_detail(agent, self._detection, lang=self.config.view.language)
             if agent is not None
             else PanelView("", [], "grey")
         )
         if down:
             offline = self.config.theme.colors.get("offline", "red")
-            panel = PanelView(panel.title, ["OFFLINE — reconnecting…"], offline)
+            panel = PanelView(panel.title, [self._tr("offline_reconnecting")], offline)
         elif armed is not None and agent is not None:
-            panel = PanelView(panel.title, ["press again to confirm", *panel.lines], panel.color)
+            panel = PanelView(panel.title, [self._tr("press_to_confirm"), *panel.lines], panel.color)
         return RenderState(tiles, panel)
 
     # --- presses ---

@@ -7,6 +7,8 @@
 // Kept DOM- and Svelte-free so it is fully unit-testable under Vitest (mirroring
 // sidecar.ts). DeckView.svelte is a thin template over these functions.
 
+import type { Lang } from "./i18n.svelte";
+
 /** Footer counts the sidecar reports in `/state.summary`. */
 export interface DeckSummary {
   agents: number;
@@ -28,6 +30,7 @@ export interface DeckState {
   summary: DeckSummary;
   source: string; // "mock" | "live"
   connected: boolean;
+  language: Lang;
 }
 
 /** The actions a single `/state` advance implies, as computed by DeckDiffer. */
@@ -101,19 +104,29 @@ export function parseState(raw: unknown): DeckState | null {
     summary: parseSummary(v.summary),
     source: typeof v.source === "string" ? v.source : "unknown",
     connected: v.connected === true,
+    language: v.language === "cs" ? "cs" : "en",
   };
 }
 
-/** A compact one-line footer label, e.g. "4 agenti · 2 pracují · 1 nečinný ·
- *  ⚠ 1 blokován". Blocked is emphasized last so it stands out. */
-const agentsWord = (n: number): string => (n === 1 ? "agent" : n >= 2 && n <= 4 ? "agenti" : "agentů");
+/** A compact one-line footer label, e.g. "4 agents · 2 working · ⚠ 1 blocked"
+ *  ("4 agenti · 2 pracují · ⚠ 1 blokován" in cs). Blocked is emphasized last
+ *  so it stands out. Framework-free: the caller passes the language. */
+const csAgents = (n: number): string => (n === 1 ? "agent" : n >= 2 && n <= 4 ? "agenti" : "agentů");
 
-export function summaryLabel(s: DeckSummary): string {
-  const parts: string[] = [`${s.agents} ${agentsWord(s.agents)}`];
-  if (s.working) parts.push(`${s.working} ${s.working === 1 ? "pracuje" : "pracují"}`);
-  if (s.idle) parts.push(`${s.idle} ${s.idle === 1 ? "nečinný" : "nečinní"}`);
-  if (s.done) parts.push(`${s.done} hotovo`);
-  if (s.blocked) parts.push(`⚠ ${s.blocked} ${s.blocked === 1 ? "blokován" : "blokováni"}`);
+export function summaryLabel(s: DeckSummary, lang: Lang = "en"): string {
+  if (lang === "cs") {
+    const parts: string[] = [`${s.agents} ${csAgents(s.agents)}`];
+    if (s.working) parts.push(`${s.working} ${s.working === 1 ? "pracuje" : "pracují"}`);
+    if (s.idle) parts.push(`${s.idle} ${s.idle === 1 ? "nečinný" : "nečinní"}`);
+    if (s.done) parts.push(`${s.done} hotovo`);
+    if (s.blocked) parts.push(`⚠ ${s.blocked} ${s.blocked === 1 ? "blokován" : "blokováni"}`);
+    return parts.join(" · ");
+  }
+  const parts: string[] = [`${s.agents} ${s.agents === 1 ? "agent" : "agents"}`];
+  if (s.working) parts.push(`${s.working} working`);
+  if (s.idle) parts.push(`${s.idle} idle`);
+  if (s.done) parts.push(`${s.done} done`);
+  if (s.blocked) parts.push(`⚠ ${s.blocked} blocked`);
   return parts.join(" · ");
 }
 
@@ -244,6 +257,7 @@ export interface DeckViewModel {
   source: string;
   connected: boolean;
   summary: DeckSummary;
+  language: Lang;
   tiles: Record<number, string>; // index -> img src
   sections: Record<number, string>; // index -> config section key (klik-to-jump)
   panel: string | null;
@@ -256,6 +270,7 @@ export function initialView(slots = 13): DeckViewModel {
     source: "unknown",
     connected: false,
     summary: emptySummary(),
+    language: "en",
     tiles: {},
     sections: {},
     panel: null,
@@ -343,6 +358,7 @@ export async function stepDeck(
     source: state.source,
     connected: state.connected,
     summary: state.summary,
+    language: state.language,
     tiles,
     sections: state.sections,
     panel,

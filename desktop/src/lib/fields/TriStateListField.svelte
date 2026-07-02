@@ -1,5 +1,6 @@
 <script lang="ts">
   import ListField from "./ListField.svelte";
+  import { t } from "../i18n.svelte";
   import type { ListFieldState } from "../configClient";
 
   let { label, state, list, defaultHint, inheritLabel, inheritHint, onchange, help = "" }:
@@ -15,9 +16,9 @@
     } = $props();
 
   const SEGMENTS = $derived<{ value: ListFieldState; text: string }[]>([
-    { value: "default", text: inheritLabel ?? "Výchozí" },
-    { value: "custom", text: "Vlastní" },
-    { value: "empty", text: "Vypnuto" },
+    { value: "default", text: inheritLabel ?? t("widget.default") },
+    { value: "custom", text: t("widget.custom") },
+    { value: "empty", text: t("widget.off") },
   ]);
 
   // Switching to "custom" carries the current list (user then edits it); if the list is
@@ -50,9 +51,9 @@
     {#if state === "custom"}
       <ListField label="" value={list} onchange={(v) => onchange("custom", v)} />
     {:else if state === "default"}
-      <p class="hint">{inheritHint ?? (defaultHint ? `výchozí: ${defaultHint}` : "(výchozí)")}</p>
+      <p class="hint">{inheritHint ?? (defaultHint ? `${t("widget.default_prefix")} ${defaultHint}` : t("widget.default_empty"))}</p>
     {:else}
-      <p class="hint">prázdné — vypnuto</p>
+      <p class="hint">{t("widget.empty_off")}</p>
     {/if}
   </div>
 </div>

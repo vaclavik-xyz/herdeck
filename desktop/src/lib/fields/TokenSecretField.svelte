@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../i18n.svelte";
   import type { SecretFlag } from "../configClient";
   let {
     label,
@@ -44,20 +45,20 @@
     {#if flag.set}
       <span class="ok" title={flag.source ?? ""}>🔑✓</span>
       {#if flag.source === "keychain"}
-        <button type="button" onclick={onclear}>clear</button>
+        <button type="button" onclick={onclear}>{t("widget.clear")}</button>
       {/if}
     {:else}
       <span class="missing">🔑✗</span>
-      <button type="button" onclick={() => (entering = true)}>nastav</button>
+      <button type="button" onclick={() => (entering = true)}>{t("widget.set")}</button>
     {/if}
   {/if}
 </label>
 
 {#if entering}
   <div class="setrow">
-    <input type="password" placeholder="hodnota tokenu" bind:value={secretValue} />
-    <button type="button" onclick={submit}>Uložit do keychain</button>
-    <button type="button" onclick={() => (entering = false)}>Zrušit</button>
+    <input type="password" placeholder={t("widget.token_value")} bind:value={secretValue} />
+    <button type="button" onclick={submit}>{t("widget.save_keychain")}</button>
+    <button type="button" onclick={() => (entering = false)}>{t("widget.cancel")}</button>
   </div>
 {/if}
 

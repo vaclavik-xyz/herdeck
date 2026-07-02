@@ -544,6 +544,79 @@ struct WmItems {
     aot: CheckMenuItem<tauri::Wry>,
 }
 
+/// English/Czech texts for every tray item, keyed by the item order in
+/// `TrayHandles::retitle`. The tray is native — the WebView retitles it via the
+/// `tray_set_language` command when the deck's `[view].language` changes.
+fn tray_labels(lang: &str) -> [&'static str; 10] {
+    match lang {
+        "cs" => [
+            "Nastavení…",
+            "Zobrazit",
+            "Skrýt",
+            "Normální",
+            "Plovoucí",
+            "Vždy navrchu",
+            "Režim okna",
+            "Spouštět po přihlášení",
+            "Změnit připojení…",
+            "Ukončit",
+        ],
+        _ => [
+            "Settings…",
+            "Show",
+            "Hide",
+            "Normal",
+            "Floating",
+            "Always on top",
+            "Window mode",
+            "Start at login",
+            "Change connection…",
+            "Quit",
+        ],
+    }
+}
+
+/// Handles to every retitlable tray item, managed as Tauri state so the
+/// `tray_set_language` command can reach them after setup.
+#[derive(Default)]
+struct TrayHandles(Mutex<Option<TrayMenuItems>>);
+
+struct TrayMenuItems {
+    settings: MenuItem<tauri::Wry>,
+    show: MenuItem<tauri::Wry>,
+    hide: MenuItem<tauri::Wry>,
+    wm: WmItems,
+    wm_submenu: tauri::menu::Submenu<tauri::Wry>,
+    autostart: CheckMenuItem<tauri::Wry>,
+    reconnect: MenuItem<tauri::Wry>,
+    quit: MenuItem<tauri::Wry>,
+}
+
+impl TrayMenuItems {
+    fn retitle(&self, lang: &str) {
+        let l = tray_labels(lang);
+        let _ = self.settings.set_text(l[0]);
+        let _ = self.show.set_text(l[1]);
+        let _ = self.hide.set_text(l[2]);
+        let _ = self.wm.normal.set_text(l[3]);
+        let _ = self.wm.floating.set_text(l[4]);
+        let _ = self.wm.aot.set_text(l[5]);
+        let _ = self.wm_submenu.set_text(l[6]);
+        let _ = self.autostart.set_text(l[7]);
+        let _ = self.reconnect.set_text(l[8]);
+        let _ = self.quit.set_text(l[9]);
+    }
+}
+
+/// Retitle the native tray menu for `lang` ("en"/"cs"). Called by the WebView
+/// whenever the deck-reported language changes; unknown values fall back to en.
+#[tauri::command]
+fn tray_set_language(lang: String, handles: tauri::State<'_, TrayHandles>) {
+    if let Some(items) = handles.0.lock().unwrap().as_ref() {
+        items.retitle(&lang);
+    }
+}
+
 /// Check exactly the item for `mode`, uncheck the other two.
 fn set_wm_checks(items: &WmItems, mode: WindowMode) {
     let _ = items.normal.set_checked(mode == WindowMode::Normal);
@@ -653,13 +726,16 @@ fn select_window_mode(app: &tauri::AppHandle, target: WindowMode, items: &WmItem
 /// Build the tray icon with a show/hide/quit menu.
 fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     use tauri_plugin_autostart::ManagerExt;
-    let settings = MenuItem::with_id(app, "settings", "Nastavení…", true, None::<&str>)?;
-    let show = MenuItem::with_id(app, "show", "Zobrazit", true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, "hide", "Schovat", true, None::<&str>)?;
+    // Built with the English (default-language) labels; tray_set_language
+    // retitles everything the moment the WebView learns the configured language.
+    let l = tray_labels("en");
+    let settings = MenuItem::with_id(app, "settings", l[0], true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", l[1], true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "hide", l[2], true, None::<&str>)?;
     let wm_normal = CheckMenuItem::with_id(
         app,
         "wm_normal",
-        "Normální",
+        l[3],
         true,
         current_mode == WindowMode::Normal,
         None::<&str>,
@@ -667,7 +743,7 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     let wm_floating = CheckMenuItem::with_id(
         app,
         "wm_floating",
-        "Plovoucí",
+        l[4],
         true,
         current_mode == WindowMode::Floating,
         None::<&str>,
@@ -675,14 +751,14 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     let wm_aot = CheckMenuItem::with_id(
         app,
         "wm_aot",
-        "Vždy navrchu",
+        l[5],
         true,
         current_mode == WindowMode::AlwaysOnTop,
         None::<&str>,
     )?;
     let wm_submenu = tauri::menu::Submenu::with_items(
         app,
-        "Režim okna",
+        l[6],
         true,
         &[&wm_normal, &wm_floating, &wm_aot],
     )?;
@@ -694,19 +770,31 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
-        "Spouštět po přihlášení",
+        l[7],
         true,
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
-    let reconnect = MenuItem::with_id(app, "reconnect", "Změnit připojení…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Ukončit", true, None::<&str>)?;
+    let reconnect = MenuItem::with_id(app, "reconnect", l[8], true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", l[9], true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[&settings, &show, &hide, &wm_submenu, &reconnect, &autostart, &quit],
     )?;
     let autostart_cb = autostart.clone();
     let wm_items_cb = wm_items.clone();
+    if let Some(handles) = app.try_state::<TrayHandles>() {
+        *handles.0.lock().unwrap() = Some(TrayMenuItems {
+            settings: settings.clone(),
+            show: show.clone(),
+            hide: hide.clone(),
+            wm: wm_items.clone(),
+            wm_submenu: wm_submenu.clone(),
+            autostart: autostart.clone(),
+            reconnect: reconnect.clone(),
+            quit: quit.clone(),
+        });
+    }
 
     let mut builder = TrayIconBuilder::with_id("herdeck-tray")
         .tooltip("herdeck")
@@ -835,6 +923,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(state)
+        .manage(TrayHandles::default())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -857,7 +946,8 @@ pub fn run() {
             setup_connect,
             open_config,
             reload_hotkey,
-            get_window_mode
+            get_window_mode,
+            tray_set_language
         ])
         .setup(move |app| {
             // `main` is no longer in tauri.conf.json — build it here so its

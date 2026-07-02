@@ -28,6 +28,7 @@ from .config import (
     _parse_profile,
     _parse_telegram_config,
 )
+from .i18n import LANGUAGES
 
 
 @dataclass
@@ -226,6 +227,11 @@ def _view_config(raw: dict | None) -> ViewConfig:
         view.tile_fill = val
     if "show_profile_on_panel" in raw:
         view.show_profile_on_panel = bool(raw["show_profile_on_panel"])
+    if "language" in raw:
+        val = raw["language"]
+        if val not in LANGUAGES:
+            raise ConfigError(f"unknown view.language '{val}'; want one of {LANGUAGES}")
+        view.language = val
     return view
 
 

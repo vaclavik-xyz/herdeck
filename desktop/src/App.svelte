@@ -12,6 +12,7 @@
     shouldOnboard,
     type SetupStatus,
   } from "./lib/onboardingClient";
+  import { locale } from "./lib/i18n.svelte";
   import { visibilityGatedLoop } from "./lib/pollGate";
 
   // Window mode is injected on <html data-window-mode> by Rust BEFORE first paint
@@ -119,6 +120,16 @@
     };
   });
 
+  const changeConnectionTitle = $derived(
+    locale.lang === "cs" ? "Změnit připojení" : "Change connection",
+  );
+
+  // The tray menu is native (Rust) — retitle its items whenever the language
+  // the deck reports changes (DeckView feeds `locale` from /state).
+  $effect(() => {
+    void invoke("tray_set_language", { lang: locale.lang }).catch(() => {});
+  });
+
   function onConnected(): void {
     reonboard = false;
     void (async () => {
@@ -141,8 +152,8 @@
       <div class="tools">
         <button
           class="reonboard"
-          title="Změnit připojení"
-          aria-label="Změnit připojení"
+          title={changeConnectionTitle}
+          aria-label={changeConnectionTitle}
           onclick={() => (reonboard = true)}>⚙</button
         >
       </div>

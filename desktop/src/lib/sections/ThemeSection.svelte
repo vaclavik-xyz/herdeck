@@ -10,6 +10,7 @@
     type ListFieldState, type ConfigPayload,
   } from "../configClient";
   import { DEFAULT_STATUS_COLORS } from "../statusColors";
+  import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
 
   let { payload = $bindable(), onChange, editProfile = null }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
@@ -17,17 +18,25 @@
   const SEC = "theme";
   const STATUS = ["working", "idle", "blocked", "done", "unknown", "offline"];
 
-  // Czech tooltips for every field — required for each labelled field
-  // (enforced by sections.help.test.ts).
-  const HELP: Record<string, string> = {
-    working: "Barva dlaždice agenta, který právě pracuje (výchozí green).",
-    idle: "Barva dlaždice nečinného agenta, který čeká na další zadání (výchozí blue).",
-    blocked: "Barva dlaždice agenta, který čeká na vaše schválení nebo odpověď (výchozí amber).",
-    done: "Barva dlaždice agenta, který dokončil práci (výchozí cyan).",
-    unknown: "Barva dlaždice agenta, jehož stav se nepodařilo zjistit (výchozí grey).",
-    offline: "Barva dlaždice agenta, jehož server je odpojený nebo nedostupný (výchozí red).",
-    server_accents: "Paleta barev pro štítek serveru na dlaždici; každý server si z ní natrvalo vylosuje jednu (lze i #hex).",
-  };
+  // Current-language tooltips for every field — required for each labelled
+  // field (enforced by sections.help.test.ts); texts live in help.ts.
+  const HELP = $derived(fieldHelp("theme"));
+
+  const LM = defineMessages({
+    en: {
+      title: "Colors",
+      none: "(none)",
+      inherit: "Inherit",
+      inherited_hint: "inherited: {value}",
+    },
+    cs: {
+      title: "Barvy",
+      none: "(nic)",
+      inherit: "Zdědit",
+      inherited_hint: "zděděno: {value}",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
@@ -47,7 +56,7 @@
 
   // --- overlay: per-status colors via path helpers (profiles[X].theme.colors.<status>) ---
   function colorPath(status: string): string[] { return [SEC, "colors", status]; }
-  function colorInheritedHint(status: string): string { const v = inheritedForPath(payload, prof, colorPath(status)) ?? DEFAULT_STATUS_COLORS[status]; return v == null ? "(nic)" : String(v); }
+  function colorInheritedHint(status: string): string { const v = inheritedForPath(payload, prof, colorPath(status)) ?? DEFAULT_STATUS_COLORS[status]; return v == null ? lm.none : String(v); }
   function colorState(status: string): "inherit" | "override" { return overrideValuePath(payload, prof, colorPath(status)) === undefined ? "inherit" : "override"; }
   function colorValue(status: string): string { const v = overrideValuePath(payload, prof, colorPath(status)); return v === undefined ? String(inheritedForPath(payload, prof, colorPath(status)) ?? DEFAULT_STATUS_COLORS[status] ?? "") : String(v); }
   function setColorState(status: string, s: "inherit" | "override"): void {
@@ -57,7 +66,7 @@
   function setColor(status: string, v: string): void { payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, colorPath(status), v) }; onChange(); }
 
   // --- overlay: server_accents (regular 2-level list) ---
-  function accentHint(): string { const v = inheritedFor(payload, prof, SEC, "server_accents"); return Array.isArray(v) ? v.join(" · ") : v == null ? "(nic)" : String(v); }
+  function accentHint(): string { const v = inheritedFor(payload, prof, SEC, "server_accents"); return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
   function ovAccents(): string[] { const v = overrideValue(payload, prof, SEC, "server_accents"); return Array.isArray(v) ? v as string[] : []; }
   function setOvAccents(state: ListFieldState, list: string[]): void {
     payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, "server_accents") : setOverride(payload.profiles, prof, SEC, "server_accents", state === "empty" ? [] : list) };
@@ -65,7 +74,7 @@
   }
 </script>
 
-<h2>Barvy{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.title}{#if overlay} · overlay: {editProfile}{/if}</h2>
 <fieldset class="colors">
   <legend>colors</legend>
   {#if overlay}
@@ -81,7 +90,7 @@
   {/if}
 </fieldset>
 {#if overlay}
-  <TriStateListField label="server_accents" help={HELP.server_accents} state={overrideState(payload, prof, SEC, "server_accents")} list={ovAccents()} inheritLabel="Zdědit" inheritHint={`zděděno: ${accentHint()}`} onchange={setOvAccents} />
+  <TriStateListField label="server_accents" help={HELP.server_accents} state={overrideState(payload, prof, SEC, "server_accents")} list={ovAccents()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: accentHint() })} onchange={setOvAccents} />
 {:else}
   <ListField label="server_accents" help={HELP.server_accents} value={accents} onchange={setBaseAccents} />
 {/if}

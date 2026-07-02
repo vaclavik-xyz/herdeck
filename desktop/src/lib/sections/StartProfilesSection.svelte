@@ -2,6 +2,7 @@
   import TextField from "../fields/TextField.svelte";
   import ListField from "../fields/ListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import {
     startProfileRows, serializeNamedRows, applyMapSection,
     mapSectionState, setMapSectionState, inheritedStartProfiles,
@@ -17,12 +18,55 @@
   const prof = $derived(editProfile ?? "");
   const argvOf = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
 
-  // Czech tooltips for every field — required for each labelled field
-  // (enforced by sections.help.test.ts).
-  const HELP: Record<string, string> = {
-    name: "Jméno typu agenta — zobrazí se na dlaždici v menu „+ New“ a určuje ikonu i profil odpovědí.",
-    argv: "Příkaz a jeho argumenty, kterým se agent spustí v novém panelu (každá položka = jedno slovo).",
-  };
+  // Field tooltips in the current language — central catalog in help.ts,
+  // required for each labelled field (enforced by sections.help.test.ts).
+  const HELP = $derived(fieldHelp("start_profiles"));
+
+  const LM = defineMessages({
+    en: {
+      heading: "Agent launchers",
+      overlay_hint:
+        "Per-entry overlay: override an inherited entry or add a profile-only one. Inherited entries cannot be removed in an overlay (the backend merge is additive).",
+      remove_entry: "Remove profile entry",
+      empty_value: "(empty)",
+      entry_name_placeholder: "profile entry name",
+      add_profile_only: "+ add (profile only)",
+      base_hint: "Launch command (argv) for each agent type started from the deck.",
+      mode_default: "Default",
+      mode_custom: "Custom",
+      mode_off: "Off",
+      empty_hint: "No launchers (explicit empty map).",
+      new_profile: "(new profile)",
+      remove_launcher: "Remove launcher",
+      name_first_hint: "Enter a profile name to edit argv.",
+      add_profile: "+ add profile",
+      default_hint: 'Default launchers (DEFAULT_START_PROFILES). Switch to "Custom" to edit.',
+      err_duplicate: "duplicate start profile name — it won't save until you rename it",
+      err_exists: "entry '{name}' already exists",
+    },
+    cs: {
+      heading: "Spouštěče agentů",
+      overlay_hint:
+        "Per-entry overlay: přepiš zděděnou položku nebo přidej profilovou. Zděděné položky nelze v overlay smazat (backend merge je aditivní).",
+      remove_entry: "Odebrat profilovou položku",
+      empty_value: "(prázdné)",
+      entry_name_placeholder: "jméno profilové položky",
+      add_profile_only: "+ přidat (jen profil)",
+      base_hint: "Spouštěcí příkaz (argv) pro každý typ agenta startovaného z decku.",
+      mode_default: "Výchozí",
+      mode_custom: "Vlastní",
+      mode_off: "Vypnuto",
+      empty_hint: "Žádné launchery (explicitní prázdná mapa).",
+      new_profile: "(nový profil)",
+      remove_launcher: "Odebrat spouštěč",
+      name_first_hint: "Zadej jméno profilu pro úpravu argv.",
+      add_profile: "+ přidat profil",
+      default_hint: 'Výchozí launchery (DEFAULT_START_PROFILES). Přepni na „Vlastní" pro úpravu.',
+      err_duplicate: "duplicitní jméno start profilu — neuloží se, dokud nepřejmenuješ",
+      err_exists: "položka '{name}' už existuje",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
 
   // --- base mode: local rows (re-seed only on reloadRev) + explicit-empty mode ---
   let rows = $state<StartProfileRow[]>(startProfileRows(payload));
@@ -40,7 +84,7 @@
   function commit(next: StartProfileRow[]): void {
     rows = next;
     const { duplicate, section } = serializeNamedRows(next, (r) => r.argv);
-    if (duplicate) { onError("duplicitní jméno start profilu — neuloží se, dokud nepřejmenuješ"); return; }
+    if (duplicate) { onError(lm.err_duplicate); return; }
     const updated = applyMapSection(payload, SEC, section);
     if (updated === null) return;
     payload = updated;
@@ -76,7 +120,7 @@
   function addEntry(): void {
     const n = newName.trim();
     if (n === "") return;
-    if (entryNames().includes(n)) { onError(`položka '${n}' už existuje`); return; }
+    if (entryNames().includes(n)) { onError(fmt(lm.err_exists, { name: n })); return; }
     payload = { ...payload, profiles: setOverridePath(payload.profiles, prof, [SEC, n], []) };
     newName = "";
     onChange();
@@ -84,45 +128,45 @@
   function removeOwn(name: string): void { payload = { ...payload, profiles: clearOverridePath(payload.profiles, prof, [SEC, name]) }; onChange(); }
 </script>
 
-<h2>Spouštěče agentů{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
-  <p class="hint">Per-entry overlay: přepiš zděděnou položku nebo přidej profilovou. Zděděné položky nelze v overlay smazat (backend merge je aditivní).</p>
+  <p class="hint">{lm.overlay_hint}</p>
   {#each entryNames() as name (name)}
     <fieldset>
-      <legend>{name}{#if !isInherited(name)} <button type="button" title="Odebrat profilovou položku" onclick={() => removeOwn(name)}>×</button>{/if}</legend>
-      <OverrideField label="argv" help={HELP.argv} state={entryState(name)} inheritedDisplay={inhArgv(name).join(" · ") || "(prázdné)"} onstate={(s) => setEntryState(name, s)}>
+      <legend>{name}{#if !isInherited(name)} <button type="button" title={lm.remove_entry} onclick={() => removeOwn(name)}>×</button>{/if}</legend>
+      <OverrideField label="argv" help={HELP.argv} state={entryState(name)} inheritedDisplay={inhArgv(name).join(" · ") || lm.empty_value} onstate={(s) => setEntryState(name, s)}>
         <ListField label="" value={ovArgv(name)} onchange={(v) => setEntryArgv(name, v)} />
       </OverrideField>
     </fieldset>
   {/each}
   <div class="create">
-    <input placeholder="jméno profilové položky" bind:value={newName} />
-    <button type="button" onclick={addEntry}>+ přidat (jen profil)</button>
+    <input placeholder={lm.entry_name_placeholder} bind:value={newName} />
+    <button type="button" onclick={addEntry}>{lm.add_profile_only}</button>
   </div>
 {:else}
-  <p class="hint">Spouštěcí příkaz (argv) pro každý typ agenta startovaného z decku.</p>
+  <p class="hint">{lm.base_hint}</p>
   <div class="modes">
-    <button type="button" class:active={mode === "default"} onclick={() => setMode("default")}>Výchozí</button>
-    <button type="button" class:active={mode === "custom"} onclick={() => setMode("custom")}>Vlastní</button>
-    <button type="button" class:active={mode === "empty"} onclick={() => setMode("empty")}>Vypnuto</button>
+    <button type="button" class:active={mode === "default"} onclick={() => setMode("default")}>{lm.mode_default}</button>
+    <button type="button" class:active={mode === "custom"} onclick={() => setMode("custom")}>{lm.mode_custom}</button>
+    <button type="button" class:active={mode === "empty"} onclick={() => setMode("empty")}>{lm.mode_off}</button>
   </div>
   {#if mode === "empty"}
-    <p class="hint">Žádné launchery (explicitní prázdná mapa).</p>
+    <p class="hint">{lm.empty_hint}</p>
   {:else if mode === "custom"}
     {#each rows as e, i (i)}
       <fieldset>
-        <legend>{e.name || "(nový profil)"} <button type="button" title="Odebrat spouštěč" onclick={() => remove(i)}>×</button></legend>
+        <legend>{e.name || lm.new_profile} <button type="button" title={lm.remove_launcher} onclick={() => remove(i)}>×</button></legend>
         <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
         {#if e.name.trim() !== ""}
           <ListField label="argv" help={HELP.argv} value={e.argv} onchange={(v) => setArgv(i, v)} />
         {:else}
-          <p class="hint">Zadej jméno profilu pro úpravu argv.</p>
+          <p class="hint">{lm.name_first_hint}</p>
         {/if}
       </fieldset>
     {/each}
-    <button type="button" onclick={add}>+ přidat profil</button>
+    <button type="button" onclick={add}>{lm.add_profile}</button>
   {:else}
-    <p class="hint">Výchozí launchery (DEFAULT_START_PROFILES). Přepni na „Vlastní" pro úpravu.</p>
+    <p class="hint">{lm.default_hint}</p>
   {/if}
 {/if}
 

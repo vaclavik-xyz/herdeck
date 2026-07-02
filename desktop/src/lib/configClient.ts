@@ -525,6 +525,19 @@ export function overrideValue(payload: ConfigPayload, profile: string, section: 
   return overrideValuePath(payload, profile, [section, key]);
 }
 
+/** The EFFECTIVE UI/deck language for the active profile: the profile's own
+ *  `view.language` override, else the inherited (extends-chain + base) value,
+ *  else "en" — mirroring the backend's profile merge for this key. */
+export function effectiveLanguage(payload: ConfigPayload): "en" | "cs" {
+  const prof = payload.activeProfile;
+  const v =
+    prof !== "default" && payload.profiles[prof] != null
+      ? (overrideValue(payload, prof, "view", "language") ??
+        inheritedFor(payload, prof, "view", "language"))
+      : readPath(payload.base, ["view", "language"]).value;
+  return v === "cs" ? "cs" : "en";
+}
+
 /** Override state of `section.key` in `profile`'s overlay: absent → "default" (= inherit),
  *  `[]` → "empty", anything else present → "custom". Reuses `ListFieldState`; in overlay
  *  context "default" denotes inheritance. */
@@ -897,8 +910,11 @@ export function commandTransport(invoke: InvokeFn): ConfigTransport {
 }
 
 /** Czech-pluralized validation-error count for the savebar badge. */
-export function errorCountLabel(n: number): string {
-  if (n === 1) return "1 chyba";
-  if (n >= 2 && n <= 4) return `${n} chyby`;
-  return `${n} chyb`;
+export function errorCountLabel(n: number, lang: "en" | "cs" = "en"): string {
+  if (lang === "cs") {
+    if (n === 1) return "1 chyba";
+    if (n >= 2 && n <= 4) return `${n} chyby`;
+    return `${n} chyb`;
+  }
+  return n === 1 ? "1 error" : `${n} errors`;
 }
