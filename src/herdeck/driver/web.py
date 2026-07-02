@@ -437,7 +437,7 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='0') press(9);
 });
 let lastV=-1; const tv={}; let pv=-1;
-let pollTimer=null, inFlight=false;
+let pollTimer=null, inFlight=false, pollDelay=100;
 async function poll(){
   if(inFlight) return;             // the in-flight poll reschedules; never overlap
   if(document.hidden){             // parked while hidden; visibilitychange resumes
@@ -445,12 +445,14 @@ async function poll(){
     return;
   }
   inFlight=true;
+  pollDelay=100;                   // the server paces successes via the long poll
   try{
     // long poll: the server holds the request until the version advances, so
     // idle traffic is ~2 req/min and changes arrive at network latency
     const r=await fetch(auth(lastV>=0?'/state?since='+lastV:'/state'));
     if(r.status===403){
       setStale('token expired — open the fresh URL from the startup log');
+      pollDelay=2000;              // a stale bookmark must not hammer at 10/s
       return;                      // rescheduled in finally; keeps checking
     }
     const s=await r.json();
@@ -471,10 +473,11 @@ async function poll(){
   }catch(e){
     fails++;
     if(fails>=2) setStale('disconnected — last update '+Math.max(1,Math.round((Date.now()-lastOk)/1000))+'s ago');
+    pollDelay=1000;                // errors are not server-paced: back off
   }finally{
     inFlight=false;
     clearTimeout(pollTimer);
-    pollTimer=setTimeout(poll,100);  // the server paces via the long poll
+    pollTimer=setTimeout(poll,pollDelay);
   }
 }
 function pollNow(){ clearTimeout(pollTimer); void poll(); }
