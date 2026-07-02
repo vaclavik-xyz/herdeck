@@ -464,6 +464,15 @@ class DeckApp:
                 pass
 
             def _send(self, code, body=b"", ctype="text/plain; charset=utf-8"):
+                # keep-alive safety: a rejected POST (bad token, 404) may leave
+                # its request body unread on the persistent connection — the
+                # next request would be parsed from those leftover bytes.
+                if (
+                    self.command == "POST"
+                    and not getattr(self, "_body_consumed", False)
+                    and int(self.headers.get("Content-Length") or 0) > 0
+                ):
+                    self.close_connection = True
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
@@ -525,6 +534,10 @@ class DeckApp:
                 else:
                     self._send(404)
 
+            def _read_body(self, length):
+                self._body_consumed = True
+                return self.rfile.read(length)
+
             def _json_body(self):
                 """Parse the request body as a JSON object (dict).
 
@@ -539,7 +552,7 @@ class DeckApp:
                 except (TypeError, ValueError):
                     self._send(400)
                     return _BAD_BODY
-                raw = self.rfile.read(length) if length else b""
+                raw = self._read_body(length) if length else b""
                 try:
                     result = json.loads(raw or b"{}")
                 except (json.JSONDecodeError, ValueError):
@@ -584,7 +597,11 @@ class DeckApp:
                             return
                         # Same semantics as write(): structural only, so live
                         # validation never flags a missing secret Apply accepts.
-                        errors = app._config_service.validate_for_write(body)
+                        # Under _setup_lock: the structural pass temporarily
+                        # placeholders token envs in os.environ, which must not
+                        # race a concurrent write/connect/reload.
+                        with app._setup_lock:
+                            errors = app._config_service.validate_for_write(body)
                         self._send(200, json.dumps({"errors": errors}).encode(), "application/json")
                     elif path == "/config":
                         body = self._json_body()
