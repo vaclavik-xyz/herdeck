@@ -539,3 +539,17 @@ def test_panel_body_lines_wrap_by_pixel_width_without_losing_words():
     overflow = text + " and then some more words that cannot possibly fit on this panel"
     lines = _panel_body_lines(d, [overflow], f, PANEL_W - 32)
     assert len(lines) == 3 and lines[-1].endswith("…")
+
+
+def test_solid_bright_fill_darkens_the_agent_mark(tmp_path):
+    """The white mark washed out on bright solid fills (amber 2.1:1) while the
+    text flipped dark (audit: solid-mark-contrast)."""
+    import io
+
+    p = make_provider(tmp_path)
+    bright = _tile_ns(color="amber", tile_fill="solid")
+    img = Image.open(io.BytesIO(p.render_tile_bytes(bright))).convert("RGB")
+    assert sum(img.getpixel((35, 35))) < 200  # dark ink inside the mark's box
+    normal = _tile_ns(color="amber", tile_fill="none")
+    img2 = Image.open(io.BytesIO(p.render_tile_bytes(normal))).convert("RGB")
+    assert sum(img2.getpixel((35, 35))) > 500  # stays white on the dark bg

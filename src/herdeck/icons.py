@@ -175,7 +175,8 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 # 2: tile_fill (none/tint/solid) — solid contrast + solid-sweep composition.
 # 3: readable subtext (branch/time) on solid dark-colour fills (e.g. blue).
 # 4: wrapped text marks a cut-off tail with an ellipsis.
-TILE_VERSION = 4
+# 5: the agent mark flips dark on bright solid fills (like the text).
+TILE_VERSION = 5
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -601,6 +602,15 @@ class IconProvider:
         working = spinner is not None
         # logo top-left; while working it animates per the chosen style
         base_logo = self._base_glyph(tile.agent_type or "default")
+        if fill == "solid" and _lum(bg_col) > 120:
+            # The always-white mark washes out on bright solid fills (amber
+            # 2.1:1, cyan 2.0:1 — below the 3:1 non-text minimum) while the
+            # text correctly flips dark. Recolour the mark via its alpha mask
+            # to the same dark ink the text uses. (Applies to user override
+            # marks too, for consistent contrast.)
+            dark = Image.new("RGBA", base_logo.size, (18, 18, 22, 0))
+            dark.putalpha(base_logo.getchannel("A"))
+            base_logo = dark
         if working and anim == "pulse":
             # "breathe": scale the mark between ~0.82x and 1.0x by the spinner phase
             f = 0.82 + 0.18 * (0.5 + 0.5 * math.sin(2 * math.pi * spinner / SPINNER_FRAMES))
