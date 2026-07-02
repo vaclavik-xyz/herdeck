@@ -494,7 +494,16 @@ class IconProvider:
         """The content-addressed cache filename for a TileView (and its bounded
         spinner phase). The rotation phase is bounded to SPINNER_FRAMES so the
         cache reuses a fixed set of frames instead of minting a new PNG per tick."""
-        spinner = None if tile.spinner is None else tile.spinner % SPINNER_FRAMES
+        # Style "none" renders NO spinner — the phase must not reach the
+        # signature, or a working tile mints a new (pixel-identical) filename
+        # every tick and the D200's identical-frame skip never fires (a full-set
+        # page reload per tick = the visible flicker).
+        animation = getattr(tile, "working_animation", "spin")
+        spinner = (
+            None
+            if tile.spinner is None or animation == "none"
+            else tile.spinner % SPINNER_FRAMES
+        )
         sig_parts = [
             TILE_VERSION,
             self._asset_fp,
@@ -510,7 +519,7 @@ class IconProvider:
             getattr(tile, "tile_fill", "none"),
         ]
         if spinner is not None:
-            sig_parts.append(getattr(tile, "working_animation", "spin"))
+            sig_parts.append(animation)
         if tile.server_tag or tile.server_accent:
             sig_parts.extend([tile.server_tag, tile.server_accent])
         sig = "|".join(str(x) for x in sig_parts)

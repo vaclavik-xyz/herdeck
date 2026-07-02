@@ -442,6 +442,11 @@ class D200Driver(DeckDriver):
         # zeroes the per-tick zip+USB cost of an idle deck.
         if buttons == self._last_frame_buttons:
             return
+        # ALWAYS a full set. Device-tested 2026-07-02: OUT_PARTIALLY_UPDATE_BUTTONS
+        # blanks most cells EVEN when the write carries all 15 — partial updates
+        # are broken on this firmware at page scale, do not retry them. The
+        # full-set page reload can blink; the mitigation is writing only frames
+        # whose content actually changed (see the identical-frame skip above).
         if self._timed_set_buttons("frame", buttons, update_only=False):
             self._last_frame_buttons = buttons
             self._record(buttons)
