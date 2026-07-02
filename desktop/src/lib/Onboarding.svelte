@@ -9,7 +9,7 @@
     SetupTransport,
     ConnectRequest,
   } from "./onboardingClient";
-  import { connectErrorMessage } from "./onboardingClient";
+  import { connectErrorMessage, shouldAutoReconnect } from "./onboardingClient";
 
   let {
     view,
@@ -53,9 +53,16 @@
   // the user's explicit request to change things — never auto-connect there.
   let autoReconnectTried = $state(false);
   $effect(() => {
-    if (onDismiss) return;
-    const choseLocal = view === "reconnect" || status?.choice === "local";
-    if (choseLocal && localAvailable && !busy && !autoReconnectTried) {
+    if (
+      shouldAutoReconnect({
+        view,
+        choice: status?.choice ?? null,
+        localAvailable,
+        busy,
+        tried: autoReconnectTried,
+        manual: onDismiss != null,
+      })
+    ) {
       autoReconnectTried = true;
       connectLocal();
     }

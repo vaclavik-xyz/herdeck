@@ -152,3 +152,22 @@ export function connectErrorMessage(
     return "Stávající config má poškozenou sekci serverů — oprav ho v nastavení (Config).";
   return error;
 }
+
+/**
+ * Should the card auto-connect to local herdr without a click? True when the
+ * user's PERSISTED choice is local (or the card is the reconnect view) and the
+ * socket is back — but never during a manual re-onboarding session (`manual`),
+ * which is the user's explicit request to change things, and never twice.
+ */
+export function shouldAutoReconnect(args: {
+  view: "welcome" | "reconnect";
+  choice: string | null;
+  localAvailable: boolean;
+  busy: boolean;
+  tried: boolean;
+  manual: boolean;
+}): boolean {
+  if (args.manual || args.busy || args.tried) return false;
+  if (!args.localAvailable) return false;
+  return args.view === "reconnect" || args.choice === "local";
+}

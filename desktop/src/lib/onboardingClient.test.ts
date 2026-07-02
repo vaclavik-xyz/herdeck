@@ -5,6 +5,7 @@ import {
   shouldOnboard,
   type SetupStatus,
   connectErrorMessage,
+  shouldAutoReconnect,
 } from "./onboardingClient";
 
 const full = {
@@ -216,5 +217,32 @@ describe("connectErrorMessage", () => {
   it("passes unknown errors through verbatim and defaults when empty", () => {
     expect(connectErrorMessage("weird failure")).toBe("weird failure");
     expect(connectErrorMessage(null)).toBe("Připojení selhalo.");
+  });
+});
+
+describe("shouldAutoReconnect", () => {
+  const base = {
+    view: "welcome" as const,
+    choice: "local" as string | null,
+    localAvailable: true,
+    busy: false,
+    tried: false,
+    manual: false,
+  };
+
+  it("fires for a persisted local choice when the socket is back", () => {
+    expect(shouldAutoReconnect(base)).toBe(true);
+    expect(shouldAutoReconnect({ ...base, view: "reconnect", choice: null })).toBe(true);
+  });
+
+  it("never fires during manual re-onboarding, while busy, or twice", () => {
+    expect(shouldAutoReconnect({ ...base, manual: true })).toBe(false);
+    expect(shouldAutoReconnect({ ...base, busy: true })).toBe(false);
+    expect(shouldAutoReconnect({ ...base, tried: true })).toBe(false);
+  });
+
+  it("never fires without local herdr or for a first run", () => {
+    expect(shouldAutoReconnect({ ...base, localAvailable: false })).toBe(false);
+    expect(shouldAutoReconnect({ ...base, choice: null })).toBe(false);
   });
 });

@@ -364,26 +364,31 @@ describe("stepDeck idle no-op (audit: stepdeck-noop-return)", () => {
 });
 
 describe("panel fetch parallelism (roborev 5a1faa6)", () => {
-  it("starts the panel request before the tile fetches resolve", async () => {
-    let panelStarted = false;
-    let releaseTile: () => void = () => {};
-    const tileGate = new Promise<void>((r) => (releaseTile = r));
+  it("starts tile AND panel requests before either resolves", async () => {
+    const started: string[] = [];
+    let releaseTile: (v: string) => void = () => {};
+    let releasePanel: (v: string) => void = () => {};
     const t: DeckTransport = {
       fetchState: async () =>
         rawState({ version: 1, tiles: { "0": 1 }, panel: 1, has_panel: true }),
-      tileImage: async (index, version) => {
-        await tileGate; // the tile hangs until the panel proves it started
-        return `tile-${index}-v${version}`;
+      tileImage: (index, version) => {
+        started.push("tile");
+        return new Promise((r) => (releaseTile = () => r(`tile-${index}-v${version}`)));
       },
-      panelImage: async (version) => {
-        panelStarted = true;
-        releaseTile();
-        return `panel-v${version}`;
+      panelImage: (version) => {
+        started.push("panel");
+        return new Promise((r) => (releasePanel = () => r(`panel-v${version}`)));
       },
       press: async () => ({ ok: true, status: 204, forbidden: false }),
     };
-    const view = await stepDeck(t, new DeckDiffer(), initialView());
-    expect(panelStarted).toBe(true);
+    const pending = stepDeck(t, new DeckDiffer(), initialView());
+    await new Promise((r) => setTimeout(r, 0)); // let the fetches be issued
+    // BOTH requests are in flight before either resolved — a serial
+    // panel-after-tiles (or tiles-after-panel) implementation fails here
+    expect(started.sort()).toEqual(["panel", "tile"]);
+    releaseTile("");
+    releasePanel("");
+    const view = await pending;
     expect(view.panel).toBe("panel-v1");
     expect(view.tiles[0]).toBe("tile-0-v1");
   });
