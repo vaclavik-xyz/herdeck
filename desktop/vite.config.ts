@@ -5,6 +5,10 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 // The build output (`build/`) is what Tauri embeds as `frontendDist`.
 export default defineConfig({
   plugins: [svelte()],
+  // Under Vitest, resolve Svelte's BROWSER build: the default node resolution
+  // picks index-server.js, whose mount() throws — and the component-mounting
+  // tests (sections.help.test.ts) need a real client-side mount in jsdom.
+  resolve: process.env.VITEST ? { conditions: ["browser"] } : undefined,
   // Tauri drives the dev server; don't let Vite clear its logs.
   clearScreen: false,
   build: {

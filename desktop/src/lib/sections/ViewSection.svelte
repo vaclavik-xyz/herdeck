@@ -24,6 +24,20 @@
   // Mirror of backend defaults (config.py ViewConfig) — keep in sync.
   const VIEW_DEFAULTS: Record<string, unknown> = { management: "launcher_menu", agent_slots: "max", show_profile_on_panel: false, working_animation: "spin", tile_fill: "none" };
 
+  // Czech tooltips for every field — required for each labelled field
+  // (enforced by sections.help.test.ts).
+  const HELP: Record<string, string> = {
+    management: "Rozložení ovládání: launcher_menu = dlaždice „+ New“ s menu, bottom_row = spodní řada tlačítek.",
+    agent_slots: "Počet dlaždic vyhrazených agentům („max“ = všechny volné); zatím se v aplikaci nepoužívá.",
+    show_profile_on_panel: "Ukáže název aktivního profilu na stavovém panelu; zatím se při vykreslování nepoužívá.",
+    working_animation: "Animace dlaždice u pracujícího agenta: spin, comet, pulse, sweep nebo none (bez animace).",
+    tile_fill: "Vyplnění dlaždice barvou stavu agenta: none = jen text a proužek, tint = ztmavený odstín, solid = plná barva.",
+    bottom_row: "Která tlačítka obsadí spodní řadu v režimu bottom_row; nyní fungují jen profiles a new_agent (+ New).",
+    tile_fields: "Které údaje dlaždice agenta zobrazí: repo, branch, status, time (doba ve stavu), server (štítek serveru).",
+    tile_primary: "První textový řádek dlaždice z polí repo/branch/workspace/tab/agent; nevyplněno = repo, prázdné = vypnuto.",
+    tile_secondary: "Druhý textový řádek dlaždice ze stejných polí; nevyplněno = branch, prázdný seznam řádek vypne.",
+  };
+
   // --- base mode (unchanged from α) ---
   const management = $derived((getAt(payload, "base", SEC, "management") as string) ?? "launcher_menu");
   const agentSlots = $derived((getAt(payload, "base", SEC, "agent_slots") as string) ?? "");
@@ -49,34 +63,34 @@
   }
 </script>
 
-<h2>View{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>Zobrazení{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
-  <OverrideField label="management" state={scState("management")} inheritedDisplay={hint("management")} onstate={(s) => setScState("management", s)}>
+  <OverrideField label="management" help={HELP.management} state={scState("management")} inheritedDisplay={hint("management")} onstate={(s) => setScState("management", s)}>
     <SelectField label="" value={String(scValue("management") ?? "")} options={MANAGEMENT} onchange={(v) => setSc("management", v)} />
   </OverrideField>
-  <OverrideField label="agent_slots" state={scState("agent_slots")} inheritedDisplay={hint("agent_slots")} onstate={(s) => setScState("agent_slots", s)}>
+  <OverrideField label="agent_slots" help={HELP.agent_slots} state={scState("agent_slots")} inheritedDisplay={hint("agent_slots")} onstate={(s) => setScState("agent_slots", s)}>
     <TextField label="" value={String(scValue("agent_slots") ?? "")} oninput={(v) => setSc("agent_slots", v)} />
   </OverrideField>
-  <OverrideField label="show_profile_on_panel" state={scState("show_profile_on_panel")} inheritedDisplay={hint("show_profile_on_panel")} onstate={(s) => setScState("show_profile_on_panel", s)}>
+  <OverrideField label="show_profile_on_panel" help={HELP.show_profile_on_panel} state={scState("show_profile_on_panel")} inheritedDisplay={hint("show_profile_on_panel")} onstate={(s) => setScState("show_profile_on_panel", s)}>
     <BooleanField label="" value={Boolean(scValue("show_profile_on_panel"))} onchange={(v) => setSc("show_profile_on_panel", v)} />
   </OverrideField>
-  <OverrideField label="working_animation" state={scState("working_animation")} inheritedDisplay={hint("working_animation")} onstate={(s) => setScState("working_animation", s)}>
+  <OverrideField label="working_animation" help={HELP.working_animation} state={scState("working_animation")} inheritedDisplay={hint("working_animation")} onstate={(s) => setScState("working_animation", s)}>
     <SelectField label="" value={String(scValue("working_animation") ?? "spin")} options={WORKING_ANIMATIONS} onchange={(v) => setSc("working_animation", v)} />
   </OverrideField>
-  <OverrideField label="tile_fill" state={scState("tile_fill")} inheritedDisplay={hint("tile_fill")} onstate={(s) => setScState("tile_fill", s)}>
+  <OverrideField label="tile_fill" help={HELP.tile_fill} state={scState("tile_fill")} inheritedDisplay={hint("tile_fill")} onstate={(s) => setScState("tile_fill", s)}>
     <SelectField label="" value={String(scValue("tile_fill") ?? "none")} options={TILE_FILLS} onchange={(v) => setSc("tile_fill", v)} />
   </OverrideField>
   {#each LIST_KEYS as key}
-    <TriStateListField label={key} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint(key)}`} onchange={(s, l) => setOvList(key, s, l)} />
+    <TriStateListField label={key} help={HELP[key]} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint(key)}`} onchange={(s, l) => setOvList(key, s, l)} />
   {/each}
 {:else}
-  <SelectField label="management" value={management} options={MANAGEMENT} onchange={(v) => set("management", v)} />
-  <TextField label="agent_slots" value={agentSlots} oninput={(v) => set("agent_slots", v)} />
-  <BooleanField label="show_profile_on_panel" value={showProfile} onchange={(v) => set("show_profile_on_panel", v)} />
-  <SelectField label="working_animation" value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
-  <SelectField label="tile_fill" value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
+  <SelectField label="management" help={HELP.management} value={management} options={MANAGEMENT} onchange={(v) => set("management", v)} />
+  <TextField label="agent_slots" help={HELP.agent_slots} value={agentSlots} oninput={(v) => set("agent_slots", v)} />
+  <BooleanField label="show_profile_on_panel" help={HELP.show_profile_on_panel} value={showProfile} onchange={(v) => set("show_profile_on_panel", v)} />
+  <SelectField label="working_animation" help={HELP.working_animation} value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
+  <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
   {#each LIST_KEYS as key}
-    <TriStateListField label={key} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? []} onchange={(s, l) => setBaseTri(key, s, l)} />
+    <TriStateListField label={key} help={HELP[key]} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? []} onchange={(s, l) => setBaseTri(key, s, l)} />
   {/each}
 {/if}
 

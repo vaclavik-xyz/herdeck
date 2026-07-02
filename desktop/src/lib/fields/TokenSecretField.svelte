@@ -7,6 +7,7 @@
     oninput,
     onset,
     onclear,
+    help = "",
   }: {
     label: string;
     value: string;
@@ -14,6 +15,7 @@
     oninput: (v: string) => void;
     onset: (secretValue: string) => void;
     onclear: () => void;
+    help?: string;
   } = $props();
 
   let entering = $state(false);
@@ -36,7 +38,7 @@
 </script>
 
 <label class="field">
-  <span>{label}</span>
+  <span class="fieldlabel" class:hashelp={!!help} title={help || undefined}>{label}</span>
   <input value={value} oninput={(e) => oninput((e.target as HTMLInputElement).value)} />
   {#if value}
     {#if flag.set}
@@ -62,6 +64,7 @@
 <style>
   .field { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr auto auto; align-items: center; gap: 8px; margin: 4px 0; }
   .field span:first-child { color: #aaa; }
+  .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
   input { background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
   .ok { color: #4fa84f; } .missing { color: #e0a030; }
   .setrow { display: flex; gap: 8px; margin: 4px 0 8px calc(var(--field-label-w, 120px) + 8px); }

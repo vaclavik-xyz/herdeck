@@ -24,6 +24,17 @@
   const NOTIF_DEFAULTS: Record<string, boolean> = { enabled: false, sound: true };
   const NOTIF_LIST_DEFAULTS: Record<string, string[]> = { on: ["blocked"], backends: ["macos"] };
 
+  // Czech tooltips for every field — required for each labelled field
+  // (enforced by sections.help.test.ts).
+  const HELP: Record<string, string> = {
+    enabled: "Hlavní vypínač upozornění — když je vypnutý, žádná oznámení se neposílají (výchozí: vypnuto).",
+    sound: "Zda upozornění zazní i zvukem; při vypnutí přijde na macOS tiché oznámení a na Telegram tichá zpráva.",
+    on: "Které stavy agenta spustí upozornění; zatím funguje jen „blocked“ (agent čeká na váš vstup).",
+    backends: "Kam se upozornění doručí: macos (oznamovací centrum) a/nebo telegram (zpráva botem, třeba na mobil).",
+    token: "Název, pod kterým je uložen token Telegram bota (proměnná prostředí či klíčenka) — ne token samotný.",
+    chat_id: "Číselné ID Telegram chatu či skupiny, kam bot posílá upozornění na zablokované agenty.",
+  };
+
   const enabled = $derived((getAt(payload, "base", "notifications", "enabled") as boolean) ?? false);
   const sound = $derived((getAt(payload, "base", "notifications", "sound") as boolean) ?? true);
   const on = $derived((getAt(payload, "base", "notifications", "on") as string[]) ?? []);
@@ -123,38 +134,39 @@
   }
 </script>
 
-<h2>Notifications{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>Notifikace{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
-  <OverrideField label="enabled" state={scState("enabled")} inheritedDisplay={scHint("enabled")} onstate={(s) => setScState("enabled", s)}>
+  <OverrideField label="enabled" help={HELP.enabled} state={scState("enabled")} inheritedDisplay={scHint("enabled")} onstate={(s) => setScState("enabled", s)}>
     <BooleanField label="" value={scBool("enabled")} onchange={(v) => setSc("enabled", v)} />
   </OverrideField>
-  <OverrideField label="sound" state={scState("sound")} inheritedDisplay={scHint("sound")} onstate={(s) => setScState("sound", s)}>
+  <OverrideField label="sound" help={HELP.sound} state={scState("sound")} inheritedDisplay={scHint("sound")} onstate={(s) => setScState("sound", s)}>
     <BooleanField label="" value={scBool("sound")} onchange={(v) => setSc("sound", v)} />
   </OverrideField>
-  <TriStateListField label="on" state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} inheritLabel="Zdědit" inheritHint={`zděděno: ${listHint("on")}`} onchange={(s, l) => setOvList("on", s, l)} />
-  <TriStateListField label="backends" state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} inheritLabel="Zdědit" inheritHint={`zděděno: ${listHint("backends")}`} onchange={(s, l) => setOvList("backends", s, l)} />
+  <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} inheritLabel="Zdědit" inheritHint={`zděděno: ${listHint("on")}`} onchange={(s, l) => setOvList("on", s, l)} />
+  <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} inheritLabel="Zdědit" inheritHint={`zděděno: ${listHint("backends")}`} onchange={(s, l) => setOvList("backends", s, l)} />
   <fieldset class="tg">
     <legend>Telegram</legend>
     <p class="hint">Prázdné pole = zdědit (token se nikdy neuloží prázdný).</p>
     <TokenSecretField
       label={`token (${tgOrigin("token_env")})`}
+      help={HELP.token}
       value={tgValue("token_env")}
       flag={secretFlag(payload, tgValue("token_env"))}
       oninput={(v) => setTg("token_env", v)}
       onset={(val) => setSecret(tgValue("token_env"), val)}
       onclear={() => clearSecret(tgValue("token_env"))}
     />
-    <TextField label={`chat_id (${tgOrigin("chat_id")})`} value={tgValue("chat_id")} oninput={(v) => setTg("chat_id", v)} />
+    <TextField label={`chat_id (${tgOrigin("chat_id")})`} help={HELP.chat_id} value={tgValue("chat_id")} oninput={(v) => setTg("chat_id", v)} />
   </fieldset>
 {:else}
-  <BooleanField label="enabled" value={enabled} onchange={(v) => set("enabled", v)} />
-  <BooleanField label="sound" value={sound} onchange={(v) => set("sound", v)} />
-  <TriStateListField label="on" state={onState} list={on} onchange={(s, l) => setTri("on", s, l)} />
-  <TriStateListField label="backends" state={backendsState} list={backends} onchange={(s, l) => setTri("backends", s, l)} />
+  <BooleanField label="enabled" help={HELP.enabled} value={enabled} onchange={(v) => set("enabled", v)} />
+  <BooleanField label="sound" help={HELP.sound} value={sound} onchange={(v) => set("sound", v)} />
+  <TriStateListField label="on" help={HELP.on} state={onState} list={on} onchange={(s, l) => setTri("on", s, l)} />
+  <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} onchange={(s, l) => setTri("backends", s, l)} />
   <fieldset class="tg">
     <legend>Telegram</legend>
-    <TokenSecretField label="token" value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />
-    <TextField label="chat_id" value={telegram.chat_id} oninput={(v) => setTelegram("chat_id", v)} />
+    <TokenSecretField label="token" help={HELP.token} value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />
+    <TextField label="chat_id" help={HELP.chat_id} value={telegram.chat_id} oninput={(v) => setTelegram("chat_id", v)} />
   </fieldset>
 {/if}
 

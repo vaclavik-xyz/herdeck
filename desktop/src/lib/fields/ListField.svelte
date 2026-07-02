@@ -1,6 +1,6 @@
 <script lang="ts">
-  let { label, value, onchange }:
-    { label: string; value: string[]; onchange: (v: string[]) => void } = $props();
+  let { label, value, onchange, help = "" }:
+    { label: string; value: string[]; onchange: (v: string[]) => void; help?: string } = $props();
 
   const items = $derived(Array.isArray(value) ? value : []);
 
@@ -16,7 +16,7 @@
 </script>
 
 <div class="listfield">
-  <span class="label">{label}</span>
+  <span class="label fieldlabel" class:hashelp={!!help} title={help || undefined}>{label}</span>
   <div class="rows">
     {#each items as item, i (i)}
       <div class="row">
@@ -31,6 +31,7 @@
 <style>
   .listfield { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr; align-items: start; gap: 8px; margin: 6px 0; }
   .label { color: #aaa; padding-top: 4px; }
+  .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
   .rows { display: flex; flex-direction: column; gap: 4px; }
   .row { display: flex; gap: 6px; }
   input { flex: 1; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }

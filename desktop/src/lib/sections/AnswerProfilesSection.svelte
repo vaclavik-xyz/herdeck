@@ -14,6 +14,17 @@
 
   const LIST_KEYS = ["approve", "deny", "stop"] as const;
 
+  // Czech tooltips for every field — required for each labelled field
+  // (enforced by sections.help.test.ts).
+  const HELP: Record<string, string> = {
+    name: "Jméno profilu = typ agenta (claude, codex…), podle kterého se vyberou klávesy; záložní je default.",
+    approve: "Sekvence kláves poslaná blokovanému agentovi při akci Schválit (u Claude např. 1 + enter).",
+    deny: "Sekvence kláves poslaná blokovanému agentovi při akci Zamítnout (např. esc).",
+    stop: "Klávesy pro Stop — vynucené přerušení agenta (např. ctrl+c), pošle se i když agent není blokovaný.",
+    approve_always: "Klávesy pro „Schválit napořád“ (u Claude 2 + enter); nevyplněné = použijí se klávesy pro Schválit.",
+    keys: "Zda profilová vrstva dědí celou položku ze základní konfigurace, nebo ji přepíše vlastními klávesami.",
+  };
+
   // Local editor rows (source of truth while editing); re-seeded only when ConfigApp bumps
   // `reloadRev` (load/discard/Apply-reload) — same pattern as StartProfilesSection.
   let rows = $state<AnswerProfileRow[]>(answerProfileRows(payload));
@@ -141,17 +152,17 @@
   function removeOwn(name: string): void { payload = { ...payload, profiles: clearOverridePath(payload.profiles, prof, [SEC, name]) }; onChange(); }
 </script>
 
-<h2>Answer profiles{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>Profily odpovědí{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <p class="hint">Per-entry overlay: přepiš zděděný answer profil nebo přidej profilový. Zděděné položky nelze v overlay smazat.</p>
   {#each entryNames() as name (name)}
     <fieldset>
-      <legend>{name}{#if !isInherited(name)} <button type="button" onclick={() => removeOwn(name)}>×</button>{/if}</legend>
-      <OverrideField label="keys" state={entryState(name)} inheritedDisplay={inhSummary(name)} onstate={(s) => setEntryState(name, s)}>
+      <legend>{name}{#if !isInherited(name)} <button type="button" title="Odebrat profilovou položku" onclick={() => removeOwn(name)}>×</button>{/if}</legend>
+      <OverrideField label="keys" help={HELP.keys} state={entryState(name)} inheritedDisplay={inhSummary(name)} onstate={(s) => setEntryState(name, s)}>
         {#each LIST_KEYS as k}
-          <ListField label={k} value={entryKeyValue(name, k)} onchange={(v) => setEntryKey(name, k, v)} />
+          <ListField label={k} help={HELP[k]} value={entryKeyValue(name, k)} onchange={(v) => setEntryKey(name, k, v)} />
         {/each}
-        <TriStateListField label="approve_always" state={aaStateOv(name)} list={aaListOv(name)} inheritLabel="Zdědit" inheritHint={`zděděno: ${aaHint(name)}`} onchange={(s, l) => setAAOv(name, s, l)} />
+        <TriStateListField label="approve_always" help={HELP.approve_always} state={aaStateOv(name)} list={aaListOv(name)} inheritLabel="Zdědit" inheritHint={`zděděno: ${aaHint(name)}`} onchange={(s, l) => setAAOv(name, s, l)} />
       </OverrideField>
     </fieldset>
   {/each}
@@ -163,13 +174,13 @@
   <p class="hint">Klávesy posílané agentovi pro approve / deny / stop podle typu agenta.</p>
   {#each rows as e, i (i)}
     <fieldset>
-      <legend>{e.name || "(nový profil)"} <button type="button" onclick={() => remove(i)}>×</button></legend>
-      <TextField label="name" value={e.name} oninput={(v) => rename(i, v)} />
+      <legend>{e.name || "(nový profil)"} <button type="button" title="Odebrat answer profil" onclick={() => remove(i)}>×</button></legend>
+      <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
       {#if e.name.trim() !== ""}
         {#each LIST_KEYS as k}
-          <ListField label={k} value={e[k] ?? []} onchange={(v) => setList(i, k, v)} />
+          <ListField label={k} help={HELP[k]} value={e[k] ?? []} onchange={(v) => setList(i, k, v)} />
         {/each}
-        <TriStateListField label="approve_always" state={aaState(e)} list={e.approve_always ?? []} onchange={(s, l) => setApproveAlways(i, s, l)} />
+        <TriStateListField label="approve_always" help={HELP.approve_always} state={aaState(e)} list={e.approve_always ?? []} onchange={(s, l) => setApproveAlways(i, s, l)} />
       {:else}
         <p class="hint">Zadej jméno profilu pro úpravu kláves.</p>
       {/if}

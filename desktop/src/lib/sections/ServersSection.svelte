@@ -20,6 +20,14 @@
 
   const servers = $derived(serversOf(payload));
 
+  // Czech tooltips for every field — required for each labelled field
+  // (enforced by sections.help.test.ts).
+  const HELP: Record<string, string> = {
+    id: "Jedinečný název serveru, podle kterého deck řadí, barví a směruje jeho agenty.",
+    url: "WebSocket adresa herdr mostu na serveru (např. ws://100.x.y.z:8788), ideálně Tailscale IP.",
+    token: "Název proměnné či položky klíčenky s přístupovým tokenem; hodnotu lze uložit rovnou do klíčenky.",
+  };
+
   function set(i: number, field: "id" | "url" | "token_env", v: string): void {
     payload = updateServer(payload, i, field, v);
     onChange();
@@ -50,18 +58,19 @@
   }
 </script>
 
-<h2>Servers</h2>
+<h2>Servery</h2>
 <!-- Index keying is correct here: this is an append / remove list (no row reordering),
      and the only per-row transient state (TokenSecretField's in-progress secret entry) is
      disposable. Editing a field keeps the same index → same DOM node → focus preserved.
      A stable-id apparatus would add complexity that 9 řez-4 sections would clone. -->
 {#each servers as s, i (i)}
   <fieldset>
-    <legend>{s.id || "(nový server)"} <button type="button" onclick={() => remove(i)}>×</button></legend>
-    <TextField label="id" value={s.id} oninput={(v) => set(i, "id", v)} />
-    <TextField label="url" value={s.url} oninput={(v) => set(i, "url", v)} />
+    <legend>{s.id || "(nový server)"} <button type="button" title="Odebrat server" onclick={() => remove(i)}>×</button></legend>
+    <TextField label="id" help={HELP.id} value={s.id} oninput={(v) => set(i, "id", v)} />
+    <TextField label="url" help={HELP.url} value={s.url} oninput={(v) => set(i, "url", v)} />
     <TokenSecretField
       label="token"
+      help={HELP.token}
       value={s.token_env}
       flag={secretFlag(payload, s.token_env)}
       oninput={(v) => set(i, "token_env", v)}
