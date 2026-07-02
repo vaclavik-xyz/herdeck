@@ -112,8 +112,8 @@ def test_page_uses_readable_desktop_scale():
     from herdeck.driver import web
 
     page = web._PAGE
-    # the desktop scale lives in --cell; the column count comes from /state.cols
-    assert "--cell:min(17vw,150px)" in page
+    # the desktop scale lives in --cell, derived from the column count
+    assert "--cell:min(calc(88vw/var(--cols)),150px)" in page
     assert "grid-template-columns:repeat(5,var(--cell))" in page
     assert ".cell{width:var(--cell);height:var(--cell);" in page
     assert (

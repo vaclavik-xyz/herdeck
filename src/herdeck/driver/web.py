@@ -338,7 +338,11 @@ _PAGE = """<!doctype html><meta charset=utf-8>
  /* cell size lives in --cell so JS can set the COLUMN COUNT from /state.cols
     (repeat() does not accept var() for its count) — the layout follows the
     configured [deck] grid instead of hardcoding the 5-wide D200 */
- #deck{--cell:min(17vw,150px);--gap:10px;background:#2a2a2e;padding:18px;border-radius:18px;
+ /* --cell derives from the COLUMN COUNT (88vw budget / --cols ≈ the old 17vw
+    at five columns), so a wider configured grid shrinks cells instead of
+    overflowing a narrow viewport. */
+ #deck{--cols:5;--cell:min(calc(88vw/var(--cols)),150px);--gap:10px;
+   background:#2a2a2e;padding:18px;border-radius:18px;
    display:grid;grid-template-columns:repeat(5,var(--cell));gap:var(--gap)}
  .cell{width:var(--cell);height:var(--cell);border-radius:8px;background:#111;cursor:pointer;
    overflow:hidden;border:none;padding:0;
@@ -357,7 +361,7 @@ _PAGE = """<!doctype html><meta charset=utf-8>
    font:13px system-ui;display:none;z-index:9}
  /* phone portrait: width is the constraint, so shrink the deck */
  @media (max-width:560px){
-   #deck{--cell:min(17vw,110px);--gap:6px;padding:10px}
+   #deck{--cell:min(calc(88vw/var(--cols)),110px);--gap:6px;padding:10px}
  }
  /* phone landscape: HEIGHT is the constraint (3 rows), so size cells by viewport
     height — but also keep the 17vw width cap so a short AND narrow viewport
@@ -365,7 +369,7 @@ _PAGE = """<!doctype html><meta charset=utf-8>
     sideways. The deck stays within both the short (e.g. 667x375) viewport's
     height and a narrow viewport's width. */
  @media (max-height:430px){
-   #deck{--cell:min(17vw,22vh,110px);--gap:6px;padding:10px}
+   #deck{--cell:min(calc(88vw/var(--cols)),22vh,110px);--gap:6px;padding:10px}
  }
 </style>
 <div id=deck></div>
@@ -416,6 +420,7 @@ let curCols=5;
 function applyGrid(cols){
   if(!cols||cols===curCols) return;
   curCols=cols;
+  deck.style.setProperty('--cols',cols);  // cell width shrinks with more columns
   deck.style.gridTemplateColumns='repeat('+cols+', var(--cell))';
   panel.style.gridColumn=(cols-1)+' / '+(cols+1);
 }
