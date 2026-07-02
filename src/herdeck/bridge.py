@@ -27,7 +27,7 @@ class HerdrClient(Protocol):
     async def focus_agent(self, pane_id: str) -> None: ...
     async def send_text(self, pane_id: str, text: str) -> None: ...
     async def start_agent(self, name: str, argv: list[str]) -> None: ...
-    async def worktrees(self) -> list[dict]: ...
+    async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]: ...
     async def workspaces(self) -> list[dict]: ...
     async def tabs(self) -> list[dict]: ...
 
@@ -96,29 +96,49 @@ def _wire_panes(
     return [_herdr_pane_to_wire(p, wt_by_ws, ws_by_id, tab_by_id) for p in raw if _is_agent_pane(p)]
 
 
-async def _fetch_labels(herdr: HerdrClient) -> tuple[list, list, list]:
+async def _fetch_labels(
+    herdr: HerdrClient, workspace_ids: list[str] | None = None
+) -> tuple[list, list, list]:
     """The worktree/workspace/tab label lists, fetched CONCURRENTLY (herdr accepts
     concurrent one-shot connections, so latency is max instead of sum — the
     code's own measurement has worktree.list alone spiking to ~130ms). Any
-    failing lookup degrades to an empty list; labels are cosmetic."""
+    failing lookup degrades to an empty list; labels are cosmetic.
 
-    async def safe(method_name: str) -> list:
+    ``workspace_ids`` are the AGENT panes' workspaces: herdr's ``worktree.list``
+    is scoped to one repo (the focused one without params), so branch labels for
+    a multi-repo fleet exist only when each agent workspace is asked about
+    explicitly (device report 2026-07-02: every non-focused repo lost its
+    branch line)."""
+
+    async def safe(method_name: str, *args) -> list:
+        fn = getattr(herdr, method_name, None)
+        if fn is None:  # minimal doubles carry only list_panes; labels are optional
+            return []
         try:
-            return await getattr(herdr, method_name)()
+            try:
+                return await fn(*args)
+            except TypeError:
+                return await fn()  # doubles predating the workspace_ids parameter
         except Exception:
             return []
 
     worktrees, workspaces, tabs = await asyncio.gather(
-        safe("worktrees"), safe("workspaces"), safe("tabs")
+        safe("worktrees", workspace_ids or []), safe("workspaces"), safe("tabs")
     )
     return worktrees, workspaces, tabs
 
 
+def _agent_workspace_ids(raw_panes: list[dict]) -> list[str]:
+    """Unique workspace ids of the agent panes (the repos whose worktrees we
+    need branch labels for), in a stable order."""
+    return sorted({p.get("workspace_id") for p in raw_panes if _is_agent_pane(p) and p.get("workspace_id")})
+
+
 async def _wired_snapshot(herdr: HerdrClient) -> list[dict]:
-    """Fetch panes + label lists from herdr concurrently and build the wire snapshot."""
-    raw, (worktrees, workspaces, tabs) = await asyncio.gather(
-        herdr.list_panes(), _fetch_labels(herdr)
-    )
+    """Fetch panes, then the label lists for THEIR workspaces (worktree.list is
+    per-repo — see _fetch_labels), and build the wire snapshot."""
+    raw = await herdr.list_panes()
+    worktrees, workspaces, tabs = await _fetch_labels(herdr, _agent_workspace_ids(raw))
     return _wire_panes(raw, worktrees, workspaces, tabs)
 
 
@@ -144,7 +164,9 @@ class StubHerdr:
     async def list_panes(self) -> list[dict]:
         return self.panes
 
-    async def worktrees(self) -> list[dict]:
+    async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]:
+        self.worktree_queries = getattr(self, "worktree_queries", [])
+        self.worktree_queries.append(list(workspace_ids or []))
         return self._worktrees
 
     async def workspaces(self) -> list[dict]:
@@ -240,15 +262,13 @@ class HerdrEvents:
         try:
             while True:
                 try:
+                    raw = await self._herdr.list_panes()
                     if self._labels is None or self._labels_stale:
-                        raw, labels = await asyncio.gather(
-                            self._herdr.list_panes(), _fetch_labels(self._herdr)
-                        )
-                        self._labels = labels
+                        # panes first: worktree labels are fetched for exactly the
+                        # workspaces the agent panes live in (worktree.list is per-repo)
+                        self._labels = await _fetch_labels(self._herdr, _agent_workspace_ids(raw))
                         self._labels_stale = False
                         self._labels_at = _monotonic()
-                    else:
-                        raw = await self._herdr.list_panes()
                     cur = _wire_panes(raw, *self._labels)
                 except Exception:
                     cur = None
@@ -441,9 +461,32 @@ class SocketHerdr:
         # No workspace_id -> herdr starts the agent in the focused workspace.
         await self._rpc("agent.start", {"name": name, "argv": argv}, retry=False)
 
-    async def worktrees(self) -> list[dict]:
-        res = await self._rpc("worktree.list", {})
-        return res.get("result", {}).get("worktrees", [])
+    async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]:
+        # herdr scopes worktree.list to ONE repo (focused when unparametrized);
+        # a multi-repo fleet needs one query per agent workspace, concurrently,
+        # merged and de-duplicated (same repo open in several workspaces).
+        ids = [w for w in (workspace_ids or []) if w]
+        if not ids:
+            res = await self._rpc("worktree.list", {})
+            return res.get("result", {}).get("worktrees", [])
+
+        async def one(ws: str) -> list[dict]:
+            try:
+                res = await self._rpc("worktree.list", {"workspace_id": ws})
+                return res.get("result", {}).get("worktrees", [])
+            except Exception:
+                return []  # labels are cosmetic; one failing repo must not drop the rest
+
+        merged: list[dict] = []
+        seen: set[tuple] = set()
+        for lst in await asyncio.gather(*(one(w) for w in ids)):
+            for wt in lst:
+                key = (wt.get("path"), wt.get("open_workspace_id"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(wt)
+        return merged
 
     async def workspaces(self) -> list[dict]:
         res = await self._rpc("workspace.list", {})
