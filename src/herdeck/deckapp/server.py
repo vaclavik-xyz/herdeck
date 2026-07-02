@@ -81,6 +81,11 @@ class DeckApp:
         self._suppress_reload = False  # set by the onboarding commit to mute the watcher
         self._setup_lock = threading.RLock()  # shared mutation lock (/setup/connect + config-write routes + reload); RLock because the config routes call reload() while holding it
 
+        # CodexBar usage poller (a daemon thread; None when [usage] is off).
+        # Renders read its latest snapshot; no render ever blocks on the CLI.
+        self._usage_cfg = getattr(config, "usage", None)
+        self._usage_poller = self._build_usage_poller(self._usage_cfg)
+
         self._lock = threading.Lock()
         self._panel_memo: tuple[tuple, bytes] | None = None  # (panel content key, png)
         self._tiles: dict[int, bytes] = {}
@@ -144,6 +149,30 @@ class DeckApp:
         self._version += 1
         return self._version
 
+    @staticmethod
+    def _build_usage_poller(usage_cfg):
+        from ..usage import poller_from_config
+
+        poller = poller_from_config(usage_cfg)
+        if poller is not None:
+            poller.start()
+        return poller
+
+    def _adopt_usage_config(self, config) -> None:
+        """Rebuild the poller when a config swap changed [usage] (providers,
+        cadence or CLI path); unchanged config keeps the running thread."""
+        new_cfg = getattr(config, "usage", None)
+        if new_cfg == self._usage_cfg:
+            return
+        old = self._usage_poller
+        self._usage_cfg = new_cfg
+        self._usage_poller = self._build_usage_poller(new_cfg)
+        if old is not None:
+            try:
+                old.close()
+            except Exception:
+                pass
+
     # --- render pipeline (reuses Orchestrator + icons) ---
     def refresh(self) -> None:
         """Pull state from the source, render via the orchestrator, and diff the
@@ -161,6 +190,8 @@ class DeckApp:
 
         from ..icons import PANEL_W_TWO_CELL, compose_panel
 
+        if self._usage_poller is not None:
+            orch.set_usage(self._usage_poller.snapshot())
         source.apply_to(orch)
         rs = orch.render()
         tiles = {t.index: self._icons.render_tile_bytes(t) for t in rs.tiles if t.index < slots}
@@ -276,6 +307,13 @@ class DeckApp:
                 watcher.close()
             except Exception:
                 pass
+        poller = getattr(self, "_usage_poller", None)
+        if poller is not None:
+            try:
+                poller.close()
+            except Exception:
+                pass
+            self._usage_poller = None
         bridge = getattr(self, "_local_bridge", None)
         if bridge is not None:
             try:
@@ -336,6 +374,7 @@ class DeckApp:
         against in-flight reads/presses. After applying the new tiles the sink list is
         fanned out a full frame so physical sinks repaint immediately on swap."""
         slots, orch, clk, rs, tiles, panel_png, sections = prepared
+        self._adopt_usage_config(new_source.config)
         with self._lock:
             old = self._source
             self._source = new_source

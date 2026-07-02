@@ -232,6 +232,13 @@ class App:
         self._ticks = 0
         self._status_panel: PanelView | None = None
         self._status_panel_until = 0.0
+        # CodexBar usage poller (None when [usage] is off); renders read its
+        # latest snapshot only, never block on the CLI.
+        from .usage import poller_from_config
+
+        self._usage_poller = poller_from_config(getattr(config, "usage", None))
+        if self._usage_poller is not None:
+            self._usage_poller.start()
 
     def _install_blocked_runtime(self, runtime: BlockedNotificationRuntime) -> None:
         self._notification_generation += 1
@@ -276,6 +283,8 @@ class App:
         return None
 
     def _refresh(self) -> None:
+        if self._usage_poller is not None:
+            self.orch.set_usage(self._usage_poller.snapshot())
         rs = self.orch.render()
         held = self._held_status_panel()
         try:

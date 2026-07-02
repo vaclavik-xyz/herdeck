@@ -41,6 +41,14 @@ approve_always = true
 # unconditional interrupt one key away from Back. Set to [] to opt out.
 require_confirm_for = ["act_force"]
 
+# Provider usage limits (CodexBar CLI) on the status panel. Requires the
+# codexbar CLI (https://github.com/steipete/CodexBar) authenticated on the
+# machine that renders the deck. Empty providers (the default) = off.
+[usage]
+providers = []                # e.g. ["claude", "codex"]
+refresh_secs = 300            # CLI poll cadence (min 30)
+codexbar_path = "codexbar"    # bare names also resolve via /opt/homebrew/bin
+
 [[macros]]
 label = "continue"
 text = "continue"

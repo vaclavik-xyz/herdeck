@@ -16,6 +16,7 @@ import MacrosSection from "./MacrosSection.svelte";
 import StartProfilesSection from "./StartProfilesSection.svelte";
 import NotificationsSection from "./NotificationsSection.svelte";
 import SafetySection from "./SafetySection.svelte";
+import UsageSection from "./UsageSection.svelte";
 import AnswerProfilesSection from "./AnswerProfilesSection.svelte";
 import ProfilesSection from "./ProfilesSection.svelte";
 import DesktopSection from "./DesktopSection.svelte";
@@ -36,6 +37,7 @@ function demoPayload(): ConfigPayload {
       },
       notifications: { enabled: true, telegram: { token_env: "TG_TOKEN", chat_id: "1" } },
       safety: { approve_always: true, require_confirm_for: ["act_force"] },
+      usage: { providers: ["claude"], refresh_secs: 300, codexbar_path: "codexbar" },
       desktop: { window_mode: "floating" },
     },
     profiles: { night: { view: { tile_fill: "solid" } } },
@@ -63,6 +65,7 @@ const SECTIONS: SectionSpec[] = [
   { name: "StartProfilesSection", key: "start_profiles", component: StartProfilesSection, overlay: true, reloadRev: true },
   { name: "NotificationsSection", key: "notifications", component: NotificationsSection, overlay: true, reloadRev: false },
   { name: "SafetySection", key: "safety", component: SafetySection, overlay: true, reloadRev: false },
+  { name: "UsageSection", key: "usage", component: UsageSection, overlay: true, reloadRev: false },
   { name: "AnswerProfilesSection", key: "answer_profiles", component: AnswerProfilesSection, overlay: true, reloadRev: true },
   { name: "ProfilesSection", key: "profiles", component: ProfilesSection, overlay: false, reloadRev: false },
   { name: "DesktopSection", key: "desktop", component: DesktopSection, overlay: false, reloadRev: false },

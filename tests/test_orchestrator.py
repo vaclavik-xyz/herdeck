@@ -257,3 +257,70 @@ def test_elapsed_seconds_quantized_to_5s_buckets():
     assert o.render().tiles[0].time_text == "20s"
     clk[0] = 1000.0 + 25
     assert o.render().tiles[0].time_text == "25s"
+
+
+# --- usage limits on the overview panel (CodexBar) ---
+
+
+def _usage_data():
+    from herdeck.usage import ProviderUsage, UsageWindow
+
+    return [
+        ProviderUsage("claude", [UsageWindow("5h", 19, None), UsageWindow("7d", 43, None)]),
+        ProviderUsage("codex", [UsageWindow("5h", 2, None)]),
+    ]
+
+
+def test_overview_panel_carries_usage_lines():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    rs = o.render()
+    assert "Claude 5h 19% · 7d 43%" in rs.panel.lines
+    assert "Codex 5h 2%" in rs.panel.lines
+
+
+def test_overview_panel_without_usage_keeps_online_line():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    rs = o.render()
+    assert rs.panel.lines[-1] == "online"
+
+
+def test_panel_press_toggles_usage_detail_on_single_page():
+    t = {"now": 0.0}
+    o = Orchestrator(make_config(), slots=13, clock=lambda: t["now"])
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    assert o.on_press(13) == []
+    rs = o.render()
+    assert rs.panel.title == "usage limits"
+    assert rs.panel.lines[0].startswith("Claude 5h 19%")
+    # second press hides the detail again
+    o.on_press(13)
+    assert o.render().panel.title == "1 agents"
+    # expired hold reverts on its own
+    o.on_press(13)
+    t["now"] = 100.0
+    assert o.render().panel.title == "1 agents"
+
+
+def test_panel_press_still_pages_when_multipage():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot(
+        "dev", [state(f"p{i}", Status.IDLE, label=f"a{i}") for i in range(30)]
+    )
+    o.set_usage(_usage_data())
+    o.on_press(13)
+    assert o._page == 1  # paging wins over the usage detail on multi-page decks
+
+
+def test_blocked_spotlight_preempts_held_usage_detail():
+    t = {"now": 0.0}
+    o = Orchestrator(make_config(), slots=13, clock=lambda: t["now"])
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.on_press(13)
+    assert o.render().panel.title == "usage limits"
+    o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    assert o.render().panel.title == "▲ needs you"  # attention beats detail

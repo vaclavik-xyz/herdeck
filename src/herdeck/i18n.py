@@ -25,6 +25,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "blocked_for": "blocked {elapsed}",
         "agents_total": "{n} agents",
         "online": "online",
+        "usage_title": "usage limits",
         # drill detail (layout.panel_detail)
         "reading_prompt": "reading prompt...",
         # orchestrator tiles / drill
@@ -74,6 +75,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "blocked_for": "čeká {elapsed}",
         "agents_total": "agentů: {n}",
         "online": "online",
+        "usage_title": "limity využití",
         "reading_prompt": "čtu prompt...",
         "new_agent": "+ Nový",
         "stop": "Stop",

@@ -162,6 +162,15 @@ the desktop app UI speak `[view].language` — `"en"` (default) or `"cs"`; the
 desktop settings window offers it as the View → `language` select and switches
 live.
 
+The status window can also show **provider usage limits** via the
+[CodexBar](https://github.com/steipete/CodexBar) CLI: set
+`[usage] providers = ["claude", "codex"]` (any provider id the installed
+`codexbar` understands). The calm overview panel then carries one line per
+provider (`Claude 5h 13% · 7d 42%`); on a single-page deck, pressing the
+status window holds a detail view with per-window reset times for a few
+seconds. Blocked/offline alerts always take the panel back. The CLI must be
+installed and authenticated on the machine that renders the deck.
+
 ## Stream Deck (Elgato) plugin backend
 herdeck can also drive a native **Elgato Stream Deck** as a plugin. A thin
 TypeScript shell (a separate follow-up plan) owns the deck over Elgato's SDK and

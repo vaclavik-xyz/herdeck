@@ -24,6 +24,8 @@ _SLOT_PRESS_GUARD_S = 0.3
 # The overview panel acknowledges a just-sent drill action this long, so
 # returning to an unchanged amber tile doesn't read as "my press was lost".
 _SENT_NOTE_TTL_S = 3.0
+# How long a panel press holds the usage-limit detail (single-page decks).
+_USAGE_DETAIL_HOLD_S = 6.0
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 _MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
 _APPROVE_ALWAYS_HINTS = ("always", "don't ask", "dont ask", "do not ask")
@@ -80,6 +82,10 @@ class Orchestrator:
         self._pending_confirm: tuple[str, AgentKey] | None = None
         self._pending_confirm_at: float = 0.0
         self._sent_note: tuple[str, float] | None = None  # (agent label, sent at)
+        # Provider usage (CodexBar) shown on the calm overview panel; the host
+        # app feeds it via set_usage from its UsagePoller.
+        self._usage: list = []
+        self._usage_detail_until: float = 0.0
         # Ordering hysteresis state (see _ordered).
         self._display_order: list[AgentKey] = []
         self._display_ranks: dict = {}
@@ -166,6 +172,10 @@ class Orchestrator:
         if text != self._detection:
             self._pending_confirm = None
         self._detection = text
+
+    def set_usage(self, data: list) -> None:
+        """Latest ProviderUsage list from the host's UsagePoller ([] = none)."""
+        self._usage = list(data)
 
     # --- drill helpers (used by app for read correlation) ---
     def drill_key(self) -> AgentKey | None:
@@ -376,14 +386,31 @@ class Orchestrator:
                 )
             else:
                 tiles.append(TileView(i, "", "empty"))
+        spotlight = self._blocked_spotlight()
+        if (
+            self._usage
+            and not self._down
+            and spotlight is None
+            and self._clock() < self._usage_detail_until
+        ):
+            # Held usage detail (panel press on a single-page deck): every
+            # provider window with its reset time, in place of the overview.
+            # An offline server or a blocked agent takes the panel back at once.
+            panel = PanelView(
+                self._tr("usage_title"),
+                layout.usage_detail_lines(self._usage),
+                "grey",
+            )
+            return RenderState(tiles, panel)
         panel = layout.panel_overview(
             layout.summary(ordered),
             self._page % pages,
             pages,
             self._down,
             len(ordered),
-            self._blocked_spotlight(),
+            spotlight,
             lang=self.config.view.language,
+            usage_lines=layout.usage_summary_lines(self._usage) if self._usage else None,
         )
         if panel.color == "red":
             panel.color = self.config.theme.colors.get("offline", panel.color)
@@ -625,7 +652,17 @@ class Orchestrator:
 
     def _press_overview(self, index: int) -> list[Command]:
         if index in self._panel_indices():
+            _, pages = layout.page(self._ordered(), self._page, self._agent_slots())
+            if pages == 1 and self._usage:
+                # Nothing to page through: the press toggles a held usage
+                # detail instead (reset times per provider window).
+                now = self._clock()
+                self._usage_detail_until = (
+                    0.0 if now < self._usage_detail_until else now + _USAGE_DETAIL_HOLD_S
+                )
+                return []
             self._page += 1
+            self._usage_detail_until = 0.0
             self._resettle()  # a page flip is a safe moment to adopt the fresh sort
             return []
         management = self._management_indices()

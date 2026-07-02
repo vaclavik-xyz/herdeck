@@ -23,6 +23,7 @@ from .config import (
     SafetyConfig,
     ServerConfig,
     ThemeConfig,
+    UsageConfig,
     ViewConfig,
     _parse_grid,
     _parse_profile,
@@ -266,6 +267,27 @@ def _safety_config(raw: dict | None) -> SafetyConfig:
     )
 
 
+def _usage_config(raw: dict | None) -> UsageConfig:
+    raw = raw or {}
+    usage = UsageConfig()
+    if "providers" in raw:
+        providers = raw["providers"]
+        if not isinstance(providers, list) or any(not isinstance(p, str) for p in providers):
+            raise ConfigError("usage.providers must be a list of provider ids (strings)")
+        usage.providers = list(providers)
+    if "refresh_secs" in raw:
+        secs = raw["refresh_secs"]
+        if type(secs) is not int or secs < 30:
+            raise ConfigError("usage.refresh_secs must be an integer >= 30")
+        usage.refresh_secs = secs
+    if "codexbar_path" in raw:
+        path = raw["codexbar_path"]
+        if not isinstance(path, str) or not path.strip():
+            raise ConfigError("usage.codexbar_path must be a non-empty string")
+        usage.codexbar_path = path
+    return usage
+
+
 def _macro_set(raw) -> list[Macro]:
     if raw is None:
         return list(DEFAULT_MACROS)
@@ -303,6 +325,7 @@ _OVERLAY_SECTIONS = (
     "theme",
     "view",
     "safety",
+    "usage",
 )
 
 
@@ -370,6 +393,7 @@ def _build_config(
         theme=_theme_config(merged.get("theme")),
         view=_view_config(merged.get("view")),
         safety=_safety_config(merged.get("safety")),
+        usage=_usage_config(merged.get("usage")),
         hardware=_hardware_config(local_data),
         meta=ConfigMeta(
             active_profile=profile_name,
