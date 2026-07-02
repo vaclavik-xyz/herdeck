@@ -88,11 +88,13 @@ def test_disconnected_colors_red_and_panel_offline():
     assert rs.panel.lines == ["reconnecting…"]
 
 
-def test_empty_slots_are_dim():
+def test_empty_slots_are_near_background():
+    # "dim" (70,70,70) rendered vacant slots BRIGHTER than occupied tiles on
+    # fill="none" — vacant must never outrank occupied (audit: empty-slot).
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
     rs = o.render()
-    assert rs.tiles[1].color == "dim" and rs.tiles[1].label == ""
+    assert rs.tiles[1].color == "empty" and rs.tiles[1].label == ""
 
 
 def test_event_updates_tile():

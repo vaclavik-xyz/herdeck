@@ -20,6 +20,9 @@ _ORDER_SETTLE_S = 2.0
 # Ignore a press on a slot whose occupant changed within this window — the
 # press was almost certainly aimed at the previous occupant.
 _SLOT_PRESS_GUARD_S = 0.3
+# The overview panel acknowledges a just-sent drill action this long, so
+# returning to an unchanged amber tile doesn't read as "my press was lost".
+_SENT_NOTE_TTL_S = 3.0
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 _MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
 _APPROVE_ALWAYS_HINTS = ("always", "don't ask", "dont ask", "do not ask")
@@ -75,6 +78,7 @@ class Orchestrator:
         self._profile_menu_origin: str = "overview"
         self._pending_confirm: tuple[str, AgentKey] | None = None
         self._pending_confirm_at: float = 0.0
+        self._sent_note: tuple[str, float] | None = None  # (agent label, sent at)
         # Ordering hysteresis state (see _ordered).
         self._display_order: list[AgentKey] = []
         self._target_keys: list[AgentKey] = []
@@ -270,6 +274,11 @@ class Orchestrator:
             "new_agent": "+ New",
         }.get(action, action)
 
+    def _note_sent(self, key: AgentKey) -> None:
+        agent = self._agents.get(key)
+        if agent is not None:
+            self._sent_note = (agent.label, self._clock())
+
     def _blocked_spotlight(self) -> tuple[str, str] | None:
         """The longest-waiting BLOCKED agent as (label, elapsed), or None."""
         blocked = [s for s in self._agents.values() if s.status is Status.BLOCKED]
@@ -347,7 +356,7 @@ class Orchestrator:
                     )
                 )
             else:
-                tiles.append(TileView(i, "", "dim"))
+                tiles.append(TileView(i, "", "empty"))
         panel = layout.panel_overview(
             layout.summary(ordered),
             self._page % pages,
@@ -360,6 +369,14 @@ class Orchestrator:
             panel.color = self.config.theme.colors.get("offline", panel.color)
         elif panel.color == "amber":
             panel.color = self.config.theme.colors.get("blocked", panel.color)
+        if self._sent_note is not None:
+            label, at = self._sent_note
+            if self._clock() - at <= _SENT_NOTE_TTL_S:
+                # acknowledge the action while its status change propagates —
+                # the tile stays amber until the bridge round-trip completes
+                panel.lines = [f"sent › {label}", *panel.lines]
+            else:
+                self._sent_note = None
         return RenderState(tiles, panel)
 
     def _render_profile_menu(self) -> RenderState:
@@ -374,7 +391,7 @@ class Orchestrator:
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
-                tiles.append(TileView(i, "", "dim"))
+                tiles.append(TileView(i, "", "empty"))
         locked = "locked by env" if self.config.meta.env_locked_profile else "pick a profile"
         return RenderState(tiles, PanelView("profiles", [locked], "grey"))
 
@@ -391,7 +408,7 @@ class Orchestrator:
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
-                tiles.append(TileView(i, "", "dim"))
+                tiles.append(TileView(i, "", "empty"))
         return RenderState(tiles, PanelView("new agent", ["pick a type"], "grey"))
 
     def tick(self) -> list[int]:
@@ -537,7 +554,7 @@ class Orchestrator:
             elif i == back_i:
                 tiles.append(TileView(i, "Back", "grey"))
             else:
-                tiles.append(TileView(i, "", "dim"))
+                tiles.append(TileView(i, "", "empty"))
         panel = (
             layout.panel_detail(agent, self._detection)
             if agent is not None
@@ -683,6 +700,7 @@ class Orchestrator:
                 return []
             self._pending_confirm = None
             cmd = Command("act_force", key.server_id, key.pane_id, keys=self._profile_for(key).stop)
+            self._note_sent(key)
             self._drill = None  # return to the fleet overview
             self._resettle()
             return [cmd]
@@ -697,6 +715,7 @@ class Orchestrator:
                 return []
             self._pending_confirm = None
             cmd = actions[index]["make"](key)
+            self._note_sent(key)
             self._drill = None  # return to the fleet overview
             self._resettle()
             return [cmd]
