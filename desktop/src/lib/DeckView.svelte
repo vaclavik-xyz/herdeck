@@ -111,12 +111,12 @@
   const cells = $derived(Array.from({ length: view.slots }, (_, i) => i));
   const statusText = $derived(
     !view.online
-      ? "offline · reconnecting…"
+      ? "offline · připojuji znovu…"
       : view.source === "mock"
         ? "mock"
         : view.connected
           ? "live"
-          : "live · disconnected",
+          : "live · odpojeno",
   );
 </script>
 
@@ -127,7 +127,7 @@
         class="cell"
         class:active={active === i}
         onclick={() => clickTile(i)}
-        aria-label={`tile ${i + 1}`}
+        aria-label={`dlaždice ${i + 1}`}
       >
         {#if view.tiles[i]}<img src={view.tiles[i]} alt="" />{/if}
       </button>
@@ -136,7 +136,7 @@
       class="panel"
       class:active={active === view.slots}
       onclick={() => { if (!onJump) void press(view.slots); }}
-      aria-label="status panel"
+      aria-label="stavový panel"
     >
       {#if view.panel}<img src={view.panel} alt="" />{/if}
     </button>
