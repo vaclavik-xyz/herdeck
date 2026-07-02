@@ -13,6 +13,13 @@
 
   let newName = $state("");
 
+  // Czech tooltips for every field — required for each labelled field
+  // (enforced by sections.help.test.ts).
+  const HELP: Record<string, string> = {
+    extends: "Ze kterého profilu tento profil dědí nastavení; „default“ znamená přímo základní konfiguraci.",
+    servers: "Které servery profil používá; při dědění přebírá výběr rodiče či báze, prázdný výběr = profil bez serverů.",
+  };
+
   const names = $derived(profileNames(payload));
   const serverIds = $derived(serversOf(payload).map((s) => s.id).filter((id) => id !== ""));
 
@@ -73,7 +80,7 @@
   }
 </script>
 
-<h2>Profiles</h2>
+<h2>Profily</h2>
 <p class="hint">Pojmenované profily překrývají bázi. Aktivní profil se vybírá nahoře; per-sekce overrides jsou řez 4b-ii.</p>
 
 <div class="create">
@@ -83,17 +90,18 @@
 
 {#each names as name (name)}
   <fieldset>
-    <legend>{name} <button type="button" onclick={() => remove(name)}>×</button></legend>
+    <legend>{name} <button type="button" title="Smazat profil" onclick={() => remove(name)}>×</button></legend>
     <SelectField
       label="extends"
+      help={HELP.extends}
       value={profileExtends(payload, name)}
       options={extendsOptions(name)}
       onchange={(v) => setExtends(name, v)}
     />
-    <OverrideField label="servers" state={srvState(name)} inheritedDisplay="zdědí base servery" onstate={(s) => setSrvState(name, s)}>
+    <OverrideField label="servers" help={HELP.servers} state={srvState(name)} inheritedDisplay="zdědí base servery" onstate={(s) => setSrvState(name, s)}>
       <div class="servers">
         {#if serverOptions(name).length === 0}
-          <span class="hint">žádné servery v bázi — přidej je v sekci Servers</span>
+          <span class="hint">žádné servery v bázi — přidej je v sekci Servery</span>
         {:else}
           {#each serverOptions(name) as opt (opt.id)}
             <label class="chk">

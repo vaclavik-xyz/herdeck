@@ -55,20 +55,20 @@ describe("parseState", () => {
 });
 
 describe("summaryLabel", () => {
-  it("emphasizes blocked last and pluralizes agents", () => {
+  it("emphasizes blocked last and pluralizes agents (Czech 2-4 form)", () => {
     expect(summaryLabel({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0 })).toBe(
-      "4 agents · 2 working · 1 idle · ⚠ 1 blocked",
+      "4 agenti · 2 pracují · 1 nečinný · ⚠ 1 blokován",
     );
   });
 
   it("omits zero buckets and uses singular agent", () => {
     expect(summaryLabel({ agents: 1, blocked: 0, working: 0, idle: 1, done: 0 })).toBe(
-      "1 agent · 1 idle",
+      "1 agent · 1 nečinný",
     );
   });
 
-  it("renders only the agent count when everything else is zero", () => {
-    expect(summaryLabel(emptySummary())).toBe("0 agents");
+  it("renders only the agent count when everything else is zero (Czech 5+ form)", () => {
+    expect(summaryLabel(emptySummary())).toBe("0 agentů");
   });
 });
 
@@ -273,7 +273,7 @@ describe("stepDeck — folds a poll into the render model", () => {
     expect(view.summary).toEqual({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0 });
     expect(view.source).toBe("live");
     expect(view.connected).toBe(true);
-    expect(summaryLabel(view.summary)).toContain("⚠ 1 blocked");
+    expect(summaryLabel(view.summary)).toContain("⚠ 1 blokován");
   });
 
   it("goes offline (keeping last tiles) when the fetch fails", async () => {

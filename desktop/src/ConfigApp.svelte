@@ -30,27 +30,32 @@
     type ConfigPayload,
   } from "./lib/configClient";
 
-  const SECTIONS = [
-    "Servers", "Deck", "View", "Theme", "Macros",
-    "Start profiles", "Notifications", "Safety", "Answer profiles", "Profiles", "Desktop",
+  // key = stable identifier (matches backend tile_sections keys where applicable),
+  // label = what the sidebar shows. Split so the UI language never leaks into logic.
+  const SECTIONS: { key: string; label: string }[] = [
+    { key: "servers", label: "Servery" },
+    { key: "deck", label: "Deck" },
+    { key: "view", label: "Zobrazení" },
+    { key: "theme", label: "Barvy" },
+    { key: "macros", label: "Makra" },
+    { key: "start_profiles", label: "Spouštěče agentů" },
+    { key: "notifications", label: "Notifikace" },
+    { key: "safety", label: "Bezpečnost" },
+    { key: "answer_profiles", label: "Profily odpovědí" },
+    { key: "profiles", label: "Profily" },
+    { key: "desktop", label: "Okno" },
   ];
 
-  // klik-to-jump: backend tile section KEY (from deckClient /state.tile_sections) → this
-  // editor's sidebar section LABEL. A preview tile click switches `active` to its section.
-  const SECTION_FOR_KEY: Record<string, string> = {
-    view: "View",
-    start_profiles: "Start profiles",
-    answer_profiles: "Answer profiles",
-    profiles: "Profiles",
-  };
+  // klik-to-jump: backend tile section KEY (from deckClient /state.tile_sections) maps
+  // 1:1 onto sidebar keys. A preview tile click switches `active` to its section.
+  const JUMPABLE = new Set(["view", "start_profiles", "answer_profiles", "profiles"]);
   function jumpToSection(key: string): void {
-    const label = SECTION_FOR_KEY[key];
-    if (label) active = label;
+    if (JUMPABLE.has(key)) active = key;
   }
 
   let discovery = $state<Discovery | null>(null);
   let payload = $state<ConfigPayload | null>(null);
-  let active = $state("Servers");
+  let active = $state("servers");
   let dirty = $state(false);
   let errors = $state<string[]>([]);
   let showErrors = $state(false); // expanded error list above the savebar
@@ -273,37 +278,37 @@
   <div class="body">
     <nav class="sidebar">
       {#each SECTIONS as s}
-        <button class:active={s === active} onclick={() => (active = s)}>{s}</button>
+        <button class:active={s.key === active} onclick={() => (active = s.key)}>{s.label}</button>
       {/each}
     </nav>
 
     <section class="form">
       {#if payload == null}
         <p class="hint">Načítám config… (nebo sidecar zatím neběží)</p>
-      {:else if active === "Servers"}
+      {:else if active === "servers"}
         {#if (payload.base.servers == null || (payload.base.servers as unknown[]).length === 0)}
-          <p class="hint">Zatím žádný server. Přidej první a klikni Apply pro vytvoření configu.</p>
+          <p class="hint">Zatím žádný server. Přidej první a klikni Použít pro vytvoření configu.</p>
         {/if}
         <ServersSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
-      {:else if active === "Deck"}
+      {:else if active === "deck"}
         <DeckSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
-      {:else if active === "View"}
+      {:else if active === "view"}
         <ViewSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
-      {:else if active === "Theme"}
+      {:else if active === "theme"}
         <ThemeSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
-      {:else if active === "Macros"}
+      {:else if active === "macros"}
         <MacrosSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
-      {:else if active === "Start profiles"}
+      {:else if active === "start_profiles"}
         <StartProfilesSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
-      {:else if active === "Notifications"}
+      {:else if active === "notifications"}
         <NotificationsSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
-      {:else if active === "Safety"}
+      {:else if active === "safety"}
         <SafetySection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
-      {:else if active === "Answer profiles"}
+      {:else if active === "answer_profiles"}
         <AnswerProfilesSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
-      {:else if active === "Profiles"}
+      {:else if active === "profiles"}
         <ProfilesSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
-      {:else if active === "Desktop"}
+      {:else if active === "desktop"}
         <DesktopSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else}
         <p class="hint">Neznámá sekce „{active}".</p>
@@ -324,15 +329,15 @@
   {/if}
 
   <footer class="savebar">
-    <button onclick={discard} disabled={!dirty || busy}>Discard</button>
+    <button onclick={discard} disabled={!dirty || busy} title="Zahodit neuložené změny a vrátit se k uloženému configu">Zahodit</button>
     {#if banner}<Banner kind={banner.kind} message={banner.message} actionLabel={banner.actionLabel} onAction={banner.onAction} />{/if}
     <span class="spacer"></span>
     {#if errors.length > 0}
-      <button class="errcount" onclick={() => (showErrors = !showErrors)}>
+      <button class="errcount" title="Zobrazit nebo skrýt seznam chyb" onclick={() => (showErrors = !showErrors)}>
         ⚠ {errorCountLabel(errors.length)} {showErrors ? "▾" : "▸"}
       </button>
     {/if}
-    <button onclick={apply} disabled={!dirty || busy}>Apply</button>
+    <button onclick={apply} disabled={!dirty || busy} title="Uložit config a hned ho promítnout do běžícího decku">Použít</button>
   </footer>
 </main>
 

@@ -13,6 +13,14 @@
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
+  // Czech tooltips for every field — required for each labelled field
+  // (enforced by sections.help.test.ts).
+  const HELP: Record<string, string> = {
+    macros: "Seznam rychlých zpráv v detailu neblokovaného agenta; profil přepisuje celý seznam najednou.",
+    label: "Krátký popisek makra na dlaždici v detailu agenta (zobrazí se max. 14 znaků).",
+    text: "Text, který se po stisku dlaždice pošle agentovi do terminálu, jako bys ho napsal sám.",
+  };
+
   // --- base mode (unchanged) ---
   const macros = $derived(macrosOf(payload));
   function set(i: number, field: keyof MacroRecord, v: string): void { payload = updateMacro(payload, i, field, v); onChange(); }
@@ -33,14 +41,14 @@
   function ovRemove(i: number): void { writeOv(ovMacros().filter((_, j) => j !== i)); }
 </script>
 
-<h2>Macros{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>Makra{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
-  <OverrideField label="macros" state={ovState()} inheritedDisplay={`${inhMacros().length} maker`} onstate={setOvState}>
+  <OverrideField label="macros" help={HELP.macros} state={ovState()} inheritedDisplay={`${inhMacros().length} maker`} onstate={setOvState}>
     {#each ovMacros() as m, i (i)}
       <fieldset>
-        <legend>{m.label || "(nové makro)"} <button type="button" onclick={() => ovRemove(i)}>×</button></legend>
-        <TextField label="label" value={m.label} oninput={(v) => ovSet(i, "label", v)} />
-        <TextField label="text" value={m.text} oninput={(v) => ovSet(i, "text", v)} />
+        <legend>{m.label || "(nové makro)"} <button type="button" title="Odebrat makro" onclick={() => ovRemove(i)}>×</button></legend>
+        <TextField label="label" help={HELP.label} value={m.label} oninput={(v) => ovSet(i, "label", v)} />
+        <TextField label="text" help={HELP.text} value={m.text} oninput={(v) => ovSet(i, "text", v)} />
       </fieldset>
     {/each}
     <button type="button" onclick={ovAdd}>+ přidat makro</button>
@@ -50,9 +58,9 @@
        rationale as ServersSection — a stable-id apparatus would add needless complexity. -->
   {#each macros as m, i (i)}
     <fieldset>
-      <legend>{m.label || "(nové makro)"} <button type="button" onclick={() => remove(i)}>×</button></legend>
-      <TextField label="label" value={m.label} oninput={(v) => set(i, "label", v)} />
-      <TextField label="text" value={m.text} oninput={(v) => set(i, "text", v)} />
+      <legend>{m.label || "(nové makro)"} <button type="button" title="Odebrat makro" onclick={() => remove(i)}>×</button></legend>
+      <TextField label="label" help={HELP.label} value={m.label} oninput={(v) => set(i, "label", v)} />
+      <TextField label="text" help={HELP.text} value={m.text} oninput={(v) => set(i, "text", v)} />
     </fieldset>
   {/each}
   <button type="button" onclick={add}>+ přidat makro</button>

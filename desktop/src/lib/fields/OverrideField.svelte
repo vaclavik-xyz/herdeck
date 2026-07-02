@@ -1,13 +1,14 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
-  let { label, state, inheritedDisplay, onstate, children }:
+  let { label, state, inheritedDisplay, onstate, children, help = "" }:
     {
       label: string;
       state: "inherit" | "override";
       inheritedDisplay: string;
       onstate: (s: "inherit" | "override") => void;
       children: Snippet;
+      help?: string;
     } = $props();
 
   const SEGMENTS: { value: "inherit" | "override"; text: string }[] = [
@@ -21,7 +22,7 @@
 </script>
 
 <div class="override">
-  <span class="label">{label}</span>
+  <span class="label fieldlabel" class:hashelp={!!help} title={help || undefined}>{label}</span>
   <div class="body">
     <div class="seg" role="group" aria-label={label}>
       {#each SEGMENTS as s}
@@ -44,6 +45,7 @@
 <style>
   .override { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr; align-items: start; gap: 8px; margin: 6px 0; }
   .label { color: #aaa; padding-top: 4px; }
+  .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
   .body { display: flex; flex-direction: column; gap: 4px; }
   .seg { display: inline-flex; align-self: flex-start; border: 1px solid #2a2a30; border-radius: 4px; overflow: hidden; }
   .seg button { background: #141417; border: 0; border-right: 1px solid #2a2a30; color: #aaa; padding: 4px 10px; cursor: pointer; }

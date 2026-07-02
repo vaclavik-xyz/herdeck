@@ -13,6 +13,23 @@
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
 
   const SEC = "deck";
+
+  // Czech tooltips for every field — required for each labelled field
+  // (enforced by sections.help.test.ts).
+  const HELP: Record<string, string> = {
+    grid: "Rozměr mřížky decku ve tvaru sloupce×řádky (např. 5x3); určuje počet dlaždic na obrazovce.",
+    overview_order: "Které servery se připojí a v jakém pořadí se řadí v přehledu; prázdné = všechny servery z konfigurace.",
+    deck: "Typ decku na tomto stroji: elgato, d200, web (simulátor v prohlížeči) nebo fake; prázdné = autodetekce.",
+    herdr_socket: "Cesta k unixovému socketu herdr pro lokální režim (výchozí ~/.config/herdr/herdr.sock).",
+    web_bind: "Adresa, na které poslouchá webový simulátor; 127.0.0.1 jen lokálně, 0.0.0.0 i pro jiná zařízení.",
+    web_port: "Port webového simulátoru v prohlížeči (výchozí 8800).",
+    icons_dir: "Složka s vlastními ikonami (PNG), které přepíší vestavěné ikony na dlaždicích.",
+    brightness: "Jas displeje fyzického decku v rozsahu 0–100 (výchozí 80).",
+    debounce: "Doba v sekundách, po kterou se ignoruje opakovaný stisk téže klávesy na D200 (výchozí 0,25 s).",
+    keep_alive_interval: "Jak často v sekundách se D200 udržuje při životě, aby se nepřepnul na výchozí obrazovku (výchozí 5 s).",
+    tick_interval: "Jak často v sekundách se deck překresluje (hodiny, uplynulý čas, animace); výchozí 0,4 s.",
+  };
+
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
   const serverHint = $derived(serversOf(payload).map((s) => s.id).filter((id) => id !== "").join(" · "));
@@ -61,27 +78,27 @@
 
 <h2>Deck{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
-  <OverrideField label="grid" state={scState("grid")} inheritedDisplay={hint("grid")} onstate={(s) => setScState("grid", s)}>
+  <OverrideField label="grid" help={HELP.grid} state={scState("grid")} inheritedDisplay={hint("grid")} onstate={(s) => setScState("grid", s)}>
     <TextField label="" value={String(scValue("grid") ?? "")} oninput={(v) => setSc("grid", v)} />
   </OverrideField>
-  <TriStateListField label="overview_order" state={overrideState(payload, prof, SEC, "overview_order")} list={ovOverviewList()} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint("overview_order")}`} onchange={setOvOverview} />
+  <TriStateListField label="overview_order" help={HELP.overview_order} state={overrideState(payload, prof, SEC, "overview_order")} list={ovOverviewList()} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint("overview_order")}`} onchange={setOvOverview} />
 {:else}
-  <TextField label="grid" value={grid} oninput={(v) => setBase("grid", v)} />
-  <TriStateListField label="overview_order" state={overviewState} list={overviewOrder} defaultHint={serverHint} onchange={setBaseOverview} />
+  <TextField label="grid" help={HELP.grid} value={grid} oninput={(v) => setBase("grid", v)} />
+  <TriStateListField label="overview_order" help={HELP.overview_order} state={overviewState} list={overviewOrder} defaultHint={serverHint} onchange={setBaseOverview} />
 {/if}
 
 <fieldset class="hw">
   <legend>Hardware (tento stroj — local.toml)</legend>
   <p class="hint">Platí jen pro tento počítač; nikdy se nepřenáší do profilů ani base configu (ani v overlay módu).</p>
-  <TextField label="deck" value={hwDeck} oninput={(v) => setLocalStr("local", "deck", v)} />
-  <TextField label="herdr_socket" value={hwSocket} oninput={(v) => setLocalStr("local", "herdr_socket", v)} />
-  <TextField label="web_bind" value={hwBind} oninput={(v) => setLocalStr("local", "web_bind", v)} />
-  <NumberField label="web_port" value={hwPort} int onchange={(v) => setLocalNum("local", "web_port", v)} />
-  <TextField label="icons_dir" value={hwIcons} oninput={(v) => setLocalStr("local", "icons_dir", v)} />
-  <NumberField label="brightness" value={brightness} int onchange={(v) => setLocalNum("hardware", "brightness", v)} />
-  <NumberField label="debounce" value={debounce} step={0.05} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
-  <NumberField label="keep_alive_interval" value={keepAlive} step={0.5} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
-  <NumberField label="tick_interval" value={tick} step={0.05} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
+  <TextField label="deck" help={HELP.deck} value={hwDeck} oninput={(v) => setLocalStr("local", "deck", v)} />
+  <TextField label="herdr_socket" help={HELP.herdr_socket} value={hwSocket} oninput={(v) => setLocalStr("local", "herdr_socket", v)} />
+  <TextField label="web_bind" help={HELP.web_bind} value={hwBind} oninput={(v) => setLocalStr("local", "web_bind", v)} />
+  <NumberField label="web_port" help={HELP.web_port} value={hwPort} int onchange={(v) => setLocalNum("local", "web_port", v)} />
+  <TextField label="icons_dir" help={HELP.icons_dir} value={hwIcons} oninput={(v) => setLocalStr("local", "icons_dir", v)} />
+  <NumberField label="brightness" help={HELP.brightness} value={brightness} int onchange={(v) => setLocalNum("hardware", "brightness", v)} />
+  <NumberField label="debounce" help={HELP.debounce} value={debounce} step={0.05} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
+  <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step={0.5} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
+  <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step={0.05} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
 </fieldset>
 
 <style>

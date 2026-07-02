@@ -19,6 +19,13 @@
   // Mirror of backend defaults (settings.py _safety_config) — keep in sync.
   const SAFETY_DEFAULTS: Record<string, unknown> = { approve_always: true };
 
+  // Czech tooltips for every field — required for each labelled field
+  // (enforced by sections.help.test.ts).
+  const HELP: Record<string, string> = {
+    approve_always: "Zda se u blokovaného agenta nabízí i tlačítko Approve! (schválit a příště se neptat); vypnutím ho skryjete.",
+    require_confirm_for: "Akce vyžadující druhý potvrzovací stisk do 5 s (výchozí act_force = Stop); prázdný seznam potvrzování vypne.",
+  };
+
   // --- base mode: UNCHANGED from today (ListField + putList) ---
   const approveAlways = $derived((getAt(payload, "base", SEC, "approve_always") as boolean) ?? true);
   const requireConfirmFor = $derived((getAt(payload, "base", SEC, "require_confirm_for") as string[]) ?? []);
@@ -40,15 +47,15 @@
   }
 </script>
 
-<h2>Safety{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>Bezpečnost{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
-  <OverrideField label="approve_always" state={scState("approve_always")} inheritedDisplay={hint("approve_always")} onstate={(s) => setScState("approve_always", s)}>
+  <OverrideField label="approve_always" help={HELP.approve_always} state={scState("approve_always")} inheritedDisplay={hint("approve_always")} onstate={(s) => setScState("approve_always", s)}>
     <BooleanField label="" value={Boolean(scValue("approve_always"))} onchange={(v) => setSc("approve_always", v)} />
   </OverrideField>
-  <TriStateListField label="require_confirm_for" state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint("require_confirm_for")}`} onchange={setOvRcf} />
+  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint("require_confirm_for")}`} onchange={setOvRcf} />
 {:else}
-  <BooleanField label="approve_always" value={approveAlways} onchange={(v) => set("approve_always", v)} />
-  <ListField label="require_confirm_for" value={requireConfirmFor} onchange={setBaseRcf} />
+  <BooleanField label="approve_always" help={HELP.approve_always} value={approveAlways} onchange={(v) => set("approve_always", v)} />
+  <ListField label="require_confirm_for" help={HELP.require_confirm_for} value={requireConfirmFor} onchange={setBaseRcf} />
 {/if}
 
 <style>

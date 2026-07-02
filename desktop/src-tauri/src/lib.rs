@@ -653,13 +653,13 @@ fn select_window_mode(app: &tauri::AppHandle, target: WindowMode, items: &WmItem
 /// Build the tray icon with a show/hide/quit menu.
 fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     use tauri_plugin_autostart::ManagerExt;
-    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
-    let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Nastavení…", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Zobrazit", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "hide", "Schovat", true, None::<&str>)?;
     let wm_normal = CheckMenuItem::with_id(
         app,
         "wm_normal",
-        "Normal",
+        "Normální",
         true,
         current_mode == WindowMode::Normal,
         None::<&str>,
@@ -667,7 +667,7 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     let wm_floating = CheckMenuItem::with_id(
         app,
         "wm_floating",
-        "Floating",
+        "Plovoucí",
         true,
         current_mode == WindowMode::Floating,
         None::<&str>,
@@ -675,14 +675,14 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     let wm_aot = CheckMenuItem::with_id(
         app,
         "wm_aot",
-        "Always on top",
+        "Vždy navrchu",
         true,
         current_mode == WindowMode::AlwaysOnTop,
         None::<&str>,
     )?;
     let wm_submenu = tauri::menu::Submenu::with_items(
         app,
-        "Window mode",
+        "Režim okna",
         true,
         &[&wm_normal, &wm_floating, &wm_aot],
     )?;
@@ -694,13 +694,13 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
-        "Start at login",
+        "Spouštět po přihlášení",
         true,
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
-    let reconnect = MenuItem::with_id(app, "reconnect", "Change connection…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let reconnect = MenuItem::with_id(app, "reconnect", "Změnit připojení…", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Ukončit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[&settings, &show, &hide, &wm_submenu, &reconnect, &autostart, &quit],

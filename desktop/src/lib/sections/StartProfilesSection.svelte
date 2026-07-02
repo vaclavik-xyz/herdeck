@@ -17,6 +17,13 @@
   const prof = $derived(editProfile ?? "");
   const argvOf = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
 
+  // Czech tooltips for every field — required for each labelled field
+  // (enforced by sections.help.test.ts).
+  const HELP: Record<string, string> = {
+    name: "Jméno typu agenta — zobrazí se na dlaždici v menu „+ New“ a určuje ikonu i profil odpovědí.",
+    argv: "Příkaz a jeho argumenty, kterým se agent spustí v novém panelu (každá položka = jedno slovo).",
+  };
+
   // --- base mode: local rows (re-seed only on reloadRev) + explicit-empty mode ---
   let rows = $state<StartProfileRow[]>(startProfileRows(payload));
   let seenRev = $state(reloadRev);
@@ -77,13 +84,13 @@
   function removeOwn(name: string): void { payload = { ...payload, profiles: clearOverridePath(payload.profiles, prof, [SEC, name]) }; onChange(); }
 </script>
 
-<h2>Start profiles{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>Spouštěče agentů{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <p class="hint">Per-entry overlay: přepiš zděděnou položku nebo přidej profilovou. Zděděné položky nelze v overlay smazat (backend merge je aditivní).</p>
   {#each entryNames() as name (name)}
     <fieldset>
-      <legend>{name}{#if !isInherited(name)} <button type="button" onclick={() => removeOwn(name)}>×</button>{/if}</legend>
-      <OverrideField label="argv" state={entryState(name)} inheritedDisplay={inhArgv(name).join(" · ") || "(prázdné)"} onstate={(s) => setEntryState(name, s)}>
+      <legend>{name}{#if !isInherited(name)} <button type="button" title="Odebrat profilovou položku" onclick={() => removeOwn(name)}>×</button>{/if}</legend>
+      <OverrideField label="argv" help={HELP.argv} state={entryState(name)} inheritedDisplay={inhArgv(name).join(" · ") || "(prázdné)"} onstate={(s) => setEntryState(name, s)}>
         <ListField label="" value={ovArgv(name)} onchange={(v) => setEntryArgv(name, v)} />
       </OverrideField>
     </fieldset>
@@ -104,10 +111,10 @@
   {:else if mode === "custom"}
     {#each rows as e, i (i)}
       <fieldset>
-        <legend>{e.name || "(nový profil)"} <button type="button" onclick={() => remove(i)}>×</button></legend>
-        <TextField label="name" value={e.name} oninput={(v) => rename(i, v)} />
+        <legend>{e.name || "(nový profil)"} <button type="button" title="Odebrat spouštěč" onclick={() => remove(i)}>×</button></legend>
+        <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
         {#if e.name.trim() !== ""}
-          <ListField label="argv" value={e.argv} onchange={(v) => setArgv(i, v)} />
+          <ListField label="argv" help={HELP.argv} value={e.argv} onchange={(v) => setArgv(i, v)} />
         {:else}
           <p class="hint">Zadej jméno profilu pro úpravu argv.</p>
         {/if}

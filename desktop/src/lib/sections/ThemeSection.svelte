@@ -16,6 +16,18 @@
 
   const SEC = "theme";
   const STATUS = ["working", "idle", "blocked", "done", "unknown", "offline"];
+
+  // Czech tooltips for every field — required for each labelled field
+  // (enforced by sections.help.test.ts).
+  const HELP: Record<string, string> = {
+    working: "Barva dlaždice agenta, který právě pracuje (výchozí green).",
+    idle: "Barva dlaždice nečinného agenta, který čeká na další zadání (výchozí blue).",
+    blocked: "Barva dlaždice agenta, který čeká na vaše schválení nebo odpověď (výchozí amber).",
+    done: "Barva dlaždice agenta, který dokončil práci (výchozí cyan).",
+    unknown: "Barva dlaždice agenta, jehož stav se nepodařilo zjistit (výchozí grey).",
+    offline: "Barva dlaždice agenta, jehož server je odpojený nebo nedostupný (výchozí red).",
+    server_accents: "Paleta barev pro štítek serveru na dlaždici; každý server si z ní natrvalo vylosuje jednu (lze i #hex).",
+  };
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
@@ -53,25 +65,25 @@
   }
 </script>
 
-<h2>Theme{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>Barvy{#if overlay} · overlay: {editProfile}{/if}</h2>
 <fieldset class="colors">
   <legend>colors</legend>
   {#if overlay}
     {#each STATUS as key (key)}
-      <OverrideField label={key} state={colorState(key)} inheritedDisplay={colorInheritedHint(key)} onstate={(s) => setColorState(key, s)}>
+      <OverrideField label={key} help={HELP[key]} state={colorState(key)} inheritedDisplay={colorInheritedHint(key)} onstate={(s) => setColorState(key, s)}>
         <ColorSelectField label="" value={colorValue(key)} allowEmpty={false} onchange={(v) => setColor(key, v)} />
       </OverrideField>
     {/each}
   {:else}
     {#each STATUS as key (key)}
-      <ColorSelectField label={key} value={baseColorOf(key)} onchange={(v) => setBaseColor(key, v)} />
+      <ColorSelectField label={key} help={HELP[key]} value={baseColorOf(key)} onchange={(v) => setBaseColor(key, v)} />
     {/each}
   {/if}
 </fieldset>
 {#if overlay}
-  <TriStateListField label="server_accents" state={overrideState(payload, prof, SEC, "server_accents")} list={ovAccents()} inheritLabel="Zdědit" inheritHint={`zděděno: ${accentHint()}`} onchange={setOvAccents} />
+  <TriStateListField label="server_accents" help={HELP.server_accents} state={overrideState(payload, prof, SEC, "server_accents")} list={ovAccents()} inheritLabel="Zdědit" inheritHint={`zděděno: ${accentHint()}`} onchange={setOvAccents} />
 {:else}
-  <ListField label="server_accents" value={accents} onchange={setBaseAccents} />
+  <ListField label="server_accents" help={HELP.server_accents} value={accents} onchange={setBaseAccents} />
 {/if}
 
 <style>

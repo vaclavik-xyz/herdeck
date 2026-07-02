@@ -104,14 +104,16 @@ export function parseState(raw: unknown): DeckState | null {
   };
 }
 
-/** A compact one-line footer label, e.g. "4 agents · 2 working · 1 idle · ⚠ 1
- *  blocked". Blocked is emphasized last so it stands out. */
+/** A compact one-line footer label, e.g. "4 agenti · 2 pracují · 1 nečinný ·
+ *  ⚠ 1 blokován". Blocked is emphasized last so it stands out. */
+const agentsWord = (n: number): string => (n === 1 ? "agent" : n >= 2 && n <= 4 ? "agenti" : "agentů");
+
 export function summaryLabel(s: DeckSummary): string {
-  const parts: string[] = [`${s.agents} ${s.agents === 1 ? "agent" : "agents"}`];
-  if (s.working) parts.push(`${s.working} working`);
-  if (s.idle) parts.push(`${s.idle} idle`);
-  if (s.done) parts.push(`${s.done} done`);
-  if (s.blocked) parts.push(`⚠ ${s.blocked} blocked`);
+  const parts: string[] = [`${s.agents} ${agentsWord(s.agents)}`];
+  if (s.working) parts.push(`${s.working} ${s.working === 1 ? "pracuje" : "pracují"}`);
+  if (s.idle) parts.push(`${s.idle} ${s.idle === 1 ? "nečinný" : "nečinní"}`);
+  if (s.done) parts.push(`${s.done} hotovo`);
+  if (s.blocked) parts.push(`⚠ ${s.blocked} ${s.blocked === 1 ? "blokován" : "blokováni"}`);
   return parts.join(" · ");
 }
 
