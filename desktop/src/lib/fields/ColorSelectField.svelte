@@ -2,7 +2,7 @@
   // A named-palette colour picker with a live swatch. Status colours resolve
   // strictly through the backend's named palette — a free-text typo ('ambre')
   // used to pass Apply and silently render as the empty-tile 'dim' grey.
-  import { PALETTE_NAMES, swatchColor } from "../statusColors";
+  import { PALETTE, PALETTE_NAMES } from "../statusColors";
 
   let { label, value, onchange, allowEmpty = true }:
     { label: string; value: string; onchange: (v: string) => void; allowEmpty?: boolean } = $props();
@@ -16,7 +16,10 @@
 <label class="field">
   <span>{label}</span>
   <span class="control">
-    <span class="swatch" style={`background:${swatchColor(value)}`}></span>
+    <!-- STRICT palette lookup: the backend resolves status colours only via
+         the named palette, so a legacy hex value must show as visibly invalid
+         (transparent swatch), not as a working colour. -->
+    <span class="swatch" style={`background:${PALETTE[value] ?? "transparent"}`}></span>
     <select value={value} onchange={(e) => onchange((e.target as HTMLSelectElement).value)}>
       {#if allowEmpty}<option value="">(výchozí)</option>{/if}
       {#each choices as o}<option value={o}>{o}</option>{/each}

@@ -45,12 +45,17 @@
     if (view === "welcome" && status != null && !localAvailable) showRemote = true;
   });
 
-  // Reconnect card: the user already CHOSE local — when herdr comes back,
-  // reconnect without demanding a click (and without the card silently
-  // rebranding to the first-run welcome).
+  // The user already CHOSE local — when herdr (re)appears, reconnect without
+  // demanding a click. Gated on the PERSISTED choice rather than the current
+  // view: the moment the socket exists the backend reports reason=first_run,
+  // so the parent flips this card to "welcome" before a view-gated effect
+  // could ever fire. A manual re-onboarding session (onDismiss present) is
+  // the user's explicit request to change things — never auto-connect there.
   let autoReconnectTried = $state(false);
   $effect(() => {
-    if (view === "reconnect" && localAvailable && !busy && !autoReconnectTried) {
+    if (onDismiss) return;
+    const choseLocal = view === "reconnect" || status?.choice === "local";
+    if (choseLocal && localAvailable && !busy && !autoReconnectTried) {
       autoReconnectTried = true;
       connectLocal();
     }
