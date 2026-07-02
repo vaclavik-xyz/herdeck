@@ -69,6 +69,11 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       approve_always: "Whether a blocked agent also offers an Approve! button (approve and don't ask again); turn off to hide it.",
       require_confirm_for: "Actions needing a second confirming press within 5 s (default act_force = Stop); empty list turns it off.",
     },
+    usage: {
+      providers: "CodexBar provider ids polled for usage limits (e.g. claude, codex) and shown on the status panel; empty = off.",
+      refresh_secs: "How often, in seconds, the codexbar CLI is polled (min 30, default 300); limits move slowly, keep it high.",
+      codexbar_path: "codexbar executable name or path; bare names also search /opt/homebrew/bin and /usr/local/bin.",
+    },
     answer_profiles: {
       name: "Profile name = agent type (claude, codex…) that selects the keys; default is the fallback.",
       approve: "Key sequence sent to a blocked agent on Approve (for Claude e.g. 1 + enter).",
@@ -146,6 +151,11 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     safety: {
       approve_always: "Zda se u blokovaného agenta nabízí i tlačítko Approve! (schválit a příště se neptat); vypnutím ho skryjete.",
       require_confirm_for: "Akce vyžadující druhý potvrzovací stisk do 5 s (výchozí act_force = Stop); prázdný seznam potvrzování vypne.",
+    },
+    usage: {
+      providers: "Provideři CodexBaru, jejichž limity se stahují (např. claude, codex) a ukazují na stavovém panelu; prázdné = vypnuto.",
+      refresh_secs: "Jak často se v sekundách volá codexbar CLI (min 30, výchozí 300); limity se mění pomalu, nechte vysoké.",
+      codexbar_path: "Název nebo cesta k binárce codexbar; holé jméno se hledá i v /opt/homebrew/bin a /usr/local/bin.",
     },
     answer_profiles: {
       name: "Jméno profilu = typ agenta (claude, codex…), podle kterého se vyberou klávesy; záložní je default.",

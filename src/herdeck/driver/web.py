@@ -167,10 +167,12 @@ class WebDeck(DeckDriver):
                     self._tile_ver[i] = self._bump()
 
     def render_panel(self, panel: PanelView) -> None:
-        from ..icons import compose_panel
+        from ..icons import PANEL_W_TWO_CELL, compose_panel
 
         buf = io.BytesIO()
-        compose_panel(panel).convert("RGB").save(buf, "PNG")
+        # The page shows the panel in a 2-cells-wide box (width:100%/height:100%),
+        # so compose at the two-cell width — the native 458px would be squeezed.
+        compose_panel(panel, width=PANEL_W_TWO_CELL).convert("RGB").save(buf, "PNG")
         png = buf.getvalue()
         with self._lock:
             if self._panel != png:  # bump only when it changes

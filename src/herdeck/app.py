@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -232,6 +233,10 @@ class App:
         self._ticks = 0
         self._status_panel: PanelView | None = None
         self._status_panel_until = 0.0
+        # CodexBar usage poller (None when [usage] is off); renders read its
+        # latest snapshot only, never block on the CLI.
+        self._usage_cfg = getattr(config, "usage", None)
+        self._usage_poller = self._build_usage_poller(self._usage_cfg)
 
     def _install_blocked_runtime(self, runtime: BlockedNotificationRuntime) -> None:
         self._notification_generation += 1
@@ -275,7 +280,35 @@ class App:
         self._status_panel = None
         return None
 
+    @staticmethod
+    def _build_usage_poller(usage_cfg):
+        from .usage import poller_from_config
+
+        poller = poller_from_config(usage_cfg)
+        if poller is not None:
+            poller.start()
+        return poller
+
+    def _adopt_usage_config(self, config: Config) -> None:
+        """Rebuild the poller when a reload/profile switch changed [usage] —
+        else disabling it left the old thread polling the CLI forever and
+        enabling it needed a process restart (deckapp got this in
+        _adopt_usage_config; this is the legacy-host mirror)."""
+        new_cfg = getattr(config, "usage", None)
+        if new_cfg == self._usage_cfg:
+            return
+        old = self._usage_poller
+        self._usage_cfg = new_cfg
+        self._usage_poller = self._build_usage_poller(new_cfg)
+        if old is not None:
+            with contextlib.suppress(Exception):
+                old.close()
+
     def _refresh(self) -> None:
+        # ALWAYS feed usage state (empty when off): the orchestrator may carry
+        # usage lines from before a reload that disabled [usage].
+        poller = self._usage_poller
+        self.orch.set_usage(poller.snapshot() if poller is not None else [])
         rs = self.orch.render()
         held = self._held_status_panel()
         try:
@@ -441,7 +474,11 @@ class App:
         # the D200 firmware — blanking static/idle tiles + the panel, leaving only the
         # working tiles lit — so never send a partial frame. A full render is cheap now
         # that strmdck's retry sleep is neutralized (one combined write).
-        if working or self._ticks % FULL_REFRESH_TICKS == 0:
+        if (
+            working
+            or self._ticks % FULL_REFRESH_TICKS == 0
+            or self.orch.consume_expired_panel_hold()
+        ):
             self._refresh()
 
     def _on_press(self, index: int) -> None:
@@ -493,6 +530,7 @@ class App:
             self._runtime_control.update_config(new_config)
         self.notifier = _build_notifier(new_config)
         self._rebuild_blocked_runtime(new_config)
+        self._adopt_usage_config(new_config)
         self.orch.update_config(new_config)
         allowed_servers = {s.id for s in new_config.servers}
         self._blocked_keys = {k for k in self._blocked_keys if k.server_id in allowed_servers}

@@ -28,6 +28,7 @@ class ConfigService:
         "theme",
         "view",
         "safety",
+        "usage",
         "hotkeys",
         "desktop",
     )

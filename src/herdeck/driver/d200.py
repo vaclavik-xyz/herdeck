@@ -19,13 +19,19 @@ from .render_pump import RenderPump
 
 log = logging.getLogger(__name__)
 
-PANEL_W = 392
 _CELL = 196
 # strmdck reads tile icons here, relative to CWD:
 _ICON_DIR = os.path.join(".cache", "icons", "_generated")
 # the two panel cells (grid 3_2 and 4_2):
 _PANEL_LEFT_INDEX = 13
 _PANEL_RIGHT_INDEX = 14
+# manifest SmallViewMode for the 3_2 slot: 2 = background image. With this set
+# the firmware allocates the small window's FULL native width (458px) to the
+# slot's icon and displays it 1:1; without it the window is fed by the 3_2/4_2
+# cell icons stretched from 392 to 458px (~17% wider text). Mirrors
+# strmdck's SmallWindowMode.BACKGROUND (kept a literal: strmdck imports are
+# function-local so this module loads without the deck extra).
+_SMALL_VIEW_BACKGROUND = 2
 
 
 class _SleeplessTime:
@@ -103,8 +109,18 @@ def build_button_zip(manifest_bytes: bytes, icons: dict[str, bytes], *, rand=os.
 
 
 def split_panel(img: Image.Image) -> tuple[Image.Image, Image.Image]:
-    left = img.crop((0, 0, _CELL, _CELL))
-    right = img.crop((PANEL_W - _CELL, 0, PANEL_W, _CELL))
+    """Split a composed panel into two square cell images (the legacy two-cell
+    path: the stock-strmdck fallback and the Elgato driver). A 392px compose
+    yields two exact 196x196 halves; the D200-native 458px compose is halved at
+    the midline and each half squeezed to the cell — the firmware then
+    stretches the cells back over the full window, so the net geometry stays
+    correct."""
+    half = img.width // 2
+    left = img.crop((0, 0, half, img.height))
+    right = img.crop((img.width - half, 0, img.width, img.height))
+    if left.size != (_CELL, _CELL):
+        left = left.resize((_CELL, _CELL))
+        right = right.resize((_CELL, _CELL))
     return left, right
 
 
@@ -133,7 +149,7 @@ class D200Driver(DeckDriver):
         self._last_write_count = 0
         self._last_icon: dict[int, str] = {}
         self._last_panel_key: tuple | None = None
-        self._panel_names: tuple[str, str] | None = None
+        self._panel_names: tuple[str, ...] | None = None
         self._last_frame_buttons: dict[int, dict] | None = None
         self._fast_path_ok = True
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
@@ -225,10 +241,10 @@ class D200Driver(DeckDriver):
         self._submit("tiles", list(tiles))
 
     def render_frame(self, tiles: list[TileView], panel: PanelView) -> None:
-        """Render tiles + panel as ONE full-set device write (indices 0-14).
+        """Render tiles + panel as ONE full-set device write.
 
-        The panel cells (13/14) share the button namespace with the tiles, so a
-        13-tile full set actually CLEARS them until the follow-up panel write
+        The panel slot shares the button namespace with the tiles, so a
+        13-tile full set actually CLEARS it until the follow-up panel write
         repaints them ~one transaction later — two zip preps + two USB uploads
         per frame and a visible panel blink. One combined set is atomic, halves
         the per-frame cost, and lets identical frames be skipped entirely."""
@@ -322,7 +338,37 @@ class D200Driver(DeckDriver):
                     "d200 fast zip path failed; falling back to strmdck set_buttons",
                     exc_info=True,
                 )
-        self._dev.set_buttons(buttons, update_only=update_only)
+        self._dev.set_buttons(self._legacy_panel_rewrite(buttons), update_only=update_only)
+
+    def _legacy_panel_rewrite(self, buttons: dict[int, dict]) -> dict[int, dict]:
+        """Stock set_buttons cannot mark the 3_2 slot as a full-width background
+        (no SmallViewMode), so a write carrying the single native panel icon is
+        rewritten into the legacy two-cell split. Split names derive from the
+        content-keyed panel name, so an already-materialized split is reused
+        (incl. across the stale-panel fallback) instead of re-splitting."""
+        entry = buttons.get(_PANEL_LEFT_INDEX)
+        if not entry or "small_view_mode" not in entry:
+            return buttons
+        stem = os.path.splitext(entry["icon"])[0]  # panel_<hash>
+        names = (f"{stem}_l.png", f"{stem}_r.png")
+        if all(os.path.exists(os.path.join(_ICON_DIR, n)) for n in names):
+            for n in names:  # keep reused halves clear of the cache prune
+                with contextlib.suppress(OSError):
+                    os.utime(os.path.join(_ICON_DIR, n))
+        else:
+            # A failed split must RAISE (-> the timed write logs + returns
+            # False, nothing records the frame signature): writing the
+            # un-rewritten single entry instead succeeded on the stock path,
+            # got recorded into _last_frame_buttons, and the frame-skip then
+            # locked the half-blank panel in until the CONTENT next changed.
+            with Image.open(os.path.join(_ICON_DIR, entry["icon"])) as img:
+                left, right = split_panel(img)
+            left.save(os.path.join(_ICON_DIR, names[0]))
+            right.save(os.path.join(_ICON_DIR, names[1]))
+        out = dict(buttons)
+        out[_PANEL_LEFT_INDEX] = {"name": "", "icon": names[0]}
+        out[_PANEL_RIGHT_INDEX] = {"name": "", "icon": names[1]}
+        return out
 
     def _fast_set_buttons(self, buttons: dict[int, dict], *, update_only: bool) -> None:
         """strmdck's set_buttons rebuilt in memory: identical manifest/zip layout
@@ -346,6 +392,8 @@ class D200Driver(DeckDriver):
                         with open(os.path.join(_ICON_DIR, name), "rb") as fp:
                             icons[name] = fp.read()
                     entry["ViewParam"][0]["Icon"] = f"icons/{name}"
+                if "small_view_mode" in button:
+                    entry["SmallViewMode"] = button["small_view_mode"]
             manifest[f"{col}_{row}"] = entry
         manifest_bytes = json.dumps(
             manifest, sort_keys=True, separators=(",", ":"), indent=2
@@ -384,38 +432,58 @@ class D200Driver(DeckDriver):
             self._record(buttons)
 
     def _panel_buttons(self, panel: PanelView) -> dict[int, dict] | None:
-        """Compose the two panel-cell buttons, (re)saving their PNGs only when
-        the panel content changed. Names are content-keyed (panel key hash +
-        TILE_VERSION) so a frame with an unchanged panel is byte-identical to
-        the previous one (frame-skip) and a composition change re-bakes."""
+        """Compose the panel button, (re)saving its PNG only when the panel
+        content changed: ONE native 458x196 icon on the 3_2 slot with
+        SmallViewMode=background — the firmware gives the slot the small
+        window's full width and displays it 1:1 (no stretch). The stock-strmdck
+        fallback cannot carry SmallViewMode; _set_buttons rewrites the entry
+        into the legacy two-cell split at write time. Names are content-keyed
+        (panel key hash + TILE_VERSION) so a frame with an unchanged panel is
+        byte-identical to the previous one (frame-skip) and a composition
+        change re-bakes."""
         key = (panel.title, tuple(panel.lines), panel.color)
         names = self._panel_names
         paths_ok = names is not None and all(
             os.path.exists(os.path.join(_ICON_DIR, n)) for n in names
         )
+        if key == self._last_panel_key and paths_ok:
+            # Refresh mtime on reuse so the cache prune (which now also evicts
+            # panel_* PNGs) never deletes a file the next write is about to zip.
+            for n in names:
+                with contextlib.suppress(OSError):
+                    os.utime(os.path.join(_ICON_DIR, n))
         if key != self._last_panel_key or not paths_ok:
             try:
-                left, right = split_panel(compose_panel(panel))
+                img = compose_panel(panel)
                 os.makedirs(_ICON_DIR, exist_ok=True)
                 h = hashlib.sha1(f"{TILE_VERSION}|{key!r}".encode()).hexdigest()[:12]
-                names = (f"panel_l_{h}.png", f"panel_r_{h}.png")
-                left.save(os.path.join(_ICON_DIR, names[0]))
-                right.save(os.path.join(_ICON_DIR, names[1]))
+                # `names` is rebound only AFTER a successful save: rebinding
+                # first made the stale-panel fallback below return the NEW
+                # name whose file was never written (a dangling icon that
+                # permanently tripped the fast path) instead of the intact
+                # previous panel it exists to serve.
+                new_names = (f"panel_{h}.png",)
+                img.save(os.path.join(_ICON_DIR, new_names[0]))
+                names = new_names
             except Exception:
-                # compose failed: a STALE panel (previous names, files intact) is
-                # better than none — a full set without the panel cells would
-                # blank them (the firmware drops omitted cells)
+                # compose/save failed: a STALE panel (previous name, file
+                # intact) is better than none — a full set without the panel
+                # slot would blank it (the firmware drops omitted cells)
                 if paths_ok:
-                    return {
-                        _PANEL_LEFT_INDEX: {"name": "", "icon": names[0]},
-                        _PANEL_RIGHT_INDEX: {"name": "", "icon": names[1]},
-                    }
+                    return self._panel_entries(names)
                 return None
             self._last_panel_key = key
             self._panel_names = names
+        return self._panel_entries(names)
+
+    @staticmethod
+    def _panel_entries(names: tuple[str, ...]) -> dict[int, dict]:
         return {
-            _PANEL_LEFT_INDEX: {"name": "", "icon": names[0]},
-            _PANEL_RIGHT_INDEX: {"name": "", "icon": names[1]},
+            _PANEL_LEFT_INDEX: {
+                "name": "",
+                "icon": names[0],
+                "small_view_mode": _SMALL_VIEW_BACKGROUND,
+            }
         }
 
     def _write_panel(self, panel: PanelView) -> None:

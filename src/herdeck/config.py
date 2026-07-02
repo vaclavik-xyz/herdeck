@@ -110,6 +110,17 @@ class SafetyConfig:
 
 
 @dataclass
+class UsageConfig:
+    # CodexBar provider ids to poll (e.g. ["claude", "codex"]); empty = the
+    # usage panel is off. Any id the installed CLI understands is allowed.
+    providers: list[str] = field(default_factory=list)
+    refresh_secs: int = 300
+    # Executable name or path; bare names also resolve via the Homebrew dirs
+    # (launchd services don't have /opt/homebrew/bin on PATH).
+    codexbar_path: str = "codexbar"
+
+
+@dataclass
 class HardwareConfig:
     deck: str | None = None
     herdr_socket: str | None = None
@@ -170,6 +181,7 @@ class Config:
     theme: ThemeConfig = field(default_factory=ThemeConfig)
     view: ViewConfig = field(default_factory=ViewConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
+    usage: UsageConfig = field(default_factory=UsageConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
     meta: ConfigMeta = field(default_factory=ConfigMeta)
 

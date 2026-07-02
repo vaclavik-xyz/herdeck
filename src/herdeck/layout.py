@@ -133,7 +133,9 @@ def panel_overview(
     total: int,
     spotlight: tuple[str, str] | None,
     lang: str = "en",
+    usage_lines: list[str] | None = None,
 ) -> PanelView:
+    page_line = -1  # which line carries the "· p/n" page marker
     if down:
         title, lines, color = tr(lang, "offline_title"), [tr(lang, "reconnecting")], "red"
         if counts.blocked:
@@ -154,9 +156,72 @@ def panel_overview(
         title = tr(lang, "agents_total", n=total)
         lines = [f"W{counts.working} · I{counts.idle} · D{counts.done}", tr(lang, "online")]
         color = "grey"
+        if usage_lines:
+            # The calm panel has spare body lines: swap the (implicit) "online"
+            # line for provider usage; the page marker moves to the counts line.
+            # Blocked/offline panels keep their priority — no usage there.
+            lines = [lines[0], *usage_lines[: _DETAIL_MAX_LINES - 1]]
+            page_line = 0
     if page_count > 1 and lines:
-        lines[-1] = f"{lines[-1]} · {page_index + 1}/{page_count}"
+        lines[page_line] = f"{lines[page_line]} · {page_index + 1}/{page_count}"
     return PanelView(title=title, lines=lines, color=color)
+
+
+def _fmt_reset(resets_at: str | None, now) -> str:
+    """Short local reset time: 'HH:MM' today, 'D.M. HH:MM' otherwise."""
+    if not resets_at:
+        return ""
+    from datetime import datetime
+
+    try:
+        dt = datetime.fromisoformat(resets_at.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return ""
+    local_now = (now or datetime.now().astimezone()).astimezone()
+    hm = f"{dt:%H:%M}"
+    if dt.date() == local_now.date():
+        return hm
+    return f"{dt.day}.{dt.month}. {hm}"
+
+
+def _provider_name(provider: str) -> str:
+    return provider.capitalize() if provider.islower() else provider
+
+
+def usage_summary_lines(data, max_providers: int = 2) -> list[str]:
+    """One compact panel line per provider: 'Claude 5h 13% · 7d 43%'."""
+    lines = []
+    for p in data[:max_providers]:
+        parts = " · ".join(f"{w.label} {w.used_percent}%" for w in p.windows[:2])
+        lines.append(f"{_provider_name(p.provider)} {parts}")
+    return lines
+
+
+def usage_detail_pages(data) -> int:
+    """How many panel pages the detail spans (one line per provider window)."""
+    count = sum(len(p.windows) for p in data)
+    return max(1, math.ceil(count / _DETAIL_MAX_LINES))
+
+
+def usage_detail_lines(
+    data, now=None, max_lines: int = _DETAIL_MAX_LINES, page: int = 0
+) -> list[str]:
+    """One panel page of per-window detail lines: 'Claude 5h 13% → 01:00'.
+
+    Every provider window gets a line; with more windows than the panel's
+    3-line body the caller pages through them (repeated panel presses) —
+    a silent cap would make e.g. Codex's weekly reset unobtainable. The
+    arrow is a deliberate U+2192 — the panel font has no glyph for the
+    nicer ⟳/↻ (they render as tofu boxes on the deck)."""
+    lines: list[str] = []
+    for p in data:
+        for w in p.windows:
+            reset = _fmt_reset(w.resets_at, now)
+            tail = f" → {reset}" if reset else ""
+            lines.append(f"{_provider_name(p.provider)} {w.label} {w.used_percent}%{tail}")
+    page = min(max(0, page), usage_detail_pages(data) - 1)
+    start = page * max_lines
+    return lines[start : start + max_lines]
 
 
 @dataclass

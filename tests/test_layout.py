@@ -172,6 +172,27 @@ def test_panel_overview_page_suffix_only_when_multipage():
     assert "/" not in single.lines[-1]
 
 
+def test_panel_overview_calm_swaps_online_for_usage_lines():
+    usage = ["Claude 5h 19% · 7d 43%", "Codex 5h 2% · 7d 30%"]
+    pv = panel_overview(Counts(0, 3, 6, 2), 0, 1, set(), 11, None, usage_lines=usage)
+    assert pv.lines == ["W3 · I6 · D2", *usage]  # "online" replaced, counts kept
+
+
+def test_panel_overview_usage_moves_page_marker_to_counts_line():
+    usage = ["Claude 5h 19% · 7d 43%"]
+    pv = panel_overview(Counts(0, 1, 0, 0), 1, 3, set(), 5, None, usage_lines=usage)
+    assert pv.lines[0] == "W1 · I0 · D0 · 2/3"
+    assert pv.lines[1] == usage[0]  # the marker never glues onto a usage line
+
+
+def test_panel_overview_usage_hidden_when_blocked_or_offline():
+    usage = ["Claude 5h 19%"]
+    blocked = panel_overview(Counts(1, 0, 0, 0), 0, 1, set(), 1, ("api", "2m"), usage_lines=usage)
+    assert all("Claude" not in ln for ln in blocked.lines)
+    offline = panel_overview(Counts(0, 0, 0, 0), 0, 1, {"srv"}, 1, None, usage_lines=usage)
+    assert all("Claude" not in ln for ln in offline.lines)
+
+
 def test_panel_detail_with_and_without_text():
     p = panel_detail(
         a("p1", Status.BLOCKED, agent_type="claude", label="api"), "Allow edit to config.py?"

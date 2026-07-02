@@ -146,10 +146,19 @@ def test_render_updates_state_and_serves_png():
 
 
 def test_render_panel_serves_png():
+    import io as _io
+
+    from PIL import Image
+
     d = make_deck()
     d.render_panel(PanelView("dev", ["online"], "grey"))
     assert d._state()["has_panel"] is True
-    assert d._panel_png()[:4] == b"\x89PNG"
+    png = d._panel_png()
+    assert png[:4] == b"\x89PNG"
+    # The page fills a 2-cells-wide box with the image (width/height 100%), so
+    # the PNG must be the two-cell composite — the native 458px would squeeze.
+    with Image.open(_io.BytesIO(png)) as im:
+        assert im.size == (392, 196)
 
 
 def test_press_invokes_callback():

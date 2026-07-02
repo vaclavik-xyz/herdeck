@@ -11,6 +11,7 @@
   import StartProfilesSection from "./lib/sections/StartProfilesSection.svelte";
   import NotificationsSection from "./lib/sections/NotificationsSection.svelte";
   import SafetySection from "./lib/sections/SafetySection.svelte";
+import UsageSection from "./lib/sections/UsageSection.svelte";
   import AnswerProfilesSection from "./lib/sections/AnswerProfilesSection.svelte";
   import ProfilesSection from "./lib/sections/ProfilesSection.svelte";
   import DesktopSection from "./lib/sections/DesktopSection.svelte";
@@ -42,6 +43,7 @@
       "sec.start_profiles": "Agent launchers",
       "sec.notifications": "Notifications",
       "sec.safety": "Safety",
+      "sec.usage": "Usage limits",
       "sec.answer_profiles": "Answer profiles",
       "sec.profiles": "Profiles",
       "sec.desktop": "Window",
@@ -80,6 +82,7 @@
       "sec.start_profiles": "Spouštěče agentů",
       "sec.notifications": "Notifikace",
       "sec.safety": "Bezpečnost",
+      "sec.usage": "Limity využití",
       "sec.answer_profiles": "Profily odpovědí",
       "sec.profiles": "Profily",
       "sec.desktop": "Okno",
@@ -116,7 +119,7 @@
   // label = what the sidebar shows in the CURRENT language.
   const SECTION_KEYS = [
     "servers", "deck", "view", "theme", "macros", "start_profiles",
-    "notifications", "safety", "answer_profiles", "profiles", "desktop",
+    "notifications", "safety", "usage", "answer_profiles", "profiles", "desktop",
   ] as const;
   const SECTIONS = $derived(SECTION_KEYS.map((key) => ({ key, label: lm[`sec.${key}`] })));
 
@@ -382,6 +385,8 @@
         <NotificationsSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "safety"}
         <SafetySection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+      {:else if active === "usage"}
+        <UsageSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "answer_profiles"}
         <AnswerProfilesSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "profiles"}

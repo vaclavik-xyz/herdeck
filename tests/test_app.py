@@ -1232,3 +1232,31 @@ def test_successful_apply_clears_a_held_reload_failed_panel(monkeypatch):
     assert deck.last_panel.title == "reload failed"
     app._apply_config(make_config())  # the next reload succeeded
     assert deck.last_panel.title != "reload failed"
+
+
+def test_apply_config_adopts_usage_changes(monkeypatch):
+    # Enabling/disabling [usage] via reload or profile switch must take effect
+    # without a restart: the old poller thread stops (no orphan CLI polling)
+    # and stale usage lines leave the panel.
+    import herdeck.usage as usage_mod
+    from herdeck.config import UsageConfig
+    from herdeck.usage import ProviderUsage, UsageWindow
+
+    monkeypatch.setattr(usage_mod, "resolve_cli", lambda p: None)  # never shell out
+
+    app = App(make_config(), FakeRenderer(13), send=lambda c: None)
+    assert app._usage_poller is None  # [usage] off by default
+
+    enabled = make_config()
+    enabled.usage = UsageConfig(providers=["claude"])
+    app._apply_config(enabled)
+    assert app._usage_poller is not None  # enabled without a restart
+    poller = app._usage_poller
+
+    app.orch.set_usage([ProviderUsage("claude", [UsageWindow("5h", 10, None)])])
+    disabled = make_config()
+    app._apply_config(disabled)
+    assert app._usage_poller is None
+    assert poller._thread is None  # the old thread was stopped, not orphaned
+    app._refresh()
+    assert app.orch._usage == []  # stale usage cleared from the panel

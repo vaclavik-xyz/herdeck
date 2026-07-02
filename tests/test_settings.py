@@ -591,3 +591,74 @@ def test_view_config_parses_language():
 def test_view_config_rejects_unknown_language():
     with pytest.raises(ConfigError):
         _view_config({"language": "klingon"})
+
+
+# ---------------------------------------------------------------------------
+# [usage] — CodexBar usage-limit polling
+# ---------------------------------------------------------------------------
+
+
+def test_usage_config_defaults_to_disabled():
+    from herdeck.settings import _usage_config
+
+    usage = _usage_config(None)
+    assert usage.providers == []
+    assert usage.refresh_secs == 300
+    assert usage.codexbar_path == "codexbar"
+
+
+def test_usage_config_parses_fields():
+    from herdeck.settings import _usage_config
+
+    usage = _usage_config(
+        {"providers": ["claude", "codex"], "refresh_secs": 120, "codexbar_path": "/opt/x/codexbar"}
+    )
+    assert usage.providers == ["claude", "codex"]
+    assert usage.refresh_secs == 120
+    assert usage.codexbar_path == "/opt/x/codexbar"
+
+
+def test_usage_config_validates():
+    from herdeck.settings import _usage_config
+
+    with pytest.raises(ConfigError, match="usage.providers"):
+        _usage_config({"providers": "claude"})
+    with pytest.raises(ConfigError, match="usage.providers"):
+        _usage_config({"providers": [1]})
+    with pytest.raises(ConfigError, match="usage.refresh_secs"):
+        _usage_config({"refresh_secs": 5})
+    with pytest.raises(ConfigError, match="usage.refresh_secs"):
+        _usage_config({"refresh_secs": "fast"})
+    with pytest.raises(ConfigError, match="usage.codexbar_path"):
+        _usage_config({"codexbar_path": " "})
+
+
+def test_usage_section_flows_through_profiles(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "x")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[[servers]]\nid = "dev"\nurl = "wss://x"\ntoken_env = "TOK"\n'
+        "[usage]\nproviders = [\"claude\"]\n"
+        "[profiles.work]\n[profiles.work.usage]\nproviders = [\"claude\", \"codex\"]\n"
+    )
+    snapshot = load_settings(cfg, None)
+    assert resolve_profile(snapshot).config.usage.providers == ["claude"]
+    assert resolve_profile(snapshot, "work").config.usage.providers == ["claude", "codex"]
+
+
+def test_usage_config_rejects_blank_or_malformed_provider_ids():
+    from herdeck.settings import _usage_config
+
+    # The editor's list Add button seeds an empty row; a blank id would turn
+    # the poller ON with a garbage `--provider ""` call, a comma corrupts the
+    # comma-joined CLI argument.
+    with pytest.raises(ConfigError, match="usage.providers"):
+        _usage_config({"providers": [""]})
+    with pytest.raises(ConfigError, match="usage.providers"):
+        _usage_config({"providers": ["  "]})
+    with pytest.raises(ConfigError, match="usage.providers"):
+        _usage_config({"providers": ["claude,codex"]})
+    assert _usage_config({"providers": ["alibaba-coding-plan", "zai"]}).providers == [
+        "alibaba-coding-plan",
+        "zai",
+    ]
