@@ -5,6 +5,7 @@ reuses the core Orchestrator + icons), and the token-authed loopback HTTP API.
 Network is never touched: tests inject a StubIcons provider.
 """
 
+import http.client
 import io
 import json
 import urllib.error
@@ -293,6 +294,73 @@ def test_http_press_non_integer_index_returns_400():
         with pytest.raises(urllib.error.HTTPError) as exc:
             urllib.request.urlopen(req, timeout=2)
         assert exc.value.code == 400
+    finally:
+        app.close()
+
+
+def test_keepalive_rejected_post_with_unread_body_closes_connection():
+    """Handler instances persist across HTTP/1.1 keep-alive requests: the
+    body-consumed flag must reset per request, or a rejected POST following a
+    body-consuming POST on the same connection would skip the close guard and
+    leave its unread body to be parsed as the next request."""
+    app = _serving_app()
+    try:
+        conn = http.client.HTTPConnection(app.host, app.port, timeout=2)
+        # request 1: body IS consumed (unknown choice -> 400 after _json_body)
+        conn.request(
+            "POST",
+            "/setup/connect",
+            body=b'{"choice": "nope"}',
+            headers={"X-Herdeck-Token": app.token, "Content-Type": "application/json"},
+        )
+        r1 = conn.getresponse()
+        assert r1.status == 400
+        r1.read()
+        # request 2 on the SAME connection: rejected before its body is read.
+        # This also proves request 1 kept the connection alive (a closed socket
+        # would raise on getresponse here).
+        conn.request(
+            "POST",
+            "/press/0",
+            body=b'{"leftover": true}',
+            headers={"X-Herdeck-Token": "nope", "Content-Type": "application/json"},
+        )
+        r2 = conn.getresponse()
+        assert r2.status == 403
+        r2.read()
+        # the server must close the connection (unread body): EOF, or RST if
+        # the kernel discards the unread bytes on close
+        try:
+            leftover = conn.sock.recv(1)
+        except ConnectionResetError:
+            leftover = b""
+        assert leftover == b""
+        conn.close()
+    finally:
+        app.close()
+
+
+def test_keepalive_consumed_body_posts_share_a_connection():
+    """The inverse guard: consecutive POSTs whose bodies ARE read must reuse
+    the persistent connection (the close guard must not fire falsely)."""
+    app = _serving_app()
+    try:
+        conn = http.client.HTTPConnection(app.host, app.port, timeout=2)
+        for _ in range(2):
+            conn.request(
+                "POST",
+                "/setup/connect",
+                body=b'{"choice": "nope"}',
+                headers={"X-Herdeck-Token": app.token, "Content-Type": "application/json"},
+            )
+            r = conn.getresponse()
+            assert r.status == 400
+            r.read()
+        # still open: no EOF waiting on the socket
+        conn.sock.settimeout(0.2)
+        with pytest.raises(TimeoutError):
+            conn.sock.recv(1)
+        conn.close()
     finally:
         app.close()
 
