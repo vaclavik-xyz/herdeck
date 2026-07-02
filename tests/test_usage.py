@@ -186,3 +186,16 @@ def test_resolve_cli_explicit_path(tmp_path):
     exe.chmod(0o755)
     assert resolve_cli(str(exe)) == str(exe)
     assert resolve_cli(str(tmp_path / "missing")) is None
+
+
+def test_parse_usage_drops_non_string_resets_at():
+    raw = json.dumps(
+        [
+            {
+                "provider": "claude",
+                "usage": {"primary": {"windowMinutes": 300, "usedPercent": 5, "resetsAt": 123}},
+            }
+        ]
+    )
+    (p,) = parse_usage(raw)
+    assert p.windows[0].resets_at is None  # malformed reset must not crash rendering

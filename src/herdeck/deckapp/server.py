@@ -158,12 +158,13 @@ class DeckApp:
             poller.start()
         return poller
 
-    def _adopt_usage_config(self, config) -> None:
+    def _adopt_usage_config(self, config) -> bool:
         """Rebuild the poller when a config swap changed [usage] (providers,
-        cadence or CLI path); unchanged config keeps the running thread."""
+        cadence or CLI path); unchanged config keeps the running thread.
+        Returns True when the poller was rebuilt."""
         new_cfg = getattr(config, "usage", None)
         if new_cfg == self._usage_cfg:
-            return
+            return False
         old = self._usage_poller
         self._usage_cfg = new_cfg
         self._usage_poller = self._build_usage_poller(new_cfg)
@@ -172,6 +173,7 @@ class DeckApp:
                 old.close()
             except Exception:
                 pass
+        return True
 
     # --- render pipeline (reuses Orchestrator + icons) ---
     def refresh(self) -> None:
@@ -374,7 +376,7 @@ class DeckApp:
         against in-flight reads/presses. After applying the new tiles the sink list is
         fanned out a full frame so physical sinks repaint immediately on swap."""
         slots, orch, clk, rs, tiles, panel_png, sections = prepared
-        self._adopt_usage_config(new_source.config)
+        usage_changed = self._adopt_usage_config(new_source.config)
         with self._lock:
             old = self._source
             self._source = new_source
@@ -384,6 +386,11 @@ class DeckApp:
             new_source.attach(orch, lock=self._lock, refresh_locked=self._refresh_locked)
             self._apply_rendered_locked(tiles, panel_png, sections)
             self._fan_out_locked(rs, None, True)
+            if usage_changed:
+                # The prepared frame was rendered with the OLD poller's data
+                # (prepare must not mutate live state); re-render once so a
+                # disabled/changed [usage] doesn't linger on the panel.
+                self._refresh_locked()
         try:
             old.close()
         except Exception:

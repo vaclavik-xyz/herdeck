@@ -85,11 +85,14 @@ def parse_usage(raw: str) -> list[ProviderUsage]:
                 used = int(win["usedPercent"])
             except (TypeError, ValueError):
                 continue
+            resets_at = win.get("resetsAt")
+            if not isinstance(resets_at, str):
+                resets_at = None  # anything else would crash reset formatting
             windows.append(
                 UsageWindow(
                     label=_window_label(win.get("windowMinutes")),
                     used_percent=used,
-                    resets_at=win.get("resetsAt"),
+                    resets_at=resets_at,
                 )
             )
         if windows:
