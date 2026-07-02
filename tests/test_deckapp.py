@@ -130,7 +130,7 @@ def test_state_has_required_shape():
     assert st["source"] == "mock"
     assert st["connected"] is True
     summ = st["summary"]
-    assert set(summ) == {"agents", "blocked", "working", "idle", "done"}
+    assert set(summ) == {"agents", "blocked", "working", "idle", "done", "waiting"}
 
 
 def test_tiles_render_as_png_bytes():

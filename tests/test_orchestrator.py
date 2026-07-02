@@ -384,3 +384,28 @@ def test_tile_press_dismisses_held_detail():
     t["now"] = 1.0  # beyond the slot-press guard
     o.on_press(0)  # drilling an agent moves attention: the hold must not linger
     assert o._usage_detail_until == 0.0
+
+
+def test_waiting_agent_renders_violet_with_holder_label():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot(
+        "dev",
+        [
+            AgentState(
+                AgentKey("dev", "p1"),
+                "claude",
+                "api",
+                Status.WAITING,
+                custom_status="⏳ ci",
+            ),
+            state("p2", Status.WORKING),
+        ],
+    )
+    rs = o.render()
+    tiles = {t.label: t for t in rs.tiles if t.label}
+    waiting = tiles["api"]
+    assert waiting.color == "violet"
+    assert waiting.status_text == "CI"  # the holder's label, not a generic word
+    assert waiting.spinner is None  # waiting tiles do not animate
+    working = [t for t in rs.tiles if t.color == "green"]
+    assert working and rs.tiles.index(working[0]) < rs.tiles.index(waiting)  # working sorts first

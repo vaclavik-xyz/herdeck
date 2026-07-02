@@ -16,7 +16,7 @@
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
 
   const SEC = "theme";
-  const STATUS = ["working", "idle", "blocked", "done", "unknown", "offline"];
+  const STATUS = ["working", "idle", "blocked", "done", "waiting", "unknown", "offline"];
 
   // Current-language tooltips for every field — required for each labelled
   // field (enforced by sections.help.test.ts); texts live in help.ts.

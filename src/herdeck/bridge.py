@@ -81,6 +81,10 @@ def _herdr_pane_to_wire(
         "branch": branch,
         "workspace": (ws_by_id or {}).get(p.get("workspace_id", ""), ""),
         "tab": (tab_by_id or {}).get(p.get("tab_id", ""), ""),
+        # Set when an external source holds the pane via `herdr pane
+        # report-agent --custom-status` (herdwatch's "⏳ ci" etc.); absent
+        # otherwise. Clients derive the WAITING state from it.
+        "custom_status": p.get("custom_status", ""),
     }
 
 

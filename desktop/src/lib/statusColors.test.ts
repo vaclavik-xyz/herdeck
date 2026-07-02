@@ -17,6 +17,7 @@ describe("DEFAULT_STATUS_COLORS (backend mirror)", () => {
       idle: "blue",
       blocked: "amber",
       done: "cyan",
+      waiting: "violet",
       unknown: "grey",
       offline: "red",
     });

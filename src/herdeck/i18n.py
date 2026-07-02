@@ -28,6 +28,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "usage_title": "usage limits",
         # drill detail (layout.panel_detail)
         "reading_prompt": "reading prompt...",
+        "waiting_on": "waiting on: {label}",
         # orchestrator tiles / drill
         "new_agent": "+ New",
         "stop": "Stop",
@@ -58,6 +59,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "status.idle": "IDLE",
         "status.blocked": "BLOCKED",
         "status.done": "DONE",
+        "status.waiting": "WAITING",
         "status.unknown": "UNKNOWN",
         "status.offline": "OFFLINE",
         # web simulator page
@@ -77,6 +79,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "online": "online",
         "usage_title": "limity využití",
         "reading_prompt": "čtu prompt...",
+        "waiting_on": "čeká na: {label}",
         "new_agent": "+ Nový",
         "stop": "Stop",
         "back": "Zpět",
@@ -103,6 +106,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "status.idle": "NEČINNÝ",
         "status.blocked": "ČEKÁ",
         "status.done": "HOTOVO",
+        # blocked already owns "ČEKÁ" (waiting for YOU); this one is passive
+        # background work, so it must read differently.
+        "status.waiting": "V POZADÍ",
         "status.unknown": "NEZNÁMÝ",
         "status.offline": "OFFLINE",
         "web.press_failed": "stisk selhal — odpojeno?",

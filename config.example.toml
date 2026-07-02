@@ -17,6 +17,7 @@ working = "green"
 idle = "blue"
 blocked = "amber"
 done = "cyan"
+waiting = "violet"   # pane held pending background work (herdwatch: CI, review)
 unknown = "grey"
 offline = "red"
 

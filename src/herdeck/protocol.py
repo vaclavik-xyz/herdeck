@@ -18,16 +18,24 @@ def _status(value: str) -> Status:
 
 
 def _pane_to_state(server_id: str, pane: dict) -> AgentState:
+    status = _status(pane.get("status", "unknown"))
+    custom = pane.get("custom_status") or ""
+    # A `working` pane carrying a custom_status is not the agent typing — it is
+    # an external holder (herdwatch) keeping the pane pending on background
+    # work (CI, review, a marker). Surface that as the distinct WAITING state.
+    if status is Status.WORKING and custom:
+        status = Status.WAITING
     return AgentState(
         key=AgentKey(server_id, pane["pane_id"]),
         agent_type=pane.get("agent_type", "default"),
         label=pane.get("label", ""),
-        status=_status(pane.get("status", "unknown")),
+        status=status,
         project=pane.get("project", ""),
         repo=pane.get("repo", ""),
         branch=pane.get("branch", ""),
         workspace=pane.get("workspace", ""),
         tab=pane.get("tab", ""),
+        custom_status=custom,
     )
 
 

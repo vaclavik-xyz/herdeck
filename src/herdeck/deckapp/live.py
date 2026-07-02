@@ -178,6 +178,7 @@ class LiveSource(StateSource):
             "working": counts.working,
             "idle": counts.idle,
             "done": counts.done,
+            "waiting": counts.waiting,
         }
 
     def close(self) -> None:

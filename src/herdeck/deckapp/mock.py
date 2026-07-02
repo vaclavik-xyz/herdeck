@@ -32,9 +32,9 @@ def _next_status(status: Status) -> Status:
 
 
 def demo_agents() -> list[AgentState]:
-    """A fixed, deterministic demo fleet: 7 agents over 2 servers spanning every
-    status (working / idle / blocked / done). No randomness, no time-based seeds —
-    two calls return equal data."""
+    """A fixed, deterministic demo fleet: 8 agents over 2 servers spanning every
+    status (working / idle / blocked / done / waiting). No randomness, no
+    time-based seeds — two calls return equal data."""
     local, gpu = MOCK_SERVERS
     return [
         AgentState(AgentKey(local, "p0"), "claude", "api", Status.WORKING, repo="api", branch="main"),
@@ -45,6 +45,15 @@ def demo_agents() -> list[AgentState]:
             AgentKey(local, "p2"), "claude", "infra", Status.BLOCKED, repo="infra", branch="fix/dns"
         ),
         AgentState(AgentKey(local, "p3"), "gemini", "docs", Status.DONE, repo="docs", branch="main"),
+        AgentState(
+            AgentKey(local, "p4"),
+            "claude",
+            "cli",
+            Status.WAITING,
+            repo="cli",
+            branch="main",
+            custom_status="⏳ ci",
+        ),
         AgentState(
             AgentKey(gpu, "p0"), "claude", "train", Status.WORKING, repo="ml", branch="exp/lora"
         ),
@@ -113,4 +122,5 @@ class MockSource(StateSource):
             "working": counts.working,
             "idle": counts.idle,
             "done": counts.done,
+            "waiting": counts.waiting,
         }

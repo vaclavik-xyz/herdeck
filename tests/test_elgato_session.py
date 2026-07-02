@@ -452,3 +452,14 @@ def test_action_and_slot_tiles_speak_czech_when_configured():
 def test_action_tiles_default_to_english():
     sess = ElgatoSession(make_config(), FakeIcons())
     assert sess._action_tile("a1", "deny").label == "Deny"
+
+
+def test_waiting_slot_shows_holder_label_not_generic_word():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s1", (0, 0))])
+    held = state("p1", Status.WAITING)
+    held.custom_status = "⏳ ci"
+    sess.apply_snapshot("dev", [held])
+    slot = sess._slot_tile(0)
+    assert slot.status_text == "CI"  # holder label, not "WAITING"
+    assert slot.color == "violet"

@@ -50,7 +50,16 @@ def test_herdr_pane_to_wire_maps_fields():
         "branch": "",
         "workspace": "",
         "tab": "",
+        "custom_status": "",
     }
+
+
+def test_herdr_pane_to_wire_passes_custom_status_through():
+    # herdwatch holds panes via `herdr pane report-agent --custom-status`;
+    # the label must reach clients so they can derive the WAITING state.
+    raw = raw_pane(agent="claude", status="working", cwd="/x/api")
+    raw["custom_status"] = "\u23f3 ci"
+    assert _herdr_pane_to_wire(raw)["custom_status"] == "\u23f3 ci"
 
 
 def test_herdr_pane_to_wire_adds_repo_and_branch_from_worktree():

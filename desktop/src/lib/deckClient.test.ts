@@ -19,7 +19,7 @@ function rawState(over: Record<string, unknown> = {}): Record<string, unknown> {
     has_panel: true,
     panel: 0,
     tiles: { "0": 1, "1": 1, "2": 1 },
-    summary: { agents: 4, blocked: 1, working: 2, idle: 1, done: 0 },
+    summary: { agents: 4, blocked: 1, working: 2, idle: 1, done: 0, waiting: 0 },
     source: "mock",
     connected: false,
     ...over,
@@ -34,7 +34,7 @@ describe("parseState", () => {
     expect(s.slots).toBe(13);
     expect(s.hasPanel).toBe(true);
     expect(s.tiles).toEqual({ 0: 1, 1: 1, 2: 1 });
-    expect(s.summary).toEqual({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0 });
+    expect(s.summary).toEqual({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0, waiting: 0 });
     expect(s.source).toBe("mock");
     expect(s.connected).toBe(false);
   });
@@ -56,7 +56,7 @@ describe("parseState", () => {
 
 describe("summaryLabel", () => {
   it("defaults to English and emphasizes blocked last", () => {
-    expect(summaryLabel({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0 })).toBe(
+    expect(summaryLabel({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0, waiting: 0 })).toBe(
       "4 agents · 2 working · 1 idle · ⚠ 1 blocked",
     );
   });
@@ -72,7 +72,7 @@ describe("summaryLabel", () => {
   });
 
   it("speaks Czech plurals when asked (1/2-4/5+ agent forms)", () => {
-    expect(summaryLabel({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0 }, "cs")).toBe(
+    expect(summaryLabel({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0, waiting: 0 }, "cs")).toBe(
       "4 agenti · 2 pracují · 1 nečinný · ⚠ 1 blokován",
     );
     expect(summaryLabel(emptySummary(), "cs")).toBe("0 agentů");
@@ -277,7 +277,7 @@ describe("stepDeck — folds a poll into the render model", () => {
   it("exposes the summary, source and connected flag for the footer/indicator", async () => {
     const t = fakeTransport([rawState({ source: "live", connected: true })]);
     const view = await stepDeck(t, new DeckDiffer(), initialView());
-    expect(view.summary).toEqual({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0 });
+    expect(view.summary).toEqual({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0, waiting: 0 });
     expect(view.source).toBe("live");
     expect(view.connected).toBe(true);
     expect(summaryLabel(view.summary)).toContain("⚠ 1 blocked");
