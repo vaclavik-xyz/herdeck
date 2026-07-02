@@ -206,3 +206,18 @@ def test_parse_usage_drops_non_string_resets_at():
     )
     (p,) = parse_usage(raw)
     assert p.windows[0].resets_at is None  # malformed reset must not crash rendering
+
+
+def test_poller_orders_providers_by_config(monkeypatch):
+    # The CLI returns entries in its own order (codex first for claude,codex);
+    # the panel must follow the user's configured order.
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codexbar")
+    reversed_json = json.dumps(
+        [
+            {"provider": "codex", "usage": {"primary": {"windowMinutes": 300, "usedPercent": 1}}},
+            {"provider": "claude", "usage": {"primary": {"windowMinutes": 300, "usedPercent": 2}}},
+        ]
+    )
+    p = UsagePoller(["claude", "codex"], runner=lambda *a, **k: _Proc(stdout=reversed_json))
+    p.poll_once()
+    assert [x.provider for x in p.snapshot()] == ["claude", "codex"]

@@ -198,6 +198,10 @@ class UsagePoller:
         if not data:
             log.warning("codexbar returned no parseable usage data")
             return
+        # The CLI returns providers in its own order; the panel shows them in
+        # the order the user configured.
+        order = {p: i for i, p in enumerate(self._providers)}
+        data.sort(key=lambda pu: order.get(pu.provider, len(order)))
         with self._lock:
             self._data = data
             self._fetched_at = self._clock()
