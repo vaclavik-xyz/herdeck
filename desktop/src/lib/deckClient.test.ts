@@ -323,3 +323,42 @@ describe("stepDeck — folds a poll into the render model", () => {
     expect(view.online).toBe(true);
   });
 });
+
+describe("stepDeck idle no-op (audit: stepdeck-noop-return)", () => {
+  function idleTransport(states: unknown[]): DeckTransport {
+    let i = 0;
+    return {
+      async fetchState() {
+        const s = states[Math.min(i, states.length - 1)];
+        i += 1;
+        return s;
+      },
+      tileImage: async (index, version) => `tile-${index}-v${version}`,
+      panelImage: async (version) => `panel-v${version}`,
+      press: async () => ({ ok: true, status: 204, forbidden: false }),
+    };
+  }
+
+  it("returns the SAME view object when nothing changed", async () => {
+    const t = idleTransport([
+      rawState({ version: 1, tiles: { "0": 1 }, panel: 0 }),
+      rawState({ version: 1, tiles: { "0": 1 }, panel: 0 }),
+    ]);
+    const differ = new DeckDiffer();
+    const first = await stepDeck(t, differ, initialView());
+    const second = await stepDeck(t, differ, first);
+    expect(second).toBe(first); // identity: the $state assignment is a no-op
+  });
+
+  it("returns a fresh object when a tile version advances", async () => {
+    const t = idleTransport([
+      rawState({ version: 1, tiles: { "0": 1 }, panel: 0 }),
+      rawState({ version: 2, tiles: { "0": 2 }, panel: 0 }),
+    ]);
+    const differ = new DeckDiffer();
+    const first = await stepDeck(t, differ, initialView());
+    const second = await stepDeck(t, differ, first);
+    expect(second).not.toBe(first);
+    expect(second.tiles[0]).toBe("tile-0-v2");
+  });
+});

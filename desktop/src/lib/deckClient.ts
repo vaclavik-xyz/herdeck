@@ -281,13 +281,33 @@ export async function stepDeck(
   if (!state) return { ...prev, online: false };
 
   const diff = differ.plan(state);
+  // Nothing to fetch and nothing visible changed: return prev UNCHANGED so the
+  // $state assignment is a no-op — the idle 300ms poll used to mint a fresh
+  // view model (new tiles map) that re-derived and re-reconciled the whole
+  // template 3.3x per second for zero visual change.
+  if (
+    diff.refetch.length === 0 &&
+    diff.clear.length === 0 &&
+    !diff.panel &&
+    prev.online &&
+    prev.source === state.source &&
+    prev.connected === state.connected &&
+    (state.slots === 0 || prev.slots === state.slots) &&
+    sameSummary(prev.summary, state.summary) &&
+    sameSections(prev.sections, state.sections)
+  ) {
+    differ.markSynced(state.version);
+    return prev;
+  }
   const tiles = { ...prev.tiles };
   let allLoaded = true;
-  // Refetch the changed tiles concurrently. Commit a tile's version only once its
-  // image resolves (a data URL, or a definitive "none"); on a fetch error keep
-  // the old src AND leave the version uncommitted so the next poll retries it.
-  await Promise.all(
-    diff.refetch.map(async ({ index, version }) => {
+  // Refetch the changed tiles AND the panel concurrently (the panel used to
+  // wait for the tiles' Promise.all, landing one round trip late). Commit a
+  // version only once its image resolves; on a fetch error keep the old src
+  // and leave the version uncommitted so the next poll retries it.
+  let panel = prev.panel;
+  await Promise.all([
+    ...diff.refetch.map(async ({ index, version }) => {
       try {
         const src = await transport.tileImage(index, version);
         if (src) tiles[index] = src;
@@ -297,19 +317,19 @@ export async function stepDeck(
         allLoaded = false; // leave previous src; retried next poll
       }
     }),
-  );
+    (async () => {
+      if (!diff.panel) return;
+      try {
+        panel = await transport.panelImage(diff.panel.version);
+        differ.commitPanel(diff.panel.version);
+      } catch {
+        allLoaded = false; // keep previous panel; retried next poll
+      }
+    })(),
+  ]);
   for (const index of diff.clear) {
     delete tiles[index];
     differ.dropTile(index);
-  }
-  let panel = prev.panel;
-  if (diff.panel) {
-    try {
-      panel = await transport.panelImage(diff.panel.version);
-      differ.commitPanel(diff.panel.version);
-    } catch {
-      allLoaded = false; // keep previous panel; retried next poll
-    }
   }
   // Arm the cheap gate only when the whole step loaded; otherwise the next poll
   // (same /state.version) re-plans and retries just the failed image(s).
@@ -325,4 +345,22 @@ export async function stepDeck(
     sections: state.sections,
     panel,
   };
+}
+
+function sameSummary(a: DeckSummary, b: DeckSummary): boolean {
+  return (
+    a.agents === b.agents &&
+    a.blocked === b.blocked &&
+    a.working === b.working &&
+    a.idle === b.idle &&
+    a.done === b.done
+  );
+}
+
+function sameSections(a: Record<number, string>, b: Record<number, string>): boolean {
+  const ak = Object.keys(a);
+  const bk = Object.keys(b);
+  if (ak.length !== bk.length) return false;
+  for (const k of ak) if (a[Number(k)] !== b[Number(k)]) return false;
+  return true;
 }
