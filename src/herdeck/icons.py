@@ -176,7 +176,8 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 # 3: readable subtext (branch/time) on solid dark-colour fills (e.g. blue).
 # 4: wrapped text marks a cut-off tail with an ellipsis.
 # 5: the agent mark flips dark on bright solid fills (like the text).
-TILE_VERSION = 5
+# 6: larger type scale (repo 31px, sub-labels 18-19px) spread down the tile.
+TILE_VERSION = 6
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -645,9 +646,12 @@ class IconProvider:
                 # thin comet ring orbiting the static mark; the 62px overlay is
                 # centred over the 46px logo box at (12,12) -> composite at (4,4)
                 bg.alpha_composite(self._comet_overlay(62, spinner, 2, 4), (4, 4))
-        # status word + elapsed time, top-right
+        # status word + elapsed time, top-right. Sizes were tuned for a screen,
+        # not a ~25mm physical key: the old 23px repo (~2.9mm cap height) and
+        # 15-16px sub-labels were legible only when leaning in, while the
+        # bottom ~40% of the tile sat empty.
         if tile.status_text:
-            fs = _font(16)
+            fs = _font(19)
             d.text(
                 (ICON_SIZE - 12 - d.textlength(tile.status_text, font=fs), 13),
                 tile.status_text,
@@ -655,27 +659,29 @@ class IconProvider:
                 fill=word_fill,
             )
         if tile.time_text:
-            ft = _font(15)
+            ft = _font(18)
             d.text(
-                (ICON_SIZE - 12 - d.textlength(tile.time_text, font=ft), 35),
+                (ICON_SIZE - 12 - d.textlength(tile.time_text, font=ft), 38),
                 tile.time_text,
                 font=ft,
                 fill=time_fill,
             )
-        # repo (primary) + branch (secondary, wrapped)
-        fr = _font(23)
+        # repo (primary) + branch (secondary, wrapped) — spread down the tile
+        # so the composition is optically centred between the logo row and the
+        # accent bar instead of leaving a dead band across the bottom third.
+        fr = _font(31)
         d.text(
-            (12, 68),
+            (12, 74),
             _truncate(d, tile.repo or "", fr, ICON_SIZE - 24),
             font=fr,
             fill=repo_fill,
         )
         if tile.branch:
-            fb = _font(16)
-            y = 98
+            fb = _font(18)
+            y = 112
             for line in _wrap(d, tile.branch, fb, ICON_SIZE - 24, 2):
                 d.text((12, y), line, font=fb, fill=branch_fill)
-                y += 20
+                y += 22
         if tile.server_tag:
             chip_fill = _rgb_color(tile.server_accent or "", (95, 95, 105))
             fc = _font(14)
