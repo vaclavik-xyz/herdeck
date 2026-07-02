@@ -198,14 +198,17 @@ def usage_summary_lines(data, max_providers: int = 2) -> list[str]:
 
 
 def usage_detail_lines(data, now=None, max_lines: int = _DETAIL_MAX_LINES) -> list[str]:
-    """One line per provider window with its reset time: 'Claude 5h 13% ⟳ 01:00'."""
+    """One line per provider window with its reset time: 'Claude 5h 13% → 01:00'.
+
+    The arrow is a deliberate U+2192 — the panel font has no glyph for the
+    nicer ⟳/↻ (they render as tofu boxes on the deck)."""
     lines: list[str] = []
     for p in data:
         for w in p.windows:
             if len(lines) == max_lines:
                 return lines
             reset = _fmt_reset(w.resets_at, now)
-            tail = f" ⟳ {reset}" if reset else ""
+            tail = f" → {reset}" if reset else ""
             lines.append(f"{_provider_name(p.provider)} {w.label} {w.used_percent}%{tail}")
     return lines
 

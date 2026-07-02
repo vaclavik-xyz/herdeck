@@ -87,7 +87,7 @@ def test_usage_detail_lines_carry_reset_times():
     ]
     now = datetime(2026, 7, 2, 20, 0, tzinfo=UTC)
     (line,) = usage_detail_lines(data, now=now)
-    assert line.startswith("Claude 5h 19% ⟳ ")  # reset rendered in local time
+    assert line.startswith("Claude 5h 19% → ")  # reset rendered in local time
     data[0].windows[0].resets_at = None
     (line,) = usage_detail_lines(data, now=now)
     assert line == "Claude 5h 19%"  # no reset -> no dangling arrow
