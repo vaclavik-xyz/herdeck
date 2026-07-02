@@ -157,6 +157,11 @@ the colour shows in the status word and a bottom accent bar; set
 `[view].tile_fill` to `tint` (whole tile a darkened shade of the colour) or
 `solid` (whole tile the full colour) for more at-a-glance visibility.
 
+All rendered deck text (tile status words, the panel, the web simulator) and
+the desktop app UI speak `[view].language` — `"en"` (default) or `"cs"`; the
+desktop settings window offers it as the View → `language` select and switches
+live.
+
 ## Stream Deck (Elgato) plugin backend
 herdeck can also drive a native **Elgato Stream Deck** as a plugin. A thin
 TypeScript shell (a separate follow-up plan) owns the deck over Elgato's SDK and

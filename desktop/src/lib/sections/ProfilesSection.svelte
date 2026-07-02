@@ -1,6 +1,7 @@
 <script lang="ts">
   import SelectField from "../fields/SelectField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import { defineMessages, fieldHelp, locale } from "../i18n.svelte";
   import {
     profileNames, createProfile, deleteProfile,
     profileExtends, setProfileExtends, profileServers,
@@ -13,12 +14,39 @@
 
   let newName = $state("");
 
-  // Czech tooltips for every field — required for each labelled field
-  // (enforced by sections.help.test.ts).
-  const HELP: Record<string, string> = {
-    extends: "Ze kterého profilu tento profil dědí nastavení; „default“ znamená přímo základní konfiguraci.",
-    servers: "Které servery profil používá; při dědění přebírá výběr rodiče či báze, prázdný výběr = profil bez serverů.",
-  };
+  // Tooltips for every field come from the central catalog in the current
+  // language — required for each labelled field (enforced by sections.help.test.ts).
+  const HELP = $derived(fieldHelp("profiles"));
+
+  const LM = defineMessages({
+    en: {
+      heading: "Profiles",
+      intro: "Named profiles overlay the base config. The active profile is picked at the top; per-section overrides are slice 4b-ii.",
+      new_profile_name: "new profile name",
+      create_profile: "+ create profile",
+      remove_profile: "Remove profile",
+      locked_delete: "cannot delete a profile locked via HERDECK_PROFILE",
+      inherits_base_servers: "inherits base servers",
+      no_base_servers: "no servers in the base — add them in the Servers section",
+      unknown_server: "(unknown)",
+      serverless: "serverless: the profile will run with no servers (an explicit empty selection)",
+      no_profiles: "No profiles yet. Create the first one above.",
+    },
+    cs: {
+      heading: "Profily",
+      intro: "Pojmenované profily překrývají bázi. Aktivní profil se vybírá nahoře; per-sekce overrides jsou řez 4b-ii.",
+      new_profile_name: "jméno nového profilu",
+      create_profile: "+ vytvořit profil",
+      remove_profile: "Smazat profil",
+      locked_delete: "nelze smazat profil zamčený přes HERDECK_PROFILE",
+      inherits_base_servers: "zdědí base servery",
+      no_base_servers: "žádné servery v bázi — přidej je v sekci Servery",
+      unknown_server: "(neznámý)",
+      serverless: "serverless: profil poběží bez serverů (explicitní prázdný výběr)",
+      no_profiles: "Zatím žádný profil. Vytvoř první výše.",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
 
   const names = $derived(profileNames(payload));
   const serverIds = $derived(serversOf(payload).map((s) => s.id).filter((id) => id !== ""));
@@ -51,7 +79,7 @@
     // An env lock (HERDECK_PROFILE) pins the active profile and can't be cleared from
     // the editor — deleting it would leave the lock pointing at a missing profile. Block it.
     if (payload.envLocked && payload.activeProfile === name) {
-      onError("nelze smazat profil zamčený přes HERDECK_PROFILE");
+      onError(lm.locked_delete);
       return;
     }
     payload = deleteProfile(payload, name);
@@ -80,17 +108,17 @@
   }
 </script>
 
-<h2>Profily</h2>
-<p class="hint">Pojmenované profily překrývají bázi. Aktivní profil se vybírá nahoře; per-sekce overrides jsou řez 4b-ii.</p>
+<h2>{lm.heading}</h2>
+<p class="hint">{lm.intro}</p>
 
 <div class="create">
-  <input placeholder="jméno nového profilu" bind:value={newName} />
-  <button type="button" onclick={create}>+ vytvořit profil</button>
+  <input placeholder={lm.new_profile_name} bind:value={newName} />
+  <button type="button" onclick={create}>{lm.create_profile}</button>
 </div>
 
 {#each names as name (name)}
   <fieldset>
-    <legend>{name} <button type="button" title="Smazat profil" onclick={() => remove(name)}>×</button></legend>
+    <legend>{name} <button type="button" title={lm.remove_profile} onclick={() => remove(name)}>×</button></legend>
     <SelectField
       label="extends"
       help={HELP.extends}
@@ -98,10 +126,10 @@
       options={extendsOptions(name)}
       onchange={(v) => setExtends(name, v)}
     />
-    <OverrideField label="servers" help={HELP.servers} state={srvState(name)} inheritedDisplay="zdědí base servery" onstate={(s) => setSrvState(name, s)}>
+    <OverrideField label="servers" help={HELP.servers} state={srvState(name)} inheritedDisplay={lm.inherits_base_servers} onstate={(s) => setSrvState(name, s)}>
       <div class="servers">
         {#if serverOptions(name).length === 0}
-          <span class="hint">žádné servery v bázi — přidej je v sekci Servery</span>
+          <span class="hint">{lm.no_base_servers}</span>
         {:else}
           {#each serverOptions(name) as opt (opt.id)}
             <label class="chk">
@@ -110,11 +138,11 @@
                 checked={profileServers(payload, name).includes(opt.id)}
                 onchange={(e) => toggleServer(name, opt.id, (e.target as HTMLInputElement).checked)}
               />
-              {opt.id}{#if !opt.known} <span class="unknown">(neznámý)</span>{/if}
+              {opt.id}{#if !opt.known} <span class="unknown">{lm.unknown_server}</span>{/if}
             </label>
           {/each}
           {#if profileServers(payload, name).length === 0}
-            <span class="hint">serverless: profil poběží bez serverů (explicitní prázdný výběr)</span>
+            <span class="hint">{lm.serverless}</span>
           {/if}
         {/if}
       </div>
@@ -122,7 +150,7 @@
   </fieldset>
 {/each}
 {#if names.length === 0}
-  <p class="hint">Zatím žádný profil. Vytvoř první výše.</p>
+  <p class="hint">{lm.no_profiles}</p>
 {/if}
 
 <style>

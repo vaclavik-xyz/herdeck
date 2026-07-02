@@ -25,6 +25,9 @@ management = "launcher_menu"
 show_profile_on_panel = true
 agent_slots = "max"
 tile_fields = ["repo", "branch", "status", "time", "server"]
+# Language of rendered deck text (tiles/panel/websim) AND the desktop app UI.
+# "en" (default) or "cs".
+language = "en"
 
 [notifications]
 enabled = false

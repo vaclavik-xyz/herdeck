@@ -8,6 +8,7 @@
     inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
     type ListFieldState, type ConfigPayload,
   } from "../configClient";
+  import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
 
   let { payload = $bindable(), onChange, editProfile = null }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
@@ -19,12 +20,26 @@
   // Mirror of backend defaults (settings.py _safety_config) — keep in sync.
   const SAFETY_DEFAULTS: Record<string, unknown> = { approve_always: true };
 
-  // Czech tooltips for every field — required for each labelled field
+  // Tooltips for every field come from the central catalog (help.ts) in the
+  // current language — required for each labelled field
   // (enforced by sections.help.test.ts).
-  const HELP: Record<string, string> = {
-    approve_always: "Zda se u blokovaného agenta nabízí i tlačítko Approve! (schválit a příště se neptat); vypnutím ho skryjete.",
-    require_confirm_for: "Akce vyžadující druhý potvrzovací stisk do 5 s (výchozí act_force = Stop); prázdný seznam potvrzování vypne.",
-  };
+  const HELP = $derived(fieldHelp("safety"));
+
+  const LM = defineMessages({
+    en: {
+      title: "Safety",
+      none: "(none)",
+      inherit: "Inherit",
+      inherited_hint: "inherited: {value}",
+    },
+    cs: {
+      title: "Bezpečnost",
+      none: "(nic)",
+      inherit: "Zdědit",
+      inherited_hint: "zděděno: {value}",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
 
   // --- base mode: UNCHANGED from today (ListField + putList) ---
   const approveAlways = $derived((getAt(payload, "base", SEC, "approve_always") as boolean) ?? true);
@@ -32,7 +47,7 @@
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseRcf(list: string[]): void { payload = putList(payload, "base", SEC, "require_confirm_for", list); onChange(); }
 
-  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? SAFETY_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? "(nic)" : String(v); }
+  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? SAFETY_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
   function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
   function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? (inheritedFor(payload, prof, SEC, key) ?? SAFETY_DEFAULTS[key]) : v; }
   function setScState(key: string, s: "inherit" | "override"): void {
@@ -47,12 +62,12 @@
   }
 </script>
 
-<h2>Bezpečnost{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.title}{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <OverrideField label="approve_always" help={HELP.approve_always} state={scState("approve_always")} inheritedDisplay={hint("approve_always")} onstate={(s) => setScState("approve_always", s)}>
     <BooleanField label="" value={Boolean(scValue("approve_always"))} onchange={(v) => setSc("approve_always", v)} />
   </OverrideField>
-  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} inheritLabel="Zdědit" inheritHint={`zděděno: ${hint("require_confirm_for")}`} onchange={setOvRcf} />
+  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("require_confirm_for") })} onchange={setOvRcf} />
 {:else}
   <BooleanField label="approve_always" help={HELP.approve_always} value={approveAlways} onchange={(v) => set("approve_always", v)} />
   <ListField label="require_confirm_for" help={HELP.require_confirm_for} value={requireConfirmFor} onchange={setBaseRcf} />

@@ -5,6 +5,8 @@
 // newly added field cannot ship without its vysvětlivka.
 import { describe, it, expect } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
+import { FIELD_HELP } from "../help";
+import { setLang, type Lang } from "../i18n.svelte";
 import { parseConfig, type ConfigPayload } from "../configClient";
 import ServersSection from "./ServersSection.svelte";
 import DeckSection from "./DeckSection.svelte";
@@ -65,7 +67,12 @@ const SECTIONS: SectionSpec[] = [
   { name: "DesktopSection", component: DesktopSection, overlay: false, reloadRev: false },
 ];
 
-function assertLabelsHaveHelp(spec: SectionSpec, editProfile: string | null): void {
+function assertLabelsHaveHelp(
+  spec: SectionSpec,
+  editProfile: string | null,
+  lang: Lang,
+): void {
+  setLang(lang);
   const target = document.createElement("div");
   document.body.appendChild(target);
   const props: Record<string, unknown> = {
@@ -95,14 +102,39 @@ function assertLabelsHaveHelp(spec: SectionSpec, editProfile: string | null): vo
 }
 
 describe("config editor help tooltips", () => {
-  for (const spec of SECTIONS) {
-    it(`${spec.name}: every labelled field has a help tooltip (base mode)`, () => {
-      assertLabelsHaveHelp(spec, null);
-    });
-    if (spec.overlay) {
-      it(`${spec.name}: every labelled field has a help tooltip (overlay mode)`, () => {
-        assertLabelsHaveHelp(spec, "night");
+  for (const lang of ["en", "cs"] as const) {
+    for (const spec of SECTIONS) {
+      it(`${spec.name} [${lang}]: every labelled field has a help tooltip (base mode)`, () => {
+        assertLabelsHaveHelp(spec, null, lang);
       });
+      if (spec.overlay) {
+        it(`${spec.name} [${lang}]: every labelled field has a help tooltip (overlay mode)`, () => {
+          assertLabelsHaveHelp(spec, "night", lang);
+        });
+      }
     }
   }
+});
+
+describe("field help catalog parity", () => {
+  it("en and cs carry exactly the same sections and field keys", () => {
+    expect(Object.keys(FIELD_HELP.cs).sort()).toEqual(Object.keys(FIELD_HELP.en).sort());
+    for (const [section, fields] of Object.entries(FIELD_HELP.en)) {
+      expect(
+        Object.keys(FIELD_HELP.cs[section]).sort(),
+        `section '${section}' keys diverge between en and cs`,
+      ).toEqual(Object.keys(fields).sort());
+    }
+  });
+
+  it("every hint is a non-empty single sentence of sane length", () => {
+    for (const lang of ["en", "cs"] as const) {
+      for (const [section, fields] of Object.entries(FIELD_HELP[lang])) {
+        for (const [key, hint] of Object.entries(fields)) {
+          expect(hint.trim().length, `${lang}/${section}/${key} empty`).toBeGreaterThan(10);
+          expect(hint.length, `${lang}/${section}/${key} too long`).toBeLessThan(140);
+        }
+      }
+    }
+  });
 });

@@ -203,7 +203,7 @@
       {#if savedAvailable}
         <div class="actions">
           <button class="ghost" disabled={busy} onclick={connectSaved}>
-            {label("Připojit k uloženému spojení", "saved")}
+            {label(lm.connect_saved, "saved")}
           </button>
         </div>
       {/if}
