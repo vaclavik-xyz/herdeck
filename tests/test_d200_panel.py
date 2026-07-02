@@ -224,8 +224,9 @@ def test_d200_slow_write_warns(tmp_path, caplog):
     try:
         with caplog.at_level(logging.WARNING, logger="herdeck.driver.d200"):
             driver.render([TileView(0, "x", "blue")])
-            assert _wait_until(lambda: dev.calls, timeout=3.0)
-        assert "slow tiles write" in caplog.text
+            # wait for the LOG LINE, not just the device call: the warning fires
+            # on the pump thread a moment after set_buttons returns
+            assert _wait_until(lambda: "slow tiles write" in caplog.text, timeout=3.0)
     finally:
         block.set()
         driver.close()

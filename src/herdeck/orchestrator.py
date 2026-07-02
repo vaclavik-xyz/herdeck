@@ -82,6 +82,7 @@ class Orchestrator:
         self._sent_note: tuple[str, float] | None = None  # (agent label, sent at)
         # Ordering hysteresis state (see _ordered).
         self._display_order: list[AgentKey] = []
+        self._display_ranks: dict = {}
         self._target_keys: list[AgentKey] = []
         self._target_since: float = 0.0
         self._force_adopt: bool = False  # one-shot: adopt on next render, slot-guarded
@@ -222,8 +223,13 @@ class Orchestrator:
         only once the target order has been stable for _ORDER_SETTLE_S, at
         view transitions (_resettle), or when a NEW BLOCK force-adopts
         (attention beats stability there — see _on_new_block; the slot press
-        guard still protects a finger in flight). Removed agents drop out
-        immediately; new agents append at the end until the next adoption."""
+        guard still protects a finger in flight). A STATUS-RANK change (idle ->
+        working, blocked -> working after an approve, ...) also adopts
+        immediately: that is a real transition the user is watching, not sort
+        jitter — holding it parks a green tile among the idles for 2s. The
+        hysteresis therefore damps only same-rank reshuffles. Removed agents
+        drop out immediately; new agents append at the end until the next
+        adoption."""
         target = layout.order_agents(self._agents.values(), self.config.overview_order)
         target_keys = [s.key for s in target]
         now = self._clock()
@@ -231,9 +237,19 @@ class Orchestrator:
             self._target_keys = target_keys
             self._target_since = now
         by_key = {s.key: s for s in target}
-        if not self._display_order or self._force_adopt or now - self._target_since >= _ORDER_SETTLE_S:
+        ranks = {s.key: layout.status_rank(s.status) for s in target}
+        rank_changed = any(
+            ranks[k] != r for k, r in self._display_ranks.items() if k in ranks
+        )
+        if (
+            not self._display_order
+            or self._force_adopt
+            or rank_changed
+            or now - self._target_since >= _ORDER_SETTLE_S
+        ):
             display = list(target_keys)
             self._force_adopt = False
+            self._display_ranks = ranks
         else:
             display = [k for k in self._display_order if k in by_key]
             display += [k for k in target_keys if k not in display]
