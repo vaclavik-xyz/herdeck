@@ -531,7 +531,9 @@ def test_panel_body_lines_wrap_by_pixel_width_without_losing_words():
     d = ImageDraw.Draw(Image.new("RGB", (PANEL_W, 196)))
     f = _font(24)
     text = "Claude needs your permission to run the following command right now"
-    lines = _panel_body_lines(d, [text], f, PANEL_W - 32)
+    # max_lines high enough for ANY platform font (CI's Linux fonts are wider
+    # than macOS ones), so the no-words-lost assertion is metric-independent
+    lines = _panel_body_lines(d, [text], f, PANEL_W - 32, max_lines=10)
     assert len(lines) >= 2
     for line in lines:
         assert d.textlength(line, font=f) <= PANEL_W - 32
