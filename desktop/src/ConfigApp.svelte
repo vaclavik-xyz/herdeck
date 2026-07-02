@@ -17,8 +17,10 @@
   import Banner from "./lib/Banner.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport as deckTransport } from "./lib/deckClient";
+  import { defineMessages, fmt, langOf, locale, setLang } from "./lib/i18n.svelte";
   import {
     commandTransport as cfgTransport,
+    getAt,
     parseConfig,
     parseValidate,
     parseActiveChanged,
@@ -30,21 +32,93 @@
     type ConfigPayload,
   } from "./lib/configClient";
 
+  const LM = defineMessages({
+    en: {
+      "sec.servers": "Servers",
+      "sec.deck": "Deck",
+      "sec.view": "View",
+      "sec.theme": "Colors",
+      "sec.macros": "Macros",
+      "sec.start_profiles": "Agent launchers",
+      "sec.notifications": "Notifications",
+      "sec.safety": "Safety",
+      "sec.answer_profiles": "Answer profiles",
+      "sec.profiles": "Profiles",
+      "sec.desktop": "Window",
+      profile: "Profile:",
+      default_base: "default (base)",
+      env_locked: "profile locked via HERDECK_PROFILE",
+      save_to_switch: "save or discard changes to switch profiles",
+      unsaved: "● unsaved changes",
+      loading: "Loading config… (or the sidecar is not up yet)",
+      no_servers: "No servers yet. Add the first one and hit Apply to create the config.",
+      unknown_section: "Unknown section „{name}\u201c.",
+      discard: "Discard",
+      discard_title: "Drop unsaved changes and return to the saved config",
+      apply: "Apply",
+      apply_title: "Save the config and push it to the running deck",
+      errlist_title: "Show or hide the error list",
+      switch_failed_locked: "profile '{name}' cannot be activated (locked or unknown)",
+      switch_failed: "profile switch failed: {e}",
+      bad_config_reply: "unexpected config reply from the sidecar",
+      sidecar_not_up: "sidecar not up yet — retrying…",
+      refresh_failed: "config refresh from the sidecar failed (unsaved changes kept)",
+      stale_on_disk: "the config changed on disk — load the new version (unsaved changes will be lost)",
+      reload: "load",
+      orphans: "{n} orphaned keychain keys ({list})",
+      cleanup: "clean up",
+      saved: "saved",
+      cleanup_failed: "cleaning token '{name}' failed (HTTP {code})",
+      orphans_cleaned: "orphaned keychain keys cleaned",
+    },
+    cs: {
+      "sec.servers": "Servery",
+      "sec.deck": "Deck",
+      "sec.view": "Zobrazení",
+      "sec.theme": "Barvy",
+      "sec.macros": "Makra",
+      "sec.start_profiles": "Spouštěče agentů",
+      "sec.notifications": "Notifikace",
+      "sec.safety": "Bezpečnost",
+      "sec.answer_profiles": "Profily odpovědí",
+      "sec.profiles": "Profily",
+      "sec.desktop": "Okno",
+      profile: "Profil:",
+      default_base: "default (báze)",
+      env_locked: "profil zamčen přes HERDECK_PROFILE",
+      save_to_switch: "ulož nebo zahoď změny pro přepnutí profilu",
+      unsaved: "● neuložené změny",
+      loading: "Načítám config… (nebo sidecar zatím neběží)",
+      no_servers: "Zatím žádný server. Přidej první a klikni Použít pro vytvoření configu.",
+      unknown_section: "Neznámá sekce „{name}\u201c.",
+      discard: "Zahodit",
+      discard_title: "Zahodit neuložené změny a vrátit se k uloženému configu",
+      apply: "Použít",
+      apply_title: "Uložit config a hned ho promítnout do běžícího decku",
+      errlist_title: "Zobrazit nebo skrýt seznam chyb",
+      switch_failed_locked: "profil '{name}' nelze aktivovat (zamčen nebo neznámý)",
+      switch_failed: "přepnutí profilu selhalo: {e}",
+      bad_config_reply: "neočekávaná odpověď configu ze sidecaru",
+      sidecar_not_up: "sidecar zatím neběží — zkouším znovu…",
+      refresh_failed: "obnovení configu ze sidecaru selhalo (neuložené změny zůstávají)",
+      stale_on_disk: "config se mezitím změnil na disku — načti novou verzi (neuložené změny se ztratí)",
+      reload: "načíst",
+      orphans: "{n} osiřelých keychain klíčů ({list})",
+      cleanup: "uklidit",
+      saved: "uloženo",
+      cleanup_failed: "úklid tokenu '{name}' selhal (HTTP {code})",
+      orphans_cleaned: "osiřelé keychain klíče uklizeny",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
+
   // key = stable identifier (matches backend tile_sections keys where applicable),
-  // label = what the sidebar shows. Split so the UI language never leaks into logic.
-  const SECTIONS: { key: string; label: string }[] = [
-    { key: "servers", label: "Servery" },
-    { key: "deck", label: "Deck" },
-    { key: "view", label: "Zobrazení" },
-    { key: "theme", label: "Barvy" },
-    { key: "macros", label: "Makra" },
-    { key: "start_profiles", label: "Spouštěče agentů" },
-    { key: "notifications", label: "Notifikace" },
-    { key: "safety", label: "Bezpečnost" },
-    { key: "answer_profiles", label: "Profily odpovědí" },
-    { key: "profiles", label: "Profily" },
-    { key: "desktop", label: "Okno" },
-  ];
+  // label = what the sidebar shows in the CURRENT language.
+  const SECTION_KEYS = [
+    "servers", "deck", "view", "theme", "macros", "start_profiles",
+    "notifications", "safety", "answer_profiles", "profiles", "desktop",
+  ] as const;
+  const SECTIONS = $derived(SECTION_KEYS.map((key) => ({ key, label: lm[`sec.${key}`] })));
 
   // klik-to-jump: backend tile section KEY (from deckClient /state.tile_sections) maps
   // 1:1 onto sidebar keys. A preview tile click switches `active` to its section.
@@ -69,12 +143,17 @@
   }
   let reloadRev = $state(0); // bumps on every load(); map sections re-seed local rows on change
 
+  // The editor speaks the config's [view].language — including LIVE while the
+  // user flips the select, before Apply (instant preview of the UI language).
+  $effect(() => {
+    if (payload != null) setLang(langOf(getAt(payload, "base", "view", "language")));
+  });
+
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
   const preview = $derived(discovery ? deckTransport((cmd, args) => invoke(cmd, args)) : null);
   const profileOptions = $derived(payload ? ["default", ...Object.keys(payload.profiles)] : ["default"]);
 
-  const DEFAULT_LABEL = "default (báze)";
-  const optionLabel = (name: string): string => (name === "default" ? DEFAULT_LABEL : name);
+  const optionLabel = (name: string): string => (name === "default" ? lm.default_base : name);
   const activeValue = $derived(payload?.activeProfile ?? "default");
   const switcherDisabled = $derived(payload == null || payload.envLocked || dirty);
 
@@ -92,10 +171,10 @@
       if (changed) {
         await load(); // re-read saved state; preview refreshes via its own poll
       } else {
-        setBanner("warning", `profil '${name}' nelze aktivovat (zamčen nebo neznámý)`);
+        setBanner("warning", fmt(lm.switch_failed_locked, { name }));
       }
     } catch (e) {
-      setBanner("error", `přepnutí profilu selhalo: ${String(e)}`);
+      setBanner("error", fmt(lm.switch_failed, { e: String(e) }));
     }
   }
 
@@ -103,7 +182,7 @@
     try {
       const fresh = parseConfig(await cfg.read());
       if (fresh == null) {
-        setBanner("warning", "neočekávaná odpověď configu ze sidecaru");
+        setBanner("warning", lm.bad_config_reply);
         return;
       }
       payload = fresh;
@@ -114,9 +193,7 @@
     } catch {
       setBanner(
         "warning",
-        payload == null
-          ? "sidecar zatím neběží — zkouším znovu…"
-          : "obnovení configu ze sidecaru selhalo (neuložené změny zůstávají)",
+        payload == null ? lm.sidecar_not_up : lm.refresh_failed,
       );
     }
   }
@@ -153,8 +230,8 @@
         errors = [];
         setBanner(
           "warning",
-          "config se mezitím změnil na disku — načti novou verzi (neuložené změny se ztratí)",
-          "načíst",
+          lm.stale_on_disk,
+          lm.reload,
           () => void load(),
         );
         return;
@@ -173,13 +250,13 @@
         if (orphans.length > 0) {
           setBanner(
             "warning",
-            `${orphans.length} osiřelých keychain klíčů (${orphans.join(", ")})`,
-            "uklidit",
+            fmt(lm.orphans, { n: orphans.length, list: orphans.join(", ") }),
+            lm.cleanup,
             () => void cleanupOrphans(orphans),
           );
         } else if (banner == null) {
           // load() surfaces its own warning on a failed refresh — never mask it
-          setBanner("success", "uloženo");
+          setBanner("success", lm.saved);
         }
       } else {
         // A rejected Apply must SHOW what is wrong, not just count it.
@@ -205,10 +282,10 @@
       if (referenced.has(name)) continue;
       const code = await cfg.clearSecret(name);
       if (code === 204) secrets[name] = { set: false, source: null };
-      else { setBanner("error", `úklid tokenu '${name}' selhal (HTTP ${code})`); return; }
+      else { setBanner("error", fmt(lm.cleanup_failed, { name, code })); return; }
     }
     payload = { ...payload, secrets };
-    setBanner("success", "osiřelé keychain klíče uklizeny");
+    setBanner("success", lm.orphans_cleaned);
   }
 
   async function discard(): Promise<void> {
@@ -254,7 +331,7 @@
 <main>
   <header class="topbar">
     <label>
-      Profil:
+      {lm.profile}
       <select
         value={activeValue}
         disabled={switcherDisabled}
@@ -264,13 +341,13 @@
       </select>
     </label>
     {#if payload?.envLocked}
-      <span class="hint">profil zamčen přes HERDECK_PROFILE</span>
+      <span class="hint">{lm.env_locked}</span>
     {:else if dirty}
-      <span class="hint">ulož nebo zahoď změny pro přepnutí profilu</span>
+      <span class="hint">{lm.save_to_switch}</span>
     {/if}
     {#if dirty}
       <span class="dirty" class:bad={errors.length > 0}>
-        ● neuložené změny{errors.length > 0 ? ` · ${errorCountLabel(errors.length)}` : ""}
+        {lm.unsaved}{errors.length > 0 ? ` · ${errorCountLabel(errors.length, locale.lang)}` : ""}
       </span>
     {/if}
   </header>
@@ -284,10 +361,10 @@
 
     <section class="form">
       {#if payload == null}
-        <p class="hint">Načítám config… (nebo sidecar zatím neběží)</p>
+        <p class="hint">{lm.loading}</p>
       {:else if active === "servers"}
         {#if (payload.base.servers == null || (payload.base.servers as unknown[]).length === 0)}
-          <p class="hint">Zatím žádný server. Přidej první a klikni Použít pro vytvoření configu.</p>
+          <p class="hint">{lm.no_servers}</p>
         {/if}
         <ServersSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "deck"}
@@ -311,7 +388,7 @@
       {:else if active === "desktop"}
         <DesktopSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else}
-        <p class="hint">Neznámá sekce „{active}".</p>
+        <p class="hint">{fmt(lm.unknown_section, { name: active })}</p>
       {/if}
     </section>
 
@@ -329,15 +406,15 @@
   {/if}
 
   <footer class="savebar">
-    <button onclick={discard} disabled={!dirty || busy} title="Zahodit neuložené změny a vrátit se k uloženému configu">Zahodit</button>
+    <button onclick={discard} disabled={!dirty || busy} title={lm.discard_title}>{lm.discard}</button>
     {#if banner}<Banner kind={banner.kind} message={banner.message} actionLabel={banner.actionLabel} onAction={banner.onAction} />{/if}
     <span class="spacer"></span>
     {#if errors.length > 0}
-      <button class="errcount" title="Zobrazit nebo skrýt seznam chyb" onclick={() => (showErrors = !showErrors)}>
-        ⚠ {errorCountLabel(errors.length)} {showErrors ? "▾" : "▸"}
+      <button class="errcount" title={lm.errlist_title} onclick={() => (showErrors = !showErrors)}>
+        ⚠ {errorCountLabel(errors.length, locale.lang)} {showErrors ? "▾" : "▸"}
       </button>
     {/if}
-    <button onclick={apply} disabled={!dirty || busy} title="Uložit config a hned ho promítnout do běžícího decku">Použít</button>
+    <button onclick={apply} disabled={!dirty || busy} title={lm.apply_title}>{lm.apply}</button>
   </footer>
 </main>
 

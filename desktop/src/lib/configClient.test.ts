@@ -841,12 +841,17 @@ describe("window mode", () => {
 });
 
 describe("errorCountLabel", () => {
+  it("defaults to English", () => {
+    expect(errorCountLabel(1)).toBe("1 error");
+    expect(errorCountLabel(5)).toBe("5 errors");
+  });
+
   it("pluralizes Czech counts", () => {
-    expect(errorCountLabel(1)).toBe("1 chyba");
-    expect(errorCountLabel(2)).toBe("2 chyby");
-    expect(errorCountLabel(4)).toBe("4 chyby");
-    expect(errorCountLabel(5)).toBe("5 chyb");
-    expect(errorCountLabel(11)).toBe("11 chyb");
+    expect(errorCountLabel(1, "cs")).toBe("1 chyba");
+    expect(errorCountLabel(2, "cs")).toBe("2 chyby");
+    expect(errorCountLabel(4, "cs")).toBe("4 chyby");
+    expect(errorCountLabel(5, "cs")).toBe("5 chyb");
+    expect(errorCountLabel(11, "cs")).toBe("11 chyb");
   });
 });
 

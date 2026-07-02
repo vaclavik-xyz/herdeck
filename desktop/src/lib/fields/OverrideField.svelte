@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
+  import { t } from "../i18n.svelte";
+
   let { label, state, inheritedDisplay, onstate, children, help = "" }:
     {
       label: string;
@@ -11,10 +13,10 @@
       help?: string;
     } = $props();
 
-  const SEGMENTS: { value: "inherit" | "override"; text: string }[] = [
-    { value: "inherit", text: "Zdědit" },
-    { value: "override", text: "Vlastní" },
-  ];
+  const SEGMENTS = $derived<{ value: "inherit" | "override"; text: string }[]>([
+    { value: "inherit", text: t("widget.inherit") },
+    { value: "override", text: t("widget.custom") },
+  ]);
 
   function pick(next: "inherit" | "override"): void {
     if (next !== state) onstate(next);
@@ -37,7 +39,7 @@
     {#if state === "override"}
       {@render children()}
     {:else}
-      <p class="hint">zděděno: {inheritedDisplay}</p>
+      <p class="hint">{t("widget.inherited")} {inheritedDisplay}</p>
     {/if}
   </div>
 </div>

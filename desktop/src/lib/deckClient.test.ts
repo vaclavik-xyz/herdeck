@@ -55,20 +55,27 @@ describe("parseState", () => {
 });
 
 describe("summaryLabel", () => {
-  it("emphasizes blocked last and pluralizes agents (Czech 2-4 form)", () => {
+  it("defaults to English and emphasizes blocked last", () => {
     expect(summaryLabel({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0 })).toBe(
-      "4 agenti · 2 pracují · 1 nečinný · ⚠ 1 blokován",
+      "4 agents · 2 working · 1 idle · ⚠ 1 blocked",
     );
   });
 
   it("omits zero buckets and uses singular agent", () => {
     expect(summaryLabel({ agents: 1, blocked: 0, working: 0, idle: 1, done: 0 })).toBe(
-      "1 agent · 1 nečinný",
+      "1 agent · 1 idle",
     );
   });
 
-  it("renders only the agent count when everything else is zero (Czech 5+ form)", () => {
-    expect(summaryLabel(emptySummary())).toBe("0 agentů");
+  it("renders only the agent count when everything else is zero", () => {
+    expect(summaryLabel(emptySummary())).toBe("0 agents");
+  });
+
+  it("speaks Czech plurals when asked (1/2-4/5+ agent forms)", () => {
+    expect(summaryLabel({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0 }, "cs")).toBe(
+      "4 agenti · 2 pracují · 1 nečinný · ⚠ 1 blokován",
+    );
+    expect(summaryLabel(emptySummary(), "cs")).toBe("0 agentů");
   });
 });
 
@@ -273,7 +280,7 @@ describe("stepDeck — folds a poll into the render model", () => {
     expect(view.summary).toEqual({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0 });
     expect(view.source).toBe("live");
     expect(view.connected).toBe(true);
-    expect(summaryLabel(view.summary)).toContain("⚠ 1 blokován");
+    expect(summaryLabel(view.summary)).toContain("⚠ 1 blocked");
   });
 
   it("goes offline (keeping last tiles) when the fetch fails", async () => {

@@ -16,6 +16,7 @@
   const SEC = "view";
   const MANAGEMENT = ["launcher_menu", "bottom_row"];
   const WORKING_ANIMATIONS = ["spin", "comet", "pulse", "sweep", "none"];
+  const UI_LANGUAGES = ["en", "cs"];
   const TILE_FILLS = ["none", "tint", "solid"];
   const LIST_KEYS = ["bottom_row", "tile_fields", "tile_primary", "tile_secondary"] as const;
   const overlay = $derived(editProfile != null && editProfile !== "default");
@@ -36,6 +37,7 @@
     tile_fields: "Které údaje dlaždice agenta zobrazí: repo, branch, status, time (doba ve stavu), server (štítek serveru).",
     tile_primary: "První textový řádek dlaždice z polí repo/branch/workspace/tab/agent; nevyplněno = repo, prázdné = vypnuto.",
     tile_secondary: "Druhý textový řádek dlaždice ze stejných polí; nevyplněno = branch, prázdný seznam řádek vypne.",
+    language: "Jazyk decku i této aplikace: en (angličtina) nebo cs (čeština). Projeví se po Použít.",
   };
 
   // --- base mode (unchanged from α) ---
@@ -44,6 +46,7 @@
   const showProfile = $derived((getAt(payload, "base", SEC, "show_profile_on_panel") as boolean) ?? false);
   const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? "spin");
   const tileFill = $derived((getAt(payload, "base", SEC, "tile_fill") as string) ?? "none");
+  const uiLanguage = $derived((getAt(payload, "base", SEC, "language") as string) ?? "en");
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
 
@@ -89,6 +92,7 @@
   <BooleanField label="show_profile_on_panel" help={HELP.show_profile_on_panel} value={showProfile} onchange={(v) => set("show_profile_on_panel", v)} />
   <SelectField label="working_animation" help={HELP.working_animation} value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
   <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
+  <SelectField label="language" help={HELP.language} value={uiLanguage} options={UI_LANGUAGES} onchange={(v) => set("language", v)} />
   {#each LIST_KEYS as key}
     <TriStateListField label={key} help={HELP[key]} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? []} onchange={(s, l) => setBaseTri(key, s, l)} />
   {/each}

@@ -10,6 +10,7 @@
     ConnectRequest,
   } from "./onboardingClient";
   import { connectErrorMessage, shouldAutoReconnect } from "./onboardingClient";
+  import { defineMessages, fmt, locale } from "./i18n.svelte";
 
   let {
     view,
@@ -24,6 +25,52 @@
     onConnected: () => void;
     onDismiss?: (() => void) | undefined;
   } = $props();
+
+  const LM = defineMessages({
+    en: {
+      connecting: "Connecting…",
+      reconnect_h1: "herdr is not running",
+      reconnect_lead: "The local connection is remembered, but herdr is not running right now.",
+      reconnect_hint: "Start {herdr} in a terminal (socket: {socket}). I'll reconnect automatically once it's up.",
+      retry: "Try again",
+      connect_saved: "Connect to the saved connection",
+      connect_remote_toggle: "Connect remotely…",
+      welcome_h1: "Connect herdeck",
+      local_ok: "✓ herdr is running locally",
+      connect_local: "Connect locally",
+      connect: "Connect",
+      remote_toggle: "Remote herdr…",
+      no_local: "herdr was not found locally — start it, or connect remotely below.",
+      url: "URL",
+      token: "Token",
+      id_optional: "ID (optional)",
+      fill_url_token: "Fill in both URL and token.",
+      demo: "Explore the demo",
+      back_to_deck: "← back to the deck",
+    },
+    cs: {
+      connecting: "Připojuji…",
+      reconnect_h1: "herdr neběží",
+      reconnect_lead: "Lokální připojení je zapamatované, ale herdr teď neběží.",
+      reconnect_hint: "Spusť {herdr} v terminálu (socket: {socket}). Jakmile naběhne, připojím se automaticky.",
+      retry: "Zkusit znovu",
+      connect_saved: "Připojit k uloženému spojení",
+      connect_remote_toggle: "Připojit vzdáleně…",
+      welcome_h1: "Připojit herdeck",
+      local_ok: "✓ herdr běží lokálně",
+      connect_local: "Připojit lokálně",
+      connect: "Připojit",
+      remote_toggle: "Vzdálený herdr…",
+      no_local: "herdr nebyl lokálně nalezen — spusť ho, nebo se připoj vzdáleně níže.",
+      url: "URL",
+      token: "Token",
+      id_optional: "ID (volitelné)",
+      fill_url_token: "Vyplň URL i token.",
+      demo: "Prozkoumat demo",
+      back_to_deck: "← zpět na deck",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
 
   let showRemote = $state(false);
   let url = $state("");
@@ -77,7 +124,7 @@
     if (r.ok) {
       onConnected();
     } else {
-      error = connectErrorMessage(r.error, status?.socketPath);
+      error = connectErrorMessage(r.error, status?.socketPath, locale.lang);
     }
   }
 
@@ -93,7 +140,7 @@
   function connectRemote(): void {
     const u = url.trim();
     if (!u || !token) {
-      error = "Vyplň URL i token.";
+      error = lm.fill_url_token;
       return;
     }
     const req: ConnectRequest = { choice: "remote", url: u, token };
@@ -107,53 +154,52 @@
   }
 
   const label = (idle: string, action: string): string =>
-    busyAction === action ? "Připojuji…" : idle;
+    busyAction === action ? lm.connecting : idle;
 </script>
 
 <section class="onboarding">
   {#if view === "reconnect"}
-    <h1>herdr neběží</h1>
-    <p class="lead">Lokální připojení je zapamatované, ale herdr teď neběží.</p>
+    <h1>{lm.reconnect_h1}</h1>
+    <p class="lead">{lm.reconnect_lead}</p>
     <p class="hint">
-      Spusť <code>herdr</code> v terminálu (socket: <code>{status?.socketPath ?? "?"}</code>).
-      Jakmile naběhne, připojím se automaticky.
+      {fmt(lm.reconnect_hint, { herdr: "herdr", socket: status?.socketPath ?? "?" })}
     </p>
     <div class="actions">
       <button class="primary" disabled={busy} onclick={connectLocal}>
-        {label("Zkusit znovu", "local")}
+        {label(lm.retry, "local")}
       </button>
       {#if savedAvailable}
         <button class="ghost" disabled={busy} onclick={connectSaved}>
-          {label("Připojit k uloženému spojení", "saved")}
+          {label(lm.connect_saved, "saved")}
         </button>
       {/if}
       <button class="link" disabled={busy} onclick={() => (showRemote = !showRemote)}>
-        Připojit vzdáleně…
+        {lm.connect_remote_toggle}
       </button>
     </div>
   {:else}
-    <h1>Připojit herdeck</h1>
+    <h1>{lm.welcome_h1}</h1>
     {#if localAvailable}
-      <p class="lead ok">✓ herdr běží lokálně</p>
+      <p class="lead ok">{lm.local_ok}</p>
       <div class="actions">
         {#if savedAvailable}
           <button class="primary" disabled={busy} onclick={connectSaved}>
-            {label("Připojit k uloženému spojení", "saved")}
+            {label(lm.connect_saved, "saved")}
           </button>
           <button class="ghost" disabled={busy} onclick={connectLocal}>
-            {label("Připojit lokálně", "local")}
+            {label(lm.connect_local, "local")}
           </button>
         {:else}
           <button class="primary" disabled={busy} onclick={connectLocal}>
-            {label("Připojit", "local")}
+            {label(lm.connect, "local")}
           </button>
         {/if}
         <button class="link" disabled={busy} onclick={() => (showRemote = !showRemote)}>
-          Vzdálený herdr…
+          {lm.remote_toggle}
         </button>
       </div>
     {:else}
-      <p class="lead">herdr nebyl lokálně nalezen — spusť ho, nebo se připoj vzdáleně níže.</p>
+      <p class="lead">{lm.no_local}</p>
       {#if savedAvailable}
         <div class="actions">
           <button class="ghost" disabled={busy} onclick={connectSaved}>
@@ -168,11 +214,11 @@
 
   {#if showRemote || (view === "welcome" && status != null && !localAvailable)}
     <form class="remote" onsubmit={(e) => { e.preventDefault(); connectRemote(); }}>
-      <label>URL<input type="text" placeholder="ws(s)://host:8788" bind:value={url} use:focusOnMount /></label>
-      <label>Token<input type="password" bind:value={token} /></label>
-      <label class="adv">ID (volitelné)<input type="text" placeholder="herdr" bind:value={serverId} /></label>
+      <label>{lm.url}<input type="text" placeholder="ws(s)://host:8788" bind:value={url} use:focusOnMount /></label>
+      <label>{lm.token}<input type="password" bind:value={token} /></label>
+      <label class="adv">{lm.id_optional}<input type="text" placeholder="herdr" bind:value={serverId} /></label>
       <button class="primary" type="submit" disabled={busy}>
-        {label("Připojit", "remote")}
+        {label(lm.connect, "remote")}
       </button>
     </form>
   {/if}
@@ -181,10 +227,10 @@
 
   <div class="footer">
     <button class="link" disabled={busy} onclick={connectDemo}>
-      {label("Prozkoumat demo", "demo")}
+      {label(lm.demo, "demo")}
     </button>
     {#if onDismiss}
-      <button class="link dismiss" disabled={busy} onclick={onDismiss}>← zpět na deck</button>
+      <button class="link dismiss" disabled={busy} onclick={onDismiss}>{lm.back_to_deck}</button>
     {/if}
   </div>
 </section>
