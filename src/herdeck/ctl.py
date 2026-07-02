@@ -420,7 +420,12 @@ async def dispatch(args, session) -> int:
 async def _amain(args) -> int:
     config_path = args.config or _discover_config_path()
     file_config = load_config(config_path) if config_path else None
-    socket_path = os.path.expanduser(os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock"))
+    # The shared resolver honours HERDR_SOCKET > [hardware].herdr_socket > XDG —
+    # the deck already did; ctl hardcoding env-or-default made a config-set
+    # socket work in `herdeck` but fail in `herdeck-ctl`.
+    from .bootstrap import resolve_socket_path
+
+    socket_path = resolve_socket_path(file_config)
     mode = resolve_mode(mock=False, config_path=config_path,
                         config_has_servers=bool(file_config and file_config.servers),
                         socket_path=socket_path, socket_exists=os.path.exists(socket_path))

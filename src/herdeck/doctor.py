@@ -380,9 +380,22 @@ def collect_checks() -> list[Check]:
     from .app import _discover_config_path
 
     config_path = _discover_config_path()
-    socket_path = os.path.expanduser(os.environ.get("HERDR_SOCKET", "~/.config/herdr/herdr.sock"))
-    socket_exists = os.path.exists(socket_path)
     has_servers, token_envs, config_error, servers = _read_config_facts(config_path)
+    # Resolve the socket like the deck does (env > [hardware].herdr_socket >
+    # default) — a diagnostic that contradicts the working app is the worst
+    # kind of doctor output.
+    from .bootstrap import resolve_socket_path
+
+    file_config = None
+    if config_path:
+        try:
+            from .config import load_config
+
+            file_config = load_config(config_path)
+        except Exception:
+            file_config = None
+    socket_path = resolve_socket_path(file_config)
+    socket_exists = os.path.exists(socket_path)
     socket_check = (
         Check("herdr socket", True, "remote config present; local socket not required")
         if has_servers
