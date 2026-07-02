@@ -525,6 +525,19 @@ export function overrideValue(payload: ConfigPayload, profile: string, section: 
   return overrideValuePath(payload, profile, [section, key]);
 }
 
+/** The EFFECTIVE UI/deck language for the active profile: the profile's own
+ *  `view.language` override, else the inherited (extends-chain + base) value,
+ *  else "en" — mirroring the backend's profile merge for this key. */
+export function effectiveLanguage(payload: ConfigPayload): "en" | "cs" {
+  const prof = payload.activeProfile;
+  const v =
+    prof !== "default" && payload.profiles[prof] != null
+      ? (overrideValue(payload, prof, "view", "language") ??
+        inheritedFor(payload, prof, "view", "language"))
+      : readPath(payload.base, ["view", "language"]).value;
+  return v === "cs" ? "cs" : "en";
+}
+
 /** Override state of `section.key` in `profile`'s overlay: absent → "default" (= inherit),
  *  `[]` → "empty", anything else present → "custom". Reuses `ListFieldState`; in overlay
  *  context "default" denotes inheritance. */

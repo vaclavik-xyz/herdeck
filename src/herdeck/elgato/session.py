@@ -7,6 +7,7 @@ from .. import layout
 from ..commands import Command, build_action_command, profile_for
 from ..config import Config
 from ..driver.base import TileView
+from ..i18n import tr
 from ..model import AgentKey, AgentState, Status
 from .slots import SlotLeases
 
@@ -187,22 +188,28 @@ class ElgatoSession:
             return not layout.parse_options(text)
         return False
 
+    def _tr(self, key: str, **fmt: object) -> str:
+        return tr(self.config.view.language, key, **fmt)
+
     def _action_tile(self, instance_id: str, kind: str) -> TileView:
         enabled = self.action_enabled(kind)
         target = self._target()
-        labels = {"approve": "Approve", "deny": "Deny", "stop": "Stop", "pager": "Next"}
+        label = self._tr(f"act.{kind}")
         ident = (target.repo or target.label) if (target is not None and kind != "pager") else ""
         color = {"approve": "green", "deny": "amber", "stop": "red", "pager": "blue"}[kind]
         if kind == "stop" and self.is_armed():
-            return TileView(0, "Stop", "red", repo=ident or None, status_text="STOP?")
+            return TileView(
+                0, self._tr("act.stop"), "red",
+                repo=ident or None, status_text=self._tr("act.stop_confirm"),
+            )
         if kind != "pager" and target is not None and target.key == self._pending_act:
-            return TileView(0, labels[kind], "dim", repo=ident or None, status_text="PENDING")
+            return TileView(0, label, "dim", repo=ident or None, status_text=self._tr("act.pending"))
         return TileView(
             0,
-            labels[kind],
+            label,
             color if enabled else "dim",
             repo=ident or None,
-            status_text=labels[kind].upper(),
+            status_text=label.upper(),
         )
 
     # --- press handling ---
@@ -308,7 +315,9 @@ class ElgatoSession:
             tile_fill=self.config.view.tile_fill,
             repo=primary,
             branch=secondary,
-            status_text="OFFLINE" if down else s.status.value.upper(),
+            status_text=(
+                self._tr("status.offline") if down else self._tr(f"status.{s.status.value}")
+            ),
         )
 
     # --- render ---

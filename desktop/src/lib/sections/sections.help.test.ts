@@ -48,23 +48,24 @@ function demoPayload(): ConfigPayload {
 
 type SectionSpec = {
   name: string;
+  key: string; // FIELD_HELP section key
   component: unknown;
   overlay: boolean; // supports editProfile
   reloadRev: boolean; // takes reloadRev
 };
 
 const SECTIONS: SectionSpec[] = [
-  { name: "ServersSection", component: ServersSection, overlay: false, reloadRev: false },
-  { name: "DeckSection", component: DeckSection, overlay: true, reloadRev: false },
-  { name: "ViewSection", component: ViewSection, overlay: true, reloadRev: false },
-  { name: "ThemeSection", component: ThemeSection, overlay: true, reloadRev: false },
-  { name: "MacrosSection", component: MacrosSection, overlay: true, reloadRev: false },
-  { name: "StartProfilesSection", component: StartProfilesSection, overlay: true, reloadRev: true },
-  { name: "NotificationsSection", component: NotificationsSection, overlay: true, reloadRev: false },
-  { name: "SafetySection", component: SafetySection, overlay: true, reloadRev: false },
-  { name: "AnswerProfilesSection", component: AnswerProfilesSection, overlay: true, reloadRev: true },
-  { name: "ProfilesSection", component: ProfilesSection, overlay: false, reloadRev: false },
-  { name: "DesktopSection", component: DesktopSection, overlay: false, reloadRev: false },
+  { name: "ServersSection", key: "servers", component: ServersSection, overlay: false, reloadRev: false },
+  { name: "DeckSection", key: "deck", component: DeckSection, overlay: true, reloadRev: false },
+  { name: "ViewSection", key: "view", component: ViewSection, overlay: true, reloadRev: false },
+  { name: "ThemeSection", key: "theme", component: ThemeSection, overlay: true, reloadRev: false },
+  { name: "MacrosSection", key: "macros", component: MacrosSection, overlay: true, reloadRev: false },
+  { name: "StartProfilesSection", key: "start_profiles", component: StartProfilesSection, overlay: true, reloadRev: true },
+  { name: "NotificationsSection", key: "notifications", component: NotificationsSection, overlay: true, reloadRev: false },
+  { name: "SafetySection", key: "safety", component: SafetySection, overlay: true, reloadRev: false },
+  { name: "AnswerProfilesSection", key: "answer_profiles", component: AnswerProfilesSection, overlay: true, reloadRev: true },
+  { name: "ProfilesSection", key: "profiles", component: ProfilesSection, overlay: false, reloadRev: false },
+  { name: "DesktopSection", key: "desktop", component: DesktopSection, overlay: false, reloadRev: false },
 ];
 
 function assertLabelsHaveHelp(
@@ -90,10 +91,15 @@ function assertLabelsHaveHelp(
     for (const el of labels) {
       const text = el.textContent?.trim() ?? "";
       if (text === "") continue; // inner field wrapped by OverrideField — label lives on the wrapper
-      expect(
-        el.getAttribute("title")?.trim() || null,
-        `${spec.name}${editProfile ? " (overlay)" : ""}: pole "${text}" nemá vysvětlivku (help prop)`,
-      ).toBeTruthy();
+      const title = el.getAttribute("title")?.trim() || null;
+      const ctx = `${spec.name}${editProfile ? " (overlay)" : ""} [${lang}]: pole "${text}"`;
+      expect(title, `${ctx} nemá vysvětlivku (help prop)`).toBeTruthy();
+      // When the label is a catalog key (possibly suffixed, e.g. "token (inherited)"),
+      // the tooltip must be the catalog text FOR THE MOUNTED LANGUAGE — a stale
+      // hardcoded single-language hint would pass a mere non-empty check.
+      const bare = text.replace(/ \(.*\)$/, "");
+      const expected = FIELD_HELP[lang][spec.key]?.[bare];
+      if (expected) expect(title, `${ctx}: tooltip není z katalogu pro '${lang}'`).toBe(expected);
     }
   } finally {
     unmount(instance);

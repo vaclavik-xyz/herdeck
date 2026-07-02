@@ -44,6 +44,7 @@ import {
   setWindowMode,
   type ConfigPayload,
   errorCountLabel,
+  effectiveLanguage,
   isStaleRevisionError,
 } from "./configClient";
 
@@ -837,6 +838,39 @@ describe("window mode", () => {
 
   it("exposes exactly the three modes", () => {
     expect(WINDOW_MODES).toEqual(["normal", "floating", "always_on_top"]);
+  });
+});
+
+describe("effectiveLanguage", () => {
+  const base = (lang?: string) => ({
+    base: { view: lang ? { language: lang } : {} },
+    profiles: {
+      night: { view: { language: "cs" } },
+      child: { extends: "night" },
+      plain: {},
+    },
+    local: {},
+    secrets: {},
+  });
+
+  it("reads base view.language when no profile is active (en default)", () => {
+    expect(effectiveLanguage(parseConfig(base())!)).toBe("en");
+    expect(effectiveLanguage(parseConfig(base("cs"))!)).toBe("cs");
+  });
+
+  it("prefers the active profile's own override", () => {
+    const p = parseConfig({ ...base("en"), active_profile: "night" })!;
+    expect(effectiveLanguage(p)).toBe("cs");
+  });
+
+  it("follows the extends chain for an inheriting profile", () => {
+    const p = parseConfig({ ...base("en"), active_profile: "child" })!;
+    expect(effectiveLanguage(p)).toBe("cs");
+  });
+
+  it("falls back to base for a profile without an override", () => {
+    const p = parseConfig({ ...base("cs"), active_profile: "plain" })!;
+    expect(effectiveLanguage(p)).toBe("cs");
   });
 });
 

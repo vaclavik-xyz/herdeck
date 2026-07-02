@@ -20,7 +20,7 @@
   import { defineMessages, fmt, langOf, locale, setLang } from "./lib/i18n.svelte";
   import {
     commandTransport as cfgTransport,
-    getAt,
+    effectiveLanguage,
     parseConfig,
     parseValidate,
     parseActiveChanged,
@@ -143,10 +143,11 @@
   }
   let reloadRev = $state(0); // bumps on every load(); map sections re-seed local rows on change
 
-  // The editor speaks the config's [view].language — including LIVE while the
-  // user flips the select, before Apply (instant preview of the UI language).
+  // The editor speaks the config's EFFECTIVE [view].language (active profile
+  // override → extends chain → base) — including LIVE while the user flips the
+  // select, before Apply (instant preview of the UI language).
   $effect(() => {
-    if (payload != null) setLang(langOf(getAt(payload, "base", "view", "language")));
+    if (payload != null) setLang(langOf(effectiveLanguage(payload)));
   });
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));

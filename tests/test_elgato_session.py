@@ -433,3 +433,22 @@ def test_slot_tile_selected_marker_hidden_when_both_lines_off():
     assert sess.selected() == AgentKey("dev", "p1")
     assert tile.repo == ""
     assert tile.branch == ""
+
+
+def test_action_and_slot_tiles_speak_czech_when_configured():
+    from herdeck.config import ViewConfig
+
+    cfg = make_config()
+    cfg.view = ViewConfig(language="cs")
+    sess = ElgatoSession(cfg, FakeIcons())
+    sess.set_slots([("s1", (0, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+    approve = sess._action_tile("a1", "approve")
+    assert approve.label == "Schválit"
+    slot = sess._slot_tile(0)
+    assert slot.status_text == "PRACUJE"
+
+
+def test_action_tiles_default_to_english():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    assert sess._action_tile("a1", "deny").label == "Deny"
