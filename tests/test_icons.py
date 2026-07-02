@@ -584,3 +584,20 @@ def test_colour_override_marks_are_not_flattened_on_bright_solid(tmp_path):
     img = Image.open(io.BytesIO(p.render_tile_bytes(tile))).convert("RGB")
     r, g, b = img.getpixel((35, 35))
     assert r > 150 and g < 90  # the red override survived, no dark silhouette
+
+
+def test_animation_none_ignores_spinner_phase_in_the_cache_name(tmp_path):
+    """Style 'none' draws no spinner, so the phase must not mint new (pixel
+    identical) filenames — that defeated the D200 identical-frame skip and
+    caused a full page reload per tick (visible flicker)."""
+    from herdeck.driver.base import TileView
+
+    provider = make_provider(tmp_path)
+    base = dict(index=0, label="repo", color="green", repo="repo", branch="main")
+    t1 = TileView(**base, spinner=1, working_animation="none")
+    t2 = TileView(**base, spinner=2, working_animation="none")
+    assert provider._tile_name(t1)[0] == provider._tile_name(t2)[0]
+    # animated styles DO vary by phase (that is the animation)
+    s1 = TileView(**base, spinner=1, working_animation="spin")
+    s2 = TileView(**base, spinner=2, working_animation="spin")
+    assert provider._tile_name(s1)[0] != provider._tile_name(s2)[0]

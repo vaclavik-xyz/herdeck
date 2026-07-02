@@ -603,8 +603,9 @@ def test_frame_with_failed_panel_compose_never_blanks_the_panel(tmp_path, monkey
         os.chdir(before)
 
 
-def test_partial_frames_env_flips_update_only(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERDECK_D200_PARTIAL_FRAMES", "1")
+def test_frames_are_always_full_sets(tmp_path):
+    # Device-tested 2026-07-02: partial updates blank most cells even when the
+    # write carries all 15 — frames must stay full sets, no env override.
     dev = _FakeDev()
     before = os.getcwd()
     driver = _make_driver(tmp_path, dev)
@@ -612,7 +613,7 @@ def test_partial_frames_env_flips_update_only(tmp_path, monkeypatch):
         driver.render_frame([TileView(0, "x", "blue")], PanelView("t", ["l"], "grey"))
         assert _wait_until(lambda: dev.calls)
         buttons, update_only = dev.calls[0]
-        assert update_only is True  # in-place update, still carrying ALL cells
+        assert update_only is False
         assert 13 in buttons and 14 in buttons
     finally:
         driver.close()

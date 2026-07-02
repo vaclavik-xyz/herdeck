@@ -442,13 +442,12 @@ class D200Driver(DeckDriver):
         # zeroes the per-tick zip+USB cost of an idle deck.
         if buttons == self._last_frame_buttons:
             return
-        # A/B knob for the occasional full-screen blink: OUT_SET_BUTTONS is a
-        # firmware page RELOAD (visible repaint), OUT_PARTIALLY_UPDATE_BUTTONS
-        # draws in place. The frame always carries ALL 15 cells, so a partial
-        # write omits nothing and the historical omitted-cells-blank bug cannot
-        # trigger. Env-gated until verified on the device.
-        update_only = os.environ.get("HERDECK_D200_PARTIAL_FRAMES") == "1"
-        if self._timed_set_buttons("frame", buttons, update_only=update_only):
+        # ALWAYS a full set. Device-tested 2026-07-02: OUT_PARTIALLY_UPDATE_BUTTONS
+        # blanks most cells EVEN when the write carries all 15 — partial updates
+        # are broken on this firmware at page scale, do not retry them. The
+        # full-set page reload can blink; the mitigation is writing only frames
+        # whose content actually changed (see the identical-frame skip above).
+        if self._timed_set_buttons("frame", buttons, update_only=False):
             self._last_frame_buttons = buttons
             self._record(buttons)
 
