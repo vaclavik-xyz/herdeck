@@ -93,12 +93,19 @@ def test_usage_detail_lines_carry_reset_times():
     assert line == "Claude 5h 19%"  # no reset -> no dangling arrow
 
 
-def test_usage_detail_lines_cap_at_panel_size():
+def test_usage_detail_lines_page_through_all_windows():
+    from herdeck.layout import usage_detail_pages
+
     data = [
         ProviderUsage("claude", [UsageWindow("5h", 1, None), UsageWindow("7d", 2, None)]),
         ProviderUsage("codex", [UsageWindow("5h", 3, None), UsageWindow("7d", 4, None)]),
     ]
-    assert len(usage_detail_lines(data)) == 3  # panel body holds 3 lines
+    # 4 windows > the 3-line panel body: page 2 carries the rest — a silent
+    # cap made e.g. Codex's weekly reset unobtainable on any surface.
+    assert usage_detail_pages(data) == 2
+    assert len(usage_detail_lines(data, page=0)) == 3
+    assert usage_detail_lines(data, page=1) == ["Codex 7d 4%"]
+    assert usage_detail_lines(data, page=99) == ["Codex 7d 4%"]  # clamped, never empty
 
 
 class _Proc:

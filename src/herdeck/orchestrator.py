@@ -86,6 +86,7 @@ class Orchestrator:
         # app feeds it via set_usage from its UsagePoller.
         self._usage: list = []
         self._usage_detail_until: float = 0.0
+        self._usage_detail_page: int = 0
         # Ordering hysteresis state (see _ordered).
         self._display_order: list[AgentKey] = []
         self._display_ranks: dict = {}
@@ -176,6 +177,16 @@ class Orchestrator:
     def set_usage(self, data: list) -> None:
         """Latest ProviderUsage list from the host's UsagePoller ([] = none)."""
         self._usage = list(data)
+
+    def consume_expired_panel_hold(self) -> bool:
+        """True ONCE when a held usage detail just expired — the hold is gated
+        at render time only, so without this an idle deck kept showing the
+        \"6s\" detail until the next periodic full refresh (up to ~16s). Hosts
+        call it each tick and issue a full render when it fires."""
+        if self._usage_detail_until and self._clock() >= self._usage_detail_until:
+            self._usage_detail_until = 0.0
+            return True
+        return False
 
     # --- drill helpers (used by app for read correlation) ---
     def drill_key(self) -> AgentKey | None:
@@ -394,11 +405,17 @@ class Orchestrator:
             and self._clock() < self._usage_detail_until
         ):
             # Held usage detail (panel press on a single-page deck): every
-            # provider window with its reset time, in place of the overview.
+            # provider window with its reset time, in place of the overview;
+            # repeated presses page when there are more windows than lines.
             # An offline server or a blocked agent takes the panel back at once.
+            detail_pages = layout.usage_detail_pages(self._usage)
+            title = self._tr("usage_title")
+            if detail_pages > 1:
+                page = min(self._usage_detail_page, detail_pages - 1)
+                title = f"{title} · {page + 1}/{detail_pages}"
             panel = PanelView(
-                self._tr("usage_title"),
-                layout.usage_detail_lines(self._usage),
+                title,
+                layout.usage_detail_lines(self._usage, page=self._usage_detail_page),
                 "grey",
             )
             return RenderState(tiles, panel)
@@ -653,18 +670,33 @@ class Orchestrator:
     def _press_overview(self, index: int) -> list[Command]:
         if index in self._panel_indices():
             _, pages = layout.page(self._ordered(), self._page, self._agent_slots())
-            if pages == 1 and self._usage:
-                # Nothing to page through: the press toggles a held usage
-                # detail instead (reset times per provider window).
+            detail_can_show = (
+                self._usage and not self._down and self._blocked_spotlight() is None
+            )
+            if pages == 1 and detail_can_show:
+                # Nothing to page through: the press shows a held usage detail
+                # instead (reset times per provider window); repeated presses
+                # page through windows beyond the 3-line body, then hide.
+                # While a spotlight/offline panel owns the view the press does
+                # NOT arm an invisible timer that would pop up later.
                 now = self._clock()
-                self._usage_detail_until = (
-                    0.0 if now < self._usage_detail_until else now + _USAGE_DETAIL_HOLD_S
-                )
+                if now >= self._usage_detail_until:
+                    self._usage_detail_page = 0
+                    self._usage_detail_until = now + _USAGE_DETAIL_HOLD_S
+                elif self._usage_detail_page + 1 < layout.usage_detail_pages(self._usage):
+                    self._usage_detail_page += 1
+                    self._usage_detail_until = now + _USAGE_DETAIL_HOLD_S
+                else:
+                    self._usage_detail_until = 0.0
                 return []
             self._page += 1
             self._usage_detail_until = 0.0
             self._resettle()  # a page flip is a safe moment to adopt the fresh sort
             return []
+        # Any non-panel press moves attention elsewhere — a held usage detail
+        # must not outlive it (it would hide e.g. the "sent ›" acknowledgement
+        # after a drill action).
+        self._usage_detail_until = 0.0
         management = self._management_indices()
         if index in management:
             action = management[index]

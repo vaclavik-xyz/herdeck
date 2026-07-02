@@ -197,20 +197,31 @@ def usage_summary_lines(data, max_providers: int = 2) -> list[str]:
     return lines
 
 
-def usage_detail_lines(data, now=None, max_lines: int = _DETAIL_MAX_LINES) -> list[str]:
-    """One line per provider window with its reset time: 'Claude 5h 13% → 01:00'.
+def usage_detail_pages(data) -> int:
+    """How many panel pages the detail spans (one line per provider window)."""
+    count = sum(len(p.windows) for p in data)
+    return max(1, math.ceil(count / _DETAIL_MAX_LINES))
 
-    The arrow is a deliberate U+2192 — the panel font has no glyph for the
+
+def usage_detail_lines(
+    data, now=None, max_lines: int = _DETAIL_MAX_LINES, page: int = 0
+) -> list[str]:
+    """One panel page of per-window detail lines: 'Claude 5h 13% → 01:00'.
+
+    Every provider window gets a line; with more windows than the panel's
+    3-line body the caller pages through them (repeated panel presses) —
+    a silent cap would make e.g. Codex's weekly reset unobtainable. The
+    arrow is a deliberate U+2192 — the panel font has no glyph for the
     nicer ⟳/↻ (they render as tofu boxes on the deck)."""
     lines: list[str] = []
     for p in data:
         for w in p.windows:
-            if len(lines) == max_lines:
-                return lines
             reset = _fmt_reset(w.resets_at, now)
             tail = f" → {reset}" if reset else ""
             lines.append(f"{_provider_name(p.provider)} {w.label} {w.used_percent}%{tail}")
-    return lines
+    page = min(max(0, page), usage_detail_pages(data) - 1)
+    start = page * max_lines
+    return lines[start : start + max_lines]
 
 
 @dataclass

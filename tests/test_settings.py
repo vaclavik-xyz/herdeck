@@ -644,3 +644,21 @@ def test_usage_section_flows_through_profiles(tmp_path, monkeypatch):
     snapshot = load_settings(cfg, None)
     assert resolve_profile(snapshot).config.usage.providers == ["claude"]
     assert resolve_profile(snapshot, "work").config.usage.providers == ["claude", "codex"]
+
+
+def test_usage_config_rejects_blank_or_malformed_provider_ids():
+    from herdeck.settings import _usage_config
+
+    # The editor's list Add button seeds an empty row; a blank id would turn
+    # the poller ON with a garbage `--provider ""` call, a comma corrupts the
+    # comma-joined CLI argument.
+    with pytest.raises(ConfigError, match="usage.providers"):
+        _usage_config({"providers": [""]})
+    with pytest.raises(ConfigError, match="usage.providers"):
+        _usage_config({"providers": ["  "]})
+    with pytest.raises(ConfigError, match="usage.providers"):
+        _usage_config({"providers": ["claude,codex"]})
+    assert _usage_config({"providers": ["alibaba-coding-plan", "zai"]}).providers == [
+        "alibaba-coding-plan",
+        "zai",
+    ]

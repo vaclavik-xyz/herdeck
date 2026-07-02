@@ -324,3 +324,63 @@ def test_blocked_spotlight_preempts_held_usage_detail():
     assert o.render().panel.title == "usage limits"
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
     assert o.render().panel.title == "▲ needs you"  # attention beats detail
+
+
+def test_usage_detail_pages_via_repeated_presses():
+    from herdeck.usage import ProviderUsage, UsageWindow
+
+    t = {"now": 0.0}
+    o = Orchestrator(make_config(), slots=13, clock=lambda: t["now"])
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(
+        [
+            ProviderUsage("claude", [UsageWindow("5h", 1, None), UsageWindow("7d", 2, None)]),
+            ProviderUsage("codex", [UsageWindow("5h", 3, None), UsageWindow("7d", 4, None)]),
+        ]
+    )
+    o.on_press(13)
+    rs = o.render()
+    assert rs.panel.title.endswith("· 1/2")
+    assert len(rs.panel.lines) == 3
+    o.on_press(13)  # page 2 -> the 4th window's reset is reachable, not dropped
+    rs = o.render()
+    assert rs.panel.title.endswith("· 2/2")
+    assert rs.panel.lines == ["Codex 7d 4%"]
+    o.on_press(13)  # past the last page -> hide
+    assert o.render().panel.title == "1 agents"
+
+
+def test_expired_detail_hold_fires_consume_once():
+    t = {"now": 0.0}
+    o = Orchestrator(make_config(), slots=13, clock=lambda: t["now"])
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.on_press(13)
+    assert o.consume_expired_panel_hold() is False  # still held
+    t["now"] = 100.0
+    assert o.consume_expired_panel_hold() is True  # hosts render on this signal
+    assert o.consume_expired_panel_hold() is False  # one-shot
+    assert o.render().panel.title == "1 agents"
+
+
+def test_panel_press_does_not_arm_detail_during_spotlight():
+    t = {"now": 0.0}
+    o = Orchestrator(make_config(), slots=13, clock=lambda: t["now"])
+    o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    o.set_usage(_usage_data())
+    o.on_press(13)  # spotlight owns the panel; the press must not arm a timer
+    assert o._usage_detail_until == 0.0
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    assert o.render().panel.title == "1 agents"  # no surprise detail pop-up
+
+
+def test_tile_press_dismisses_held_detail():
+    t = {"now": 0.0}
+    o = Orchestrator(make_config(), slots=13, clock=lambda: t["now"])
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.on_press(13)
+    assert o.render().panel.title == "usage limits"
+    t["now"] = 1.0  # beyond the slot-press guard
+    o.on_press(0)  # drilling an agent moves attention: the hold must not linger
+    assert o._usage_detail_until == 0.0

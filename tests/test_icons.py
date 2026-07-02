@@ -455,16 +455,22 @@ def test_init_prunes_stale_generated_pngs(tmp_path):
 
     stale_tile = tmp_path / "tile_deadbeef.png"
     stale_icon = tmp_path / "icon_v2_0_stale_green.png"
+    # Panel PNGs are content-keyed too (usage percentages/reset times mint
+    # fresh names regularly) — exempting them grew the cache without bound.
+    stale_panel = tmp_path / "panel_abc123def456.png"
+    stale_panel_half = tmp_path / "panel_abc123def456_l.png"
     fresh_tile = tmp_path / "tile_fresh.png"
-    foreign = tmp_path / "panel_left.png"
-    for f in (stale_tile, stale_icon, fresh_tile, foreign):
+    foreign = tmp_path / "user_custom.png"
+    for f in (stale_tile, stale_icon, stale_panel, stale_panel_half, fresh_tile, foreign):
         f.write_bytes(b"png")
     old = _time.time() - 48 * 3600
-    for f in (stale_tile, stale_icon, foreign):
+    for f in (stale_tile, stale_icon, stale_panel, stale_panel_half, foreign):
         os.utime(f, (old, old))
     make_provider(tmp_path)
     assert not stale_tile.exists()
     assert not stale_icon.exists()
+    assert not stale_panel.exists()
+    assert not stale_panel_half.exists()
     assert fresh_tile.exists()  # fresh generated files survive the age cutoff
     assert foreign.exists()  # non-generated names are never touched, however old
 

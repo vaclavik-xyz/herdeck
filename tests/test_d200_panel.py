@@ -718,3 +718,61 @@ def test_frames_are_always_full_sets(tmp_path):
     finally:
         driver.close()
         os.chdir(before)
+
+
+def test_failed_legacy_split_does_not_lock_in_the_frame(tmp_path, monkeypatch):
+    # A degraded rewrite must FAIL the write (nothing recorded) so the same
+    # frame retries and heals — writing the un-rewritten single entry instead
+    # succeeded, was recorded, and the frame-skip locked the broken panel in.
+    import herdeck.driver.d200 as d200mod
+
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        real = d200mod.split_panel
+        fail = {"on": True}
+
+        def flaky(img):
+            if fail["on"]:
+                raise RuntimeError("split boom")
+            return real(img)
+
+        monkeypatch.setattr(d200mod, "split_panel", flaky)
+        driver.render_frame([TileView(0, "x", "blue")], PanelView("t", ["l"], "grey"))
+        time.sleep(0.15)
+        assert dev.calls == []  # degraded write dropped instead of sent
+        fail["on"] = False
+        driver.render_frame([TileView(0, "x", "blue")], PanelView("t", ["l"], "grey"))
+        assert _wait_until(lambda: dev.calls)  # identical frame NOT skipped -> heals
+        assert 13 in dev.calls[0][0] and 14 in dev.calls[0][0]
+    finally:
+        driver.close()
+        os.chdir(before)
+
+
+def test_panel_save_failure_serves_stale_previous_panel(tmp_path, monkeypatch):
+    # `names` must rebind only after a successful save: rebinding first made
+    # the stale-panel fallback return a NEW name whose file was never written
+    # (a dangling icon that permanently tripped the fast path).
+    from PIL import Image as PILImage
+
+    dev = _FakeDev()
+    before = os.getcwd()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        driver.render_panel(PanelView("A", ["l"], "grey"))
+        assert _wait_until(lambda: dev.calls)
+        old_icon = dev.calls[0][0][13]["icon"]
+
+        def boom(self, *a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(PILImage.Image, "save", boom)
+        driver.render_panel(PanelView("B", ["l"], "grey"))
+        assert _wait_until(lambda: len(dev.calls) == 2)
+        # the intact previous panel is served, not a dangling new name
+        assert dev.calls[1][0][13]["icon"] == old_icon
+    finally:
+        driver.close()
+        os.chdir(before)

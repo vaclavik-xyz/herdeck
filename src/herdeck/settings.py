@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -274,6 +275,15 @@ def _usage_config(raw: dict | None) -> UsageConfig:
         providers = raw["providers"]
         if not isinstance(providers, list) or any(not isinstance(p, str) for p in providers):
             raise ConfigError("usage.providers must be a list of provider ids (strings)")
+        for p in providers:
+            # Ids become one comma-joined CLI argument: a blank id would turn
+            # the poller ON with a garbage `--provider ""` call (the editor's
+            # list Add button seeds an empty row), a comma corrupts the join.
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", p):
+                raise ConfigError(
+                    f"usage.providers entry {p!r} is not a provider id"
+                    " (letters, digits, '-', '_')"
+                )
         usage.providers = list(providers)
     if "refresh_secs" in raw:
         secs = raw["refresh_secs"]

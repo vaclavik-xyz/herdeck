@@ -43,11 +43,16 @@ _BYTES_CACHE_MAX = 512  # in-memory PNG-bytes LRU entries (~a few MB)
 
 
 def prune_generated(cache_dir: str, max_age_s: float = PRUNE_MAX_AGE_S) -> int:
-    """Delete generated ``tile_*``/``icon_v*`` PNGs older than ``max_age_s``.
+    """Delete generated ``tile_*``/``icon_v*``/``panel_*`` PNGs older than
+    ``max_age_s``.
 
-    Only the content-addressed names this module writes are touched; anything
-    else in the dir (panel_left.png, user files) is left alone. Returns the
-    number of files removed."""
+    Only the content-addressed names herdeck writes are touched; anything else
+    in the dir (user files) is left alone. Panel PNGs are content-keyed too
+    (d200 driver: ``panel_<hash>.png`` + fallback ``_l``/``_r`` halves) and
+    usage percentages/reset times in the panel now mint fresh names regularly,
+    so exempting them grew the cache without bound on a 24/7 deck; consumers
+    re-check file existence per frame and refresh mtime on reuse, so pruning
+    old ones is safe. Returns the number of files removed."""
     try:
         entries = os.scandir(cache_dir)
     except OSError:
@@ -59,7 +64,11 @@ def prune_generated(cache_dir: str, max_age_s: float = PRUNE_MAX_AGE_S) -> int:
             name = entry.name
             if not name.endswith(".png"):
                 continue
-            if not (name.startswith("tile_") or name.startswith("icon_v")):
+            if not (
+                name.startswith("tile_")
+                or name.startswith("icon_v")
+                or name.startswith("panel_")
+            ):
                 continue
             try:
                 if entry.is_file() and entry.stat().st_mtime < cutoff:

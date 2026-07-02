@@ -351,14 +351,20 @@ class D200Driver(DeckDriver):
             return buttons
         stem = os.path.splitext(entry["icon"])[0]  # panel_<hash>
         names = (f"{stem}_l.png", f"{stem}_r.png")
-        if not all(os.path.exists(os.path.join(_ICON_DIR, n)) for n in names):
-            try:
-                with Image.open(os.path.join(_ICON_DIR, entry["icon"])) as img:
-                    left, right = split_panel(img)
-                left.save(os.path.join(_ICON_DIR, names[0]))
-                right.save(os.path.join(_ICON_DIR, names[1]))
-            except Exception:
-                return buttons  # stock ignores the unknown key; panel heals next frame
+        if all(os.path.exists(os.path.join(_ICON_DIR, n)) for n in names):
+            for n in names:  # keep reused halves clear of the cache prune
+                with contextlib.suppress(OSError):
+                    os.utime(os.path.join(_ICON_DIR, n))
+        else:
+            # A failed split must RAISE (-> the timed write logs + returns
+            # False, nothing records the frame signature): writing the
+            # un-rewritten single entry instead succeeded on the stock path,
+            # got recorded into _last_frame_buttons, and the frame-skip then
+            # locked the half-blank panel in until the CONTENT next changed.
+            with Image.open(os.path.join(_ICON_DIR, entry["icon"])) as img:
+                left, right = split_panel(img)
+            left.save(os.path.join(_ICON_DIR, names[0]))
+            right.save(os.path.join(_ICON_DIR, names[1]))
         out = dict(buttons)
         out[_PANEL_LEFT_INDEX] = {"name": "", "icon": names[0]}
         out[_PANEL_RIGHT_INDEX] = {"name": "", "icon": names[1]}
@@ -440,17 +446,29 @@ class D200Driver(DeckDriver):
         paths_ok = names is not None and all(
             os.path.exists(os.path.join(_ICON_DIR, n)) for n in names
         )
+        if key == self._last_panel_key and paths_ok:
+            # Refresh mtime on reuse so the cache prune (which now also evicts
+            # panel_* PNGs) never deletes a file the next write is about to zip.
+            for n in names:
+                with contextlib.suppress(OSError):
+                    os.utime(os.path.join(_ICON_DIR, n))
         if key != self._last_panel_key or not paths_ok:
             try:
                 img = compose_panel(panel)
                 os.makedirs(_ICON_DIR, exist_ok=True)
                 h = hashlib.sha1(f"{TILE_VERSION}|{key!r}".encode()).hexdigest()[:12]
-                names = (f"panel_{h}.png",)
-                img.save(os.path.join(_ICON_DIR, names[0]))
+                # `names` is rebound only AFTER a successful save: rebinding
+                # first made the stale-panel fallback below return the NEW
+                # name whose file was never written (a dangling icon that
+                # permanently tripped the fast path) instead of the intact
+                # previous panel it exists to serve.
+                new_names = (f"panel_{h}.png",)
+                img.save(os.path.join(_ICON_DIR, new_names[0]))
+                names = new_names
             except Exception:
-                # compose failed: a STALE panel (previous name, file intact) is
-                # better than none — a full set without the panel slot would
-                # blank it (the firmware drops omitted cells)
+                # compose/save failed: a STALE panel (previous name, file
+                # intact) is better than none — a full set without the panel
+                # slot would blank it (the firmware drops omitted cells)
                 if paths_ok:
                     return self._panel_entries(names)
                 return None

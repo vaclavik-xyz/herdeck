@@ -272,7 +272,8 @@ class DeckApp:
         with self._lock:
             working = self._orch.tick()
             self._ticks += 1
-            if self._ticks % self.FULL_REFRESH_TICKS == 0:
+            hold_expired = self._orch.consume_expired_panel_hold()
+            if self._ticks % self.FULL_REFRESH_TICKS == 0 or hold_expired:
                 self._refresh_locked(working=None, full=True)
             elif working:
                 self._refresh_locked(working=working, full=False)

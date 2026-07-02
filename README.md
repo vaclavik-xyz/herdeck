@@ -168,8 +168,9 @@ The status window can also show **provider usage limits** via the
 `codexbar` understands). The calm overview panel then carries one line per
 provider (`Claude 5h 13% · 7d 42%`); on a single-page deck, pressing the
 status window holds a detail view with per-window reset times for a few
-seconds. Blocked/offline alerts always take the panel back. The CLI must be
-installed and authenticated on the machine that renders the deck.
+seconds — repeated presses page through windows beyond the panel's three
+lines, then hide it. Blocked/offline alerts always take the panel back. The
+CLI must be installed and authenticated on the machine that renders the deck.
 
 ## Stream Deck (Elgato) plugin backend
 herdeck can also drive a native **Elgato Stream Deck** as a plugin. A thin
