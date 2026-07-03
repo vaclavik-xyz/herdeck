@@ -48,11 +48,13 @@ with `[view].language = "cs"`. Every new user-visible string must be added in
   `STRINGS` (`tr(lang, key)`), driven by `config.view.language`.
 - Tray menu (Rust): `tray_labels()` in `desktop/src-tauri/src/lib.rs`.
 
-These rules are enforced by tests
-(`desktop/src/lib/sections/sections.help.test.ts` and `tests/test_i18n.py`), so
-a PR that adds a string in only one language will fail CI. Field labels in the
-editor stay in English (they are the exact TOML config keys); the tooltip
-explains them. CLI, logs, README, and code comments stay in English.
+The desktop field-help parity (`desktop/src/lib/sections/sections.help.test.ts`)
+and the rendered-string parity (`tests/test_i18n.py`) are enforced by tests in
+CI, so a PR that adds a UI string or help tooltip in only one language fails CI.
+Tray labels in Rust (`tray_labels()`) are not auto-checked — keep their en/cs in
+sync by hand. Field labels in the editor stay in English (they are the exact
+TOML config keys); the tooltip explains them. CLI, logs, README, and code
+comments stay in English.
 
 ## Commits and pull requests
 
