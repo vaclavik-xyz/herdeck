@@ -14,7 +14,7 @@ from herdeck.bridge import (
 )
 
 
-def raw_pane(pane_id="w1:p1", agent="claude", status="blocked", cwd="/Users/admin/projects/api"):
+def raw_pane(pane_id="w1:p1", agent="claude", status="blocked", cwd="/home/user/projects/api"):
     """A raw herdr pane (as returned by pane.list)."""
     p = {
         "pane_id": pane_id,
@@ -38,7 +38,7 @@ def herdr():
 
 def test_herdr_pane_to_wire_maps_fields():
     w = _herdr_pane_to_wire(
-        raw_pane(agent="codex", status="working", cwd="/Users/admin/projects/web")
+        raw_pane(agent="codex", status="working", cwd="/home/user/projects/web")
     )
     assert w == {
         "pane_id": "w1:p1",
@@ -421,8 +421,8 @@ def test_workspaces_and_tabs_by_id_index_label():
 async def test_list_snapshot_includes_workspace_and_tab():
     panes = [{
         "pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1",
-        "cwd": "/Users/admin/projects/herdeck",
-        "foreground_cwd": "/Users/admin/projects/herdeck",
+        "cwd": "/home/user/projects/herdeck",
+        "foreground_cwd": "/home/user/projects/herdeck",
         "agent": "claude", "agent_status": "blocked",
     }]
     herdr = StubHerdr(

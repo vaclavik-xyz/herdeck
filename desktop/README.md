@@ -1,20 +1,22 @@
-# herdeck desktop (phase 1)
+# herdeck desktop
 
-Tauri 2 (Rust) + Svelte + Vite floating shell for the herdeck deck. This is
-**slice 3** of phase 1: the desktop **shell** only — a floating always-on-top
-window + tray that spawns and supervises the Python sidecar
-(`python -m herdeck.deckapp`), reads its discovery JSON, and hands the loopback
-`url`+`token` to the WebView.
+Tauri 2 (Rust) + Svelte + Vite desktop app for herdeck: a floating,
+always-on-top window that renders the live deck and a full settings UI.
 
-The real **DeckView** (poll `/state`, render `/tile` PNGs, click → `/press`) is
-**slice 2** and replaces the placeholder marked in
-`src/App.svelte` / `src/lib/DeckPlaceholder.svelte`.
+The Rust shell owns the window + tray and either **attaches** to a herdeck
+runtime that is already listening (via its discovery JSON) or **spawns and
+supervises** a Python sidecar (`python -m herdeck.deckapp`). It reads the
+sidecar's loopback `url` + access `token` and proxies `/state`, `/tile`, and
+`/press` through Rust commands, so the token never crosses into JS (the sidecar
+is a different origin and sends no CORS headers).
 
-The placeholder probes the sidecar's `/health` through the Rust `check_health`
-command (loopback HTTP performed in Rust), **not** a browser `fetch`: the sidecar
-is a different origin and sends no CORS headers, and this also keeps the access
-token out of JS. Slice 2 must decide the same for `/state` + `/tile` (proxy via
-Rust, or have the sidecar emit CORS headers).
+The Svelte frontend has two surfaces:
+
+- **DeckView** — polls `/state`, renders the `/tile` PNGs, and turns clicks into
+  `/press`, mirroring the hardware deck.
+- **Onboarding + config editor** — a first-run onboarding flow and a sectioned
+  settings editor (servers, theme, view, macros, notifications, safety,
+  profiles) that reads and writes the herdeck config through the sidecar.
 
 ## Layout
 
@@ -24,26 +26,35 @@ desktop/
   index.html
   src/
     main.ts                  # Svelte 5 mount
-    App.svelte               # PLACEHOLDER mount point for DeckView (slice 2)
+    App.svelte               # attaches/spawns sidecar; mounts Onboarding or DeckView
     lib/
-      sidecar.ts             # framework-free helpers (discovery + /health)
-      sidecar.test.ts        # vitest unit tests
-      DeckPlaceholder.svelte # small health-probe placeholder (slice 3 only)
+      sidecar.ts             # framework-free discovery + /health helpers
+      deckClient.ts          # /state + /tile + /press transport
+      DeckView.svelte        # live deck render + press
+      Onboarding.svelte      # first-run onboarding flow
+      configClient.ts        # config read/write transport
+      onboardingClient.ts    # onboarding/setup transport
+      sections/              # config editor sections (servers, theme, view, …)
+      fields/                # reusable form field components
+      help.ts, i18n.svelte.ts, statusColors.ts, …
   src-tauri/
     Cargo.toml, build.rs, tauri.conf.json
     capabilities/default.json
-    icons/                   # generated PNG icons
+    icons/                   # desktop app icons
     src/
       main.rs                # thin bin entry
-      lib.rs                 # window + tray + supervisor wiring
+      lib.rs                 # window + tray + sidecar supervisor + command wiring
       sidecar.rs             # spawn/parse/supervise logic (+ unit tests)
-    tests/spawn.rs           # integration tests (real spawn, no Python needed)
+      http.rs                # loopback HTTP proxy with token injection (+ tests)
+      window_mode.rs         # window mode (normal/floating/always-on-top)
+      hotkey.rs              # global hotkey
+    tests/                   # integration tests
 ```
 
 ## Develop
 
-The Tauri CLI runs the Vite dev server and the Rust shell together. The shell, in
-dev, resolves the repo `.venv` interpreter and runs `python -m herdeck.deckapp`,
+The Tauri CLI runs the Vite dev server and the Rust shell together. In dev the
+shell resolves the repo `.venv` interpreter and runs `python -m herdeck.deckapp`,
 so create that venv first:
 
 ```sh

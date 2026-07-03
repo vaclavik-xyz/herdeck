@@ -100,7 +100,7 @@ def check_optional_deps(is_available: Callable[[str], bool]) -> Check:
         ("streamdeck", "StreamDeck"),
         # The converged runtime imports these unconditionally at startup
         # (config write / keychain tokens) yet they live only in extras — a
-        # missing tomli_w crashed the deployed macbench runtime with a raw
+        # missing tomli_w crashed the deployed runtime with a raw
         # ImportError while doctor showed all green.
         ("tomli_w", "tomli_w"),
         ("keyring", "keyring"),

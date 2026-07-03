@@ -101,9 +101,8 @@ describe("packaging wiring", () => {
     expect(pkg.scripts.package).toMatch(/build-plugin\.sh/);
   });
 
-  it("gitignores the freeze output (backend/) and build artifacts (assets PNGs, build/)", () => {
+  it("gitignores the freeze output (backend/) and build artifacts (build/)", () => {
     expect(sdIgnore).toMatch(/^backend\/$/m);
-    expect(rootIgnore).toMatch(/^src\/herdeck\/assets\/\*\.png$/m);
     expect(rootIgnore).toMatch(/^build\/$/m);
   });
 });

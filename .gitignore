@@ -16,6 +16,12 @@ build/
 # herdr-agent-company run dirs (manifest, inbox, evidence)
 .scratch/
 
+# Local coding-agent state (Claude Code settings, worktrees, scheduled tasks)
+.claude/
+
+# Internal design/planning docs (SDD plans + specs) — kept locally, not published
+docs/superpowers/
+
 # local tooling artifacts (roborev config, clawpatch cache, uv lockfile) — not part of the project
 .clawpatch/
 .roborev.toml
