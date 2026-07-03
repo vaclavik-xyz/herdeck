@@ -180,6 +180,10 @@ running herdeck runtime or spawns its own sidecar. Build and run it from
 `desktop/`:
 
 ```bash
+# from the repo root — dev mode spawns .venv/bin/python -m herdeck.deckapp as
+# the sidecar, so create that venv first (same as Quick start):
+python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
+
 cd desktop
 npm install
 npm run tauri dev   # opens the floating window (needs a real desktop session)
