@@ -1,17 +1,42 @@
 # Herdeck
 
-Turn an Ulanzi Stream Controller D200 into a control panel for AI coding agents
-running under [herdr](https://github.com/ogulcancelik/herdr) on remote servers.
-See blocked agents at a glance and Approve / Deny / Stop with one press.
+![CI](https://github.com/vaclavik-xyz/herdeck/actions/workflows/ci.yml/badge.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
 
-## Quick start (local)
+Turn an Ulanzi Stream Controller D200 (or an Elgato Stream Deck) into a control
+panel for AI coding agents running under
+[herdr](https://github.com/ogulcancelik/herdr). See blocked agents at a glance
+and Approve / Deny / Stop with one press — on the hardware deck, a browser
+simulator, or a native desktop window.
+
+> **What is herdr?** herdr runs your AI coding agents (Claude, Codex, Cursor,
+> Gemini, …) in managed terminal panes and exposes their live state over a local
+> socket. herdeck is a front-end for it. You install and run herdr separately;
+> or use the mock path below to try herdeck standalone.
+
+## Try it in 30 seconds (no hardware, no herdr)
+
+```bash
+git clone https://github.com/vaclavik-xyz/herdeck.git && cd herdeck
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+HERDECK_MOCK=1 HERDECK_DECK=web herdeck   # synthetic agents — no deck, bridge, config, or token
+# open http://127.0.0.1:8800
+```
+
+This renders the deck in your browser with lively synthetic agents using the
+exact device code — no Stream Deck and no herdr required.
+
+## Quick start (local, real agents)
 
 If herdr runs on the same machine as your deck, no config or token is needed:
 
-1. `pip install -e ".[deck]"` (Mac, real D200), `pip install -e ".[elgato]"`
+1. `git clone https://github.com/vaclavik-xyz/herdeck.git && cd herdeck`
+2. `pip install -e ".[deck]"` (Mac, real D200), `pip install -e ".[elgato]"`
    (Elgato Stream Deck), or `pip install -e ".[dev]"` (web simulator only).
-2. Make sure herdr is running (socket at `~/.config/herdr/herdr.sock`).
-3. Run it:
+3. Make sure herdr is running (socket at `~/.config/herdr/herdr.sock`).
+4. Run it:
    ```bash
    herdeck                  # drives an attached Stream Deck
    HERDECK_DECK=web herdeck # browser simulator at http://127.0.0.1:8800
@@ -86,7 +111,8 @@ herdr's socket lives at `~/.config/herdr/herdr.sock` (macOS & Linux).
 1. `pip install -e ".[deck]"` (pulls `strmdck` + `pillow`).
 2. Copy `config.example.toml` to `~/.config/herdeck/config.toml`, set the
    server URL to `ws://<server-tailscale-ip>:8788` and export the token env
-   (e.g. `export HERDECK_DEV_TOKEN=<token>`).
+   named by the server's `token_env` (the shipped example uses
+   `export HERDECK_WORKBOX_TOKEN=<token>`).
 3. Close the official Ulanzi app (it holds the USB device).
 4. Run: `HERDECK_CONFIG=~/.config/herdeck/config.toml python -m herdeck.app`
    (or load `deploy/com.herdeck.app.plist` to autostart at login).
@@ -129,7 +155,7 @@ clicks into presses. Two ways to use it:
 - **Against the live bridge** (real agents, even remotely over Tailscale):
   ```bash
   HERDECK_DECK=web HERDECK_CONFIG=~/.config/herdeck/config.toml \
-  HERDECK_DEV_TOKEN=<token> python -m herdeck.app
+  HERDECK_WORKBOX_TOKEN=<token> python -m herdeck.app
   # open http://127.0.0.1:8800  (set HERDECK_WEB_BIND to a Tailscale IP for remote)
   ```
 - **Fully offline** (synthetic, lively agents — no bridge, config, or token):
@@ -144,6 +170,23 @@ configure the server. Click a tile to press it; click the panel to page.
 **Headless.** `HERDECK_FAKE_DECK=1 python -m herdeck.app` uses an in-memory
 renderer (no UI). `scripts/e2e_verify.py` connects the pipeline to a bridge and
 prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).
+
+## Desktop app
+
+herdeck also ships a native **desktop app** (Tauri + Svelte): a floating,
+always-on-top window that renders the same deck as the hardware, plus a
+first-run onboarding flow and a full settings / config editor. It attaches to a
+running herdeck runtime or spawns its own sidecar. Build and run it from
+`desktop/`:
+
+```bash
+cd desktop
+npm install
+npm run tauri dev   # opens the floating window (needs a real desktop session)
+```
+
+See [`desktop/README.md`](desktop/README.md) for architecture and build/test
+details.
 
 ## The deck (Ulanzi D200)
 The D200 has **13 buttons** (a 5×3 grid minus the small status window). The
@@ -325,7 +368,10 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 ## Security
 - The bridge WebSocket is authenticated with a bearer token (constant-time
   compare) and must be bound to the Tailscale interface only (`HERDECK_BIND`),
-  never `0.0.0.0`. Non-idempotent key sends are never retried (no double-approve).
+  never `0.0.0.0`. The transport is plain `ws://`, so that interface must be an
+  encrypted overlay (Tailscale/WireGuard) — the token is both the authentication
+  and the only confidentiality boundary. Never bind it to a plain LAN or public
+  IP. Non-idempotent key sends are never retried (no double-approve).
 - The token is read from an environment variable; never commit it. The example
   launchd/systemd units store it inline — for real use keep them readable only by
   your user (`chmod 600`) or source the token from a secret store / Keychain.
@@ -349,4 +395,15 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   universal2/Intel, real (non-placeholder) icon art, and on-hardware verification.
 
 ## License
-MIT
+
+herdeck is released under the [MIT License](LICENSE) — Copyright (c) 2026
+Filip Vaclavik.
+
+### Credits and trademarks
+
+The bundled agent marks (`src/herdeck/assets/*.svg`) come from
+[Simple Icons](https://simpleicons.org) under CC0 1.0. The marks themselves
+remain trademarks of their respective owners (Anthropic, OpenAI,
+Microsoft/GitHub, Cursor, Google, OpenCode) and are bundled solely to identify
+which agent a deck tile represents — no affiliation or endorsement is implied.
+See [`src/herdeck/assets/ATTRIBUTION.md`](src/herdeck/assets/ATTRIBUTION.md).
