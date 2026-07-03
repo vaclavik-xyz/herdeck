@@ -271,7 +271,7 @@ def _assets_dir(tmp_path, sub, *svgs):
 def test_render_cache_key_changes_when_bundled_asset_set_changes(tmp_path):
     """Adding a bundled glyph must invalidate the on-disk render cache, else an
     upgraded app serves the stale letter-glyph tile for the newly bundled agent
-    (the Q1-on-upgrade regression seen on macbench)."""
+    (the Q1-on-upgrade regression seen after an in-place upgrade)."""
     a = _assets_dir(tmp_path, "a", "codex.svg")
     b = _assets_dir(tmp_path, "b", "codex.svg", "claude.svg")  # one extra bundled mark
 
@@ -520,7 +520,7 @@ def test_wrap_marks_cut_tail_with_ellipsis():
 
     d = ImageDraw.Draw(Image.new("RGB", (196, 196)))
     f = _font(22)
-    cut = _wrap(d, "Yes, and don't ask again for rm commands in /Users/admin/projects", f, 180, 3)
+    cut = _wrap(d, "Yes, and don't ask again for rm commands in /home/user/projects", f, 180, 3)
     assert len(cut) == 3
     assert cut[-1].endswith("…")
     intact = _wrap(d, "Yes", f, 180, 3)

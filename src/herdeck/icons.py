@@ -115,7 +115,7 @@ def _fingerprint_assets(assets_dir: str | None) -> str:
     file's name + its bytes). Folded into the render-cache keys so that adding,
     removing, OR re-baking/editing a bundled mark invalidates stale cached
     tiles — otherwise an UPGRADED app reuses a pre-bundle letter-glyph tile for
-    a newly bundled agent (the Q1-on-upgrade staleness seen on macbench).
+    a newly bundled agent (the Q1-on-upgrade staleness seen after an in-place upgrade).
     Hashes contents (not just name+size) so a same-name same-length re-bake is
     caught too. The asset set is small (a handful of KB), so the one read per
     provider construction is negligible. Returns ``"0"`` when there is no
@@ -381,7 +381,7 @@ def _wrap(draw, text, font, max_w, max_lines=2):
 
     A cut-off tail is ALWAYS marked with an ellipsis: silently dropping words
     turned e.g. the drill option "…don't ask again for rm commands in
-    /Users/admin/projects" into an apparent approval for "rm commands in /"."""
+    /home/user/projects" into an apparent approval for "rm commands in /"."""
     words = text.replace("/", " / ").split()
     lines: list[str] = []
     cur = ""
