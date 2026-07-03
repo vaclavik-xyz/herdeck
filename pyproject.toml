@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Filip Vaclavik" }]
-keywords = ["ai", "coding-agents", "dashboard", "herdr", "stream-deck"]
+keywords = [
+  "ai", "ai-agents", "coding-agents", "claude", "codex", "dashboard",
+  "herdr", "stream-deck", "elgato", "tauri", "cli", "developer-tools",
+]
 classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
