@@ -53,12 +53,12 @@ def _worktrees_by_workspace(worktrees: list[dict]) -> dict[str, dict]:
 
 
 def _workspaces_by_id(workspaces: list[dict]) -> dict[str, str]:
-    """Index herdr workspaces (workspace.list) as {workspace_id: label}."""
+    """Index herdr workspaces (session.snapshot's ``workspaces`` list) as {workspace_id: label}."""
     return {w["workspace_id"]: w.get("label", "") for w in (workspaces or []) if w.get("workspace_id")}
 
 
 def _tabs_by_id(tabs: list[dict]) -> dict[str, str]:
-    """Index herdr tabs (tab.list) as {tab_id: label}."""
+    """Index herdr tabs (session.snapshot's ``tabs`` list) as {tab_id: label}."""
     return {t["tab_id"]: t.get("label", "") for t in (tabs or []) if t.get("tab_id")}
 
 
@@ -73,7 +73,7 @@ def _herdr_pane_to_wire(
     herdr uses `agent` / `agent_status` and has no human label. We derive repo +
     branch from the pane's open worktree (herdr `worktree.list`), falling back to
     the working-directory basename when no worktree info is available. The
-    workspace/tab labels come from `workspace.list` / `tab.list`; a missing lookup
+    workspace/tab labels ride along in `session.snapshot`; a missing lookup
     or empty label stays empty (the raw id is never used as tile text).
     """
     cwd = p.get("foreground_cwd") or p.get("cwd") or ""
@@ -238,7 +238,7 @@ _WORKTREE_EVENT_NAMES = {"worktree_created", "worktree_opened", "worktree_remove
 class HerdrEvents:
     """Yields the full agent list whenever it changes.
 
-    The source of truth is a diff of ``pane.list`` (so additions, status changes
+    The source of truth is a diff of ``session.snapshot`` (so additions, status changes
     AND removals are all reflected — a closed pane simply drops out). Re-lists are
     triggered immediately by herdr's push events (``events.subscribe``) when a
     socket path is given, with a slow poll as a safety net; without one it falls
@@ -417,8 +417,9 @@ class SocketHerdr:
         # server-side close isn't detected before the next write.
         # RPCs are NOT serialized: each call reads from its own connection, so the
         # fixed request id "b" cannot cross-talk, and herdr accepts concurrent
-        # one-shot connections — this is what lets a snapshot fetch its four
-        # lists in parallel (latency = max instead of sum).
+        # one-shot connections — this is what lets the per-workspace `worktree.list`
+        # fan-out (worktrees()) and on-demand client RPCs (act, start_agent, ...)
+        # run in parallel (latency = max instead of sum).
         attempts = 2 if retry else 1
         last_exc: Exception | None = None
         for _ in range(attempts):
