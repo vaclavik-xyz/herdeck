@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import os
 import time
 from typing import Protocol
@@ -11,6 +12,8 @@ import websockets
 
 from .protocol import encode
 
+log = logging.getLogger(__name__)
+
 # herdr agent_status values that mark a pane as worth showing on the deck.
 _AGENT_STATUSES = {"idle", "working", "blocked", "done"}
 
@@ -18,6 +21,10 @@ _AGENT_STATUSES = {"idle", "working", "blocked", "done"}
 _SNAPSHOT_UNSUPPORTED = (
     "herdeck requires herdr >= 0.7.2 (session.snapshot missing); run 'herdr update'"
 )
+
+# Startup probe bound: a herdr that accepts but never answers (e.g. mid
+# live-handoff) must not block bridge startup; timeout = transient, not fatal.
+_PROBE_TIMEOUT = 5.0
 
 # Module-level indirection so tests can fake the clock without touching the
 # shared stdlib time module (which asyncio's loop may also consult).
@@ -289,7 +296,9 @@ class HerdrEvents:
                         snap.get("workspaces", []),
                         snap.get("tabs", []),
                     )
-                except Exception:
+                except Exception as exc:
+                    if str(exc) == _SNAPSHOT_UNSUPPORTED:
+                        raise  # herdr too old: never retryable, surface loudly
                     cur = None
                 if cur is not None:
                     if cur != prev:
@@ -558,6 +567,36 @@ async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, 
         clients.discard(ws)
 
 
+async def _require_snapshot_support(herdr: HerdrClient) -> None:
+    """Fail fast when herdr predates session.snapshot (herdeck needs >= 0.7.2).
+
+    Only the version error is fatal: a herdr that is merely not up yet (or is
+    mid live-handoff) must not kill the bridge — the stream retries those
+    exactly as before."""
+    try:
+        await asyncio.wait_for(herdr.snapshot(), timeout=_PROBE_TIMEOUT)
+    except RuntimeError as exc:
+        if str(exc) == _SNAPSHOT_UNSUPPORTED:
+            raise
+    except Exception:
+        pass
+
+
+def _log_broadcast_task_failure(task: asyncio.Task) -> None:
+    """serve() awaits _broadcast in its own foreground, so a fatal stream
+    error (e.g. an old herdr surfacing after a transient-down startup probe)
+    propagates to whatever called serve(). start_local_bridge()'s broadcast
+    runs as a detached background task with no such supervisor, so without
+    this the same failure would die silently — surfaced here as an error log
+    instead (asyncio's own 'Task exception was never retrieved' warning is
+    easy to miss)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("local bridge broadcast stopped: %s", exc, exc_info=exc)
+
+
 async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     """Bind an embedded bridge on a loopback ephemeral port with a random,
     in-memory token. Returns (host, port, token, (server, broadcast_task))."""
@@ -569,6 +608,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     # only (see serve()). A test may inject a single stub for both.
     events_herdr = herdr or SocketHerdr(socket_path)
     client_herdr = herdr or SocketHerdr(socket_path)
+    await _require_snapshot_support(events_herdr)
     events = HerdrEvents(events_herdr, socket_path=socket_path)
     clients: set = set()
 
@@ -578,6 +618,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     server = await websockets.serve(handler, host, 0)
     port = server.sockets[0].getsockname()[1]
     btask = asyncio.create_task(_broadcast(events.stream(), clients, "local"))
+    btask.add_done_callback(_log_broadcast_task_failure)
     return host, port, token, (server, btask)
 
 
@@ -588,6 +629,7 @@ async def serve(socket_path: str, host: str, port: int, server_id: str, token: s
     # requests are kept for organizational clarity.
     events_herdr = SocketHerdr(socket_path)
     client_herdr = SocketHerdr(socket_path)
+    await _require_snapshot_support(events_herdr)
     events = HerdrEvents(events_herdr, socket_path=socket_path)  # push events + slow poll
     clients: set = set()
 

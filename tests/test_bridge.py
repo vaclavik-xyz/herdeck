@@ -756,3 +756,102 @@ def test_listen_subscribes_to_label_and_worktree_events():
         "worktree.created", "worktree.opened", "worktree.removed",
     }
     assert not set(_LABEL_EVENT_TYPES) & set(_GLOBAL_EVENT_TYPES)
+
+
+# --- herdr version gate (hard requirement: >= 0.7.2) ---
+
+
+async def test_require_snapshot_support_rejects_old_herdr():
+    from herdeck.bridge import _SNAPSHOT_UNSUPPORTED, _require_snapshot_support
+
+    class OldHerdr:
+        async def snapshot(self):
+            raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
+
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+        await _require_snapshot_support(OldHerdr())
+
+
+async def test_require_snapshot_support_tolerates_down_or_flaky_herdr():
+    from herdeck.bridge import _require_snapshot_support
+
+    class DownHerdr:
+        async def snapshot(self):
+            raise ConnectionError("socket not there yet")
+
+    class FlakyHerdr:
+        async def snapshot(self):
+            raise RuntimeError("herdr RPC session.snapshot failed: live update in progress")
+
+    await _require_snapshot_support(DownHerdr())  # must not raise
+    await _require_snapshot_support(FlakyHerdr())  # must not raise
+
+
+async def test_start_local_bridge_probes_snapshot_support():
+    from herdeck.bridge import _SNAPSHOT_UNSUPPORTED, start_local_bridge
+
+    class OldHerdr:
+        async def snapshot(self):
+            raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
+
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+        await start_local_bridge("/unused.sock", herdr=OldHerdr())
+
+
+async def test_require_snapshot_support_times_out_instead_of_hanging(monkeypatch):
+    import asyncio
+
+    from herdeck import bridge as bridge_mod
+    from herdeck.bridge import _require_snapshot_support
+
+    monkeypatch.setattr(bridge_mod, "_PROBE_TIMEOUT", 0.05)
+
+    class HangingHerdr:
+        async def snapshot(self):
+            await asyncio.Event().wait()  # accepts but never answers
+
+    await asyncio.wait_for(_require_snapshot_support(HangingHerdr()), timeout=1.0)  # must return, not raise
+
+
+async def test_stream_surfaces_version_error_instead_of_retrying():
+    from herdeck.bridge import _SNAPSHOT_UNSUPPORTED, HerdrEvents
+
+    class OldHerdr:
+        async def snapshot(self):
+            raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
+
+    gen = HerdrEvents(OldHerdr(), poll_interval=0).stream()
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+        await gen.__anext__()
+
+
+async def test_start_local_bridge_logs_when_broadcast_dies_after_startup(caplog):
+    """The startup probe tolerates herdr being transiently down; if an old
+    herdr answers once the bridge is already serving, the detached broadcast
+    task (unlike serve()'s foreground _broadcast) has no caller to surface
+    the failure to — it must at least log loudly instead of dying silently."""
+    import asyncio
+    import logging
+
+    from herdeck.bridge import _SNAPSHOT_UNSUPPORTED, start_local_bridge
+
+    calls = {"n": 0}
+
+    class TransientlyDownThenOldHerdr:
+        async def snapshot(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise ConnectionError("herdr not up yet")  # tolerated by the probe
+            raise RuntimeError(_SNAPSHOT_UNSUPPORTED)  # first real stream snapshot
+
+    host, port, token, (server, btask) = await start_local_bridge(
+        "/unused.sock", herdr=TransientlyDownThenOldHerdr()
+    )
+    try:
+        with caplog.at_level(logging.ERROR, logger="herdeck.bridge"):
+            with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+                await asyncio.wait_for(btask, timeout=1.0)
+        assert "broadcast stopped" in caplog.text
+    finally:
+        server.close()
+        await server.wait_closed()
