@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import contextlib
 import hmac
 import io
 import json
+import queue
+import re
 import secrets
 import threading
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
 from urllib.parse import parse_qs, urlsplit
 
 from ..i18n import tr
@@ -14,6 +20,19 @@ from .base import DeckDriver, PanelView, TileView
 
 # Panel press maps to this button index (the orchestrator pages on PANEL_INDICES).
 _PANEL_PRESS_INDEX = 13
+_TERMINAL_CANCEL = object()
+_TERMINAL_STREAM_RE = re.compile(r"[A-Za-z0-9_-]{8,80}")
+_WEB_ASSET_TYPES = {
+    "xterm.js": "text/javascript; charset=utf-8",
+    "addon-fit.js": "text/javascript; charset=utf-8",
+    "xterm.css": "text/css; charset=utf-8",
+}
+
+
+@dataclass
+class _TerminalStream:
+    cancel: threading.Event
+    subscription: object | None = None
 
 
 def _default_token_path() -> str:
@@ -76,6 +95,11 @@ class WebDeck(DeckDriver):
         self._slots = slots
         self._cols = max(1, cols)  # grid width; the page lays cells out with it
         self._callback: Callable[[int], None] | None = None
+        self._terminal_open: Callable[[int, int, int], object] | None = None
+        self._terminal_close: Callable[[object], None] | None = None
+        self._terminal_lock = threading.Lock()
+        self._terminal_streams: dict[str, _TerminalStream] = {}
+        self._terminal_cancelled: dict[str, float] = {}
         self._lock = threading.Lock()
         # Long-poll support: /state?since=<version> HOLDS until _bump() fires.
         self._changed = threading.Condition(self._lock)
@@ -127,6 +151,11 @@ class WebDeck(DeckDriver):
     # How long a since-matched /state request is held before answering with
     # the unchanged state (the client just re-polls).
     LONG_POLL_TIMEOUT = 25.0
+    TERMINAL_PING_INTERVAL = 15.0
+    TERMINAL_WRITE_TIMEOUT = 5.0
+    TERMINAL_STREAM_LIMIT = 3
+    TERMINAL_CANCEL_TTL = 30.0
+    TERMINAL_CANCEL_LIMIT = 256
 
     def _bump(self) -> int:
         """Assign the next monotonic version. Call while holding self._lock."""
@@ -182,6 +211,15 @@ class WebDeck(DeckDriver):
     def on_press(self, callback: Callable[[int], None]) -> None:
         self._callback = callback
 
+    def on_terminal(
+        self,
+        open_callback: Callable[[int, int, int], object],
+        close_callback: Callable[[object], None],
+    ) -> None:
+        """Register the app-side provider for read-only terminal streams."""
+        self._terminal_open = open_callback
+        self._terminal_close = close_callback
+
     def press(self, index: int) -> None:
         """Inject a press (called by the HTTP handler thread; the app marshals).
 
@@ -192,6 +230,11 @@ class WebDeck(DeckDriver):
             self._callback(index)
 
     def close(self) -> None:
+        with self._terminal_lock:
+            terminal_streams = list(self._terminal_streams.values())
+        for stream in terminal_streams:
+            stream.cancel.set()
+            self._wake_terminal_stream(stream)
         with self._lock:
             self._changed.notify_all()  # release held long-polls before shutdown
         server = self._server
@@ -209,6 +252,67 @@ class WebDeck(DeckDriver):
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1)
         self._thread = None
+
+    def _reserve_terminal_stream(self, stream_id: str) -> tuple[_TerminalStream | None, str]:
+        with self._terminal_lock:
+            self._prune_terminal_cancellations_locked()
+            if self._terminal_cancelled.pop(stream_id, None) is not None:
+                return None, "cancelled"
+            if stream_id in self._terminal_streams:
+                return None, "duplicate"
+            if len(self._terminal_streams) >= self.TERMINAL_STREAM_LIMIT:
+                return None, "busy"
+            stream = _TerminalStream(threading.Event())
+            self._terminal_streams[stream_id] = stream
+            return stream, ""
+
+    def _prune_terminal_cancellations_locked(self) -> None:
+        now = time.monotonic()
+        self._terminal_cancelled = {
+            stream_id: expires
+            for stream_id, expires in self._terminal_cancelled.items()
+            if expires > now
+        }
+
+    def _bind_terminal_stream(self, stream_id: str, stream: _TerminalStream, sub: object) -> bool:
+        with self._terminal_lock:
+            if self._terminal_streams.get(stream_id) is not stream:
+                return False
+            stream.subscription = sub
+            return not stream.cancel.is_set()
+
+    def _release_terminal_stream(self, stream_id: str, stream: _TerminalStream) -> None:
+        with self._terminal_lock:
+            if self._terminal_streams.get(stream_id) is stream:
+                del self._terminal_streams[stream_id]
+
+    @staticmethod
+    def _wake_terminal_stream(stream: _TerminalStream) -> None:
+        sub_queue = getattr(stream.subscription, "queue", None)
+        if sub_queue is None:
+            return
+        # Explicit close supersedes buffered frames; make cancellation the next
+        # item observed instead of waiting behind a full slow-client backlog.
+        with contextlib.suppress(queue.Empty):
+            while True:
+                sub_queue.get_nowait()
+        with contextlib.suppress(queue.Full):
+            sub_queue.put_nowait(_TERMINAL_CANCEL)
+
+    def _cancel_terminal_stream(self, stream_id: str) -> None:
+        with self._terminal_lock:
+            stream = self._terminal_streams.get(stream_id)
+            if stream is None:
+                self._prune_terminal_cancellations_locked()
+                if len(self._terminal_cancelled) >= self.TERMINAL_CANCEL_LIMIT:
+                    oldest = min(self._terminal_cancelled, key=self._terminal_cancelled.get)
+                    del self._terminal_cancelled[oldest]
+                self._terminal_cancelled[stream_id] = (
+                    time.monotonic() + self.TERMINAL_CANCEL_TTL
+                )
+                return
+            stream.cancel.set()
+        self._wake_terminal_stream(stream)
 
     # --- state snapshot for the browser ---
     def _state_locked(self) -> dict:
@@ -259,16 +363,55 @@ class WebDeck(DeckDriver):
         )
 
         class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
             def log_message(self, *a):  # silence default request logging
                 pass
 
-            def _send(self, code, body=b"", ctype="text/plain; charset=utf-8"):
+            def _send(
+                self,
+                code,
+                body=b"",
+                ctype="text/plain; charset=utf-8",
+                headers=None,
+            ):
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 if body:
                     self.wfile.write(body)
+
+            def _begin_sse(self):
+                self.close_connection = True
+                self.connection.settimeout(deck.TERMINAL_WRITE_TIMEOUT)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "close")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+
+            def _emit_sse(self, item) -> bool:
+                if item is _TERMINAL_CANCEL:
+                    return False
+                payload = f"data: {json.dumps(item, ensure_ascii=False)}\n\n".encode()
+                try:
+                    self.wfile.write(payload)
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+                    return False
+                return True
+
+            def _emit_ping(self) -> bool:
+                try:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+                    return False
+                return True
 
             def _valid_token(self, token):
                 return hmac.compare_digest(token.encode(), deck._press_token.encode())
@@ -322,8 +465,103 @@ class WebDeck(DeckDriver):
                     except ValueError:
                         png = None
                     self._send(200, png, "image/png") if png else self._send(404)
+                elif path.startswith("/assets/"):
+                    name = path.rsplit("/", 1)[1]
+                    ctype = _WEB_ASSET_TYPES.get(name)
+                    if ctype is None:
+                        self._send(404)
+                        return
+                    body = files("herdeck").joinpath("assets", "web", name).read_bytes()
+                    self._send(
+                        200,
+                        body,
+                        ctype,
+                        {"Cache-Control": "public, max-age=3600"},
+                    )
+                elif path.startswith("/term/"):
+                    if not self._require_token(url):
+                        return
+                    self._serve_terminal(url, path)
                 else:
                     self._send(404)
+
+            def _serve_terminal(self, url, path):
+                if deck._terminal_open is None or deck._terminal_close is None:
+                    self._send(503)
+                    return
+                try:
+                    index = int(path.rsplit("/", 1)[1])
+                    cols = int(parse_qs(url.query).get("cols", [80])[0])
+                    rows = int(parse_qs(url.query).get("rows", [24])[0])
+                except (TypeError, ValueError):
+                    self._send(400)
+                    return
+                if not 0 <= index < deck._slots:
+                    self._send(400)
+                    return
+                cols = max(20, min(240, cols))
+                rows = max(5, min(100, rows))
+                stream_id = parse_qs(url.query).get("stream", [""])[0]
+                if not _TERMINAL_STREAM_RE.fullmatch(stream_id):
+                    self._send(400)
+                    return
+
+                stream, error = deck._reserve_terminal_stream(stream_id)
+                if error == "duplicate":
+                    self._send(409)
+                    return
+                self._begin_sse()
+                if error == "cancelled":
+                    return
+                if error == "busy":
+                    self._emit_sse(
+                        {
+                            "kind": "closed",
+                            "reason": tr(deck._language, "web.term_busy"),
+                        }
+                    )
+                    return
+                assert stream is not None
+
+                subscription = None
+                try:
+                    try:
+                        subscription = deck._terminal_open(index, cols, rows)
+                    except Exception:
+                        self._emit_sse(
+                            {
+                                "kind": "closed",
+                                "reason": tr(deck._language, "web.term_ended"),
+                            }
+                        )
+                        return
+                    if not deck._bind_terminal_stream(stream_id, stream, subscription):
+                        return
+                    sub_queue = getattr(subscription, "queue", None)
+                    if sub_queue is None:
+                        self._emit_sse(
+                            {
+                                "kind": "closed",
+                                "reason": tr(deck._language, "web.term_ended"),
+                            }
+                        )
+                        return
+                    while not stream.cancel.is_set():
+                        try:
+                            item = sub_queue.get(timeout=deck.TERMINAL_PING_INTERVAL)
+                        except queue.Empty:
+                            if not self._emit_ping():
+                                break
+                            continue
+                        if item is _TERMINAL_CANCEL or not self._emit_sse(item):
+                            break
+                        if isinstance(item, dict) and item.get("kind") == "closed":
+                            break
+                finally:
+                    if subscription is not None:
+                        with contextlib.suppress(Exception):
+                            deck._terminal_close(subscription)
+                    deck._release_terminal_stream(stream_id, stream)
 
             def do_POST(self):
                 path = urlsplit(self.path).path
@@ -337,6 +575,17 @@ class WebDeck(DeckDriver):
                         self._send(204)
                     except ValueError:
                         self._send(400)
+                elif path.startswith("/term-stop/"):
+                    token = self.headers.get("X-Herdeck-Token", "")
+                    if not self._valid_token(token):
+                        self._send(403, forbidden)
+                        return
+                    stream_id = path.rsplit("/", 1)[1]
+                    if not _TERMINAL_STREAM_RE.fullmatch(stream_id):
+                        self._send(400)
+                        return
+                    deck._cancel_terminal_stream(stream_id)
+                    self._send(204)
                 else:
                     self._send(404)
 

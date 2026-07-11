@@ -70,6 +70,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "web.term_no_agent": "no agent terminal on this tile",
         "web.term_disconnected": "bridge disconnected",
         "web.term_ended": "preview ended",
+        "web.term_busy": "too many open previews",
     },
     "cs": {
         "offline_title": "OFFLINE",
@@ -121,6 +122,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "web.term_no_agent": "na této dlaždici není terminál agenta",
         "web.term_disconnected": "spojení s bridge ztraceno",
         "web.term_ended": "náhled ukončen",
+        "web.term_busy": "příliš mnoho otevřených náhledů",
     },
 }
 

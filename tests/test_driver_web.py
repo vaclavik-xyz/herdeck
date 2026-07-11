@@ -521,3 +521,291 @@ def test_page_speaks_czech_when_configured(tmp_path):
         assert "token vypršel" in page
     finally:
         d.close()
+
+
+# --- read-only live terminal preview ----------------------------------------
+
+
+class TerminalSub:
+    def __init__(self):
+        import queue
+
+        self.queue = queue.Queue(maxsize=120)
+
+
+def _term_url(deck, stream="stream-0001", *, index=0, cols=80, rows=24):
+    return (
+        f"http://{deck.host}:{deck.port}/term/{index}"
+        f"?stream={stream}&cols={cols}&rows={rows}&token={deck.press_token}"
+    )
+
+
+def test_web_terminal_assets_are_served_with_correct_content_types(tmp_path):
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    try:
+        for name, content_type, marker in (
+            ("xterm.js", "text/javascript", b"Terminal"),
+            ("addon-fit.js", "text/javascript", b"FitAddon"),
+            ("xterm.css", "text/css", b".xterm"),
+        ):
+            with urllib.request.urlopen(
+                f"http://{d.host}:{d.port}/assets/{name}", timeout=5
+            ) as response:
+                assert response.headers.get_content_type() == content_type
+                assert marker in response.read()
+    finally:
+        d.close()
+
+
+def test_terminal_sse_streams_provider_items_and_closes_subscription(tmp_path):
+    import json
+
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    sub = TerminalSub()
+    sub.queue.put_nowait({"kind": "meta", "label": "api"})
+    sub.queue.put_nowait(
+        {"kind": "frame", "seq": 1, "full": True, "cols": 80, "rows": 24, "data": "QQ=="}
+    )
+    sub.queue.put_nowait({"kind": "closed", "reason": "pane gone"})
+    opened = []
+    closed = []
+    d.on_terminal(
+        lambda index, cols, rows: opened.append((index, cols, rows)) or sub,
+        lambda subscription: closed.append(subscription),
+    )
+    try:
+        with urllib.request.urlopen(_term_url(d), timeout=5) as response:
+            assert response.headers.get_content_type() == "text/event-stream"
+            events = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.read().decode().splitlines()
+                if line.startswith("data: ")
+            ]
+        assert opened == [(0, 80, 24)]
+        assert [event["kind"] for event in events] == ["meta", "frame", "closed"]
+        assert closed == [sub]
+        assert d._terminal_streams == {}
+    finally:
+        d.close()
+
+
+def test_terminal_stop_endpoint_wakes_idle_stream_and_is_idempotent(tmp_path):
+    import threading
+
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    sub = TerminalSub()
+    opened = threading.Event()
+    closed = threading.Event()
+
+    def open_terminal(index, cols, rows):
+        opened.set()
+        return sub
+
+    d.on_terminal(open_terminal, lambda subscription: closed.set())
+    result = {}
+
+    def consume():
+        with urllib.request.urlopen(_term_url(d, "stream-cancel"), timeout=5) as response:
+            result["body"] = response.read()
+
+    thread = threading.Thread(target=consume)
+    thread.start()
+    try:
+        assert opened.wait(2)
+        stop = urllib.request.Request(
+            f"http://{d.host}:{d.port}/term-stop/stream-cancel",
+            method="POST",
+            headers={"X-Herdeck-Token": d.press_token},
+        )
+        with urllib.request.urlopen(stop, timeout=5) as response:
+            assert response.status == 204
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert closed.wait(1)
+        assert d._terminal_streams == {}
+
+        with urllib.request.urlopen(stop, timeout=5) as response:
+            assert response.status == 204
+    finally:
+        d.close()
+        thread.join(timeout=2)
+
+
+def test_terminal_provider_exception_releases_stream_capacity(tmp_path):
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+
+    def fail(index, cols, rows):
+        raise RuntimeError("boom")
+
+    d.on_terminal(fail, lambda subscription: None)
+    try:
+        with urllib.request.urlopen(_term_url(d, "stream-error"), timeout=5) as response:
+            body = response.read().decode()
+        assert '"kind": "closed"' in body
+        assert d._terminal_streams == {}
+    finally:
+        d.close()
+
+
+def test_terminal_endpoint_authenticates_and_clamps_dimensions(tmp_path):
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    seen = []
+
+    def open_terminal(index, cols, rows):
+        sub = TerminalSub()
+        seen.append((index, cols, rows))
+        sub.queue.put_nowait({"kind": "closed", "reason": "done"})
+        return sub
+
+    d.on_terminal(open_terminal, lambda subscription: None)
+    try:
+        unauthenticated = _term_url(d, "stream-auth").replace(
+            f"&token={d.press_token}", ""
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(unauthenticated, timeout=5)
+        assert exc.value.code == 403
+
+        with urllib.request.urlopen(
+            _term_url(d, "stream-clamp", cols=1, rows=999), timeout=5
+        ) as response:
+            response.read()
+        assert seen == [(0, 20, 100)]
+    finally:
+        d.close()
+
+
+def test_terminal_stream_limit_uses_real_concurrent_streams_and_releases_slots(tmp_path):
+    import json
+    import threading
+
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    condition = threading.Condition()
+    subscriptions = []
+    closed = []
+
+    def open_terminal(index, cols, rows):
+        sub = TerminalSub()
+        with condition:
+            subscriptions.append(sub)
+            condition.notify_all()
+        return sub
+
+    d.on_terminal(open_terminal, lambda subscription: closed.append(subscription))
+    threads = []
+
+    def consume(stream_id):
+        with urllib.request.urlopen(_term_url(d, stream_id), timeout=5) as response:
+            response.read()
+
+    try:
+        for number in range(d.TERMINAL_STREAM_LIMIT):
+            thread = threading.Thread(target=consume, args=(f"stream-cap-{number}",))
+            threads.append(thread)
+            thread.start()
+        with condition:
+            assert condition.wait_for(
+                lambda: len(subscriptions) == d.TERMINAL_STREAM_LIMIT,
+                timeout=2,
+            )
+
+        with urllib.request.urlopen(_term_url(d, "stream-cap-busy"), timeout=5) as response:
+            events = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.read().decode().splitlines()
+                if line.startswith("data: ")
+            ]
+        assert events == [{"kind": "closed", "reason": "too many open previews"}]
+        assert len(subscriptions) == d.TERMINAL_STREAM_LIMIT
+
+        for number in range(d.TERMINAL_STREAM_LIMIT):
+            stop = urllib.request.Request(
+                f"http://{d.host}:{d.port}/term-stop/stream-cap-{number}",
+                method="POST",
+                headers={"X-Herdeck-Token": d.press_token},
+            )
+            with urllib.request.urlopen(stop, timeout=5) as response:
+                assert response.status == 204
+        for thread in threads:
+            thread.join(timeout=2)
+            assert not thread.is_alive()
+        assert len(closed) == d.TERMINAL_STREAM_LIMIT
+        assert d._terminal_streams == {}
+    finally:
+        d.close()
+        for thread in threads:
+            thread.join(timeout=2)
+
+
+def test_terminal_stop_arriving_before_get_prevents_late_provider_start(tmp_path):
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    opened = []
+    d.on_terminal(
+        lambda index, cols, rows: opened.append((index, cols, rows)) or TerminalSub(),
+        lambda subscription: None,
+    )
+    try:
+        stop = urllib.request.Request(
+            f"http://{d.host}:{d.port}/term-stop/stream-before-get",
+            method="POST",
+            headers={"X-Herdeck-Token": d.press_token},
+        )
+        with urllib.request.urlopen(stop, timeout=5) as response:
+            assert response.status == 204
+        with urllib.request.urlopen(
+            _term_url(d, "stream-before-get"), timeout=5
+        ) as response:
+            response.read()
+        assert opened == []
+        assert d._terminal_streams == {}
+    finally:
+        d.close()
