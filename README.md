@@ -12,8 +12,10 @@ simulator, or a native desktop window.
 
 > **What is herdr?** herdr runs your AI coding agents (Claude, Codex, Cursor,
 > Gemini, …) in managed terminal panes and exposes their live state over a local
-> socket. herdeck is a front-end for it. You install and run herdr separately;
-> or use the mock path below to try herdeck standalone.
+> socket. herdeck is a front-end for it and requires **herdr >= 0.7.2** (its
+> `session.snapshot` API; check with `herdr status`, upgrade with `herdr update`).
+> You install and run herdr separately; or use the mock path below to try
+> herdeck standalone.
 
 ## Try it in 30 seconds (no hardware, no herdr)
 
