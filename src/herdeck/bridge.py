@@ -226,6 +226,18 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
 # herdr events that change fleet membership (need a status re-subscribe after).
 _GLOBAL_EVENT_TYPES = ("pane.created", "pane.closed", "pane.exited", "pane.agent_detected")
 _FLEET_EVENT_NAMES = {"pane_created", "pane_closed", "pane_exited", "pane_agent_detected"}
+# Label-bearing events. Workspace/tab labels ride along in every snapshot, so
+# these only need to wake the stream; worktree events additionally invalidate
+# the cached worktree list (branch labels are not in the snapshot).
+_LABEL_EVENT_TYPES = (
+    "tab.renamed",
+    "workspace.renamed",
+    "workspace.updated",
+    "worktree.created",
+    "worktree.opened",
+    "worktree.removed",
+)
+_WORKTREE_EVENT_NAMES = {"worktree_created", "worktree_opened", "worktree_removed"}
 
 
 class HerdrEvents:
@@ -297,6 +309,16 @@ class HerdrEvents:
             if listener is not None:
                 listener.cancel()
 
+    def _note_event(self, name: str | None) -> bool:
+        """Digest one push event; True means fleet membership changed and the
+        per-pane status subscriptions must be rebuilt."""
+        if name in _WORKTREE_EVENT_NAMES:
+            self._worktrees_stale = True
+        if name in _FLEET_EVENT_NAMES:
+            self._worktrees_stale = True  # a new pane may sit in an unseen workspace
+            return True
+        return False
+
     async def _listen(self) -> None:
         """Hold a herdr event subscription; wake the stream on every event."""
         while True:
@@ -307,7 +329,7 @@ class HerdrEvents:
                     p["pane_id"]
                     for p in _wire_panes((await self._herdr.snapshot()).get("agents", []))
                 ]
-                subs = [{"type": t} for t in _GLOBAL_EVENT_TYPES]
+                subs = [{"type": t} for t in _GLOBAL_EVENT_TYPES + _LABEL_EVENT_TYPES]
                 subs += [
                     {"type": "pane.agent_status_changed", "pane_id": pid} for pid in agent_panes
                 ]
@@ -334,8 +356,7 @@ class HerdrEvents:
                         name = json.loads(line).get("event")
                     except Exception:
                         name = None
-                    if name in _FLEET_EVENT_NAMES:
-                        self._worktrees_stale = True  # membership changed -> refetch
+                    if self._note_event(name):
                         break  # fleet changed -> re-subscribe panes
             except Exception:
                 pass

@@ -697,3 +697,62 @@ async def test_stub_herdr_snapshot_composes_lists():
     assert snap["agents"][0]["pane_id"] == "w1:p1"
     assert snap["workspaces"] == [{"workspace_id": "w1", "label": "api"}]
     assert snap["tabs"] == [{"tab_id": "w1:t1", "label": "1"}]
+
+
+# --- push-event digestion (labels ride the snapshot; worktrees need staling) ---
+
+
+def test_note_event_stales_worktrees_and_flags_fleet_changes():
+    from herdeck.bridge import HerdrEvents
+
+    ev = HerdrEvents(StubHerdr(panes=[]), poll_interval=100)
+    ev._worktrees_stale = False
+    # label renames ride the next snapshot: wake-only, no staling, no re-subscribe
+    assert ev._note_event("tab_renamed") is False
+    assert ev._note_event("workspace_renamed") is False
+    assert ev._note_event("workspace_updated") is False
+    assert ev._worktrees_stale is False
+    # worktree membership changed: branch labels must refetch
+    assert ev._note_event("worktree_opened") is False
+    assert ev._worktrees_stale is True
+    ev._worktrees_stale = False
+    assert ev._note_event("worktree_removed") is False
+    assert ev._worktrees_stale is True
+    # fleet change: re-subscribe per-pane status subs AND refetch worktrees
+    ev._worktrees_stale = False
+    assert ev._note_event("pane_created") is True
+    assert ev._worktrees_stale is True
+    # unknown/None events are inert
+    ev._worktrees_stale = False
+    assert ev._note_event(None) is False
+    assert ev._worktrees_stale is False
+
+
+async def test_tab_rename_wake_delivers_fresh_labels_without_worktree_refetch():
+    import asyncio
+
+    from herdeck.bridge import HerdrEvents
+
+    pane = raw_pane("w1:p1", agent="claude", status="idle")
+    pane["tab_id"] = "w1:t1"
+    stub = StubHerdr(panes=[pane], tabs=[{"tab_id": "w1:t1", "label": "1"}])
+    ev = HerdrEvents(stub, poll_interval=100)
+    gen = ev.stream()
+    first = await gen.__anext__()
+    assert first[0]["tab"] == "1"
+    stub._tabs = [{"tab_id": "w1:t1", "label": "review"}]  # herdr-side rename
+    ev._wake.set()  # what a tab.renamed push event does
+    second = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert second[0]["tab"] == "review"
+    assert stub.worktree_queries == [["w1"]]  # worktrees were NOT refetched
+    await gen.aclose()
+
+
+def test_listen_subscribes_to_label_and_worktree_events():
+    from herdeck.bridge import _GLOBAL_EVENT_TYPES, _LABEL_EVENT_TYPES
+
+    assert set(_LABEL_EVENT_TYPES) == {
+        "tab.renamed", "workspace.renamed", "workspace.updated",
+        "worktree.created", "worktree.opened", "worktree.removed",
+    }
+    assert not set(_LABEL_EVENT_TYPES) & set(_GLOBAL_EVENT_TYPES)
