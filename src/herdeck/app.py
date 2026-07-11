@@ -4,7 +4,10 @@ import asyncio
 import contextlib
 import logging
 import os
+import queue
+import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from .app_control import RuntimeAgentControl
 from .bootstrap import (
@@ -22,6 +25,7 @@ from .config import Config, ConfigError, ServerConfig
 from .connector import Connector
 from .driver.base import DeckDriver, PanelView
 from .driver.fake import FakeRenderer
+from .i18n import tr
 from .model import AgentState, Status
 from .notify import (
     BlockedAlertNotifier,
@@ -35,6 +39,7 @@ from .notify import (
     make_telegram_sink,
 )
 from .orchestrator import Orchestrator
+from .protocol import TermClosed, TermFrame
 from .secrets import get_secret
 from .telegram import TelegramBotClient, TelegramInteractor
 
@@ -184,6 +189,16 @@ def _default_notify_schedule(coro: Awaitable[None]) -> None:
         loop.create_task(_guard_blocked_notify(coro))
 
 
+@dataclass
+class TermSub:
+    """One browser terminal subscription, drained by the HTTP thread."""
+
+    req: str
+    queue: queue.Queue[dict]
+    server_id: str | None = None
+    pane_id: str | None = None
+
+
 class App:
     """Glue between orchestrator (sync) and connectors (async)."""
 
@@ -201,6 +216,7 @@ class App:
         update_connectors: Callable[[Config], object] | None = None,
         config_reloader: Callable[[], Config] | None = None,
         runtime_control: RuntimeAgentControl | None = None,
+        send_raw: Callable[[str, dict], bool] | None = None,
     ):
         self.config = config
         self.deck = deck
@@ -210,6 +226,11 @@ class App:
         self._update_connectors = update_connectors or (lambda cfg: None)
         self._config_reloader = config_reloader
         self._runtime_control = runtime_control
+        self._send_raw = send_raw
+        # All subscription lifecycle changes happen on the asyncio loop. The
+        # queue in TermSub is the only state shared with the HTTP thread.
+        self._terminals: dict[str, TermSub] = {}
+        self._servers_up: set[str] = set()
         self.notifier = notifier or NoopNotifier()
         self._blocked_runtime_factory = blocked_runtime_factory
         self.notification_poller = None
@@ -228,6 +249,9 @@ class App:
         self._blocked_keys: set = set()
         self.orch = Orchestrator(config, slots=deck.slot_count())
         deck.on_press(self._on_press)
+        on_terminal = getattr(deck, "on_terminal", None)
+        if callable(on_terminal):
+            on_terminal(self.open_terminal, self.close_terminal)
         self._req = 0
         self._active_read_req: str | None = None
         self._ticks = 0
@@ -313,6 +337,7 @@ class App:
         held = self._held_status_panel()
         try:
             self.deck.render(rs.tiles)
+            self.orch.confirm_rendered_preview()
             self.deck.render_panel(held if held is not None else rs.panel)
         except Exception:
             pass  # a render failure must never freeze the loop
@@ -435,6 +460,11 @@ class App:
     def handle_connection(self, server_id: str, up: bool) -> None:
         if not self._server_allowed(server_id):
             return
+        if up:
+            self._servers_up.add(server_id)
+        else:
+            self._servers_up.discard(server_id)
+            self._close_server_terminals(server_id)
         self.orch.set_connection(server_id, up)
         self._refresh()
 
@@ -465,6 +495,121 @@ class App:
         else:
             log.debug("result act req=%s data=%s -> re-list", req, data)
             self._send(Command("list", server_id))
+
+    _TERM_QUEUE_MAX = 120
+
+    def open_terminal(self, index: int, cols: int, rows: int) -> TermSub:
+        """Schedule a preview start from a non-loop thread."""
+        sub = TermSub(
+            req=f"t{uuid.uuid4().hex[:12]}",
+            queue=queue.Queue(maxsize=self._TERM_QUEUE_MAX),
+        )
+        self._schedule(lambda: self._start_terminal(sub, index, cols, rows))
+        return sub
+
+    def close_terminal(self, sub: TermSub) -> None:
+        """Schedule an idempotent preview stop from a non-loop thread."""
+        self._schedule(lambda: self._stop_terminal(sub))
+
+    def _term_lang(self) -> str:
+        return self.config.view.language
+
+    def _send_terminal(self, server_id: str, message: dict) -> bool:
+        if self._send_raw is None:
+            return False
+        try:
+            return bool(self._send_raw(server_id, message))
+        except Exception:
+            log.debug("terminal preview send failed", exc_info=True)
+            return False
+
+    def _start_terminal(self, sub: TermSub, index: int, cols: int, rows: int) -> None:
+        self._terminals[sub.req] = sub
+        agent = self.orch.agent_for_preview(index)
+        if agent is None:
+            self._finish_terminal(sub, tr(self._term_lang(), "web.term_no_agent"))
+            return
+
+        key = agent.key
+        if key.server_id not in self._servers_up or self._send_raw is None:
+            self._finish_terminal(sub, tr(self._term_lang(), "web.term_disconnected"))
+            return
+
+        sub.server_id = key.server_id
+        sub.pane_id = key.pane_id
+        sub.queue.put_nowait({"kind": "meta", "label": agent.label or agent.agent_type})
+        started = self._send_terminal(
+            key.server_id,
+            {
+                "type": "observe",
+                "req": sub.req,
+                "pane_id": key.pane_id,
+                "cols": cols,
+                "rows": rows,
+            },
+        )
+        if not started:
+            self._finish_terminal(sub, tr(self._term_lang(), "web.term_disconnected"))
+
+    def _stop_terminal(self, sub: TermSub) -> None:
+        if self._terminals.get(sub.req) is not sub:
+            return
+        del self._terminals[sub.req]
+        if sub.server_id is not None:
+            self._send_terminal(
+                sub.server_id,
+                {"type": "observe_stop", "req": sub.req},
+            )
+
+    def _finish_terminal(self, sub: TermSub, reason: str) -> None:
+        if self._terminals.get(sub.req) is not sub:
+            return
+        del self._terminals[sub.req]
+        closed = {"kind": "closed", "reason": reason}
+        try:
+            sub.queue.put_nowait(closed)
+        except queue.Full:
+            # Preserve bounded memory while guaranteeing a final close marker.
+            with contextlib.suppress(queue.Empty):
+                sub.queue.get_nowait()
+            sub.queue.put_nowait(closed)
+
+    def _close_server_terminals(self, server_id: str) -> None:
+        for sub in list(self._terminals.values()):
+            if sub.server_id == server_id:
+                self._finish_terminal(
+                    sub,
+                    tr(self._term_lang(), "web.term_disconnected"),
+                )
+
+    def handle_term(self, server_id: str, message: TermFrame | TermClosed) -> None:
+        """Route an inbound terminal frame on the asyncio loop."""
+        sub = self._terminals.get(message.req)
+        if sub is None or sub.server_id != server_id:
+            return
+        if isinstance(message, TermClosed):
+            self._finish_terminal(
+                sub,
+                message.reason or tr(self._term_lang(), "web.term_ended"),
+            )
+            return
+
+        frame = {
+            "kind": "frame",
+            "seq": message.seq,
+            "full": message.full,
+            "cols": message.cols,
+            "rows": message.rows,
+            "data": message.data,
+        }
+        try:
+            sub.queue.put_nowait(frame)
+        except queue.Full:
+            self._finish_terminal(sub, tr(self._term_lang(), "web.term_ended"))
+            self._send_terminal(
+                server_id,
+                {"type": "observe_stop", "req": sub.req},
+            )
 
     def handle_tick(self) -> None:
         working = self.orch.tick()
@@ -525,6 +670,7 @@ class App:
     def _apply_config(self, new_config: Config) -> None:
         # A successful apply supersedes any held "reload failed" notice.
         self._status_panel = None
+        old_servers = {server.id for server in self.config.servers}
         self.config = new_config
         if self._runtime_control is not None:
             self._runtime_control.update_config(new_config)
@@ -535,6 +681,10 @@ class App:
         allowed_servers = {s.id for s in new_config.servers}
         self._blocked_keys = {k for k in self._blocked_keys if k.server_id in allowed_servers}
         restarted = set(self._update_connectors(new_config) or [])
+        affected = (old_servers - allowed_servers) | restarted
+        for server_id in affected:
+            self._servers_up.discard(server_id)
+            self._close_server_terminals(server_id)
         if restarted:
             self.orch.clear_server_state(restarted)
             self._blocked_keys = {k for k in self._blocked_keys if k.server_id not in restarted}
@@ -816,6 +966,13 @@ async def _run(
                 conn.send(command_to_msg(cmd, app.next_req_for(cmd))), loop
             )
 
+    def send_raw(server_id: str, message: dict) -> bool:
+        conn = manager.get(server_id)
+        if conn is None:
+            return False
+        asyncio.create_task(conn.send(message))
+        return True
+
     def make_connector(server: ServerConfig) -> Connector:
         return Connector(
             server,
@@ -824,6 +981,9 @@ async def _run(
             on_connection=lambda sid, up: loop.call_soon_threadsafe(app.handle_connection, sid, up),
             on_result=lambda req, data, sid=server.id: loop.call_soon_threadsafe(
                 app.handle_result, sid, req, data
+            ),
+            on_term=lambda _sid, message, sid=server.id: loop.call_soon_threadsafe(
+                app.handle_term, sid, message
             ),
         )
 
@@ -842,6 +1002,7 @@ async def _run(
         switch_profile=switch_profile,
         update_connectors=lambda cfg: manager.update(cfg.servers),
         config_reloader=config_reloader,
+        send_raw=send_raw,
     )
 
     async def runtime_send(cmd: Command, req: str) -> None:

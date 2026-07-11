@@ -104,6 +104,127 @@ def test_event_updates_tile():
     assert o.render().tiles[0].color == "amber"
 
 
+def test_agent_for_preview_reads_rendered_slot_without_mutating_order_state():
+    now = [10.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: now[0])
+    o.apply_snapshot(
+        "dev",
+        [state("p1", Status.IDLE), state("p2", Status.WORKING)],
+    )
+    o.render()
+    o.confirm_rendered_preview()  # establish the mapping the browser actually sees
+    now[0] += 0.81
+    expected = o._display_order[0]
+    before = (
+        list(o._display_order),
+        dict(o._display_ranks),
+        list(o._target_keys),
+        o._target_since,
+        o._force_adopt,
+        dict(o._slot_changed_at),
+        dict(o._rendered_preview_slots),
+        dict(o._preview_slot_changed_at),
+        o._page,
+        o._drill,
+    )
+    agent = o.agent_for_preview(0)
+    after = (
+        list(o._display_order),
+        dict(o._display_ranks),
+        list(o._target_keys),
+        o._target_since,
+        o._force_adopt,
+        dict(o._slot_changed_at),
+        dict(o._rendered_preview_slots),
+        dict(o._preview_slot_changed_at),
+        o._page,
+        o._drill,
+    )
+    assert agent is not None and agent.key == expected
+    assert after == before
+
+
+def test_agent_for_preview_respects_drill_menus_and_control_tiles():
+    now = [10.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: now[0])
+    target = state("p1", Status.IDLE)
+    o.apply_snapshot("dev", [target])
+    o.render()
+    o.confirm_rendered_preview()
+    now[0] += 0.81
+    assert o.agent_for_preview(0) == target
+    assert o.agent_for_preview(12) is None  # corner launcher
+    assert all(o.agent_for_preview(index) is None for index in o._panel_indices())
+
+    o._drill = target.key
+    o.render()
+    o.confirm_rendered_preview()
+    now[0] += 0.81
+    assert o.agent_for_preview(12) == target  # any tile means the drilled pane
+    o._launcher = True
+    o.render()
+    o.confirm_rendered_preview()
+    assert o.agent_for_preview(0) is None
+    o._launcher = False
+    o._profile_menu = True
+    o.render()
+    o.confirm_rendered_preview()
+    assert o.agent_for_preview(0) is None
+
+
+def test_agent_for_preview_rejects_a_slot_changed_during_long_press():
+    now = [10.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: now[0])
+    target = state("p1", Status.IDLE)
+    o.apply_snapshot("dev", [target])
+    o.render()
+    o.confirm_rendered_preview()
+    assert o.agent_for_preview(0) is None
+    now[0] += 0.79
+    assert o.agent_for_preview(0) is None
+    now[0] += 0.02
+    assert o.agent_for_preview(0) == target
+
+
+def test_agent_for_preview_guards_blank_to_agent_render_change():
+    now = [10.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: now[0])
+    o.render()
+    o.confirm_rendered_preview()
+
+    target = state("p1", Status.IDLE)
+    o.apply_snapshot("dev", [target])
+    o.render()
+    o.confirm_rendered_preview()
+
+    assert o.agent_for_preview(0) is None
+    now[0] += 0.81
+    assert o.agent_for_preview(0) == target
+
+
+def test_agent_for_preview_guards_successful_page_flip():
+    now = [10.0]
+    o = Orchestrator(make_config(), slots=13, clock=lambda: now[0])
+    agents = [state(f"p{i:02}", Status.IDLE) for i in range(13)]
+    o.apply_snapshot("dev", agents)
+    o.render()
+    o.confirm_rendered_preview()
+    now[0] += 0.81
+    first_page_agent = o.agent_for_preview(0)
+    assert first_page_agent is not None
+
+    o._page = 1
+    o._resettle()
+    o.render()
+    o.confirm_rendered_preview()
+
+    assert o.agent_for_preview(0) is None
+    now[0] += 0.81
+    second_page_agent = o.agent_for_preview(0)
+    assert second_page_agent is not None
+    assert second_page_agent.key != first_page_agent.key
+
+
 def test_agent_tile_has_repo_branch_status_and_time():
     clk = [1000.0]
     o = Orchestrator(make_config(), slots=13, clock=lambda: clk[0])
