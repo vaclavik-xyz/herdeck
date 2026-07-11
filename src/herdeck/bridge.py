@@ -14,6 +14,11 @@ from .protocol import encode
 # herdr agent_status values that mark a pane as worth showing on the deck.
 _AGENT_STATUSES = {"idle", "working", "blocked", "done"}
 
+# Hard floor: session.snapshot shipped in herdr 0.7.2; there is no fallback path.
+_SNAPSHOT_UNSUPPORTED = (
+    "herdeck requires herdr >= 0.7.2 (session.snapshot missing); run 'herdr update'"
+)
+
 # Module-level indirection so tests can fake the clock without touching the
 # shared stdlib time module (which asyncio's loop may also consult).
 _monotonic = time.monotonic
@@ -21,6 +26,7 @@ _monotonic = time.monotonic
 
 class HerdrClient(Protocol):
     async def list_panes(self) -> list[dict]: ...
+    async def snapshot(self) -> dict: ...
     async def get_pane(self, pane_id: str) -> dict: ...
     async def read_pane(self, pane_id: str, source: str) -> str: ...
     async def send_keys(self, pane_id: str, keys: list[str]) -> None: ...
@@ -167,6 +173,13 @@ class StubHerdr:
 
     async def list_panes(self) -> list[dict]:
         return self.panes
+
+    async def snapshot(self) -> dict:
+        return {
+            "agents": self.panes,
+            "workspaces": self._workspaces,
+            "tabs": self._tabs,
+        }
 
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]:
         self.worktree_queries = getattr(self, "worktree_queries", [])
@@ -435,6 +448,17 @@ class SocketHerdr:
     async def list_panes(self) -> list[dict]:
         res = await self._rpc("pane.list", {})
         return res.get("result", {}).get("panes", [])
+
+    async def snapshot(self) -> dict:
+        # session.snapshot (herdr >= 0.7.2) returns agents + workspace/tab labels
+        # in one response; worktrees are NOT included (see worktrees()).
+        try:
+            res = await self._rpc("session.snapshot", {})
+        except RuntimeError as exc:
+            if "unknown variant" in str(exc):
+                raise RuntimeError(_SNAPSHOT_UNSUPPORTED) from exc
+            raise
+        return res.get("result", {}).get("snapshot", {})
 
     async def get_pane(self, pane_id: str) -> dict:
         # herdr has no working `pane.get`; derive the pane from the (supported)

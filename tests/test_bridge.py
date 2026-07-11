@@ -653,3 +653,50 @@ async def test_socket_herdr_merges_per_workspace_worktrees():
     ]
     assert len(merged) == 2  # the shared row is de-duplicated
     assert {w["branch"] for w in merged} == {"main", "dev"}
+
+
+# --- session.snapshot client method ---
+
+
+async def test_socket_herdr_snapshot_returns_snapshot():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params))
+        return {"result": {"snapshot": {"agents": [], "workspaces": [], "tabs": []}}}
+
+    h._rpc = fake_rpc
+    snap = await h.snapshot()
+    assert calls == [("session.snapshot", {})]
+    assert snap == {"agents": [], "workspaces": [], "tabs": []}
+
+
+async def test_socket_herdr_snapshot_maps_unknown_method_to_version_hint():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        raise RuntimeError(
+            "herdr RPC session.snapshot failed: invalid request: "
+            "unknown variant `session.snapshot`, expected one of `ping`, `server.stop`"
+        )
+
+    h._rpc = fake_rpc
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+        await h.snapshot()
+
+
+async def test_stub_herdr_snapshot_composes_lists():
+    stub = StubHerdr(
+        panes=[raw_pane()],
+        workspaces=[{"workspace_id": "w1", "label": "api"}],
+        tabs=[{"tab_id": "w1:t1", "label": "1"}],
+    )
+    snap = await stub.snapshot()
+    assert snap["agents"][0]["pane_id"] == "w1:p1"
+    assert snap["workspaces"] == [{"workspace_id": "w1", "label": "api"}]
+    assert snap["tabs"] == [{"tab_id": "w1:t1", "label": "1"}]
