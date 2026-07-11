@@ -1001,6 +1001,34 @@ def test_connect_local_bridge_start_failure(tmp_path, monkeypatch):
         app.close()
 
 
+def test_connect_local_bridge_surfaces_snapshot_unsupported(tmp_path, monkeypatch):
+    """A pre-0.7.2 herdr makes the embedded bridge raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
+    (bridge.py's hard floor). The route must pass that exact message through as the error,
+    not mask it behind the generic 'could not start local source' (audit: version guidance
+    must reach the desktop user)."""
+    from herdeck.bridge import _SNAPSHOT_UNSUPPORTED
+
+    sock = tmp_path / "herdr.sock"
+    sock.touch()
+    monkeypatch.setenv("HERDR_SOCKET", str(sock))
+    monkeypatch.setenv("HERDECK_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.delenv("HERDECK_MOCK", raising=False)
+
+    def _boom(socket_path):  # herdr too old: session.snapshot missing
+        raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
+
+    monkeypatch.setattr(srv, "_start_local_bridge", _boom)
+    app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
+    prev = app._source
+    try:
+        _, body = _post(app, "/setup/connect", {"choice": "local"})
+        assert body["ok"] is False
+        assert body["error"] == _SNAPSHOT_UNSUPPORTED
+        assert app._source is prev and app._local_bridge is None
+    finally:
+        app.close()
+
+
 def test_connect_remote_deduplicates_server_ids(tmp_path, monkeypatch):
     # A malformed config with TWO [[servers]] both id="herdr" must be collapsed to
     # exactly ONE entry (the new url) after connect — no leftover duplicate survives.
