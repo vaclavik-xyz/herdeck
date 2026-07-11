@@ -6,6 +6,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- The bridge now bootstraps fleet state from herdr's `session.snapshot` API and
+  subscribes to tab/workspace/worktree events, so workspace, tab, and branch
+  labels update instantly. **herdr >= 0.7.2 is now required** — check with
+  `herdr status`, upgrade with `herdr update`.
+
 ## [0.1.0]
 
 Initial public release.

@@ -1,6 +1,6 @@
 from herdeck.doctor import (
     Check,
-    _socket_pane_list,
+    _socket_snapshot,
     check_config,
     check_deck,
     check_optional_deps,
@@ -17,7 +17,9 @@ def test_check_socket_missing():
 
 def test_check_socket_ok():
     c = check_socket(
-        "/s.sock", exists=lambda p: True, probe=lambda path: {"result": {"panes": [1, 2]}}
+        "/s.sock",
+        exists=lambda p: True,
+        probe=lambda path: {"result": {"snapshot": {"agents": [1, 2]}}},
     )
     assert c.ok is True and "2" in c.detail
 
@@ -34,9 +36,18 @@ def test_check_socket_malformed():
     assert c.ok is False
 
 
-def test_check_socket_malformed_panes_type():
+def test_check_socket_malformed_agents_type():
     c = check_socket(
-        "/s.sock", exists=lambda p: True, probe=lambda path: {"result": {"panes": "not-a-list"}}
+        "/s.sock",
+        exists=lambda p: True,
+        probe=lambda path: {"result": {"snapshot": {"agents": "not-a-list"}}},
+    )
+    assert c.ok is False
+
+
+def test_check_socket_malformed_snapshot_type():
+    c = check_socket(
+        "/s.sock", exists=lambda p: True, probe=lambda path: {"result": {"snapshot": "nope"}}
     )
     assert c.ok is False
 
@@ -126,7 +137,7 @@ token_env = "HERDECK_TOKEN"
     assert checks["server 'remote'"].ok is True  # remote servers are now probed
 
 
-async def test_socket_pane_list_returns_raw_rpc(monkeypatch):
+async def test_socket_snapshot_returns_raw_rpc(monkeypatch):
     from herdeck import bridge
 
     class FakeSocketHerdr:
@@ -134,6 +145,7 @@ async def test_socket_pane_list_returns_raw_rpc(monkeypatch):
             self.path = path
 
         async def _rpc(self, method, params):
+            assert method == "session.snapshot"  # doctor probes the same RPC the bridge needs
             return {"error": {"message": "bad response"}}
 
         async def list_panes(self):
@@ -141,7 +153,7 @@ async def test_socket_pane_list_returns_raw_rpc(monkeypatch):
 
     monkeypatch.setattr(bridge, "SocketHerdr", FakeSocketHerdr)
 
-    assert await _socket_pane_list("/s.sock") == {"error": {"message": "bad response"}}
+    assert await _socket_snapshot("/s.sock") == {"error": {"message": "bad response"}}
 
 
 def test_python_m_invocation_runs_main():
@@ -513,7 +525,7 @@ def test_collect_checks_uses_the_config_socket_override(tmp_path, monkeypatch):
     monkeypatch.setenv("HERDECK_CONFIG", str(config))
     monkeypatch.delenv("HERDR_SOCKET", raising=False)
     monkeypatch.delenv("HERDECK_LOCAL_CONFIG", raising=False)
-    monkeypatch.setattr(doctor_mod, "_probe_socket", lambda p: {"result": {"panes": []}})
+    monkeypatch.setattr(doctor_mod, "_probe_socket", lambda p: {"result": {"snapshot": {"agents": []}}})
 
     checks = {c.name: c for c in collect_checks()}
     assert checks["herdr socket"].ok is True  # found via [hardware].herdr_socket

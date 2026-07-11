@@ -1117,6 +1117,7 @@ def connect(app, body) -> dict | None:
 
     if choice == "local":
         from ..bootstrap import resolve_socket_path
+        from ..bridge import _SNAPSHOT_UNSUPPORTED
 
         socket_path = resolve_socket_path(None)
         if not os.path.exists(socket_path):
@@ -1129,13 +1130,18 @@ def connect(app, body) -> dict | None:
             new_source = build_live_source_for_connect(config, server)  # build ...
             prepared = app._prepare_swap(new_source, clock=time.monotonic)  # ... pre-build orch (live clock) BEFORE the marker ...
             write_choice(config_path, "local")  # ... persist (durable)
-        except Exception:
+        except Exception as exc:
             _restore_choice(config_path, prior_choice)  # undo the marker if it was written
             if new_source is not None:
                 new_source.close()  # don't leak the built source / its connector runner
             if runner is not None:
                 runner.close()  # ... or the just-started bridge; previous source untouched
-            return {"ok": False, "error": "could not start local source"}
+            log.warning("local source start failed", exc_info=True)
+            # The bridge's hard version floor (herdr < 0.7.2, no session.snapshot) carries
+            # actionable guidance ('run herdr update') that must reach the desktop user
+            # verbatim, not the generic message below.
+            error = str(exc) if str(exc) == _SNAPSHOT_UNSUPPORTED else "could not start local source"
+            return {"ok": False, "error": error}
         app._commit_swap(new_source, prepared)  # non-failing: all fallible work done; sets the live clock
         app._set_local_bridge(runner)  # adopt new bridge (closes old one)
         app._reloader = _reloader_for(app, ("local",), _select_source)  # no-op: don't swap out the bridge

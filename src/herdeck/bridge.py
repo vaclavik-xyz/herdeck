@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import os
 import time
 from typing import Protocol
@@ -11,8 +12,19 @@ import websockets
 
 from .protocol import encode
 
+log = logging.getLogger(__name__)
+
 # herdr agent_status values that mark a pane as worth showing on the deck.
 _AGENT_STATUSES = {"idle", "working", "blocked", "done"}
+
+# Hard floor: session.snapshot shipped in herdr 0.7.2; there is no fallback path.
+_SNAPSHOT_UNSUPPORTED = (
+    "herdeck requires herdr >= 0.7.2 (session.snapshot missing); run 'herdr update'"
+)
+
+# Startup probe bound: a herdr that accepts but never answers (e.g. mid
+# live-handoff) must not block bridge startup; timeout = transient, not fatal.
+_PROBE_TIMEOUT = 5.0
 
 # Module-level indirection so tests can fake the clock without touching the
 # shared stdlib time module (which asyncio's loop may also consult).
@@ -20,7 +32,7 @@ _monotonic = time.monotonic
 
 
 class HerdrClient(Protocol):
-    async def list_panes(self) -> list[dict]: ...
+    async def snapshot(self) -> dict: ...
     async def get_pane(self, pane_id: str) -> dict: ...
     async def read_pane(self, pane_id: str, source: str) -> str: ...
     async def send_keys(self, pane_id: str, keys: list[str]) -> None: ...
@@ -28,8 +40,6 @@ class HerdrClient(Protocol):
     async def send_text(self, pane_id: str, text: str) -> None: ...
     async def start_agent(self, name: str, argv: list[str]) -> None: ...
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]: ...
-    async def workspaces(self) -> list[dict]: ...
-    async def tabs(self) -> list[dict]: ...
 
 
 def _is_agent_pane(p: dict) -> bool:
@@ -43,12 +53,12 @@ def _worktrees_by_workspace(worktrees: list[dict]) -> dict[str, dict]:
 
 
 def _workspaces_by_id(workspaces: list[dict]) -> dict[str, str]:
-    """Index herdr workspaces (workspace.list) as {workspace_id: label}."""
+    """Index herdr workspaces (session.snapshot's ``workspaces`` list) as {workspace_id: label}."""
     return {w["workspace_id"]: w.get("label", "") for w in (workspaces or []) if w.get("workspace_id")}
 
 
 def _tabs_by_id(tabs: list[dict]) -> dict[str, str]:
-    """Index herdr tabs (tab.list) as {tab_id: label}."""
+    """Index herdr tabs (session.snapshot's ``tabs`` list) as {tab_id: label}."""
     return {t["tab_id"]: t.get("label", "") for t in (tabs or []) if t.get("tab_id")}
 
 
@@ -63,7 +73,7 @@ def _herdr_pane_to_wire(
     herdr uses `agent` / `agent_status` and has no human label. We derive repo +
     branch from the pane's open worktree (herdr `worktree.list`), falling back to
     the working-directory basename when no worktree info is available. The
-    workspace/tab labels come from `workspace.list` / `tab.list`; a missing lookup
+    workspace/tab labels ride along in `session.snapshot`; a missing lookup
     or empty label stays empty (the raw id is never used as tile text).
     """
     cwd = p.get("foreground_cwd") or p.get("cwd") or ""
@@ -100,36 +110,15 @@ def _wire_panes(
     return [_herdr_pane_to_wire(p, wt_by_ws, ws_by_id, tab_by_id) for p in raw if _is_agent_pane(p)]
 
 
-async def _fetch_labels(
-    herdr: HerdrClient, workspace_ids: list[str] | None = None
-) -> tuple[list, list, list]:
-    """The worktree/workspace/tab label lists, fetched CONCURRENTLY (herdr accepts
-    concurrent one-shot connections, so latency is max instead of sum — the
-    code's own measurement has worktree.list alone spiking to ~130ms). Any
-    failing lookup degrades to an empty list; labels are cosmetic.
-
-    ``workspace_ids`` are the AGENT panes' workspaces: herdr's ``worktree.list``
-    is scoped to one repo (the focused one without params), so branch labels for
-    a multi-repo fleet exist only when each agent workspace is asked about
-    explicitly (device report 2026-07-02: every non-focused repo lost its
-    branch line)."""
-
-    async def safe(method_name: str, *args) -> list:
-        fn = getattr(herdr, method_name, None)
-        if fn is None:  # minimal doubles carry only list_panes; labels are optional
-            return []
-        try:
-            try:
-                return await fn(*args)
-            except TypeError:
-                return await fn()  # doubles predating the workspace_ids parameter
-        except Exception:
-            return []
-
-    worktrees, workspaces, tabs = await asyncio.gather(
-        safe("worktrees", workspace_ids or []), safe("workspaces"), safe("tabs")
-    )
-    return worktrees, workspaces, tabs
+async def _fetch_worktrees(herdr: HerdrClient, workspace_ids: list[str]) -> list:
+    """Branch labels come from worktree.list, which herdr scopes to ONE repo —
+    each agent workspace is asked about explicitly (device report 2026-07-02:
+    every non-focused repo lost its branch line). Failures degrade to no
+    labels; they are cosmetic."""
+    try:
+        return await herdr.worktrees(workspace_ids)
+    except Exception:
+        return []
 
 
 def _agent_workspace_ids(raw_panes: list[dict]) -> list[str]:
@@ -139,11 +128,13 @@ def _agent_workspace_ids(raw_panes: list[dict]) -> list[str]:
 
 
 async def _wired_snapshot(herdr: HerdrClient) -> list[dict]:
-    """Fetch panes, then the label lists for THEIR workspaces (worktree.list is
-    per-repo — see _fetch_labels), and build the wire snapshot."""
-    raw = await herdr.list_panes()
-    worktrees, workspaces, tabs = await _fetch_labels(herdr, _agent_workspace_ids(raw))
-    return _wire_panes(raw, worktrees, workspaces, tabs)
+    """One session.snapshot carries the agent panes AND the workspace/tab
+    labels; only branch labels need the extra per-workspace worktree fan-out
+    (worktrees are not part of the snapshot)."""
+    snap = await herdr.snapshot()
+    raw = snap.get("agents", [])
+    worktrees = await _fetch_worktrees(herdr, _agent_workspace_ids(raw))
+    return _wire_panes(raw, worktrees, snap.get("workspaces", []), snap.get("tabs", []))
 
 
 class StubHerdr:
@@ -165,19 +156,17 @@ class StubHerdr:
         self.focused: list[str] = []
         self.started: list[tuple[str, list[str]]] = []
 
-    async def list_panes(self) -> list[dict]:
-        return self.panes
+    async def snapshot(self) -> dict:
+        return {
+            "agents": self.panes,
+            "workspaces": self._workspaces,
+            "tabs": self._tabs,
+        }
 
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]:
         self.worktree_queries = getattr(self, "worktree_queries", [])
         self.worktree_queries.append(list(workspace_ids or []))
         return self._worktrees
-
-    async def workspaces(self) -> list[dict]:
-        return self._workspaces
-
-    async def tabs(self) -> list[dict]:
-        return self._tabs
 
     async def get_pane(self, pane_id: str) -> dict:
         return next(p for p in self.panes if p["pane_id"] == pane_id)
@@ -232,12 +221,24 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
 # herdr events that change fleet membership (need a status re-subscribe after).
 _GLOBAL_EVENT_TYPES = ("pane.created", "pane.closed", "pane.exited", "pane.agent_detected")
 _FLEET_EVENT_NAMES = {"pane_created", "pane_closed", "pane_exited", "pane_agent_detected"}
+# Label-bearing events. Workspace/tab labels ride along in every snapshot, so
+# these only need to wake the stream; worktree events additionally invalidate
+# the cached worktree list (branch labels are not in the snapshot).
+_LABEL_EVENT_TYPES = (
+    "tab.renamed",
+    "workspace.renamed",
+    "workspace.updated",
+    "worktree.created",
+    "worktree.opened",
+    "worktree.removed",
+)
+_WORKTREE_EVENT_NAMES = {"worktree_created", "worktree_opened", "worktree_removed"}
 
 
 class HerdrEvents:
     """Yields the full agent list whenever it changes.
 
-    The source of truth is a diff of ``pane.list`` (so additions, status changes
+    The source of truth is a diff of ``session.snapshot`` (so additions, status changes
     AND removals are all reflected — a closed pane simply drops out). Re-lists are
     triggered immediately by herdr's push events (``events.subscribe``) when a
     socket path is given, with a slow poll as a safety net; without one it falls
@@ -251,14 +252,15 @@ class HerdrEvents:
         self._socket_path = socket_path
         self._interval = poll_interval
         self._wake = asyncio.Event()
-        # Cached worktree/workspace/tab label lists. A pane.agent_status_changed
-        # wake cannot change them, so status wakes reuse the cache and pay for
-        # pane.list only; fleet events (_listen) mark it stale, and an age check
-        # refreshes it at least every poll_interval even when constant status
-        # wakes keep the slow-poll timeout from ever firing.
-        self._labels: tuple[list, list, list] | None = None
-        self._labels_stale = True
-        self._labels_at = 0.0  # monotonic time of the last label refresh
+        # Cached worktree list (branch labels — the one thing session.snapshot
+        # does not carry). A pane.agent_status_changed wake cannot change it, so
+        # status wakes reuse the cache; fleet/worktree events (_listen) mark it
+        # stale, and an age check refreshes it at least every poll_interval even
+        # when constant status wakes keep the slow-poll timeout from ever firing
+        # (a branch switch inside an existing worktree emits no event).
+        self._worktrees: list | None = None
+        self._worktrees_stale = True
+        self._worktrees_at = 0.0  # monotonic time of the last refresh
 
     async def stream(self):
         listener = asyncio.create_task(self._listen()) if self._socket_path else None
@@ -266,15 +268,25 @@ class HerdrEvents:
         try:
             while True:
                 try:
-                    raw = await self._herdr.list_panes()
-                    if self._labels is None or self._labels_stale:
-                        # panes first: worktree labels are fetched for exactly the
-                        # workspaces the agent panes live in (worktree.list is per-repo)
-                        self._labels = await _fetch_labels(self._herdr, _agent_workspace_ids(raw))
-                        self._labels_stale = False
-                        self._labels_at = _monotonic()
-                    cur = _wire_panes(raw, *self._labels)
-                except Exception:
+                    snap = await self._herdr.snapshot()
+                    raw = snap.get("agents", [])
+                    if self._worktrees is None or self._worktrees_stale:
+                        # agents first: worktrees are fetched for exactly the
+                        # workspaces the agent panes live in (per-repo scoping)
+                        self._worktrees = await _fetch_worktrees(
+                            self._herdr, _agent_workspace_ids(raw)
+                        )
+                        self._worktrees_stale = False
+                        self._worktrees_at = _monotonic()
+                    cur = _wire_panes(
+                        raw,
+                        self._worktrees,
+                        snap.get("workspaces", []),
+                        snap.get("tabs", []),
+                    )
+                except Exception as exc:
+                    if str(exc) == _SNAPSHOT_UNSUPPORTED:
+                        raise  # herdr too old: never retryable, surface loudly
                     cur = None
                 if cur is not None:
                     if cur != prev:
@@ -286,13 +298,23 @@ class HerdrEvents:
                     pass
                 self._wake.clear()
                 # Age-based staling (not timeout-based): frequent status wakes can
-                # keep the timeout from ever firing, which would let labels (e.g.
-                # a branch change, which is not a fleet event) stay stale forever.
-                if _monotonic() - self._labels_at >= self._interval:
-                    self._labels_stale = True
+                # keep the timeout from ever firing, which would let the branch
+                # labels (a branch change is not an event) stay stale forever.
+                if _monotonic() - self._worktrees_at >= self._interval:
+                    self._worktrees_stale = True
         finally:
             if listener is not None:
                 listener.cancel()
+
+    def _note_event(self, name: str | None) -> bool:
+        """Digest one push event; True means fleet membership changed and the
+        per-pane status subscriptions must be rebuilt."""
+        if name in _WORKTREE_EVENT_NAMES:
+            self._worktrees_stale = True
+        if name in _FLEET_EVENT_NAMES:
+            self._worktrees_stale = True  # a new pane may sit in an unseen workspace
+            return True
+        return False
 
     async def _listen(self) -> None:
         """Hold a herdr event subscription; wake the stream on every event."""
@@ -300,8 +322,11 @@ class HerdrEvents:
             writer = None
             try:
                 reader, writer = await asyncio.open_unix_connection(self._socket_path)
-                agent_panes = [p["pane_id"] for p in _wire_panes(await self._herdr.list_panes())]
-                subs = [{"type": t} for t in _GLOBAL_EVENT_TYPES]
+                agent_panes = [
+                    p["pane_id"]
+                    for p in _wire_panes((await self._herdr.snapshot()).get("agents", []))
+                ]
+                subs = [{"type": t} for t in _GLOBAL_EVENT_TYPES + _LABEL_EVENT_TYPES]
                 subs += [
                     {"type": "pane.agent_status_changed", "pane_id": pid} for pid in agent_panes
                 ]
@@ -328,8 +353,7 @@ class HerdrEvents:
                         name = json.loads(line).get("event")
                     except Exception:
                         name = None
-                    if name in _FLEET_EVENT_NAMES:
-                        self._labels_stale = True  # membership changed -> refetch labels
+                    if self._note_event(name):
                         break  # fleet changed -> re-subscribe panes
             except Exception:
                 pass
@@ -393,8 +417,9 @@ class SocketHerdr:
         # server-side close isn't detected before the next write.
         # RPCs are NOT serialized: each call reads from its own connection, so the
         # fixed request id "b" cannot cross-talk, and herdr accepts concurrent
-        # one-shot connections — this is what lets a snapshot fetch its four
-        # lists in parallel (latency = max instead of sum).
+        # one-shot connections — this is what lets the per-workspace `worktree.list`
+        # fan-out (worktrees()) and on-demand client RPCs (act, start_agent, ...)
+        # run in parallel (latency = max instead of sum).
         attempts = 2 if retry else 1
         last_exc: Exception | None = None
         for _ in range(attempts):
@@ -433,8 +458,21 @@ class SocketHerdr:
         raise last_exc
 
     async def list_panes(self) -> list[dict]:
+        # Kept for get_pane's act guard only (herdr has no working pane.get);
+        # fleet state comes from snapshot().
         res = await self._rpc("pane.list", {})
         return res.get("result", {}).get("panes", [])
+
+    async def snapshot(self) -> dict:
+        # session.snapshot (herdr >= 0.7.2) returns agents + workspace/tab labels
+        # in one response; worktrees are NOT included (see worktrees()).
+        try:
+            res = await self._rpc("session.snapshot", {})
+        except RuntimeError as exc:
+            if "unknown variant" in str(exc):
+                raise RuntimeError(_SNAPSHOT_UNSUPPORTED) from exc
+            raise
+        return res.get("result", {}).get("snapshot", {})
 
     async def get_pane(self, pane_id: str) -> dict:
         # herdr has no working `pane.get`; derive the pane from the (supported)
@@ -492,14 +530,6 @@ class SocketHerdr:
                 merged.append(wt)
         return merged
 
-    async def workspaces(self) -> list[dict]:
-        res = await self._rpc("workspace.list", {})
-        return res.get("result", {}).get("workspaces", [])
-
-    async def tabs(self) -> list[dict]:
-        res = await self._rpc("tab.list", {})
-        return res.get("result", {}).get("tabs", [])
-
 
 async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, clients: set):
     auth = ws.request.headers.get("Authorization", "")
@@ -520,6 +550,36 @@ async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, 
         clients.discard(ws)
 
 
+async def _require_snapshot_support(herdr: HerdrClient) -> None:
+    """Fail fast when herdr predates session.snapshot (herdeck needs >= 0.7.2).
+
+    Only the version error is fatal: a herdr that is merely not up yet (or is
+    mid live-handoff) must not kill the bridge — the stream retries those
+    exactly as before."""
+    try:
+        await asyncio.wait_for(herdr.snapshot(), timeout=_PROBE_TIMEOUT)
+    except RuntimeError as exc:
+        if str(exc) == _SNAPSHOT_UNSUPPORTED:
+            raise
+    except Exception:
+        pass
+
+
+def _log_broadcast_task_failure(task: asyncio.Task) -> None:
+    """serve() awaits _broadcast in its own foreground, so a fatal stream
+    error (e.g. an old herdr surfacing after a transient-down startup probe)
+    propagates to whatever called serve(). start_local_bridge()'s broadcast
+    runs as a detached background task with no such supervisor, so without
+    this the same failure would die silently — surfaced here as an error log
+    instead (asyncio's own 'Task exception was never retrieved' warning is
+    easy to miss)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("local bridge broadcast stopped: %s", exc, exc_info=exc)
+
+
 async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     """Bind an embedded bridge on a loopback ephemeral port with a random,
     in-memory token. Returns (host, port, token, (server, broadcast_task))."""
@@ -531,6 +591,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     # only (see serve()). A test may inject a single stub for both.
     events_herdr = herdr or SocketHerdr(socket_path)
     client_herdr = herdr or SocketHerdr(socket_path)
+    await _require_snapshot_support(events_herdr)
     events = HerdrEvents(events_herdr, socket_path=socket_path)
     clients: set = set()
 
@@ -540,6 +601,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     server = await websockets.serve(handler, host, 0)
     port = server.sockets[0].getsockname()[1]
     btask = asyncio.create_task(_broadcast(events.stream(), clients, "local"))
+    btask.add_done_callback(_log_broadcast_task_failure)
     return host, port, token, (server, btask)
 
 
@@ -550,6 +612,7 @@ async def serve(socket_path: str, host: str, port: int, server_id: str, token: s
     # requests are kept for organizational clarity.
     events_herdr = SocketHerdr(socket_path)
     client_herdr = SocketHerdr(socket_path)
+    await _require_snapshot_support(events_herdr)
     events = HerdrEvents(events_herdr, socket_path=socket_path)  # push events + slow poll
     clients: set = set()
 
