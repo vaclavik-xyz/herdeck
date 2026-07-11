@@ -27,6 +27,11 @@ the desktop app, a loopback HTTP sidecar. The intended, supported deployment:
   compared) provides authentication.
 - The desktop sidecar binds to `127.0.0.1` only; its access token is injected by
   the Rust shell and is never exposed to the WebView / JavaScript.
+- The browser simulator binds to loopback by default. For remote use, bind it to
+  a trusted Tailscale interface only. Its URL token authorizes deck presses and
+  live read-only terminal contents, so protect bookmarked/shared URLs as
+  credentials; never bind the simulator to `0.0.0.0`, a public IP, or an
+  untrusted LAN.
 - Tokens live in the OS keychain or an environment variable, never in committed
   configuration.
 

@@ -168,6 +168,14 @@ clicks into presses. Two ways to use it:
 
 `HERDECK_WEB_PORT` (default 8800) and `HERDECK_WEB_BIND` (default 127.0.0.1)
 configure the server. Click a tile to press it; click the panel to page.
+Long-press or right-click an agent tile (or focus it and press `Shift+Enter`) to
+open a live read-only terminal preview; close it with `Esc` or ×. The bridge
+host needs herdr >= 0.7.3 for `herdr terminal session observe`.
+
+The simulator URL token now grants both deck controls and visibility into agent
+terminals. Treat it as a credential and bind the simulator only to loopback or
+your trusted Tailscale interface — never `0.0.0.0`, a public IP, or an untrusted
+LAN.
 
 **Headless.** `HERDECK_FAKE_DECK=1 python -m herdeck.app` uses an in-memory
 renderer (no UI). `scripts/e2e_verify.py` connects the pipeline to a bridge and

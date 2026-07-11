@@ -6,6 +6,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Live terminal preview in the browser deck: long-press, right-click, or use
+  `Shift+Enter` on an agent tile to watch that pane read-only, streamed from
+  herdr (`terminal session observe`, herdr >= 0.7.3) through the bridge.
+
 ### Changed
 - The bridge now bootstraps fleet state from herdr's `session.snapshot` API and
   subscribes to tab/workspace/worktree events, so workspace, tab, and branch
