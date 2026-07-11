@@ -306,12 +306,21 @@ class HerdrEvents:
             if listener is not None:
                 listener.cancel()
 
-    def _note_event(self, name: str | None) -> bool:
+    def _note_event(
+        self, name: str | None, pane_id: str | None = None, subscribed: set[str] | None = None
+    ) -> bool:
         """Digest one push event; True means fleet membership changed and the
-        per-pane status subscriptions must be rebuilt."""
+        per-pane status subscriptions must be rebuilt.
+
+        herdr re-emits ``pane.agent_detected`` continuously for panes it is
+        already tracking (several times a second on a busy fleet); re-detection
+        of a pane we already hold a status subscription for is just a wake, not
+        a membership change — breaking on it spins the subscribe loop."""
         if name in _WORKTREE_EVENT_NAMES:
             self._worktrees_stale = True
         if name in _FLEET_EVENT_NAMES:
+            if name == "pane_agent_detected" and pane_id is not None and pane_id in (subscribed or ()):
+                return False
             self._worktrees_stale = True  # a new pane may sit in an unseen workspace
             return True
         return False
@@ -322,13 +331,14 @@ class HerdrEvents:
             writer = None
             try:
                 reader, writer = await asyncio.open_unix_connection(self._socket_path)
-                agent_panes = [
+                agent_panes = {
                     p["pane_id"]
                     for p in _wire_panes((await self._herdr.snapshot()).get("agents", []))
-                ]
+                }
                 subs = [{"type": t} for t in _GLOBAL_EVENT_TYPES + _LABEL_EVENT_TYPES]
                 subs += [
-                    {"type": "pane.agent_status_changed", "pane_id": pid} for pid in agent_panes
+                    {"type": "pane.agent_status_changed", "pane_id": pid}
+                    for pid in sorted(agent_panes)
                 ]
                 writer.write(
                     (
@@ -350,10 +360,12 @@ class HerdrEvents:
                         break
                     self._wake.set()
                     try:
-                        name = json.loads(line).get("event")
+                        evt = json.loads(line)
+                        name = evt.get("event")
+                        pane_id = (evt.get("data") or {}).get("pane_id")
                     except Exception:
-                        name = None
-                    if self._note_event(name):
+                        name = pane_id = None
+                    if self._note_event(name, pane_id, agent_panes):
                         break  # fleet changed -> re-subscribe panes
             except Exception:
                 pass
