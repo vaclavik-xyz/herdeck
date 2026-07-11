@@ -439,40 +439,42 @@ async def test_list_snapshot_includes_workspace_and_tab():
 # --- snapshot RPC concurrency + label caching (audit: bridge-parallel-rpcs) --
 
 
-async def test_wired_snapshot_fetches_lists_concurrently():
-    import asyncio
-
+async def test_wired_snapshot_reads_labels_from_snapshot():
+    pane = raw_pane("w2:p1", agent="claude", status="blocked")
+    pane["workspace_id"] = "w2"
+    pane["tab_id"] = "w2:t1"
+    stub = StubHerdr(
+        panes=[pane],
+        workspaces=[{"workspace_id": "w2", "label": "herdeck"}],
+        tabs=[{"tab_id": "w2:t1", "label": "1"}],
+    )
     from herdeck.bridge import _wired_snapshot
 
-    class SlowStub:
-        def __init__(self):
-            self.active = 0
-            self.max_active = 0
+    out = await _wired_snapshot(stub)
+    assert out[0]["workspace"] == "herdeck"
+    assert out[0]["tab"] == "1"
 
-        async def _slow(self, result):
-            self.active += 1
-            self.max_active = max(self.max_active, self.active)
-            await asyncio.sleep(0.02)
-            self.active -= 1
-            return result
 
-        async def list_panes(self):
-            return await self._slow([])
+async def test_wired_snapshot_keeps_agent_pane_without_agent_key():
+    # herdr's agents list should already be agent-only; the _is_agent_pane belt
+    # must keep a row that carries only a live agent_status.
+    pane = {"pane_id": "w1:p9", "workspace_id": "w1", "cwd": "/x/api",
+            "foreground_cwd": "/x/api", "agent_status": "working"}
+    stub = StubHerdr(panes=[pane])
+    from herdeck.bridge import _wired_snapshot
 
+    out = await _wired_snapshot(stub)
+    assert [p["pane_id"] for p in out] == ["w1:p9"]
+
+
+async def test_fetch_worktrees_degrades_to_empty_on_error():
+    from herdeck.bridge import _fetch_worktrees
+
+    class BrokenHerdr:
         async def worktrees(self, workspace_ids=None):
-            return await self._slow([])
+            raise RuntimeError("worktree.list failed")
 
-        async def workspaces(self):
-            return await self._slow([])
-
-        async def tabs(self):
-            return await self._slow([])
-
-    stub = SlowStub()
-    await _wired_snapshot(stub)
-    # pane.list goes FIRST (worktree queries need the agent workspaces), then
-    # the three label lists fly concurrently (latency = panes + max(labels))
-    assert stub.max_active == 3
+    assert await _fetch_worktrees(BrokenHerdr(), ["w1"]) == []
 
 
 async def test_stream_caches_labels_across_status_wakes():

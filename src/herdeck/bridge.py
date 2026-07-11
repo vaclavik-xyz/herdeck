@@ -138,6 +138,17 @@ async def _fetch_labels(
     return worktrees, workspaces, tabs
 
 
+async def _fetch_worktrees(herdr: HerdrClient, workspace_ids: list[str]) -> list:
+    """Branch labels come from worktree.list, which herdr scopes to ONE repo —
+    each agent workspace is asked about explicitly (device report 2026-07-02:
+    every non-focused repo lost its branch line). Failures degrade to no
+    labels; they are cosmetic."""
+    try:
+        return await herdr.worktrees(workspace_ids)
+    except Exception:
+        return []
+
+
 def _agent_workspace_ids(raw_panes: list[dict]) -> list[str]:
     """Unique workspace ids of the agent panes (the repos whose worktrees we
     need branch labels for), in a stable order."""
@@ -145,11 +156,13 @@ def _agent_workspace_ids(raw_panes: list[dict]) -> list[str]:
 
 
 async def _wired_snapshot(herdr: HerdrClient) -> list[dict]:
-    """Fetch panes, then the label lists for THEIR workspaces (worktree.list is
-    per-repo — see _fetch_labels), and build the wire snapshot."""
-    raw = await herdr.list_panes()
-    worktrees, workspaces, tabs = await _fetch_labels(herdr, _agent_workspace_ids(raw))
-    return _wire_panes(raw, worktrees, workspaces, tabs)
+    """One session.snapshot carries the agent panes AND the workspace/tab
+    labels; only branch labels need the extra per-workspace worktree fan-out
+    (worktrees are not part of the snapshot)."""
+    snap = await herdr.snapshot()
+    raw = snap.get("agents", [])
+    worktrees = await _fetch_worktrees(herdr, _agent_workspace_ids(raw))
+    return _wire_panes(raw, worktrees, snap.get("workspaces", []), snap.get("tabs", []))
 
 
 class StubHerdr:
