@@ -841,9 +841,16 @@ def test_page_includes_accessible_generation_safe_terminal_overlay(tmp_path):
         assert "Math.max(5,Math.min(100" in page
         assert "'/term-stop/'" in page
         assert "e.button!==0" in page  # secondary pointerdown never arms long-press
+        assert "suppressNextClick" in page and "suppressClickUntil" not in page
+        assert "cancelLongPress();suppressNextClick=false" in page
+        assert "suppressNextClick&&e.detail!==0" in page
+        assert "if(openedByLongPress&&!tover.hidden)return" in page
         assert "e.shiftKey&&e.key==='Enter'" in page
         assert "lastPreviewFocus" in page and ".focus()" in page
         assert "if(e.key==='Escape'" in page
+        assert "if(document.activeElement===tclose)tterm.focus()" in page
+        assert "tlive.textContent=L.termLive" in page
+        assert "tlive.textContent=L.termEndedBadge" in page
     finally:
         d.close()
 

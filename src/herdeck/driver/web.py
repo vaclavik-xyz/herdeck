@@ -466,6 +466,10 @@ class WebDeck(DeckDriver):
                         "termReadOnly": tr(deck._language, "web.term_read_only"),
                         "termTitle": tr(deck._language, "web.term_title"),
                         "termHint": tr(deck._language, "web.term_hint"),
+                        "termConnectingBadge": tr(
+                            deck._language, "web.term_connecting_badge"
+                        ),
+                        "termEndedBadge": tr(deck._language, "web.term_ended_badge"),
                     },
                     ensure_ascii=False,  # keep em-dashes/diacritics readable in the page
                 ),
@@ -669,6 +673,8 @@ _PAGE = """<!doctype html><meta charset=utf-8>
    font-weight:700;letter-spacing:.12em;white-space:nowrap}
  #tlive::before{content:"";width:7px;height:7px;border-radius:50%;background:#5af;
    box-shadow:0 0 0 3px rgba(85,170,255,.12)}
+ #tlive.state-ended{color:#9aa7b8}
+ #tlive.state-ended::before{background:#566171;box-shadow:none}
  #ttitle{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
    color:#e7ecf3;font-weight:600}
  #treadonly{color:#9aa7b8;font-size:10px;font-weight:700;letter-spacing:.13em;
@@ -764,7 +770,7 @@ const treadonly=document.getElementById('treadonly');
 const tclose=document.getElementById('tclose');
 const tmsg=document.getElementById('tmsg');
 const tterm=document.getElementById('tterm');
-tlive.textContent=L.termLive;
+tlive.textContent=L.termConnectingBadge;
 treadonly.textContent=L.termReadOnly;
 tclose.title=L.termClose;
 tclose.setAttribute('aria-label',L.termClose);
@@ -796,6 +802,7 @@ function disposePreview(current,notifyRemote){
 function finishPreview(current,reason,remoteEnded=false){
   if(preview!==current)return;
   current.ended=true;
+  tlive.textContent=L.termEndedBadge;tlive.classList.add('state-ended');
   if(current.source){current.source.close();current.source=null;}
   if(remoteEnded)current.stopSent=true;else stopRemote(current);
   tshow(reason||L.termEnded);
@@ -830,6 +837,7 @@ function openPreview(index,opener,preserveFocus=false){
   tover.hidden=false;
   deck.inert=true;deck.setAttribute('aria-hidden','true');
   document.body.style.overflow='hidden';
+  tlive.textContent=L.termConnectingBadge;tlive.classList.remove('state-ended');
   ttitle.textContent=L.termTitle;tshow(L.termConnecting);
 
   current.terminal=new Terminal({
@@ -860,6 +868,7 @@ function openPreview(index,opener,preserveFocus=false){
     const source=new EventSource(auth(path));current.source=source;
     source.onopen=()=>{
       if(preview!==current){source.close();stopRemote(current);return;}
+      tlive.textContent=L.termLive;
     };
     source.onmessage=event=>{
       if(preview!==current)return;
@@ -908,25 +917,28 @@ window.addEventListener('resize',()=>{
 function addCell(i){
   const b=document.createElement('button');b.className='cell';
   b.title=L.termHint;
-  let longTimer=null,startX=0,startY=0,longOpenedUntil=0,suppressClickUntil=0;
+  let longTimer=null,startX=0,startY=0,openedByLongPress=false,suppressNextClick=false;
   const cancelLongPress=()=>{clearTimeout(longTimer);longTimer=null;};
   b.addEventListener('pointerdown',e=>{
     if(e.button!==0||!tover.hidden)return;
-    cancelLongPress();startX=e.clientX;startY=e.clientY;
+    cancelLongPress();openedByLongPress=false;suppressNextClick=false;
+    startX=e.clientX;startY=e.clientY;
     longTimer=setTimeout(()=>{
-      longTimer=null;longOpenedUntil=performance.now()+1000;
-      suppressClickUntil=performance.now()+1000;openPreview(i,b);
+      longTimer=null;openedByLongPress=true;suppressNextClick=true;openPreview(i,b);
     },500);
   });
   b.addEventListener('pointermove',e=>{
     if(longTimer&&Math.hypot(e.clientX-startX,e.clientY-startY)>10)cancelLongPress();
   });
   b.addEventListener('pointerup',cancelLongPress);
-  b.addEventListener('pointercancel',cancelLongPress);
+  b.addEventListener('pointercancel',()=>{
+    cancelLongPress();suppressNextClick=false;
+  });
   b.addEventListener('lostpointercapture',cancelLongPress);
   b.addEventListener('contextmenu',e=>{
     e.preventDefault();cancelLongPress();
-    if(performance.now()<longOpenedUntil)return;
+    if(openedByLongPress&&!tover.hidden)return;
+    openedByLongPress=false;
     openPreview(i,b);
   });
   b.addEventListener('keydown',e=>{
@@ -935,9 +947,10 @@ function addCell(i){
     }
   });
   b.onclick=e=>{
-    if(performance.now()<suppressClickUntil){
-      suppressClickUntil=0;e.preventDefault();return;
+    if(suppressNextClick&&e.detail!==0){
+      suppressNextClick=false;e.preventDefault();return;
     }
+    if(e.detail===0)suppressNextClick=false;
     press(i);
   };
   const img=document.createElement('img');b.appendChild(img);
@@ -970,7 +983,7 @@ document.addEventListener('keydown',e=>{
   if(!tover.hidden){
     if(e.key==='Tab'){
       e.preventDefault();
-      if(document.activeElement===tclose&&!e.shiftKey)tterm.focus();else tclose.focus();
+      if(document.activeElement===tclose)tterm.focus();else tclose.focus();
     }
     return;
   }

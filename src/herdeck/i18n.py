@@ -77,6 +77,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "web.term_read_only": "READ ONLY",
         "web.term_title": "Live terminal preview",
         "web.term_hint": "Long-press, right-click, or Shift+Enter for a read-only terminal",
+        "web.term_connecting_badge": "CONNECTING",
+        "web.term_ended_badge": "ENDED",
     },
     "cs": {
         "offline_title": "OFFLINE",
@@ -135,6 +137,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "web.term_read_only": "JEN ČTENÍ",
         "web.term_title": "Živý náhled terminálu",
         "web.term_hint": "Podrž, klikni pravým nebo stiskni Shift+Enter pro náhled terminálu",
+        "web.term_connecting_badge": "PŘIPOJUJI",
+        "web.term_ended_badge": "UKONČENO",
     },
 }
 
