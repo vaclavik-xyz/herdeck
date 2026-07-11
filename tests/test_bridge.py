@@ -855,3 +855,19 @@ async def test_start_local_bridge_logs_when_broadcast_dies_after_startup(caplog)
     finally:
         server.close()
         await server.wait_closed()
+
+
+def test_note_event_ignores_redetection_of_subscribed_pane():
+    from herdeck.bridge import HerdrEvents
+
+    ev = HerdrEvents(StubHerdr(panes=[]), poll_interval=100)
+    ev._worktrees_stale = False
+    # herdr re-emits pane.agent_detected continuously for panes it already
+    # tracks; a re-detection of an already-subscribed pane is a plain wake,
+    # not a membership change (observed live: ~6 re-subscribes/s otherwise)
+    assert ev._note_event("pane_agent_detected", "w1:p1", {"w1:p1"}) is False
+    assert ev._worktrees_stale is False
+    # an agent detected in a pane we do NOT hold a status sub for is still
+    # a fleet change (the per-pane subscriptions must be rebuilt)
+    assert ev._note_event("pane_agent_detected", "w9:p1", {"w1:p1"}) is True
+    assert ev._worktrees_stale is True
