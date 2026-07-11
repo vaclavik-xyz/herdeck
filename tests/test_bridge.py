@@ -1,4 +1,8 @@
+import asyncio
+import contextlib
 import json
+import os
+import sys
 
 import pytest
 
@@ -162,7 +166,10 @@ async def test_broadcast_fans_out_snapshots_to_all_clients():
         async def send(self, msg):
             self._log.append(msg)
 
-    clients = {FakeWS(sent_a), FakeWS(sent_b)}
+    clients = {
+        FakeWS(sent_a): asyncio.Lock(),
+        FakeWS(sent_b): asyncio.Lock(),
+    }
 
     async def stream():
         yield [
@@ -196,7 +203,7 @@ async def test_broadcast_survives_a_dead_client():
         async def send(self, msg):
             raise RuntimeError("closed")
 
-    clients = {GoodWS(), DeadWS()}
+    clients = {GoodWS(): asyncio.Lock(), DeadWS(): asyncio.Lock()}
 
     async def stream():
         yield [{"pane_id": "p", "status": "working"}]
@@ -425,12 +432,17 @@ def test_workspaces_and_tabs_by_id_index_label():
 
 
 async def test_list_snapshot_includes_workspace_and_tab():
-    panes = [{
-        "pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1",
-        "cwd": "/home/user/projects/herdeck",
-        "foreground_cwd": "/home/user/projects/herdeck",
-        "agent": "claude", "agent_status": "blocked",
-    }]
+    panes = [
+        {
+            "pane_id": "w2:p1",
+            "workspace_id": "w2",
+            "tab_id": "w2:t1",
+            "cwd": "/home/user/projects/herdeck",
+            "foreground_cwd": "/home/user/projects/herdeck",
+            "agent": "claude",
+            "agent_status": "blocked",
+        }
+    ]
     herdr = StubHerdr(
         panes=panes,
         workspaces=[{"workspace_id": "w2", "label": "herdeck"}],
@@ -464,8 +476,13 @@ async def test_wired_snapshot_reads_labels_from_snapshot():
 async def test_wired_snapshot_keeps_agent_pane_without_agent_key():
     # herdr's agents list should already be agent-only; the _is_agent_pane belt
     # must keep a row that carries only a live agent_status.
-    pane = {"pane_id": "w1:p9", "workspace_id": "w1", "cwd": "/x/api",
-            "foreground_cwd": "/x/api", "agent_status": "working"}
+    pane = {
+        "pane_id": "w1:p9",
+        "workspace_id": "w1",
+        "cwd": "/x/api",
+        "foreground_cwd": "/x/api",
+        "agent_status": "working",
+    }
     stub = StubHerdr(panes=[pane])
     from herdeck.bridge import _wired_snapshot
 
@@ -589,7 +606,7 @@ async def test_broadcast_stalled_client_does_not_starve_others():
         yield [{"pane_id": "p2"}]
 
     stalled = StalledWs()
-    clients = {FastWs(), stalled}
+    clients = {FastWs(): asyncio.Lock(), stalled: asyncio.Lock()}
     # patch the per-client timeout small for the test
     import herdeck.bridge as bridge_mod
 
@@ -752,8 +769,12 @@ def test_listen_subscribes_to_label_and_worktree_events():
     from herdeck.bridge import _GLOBAL_EVENT_TYPES, _LABEL_EVENT_TYPES
 
     assert set(_LABEL_EVENT_TYPES) == {
-        "tab.renamed", "workspace.renamed", "workspace.updated",
-        "worktree.created", "worktree.opened", "worktree.removed",
+        "tab.renamed",
+        "workspace.renamed",
+        "workspace.updated",
+        "worktree.created",
+        "worktree.opened",
+        "worktree.removed",
     }
     assert not set(_LABEL_EVENT_TYPES) & set(_GLOBAL_EVENT_TYPES)
 
@@ -810,7 +831,9 @@ async def test_require_snapshot_support_times_out_instead_of_hanging(monkeypatch
         async def snapshot(self):
             await asyncio.Event().wait()  # accepts but never answers
 
-    await asyncio.wait_for(_require_snapshot_support(HangingHerdr()), timeout=1.0)  # must return, not raise
+    await asyncio.wait_for(
+        _require_snapshot_support(HangingHerdr()), timeout=1.0
+    )  # must return, not raise
 
 
 async def test_stream_surfaces_version_error_instead_of_retrying():
@@ -871,3 +894,619 @@ def test_note_event_ignores_redetection_of_subscribed_pane():
     # a fleet change (the per-pane subscriptions must be rebuilt)
     assert ev._note_event("pane_agent_detected", "w9:p1", {"w1:p1"}) is True
     assert ev._worktrees_stale is True
+
+
+# --- live terminal observe -------------------------------------------------
+
+_FAKE_OBSERVE_BODY = r"""import base64
+import json
+import os
+import sys
+import time
+
+args = sys.argv[1:]
+pane = args[3]
+cols = int(args[args.index("--cols") + 1])
+rows = int(args[args.index("--rows") + 1])
+pidfile = os.environ.get("FAKE_OBSERVE_PIDFILE")
+if pidfile:
+    with open(pidfile, "w") as fh:
+        fh.write(str(os.getpid()))
+starts = os.environ.get("FAKE_OBSERVE_STARTS")
+if starts:
+    with open(starts, "a") as fh:
+        fh.write(pane + "\n")
+socketfile = os.environ.get("FAKE_OBSERVE_SOCKETFILE")
+if socketfile:
+    with open(socketfile, "w") as fh:
+        fh.write(os.environ.get("HERDR_SOCKET", ""))
+if pane == "w9:gone":
+    print(json.dumps({"type": "terminal.closed", "reason": "terminal target not found"}), flush=True)
+    raise SystemExit(0)
+if pane == "w9:dead":
+    raise SystemExit(1)
+if pane == "w9:badframe":
+    print(json.dumps({"type": "terminal.frame", "seq": "bad", "full": True,
+                      "width": cols, "height": rows, "encoding": "ansi", "bytes": "QQ=="}), flush=True)
+    time.sleep(60)
+big = base64.b64encode(b"x" * 100_000).decode()
+print(json.dumps({"type": "terminal.frame", "seq": 1, "full": True,
+                  "width": cols, "height": rows, "encoding": "ansi", "bytes": big}), flush=True)
+print(json.dumps({"type": "terminal.frame", "seq": 2, "full": False,
+                  "width": cols, "height": rows, "encoding": "ansi", "bytes": "aGk="}), flush=True)
+if pane == "w9:short":
+    raise SystemExit(0)
+time.sleep(60)
+"""
+
+
+@pytest.fixture
+def fake_observe_bin(tmp_path, monkeypatch):
+    from herdeck import bridge as bridge_mod
+
+    script = tmp_path / "fake-herdr"
+    script.write_text(f"#!{sys.executable}\n{_FAKE_OBSERVE_BODY}")
+    script.chmod(0o755)
+    monkeypatch.setenv("HERDECK_HERDR_BIN", str(script))
+    monkeypatch.setattr(bridge_mod, "_observe_total", 0, raising=False)
+    return script
+
+
+async def _open_bridge_client(socket_path="/unused.sock"):
+    import websockets
+
+    from herdeck.bridge import StubHerdr, start_local_bridge
+
+    host, port, token, runtime = await start_local_bridge(socket_path, herdr=StubHerdr(panes=[]))
+    server, btask = runtime
+    ws = await websockets.connect(
+        f"ws://{host}:{port}",
+        additional_headers={"Authorization": f"Bearer {token}"},
+    )
+    assert json.loads(await ws.recv())["type"] == "snapshot"
+    return ws, server, btask
+
+
+async def _close_bridge_client(ws, server, btask):
+    await ws.close()
+    btask.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await btask
+    server.close()
+    await server.wait_closed()
+
+
+async def _recv_term(ws, kind, req=None, timeout=5.0):
+    while True:
+        msg = json.loads(await asyncio.wait_for(ws.recv(), timeout))
+        if msg.get("type") == kind and (req is None or msg.get("req") == req):
+            return msg
+        assert msg.get("type") in {"snapshot", "term_frame", "term_closed"}, msg
+
+
+async def test_observe_streams_large_frames_and_stop_closes(fake_observe_bin):
+    ws, server, btask = await _open_bridge_client()
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "t1",
+                    "pane_id": "w1:p1",
+                    "cols": 100,
+                    "rows": 30,
+                }
+            )
+        )
+        first = await _recv_term(ws, "term_frame", "t1")
+        assert first["seq"] == 1 and first["full"] is True
+        assert first["cols"] == 100 and first["rows"] == 30
+        assert len(first["data"]) > 100_000
+        second = await _recv_term(ws, "term_frame", "t1")
+        assert second["seq"] == 2 and second["data"] == "aGk="
+
+        await ws.send(json.dumps({"type": "observe_stop", "req": "t1"}))
+        closed = await _recv_term(ws, "term_closed", "t1")
+        assert closed["reason"]
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+def test_resolve_herdr_bin_checks_homebrew_and_cargo_fallbacks(monkeypatch):
+    from herdeck import bridge as bridge_mod
+
+    monkeypatch.delenv("HERDECK_HERDR_BIN", raising=False)
+    monkeypatch.setattr(bridge_mod.shutil, "which", lambda name: None)
+    wanted = "/opt/homebrew/bin/herdr"
+    monkeypatch.setattr(bridge_mod.os, "access", lambda path, mode: path == wanted)
+    assert bridge_mod._resolve_herdr_bin() == wanted
+
+
+async def test_observe_uses_the_bridge_socket_path(fake_observe_bin, tmp_path, monkeypatch):
+    socketfile = tmp_path / "socket-path"
+    monkeypatch.delenv("HERDR_SOCKET", raising=False)
+    monkeypatch.setenv("FAKE_OBSERVE_SOCKETFILE", str(socketfile))
+    ws, server, btask = await _open_bridge_client("/tmp/herdr-preview.sock")
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "socket",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        await _recv_term(ws, "term_frame", "socket")
+        assert socketfile.read_text() == "/tmp/herdr-preview.sock"
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_immediate_stop_releases_global_slot(fake_observe_bin):
+    from herdeck import bridge as bridge_mod
+
+    ws, server, btask = await _open_bridge_client()
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "instant",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        await ws.send(json.dumps({"type": "observe_stop", "req": "instant"}))
+        assert (await _recv_term(ws, "term_closed", "instant"))["reason"] == "stopped"
+        for _ in range(20):
+            if bridge_mod._observe_total == 0:
+                break
+            await asyncio.sleep(0)
+        assert bridge_mod._observe_total == 0
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_passes_through_terminal_closed_reason(fake_observe_bin):
+    ws, server, btask = await _open_bridge_client()
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "gone",
+                    "pane_id": "w9:gone",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        closed = await _recv_term(ws, "term_closed", "gone")
+        assert closed["reason"] == "terminal target not found"
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_no_output_hints_at_required_herdr_version(fake_observe_bin):
+    ws, server, btask = await _open_bridge_client()
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "dead",
+                    "pane_id": "w9:dead",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        closed = await _recv_term(ws, "term_closed", "dead")
+        assert "herdr >= 0.7.3" in closed["reason"]
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_eof_without_closed_line_has_stable_reason(fake_observe_bin):
+    ws, server, btask = await _open_bridge_client()
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "short",
+                    "pane_id": "w9:short",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        await _recv_term(ws, "term_frame", "short")
+        closed = await _recv_term(ws, "term_closed", "short")
+        assert closed["reason"] == "stream ended"
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_invalid_frame_closes_only_that_stream(fake_observe_bin):
+    ws, server, btask = await _open_bridge_client()
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "bad",
+                    "pane_id": "w9:badframe",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        closed = await _recv_term(ws, "term_closed", "bad")
+        assert closed["reason"] == "invalid terminal frame from herdr"
+
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "good",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        assert (await _recv_term(ws, "term_frame", "good"))["seq"] == 1
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_clamps_explicit_zero_and_large_dimensions(fake_observe_bin):
+    ws, server, btask = await _open_bridge_client()
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "clamp",
+                    "pane_id": "w1:p1",
+                    "cols": 9999,
+                    "rows": 0,
+                }
+            )
+        )
+        frame = await _recv_term(ws, "term_frame", "clamp")
+        assert frame["cols"] == 240 and frame["rows"] == 5
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_rejects_malformed_control_without_using_a_slot(fake_observe_bin):
+    from herdeck import bridge as bridge_mod
+
+    ws, server, btask = await _open_bridge_client()
+    try:
+        bad = [
+            ({"type": "observe", "pane_id": "w1:p1"}, ""),
+            ({"type": "observe", "req": "empty", "pane_id": ""}, "empty"),
+            (
+                {
+                    "type": "observe",
+                    "req": "dims",
+                    "pane_id": "w1:p1",
+                    "cols": True,
+                },
+                "dims",
+            ),
+        ]
+        for payload, req in bad:
+            await ws.send(json.dumps(payload))
+            assert (await _recv_term(ws, "term_closed", req))["reason"]
+        assert bridge_mod._observe_total == 0
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_overflowing_dimension_does_not_close_websocket(fake_observe_bin):
+    ws, server, btask = await _open_bridge_client()
+    try:
+        await ws.send(
+            '{"type":"observe","req":"overflow","pane_id":"w1:p1","cols":1e309,"rows":24}'
+        )
+        closed = await _recv_term(ws, "term_closed", "overflow")
+        assert closed["reason"] == "invalid terminal dimensions"
+
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "still-open",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        await _recv_term(ws, "term_frame", "still-open")
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_duplicate_request_is_idempotent(fake_observe_bin, tmp_path, monkeypatch):
+    starts = tmp_path / "starts"
+    monkeypatch.setenv("FAKE_OBSERVE_STARTS", str(starts))
+    ws, server, btask = await _open_bridge_client()
+    try:
+        request = {
+            "type": "observe",
+            "req": "same",
+            "pane_id": "w1:p1",
+            "cols": 80,
+            "rows": 24,
+        }
+        await ws.send(json.dumps(request))
+        await _recv_term(ws, "term_frame", "same")
+        await ws.send(json.dumps({**request, "pane_id": "w9:gone"}))
+        await asyncio.sleep(0.05)
+        assert starts.read_text().splitlines() == ["w1:p1"]
+        await ws.send(json.dumps({"type": "observe_stop", "req": "same"}))
+        await _recv_term(ws, "term_closed", "same")
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_per_client_cap_releases_after_stop(fake_observe_bin):
+    ws, server, btask = await _open_bridge_client()
+    try:
+        for number in range(3):
+            req = f"cap{number}"
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "observe",
+                        "req": req,
+                        "pane_id": "w1:p1",
+                        "cols": 80,
+                        "rows": 24,
+                    }
+                )
+            )
+            await _recv_term(ws, "term_frame", req)
+
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "rejected",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        rejected = await _recv_term(ws, "term_closed", "rejected")
+        assert rejected["reason"] == "too many live previews"
+
+        await ws.send(json.dumps({"type": "observe_stop", "req": "cap0"}))
+        await _recv_term(ws, "term_closed", "cap0")
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "replacement",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        await _recv_term(ws, "term_frame", "replacement")
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_global_cap_spans_clients_and_releases(fake_observe_bin):
+    import websockets
+
+    from herdeck.bridge import StubHerdr, start_local_bridge
+
+    host, port, token, (server, btask) = await start_local_bridge(
+        "/unused.sock", herdr=StubHerdr(panes=[])
+    )
+    clients = []
+    try:
+        for _ in range(3):
+            ws = await websockets.connect(
+                f"ws://{host}:{port}",
+                additional_headers={"Authorization": f"Bearer {token}"},
+            )
+            assert json.loads(await ws.recv())["type"] == "snapshot"
+            clients.append(ws)
+
+        counts = (3, 3, 2)
+        for client_no, count in enumerate(counts):
+            for stream_no in range(count):
+                req = f"g{client_no}-{stream_no}"
+                await clients[client_no].send(
+                    json.dumps(
+                        {
+                            "type": "observe",
+                            "req": req,
+                            "pane_id": "w1:p1",
+                            "cols": 80,
+                            "rows": 24,
+                        }
+                    )
+                )
+                await _recv_term(clients[client_no], "term_frame", req)
+
+        await clients[2].send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "global-reject",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        rejected = await _recv_term(clients[2], "term_closed", "global-reject")
+        assert rejected["reason"] == "too many live previews"
+
+        await clients[0].send(json.dumps({"type": "observe_stop", "req": "g0-0"}))
+        await _recv_term(clients[0], "term_closed", "g0-0")
+        await clients[2].send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "global-replacement",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        await _recv_term(clients[2], "term_frame", "global-replacement")
+    finally:
+        await asyncio.gather(*(ws.close() for ws in clients), return_exceptions=True)
+        btask.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await btask
+        server.close()
+        await server.wait_closed()
+
+
+async def test_observe_spawn_failure_releases_global_slot(fake_observe_bin, monkeypatch):
+    from herdeck import bridge as bridge_mod
+
+    monkeypatch.setenv("HERDECK_HERDR_BIN", "/nonexistent/herdr")
+    ws, server, btask = await _open_bridge_client()
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "missing",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        closed = await _recv_term(ws, "term_closed", "missing")
+        assert "could not start herdr" in closed["reason"]
+        for _ in range(20):
+            if bridge_mod._observe_total == 0:
+                break
+            await asyncio.sleep(0)
+        assert bridge_mod._observe_total == 0
+
+        monkeypatch.setenv("HERDECK_HERDR_BIN", str(fake_observe_bin))
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "after-missing",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        await _recv_term(ws, "term_frame", "after-missing")
+    finally:
+        await _close_bridge_client(ws, server, btask)
+
+
+async def test_observe_disconnect_reaps_process_and_releases_slot(
+    fake_observe_bin, tmp_path, monkeypatch
+):
+    from herdeck import bridge as bridge_mod
+
+    pidfile = tmp_path / "observe.pid"
+    monkeypatch.setenv("FAKE_OBSERVE_PIDFILE", str(pidfile))
+    ws, server, btask = await _open_bridge_client()
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "observe",
+                    "req": "disconnect",
+                    "pane_id": "w1:p1",
+                    "cols": 80,
+                    "rows": 24,
+                }
+            )
+        )
+        await _recv_term(ws, "term_frame", "disconnect")
+        pid = int(pidfile.read_text())
+        await ws.close()
+        for _ in range(100):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            await asyncio.sleep(0.02)
+        else:
+            pytest.fail("observe subprocess survived websocket disconnect")
+        assert bridge_mod._observe_total == 0
+    finally:
+        await ws.close()
+        btask.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await btask
+        server.close()
+        await server.wait_closed()
+
+
+async def test_connection_send_lock_serializes_broadcast_reply_and_frames():
+    from herdeck.bridge import _send_to_client
+
+    active = 0
+    max_active = 0
+
+    class DetectConcurrentSend:
+        async def send(self, msg):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+
+    ws = DetectConcurrentSend()
+    lock = asyncio.Lock()
+    delivered = await asyncio.gather(
+        _send_to_client(ws, "snapshot", lock, timeout=1),
+        _send_to_client(ws, "reply", lock, timeout=1),
+        _send_to_client(ws, "term_frame", lock, timeout=1),
+    )
+    assert delivered == [True, True, True]
+    assert max_active == 1
+
+
+async def test_send_timeout_starts_after_connection_lock_is_acquired():
+    from herdeck.bridge import _send_to_client
+
+    slow_started = asyncio.Event()
+
+    class SlowFirstSend:
+        async def send(self, msg):
+            if msg == "slow":
+                slow_started.set()
+                await asyncio.sleep(0.05)
+
+    ws = SlowFirstSend()
+    lock = asyncio.Lock()
+    slow = asyncio.create_task(_send_to_client(ws, "slow", lock, timeout=0.2))
+    await slow_started.wait()
+    # This message may wait >10 ms for the previous whole frame. Its own send
+    # is instant, so it must not inherit time spent waiting for the lock.
+    fast = await _send_to_client(ws, "fast", lock, timeout=0.01)
+    assert await slow is True
+    assert fast is True
