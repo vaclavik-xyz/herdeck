@@ -24,7 +24,7 @@ class Check:
 
 
 def check_socket(path: str, exists: Callable[[str], bool], probe) -> Check:
-    """probe(path) -> herdr pane.list response dict, or raises on failure."""
+    """probe(path) -> herdr session.snapshot response dict, or raises on failure."""
     if not exists(path):
         return Check("herdr socket", False, f"not found at {path} (is herdr running?)")
     try:
@@ -36,12 +36,15 @@ def check_socket(path: str, exists: Callable[[str], bool], probe) -> Check:
     result = resp.get("result")
     if not isinstance(result, dict):
         return Check("herdr socket", False, "malformed response (result is not a dict)")
-    panes = result.get("panes")
-    if panes is None:
-        return Check("herdr socket", False, "malformed response (no panes)")
-    if not isinstance(panes, list):
-        return Check("herdr socket", False, "malformed response (panes is not a list)")
-    return Check("herdr socket", True, f"responding, {len(panes)} panes")
+    snapshot = result.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return Check("herdr socket", False, "malformed response (snapshot is not a dict)")
+    agents = snapshot.get("agents")
+    if agents is None:
+        return Check("herdr socket", False, "malformed response (no agents)")
+    if not isinstance(agents, list):
+        return Check("herdr socket", False, "malformed response (agents is not a list)")
+    return Check("herdr socket", True, f"responding, {len(agents)} agents")
 
 
 def check_config(
@@ -246,14 +249,14 @@ def format_report(checks: Iterable[Check]) -> str:
     return "\n".join(lines)
 
 
-async def _socket_pane_list(path: str) -> dict:
+async def _socket_snapshot(path: str) -> dict:
     from .bridge import SocketHerdr
 
-    return await SocketHerdr(path)._rpc("pane.list", {})
+    return await SocketHerdr(path)._rpc("session.snapshot", {})
 
 
 def _probe_socket(path: str) -> dict:
-    return asyncio.run(asyncio.wait_for(_socket_pane_list(path), timeout=SOCKET_TIMEOUT))
+    return asyncio.run(asyncio.wait_for(_socket_snapshot(path), timeout=SOCKET_TIMEOUT))
 
 
 async def _probe_server_ws(url: str, token: str) -> str | None:
