@@ -227,10 +227,13 @@ async def test_herdr_events_yields_full_list_on_change_and_removal():
         def __init__(self):
             self.calls = 0
 
-        async def list_panes(self):
+        async def snapshot(self):
             i = min(self.calls, len(seq) - 1)
             self.calls += 1
-            return seq[i]
+            return {"agents": seq[i]}
+
+        async def worktrees(self, workspace_ids=None):
+            return []
 
     gen = HerdrEvents(FakeHerdr(), poll_interval=0).stream()
     first = await gen.__anext__()
@@ -356,10 +359,13 @@ async def test_push_event_wakes_stream_before_poll():
         def __init__(self):
             self.calls = 0
 
-        async def list_panes(self):
+        async def snapshot(self):
             i = min(self.calls, len(seq) - 1)
             self.calls += 1
-            return seq[i]
+            return {"agents": seq[i]}
+
+        async def worktrees(self, workspace_ids=None):
+            return []
 
     ev = HerdrEvents(FakeHerdr(), poll_interval=100)  # would block without a wake
     gen = ev.stream()
@@ -477,7 +483,7 @@ async def test_fetch_worktrees_degrades_to_empty_on_error():
     assert await _fetch_worktrees(BrokenHerdr(), ["w1"]) == []
 
 
-async def test_stream_caches_labels_across_status_wakes():
+async def test_stream_caches_worktrees_across_status_wakes():
     import asyncio
 
     from herdeck.bridge import HerdrEvents
@@ -485,43 +491,38 @@ async def test_stream_caches_labels_across_status_wakes():
     class CountingHerdr:
         def __init__(self):
             self.panes = [raw_pane("w1:p1", agent="claude", status="idle")]
-            self.label_calls = 0
+            self.worktree_calls = 0
 
-        async def list_panes(self):
-            return self.panes
+        async def snapshot(self):
+            return {"agents": self.panes}
 
-        async def worktrees(self):
-            self.label_calls += 1
-            return []
-
-        async def workspaces(self):
-            return []
-
-        async def tabs(self):
+        async def worktrees(self, workspace_ids=None):
+            self.worktree_calls += 1
             return []
 
     stub = CountingHerdr()
     ev = HerdrEvents(stub, poll_interval=100)  # would block without a wake
     gen = ev.stream()
     await gen.__anext__()
-    assert stub.label_calls == 1
-    # a status-change push wake must NOT refetch the label lists
+    assert stub.worktree_calls == 1
+    # a status-change push wake must NOT refetch the worktree list
     stub.panes = [raw_pane("w1:p1", agent="claude", status="blocked")]
     ev._wake.set()
     await asyncio.wait_for(gen.__anext__(), timeout=1.0)
-    assert stub.label_calls == 1
-    # a fleet event (what _listen flags) marks labels stale -> refetched
+    assert stub.worktree_calls == 1
+    # a fleet event (what _listen flags) marks worktrees stale -> refetched
     stub.panes = stub.panes + [raw_pane("w1:p2", agent="codex", status="idle")]
-    ev._labels_stale = True
+    ev._worktrees_stale = True
     ev._wake.set()
     await asyncio.wait_for(gen.__anext__(), timeout=1.0)
-    assert stub.label_calls == 2
+    assert stub.worktree_calls == 2
     await gen.aclose()
 
 
-async def test_stream_refreshes_labels_by_age_when_wakes_starve_the_poll(monkeypatch):
-    """Constant status wakes keep the slow-poll timeout from firing; labels must
-    still refresh once they are older than poll_interval (roborev 8847c23)."""
+async def test_stream_refreshes_worktrees_by_age_when_wakes_starve_the_poll(monkeypatch):
+    """Constant status wakes keep the slow-poll timeout from firing; the cached
+    worktrees must still refresh once older than poll_interval (a branch switch
+    inside an existing worktree emits no event)."""
     import asyncio
 
     from herdeck import bridge as bridge_mod
@@ -533,36 +534,30 @@ async def test_stream_refreshes_labels_by_age_when_wakes_starve_the_poll(monkeyp
     class CountingHerdr:
         def __init__(self):
             self.panes = [raw_pane("w1:p1", agent="claude", status="idle")]
-            self.label_calls = 0
+            self.worktree_calls = 0
 
-        async def list_panes(self):
-            return self.panes
+        async def snapshot(self):
+            return {"agents": self.panes}
 
-        async def worktrees(self):
-            self.label_calls += 1
-            return []
-
-        async def workspaces(self):
-            return []
-
-        async def tabs(self):
+        async def worktrees(self, workspace_ids=None):
+            self.worktree_calls += 1
             return []
 
     stub = CountingHerdr()
     ev = HerdrEvents(stub, poll_interval=5.0)
     gen = ev.stream()
-    await gen.__anext__()  # labels fetched at t=0
-    assert stub.label_calls == 1
+    await gen.__anext__()  # worktrees fetched at t=0
+    assert stub.worktree_calls == 1
     stub.panes = [raw_pane("w1:p1", agent="claude", status="blocked")]
     t[0] = 1.0
-    ev._wake.set()  # young cache + status wake -> no label refetch
+    ev._wake.set()  # young cache + status wake -> no refetch
     await asyncio.wait_for(gen.__anext__(), timeout=1.0)
-    assert stub.label_calls == 1
+    assert stub.worktree_calls == 1
     stub.panes = [raw_pane("w1:p1", agent="claude", status="working")]
     t[0] = 6.0  # cache older than poll_interval; wake is still a status event
     ev._wake.set()
     await asyncio.wait_for(gen.__anext__(), timeout=1.0)
-    assert stub.label_calls == 2
+    assert stub.worktree_calls == 2
     await gen.aclose()
 
 

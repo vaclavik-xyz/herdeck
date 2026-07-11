@@ -106,38 +106,6 @@ def _wire_panes(
     return [_herdr_pane_to_wire(p, wt_by_ws, ws_by_id, tab_by_id) for p in raw if _is_agent_pane(p)]
 
 
-async def _fetch_labels(
-    herdr: HerdrClient, workspace_ids: list[str] | None = None
-) -> tuple[list, list, list]:
-    """The worktree/workspace/tab label lists, fetched CONCURRENTLY (herdr accepts
-    concurrent one-shot connections, so latency is max instead of sum — the
-    code's own measurement has worktree.list alone spiking to ~130ms). Any
-    failing lookup degrades to an empty list; labels are cosmetic.
-
-    ``workspace_ids`` are the AGENT panes' workspaces: herdr's ``worktree.list``
-    is scoped to one repo (the focused one without params), so branch labels for
-    a multi-repo fleet exist only when each agent workspace is asked about
-    explicitly (device report 2026-07-02: every non-focused repo lost its
-    branch line)."""
-
-    async def safe(method_name: str, *args) -> list:
-        fn = getattr(herdr, method_name, None)
-        if fn is None:  # minimal doubles carry only list_panes; labels are optional
-            return []
-        try:
-            try:
-                return await fn(*args)
-            except TypeError:
-                return await fn()  # doubles predating the workspace_ids parameter
-        except Exception:
-            return []
-
-    worktrees, workspaces, tabs = await asyncio.gather(
-        safe("worktrees", workspace_ids or []), safe("workspaces"), safe("tabs")
-    )
-    return worktrees, workspaces, tabs
-
-
 async def _fetch_worktrees(herdr: HerdrClient, workspace_ids: list[str]) -> list:
     """Branch labels come from worktree.list, which herdr scopes to ONE repo —
     each agent workspace is asked about explicitly (device report 2026-07-02:
@@ -277,14 +245,15 @@ class HerdrEvents:
         self._socket_path = socket_path
         self._interval = poll_interval
         self._wake = asyncio.Event()
-        # Cached worktree/workspace/tab label lists. A pane.agent_status_changed
-        # wake cannot change them, so status wakes reuse the cache and pay for
-        # pane.list only; fleet events (_listen) mark it stale, and an age check
-        # refreshes it at least every poll_interval even when constant status
-        # wakes keep the slow-poll timeout from ever firing.
-        self._labels: tuple[list, list, list] | None = None
-        self._labels_stale = True
-        self._labels_at = 0.0  # monotonic time of the last label refresh
+        # Cached worktree list (branch labels — the one thing session.snapshot
+        # does not carry). A pane.agent_status_changed wake cannot change it, so
+        # status wakes reuse the cache; fleet/worktree events (_listen) mark it
+        # stale, and an age check refreshes it at least every poll_interval even
+        # when constant status wakes keep the slow-poll timeout from ever firing
+        # (a branch switch inside an existing worktree emits no event).
+        self._worktrees: list | None = None
+        self._worktrees_stale = True
+        self._worktrees_at = 0.0  # monotonic time of the last refresh
 
     async def stream(self):
         listener = asyncio.create_task(self._listen()) if self._socket_path else None
@@ -292,14 +261,22 @@ class HerdrEvents:
         try:
             while True:
                 try:
-                    raw = await self._herdr.list_panes()
-                    if self._labels is None or self._labels_stale:
-                        # panes first: worktree labels are fetched for exactly the
-                        # workspaces the agent panes live in (worktree.list is per-repo)
-                        self._labels = await _fetch_labels(self._herdr, _agent_workspace_ids(raw))
-                        self._labels_stale = False
-                        self._labels_at = _monotonic()
-                    cur = _wire_panes(raw, *self._labels)
+                    snap = await self._herdr.snapshot()
+                    raw = snap.get("agents", [])
+                    if self._worktrees is None or self._worktrees_stale:
+                        # agents first: worktrees are fetched for exactly the
+                        # workspaces the agent panes live in (per-repo scoping)
+                        self._worktrees = await _fetch_worktrees(
+                            self._herdr, _agent_workspace_ids(raw)
+                        )
+                        self._worktrees_stale = False
+                        self._worktrees_at = _monotonic()
+                    cur = _wire_panes(
+                        raw,
+                        self._worktrees,
+                        snap.get("workspaces", []),
+                        snap.get("tabs", []),
+                    )
                 except Exception:
                     cur = None
                 if cur is not None:
@@ -312,10 +289,10 @@ class HerdrEvents:
                     pass
                 self._wake.clear()
                 # Age-based staling (not timeout-based): frequent status wakes can
-                # keep the timeout from ever firing, which would let labels (e.g.
-                # a branch change, which is not a fleet event) stay stale forever.
-                if _monotonic() - self._labels_at >= self._interval:
-                    self._labels_stale = True
+                # keep the timeout from ever firing, which would let the branch
+                # labels (a branch change is not an event) stay stale forever.
+                if _monotonic() - self._worktrees_at >= self._interval:
+                    self._worktrees_stale = True
         finally:
             if listener is not None:
                 listener.cancel()
@@ -326,7 +303,10 @@ class HerdrEvents:
             writer = None
             try:
                 reader, writer = await asyncio.open_unix_connection(self._socket_path)
-                agent_panes = [p["pane_id"] for p in _wire_panes(await self._herdr.list_panes())]
+                agent_panes = [
+                    p["pane_id"]
+                    for p in _wire_panes((await self._herdr.snapshot()).get("agents", []))
+                ]
                 subs = [{"type": t} for t in _GLOBAL_EVENT_TYPES]
                 subs += [
                     {"type": "pane.agent_status_changed", "pane_id": pid} for pid in agent_panes
@@ -355,7 +335,7 @@ class HerdrEvents:
                     except Exception:
                         name = None
                     if name in _FLEET_EVENT_NAMES:
-                        self._labels_stale = True  # membership changed -> refetch labels
+                        self._worktrees_stale = True  # membership changed -> refetch
                         break  # fleet changed -> re-subscribe panes
             except Exception:
                 pass
