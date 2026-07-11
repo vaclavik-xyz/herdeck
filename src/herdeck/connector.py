@@ -9,7 +9,16 @@ import websockets
 
 from .config import ServerConfig
 from .model import AgentKey, AgentState
-from .protocol import Error, Event, Result, Snapshot, decode_inbound, encode
+from .protocol import (
+    Error,
+    Event,
+    Result,
+    Snapshot,
+    TermClosed,
+    TermFrame,
+    decode_inbound,
+    encode,
+)
 
 log = logging.getLogger("herdeck.connector")
 
@@ -42,6 +51,7 @@ class Connector:
         on_error: Callable[[str], None] | None = None,
         backoff_base: float = 0.5,
         backoff_max: float = 30.0,
+        on_term: Callable[[str, TermFrame | TermClosed], None] | None = None,
     ):
         self.server = server
         self._on_snapshot = on_snapshot
@@ -49,6 +59,7 @@ class Connector:
         self._on_connection = on_connection
         self._on_result = on_result or (lambda req, data: None)
         self._on_error = on_error or (lambda message: None)
+        self._on_term = on_term or (lambda server_id, message: None)
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._stop = False
@@ -56,6 +67,7 @@ class Connector:
         self._loop = None
         self._wake = None
         self._send_lock = asyncio.Lock()
+        self._stopping_terms: set[str] = set()
         self._last_connect_error: str | None = None
         self._last_logged_error: str | None = None
 
@@ -99,6 +111,7 @@ class Connector:
                     ping_timeout=20,
                 ) as ws:
                     self._ws = ws
+                    self._stopping_terms.clear()
                     attempt = 0
                     connected = True
                     self._on_connection(self.server.id, True)
@@ -154,9 +167,7 @@ class Connector:
             return state
         # Re-stamp ONLY the key; replace() copies every other field so a new
         # AgentState field (e.g. custom_status) is never silently dropped here.
-        return dataclasses.replace(
-            state, key=AgentKey(self.server.id, state.key.pane_id)
-        )
+        return dataclasses.replace(state, key=AgentKey(self.server.id, state.key.pane_id))
 
     def _dispatch(self, raw: str) -> None:
         msg = decode_inbound(raw)
@@ -166,5 +177,21 @@ class Connector:
             self._on_event(self.server.id, self._rekey(msg.state))
         elif isinstance(msg, Result):
             self._on_result(msg.req, msg.data)
+        elif isinstance(msg, TermFrame):
+            if msg.req in self._stopping_terms:
+                return
+            self._on_term(self.server.id, msg)
+        elif isinstance(msg, TermClosed):
+            if msg.stop_remote:
+                if msg.req in self._stopping_terms:
+                    return
+                self._stopping_terms.add(msg.req)
+                asyncio.create_task(self.send({"type": "observe_stop", "req": msg.req}))
+                self._on_term(self.server.id, TermClosed(msg.req, msg.reason))
+                return
+            if msg.req in self._stopping_terms:
+                self._stopping_terms.discard(msg.req)
+                return
+            self._on_term(self.server.id, msg)
         elif isinstance(msg, Error):
             self._on_error(msg.message)
