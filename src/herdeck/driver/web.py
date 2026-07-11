@@ -95,7 +95,7 @@ class WebDeck(DeckDriver):
         self._slots = slots
         self._cols = max(1, cols)  # grid width; the page lays cells out with it
         self._callback: Callable[[int], None] | None = None
-        self._terminal_open: Callable[[int, int, int], object] | None = None
+        self._terminal_open: Callable[[int, int, int, int], object] | None = None
         self._terminal_close: Callable[[object], None] | None = None
         self._terminal_lock = threading.Lock()
         self._terminal_streams: dict[str, _TerminalStream] = {}
@@ -213,12 +213,17 @@ class WebDeck(DeckDriver):
 
     def on_terminal(
         self,
-        open_callback: Callable[[int, int, int], object],
+        open_callback: Callable[[int, int, int, int], object],
         close_callback: Callable[[object], None],
     ) -> None:
         """Register the app-side provider for read-only terminal streams."""
         self._terminal_open = open_callback
         self._terminal_close = close_callback
+
+    def terminal_tile_is_current(self, index: int, version: int) -> bool:
+        """Return whether *version* still names the image served for *index*."""
+        with self._lock:
+            return self._tile_ver.get(index) == version
 
     def press(self, index: int) -> None:
         """Inject a press (called by the HTTP handler thread; the app marshals).
@@ -526,11 +531,18 @@ class WebDeck(DeckDriver):
                     index = int(path.rsplit("/", 1)[1])
                     cols = int(parse_qs(url.query).get("cols", [80])[0])
                     rows = int(parse_qs(url.query).get("rows", [24])[0])
+                    tile_version = int(parse_qs(url.query)["v"][0])
                 except (TypeError, ValueError):
+                    self._send(400)
+                    return
+                except KeyError:
                     self._send(400)
                     return
                 if not 0 <= index < deck._slots:
                     self._send(400)
+                    return
+                if not deck.terminal_tile_is_current(index, tile_version):
+                    self._send(409)
                     return
                 cols = max(20, min(240, cols))
                 rows = max(5, min(100, rows))
@@ -559,7 +571,9 @@ class WebDeck(DeckDriver):
                 subscription = None
                 try:
                     try:
-                        subscription = deck._terminal_open(index, cols, rows)
+                        subscription = deck._terminal_open(
+                            index, cols, rows, tile_version
+                        )
                     except Exception:
                         self._emit_sse(
                             {
@@ -823,14 +837,14 @@ function frameBytes(encoded){
   for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
   return bytes;
 }
-function openPreview(index,opener,preserveFocus=false){
+function openPreview(index,tileVersion,opener,preserveFocus=false){
   const previous=preview;
   preview=null;
   disposePreview(previous,true);
   if(!preserveFocus)lastPreviewFocus=opener||document.activeElement;
 
   const current={
-    index,generation:++previewGeneration,streamId:newStreamId(),source:null,
+    index,tileVersion,generation:++previewGeneration,streamId:newStreamId(),source:null,
     terminal:null,fit:null,ended:false,stopSent:false,opener
   };
   preview=current;
@@ -857,6 +871,9 @@ function openPreview(index,opener,preserveFocus=false){
 
   requestAnimationFrame(()=>{
     if(preview!==current)return;
+    if(!Number.isInteger(current.tileVersion)){
+      finishPreview(current,L.termEnded);return;
+    }
     current.fit.fit();
     const cols=Math.max(20,Math.min(240,current.terminal.cols||80));
     const rows=Math.max(5,Math.min(100,current.terminal.rows||24));
@@ -864,7 +881,7 @@ function openPreview(index,opener,preserveFocus=false){
       current.terminal.resize(cols,rows);
     }
     const path='/term/'+index+'?stream='+encodeURIComponent(current.streamId)+
-      '&cols='+cols+'&rows='+rows;
+      '&v='+current.tileVersion+'&cols='+cols+'&rows='+rows;
     const source=new EventSource(auth(path));current.source=source;
     source.onopen=()=>{
       if(preview!==current){source.close();stopRemote(current);return;}
@@ -910,21 +927,23 @@ window.addEventListener('resize',()=>{
   clearTimeout(tresizeT);
   tresizeT=setTimeout(()=>{
     if(preview!==current||current.ended)return;
-    openPreview(current.index,current.opener,true);
+    openPreview(current.index,current.tileVersion,current.opener,true);
   },400);
 });
 
 function addCell(i){
   const b=document.createElement('button');b.className='cell';
   b.title=L.termHint;
-  let longTimer=null,startX=0,startY=0,openedByLongPress=false,suppressNextClick=false;
+  let longTimer=null,startX=0,startY=0,longVersion;
+  let openedByLongPress=false,suppressNextClick=false;
   const cancelLongPress=()=>{clearTimeout(longTimer);longTimer=null;};
   b.addEventListener('pointerdown',e=>{
     if(e.button!==0||!tover.hidden)return;
     cancelLongPress();openedByLongPress=false;suppressNextClick=false;
-    startX=e.clientX;startY=e.clientY;
+    startX=e.clientX;startY=e.clientY;longVersion=tv[i];
     longTimer=setTimeout(()=>{
-      longTimer=null;openedByLongPress=true;suppressNextClick=true;openPreview(i,b);
+      longTimer=null;openedByLongPress=true;suppressNextClick=true;
+      openPreview(i,longVersion,b);
     },500);
   });
   b.addEventListener('pointermove',e=>{
@@ -939,11 +958,11 @@ function addCell(i){
     e.preventDefault();cancelLongPress();
     if(openedByLongPress&&!tover.hidden)return;
     openedByLongPress=false;
-    openPreview(i,b);
+    openPreview(i,tv[i],b);
   });
   b.addEventListener('keydown',e=>{
     if(e.shiftKey&&e.key==='Enter'){
-      e.preventDefault();e.stopPropagation();openPreview(i,b);
+      e.preventDefault();e.stopPropagation();openPreview(i,tv[i],b);
     }
   });
   b.onclick=e=>{
@@ -972,7 +991,7 @@ function ensureCells(count){
   while(btns.length<count) addCell(btns.length);
   while(btns.length>count){
     const i=btns.length-1;
-    btns.pop().remove(); cells.pop(); delete tv[i];
+    btns.pop().remove(); cells.pop(); delete tv[i];delete pendingTv[i];
   }
   slotCount=count;
   deck.appendChild(panel);
@@ -992,7 +1011,7 @@ document.addEventListener('keydown',e=>{
   if(e.key>='1'&&e.key<='9') press(e.key.charCodeAt(0)-49);
   else if(e.key==='0') press(9);
 });
-let lastV=-1; const tv={}; let pv=-1;
+let lastV=-1; const tv={},pendingTv={}; let pv=-1;
 let pollTimer=null, inFlight=false, pollDelay=100;
 async function poll(){
   if(inFlight) return;             // the in-flight poll reschedules; never overlap
@@ -1021,8 +1040,19 @@ async function poll(){
       for(let i=0;i<slotCount;i++){ // refetch only tiles whose version advanced
         const v=t[i];
         if(v===undefined){          // tile gone -> clear the cell
+          delete pendingTv[i];
           if(tv[i]!==undefined){ delete tv[i]; cells[i].removeAttribute('src'); }
-        } else if(v!==tv[i]){ tv[i]=v; cells[i].src=auth('/tile/'+i+'?v='+v); }
+        } else if(v!==tv[i]&&v!==pendingTv[i]){
+          pendingTv[i]=v;
+          const candidate=new Image();candidate.alt='';
+          candidate.onload=()=>{
+            if(pendingTv[i]!==v||i>=cells.length)return;
+            cells[i].replaceWith(candidate);cells[i]=candidate;
+            tv[i]=v;delete pendingTv[i];
+          };
+          candidate.onerror=()=>{if(pendingTv[i]===v)delete pendingTv[i];};
+          candidate.src=auth('/tile/'+i+'?v='+v);
+        }
       }
       if(s.has_panel && s.panel!==pv){ pv=s.panel; pimg.src=auth('/panel?v='+pv); }
     }

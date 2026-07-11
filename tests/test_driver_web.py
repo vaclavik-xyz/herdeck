@@ -535,10 +535,18 @@ class TerminalSub:
         self.queue = queue.Queue(maxsize=120)
 
 
-def _term_url(deck, stream="stream-0001", *, index=0, cols=80, rows=24):
+def _term_url(
+    deck, stream="stream-0001", *, index=0, cols=80, rows=24, tile_version=None
+):
+    if tile_version is None:
+        tile_version = deck._state()["tiles"].get(index)
+    if tile_version is None:
+        deck.render([TileView(index, "terminal", "blue")])
+        tile_version = deck._state()["tiles"][index]
     return (
         f"http://{deck.host}:{deck.port}/term/{index}"
-        f"?stream={stream}&cols={cols}&rows={rows}&token={deck.press_token}"
+        f"?stream={stream}&v={tile_version}&cols={cols}&rows={rows}"
+        f"&token={deck.press_token}"
     )
 
 
@@ -586,7 +594,10 @@ def test_terminal_sse_streams_provider_items_and_closes_subscription(tmp_path):
     opened = []
     closed = []
     d.on_terminal(
-        lambda index, cols, rows: opened.append((index, cols, rows)) or sub,
+        lambda index, cols, rows, version: opened.append(
+            (index, cols, rows, version)
+        )
+        or sub,
         lambda subscription: closed.append(subscription),
     )
     try:
@@ -597,7 +608,7 @@ def test_terminal_sse_streams_provider_items_and_closes_subscription(tmp_path):
                 for line in response.read().decode().splitlines()
                 if line.startswith("data: ")
             ]
-        assert opened == [(0, 80, 24)]
+        assert opened == [(0, 80, 24, d._state()["tiles"][0])]
         assert [event["kind"] for event in events] == ["meta", "frame", "closed"]
         assert closed == [sub]
         assert d._terminal_streams == {}
@@ -620,7 +631,7 @@ def test_terminal_stop_endpoint_wakes_idle_stream_and_is_idempotent(tmp_path):
     opened = threading.Event()
     closed = threading.Event()
 
-    def open_terminal(index, cols, rows):
+    def open_terminal(index, cols, rows, version):
         opened.set()
         return sub
 
@@ -664,7 +675,7 @@ def test_terminal_provider_exception_releases_stream_capacity(tmp_path):
         token_path=str(tmp_path / "web-token"),
     )
 
-    def fail(index, cols, rows):
+    def fail(index, cols, rows, version):
         raise RuntimeError("boom")
 
     d.on_terminal(fail, lambda subscription: None)
@@ -688,9 +699,9 @@ def test_terminal_endpoint_authenticates_and_clamps_dimensions(tmp_path):
     )
     seen = []
 
-    def open_terminal(index, cols, rows):
+    def open_terminal(index, cols, rows, version):
         sub = TerminalSub()
-        seen.append((index, cols, rows))
+        seen.append((index, cols, rows, version))
         sub.queue.put_nowait({"kind": "closed", "reason": "done"})
         return sub
 
@@ -707,7 +718,41 @@ def test_terminal_endpoint_authenticates_and_clamps_dimensions(tmp_path):
             _term_url(d, "stream-clamp", cols=1, rows=999), timeout=5
         ) as response:
             response.read()
-        assert seen == [(0, 20, 100)]
+        assert seen == [(0, 20, 100, d._state()["tiles"][0])]
+    finally:
+        d.close()
+
+
+def test_terminal_endpoint_rejects_stale_tile_version_before_provider_start(tmp_path):
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=VaryingIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    d.render([TileView(0, "visible", "blue")])
+    visible_version = d._state()["tiles"][0]
+    d.render([TileView(0, "replacement", "blue")])
+    opened = []
+    d.on_terminal(
+        lambda index, cols, rows, version: opened.append(
+            (index, cols, rows, version)
+        )
+        or TerminalSub(),
+        lambda subscription: None,
+    )
+    stale_url = (
+        f"http://{d.host}:{d.port}/term/0?stream=stream-stale-tile"
+        f"&v={visible_version}&cols=80&rows=24&token={d.press_token}"
+    )
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(stale_url, timeout=5)
+        assert exc.value.code == 409
+        assert opened == []
+        assert d._terminal_streams == {}
     finally:
         d.close()
 
@@ -728,7 +773,7 @@ def test_terminal_stream_limit_uses_real_concurrent_streams_and_releases_slots(t
     subscriptions = []
     closed = []
 
-    def open_terminal(index, cols, rows):
+    def open_terminal(index, cols, rows, version):
         sub = TerminalSub()
         with condition:
             subscriptions.append(sub)
@@ -792,7 +837,10 @@ def test_terminal_stop_arriving_before_get_prevents_late_provider_start(tmp_path
     )
     opened = []
     d.on_terminal(
-        lambda index, cols, rows: opened.append((index, cols, rows)) or TerminalSub(),
+        lambda index, cols, rows, version: opened.append(
+            (index, cols, rows, version)
+        )
+        or TerminalSub(),
         lambda subscription: None,
     )
     try:
@@ -851,6 +899,10 @@ def test_page_includes_accessible_generation_safe_terminal_overlay(tmp_path):
         assert "if(document.activeElement===tclose)tterm.focus()" in page
         assert "tlive.textContent=L.termLive" in page
         assert "tlive.textContent=L.termEndedBadge" in page
+        assert "longVersion=tv[i]" in page
+        assert "'&v='+current.tileVersion" in page
+        assert "candidate.onload" in page
+        assert "tv[i]=v;delete pendingTv[i]" in page
     finally:
         d.close()
 

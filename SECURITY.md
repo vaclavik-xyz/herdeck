@@ -32,8 +32,10 @@ the desktop app, a loopback HTTP sidecar. The intended, supported deployment:
   live read-only terminal contents, so protect bookmarked/shared URLs as
   credentials; never bind the simulator to `0.0.0.0`, a public IP, or an
   untrusted LAN.
-- Tokens live in the OS keychain or an environment variable, never in committed
-  configuration.
+- Bridge and desktop-sidecar tokens live in the OS keychain or an environment
+  variable. The browser simulator persists its bearer token in
+  `~/.local/state/herdeck/web-token` with mode `0600`. Tokens are never stored
+  in committed configuration.
 
 Binding the bridge to a plain LAN or public interface is **outside** the
 supported configuration: it exposes the bearer token and every forwarded

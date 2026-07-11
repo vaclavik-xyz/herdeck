@@ -498,13 +498,21 @@ class App:
 
     _TERM_QUEUE_MAX = 120
 
-    def open_terminal(self, index: int, cols: int, rows: int) -> TermSub:
+    def open_terminal(
+        self,
+        index: int,
+        cols: int,
+        rows: int,
+        tile_version: int | None = None,
+    ) -> TermSub:
         """Schedule a preview start from a non-loop thread."""
         sub = TermSub(
             req=f"t{uuid.uuid4().hex[:12]}",
             queue=queue.Queue(maxsize=self._TERM_QUEUE_MAX),
         )
-        self._schedule(lambda: self._start_terminal(sub, index, cols, rows))
+        self._schedule(
+            lambda: self._start_terminal(sub, index, cols, rows, tile_version)
+        )
         return sub
 
     def close_terminal(self, sub: TermSub) -> None:
@@ -523,8 +531,20 @@ class App:
             log.debug("terminal preview send failed", exc_info=True)
             return False
 
-    def _start_terminal(self, sub: TermSub, index: int, cols: int, rows: int) -> None:
+    def _start_terminal(
+        self,
+        sub: TermSub,
+        index: int,
+        cols: int,
+        rows: int,
+        tile_version: int | None,
+    ) -> None:
         self._terminals[sub.req] = sub
+        if tile_version is not None:
+            tile_is_current = getattr(self.deck, "terminal_tile_is_current", None)
+            if not callable(tile_is_current) or not tile_is_current(index, tile_version):
+                self._finish_terminal(sub, tr(self._term_lang(), "web.term_no_agent"))
+                return
         agent = self.orch.agent_for_preview(index)
         if agent is None:
             self._finish_terminal(sub, tr(self._term_lang(), "web.term_no_agent"))

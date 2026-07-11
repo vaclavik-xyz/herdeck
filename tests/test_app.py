@@ -323,6 +323,41 @@ def test_terminal_preview_mapping_advances_only_after_successful_tile_render():
     assert app.orch.agent_for_preview(0) == original
 
 
+def test_terminal_preview_rechecks_tile_version_before_async_start(tmp_path):
+    from herdeck.driver.base import TileView
+    from herdeck.driver.web import WebDeck
+
+    class VaryingIcons:
+        def render_tile_bytes(self, tile):
+            return tile.label.encode()
+
+    deck = WebDeck(slots=13, serve=False, icon_provider=VaryingIcons())
+    scheduled = []
+    sent = []
+    app = App(
+        make_config(),
+        deck,
+        send=lambda command: None,
+        schedule=scheduled.append,
+        send_raw=lambda server_id, message: sent.append((server_id, message)) or True,
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+    visible_version = deck._state()["tiles"][0]
+
+    sub = app.open_terminal(0, 80, 24, visible_version)
+    deck.render([TileView(0, "replacement", "blue")])
+    scheduled.pop(0)()
+
+    assert sent == []
+    assert sub.queue.get_nowait() == {
+        "kind": "closed",
+        "reason": "no agent terminal on this tile",
+    }
+    assert app._terminals == {}
+
+
 def test_terminal_preview_flows_end_to_end_through_webdeck_sse(tmp_path):
     import json
     import queue
@@ -357,11 +392,12 @@ def test_terminal_preview_flows_end_to_end_through_webdeck_sse(tmp_path):
     app.handle_connection("dev", True)
     settle_terminal_tile(app)
     result = {}
+    tile_version = deck._state()["tiles"][0]
 
     def consume():
         url = (
             f"http://{deck.host}:{deck.port}/term/0?stream=stream-app-e2e"
-            f"&cols=80&rows=24&token={deck.press_token}"
+            f"&v={tile_version}&cols=80&rows=24&token={deck.press_token}"
         )
         with urllib.request.urlopen(url, timeout=5) as response:
             result["body"] = response.read().decode()
