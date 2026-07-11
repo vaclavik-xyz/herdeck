@@ -32,7 +32,6 @@ _monotonic = time.monotonic
 
 
 class HerdrClient(Protocol):
-    async def list_panes(self) -> list[dict]: ...
     async def snapshot(self) -> dict: ...
     async def get_pane(self, pane_id: str) -> dict: ...
     async def read_pane(self, pane_id: str, source: str) -> str: ...
@@ -41,8 +40,6 @@ class HerdrClient(Protocol):
     async def send_text(self, pane_id: str, text: str) -> None: ...
     async def start_agent(self, name: str, argv: list[str]) -> None: ...
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]: ...
-    async def workspaces(self) -> list[dict]: ...
-    async def tabs(self) -> list[dict]: ...
 
 
 def _is_agent_pane(p: dict) -> bool:
@@ -159,9 +156,6 @@ class StubHerdr:
         self.focused: list[str] = []
         self.started: list[tuple[str, list[str]]] = []
 
-    async def list_panes(self) -> list[dict]:
-        return self.panes
-
     async def snapshot(self) -> dict:
         return {
             "agents": self.panes,
@@ -173,12 +167,6 @@ class StubHerdr:
         self.worktree_queries = getattr(self, "worktree_queries", [])
         self.worktree_queries.append(list(workspace_ids or []))
         return self._worktrees
-
-    async def workspaces(self) -> list[dict]:
-        return self._workspaces
-
-    async def tabs(self) -> list[dict]:
-        return self._tabs
 
     async def get_pane(self, pane_id: str) -> dict:
         return next(p for p in self.panes if p["pane_id"] == pane_id)
@@ -469,6 +457,8 @@ class SocketHerdr:
         raise last_exc
 
     async def list_panes(self) -> list[dict]:
+        # Kept for get_pane's act guard only (herdr has no working pane.get);
+        # fleet state comes from snapshot().
         res = await self._rpc("pane.list", {})
         return res.get("result", {}).get("panes", [])
 
@@ -538,14 +528,6 @@ class SocketHerdr:
                 seen.add(key)
                 merged.append(wt)
         return merged
-
-    async def workspaces(self) -> list[dict]:
-        res = await self._rpc("workspace.list", {})
-        return res.get("result", {}).get("workspaces", [])
-
-    async def tabs(self) -> list[dict]:
-        res = await self._rpc("tab.list", {})
-        return res.get("result", {}).get("tabs", [])
 
 
 async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, clients: set):
