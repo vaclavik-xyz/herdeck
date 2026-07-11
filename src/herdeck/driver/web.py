@@ -361,6 +361,17 @@ class WebDeck(DeckDriver):
             b"<h2>Missing or invalid access token</h2>"
             + b"<p>" + tr(deck._language, "web.forbidden").encode() + b"</p>"
         )
+        page_headers = {
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": (
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                "connect-src 'self'; object-src 'none'; base-uri 'none'; "
+                "frame-ancestors 'none'"
+            ),
+        }
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -433,7 +444,12 @@ class WebDeck(DeckDriver):
                     if not self._valid_token(token):
                         # A browser tab is the only consumer of "/": a readable
                         # page beats a plaintext dead-end.
-                        self._send(403, forbidden_page, "text/html; charset=utf-8")
+                        self._send(
+                            403,
+                            forbidden_page,
+                            "text/html; charset=utf-8",
+                            page_headers,
+                        )
                         return
                     page = _PAGE.replace("__PRESS_TOKEN_JSON__", json.dumps(deck._press_token)).replace(
                 "__L_JSON__",
@@ -442,11 +458,24 @@ class WebDeck(DeckDriver):
                         "pressFailed": tr(deck._language, "web.press_failed"),
                         "tokenExpired": tr(deck._language, "web.token_expired"),
                         "disconnected": tr(deck._language, "web.disconnected"),
+                        "termClose": tr(deck._language, "web.term_close"),
+                        "termConnecting": tr(deck._language, "web.term_connecting"),
+                        "termEnded": tr(deck._language, "web.term_ended"),
+                        "termDisconnected": tr(deck._language, "web.term_disconnected"),
+                        "termLive": tr(deck._language, "web.term_live"),
+                        "termReadOnly": tr(deck._language, "web.term_read_only"),
+                        "termTitle": tr(deck._language, "web.term_title"),
+                        "termHint": tr(deck._language, "web.term_hint"),
                     },
                     ensure_ascii=False,  # keep em-dashes/diacritics readable in the page
                 ),
             )
-                    self._send(200, page.encode(), "text/html; charset=utf-8")
+                    self._send(
+                        200,
+                        page.encode(),
+                        "text/html; charset=utf-8",
+                        page_headers,
+                    )
                 elif path == "/state":
                     if not self._require_token(url):
                         return
@@ -595,6 +624,9 @@ class WebDeck(DeckDriver):
 _PAGE = """<!doctype html><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>Herdeck simulator</title>
+<link rel="stylesheet" href="/assets/xterm.css">
+<script src="/assets/xterm.js"></script>
+<script src="/assets/addon-fit.js"></script>
 <style>
  body{background:#0b0b0d;margin:0;font-family:-apple-system,sans-serif;
    display:flex;align-items:center;justify-content:center;min-height:100vh}
@@ -610,7 +642,8 @@ _PAGE = """<!doctype html><meta charset=utf-8>
    display:grid;grid-template-columns:repeat(5,var(--cell));gap:var(--gap)}
  .cell{width:var(--cell);height:var(--cell);border-radius:8px;background:#111;cursor:pointer;
    overflow:hidden;border:none;padding:0;
-   touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+   touch-action:manipulation;-webkit-tap-highlight-color:transparent;
+   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
  .cell:active{transform:scale(.95);filter:brightness(1.3)} /* instant, local press feedback */
  .cell.active{outline:3px solid #5af}
  .cell img{width:100%;height:100%;display:block}
@@ -623,6 +656,42 @@ _PAGE = """<!doctype html><meta charset=utf-8>
  #note{position:fixed;left:50%;top:10px;transform:translateX(-50%);max-width:90vw;
    background:#3a1d1d;color:#f0a0a0;padding:6px 12px;border-radius:8px;
    font:13px system-ui;display:none;z-index:9}
+ [hidden]{display:none!important}
+ #tover{position:fixed;inset:0;z-index:20;background:rgba(4,6,10,.94);
+   display:flex;align-items:center;justify-content:center;padding:3vh 3vw;color:#e7ecf3}
+ #tshell{width:min(1200px,94vw);height:min(860px,92vh);min-height:280px;
+   background:#0b0b0d;border:1px solid #343944;border-radius:12px;overflow:hidden;
+   box-shadow:0 18px 60px rgba(0,0,0,.5);display:flex;flex-direction:column}
+ #tbar{height:52px;flex:0 0 52px;display:flex;align-items:center;gap:12px;
+   padding:0 8px 0 14px;background:#202126;border-bottom:1px solid #343944;
+   font:13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+ #tlive{display:flex;align-items:center;gap:7px;color:#8fc4ff;font-size:11px;
+   font-weight:700;letter-spacing:.12em;white-space:nowrap}
+ #tlive::before{content:"";width:7px;height:7px;border-radius:50%;background:#5af;
+   box-shadow:0 0 0 3px rgba(85,170,255,.12)}
+ #ttitle{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+   color:#e7ecf3;font-weight:600}
+ #treadonly{color:#9aa7b8;font-size:10px;font-weight:700;letter-spacing:.13em;
+   white-space:nowrap}
+ #tclose{width:44px;height:44px;flex:0 0 44px;border:1px solid transparent;
+   border-radius:8px;background:transparent;color:#c9d1dc;cursor:pointer;
+   font:26px/1 system-ui;display:grid;place-items:center}
+ #tclose:hover{background:#2a2a2e;color:#fff}
+ #tclose:focus-visible{outline:3px solid #5af;outline-offset:-3px}
+ #tmsg{min-height:28px;box-sizing:border-box;padding:7px 14px 5px;background:#111318;
+   color:#9aa7b8;font:12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+ #tterm{flex:1;min-height:0;padding:8px 10px 10px;background:#0b0b0d}
+ #tterm .xterm{height:100%}
+ @media (max-width:560px){
+   #tover{padding:0}
+   #tshell{width:100vw;height:100dvh;min-height:100vh;border:0;border-radius:0}
+   #tbar{gap:8px;padding-left:10px}
+   #treadonly{display:none}
+   #tterm{padding:6px}
+ }
+ @media (prefers-reduced-motion:reduce){
+   .cell:active{transform:none}
+ }
  /* phone portrait: width is the constraint, so shrink the deck */
  @media (max-width:560px){
    #deck{--gap:6px;--pad:10px;
@@ -639,6 +708,18 @@ _PAGE = """<!doctype html><meta charset=utf-8>
  }
 </style>
 <div id=deck></div>
+<div id="tover" hidden role="dialog" aria-modal="true" aria-labelledby="ttitle" aria-describedby="tmsg">
+  <section id="tshell">
+    <header id="tbar">
+      <span id="tlive"></span>
+      <span id="ttitle"></span>
+      <span id="treadonly"></span>
+      <button id="tclose" type="button">×</button>
+    </header>
+    <div id="tmsg" aria-live="polite"></div>
+    <div id="tterm" tabindex="0"></div>
+  </section>
+</div>
 <script>
 const deck=document.getElementById('deck');
 const note=document.createElement('div');note.id='note';document.body.appendChild(note);
@@ -674,9 +755,191 @@ async function press(i){
   }
   pollNow();  // the press already re-rendered server-side; don't wait 300ms
 }
+
+// --- live terminal preview: long-press / right-click / Shift+Enter --------
+const tover=document.getElementById('tover');
+const ttitle=document.getElementById('ttitle');
+const tlive=document.getElementById('tlive');
+const treadonly=document.getElementById('treadonly');
+const tclose=document.getElementById('tclose');
+const tmsg=document.getElementById('tmsg');
+const tterm=document.getElementById('tterm');
+tlive.textContent=L.termLive;
+treadonly.textContent=L.termReadOnly;
+tclose.title=L.termClose;
+tclose.setAttribute('aria-label',L.termClose);
+tterm.setAttribute('aria-label',L.termTitle);
+let preview=null,previewGeneration=0,lastPreviewFocus=null,tresizeT=null;
+
+function tshow(message){tmsg.textContent=message||'';}
+function newStreamId(){
+  if(globalThis.crypto&&typeof crypto.randomUUID==='function')return crypto.randomUUID();
+  return 'stream-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,14);
+}
+function stopRemote(current){
+  if(current.stopSent)return;
+  current.stopSent=true;
+  void fetch('/term-stop/'+encodeURIComponent(current.streamId),{
+    method:'POST',headers:{'X-Herdeck-Token':pressToken},keepalive:true
+  }).catch(()=>{});
+}
+function disposePreview(current,notifyRemote){
+  if(!current)return;
+  if(current.source){
+    current.source.onopen=current.source.onmessage=current.source.onerror=null;
+    current.source.close();current.source=null;
+  }
+  if(notifyRemote)stopRemote(current);
+  if(current.terminal){current.terminal.dispose();current.terminal=null;}
+  tterm.replaceChildren();
+}
+function finishPreview(current,reason,remoteEnded=false){
+  if(preview!==current)return;
+  current.ended=true;
+  if(current.source){current.source.close();current.source=null;}
+  if(remoteEnded)current.stopSent=true;else stopRemote(current);
+  tshow(reason||L.termEnded);
+}
+function closePreview(){
+  clearTimeout(tresizeT);
+  const current=preview;
+  preview=null;previewGeneration++;
+  disposePreview(current,true);
+  tover.hidden=true;
+  deck.inert=false;deck.removeAttribute('aria-hidden');
+  document.body.style.overflow='';
+  const restore=lastPreviewFocus;lastPreviewFocus=null;
+  if(restore&&restore.isConnected)restore.focus();
+}
+function frameBytes(encoded){
+  const binary=atob(encoded);const bytes=new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+  return bytes;
+}
+function openPreview(index,opener,preserveFocus=false){
+  const previous=preview;
+  preview=null;
+  disposePreview(previous,true);
+  if(!preserveFocus)lastPreviewFocus=opener||document.activeElement;
+
+  const current={
+    index,generation:++previewGeneration,streamId:newStreamId(),source:null,
+    terminal:null,fit:null,ended:false,stopSent:false,opener
+  };
+  preview=current;
+  tover.hidden=false;
+  deck.inert=true;deck.setAttribute('aria-hidden','true');
+  document.body.style.overflow='hidden';
+  ttitle.textContent=L.termTitle;tshow(L.termConnecting);
+
+  current.terminal=new Terminal({
+    disableStdin:true,screenReaderMode:true,cursorBlink:false,scrollback:1000,
+    fontSize:13,lineHeight:1.15,
+    fontFamily:'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
+    theme:{
+      background:'#0b0b0d',foreground:'#e7ecf3',cursor:'#9aa7b8',
+      selectionBackground:'#334c66',black:'#0b0b0d',brightBlack:'#566171',
+      blue:'#5af',brightBlue:'#8fc4ff',red:'#f0a0a0'
+    }
+  });
+  current.fit=new FitAddon.FitAddon();
+  current.terminal.loadAddon(current.fit);
+  current.terminal.open(tterm);
+  tclose.focus({preventScroll:true});
+
+  requestAnimationFrame(()=>{
+    if(preview!==current)return;
+    current.fit.fit();
+    const cols=Math.max(20,Math.min(240,current.terminal.cols||80));
+    const rows=Math.max(5,Math.min(100,current.terminal.rows||24));
+    if(current.terminal.cols!==cols||current.terminal.rows!==rows){
+      current.terminal.resize(cols,rows);
+    }
+    const path='/term/'+index+'?stream='+encodeURIComponent(current.streamId)+
+      '&cols='+cols+'&rows='+rows;
+    const source=new EventSource(auth(path));current.source=source;
+    source.onopen=()=>{
+      if(preview!==current){source.close();stopRemote(current);return;}
+    };
+    source.onmessage=event=>{
+      if(preview!==current)return;
+      let message;
+      try{message=JSON.parse(event.data);}catch(error){
+        finishPreview(current,L.termEnded);return;
+      }
+      if(message.kind==='meta'){
+        ttitle.textContent=message.label||L.termTitle;return;
+      }
+      if(message.kind==='frame'){
+        try{
+          const frameCols=Math.max(20,Math.min(240,Number(message.cols)||cols));
+          const frameRows=Math.max(5,Math.min(100,Number(message.rows)||rows));
+          if(current.terminal.cols!==frameCols||current.terminal.rows!==frameRows){
+            current.terminal.resize(frameCols,frameRows);
+          }
+          if(message.full)current.terminal.reset();
+          current.terminal.write(frameBytes(message.data));
+          tshow('');
+        }catch(error){finishPreview(current,L.termEnded);}
+        return;
+      }
+      if(message.kind==='closed'){
+        finishPreview(current,message.reason||L.termEnded,true);
+      }
+    };
+    source.onerror=()=>{
+      if(preview!==current)return;
+      finishPreview(current,L.termDisconnected);
+    };
+  });
+}
+tclose.addEventListener('click',closePreview);
+tover.addEventListener('click',event=>{if(event.target===tover)closePreview();});
+window.addEventListener('resize',()=>{
+  const current=preview;
+  if(!current||current.ended)return;
+  clearTimeout(tresizeT);
+  tresizeT=setTimeout(()=>{
+    if(preview!==current||current.ended)return;
+    openPreview(current.index,current.opener,true);
+  },400);
+});
+
 function addCell(i){
   const b=document.createElement('button');b.className='cell';
-  b.onclick=()=>press(i);
+  b.title=L.termHint;
+  let longTimer=null,startX=0,startY=0,longOpenedUntil=0,suppressClickUntil=0;
+  const cancelLongPress=()=>{clearTimeout(longTimer);longTimer=null;};
+  b.addEventListener('pointerdown',e=>{
+    if(e.button!==0||!tover.hidden)return;
+    cancelLongPress();startX=e.clientX;startY=e.clientY;
+    longTimer=setTimeout(()=>{
+      longTimer=null;longOpenedUntil=performance.now()+1000;
+      suppressClickUntil=performance.now()+1000;openPreview(i,b);
+    },500);
+  });
+  b.addEventListener('pointermove',e=>{
+    if(longTimer&&Math.hypot(e.clientX-startX,e.clientY-startY)>10)cancelLongPress();
+  });
+  b.addEventListener('pointerup',cancelLongPress);
+  b.addEventListener('pointercancel',cancelLongPress);
+  b.addEventListener('lostpointercapture',cancelLongPress);
+  b.addEventListener('contextmenu',e=>{
+    e.preventDefault();cancelLongPress();
+    if(performance.now()<longOpenedUntil)return;
+    openPreview(i,b);
+  });
+  b.addEventListener('keydown',e=>{
+    if(e.shiftKey&&e.key==='Enter'){
+      e.preventDefault();e.stopPropagation();openPreview(i,b);
+    }
+  });
+  b.onclick=e=>{
+    if(performance.now()<suppressClickUntil){
+      suppressClickUntil=0;e.preventDefault();return;
+    }
+    press(i);
+  };
   const img=document.createElement('img');b.appendChild(img);
   deck.appendChild(b);cells.push(img);btns.push(b);
 }
@@ -703,6 +966,14 @@ function ensureCells(count){
 }
 // keyboard: 1..9 -> tiles 0..8, 0 -> tile 9; ignore when a modifier is held.
 document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&!tover.hidden){e.preventDefault();closePreview();return;}
+  if(!tover.hidden){
+    if(e.key==='Tab'){
+      e.preventDefault();
+      if(document.activeElement===tclose&&!e.shiftKey)tterm.focus();else tclose.focus();
+    }
+    return;
+  }
   if(e.repeat) return;                                   // don't spam presses on key-hold
   if(e.metaKey||e.ctrlKey||e.altKey||e.shiftKey) return;
   if(e.key>='1'&&e.key<='9') press(e.key.charCodeAt(0)-49);

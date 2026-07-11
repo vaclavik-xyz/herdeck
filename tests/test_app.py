@@ -323,6 +323,86 @@ def test_terminal_preview_mapping_advances_only_after_successful_tile_render():
     assert app.orch.agent_for_preview(0) == original
 
 
+def test_terminal_preview_flows_end_to_end_through_webdeck_sse(tmp_path):
+    import json
+    import queue
+    import threading
+    import urllib.request
+
+    from herdeck.driver.web import WebDeck
+    from herdeck.protocol import TermClosed, TermFrame
+
+    class TinyIcons:
+        def render_tile_bytes(self, tile):
+            return b"test-png"
+
+    deck = WebDeck(
+        slots=13,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=TinyIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    scheduled = queue.Queue()
+    sent = []
+    app = App(
+        make_config(),
+        deck,
+        send=lambda command: None,
+        schedule=scheduled.put,
+        send_raw=lambda server_id, message: sent.append((server_id, message)) or True,
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+    result = {}
+
+    def consume():
+        url = (
+            f"http://{deck.host}:{deck.port}/term/0?stream=stream-app-e2e"
+            f"&cols=80&rows=24&token={deck.press_token}"
+        )
+        with urllib.request.urlopen(url, timeout=5) as response:
+            result["body"] = response.read().decode()
+
+    reader = threading.Thread(target=consume)
+    reader.start()
+    try:
+        scheduled.get(timeout=2)()  # App._start_terminal on the simulated loop
+        req = sent[-1][1]["req"]
+        app.handle_term("dev", TermFrame(req, 1, True, 80, 24, "QQ=="))
+        app.handle_term("dev", TermClosed(req, "done"))
+        reader.join(timeout=2)
+        assert not reader.is_alive()
+        while not scheduled.empty():
+            scheduled.get_nowait()()  # idempotent close callback from the HTTP thread
+
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in result["body"].splitlines()
+            if line.startswith("data: ")
+        ]
+        assert [event["kind"] for event in events] == ["meta", "frame", "closed"]
+        assert sent == [
+            (
+                "dev",
+                {
+                    "type": "observe",
+                    "req": req,
+                    "pane_id": "p1",
+                    "cols": 80,
+                    "rows": 24,
+                },
+            )
+        ]
+        assert app._terminals == {}
+        assert deck._terminal_streams == {}
+    finally:
+        deck.close()
+        reader.join(timeout=2)
+
+
 async def test_guard_swallows_exception():
     class Boom:
         async def run(self):

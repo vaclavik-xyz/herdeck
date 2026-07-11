@@ -519,6 +519,8 @@ def test_page_speaks_czech_when_configured(tmp_path):
             page = r.read().decode()
         assert "stisk selhal — odpojeno?" in page
         assert "token vypršel" in page
+        assert "ŽIVĚ" in page
+        assert "JEN ČTENÍ" in page
     finally:
         d.close()
 
@@ -809,3 +811,63 @@ def test_terminal_stop_arriving_before_get_prevents_late_provider_start(tmp_path
         assert d._terminal_streams == {}
     finally:
         d.close()
+
+
+def test_page_includes_accessible_generation_safe_terminal_overlay(tmp_path):
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    try:
+        with urllib.request.urlopen(
+            f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=5
+        ) as response:
+            page = response.read().decode()
+            assert response.headers["Cache-Control"] == "no-store"
+            assert response.headers["Referrer-Policy"] == "no-referrer"
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+        assert 'href="/assets/xterm.css"' in page
+        assert 'src="/assets/xterm.js"' in page
+        assert 'src="/assets/addon-fit.js"' in page
+        assert 'role="dialog"' in page and 'aria-modal="true"' in page
+        assert 'aria-live="polite"' in page
+        assert "if(preview!==current)return" in page  # stale EventSource generation guard
+        assert "Math.max(20,Math.min(240" in page
+        assert "Math.max(5,Math.min(100" in page
+        assert "'/term-stop/'" in page
+        assert "e.button!==0" in page  # secondary pointerdown never arms long-press
+        assert "e.shiftKey&&e.key==='Enter'" in page
+        assert "lastPreviewFocus" in page and ".focus()" in page
+        assert "if(e.key==='Escape'" in page
+    finally:
+        d.close()
+
+
+def test_embedded_page_javascript_parses_with_node():
+    import re
+    import shutil
+    import subprocess
+
+    from herdeck.driver import web
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    scripts = re.findall(r"<script>(.*?)</script>", web._PAGE, flags=re.DOTALL)
+    assert len(scripts) == 1
+    source = scripts[0].replace("__PRESS_TOKEN_JSON__", '"token"').replace(
+        "__L_JSON__", "{}"
+    )
+    result = subprocess.run(
+        [node, "--check", "-"],
+        input=source,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

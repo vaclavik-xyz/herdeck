@@ -71,6 +71,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "web.term_disconnected": "bridge disconnected",
         "web.term_ended": "preview ended",
         "web.term_busy": "too many open previews",
+        "web.term_close": "close terminal preview",
+        "web.term_connecting": "connecting…",
+        "web.term_live": "LIVE",
+        "web.term_read_only": "READ ONLY",
+        "web.term_title": "Live terminal preview",
+        "web.term_hint": "Long-press, right-click, or Shift+Enter for a read-only terminal",
     },
     "cs": {
         "offline_title": "OFFLINE",
@@ -123,6 +129,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "web.term_disconnected": "spojení s bridge ztraceno",
         "web.term_ended": "náhled ukončen",
         "web.term_busy": "příliš mnoho otevřených náhledů",
+        "web.term_close": "zavřít náhled terminálu",
+        "web.term_connecting": "připojuji…",
+        "web.term_live": "ŽIVĚ",
+        "web.term_read_only": "JEN ČTENÍ",
+        "web.term_title": "Živý náhled terminálu",
+        "web.term_hint": "Podrž, klikni pravým nebo stiskni Shift+Enter pro náhled terminálu",
     },
 }
 
