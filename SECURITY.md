@@ -27,8 +27,15 @@ the desktop app, a loopback HTTP sidecar. The intended, supported deployment:
   compared) provides authentication.
 - The desktop sidecar binds to `127.0.0.1` only; its access token is injected by
   the Rust shell and is never exposed to the WebView / JavaScript.
-- Tokens live in the OS keychain or an environment variable, never in committed
-  configuration.
+- The browser simulator binds to loopback by default. For remote use, bind it to
+  a trusted Tailscale interface only. Its URL token authorizes deck presses and
+  live read-only terminal contents, so protect bookmarked/shared URLs as
+  credentials; never bind the simulator to `0.0.0.0`, a public IP, or an
+  untrusted LAN.
+- Bridge and desktop-sidecar tokens live in the OS keychain or an environment
+  variable. The browser simulator persists its bearer token in
+  `~/.local/state/herdeck/web-token` with mode `0600`. Tokens are never stored
+  in committed configuration.
 
 Binding the bridge to a plain LAN or public interface is **outside** the
 supported configuration: it exposes the bearer token and every forwarded

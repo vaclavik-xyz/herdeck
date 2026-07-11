@@ -21,6 +21,9 @@ _ORDER_SETTLE_S = 2.0
 # Ignore a press on a slot whose occupant changed within this window — the
 # press was almost certainly aimed at the previous occupant.
 _SLOT_PRESS_GUARD_S = 0.3
+# A preview opens after a 500 ms long-press. Keep the occupant-change guard
+# alive through that gesture so it can never resolve the replacement tile.
+_PREVIEW_SLOT_GUARD_S = _SLOT_PRESS_GUARD_S + 0.5
 # The overview panel acknowledges a just-sent drill action this long, so
 # returning to an unchanged amber tile doesn't read as "my press was lost".
 _SENT_NOTE_TTL_S = 3.0
@@ -94,6 +97,10 @@ class Orchestrator:
         self._target_since: float = 0.0
         self._force_adopt: bool = False  # one-shot: adopt on next render, slot-guarded
         self._slot_changed_at: dict[int, float] = {}
+        # Browser previews resolve against the last tile frame the driver
+        # accepted, not against speculative state produced by a failed render.
+        self._rendered_preview_slots: dict[int, AgentKey] = {}
+        self._preview_slot_changed_at: dict[int, float] = {}
 
     def _agent_slots(self) -> int:
         """Overview tiles available for agents (the last tile is the launcher)."""
@@ -204,6 +211,39 @@ class Orchestrator:
             and pane_id is not None
             and self._drill == AgentKey(server_id, pane_id)
         )
+
+    def agent_for_preview(self, index: int) -> AgentState | None:
+        """Resolve a browser tile to the agent it last rendered, read-only."""
+        if index < 0 or index >= self.slots:
+            return None
+        key = self._rendered_preview_slots.get(index)
+        if key is None:
+            return None
+        changed_at = self._preview_slot_changed_at.get(index, float("-inf"))
+        if self._clock() - changed_at < _PREVIEW_SLOT_GUARD_S:
+            return None
+        return self._agents.get(key)
+
+    def confirm_rendered_preview(self) -> None:
+        """Commit the current tile-to-agent map after a successful render."""
+        if self._profile_menu or self._launcher:
+            rendered: dict[int, AgentKey] = {}
+        elif self._drill is not None and self._drill in self._agents:
+            rendered = {index: self._drill for index in range(self.slots)}
+        else:
+            ordered = [
+                self._agents[key]
+                for key in self._display_order
+                if key in self._agents
+            ]
+            shown, _ = layout.page(ordered, self._page, self._agent_slots())
+            rendered = {index: agent.key for index, agent in enumerate(shown)}
+
+        now = self._clock()
+        for index in self._rendered_preview_slots.keys() | rendered.keys():
+            if self._rendered_preview_slots.get(index) != rendered.get(index):
+                self._preview_slot_changed_at[index] = now
+        self._rendered_preview_slots = rendered
 
     def is_drilling(self) -> bool:
         return self._drill is not None

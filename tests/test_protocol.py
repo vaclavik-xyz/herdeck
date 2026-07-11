@@ -1,3 +1,5 @@
+import pytest
+
 from herdeck.model import AgentKey, AgentState, Status
 from herdeck.protocol import (
     Error,
@@ -114,3 +116,48 @@ def test_working_pane_with_custom_status_derives_waiting():
     # a custom status on a non-working pane never flips the state
     idle = _pane_to_state("dev", {"pane_id": "p1", "status": "idle", "custom_status": "⏳ x"})
     assert idle.status is Status.IDLE
+
+
+def test_decode_terminal_frame_preserves_wire_values():
+    from herdeck.protocol import TermFrame
+
+    msg = decode_inbound(
+        '{"type":"term_frame","req":"t1","seq":3,"full":false,"cols":100,"rows":30,"data":"aGk="}'
+    )
+    assert msg == TermFrame("t1", 3, False, 100, 30, "aGk=")
+
+
+def test_decode_terminal_closed_preserves_reason():
+    from herdeck.protocol import TermClosed
+
+    msg = decode_inbound('{"type":"term_closed","req":"t1","reason":"pane gone"}')
+    assert msg == TermClosed("t1", "pane gone")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("seq", '"3"'),
+        ("full", '"false"'),
+        ("cols", "0"),
+        ("rows", "-1"),
+        ("data", "42"),
+    ],
+)
+def test_decode_malformed_terminal_frame_closes_only_its_request(field, value):
+    from herdeck.protocol import TermClosed
+
+    fields = {
+        "seq": "3",
+        "full": "false",
+        "cols": "100",
+        "rows": "30",
+        "data": '"aGk="',
+    }
+    fields[field] = value
+    raw = (
+        '{"type":"term_frame","req":"t1",'
+        + ",".join(f'"{name}":{raw_value}' for name, raw_value in fields.items())
+        + "}"
+    )
+    assert decode_inbound(raw) == TermClosed("t1", "invalid terminal frame", stop_remote=True)

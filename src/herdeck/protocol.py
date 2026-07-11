@@ -62,7 +62,28 @@ class Error:
     message: str
 
 
-def decode_inbound(raw: str) -> Snapshot | Event | Result | Error:
+@dataclass
+class TermFrame:
+    """One live-terminal frame (base64 ANSI, passed through from herdr)."""
+
+    req: str
+    seq: int
+    full: bool
+    cols: int
+    rows: int
+    data: str
+
+
+@dataclass
+class TermClosed:
+    req: str
+    reason: str
+    stop_remote: bool = False
+
+
+def decode_inbound(
+    raw: str,
+) -> Snapshot | Event | Result | Error | TermFrame | TermClosed:
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "snapshot":
@@ -75,4 +96,34 @@ def decode_inbound(raw: str) -> Snapshot | Event | Result | Error:
         return Result(msg["req"], msg.get("data", {}))
     if kind == "error":
         return Error(msg.get("message", ""))
+    if kind == "term_frame":
+        req = msg.get("req")
+        if not isinstance(req, str) or not req:
+            raise ValueError("terminal frame missing request id")
+        valid = (
+            type(msg.get("seq")) is int
+            and msg["seq"] >= 0
+            and type(msg.get("full")) is bool
+            and type(msg.get("cols")) is int
+            and msg["cols"] > 0
+            and type(msg.get("rows")) is int
+            and msg["rows"] > 0
+            and isinstance(msg.get("data"), str)
+        )
+        if not valid:
+            return TermClosed(req, "invalid terminal frame", stop_remote=True)
+        return TermFrame(
+            req,
+            msg["seq"],
+            msg["full"],
+            msg["cols"],
+            msg["rows"],
+            msg["data"],
+        )
+    if kind == "term_closed":
+        req = msg.get("req")
+        if not isinstance(req, str) or not req:
+            raise ValueError("terminal close missing request id")
+        reason = msg.get("reason", "")
+        return TermClosed(req, reason if isinstance(reason, str) else "preview closed")
     raise ValueError(f"unknown inbound message type: {kind}")

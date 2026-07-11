@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import logging
 import os
+import shutil
 import time
 from typing import Protocol
 
@@ -54,7 +56,9 @@ def _worktrees_by_workspace(worktrees: list[dict]) -> dict[str, dict]:
 
 def _workspaces_by_id(workspaces: list[dict]) -> dict[str, str]:
     """Index herdr workspaces (session.snapshot's ``workspaces`` list) as {workspace_id: label}."""
-    return {w["workspace_id"]: w.get("label", "") for w in (workspaces or []) if w.get("workspace_id")}
+    return {
+        w["workspace_id"]: w.get("label", "") for w in (workspaces or []) if w.get("workspace_id")
+    }
 
 
 def _tabs_by_id(tabs: list[dict]) -> dict[str, str]:
@@ -124,7 +128,9 @@ async def _fetch_worktrees(herdr: HerdrClient, workspace_ids: list[str]) -> list
 def _agent_workspace_ids(raw_panes: list[dict]) -> list[str]:
     """Unique workspace ids of the agent panes (the repos whose worktrees we
     need branch labels for), in a stable order."""
-    return sorted({p.get("workspace_id") for p in raw_panes if _is_agent_pane(p) and p.get("workspace_id")})
+    return sorted(
+        {p.get("workspace_id") for p in raw_panes if _is_agent_pane(p) and p.get("workspace_id")}
+    )
 
 
 async def _wired_snapshot(herdr: HerdrClient) -> list[dict]:
@@ -234,6 +240,176 @@ _LABEL_EVENT_TYPES = (
 )
 _WORKTREE_EVENT_NAMES = {"worktree_created", "worktree_opened", "worktree_removed"}
 
+# herdr 0.7.3 exposes terminal observation through the CLI only (there is no
+# socket RPC). Each process is bounded independently from the per-client cap.
+_OBSERVE_MAX_PER_CLIENT = 3
+_OBSERVE_MAX_TOTAL = 8
+_OBSERVE_COLS_MIN, _OBSERVE_COLS_MAX = 20, 240
+_OBSERVE_ROWS_MIN, _OBSERVE_ROWS_MAX = 5, 100
+# Full-frame NDJSON lines can exceed asyncio's 64 KiB StreamReader default.
+_OBSERVE_LINE_LIMIT = 8 * 2**20
+_observe_total = 0
+
+
+def _resolve_herdr_bin() -> str | None:
+    """Resolve herdr even under launchd's minimal PATH."""
+    configured = os.environ.get("HERDECK_HERDR_BIN")
+    if configured:
+        return configured
+    found = shutil.which("herdr")
+    if found:
+        return found
+    fallbacks = (
+        os.path.expanduser("~/.local/bin/herdr"),
+        "/opt/homebrew/bin/herdr",
+        "/usr/local/bin/herdr",
+        os.path.expanduser("~/.cargo/bin/herdr"),
+        "/home/linuxbrew/.linuxbrew/bin/herdr",
+    )
+    return next((path for path in fallbacks if os.access(path, os.X_OK)), None)
+
+
+async def _reap_observe_process(proc) -> None:
+    if proc is None or proc.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError):
+        proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2.0)
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+
+
+async def _reap_observe_cancellation_safe(proc) -> None:
+    """Finish child cleanup even if the parent task is cancelled again."""
+    cleanup = asyncio.create_task(_reap_observe_process(proc))
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            continue
+    await cleanup
+
+
+def _valid_terminal_frame(evt: object) -> bool:
+    if not isinstance(evt, dict):
+        return False
+    return (
+        type(evt.get("seq")) is int
+        and type(evt.get("full")) is bool
+        and type(evt.get("width")) is int
+        and type(evt.get("height")) is int
+        and isinstance(evt.get("bytes"), str)
+    )
+
+
+def _observe_dimension(msg: dict, name: str, default: int, low: int, high: int) -> int:
+    value = msg.get(name, default)
+    if value is None:
+        value = default
+    if isinstance(value, bool):
+        raise ValueError(name)
+    return max(low, min(high, int(value)))
+
+
+async def _run_observe(
+    send,
+    req: str,
+    pane_id: str,
+    cols: int,
+    rows: int,
+    state: dict,
+    socket_path: str,
+) -> None:
+    """Forward one herdr observe subprocess and finish it exactly once."""
+    proc = None
+    reason = "stream ended"
+    try:
+        binary = _resolve_herdr_bin()
+        if binary is None:
+            reason = "herdr binary not found on the bridge host"
+            return
+        try:
+            child_env = os.environ.copy()
+            child_env["HERDR_SOCKET"] = socket_path
+            proc = await asyncio.create_subprocess_exec(
+                binary,
+                "terminal",
+                "session",
+                "observe",
+                pane_id,
+                "--cols",
+                str(cols),
+                "--rows",
+                str(rows),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                limit=_OBSERVE_LINE_LIMIT,
+                env=child_env,
+            )
+        except OSError as exc:
+            reason = f"could not start herdr: {exc}"
+            return
+
+        assert proc.stdout is not None
+        got_output = False
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                if not got_output:
+                    reason = "no stream from herdr (needs herdr >= 0.7.3)"
+                break
+            try:
+                evt = json.loads(line)
+            except (TypeError, ValueError):
+                reason = "invalid terminal stream from herdr"
+                break
+            got_output = True
+            if not isinstance(evt, dict):
+                reason = "invalid terminal stream from herdr"
+                break
+            kind = evt.get("type")
+            if kind == "terminal.closed":
+                raw_reason = evt.get("reason")
+                reason = raw_reason if isinstance(raw_reason, str) and raw_reason else "closed"
+                break
+            if kind != "terminal.frame":
+                continue
+            if evt.get("encoding") != "ansi":
+                reason = f"unsupported terminal encoding: {evt.get('encoding')}"
+                break
+            if not _valid_terminal_frame(evt):
+                reason = "invalid terminal frame from herdr"
+                break
+            delivered = await send(
+                encode(
+                    {
+                        "type": "term_frame",
+                        "req": req,
+                        "seq": evt["seq"],
+                        "full": evt["full"],
+                        "cols": evt["width"],
+                        "rows": evt["height"],
+                        "data": evt["bytes"],
+                    }
+                )
+            )
+            if not delivered:
+                return
+    except asyncio.CancelledError:
+        reason = "stopped"
+    except Exception as exc:
+        log.warning("terminal observe %s failed: %s", req, exc)
+        reason = "terminal preview failed"
+    finally:
+        await _reap_observe_cancellation_safe(proc)
+        if not state["closed"]:
+            state["closed"] = True
+            await send(encode({"type": "term_closed", "req": req, "reason": reason}))
+
 
 class HerdrEvents:
     """Yields the full agent list whenever it changes.
@@ -319,7 +495,11 @@ class HerdrEvents:
         if name in _WORKTREE_EVENT_NAMES:
             self._worktrees_stale = True
         if name in _FLEET_EVENT_NAMES:
-            if name == "pane_agent_detected" and pane_id is not None and pane_id in (subscribed or ()):
+            if (
+                name == "pane_agent_detected"
+                and pane_id is not None
+                and pane_id in (subscribed or ())
+            ):
                 return False
             self._worktrees_stale = True  # a new pane may sit in an unseen workspace
             return True
@@ -385,11 +565,17 @@ class HerdrEvents:
 _BROADCAST_SEND_TIMEOUT = 2.0
 
 
-async def _send_to_client(ws, msg: str, timeout: float | None = None) -> None:
+async def _send_to_client(ws, msg: str, lock: asyncio.Lock, timeout: float | None = None) -> bool:
     if timeout is None:
         timeout = _BROADCAST_SEND_TIMEOUT  # module-level so tests can shrink it
+
     try:
-        await asyncio.wait_for(ws.send(msg), timeout=timeout)
+        # Waiting behind another whole message isn't backpressure on THIS
+        # message. The lock holder has its own bounded ws.send(), so start this
+        # timeout only after serialization hands us the connection.
+        async with lock:
+            await asyncio.wait_for(ws.send(msg), timeout=timeout)
+        return True
     except TimeoutError:
         # Backpressured/half-open: drop the connection so the client reconnects
         # cleanly (a reconnect resyncs with a full snapshot anyway).
@@ -399,9 +585,10 @@ async def _send_to_client(ws, msg: str, timeout: float | None = None) -> None:
             pass
     except Exception:
         pass
+    return False
 
 
-async def _broadcast(snapshot_stream, clients: set, server_id: str) -> None:
+async def _broadcast(snapshot_stream, clients: dict, server_id: str) -> None:
     """Forward each changed full agent list to all clients as a snapshot.
 
     Snapshots (not per-pane events) are used so that removed/finished panes
@@ -413,7 +600,9 @@ async def _broadcast(snapshot_stream, clients: set, server_id: str) -> None:
     async for panes in snapshot_stream:
         msg = encode({"type": "snapshot", "server_id": server_id, "panes": panes})
         if clients:
-            await asyncio.gather(*(_send_to_client(ws, msg) for ws in list(clients)))
+            await asyncio.gather(
+                *(_send_to_client(ws, msg, lock) for ws, lock in list(clients.items()))
+            )
 
 
 class SocketHerdr:
@@ -543,23 +732,145 @@ class SocketHerdr:
         return merged
 
 
-async def _serve_connection(ws, herdr: HerdrClient, server_id: str, token: str, clients: set):
+async def _serve_connection(
+    ws,
+    herdr: HerdrClient,
+    server_id: str,
+    token: str,
+    clients: dict,
+    socket_path: str,
+):
+    global _observe_total
     auth = ws.request.headers.get("Authorization", "")
     if not hmac.compare_digest(auth, f"Bearer {token}"):
         await ws.close(code=4401, reason="unauthorized")
         return
+    send_lock = asyncio.Lock()
+
+    async def send(msg: str) -> bool:
+        return await _send_to_client(ws, msg, send_lock)
+
     panes = await _wired_snapshot(herdr)
-    await ws.send(encode({"type": "snapshot", "server_id": server_id, "panes": panes}))
-    clients.add(ws)
+    if not await send(encode({"type": "snapshot", "server_id": server_id, "panes": panes})):
+        return
+    clients[ws] = send_lock
+    observes: dict[str, tuple[asyncio.Task, dict]] = {}
+
+    def observe_done(req: str, task: asyncio.Task) -> None:
+        global _observe_total
+        current = observes.get(req)
+        if current is not None and current[0] is task:
+            observes.pop(req, None)
+        _observe_total -= 1
+
+    async def stop_observe(req: str, *, notify: bool = True) -> None:
+        current = observes.get(req)
+        if current is None:
+            return
+        task, state = current
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if notify and not state["closed"]:
+            state["closed"] = True
+            await send(encode({"type": "term_closed", "req": req, "reason": "stopped"}))
+
     try:
         async for raw in ws:
+            try:
+                msg = json.loads(raw)
+            except ValueError:
+                msg = None
+            kind = msg.get("type") if isinstance(msg, dict) else None
+            if kind == "observe":
+                req = msg.get("req")
+                pane_id = msg.get("pane_id")
+                if not isinstance(req, str) or not req.strip():
+                    await send(
+                        encode(
+                            {
+                                "type": "term_closed",
+                                "req": req if isinstance(req, str) else "",
+                                "reason": "invalid observe request",
+                            }
+                        )
+                    )
+                    continue
+                if req in observes:  # idempotent duplicate; never replace its task
+                    continue
+                if not isinstance(pane_id, str) or not pane_id.strip():
+                    await send(
+                        encode(
+                            {
+                                "type": "term_closed",
+                                "req": req,
+                                "reason": "invalid terminal target",
+                            }
+                        )
+                    )
+                    continue
+                if len(observes) >= _OBSERVE_MAX_PER_CLIENT or _observe_total >= _OBSERVE_MAX_TOTAL:
+                    await send(
+                        encode(
+                            {
+                                "type": "term_closed",
+                                "req": req,
+                                "reason": "too many live previews",
+                            }
+                        )
+                    )
+                    continue
+
+                try:
+                    cols = _observe_dimension(
+                        msg, "cols", 100, _OBSERVE_COLS_MIN, _OBSERVE_COLS_MAX
+                    )
+                    rows = _observe_dimension(msg, "rows", 30, _OBSERVE_ROWS_MIN, _OBSERVE_ROWS_MAX)
+                except (OverflowError, TypeError, ValueError):
+                    await send(
+                        encode(
+                            {
+                                "type": "term_closed",
+                                "req": req,
+                                "reason": "invalid terminal dimensions",
+                            }
+                        )
+                    )
+                    continue
+                state = {"closed": False}
+                _observe_total += 1
+                try:
+                    task = asyncio.create_task(
+                        _run_observe(send, req, pane_id, cols, rows, state, socket_path)
+                    )
+                except Exception:
+                    _observe_total -= 1
+                    raise
+                observes[req] = (task, state)
+                task.add_done_callback(lambda done, r=req: observe_done(r, done))
+                continue
+            if kind == "observe_stop":
+                req = msg.get("req")
+                if isinstance(req, str):
+                    await stop_observe(req)
+                continue
             try:
                 out = await handle_client_message(herdr, server_id, raw)
             except Exception as exc:
                 out = encode({"type": "error", "message": str(exc)})
-            await ws.send(out)
+            await send(out)
     finally:
-        clients.discard(ws)
+        clients.pop(ws, None)
+        pending = list(observes)
+        for req in pending:
+            current = observes.get(req)
+            if current is not None and not current[0].done():
+                current[0].cancel()
+        if pending:
+            await asyncio.gather(
+                *(observes[req][0] for req in pending if req in observes),
+                return_exceptions=True,
+            )
 
 
 async def _require_snapshot_support(herdr: HerdrClient) -> None:
@@ -605,10 +916,10 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     client_herdr = herdr or SocketHerdr(socket_path)
     await _require_snapshot_support(events_herdr)
     events = HerdrEvents(events_herdr, socket_path=socket_path)
-    clients: set = set()
+    clients: dict = {}
 
     async def handler(ws):
-        await _serve_connection(ws, client_herdr, "local", token, clients)
+        await _serve_connection(ws, client_herdr, "local", token, clients, socket_path)
 
     server = await websockets.serve(handler, host, 0)
     port = server.sockets[0].getsockname()[1]
@@ -626,10 +937,10 @@ async def serve(socket_path: str, host: str, port: int, server_id: str, token: s
     client_herdr = SocketHerdr(socket_path)
     await _require_snapshot_support(events_herdr)
     events = HerdrEvents(events_herdr, socket_path=socket_path)  # push events + slow poll
-    clients: set = set()
+    clients: dict = {}
 
     async def handler(ws):
-        await _serve_connection(ws, client_herdr, server_id, token, clients)
+        await _serve_connection(ws, client_herdr, server_id, token, clients, socket_path)
 
     async with websockets.serve(handler, host, port):
         await _broadcast(events.stream(), clients, server_id)  # runs forever

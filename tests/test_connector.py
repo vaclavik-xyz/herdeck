@@ -119,6 +119,56 @@ async def test_error_frame_goes_to_on_error(ws_server):
     await asyncio.wait_for(task, timeout=2.0)
 
 
+def test_dispatch_routes_terminal_messages_with_configured_server_id():
+    from herdeck.protocol import TermClosed, TermFrame
+
+    seen = []
+    conn = Connector(
+        ServerConfig("configured", "ws://example.invalid", "tok"),
+        on_snapshot=lambda sid, states: None,
+        on_event=lambda sid, state: None,
+        on_connection=lambda sid, up: None,
+        on_term=lambda sid, msg: seen.append((sid, msg)),
+    )
+    conn._dispatch(
+        '{"type":"term_frame","req":"t1","seq":1,"full":true,"cols":80,"rows":24,"data":"QQ=="}'
+    )
+    conn._dispatch('{"type":"term_closed","req":"t1","reason":"done"}')
+    assert seen == [
+        ("configured", TermFrame("t1", 1, True, 80, 24, "QQ==")),
+        ("configured", TermClosed("t1", "done")),
+    ]
+
+
+async def test_malformed_terminal_frame_stops_remote_and_ignores_late_frames():
+    from herdeck.protocol import TermClosed
+
+    seen = []
+    sent = []
+    conn = Connector(
+        ServerConfig("configured", "ws://example.invalid", "tok"),
+        on_snapshot=lambda sid, states: None,
+        on_event=lambda sid, state: None,
+        on_connection=lambda sid, up: None,
+        on_term=lambda sid, msg: seen.append((sid, msg)),
+    )
+
+    async def record_send(msg):
+        sent.append(msg)
+
+    conn.send = record_send
+    conn._dispatch(
+        '{"type":"term_frame","req":"bad","seq":"oops","full":true,'
+        '"cols":80,"rows":24,"data":"QQ=="}'
+    )
+    conn._dispatch(
+        '{"type":"term_frame","req":"bad","seq":2,"full":false,"cols":80,"rows":24,"data":"Qg=="}'
+    )
+    await asyncio.sleep(0)
+    assert sent == [{"type": "observe_stop", "req": "bad"}]
+    assert seen == [("configured", TermClosed("bad", "invalid terminal frame"))]
+
+
 async def test_stop_during_backoff_returns_quickly():
     cfg = ServerConfig("x", "ws://127.0.0.1:9", "t")  # port 9: connection refused
     conn = Connector(
@@ -233,8 +283,8 @@ def test_dispatch_rekey_preserves_workspace_and_tab():
         '"branch":"main","workspace":"herdeck","tab":"2"}]}'
     )
     conn._dispatch(raw)
-    assert seen["states"][0].key.server_id == "dev"   # rekeyed to configured id
-    assert seen["states"][0].workspace == "herdeck"   # carried through rekey
+    assert seen["states"][0].key.server_id == "dev"  # rekeyed to configured id
+    assert seen["states"][0].workspace == "herdeck"  # carried through rekey
     assert seen["states"][0].tab == "2"
 
 
@@ -260,8 +310,8 @@ def test_dispatch_rekey_preserves_custom_status_and_waiting():
     )
     conn._dispatch(raw)
     s = seen["states"][0]
-    assert s.key.server_id == "dev"        # rekeyed
-    assert s.status is Status.WAITING      # derived from working + custom_status
+    assert s.key.server_id == "dev"  # rekeyed
+    assert s.status is Status.WAITING  # derived from working + custom_status
     assert s.custom_status == "⏳ ci"  # carried through rekey (was dropped)
 
 

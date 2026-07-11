@@ -25,6 +25,11 @@ def blocked(pane="p1"):
     return AgentState(AgentKey("dev", pane), "claude", "api", Status.BLOCKED)
 
 
+def settle_terminal_tile(app: App, index: int = 0) -> None:
+    """Advance past the long-press replacement guard for app-only tests."""
+    app.orch._preview_slot_changed_at.pop(index, None)
+
+
 async def test_run_requires_at_least_one_server():
     cfg = Config(
         servers=[],
@@ -81,6 +86,357 @@ def test_tick_partial_renders_working_tiles():
     deck.last = []  # clear to detect a re-render
     app.handle_tick()
     assert deck.last and deck.last[0].spinner == 1
+
+
+def test_terminal_preview_opens_by_rendered_tile_and_routes_frames():
+    from herdeck.protocol import TermClosed, TermFrame
+
+    sent = []
+    app = App(
+        make_config(),
+        FakeRenderer(13),
+        send=lambda command: None,
+        send_raw=lambda server_id, message: sent.append((server_id, message)) or True,
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+
+    sub = app.open_terminal(0, 100, 30)
+    server_id, observe = sent[-1]
+    assert server_id == "dev"
+    assert observe == {
+        "type": "observe",
+        "req": sub.req,
+        "pane_id": "p1",
+        "cols": 100,
+        "rows": 30,
+    }
+    assert sub.queue.get_nowait() == {"kind": "meta", "label": "api"}
+
+    app.handle_term("dev", TermFrame(sub.req, 1, True, 100, 30, "QQ=="))
+    assert sub.queue.get_nowait() == {
+        "kind": "frame",
+        "seq": 1,
+        "full": True,
+        "cols": 100,
+        "rows": 30,
+        "data": "QQ==",
+    }
+    app.handle_term("dev", TermClosed(sub.req, "pane gone"))
+    assert sub.queue.get_nowait() == {"kind": "closed", "reason": "pane gone"}
+    assert app._terminals == {}
+
+
+def test_terminal_preview_closes_when_tile_has_no_agent():
+    app = App(
+        make_config(),
+        FakeRenderer(13),
+        send=lambda command: None,
+        send_raw=lambda server_id, message: True,
+    )
+
+    sub = app.open_terminal(0, 80, 24)
+
+    assert sub.queue.get_nowait() == {
+        "kind": "closed",
+        "reason": "no agent terminal on this tile",
+    }
+    assert app._terminals == {}
+
+
+def test_terminal_preview_closes_when_server_is_removed_from_config():
+    sent = []
+    app = App(
+        make_config(),
+        FakeRenderer(13),
+        send=lambda command: None,
+        send_raw=lambda server_id, message: sent.append((server_id, message)) or True,
+        update_connectors=lambda config: set(),
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+    sub = app.open_terminal(0, 80, 24)
+    assert sub.queue.get_nowait()["kind"] == "meta"
+
+    new_config = make_config()
+    new_config.servers = [ServerConfig("other", "wss://other", "t")]
+    new_config.overview_order = ["other"]
+    app._apply_config(new_config)
+
+    assert sub.queue.get_nowait() == {
+        "kind": "closed",
+        "reason": "bridge disconnected",
+    }
+    assert app._terminals == {}
+    assert "dev" not in app._servers_up
+
+
+def test_terminal_preview_close_before_scheduled_start_does_not_leak_observer():
+    scheduled = []
+    sent = []
+    app = App(
+        make_config(),
+        FakeRenderer(13),
+        send=lambda command: None,
+        schedule=scheduled.append,
+        send_raw=lambda server_id, message: sent.append((server_id, message)) or True,
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+
+    sub = app.open_terminal(0, 80, 24)
+    app.close_terminal(sub)
+    assert app._terminals == {}
+
+    for callback in scheduled:
+        callback()
+
+    assert [message["type"] for _, message in sent] == ["observe", "observe_stop"]
+    assert app._terminals == {}
+
+
+def test_terminal_preview_closes_on_connection_loss():
+    sent = []
+    app = App(
+        make_config(),
+        FakeRenderer(13),
+        send=lambda command: None,
+        send_raw=lambda server_id, message: sent.append((server_id, message)) or True,
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+    sub = app.open_terminal(0, 80, 24)
+    assert sub.queue.get_nowait()["kind"] == "meta"
+
+    app.handle_connection("dev", False)
+
+    assert sub.queue.get_nowait() == {
+        "kind": "closed",
+        "reason": "bridge disconnected",
+    }
+    assert app._terminals == {}
+    assert [message["type"] for _, message in sent] == ["observe"]
+
+
+def test_terminal_preview_closes_when_connector_cannot_send():
+    app = App(
+        make_config(),
+        FakeRenderer(13),
+        send=lambda command: None,
+        send_raw=lambda server_id, message: False,
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+
+    sub = app.open_terminal(0, 80, 24)
+
+    assert sub.queue.get_nowait()["kind"] == "meta"
+    assert sub.queue.get_nowait() == {
+        "kind": "closed",
+        "reason": "bridge disconnected",
+    }
+    assert app._terminals == {}
+
+
+def test_terminal_preview_drops_slow_consumer_and_stops_observer():
+    from herdeck.protocol import TermFrame
+
+    sent = []
+    app = App(
+        make_config(),
+        FakeRenderer(13),
+        send=lambda command: None,
+        send_raw=lambda server_id, message: sent.append((server_id, message)) or True,
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+    sub = app.open_terminal(0, 80, 24)
+    assert sub.queue.get_nowait()["kind"] == "meta"
+
+    for seq in range(app._TERM_QUEUE_MAX + 1):
+        app.handle_term("dev", TermFrame(sub.req, seq, seq == 0, 80, 24, "QQ=="))
+
+    queued = []
+    while not sub.queue.empty():
+        queued.append(sub.queue.get_nowait())
+    assert len(queued) == app._TERM_QUEUE_MAX
+    assert queued[-1] == {"kind": "closed", "reason": "preview ended"}
+    assert app._terminals == {}
+    assert sent[-1] == ("dev", {"type": "observe_stop", "req": sub.req})
+
+
+def test_terminal_preview_closes_when_server_connector_restarts():
+    app = App(
+        make_config(),
+        FakeRenderer(13),
+        send=lambda command: None,
+        send_raw=lambda server_id, message: True,
+        update_connectors=lambda config: {"dev"},
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+    sub = app.open_terminal(0, 80, 24)
+    assert sub.queue.get_nowait()["kind"] == "meta"
+
+    app._apply_config(make_config())
+
+    assert sub.queue.get_nowait() == {
+        "kind": "closed",
+        "reason": "bridge disconnected",
+    }
+    assert app._terminals == {}
+    assert "dev" not in app._servers_up
+
+
+def test_terminal_preview_mapping_advances_only_after_successful_tile_render():
+    class FailingRenderer(FakeRenderer):
+        fail = False
+
+        def render(self, tiles):
+            if self.fail:
+                raise RuntimeError("render failed")
+            super().render(tiles)
+
+    deck = FailingRenderer(13)
+    app = App(make_config(), deck, send=lambda command: None)
+    original = blocked("p1")
+    original.status = Status.IDLE
+    original.label = "old-visible"
+    app.handle_snapshot("dev", [original])
+    app.orch._preview_slot_changed_at.clear()
+    assert app.orch.agent_for_preview(0) == original
+
+    replacement = blocked("p2")
+    replacement.label = "not-rendered"
+    deck.fail = True
+    app.handle_snapshot("dev", [original, replacement])
+    app.orch._preview_slot_changed_at.clear()
+
+    assert deck.last[0].label == "old-visible"
+    assert app.orch.agent_for_preview(0) == original
+
+
+def test_terminal_preview_rechecks_tile_version_before_async_start(tmp_path):
+    from herdeck.driver.base import TileView
+    from herdeck.driver.web import WebDeck
+
+    class VaryingIcons:
+        def render_tile_bytes(self, tile):
+            return tile.label.encode()
+
+    deck = WebDeck(slots=13, serve=False, icon_provider=VaryingIcons())
+    scheduled = []
+    sent = []
+    app = App(
+        make_config(),
+        deck,
+        send=lambda command: None,
+        schedule=scheduled.append,
+        send_raw=lambda server_id, message: sent.append((server_id, message)) or True,
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+    visible_version = deck._state()["tiles"][0]
+
+    sub = app.open_terminal(0, 80, 24, visible_version)
+    deck.render([TileView(0, "replacement", "blue")])
+    scheduled.pop(0)()
+
+    assert sent == []
+    assert sub.queue.get_nowait() == {
+        "kind": "closed",
+        "reason": "no agent terminal on this tile",
+    }
+    assert app._terminals == {}
+
+
+def test_terminal_preview_flows_end_to_end_through_webdeck_sse(tmp_path):
+    import json
+    import queue
+    import threading
+    import urllib.request
+
+    from herdeck.driver.web import WebDeck
+    from herdeck.protocol import TermClosed, TermFrame
+
+    class TinyIcons:
+        def render_tile_bytes(self, tile):
+            return b"test-png"
+
+    deck = WebDeck(
+        slots=13,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=TinyIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    scheduled = queue.Queue()
+    sent = []
+    app = App(
+        make_config(),
+        deck,
+        send=lambda command: None,
+        schedule=scheduled.put,
+        send_raw=lambda server_id, message: sent.append((server_id, message)) or True,
+    )
+    app.handle_snapshot("dev", [blocked("p1")])
+    app.handle_connection("dev", True)
+    settle_terminal_tile(app)
+    result = {}
+    tile_version = deck._state()["tiles"][0]
+
+    def consume():
+        url = (
+            f"http://{deck.host}:{deck.port}/term/0?stream=stream-app-e2e"
+            f"&v={tile_version}&cols=80&rows=24&token={deck.press_token}"
+        )
+        with urllib.request.urlopen(url, timeout=5) as response:
+            result["body"] = response.read().decode()
+
+    reader = threading.Thread(target=consume)
+    reader.start()
+    try:
+        scheduled.get(timeout=2)()  # App._start_terminal on the simulated loop
+        req = sent[-1][1]["req"]
+        app.handle_term("dev", TermFrame(req, 1, True, 80, 24, "QQ=="))
+        app.handle_term("dev", TermClosed(req, "done"))
+        reader.join(timeout=2)
+        assert not reader.is_alive()
+        while not scheduled.empty():
+            scheduled.get_nowait()()  # idempotent close callback from the HTTP thread
+
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in result["body"].splitlines()
+            if line.startswith("data: ")
+        ]
+        assert [event["kind"] for event in events] == ["meta", "frame", "closed"]
+        assert sent == [
+            (
+                "dev",
+                {
+                    "type": "observe",
+                    "req": req,
+                    "pane_id": "p1",
+                    "cols": 80,
+                    "rows": 24,
+                },
+            )
+        ]
+        assert app._terminals == {}
+        assert deck._terminal_streams == {}
+    finally:
+        deck.close()
+        reader.join(timeout=2)
 
 
 async def test_guard_swallows_exception():
