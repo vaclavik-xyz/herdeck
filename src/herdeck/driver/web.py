@@ -344,8 +344,10 @@ class WebDeck(DeckDriver):
                 self._changed.wait(timeout=self.LONG_POLL_TIMEOUT)
             return self._state_locked()
 
-    def _tile_png(self, index: int) -> bytes | None:
+    def _tile_png(self, index: int, version: int | None = None) -> bytes | None:
         with self._lock:
+            if version is not None and self._tile_ver.get(index) != version:
+                return None
             return self._tiles.get(index)
 
     def _panel_png(self) -> bytes | None:
@@ -499,8 +501,10 @@ class WebDeck(DeckDriver):
                     if not self._require_token(url):
                         return
                     try:
-                        png = deck._tile_png(int(path.rsplit("/", 1)[1]))
-                    except ValueError:
+                        index = int(path.rsplit("/", 1)[1])
+                        tile_version = int(parse_qs(url.query)["v"][0])
+                        png = deck._tile_png(index, tile_version)
+                    except (KeyError, ValueError):
                         png = None
                     self._send(200, png, "image/png") if png else self._send(404)
                 elif path.startswith("/assets/"):
@@ -991,7 +995,8 @@ function ensureCells(count){
   while(btns.length<count) addCell(btns.length);
   while(btns.length>count){
     const i=btns.length-1;
-    btns.pop().remove(); cells.pop(); delete tv[i];delete pendingTv[i];
+    btns.pop().remove();cells.pop();
+    delete tv[i];delete pendingTv[i];delete tileRetry[i];
   }
   slotCount=count;
   deck.appendChild(panel);
@@ -1011,7 +1016,7 @@ document.addEventListener('keydown',e=>{
   if(e.key>='1'&&e.key<='9') press(e.key.charCodeAt(0)-49);
   else if(e.key==='0') press(9);
 });
-let lastV=-1; const tv={},pendingTv={}; let pv=-1;
+let lastV=-1; const tv={},pendingTv={},tileRetry={}; let pv=-1;
 let pollTimer=null, inFlight=false, pollDelay=100;
 async function poll(){
   if(inFlight) return;             // the in-flight poll reschedules; never overlap
@@ -1040,7 +1045,7 @@ async function poll(){
       for(let i=0;i<slotCount;i++){ // refetch only tiles whose version advanced
         const v=t[i];
         if(v===undefined){          // tile gone -> clear the cell
-          delete pendingTv[i];
+          delete pendingTv[i];delete tileRetry[i];
           if(tv[i]!==undefined){ delete tv[i]; cells[i].removeAttribute('src'); }
         } else if(v!==tv[i]&&v!==pendingTv[i]){
           pendingTv[i]=v;
@@ -1048,9 +1053,18 @@ async function poll(){
           candidate.onload=()=>{
             if(pendingTv[i]!==v||i>=cells.length)return;
             cells[i].replaceWith(candidate);cells[i]=candidate;
-            tv[i]=v;delete pendingTv[i];
+            tv[i]=v;delete pendingTv[i];delete tileRetry[i];
           };
-          candidate.onerror=()=>{if(pendingTv[i]===v)delete pendingTv[i];};
+          candidate.onerror=()=>{
+            if(pendingTv[i]!==v)return;
+            delete pendingTv[i];
+            const attempt=(tileRetry[i]||0)+1;tileRetry[i]=attempt;
+            const delay=Math.min(5000,250*2**Math.min(attempt,5));
+            setTimeout(()=>{
+              if(tileRetry[i]!==attempt||tv[i]===v||pendingTv[i]!==undefined)return;
+              lastV=-1;pollNow();
+            },delay);
+          };
           candidate.src=auth('/tile/'+i+'?v='+v);
         }
       }

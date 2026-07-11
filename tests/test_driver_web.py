@@ -282,6 +282,30 @@ def test_state_reports_per_tile_versions():
     assert tiles[0] >= 1 and tiles[1] >= 1
 
 
+def test_tile_endpoint_rejects_content_from_a_different_version(tmp_path):
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=VaryingIcons(),
+        token_path=str(tmp_path / "web-token"),
+    )
+    d.render([TileView(0, "visible", "blue")])
+    visible_version = d._state()["tiles"][0]
+    d.render([TileView(0, "replacement", "blue")])
+    url = (
+        f"http://{d.host}:{d.port}/tile/0?v={visible_version}"
+        f"&token={d.press_token}"
+    )
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(url, timeout=5)
+        assert exc.value.code == 404
+    finally:
+        d.close()
+
+
 def test_unchanged_tile_keeps_version_changed_tile_bumps():
     d = make_varying_deck()
     d.render([TileView(0, "a", "blue"), TileView(1, "b", "green")])
@@ -903,6 +927,9 @@ def test_page_includes_accessible_generation_safe_terminal_overlay(tmp_path):
         assert "'&v='+current.tileVersion" in page
         assert "candidate.onload" in page
         assert "tv[i]=v;delete pendingTv[i]" in page
+        assert "tileRetry[i]" in page
+        assert "Math.min(5000" in page
+        assert "lastV=-1;pollNow()" in page
     finally:
         d.close()
 
