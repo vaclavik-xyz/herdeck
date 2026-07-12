@@ -45,16 +45,22 @@ from its secret store and sends it only as `X-Herdeck-Token`. It must never put
 the credential in an iframe URL, query string, redirect, browser storage, or
 application log.
 
-Mint a bounded browser session from the persOS backend:
+Expose a browser-visible persOS handoff route on the public cockpit origin. That
+route authenticates the persOS user, calls Herdeck privately with the persistent
+credential, and forwards Herdeck's `Set-Cookie` header unchanged in its response
+to the browser:
 
 ```http
 POST /herdeck/api/v1/browser-sessions HTTP/1.1
 X-Herdeck-Token: <persistent credential>
 ```
 
-The `201` response sets an opaque `HttpOnly` cookie scoped to `/herdeck/` and
-returns its lifetime as `expires_in`. The body never contains the cookie or the
-persistent credential. The browser may then load the clean iframe URL
+The private Herdeck `201` response alone cannot set a cookie in the user's
+browser: the persOS backend must relay `Set-Cookie` through its browser-facing
+response on `https://persos.example`. The relayed response sets an opaque
+`HttpOnly` cookie scoped to `/herdeck/` and returns its lifetime as `expires_in`.
+Neither backend may copy the cookie into a JSON body or log it. After that
+browser-visible handoff completes, the browser may load the clean iframe URL
 `https://persos.example/herdeck/`.
 
 On cockpit logout, revoke the current Herdeck session before removing the
@@ -78,8 +84,10 @@ supported for compatibility, but new cockpit integrations use the handoff.
 
 ## API v1
 
-All routes work both at the root and below the configured base path. API
-responses use `application/json`, `Cache-Control: no-store`, and include
+Without a configured base path, routes live at the server root. With
+`HERDECK_WEB_BASE_PATH=/herdeck`, they live exclusively below `/herdeck`; the
+unprefixed forms return 404. API responses use `application/json`,
+`Cache-Control: no-store`, and include
 `api_version: "v1"`. Missing or invalid credentials return:
 
 ```json
