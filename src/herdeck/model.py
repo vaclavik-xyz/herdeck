@@ -37,3 +37,6 @@ class AgentState:
     # Label asserted via `herdr pane report-agent --custom-status` (herdwatch:
     # "⏳ ci", "⏳ review +1"); empty when no source holds the pane.
     custom_status: str = ""
+    # Stable Herdr terminal identity. ``pane_id`` is a public location and may
+    # be moved or recycled; long-lived controls must bind to this value too.
+    terminal_id: str = ""

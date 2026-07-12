@@ -14,28 +14,38 @@ class Command:
     source: str | None = None
     keys: list[str] = field(default_factory=list)
     text: str | None = None  # for send_text (macros) / start (agent name)
+    terminal_id: str | None = None  # expected stable identity for pane-bound commands
 
 
 def command_to_msg(cmd: Command, req: str | None) -> dict:
     """Encode a Command into the bridge wire message. `req` is ignored for `list`."""
     if cmd.kind == "list":
         return {"type": "list"}
+    def with_identity(message: dict) -> dict:
+        if cmd.terminal_id:
+            message["terminal_id"] = cmd.terminal_id
+        return message
+
     if cmd.kind == "read":
-        return {"type": "read", "req": req, "pane_id": cmd.pane_id, "source": cmd.source}
+        return with_identity(
+            {"type": "read", "req": req, "pane_id": cmd.pane_id, "source": cmd.source}
+        )
     if cmd.kind == "focus":
-        return {"type": "focus", "req": req, "pane_id": cmd.pane_id}
+        return with_identity({"type": "focus", "req": req, "pane_id": cmd.pane_id})
     if cmd.kind == "send_text":
-        return {"type": "send_text", "req": req, "pane_id": cmd.pane_id, "text": cmd.text}
+        return with_identity(
+            {"type": "send_text", "req": req, "pane_id": cmd.pane_id, "text": cmd.text}
+        )
     if cmd.kind == "start":
         return {"type": "start", "req": req, "name": cmd.text, "argv": cmd.keys}
     if cmd.kind in ("act_if_blocked", "act_force"):
-        return {
+        return with_identity({
             "type": "act",
             "req": req,
             "pane_id": cmd.pane_id,
             "keys": cmd.keys,
             "guard": cmd.kind == "act_if_blocked",
-        }
+        })
     raise ValueError(f"unknown command kind: {cmd.kind}")
 
 
@@ -59,4 +69,10 @@ def build_action_command(
         kind = "act_force"
     else:
         raise ValueError(f"unknown action: {action}")
-    return Command(kind, agent.key.server_id, agent.key.pane_id, keys=list(keys))
+    return Command(
+        kind,
+        agent.key.server_id,
+        agent.key.pane_id,
+        keys=list(keys),
+        terminal_id=agent.terminal_id or None,
+    )

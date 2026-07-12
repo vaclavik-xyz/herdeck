@@ -55,6 +55,7 @@ def test_herdr_pane_to_wire_maps_fields():
         "workspace": "",
         "tab": "",
         "custom_status": "",
+        "terminal_id": "",
     }
 
 
@@ -64,6 +65,13 @@ def test_herdr_pane_to_wire_passes_custom_status_through():
     raw = raw_pane(agent="claude", status="working", cwd="/x/api")
     raw["custom_status"] = "\u23f3 ci"
     assert _herdr_pane_to_wire(raw)["custom_status"] == "\u23f3 ci"
+
+
+def test_herdr_pane_to_wire_passes_terminal_identity_through():
+    raw = raw_pane()
+    raw["terminal_id"] = "term-123"
+
+    assert _herdr_pane_to_wire(raw)["terminal_id"] == "term-123"
 
 
 def test_herdr_pane_to_wire_adds_repo_and_branch_from_worktree():
@@ -149,6 +157,21 @@ async def test_act_unguarded_sends_even_when_not_blocked(herdr):
     msg = json.loads(out)
     assert msg["data"]["sent"] is True
     assert herdr.sent == [("w1:p1", ["ctrl+c"])]
+
+
+async def test_act_rejects_recycled_pane_identity(herdr):
+    herdr.panes[0]["terminal_id"] = "term-new"
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        '{"type":"act","req":"r10","pane_id":"w1:p1",'
+        '"terminal_id":"term-old","keys":["1"],"guard":false}',
+    )
+
+    msg = json.loads(out)
+    assert msg["data"] == {"skipped": True, "message": "agent identity changed"}
+    assert herdr.sent == []
 
 
 # --- broadcast fan-out (snapshots) ---
@@ -252,6 +275,34 @@ async def test_herdr_events_yields_full_list_on_change_and_removal():
     await gen.aclose()
 
 
+async def test_herdr_events_preserves_last_good_state_across_malformed_snapshot():
+    from herdeck.bridge import HerdrEvents
+
+    class FlakyHerdr:
+        def __init__(self):
+            self.calls = 0
+
+        async def snapshot(self):
+            self.calls += 1
+            if self.calls == 1:
+                return {"agents": [raw_pane("w1:p1", status="idle")]}
+            if self.calls == 2:
+                raise RuntimeError("session.snapshot snapshot agents must be a list")
+            return {"agents": [raw_pane("w1:p1", status="blocked")]}
+
+        async def worktrees(self, workspace_ids=None):
+            return []
+
+    gen = HerdrEvents(FlakyHerdr(), poll_interval=0).stream()
+
+    first = await gen.__anext__()
+    second = await gen.__anext__()
+
+    assert first[0]["status"] == "idle"
+    assert second[0]["status"] == "blocked"
+    await gen.aclose()
+
+
 # --- rpc retry semantics ---
 
 
@@ -279,7 +330,7 @@ async def test_rpc_retries_reads_but_not_send_keys(monkeypatch):
         async def readline(self):
             return b""  # always EOF -> triggers retry path
 
-    async def fake_conn(path):
+    async def fake_conn(path, **kwargs):
         return FakeReader(), FakeWriter()
 
     monkeypatch.setattr(_asyncio, "open_unix_connection", fake_conn)
@@ -319,7 +370,7 @@ async def test_rpc_error_envelope_raises(monkeypatch):
         async def readline(self):
             return b'{"id":"b","error":{"message":"pane not found"}}\n'
 
-    async def fake_conn(path):
+    async def fake_conn(path, **kwargs):
         return FakeReader(), FakeWriter()
 
     monkeypatch.setattr(_asyncio, "open_unix_connection", fake_conn)
@@ -327,6 +378,118 @@ async def test_rpc_error_envelope_raises(monkeypatch):
     h = SocketHerdr("/tmp/herdr.sock")
     with pytest.raises(RuntimeError, match="pane not found"):
         await h.read_pane("w1:p1", "detection")
+
+
+async def test_rpc_has_absolute_timeout(monkeypatch):
+    import asyncio as _asyncio
+
+    from herdeck.bridge import SocketHerdr
+
+    class FakeWriter:
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            pass
+
+        async def wait_closed(self):
+            pass
+
+    class HangingReader:
+        async def readline(self):
+            await _asyncio.Event().wait()
+
+    async def fake_conn(path, **kwargs):
+        return HangingReader(), FakeWriter()
+
+    monkeypatch.setattr(_asyncio, "open_unix_connection", fake_conn)
+    h = SocketHerdr("/tmp/herdr.sock", timeout=0.01)
+
+    with pytest.raises(TimeoutError, match="herdr RPC pane.list timed out"):
+        await h.list_panes()
+
+
+async def test_rpc_opens_stream_with_explicit_line_limit(monkeypatch):
+    import asyncio as _asyncio
+
+    from herdeck.bridge import SocketHerdr
+
+    seen = []
+
+    class FakeWriter:
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            pass
+
+        async def wait_closed(self):
+            pass
+
+    class FakeReader:
+        async def readline(self):
+            return b'{"result":{"panes":[]}}\n'
+
+    async def fake_conn(path, **kwargs):
+        seen.append(kwargs)
+        return FakeReader(), FakeWriter()
+
+    monkeypatch.setattr(_asyncio, "open_unix_connection", fake_conn)
+
+    await SocketHerdr("/tmp/herdr.sock", line_limit=1234).list_panes()
+
+    assert seen == [{"limit": 1234}]
+
+
+def test_subscription_ack_requires_started_result():
+    from herdeck.bridge import _validate_subscription_ack
+
+    with pytest.raises(RuntimeError, match="subscription_started"):
+        _validate_subscription_ack(b'{"result":{"type":"ok"}}\n')
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        b'[]\n',
+        b'{"event":42,"data":{}}\n',
+        b'{"event":"pane.created","data":[]}\n',
+        b'not-json\n',
+    ],
+)
+def test_event_decoder_rejects_malformed_payloads(line):
+    from herdeck.bridge import _decode_event_line
+
+    assert _decode_event_line(line) is None
+
+
+def test_reconnect_backoff_grows_on_failure_and_resets_after_handshake():
+    from herdeck.bridge import _reconnect_backoff
+
+    assert _reconnect_backoff(0.5, base=0.5, maximum=2.0, connected=False) == (0.5, 1.0)
+    assert _reconnect_backoff(1.0, base=0.5, maximum=2.0, connected=False) == (1.0, 2.0)
+    assert _reconnect_backoff(2.0, base=0.5, maximum=2.0, connected=False) == (2.0, 2.0)
+    assert _reconnect_backoff(2.0, base=0.5, maximum=2.0, connected=True) == (0.5, 0.5)
+
+
+async def test_snapshot_rejects_missing_agents_instead_of_clearing_fleet():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        return {"result": {"snapshot": {"panes": []}}}
+
+    h._rpc = fake_rpc
+
+    with pytest.raises(RuntimeError, match="snapshot agents must be a list"):
+        await h.snapshot()
 
 
 def test_bridge_main_rejects_empty_token(monkeypatch):
@@ -777,6 +940,64 @@ def test_listen_subscribes_to_label_and_worktree_events():
         "worktree.removed",
     }
     assert not set(_LABEL_EVENT_TYPES) & set(_GLOBAL_EVENT_TYPES)
+    assert set(_GLOBAL_EVENT_TYPES) == {
+        "pane.created",
+        "pane.closed",
+        "pane.exited",
+        "pane.moved",
+        "workspace.closed",
+        "tab.closed",
+    }
+    assert "pane.agent_detected" not in _GLOBAL_EVENT_TYPES
+
+
+def test_event_subscriptions_cover_all_snapshot_panes_not_only_agents():
+    from herdeck.bridge import HerdrEvents
+
+    snapshot = {
+        "agents": [raw_pane("w1:p1")],
+        "panes": [
+            {"pane_id": "w1:p1"},
+            {"pane_id": "w1:p2"},
+        ],
+    }
+
+    pane_ids = HerdrEvents._snapshot_pane_ids(snapshot)
+    subscriptions = HerdrEvents._subscriptions_for(pane_ids)
+
+    status_ids = {
+        sub["pane_id"]
+        for sub in subscriptions
+        if sub.get("type") == "pane.agent_status_changed"
+    }
+    assert status_ids == {"w1:p1", "w1:p2"}
+
+
+@pytest.mark.asyncio
+async def test_retained_lifecycle_event_only_resubscribes_after_real_topology_change():
+    from herdeck.bridge import HerdrEvents
+
+    class SnapshotHerdr:
+        def __init__(self):
+            self.snapshot_value = {
+                "agents": [raw_pane("w1:p1")],
+                "panes": [{"pane_id": "w1:p1"}, {"pane_id": "w1:p2"}],
+            }
+
+        async def snapshot(self):
+            return self.snapshot_value
+
+    herdr = SnapshotHerdr()
+    events = HerdrEvents(herdr)
+    subscribed = {"w1:p1", "w1:p2"}
+
+    assert await events._topology_changed("pane_created", subscribed) is False
+
+    herdr.snapshot_value = {
+        "agents": [raw_pane("w1:p1")],
+        "panes": [{"pane_id": "w1:p1"}, {"pane_id": "w1:p3"}],
+    }
+    assert await events._topology_changed("pane_moved", subscribed) is True
 
 
 # --- herdr version gate (hard requirement: >= 0.7.2) ---
@@ -880,20 +1101,18 @@ async def test_start_local_bridge_logs_when_broadcast_dies_after_startup(caplog)
         await server.wait_closed()
 
 
-def test_note_event_ignores_redetection_of_subscribed_pane():
+def test_note_event_ignores_global_agent_detection_feed():
     from herdeck.bridge import HerdrEvents
 
     ev = HerdrEvents(StubHerdr(panes=[]), poll_interval=100)
     ev._worktrees_stale = False
-    # herdr re-emits pane.agent_detected continuously for panes it already
-    # tracks; a re-detection of an already-subscribed pane is a plain wake,
-    # not a membership change (observed live: ~6 re-subscribes/s otherwise)
+    # Herdr 0.7.3 replays pane.agent_detected aggressively. Discovery now rides
+    # per-pane status subscriptions for every snapshot pane, so this global
+    # event is never a reason to rebuild the stream.
     assert ev._note_event("pane_agent_detected", "w1:p1", {"w1:p1"}) is False
     assert ev._worktrees_stale is False
-    # an agent detected in a pane we do NOT hold a status sub for is still
-    # a fleet change (the per-pane subscriptions must be rebuilt)
-    assert ev._note_event("pane_agent_detected", "w9:p1", {"w1:p1"}) is True
-    assert ev._worktrees_stale is True
+    assert ev._note_event("pane_agent_detected", "w9:p1", {"w1:p1"}) is False
+    assert ev._worktrees_stale is False
 
 
 # --- live terminal observe -------------------------------------------------

@@ -44,6 +44,18 @@ def test_decode_snapshot_preserves_repo_and_branch():
     assert msg.states[0].branch == "feat/clawpatch"
 
 
+def test_decode_snapshot_preserves_terminal_identity():
+    raw = (
+        '{"type":"snapshot","server_id":"workbox","panes":'
+        '[{"pane_id":"w1:p1","terminal_id":"term-123","agent_type":"claude",'
+        '"label":"api","status":"blocked"}]}'
+    )
+
+    msg = decode_inbound(raw)
+
+    assert msg.states[0].terminal_id == "term-123"
+
+
 def test_decode_event_to_state():
     raw = (
         '{"type":"event","server_id":"workbox","pane":'

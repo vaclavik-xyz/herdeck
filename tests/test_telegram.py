@@ -466,6 +466,63 @@ async def test_callback_approve_requires_allowed_user_chat_and_topic():
 
 
 @pytest.mark.asyncio
+async def test_callback_rejects_recycled_pane_identity():
+    from herdeck.telegram import TelegramAlertStore, TelegramBotClient, TelegramInteractor
+
+    calls = []
+    client = TelegramBotClient(
+        "TOK", request=lambda method, fields: calls.append((method, fields)) or True
+    )
+    store = TelegramAlertStore(token_factory=lambda: "tok1")
+    record = store.create(
+        AgentKey("local", "p1"),
+        chat_id="-1001",
+        message_id=9,
+        terminal_id="term-old",
+    )
+
+    class RecycledControl(ActionControl):
+        def current_agent(self, key):
+            return AgentState(
+                key,
+                "codex",
+                "other agent",
+                Status.BLOCKED,
+                terminal_id="term-new",
+            )
+
+    control = RecycledControl()
+    interactor = TelegramInteractor(
+        client,
+        control,
+        chat_id="-1001",
+        message_thread_id=456,
+        allowed_user_ids=[111],
+        store=store,
+    )
+
+    ok = await interactor.process_update(
+        {
+            "callback_query": {
+                "id": "cb1",
+                "from": {"id": 111},
+                "message": {
+                    "chat": {"id": -1001},
+                    "message_id": 9,
+                    "message_thread_id": 456,
+                },
+                "data": f"h:{record.token}:approve",
+            }
+        }
+    )
+
+    assert ok is False
+    assert control.actions == []
+    assert store.by_token(record.token) is None
+    assert ("answerCallbackQuery", {"callback_query_id": "cb1", "text": "stale"}) in calls
+
+
+@pytest.mark.asyncio
 async def test_successful_terminal_callback_discards_token_before_second_tap():
     from herdeck.telegram import TelegramAlertStore, TelegramBotClient, TelegramInteractor
 

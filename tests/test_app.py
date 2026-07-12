@@ -597,6 +597,29 @@ def test_detection_survives_snapshot_that_keeps_pane_blocked():
     assert deck.last[0].label == "1" and deck.last[0].subtext == "Yes"
 
 
+def test_recycled_blocked_pane_invalidates_prompt_and_inflight_read():
+    deck = FakeRenderer(13)
+    app = App(make_config(), deck, send=lambda c: None)
+    key = AgentKey("dev", "p1")
+    app.handle_snapshot(
+        "dev",
+        [AgentState(key, "claude", "old", Status.BLOCKED, terminal_id="term-old")],
+    )
+    deck.simulate_press(0)
+    req = app.next_req_for(Command("read", "dev", "p1", source="detection"))
+    app.handle_result("dev", req, {"text": "1. Approve", "pane_id": "p1"})
+    assert deck.last[0].label == "1"
+
+    app.handle_snapshot(
+        "dev",
+        [AgentState(key, "codex", "new", Status.BLOCKED, terminal_id="term-new")],
+    )
+    app.handle_result("dev", req, {"text": "1. STALE", "pane_id": "p1"})
+
+    assert app.orch._detection == ""
+    assert deck.last[0].label != "1"
+
+
 def test_tick_full_render_never_partial():
     # handle_tick must re-send the WHOLE frame (render), never a partial
     # render_working: a partial write drops the cells it omits on the D200 firmware,
@@ -661,6 +684,32 @@ def test_app_notifies_on_block_transition(monkeypatch):
     assert len(calls) == 1 and "api" in calls[0][1]
     app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)])
     assert len(calls) == 1  # no duplicate while still blocked
+
+
+def test_app_notifies_again_when_blocked_pane_id_is_recycled():
+    from herdeck.notify import Notifier
+
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: calls.append((t, b))),
+    )
+    key = AgentKey("dev", "p1")
+
+    app.handle_snapshot(
+        "dev",
+        [AgentState(key, "claude", "old", Status.BLOCKED, terminal_id="term-old")],
+    )
+    app.handle_snapshot(
+        "dev",
+        [AgentState(key, "codex", "new", Status.BLOCKED, terminal_id="term-new")],
+    )
+
+    assert [body for _, body in calls] == ["old", "new"]
 
 
 def test_app_blocked_notifier_receives_agent_state_and_metadata():

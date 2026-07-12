@@ -71,7 +71,13 @@ class RuntimeAgentControl:
         if agent is None:
             return ""
         data = await self._request(
-            Command("read", agent.key.server_id, agent.key.pane_id, source="detection"),
+            Command(
+                "read",
+                agent.key.server_id,
+                agent.key.pane_id,
+                source="detection",
+                terminal_id=agent.terminal_id or None,
+            ),
             timeout=timeout,
         )
         return data.get("text", "")
@@ -105,7 +111,13 @@ class RuntimeAgentControl:
         if agent is None:
             return ActionResult(False, message="agent is no longer available")
         data = await self._request(
-            Command("send_text", agent.key.server_id, agent.key.pane_id, text=text),
+            Command(
+                "send_text",
+                agent.key.server_id,
+                agent.key.pane_id,
+                text=text,
+                terminal_id=agent.terminal_id or None,
+            ),
             timeout=timeout,
         )
         return self._action_result(data)

@@ -441,21 +441,48 @@ class App:
                 server_id,
                 [(s.key.pane_id, s.agent_type, s.label, s.status.value) for s in states],
             )
+        recycled = {
+            state.key
+            for state in states
+            if self._terminal_identity_changed(self.orch.get_agent(state.key), state)
+        }
+        self._blocked_keys.difference_update(recycled)
         key = self.orch.drill_key()
         self.orch.apply_snapshot(server_id, states)
         if key is not None and key.server_id == server_id:
-            self._invalidate_read_if_unblocked(key)
+            if key in recycled:
+                self._invalidate_read()
+            else:
+                self._invalidate_read_if_unblocked(key)
         self._maybe_notify(states, {k for k in self._blocked_keys if k.server_id == server_id})
         self._refresh()
 
     def handle_event(self, server_id: str, state: AgentState) -> None:
         if not self._server_allowed(server_id):
             return
+        recycled = self._terminal_identity_changed(self.orch.get_agent(state.key), state)
+        if recycled:
+            self._blocked_keys.discard(state.key)
         self.orch.apply_event(server_id, state)
         if self.orch.is_drill_pane(server_id, state.key.pane_id):
-            self._invalidate_read_if_unblocked(state.key)
+            if recycled:
+                self._invalidate_read()
+            else:
+                self._invalidate_read_if_unblocked(state.key)
         self._maybe_notify([state], {state.key})
         self._refresh()
+
+    @staticmethod
+    def _terminal_identity_changed(
+        previous: AgentState | None,
+        current: AgentState,
+    ) -> bool:
+        return bool(
+            previous is not None
+            and previous.terminal_id
+            and current.terminal_id
+            and previous.terminal_id != current.terminal_id
+        )
 
     def handle_connection(self, server_id: str, up: bool) -> None:
         if not self._server_allowed(server_id):
@@ -558,16 +585,16 @@ class App:
         sub.server_id = key.server_id
         sub.pane_id = key.pane_id
         sub.queue.put_nowait({"kind": "meta", "label": agent.label or agent.agent_type})
-        started = self._send_terminal(
-            key.server_id,
-            {
-                "type": "observe",
-                "req": sub.req,
-                "pane_id": key.pane_id,
-                "cols": cols,
-                "rows": rows,
-            },
-        )
+        message = {
+            "type": "observe",
+            "req": sub.req,
+            "pane_id": key.pane_id,
+            "cols": cols,
+            "rows": rows,
+        }
+        if agent.terminal_id:
+            message["terminal_id"] = agent.terminal_id
+        started = self._send_terminal(key.server_id, message)
         if not started:
             self._finish_terminal(sub, tr(self._term_lang(), "web.term_disconnected"))
 

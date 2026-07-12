@@ -153,6 +153,7 @@ class TelegramAlertRecord:
     chat_id: str
     message_id: int
     created_at: float
+    terminal_id: str = ""
 
 
 class TelegramAlertStore:
@@ -169,15 +170,22 @@ class TelegramAlertStore:
         self._by_token: dict[str, TelegramAlertRecord] = {}
         self._by_message: dict[tuple[str, int], TelegramAlertRecord] = {}
 
-    def create(self, key: AgentKey, *, chat_id: str, message_id: int) -> TelegramAlertRecord:
-        record = self.reserve(key)
+    def create(
+        self,
+        key: AgentKey,
+        *,
+        chat_id: str,
+        message_id: int,
+        terminal_id: str = "",
+    ) -> TelegramAlertRecord:
+        record = self.reserve(key, terminal_id=terminal_id)
         return self.attach_message(record.token, chat_id=chat_id, message_id=message_id)
 
-    def reserve(self, key: AgentKey) -> TelegramAlertRecord:
+    def reserve(self, key: AgentKey, *, terminal_id: str = "") -> TelegramAlertRecord:
         for old in [record for record in self._by_token.values() if record.key == key]:
             self.discard(old.token)
         token = self._token_factory()
-        record = TelegramAlertRecord(token, key, "", -1, self._now())
+        record = TelegramAlertRecord(token, key, "", -1, self._now(), terminal_id)
         self._by_token[token] = record
         return record
 
@@ -250,7 +258,7 @@ class TelegramInteractor:
     async def notify_blocked(
         self, agent: AgentState, *, body: str, sound: bool, multi_server: bool
     ) -> None:
-        record = self._store.reserve(agent.key)
+        record = self._store.reserve(agent.key, terminal_id=agent.terminal_id)
         reset_confirmation = getattr(self._control, "reset_confirmation", None)
         if callable(reset_confirmation):
             reset_confirmation(agent.key)
@@ -298,7 +306,11 @@ class TelegramInteractor:
                 agent = self._control.current_agent(record.key)
             except Exception:
                 continue
-            if agent is not None and agent.status is Status.BLOCKED:
+            identity_matches = (
+                agent is not None
+                and (not record.terminal_id or agent.terminal_id == record.terminal_id)
+            )
+            if identity_matches and agent.status is Status.BLOCKED:
                 live.add(record.key)
         return live
 

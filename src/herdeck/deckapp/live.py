@@ -192,7 +192,19 @@ class LiveSource(StateSource):
 
         def mutate():
             with self._lock:
+                recycled = {
+                    key
+                    for key, state in new_by_key.items()
+                    if self._terminal_identity_changed(self._agents.get(key), state)
+                }
                 self._agents = dict(new_by_key)
+                for key in recycled:
+                    self._preread.pop(key, None)
+                    self._preread_req.pop(key, None)
+            if self._drilled_key() in recycled:
+                self._active_read_req = None
+                if self._orch is not None:
+                    self._orch.set_detection("")
             # Drop the drilled prompt only if the pane left BLOCKED
             # (App.handle_snapshot): the prompt + in-flight read stay valid while it
             # is still blocked.
@@ -205,16 +217,39 @@ class LiveSource(StateSource):
     def _on_event(self, server_id: str, state: AgentState) -> None:
         def mutate():
             with self._lock:
+                recycled = self._terminal_identity_changed(
+                    self._agents.get(state.key), state
+                )
                 self._agents[state.key] = state
+                if recycled:
+                    self._preread.pop(state.key, None)
+                    self._preread_req.pop(state.key, None)
             # Same rule for a single-pane event: only a real unblock clears the
             # drilled prompt (App.handle_event).
             drilled = self._drilled_key()
             if drilled is not None and drilled == state.key:
-                self._invalidate_if_drill_unblocked(server_id, state)
+                if recycled:
+                    self._active_read_req = None
+                    if self._orch is not None:
+                        self._orch.set_detection("")
+                else:
+                    self._invalidate_if_drill_unblocked(server_id, state)
             self._reconcile_prereads()
             return True
 
         self._apply(mutate)
+
+    @staticmethod
+    def _terminal_identity_changed(
+        previous: AgentState | None,
+        current: AgentState,
+    ) -> bool:
+        return bool(
+            previous is not None
+            and previous.terminal_id
+            and current.terminal_id
+            and previous.terminal_id != current.terminal_id
+        )
 
     def _on_connection(self, server_id: str, up: bool) -> None:
         def mutate():
@@ -338,9 +373,18 @@ class LiveSource(StateSource):
         if runner is None:
             return
         for bg_req, key in reads:
+            with self._lock:
+                agent = self._agents.get(key)
             runner.send(
                 command_to_msg(
-                    Command("read", key.server_id, key.pane_id, source="detection"), bg_req
+                    Command(
+                        "read",
+                        key.server_id,
+                        key.pane_id,
+                        source="detection",
+                        terminal_id=(agent.terminal_id or None) if agent else None,
+                    ),
+                    bg_req,
                 )
             )
 

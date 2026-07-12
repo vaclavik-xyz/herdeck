@@ -392,14 +392,26 @@ async def dispatch(args, session) -> int:
 
     if args.cmd == "send":
         await session.request(
-            Command("send_text", agent.key.server_id, agent.key.pane_id, text=args.text),
+            Command(
+                "send_text",
+                agent.key.server_id,
+                agent.key.pane_id,
+                text=args.text,
+                terminal_id=agent.terminal_id or None,
+            ),
             timeout=args.timeout,
         )
         _emit(args, {"result": "sent"})
         return EXIT_OK
     if args.cmd == "focus":
         await session.request(
-            Command("focus", agent.key.server_id, agent.key.pane_id), timeout=args.timeout
+            Command(
+                "focus",
+                agent.key.server_id,
+                agent.key.pane_id,
+                terminal_id=agent.terminal_id or None,
+            ),
+            timeout=args.timeout,
         )
         _emit(args, {"result": "focused"})
         return EXIT_OK

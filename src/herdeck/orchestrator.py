@@ -142,6 +142,11 @@ class Orchestrator:
 
     # --- inbound state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        previous = {
+            key: state
+            for key, state in self._agents.items()
+            if key.server_id == server_id
+        }
         drilled_before = (
             self._agents.get(self._drill)
             if self._drill is not None and self._drill.server_id == server_id
@@ -150,6 +155,14 @@ class Orchestrator:
         self._agents = {k: v for k, v in self._agents.items() if k.server_id != server_id}
         new_blocks = False
         for s in states:
+            old = previous.get(s.key)
+            if (
+                old is not None
+                and old.terminal_id
+                and s.terminal_id
+                and old.terminal_id != s.terminal_id
+            ):
+                self._since.pop(s.key, None)
             self._agents[s.key] = s
             new_blocks = self._touch(s) or new_blocks
         if new_blocks:
@@ -159,6 +172,15 @@ class Orchestrator:
         if self._drill is not None and self._drill.server_id == server_id:
             if self._agents.get(self._drill) != drilled_before:
                 self._pending_confirm = None
+            current_drill = self._agents.get(self._drill)
+            if (
+                drilled_before is not None
+                and current_drill is not None
+                and drilled_before.terminal_id
+                and current_drill.terminal_id
+                and drilled_before.terminal_id != current_drill.terminal_id
+            ):
+                self._detection = ""
 
     def apply_event(self, server_id: str, state: AgentState) -> None:
         if self._drill == state.key and self._agents.get(state.key) != state:
@@ -578,8 +600,12 @@ class Orchestrator:
                             # Enter (the digit alone just moves the cursor), so send
                             # both — matching the profiles' "<digit>, enter" approve keys.
                             "make": (
-                                lambda key, k=opt.key: Command(
-                                    "act_if_blocked", key.server_id, key.pane_id, keys=[k, "enter"]
+                                lambda key, k=opt.key, terminal_id=agent.terminal_id: Command(
+                                    "act_if_blocked",
+                                    key.server_id,
+                                    key.pane_id,
+                                    keys=[k, "enter"],
+                                    terminal_id=terminal_id or None,
                                 )
                             ),
                         }
@@ -601,8 +627,12 @@ class Orchestrator:
                             "confirm_key": f"fb:{action_id}",
                             "label": label,
                             "make": (
-                                lambda key, ks=keys: Command(
-                                    "act_if_blocked", key.server_id, key.pane_id, keys=ks
+                                lambda key, ks=keys, terminal_id=agent.terminal_id: Command(
+                                    "act_if_blocked",
+                                    key.server_id,
+                                    key.pane_id,
+                                    keys=ks,
+                                    terminal_id=terminal_id or None,
                                 )
                             ),
                         }
@@ -613,8 +643,12 @@ class Orchestrator:
                     {
                         "label": m.label[:_OPTION_LABEL_MAX],
                         "make": (
-                            lambda key, t=m.text: Command(
-                                "send_text", key.server_id, key.pane_id, text=t
+                            lambda key, t=m.text, terminal_id=agent.terminal_id: Command(
+                                "send_text",
+                                key.server_id,
+                                key.pane_id,
+                                text=t,
+                                terminal_id=terminal_id or None,
                             )
                         ),
                     }
@@ -767,15 +801,27 @@ class Orchestrator:
             pos = (self._page % pages) * agent_slots + index
             if self._clock() - self._slot_changed_at.get(pos, float("-inf")) < _SLOT_PRESS_GUARD_S:
                 return []
-            key = shown[index].key
+            selected = shown[index]
+            key = selected.key
             self._drill = key
             self._detection = ""
             self._pending_confirm = None
             self._resettle()  # returning from drill re-sorts anyway
             # Focus the agent in the on-screen herdr session AND read its prompt.
             return [
-                Command("focus", key.server_id, key.pane_id),
-                Command("read", key.server_id, key.pane_id, source="detection"),
+                Command(
+                    "focus",
+                    key.server_id,
+                    key.pane_id,
+                    terminal_id=selected.terminal_id or None,
+                ),
+                Command(
+                    "read",
+                    key.server_id,
+                    key.pane_id,
+                    source="detection",
+                    terminal_id=selected.terminal_id or None,
+                ),
             ]
         return []
 
@@ -842,7 +888,14 @@ class Orchestrator:
                 self._arm_confirm(action, key)  # (re-)arm; an expired arm never fires
                 return []
             self._pending_confirm = None
-            cmd = Command("act_force", key.server_id, key.pane_id, keys=self._profile_for(key).stop)
+            target = self._agents[key]
+            cmd = Command(
+                "act_force",
+                key.server_id,
+                key.pane_id,
+                keys=self._profile_for(key).stop,
+                terminal_id=target.terminal_id or None,
+            )
             self._note_sent(key)
             self._drill = None  # return to the fleet overview
             self._resettle()
