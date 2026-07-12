@@ -457,12 +457,12 @@ class SemanticAPI:
         lowered = message.lower()
         if result.sent:
             return SemanticAPI._outcome(200, "sent", "action sent")
+        if "identity changed" in lowered or ("terminal" in lowered and "stale" in lowered):
+            return SemanticAPI._outcome(409, "stale_identity", "terminal identity is stale")
         if result.skipped:
             return SemanticAPI._outcome(200, "skipped", "action skipped")
         if "confirmation required" in lowered:
             return SemanticAPI._outcome(409, "confirmation_required", "confirmation required")
-        if "terminal" in lowered and ("changed" in lowered or "stale" in lowered):
-            return SemanticAPI._outcome(409, "stale_identity", "terminal identity is stale")
         if "available" in lowered or "not found" in lowered:
             return SemanticAPI._outcome(404, "unavailable_target", "target is unavailable")
         return SemanticAPI._outcome(502, "backend_failure", "backend action failed")

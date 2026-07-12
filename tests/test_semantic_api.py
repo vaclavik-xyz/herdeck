@@ -227,6 +227,19 @@ async def test_nonblocked_and_stale_targets_send_nothing():
 
 
 @pytest.mark.asyncio
+async def test_backend_identity_race_is_reported_as_stale_not_generic_skip():
+    agents = [agent()]
+    api, control = make_api(agents)
+    control.result = ActionResult(False, skipped=True, message="agent identity changed")
+
+    response = await api.action("server:a", target(action="approve"))
+
+    assert response.status == 409
+    assert response.body["outcome"] == "stale_identity"
+    assert control.calls == [("approve", AgentKey("local", "p1"))]
+
+
+@pytest.mark.asyncio
 async def test_stop_requires_caller_bound_single_use_confirmation():
     agents = [agent()]
     api, control = make_api(agents)
