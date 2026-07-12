@@ -215,6 +215,46 @@ web service without exposing its token with:
 herdeck-doctor --web-url http://100.x.y.z:8800
 ```
 
+### Reverse proxy and cockpit embed
+
+Herdeck can run behind an HTTPS reverse proxy under a preserved path prefix.
+Keep the backend on loopback, forward `/herdeck/` without stripping the prefix,
+and opt in only the exact HTTPS origin allowed to frame the deck:
+
+```bash
+herdeck-service install web \
+  --bind 127.0.0.1 \
+  --config ~/.config/herdeck/config.toml \
+  --base-path /herdeck \
+  --public-origin https://cockpit.example \
+  --frame-ancestor https://cockpit.example
+
+herdeck-web url \
+  --host 127.0.0.1 \
+  --base-path /herdeck \
+  --public-origin https://cockpit.example
+
+herdeck-doctor --web-url https://cockpit.example/herdeck/
+```
+
+By default the Content Security Policy uses `frame-ancestors 'none'`. Frame
+ancestors must be explicit HTTPS origins; wildcards, paths, and forwarded trust
+headers are not accepted. `HERDECK_WEB_FRAME_ANCESTORS` is the comma-separated
+environment equivalent of repeated `--frame-ancestor` options.
+
+An embed policy requires an explicit HTTPS `public_origin`. Hosting Herdeck
+under the cockpit's own origin (as in the `/herdeck` example) is the most robust
+setup and keeps `SameSite=Strict`. If an allowed parent has a different origin,
+Herdeck emits `SameSite=None; Secure`; that deployment also depends on the
+browser allowing third-party cookies for the iframe.
+
+The capability URL is only a bootstrap credential. A browser exchanges its
+`?token=...` value for a bounded, expiring `HttpOnly; SameSite=Strict` session
+cookie and is redirected to a clean URL. Browser writes additionally require an
+exact `Origin` match. Existing automation can continue to use
+`X-Herdeck-Token`; query-token reads remain compatible. When
+`HERDECK_WEB_PUBLIC_ORIGIN` is HTTPS the session cookie is also `Secure`.
+
 ### Optional work/run context
 
 Orchestrators can attach display-only work identity to a Herdr pane through

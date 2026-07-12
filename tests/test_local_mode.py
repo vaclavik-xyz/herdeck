@@ -215,6 +215,30 @@ def test_make_deck_prefers_env_web_bind_and_port(monkeypatch):
     assert seen == {"host": "127.9.9.9", "port": 9911}
 
 
+def test_make_deck_wires_reverse_proxy_environment(monkeypatch):
+    seen = {}
+
+    def web_factory(**kwargs):
+        seen.update(kwargs)
+        return _Web()
+
+    monkeypatch.setenv("HERDECK_WEB_BASE_PATH", "/cockpit/herdeck")
+    monkeypatch.setenv("HERDECK_WEB_PUBLIC_ORIGIN", "https://cockpit.example")
+    monkeypatch.setenv(
+        "HERDECK_WEB_FRAME_ANCESTORS",
+        "https://cockpit.example, https://admin.example",
+    )
+
+    make_deck("web", 13, web_factory=web_factory)
+
+    assert seen["base_path"] == "/cockpit/herdeck"
+    assert seen["public_origin"] == "https://cockpit.example"
+    assert seen["frame_ancestors"] == (
+        "https://cockpit.example",
+        "https://admin.example",
+    )
+
+
 def test_runtime_startup_settings_prefer_env_over_local(monkeypatch):
     from herdeck.app import _resolve_deck_kind, _resolve_socket_path, _resolve_tick_interval
     from herdeck.config import Config, HardwareConfig

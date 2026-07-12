@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import hmac
 import io
+import ipaddress
 import json
 import os
 import queue
@@ -12,10 +13,11 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from ..i18n import tr
 from .base import DeckDriver, PanelView, TileView
@@ -29,6 +31,67 @@ _WEB_ASSET_TYPES = {
     "addon-fit.js": "text/javascript; charset=utf-8",
     "xterm.css": "text/css; charset=utf-8",
 }
+
+
+def normalize_web_base_path(value: str) -> str:
+    value = value.strip()
+    if value in {"", "/"}:
+        return ""
+    if not value.startswith("/") or value.endswith("/") or "//" in value:
+        raise ValueError("web base path must look like /herdeck (without a trailing slash)")
+    segments = value[1:].split("/")
+    if any(
+        segment in {"", ".", ".."} or re.fullmatch(r"[A-Za-z0-9._~-]+", segment) is None
+        for segment in segments
+    ):
+        raise ValueError("web base path contains an unsafe segment")
+    return value
+
+
+def normalize_web_origin(value: str, *, https_only: bool = False) -> str:
+    value = value.strip()
+    if not value:
+        if https_only:
+            raise ValueError("frame ancestor origin must not be empty")
+        return ""
+    parsed = urlsplit(value)
+    allowed_schemes = {"https"} if https_only else {"http", "https"}
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"invalid web origin: {value}") from exc
+    if (
+        parsed.scheme.lower() not in allowed_schemes
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or "*" in parsed.netloc
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        scheme = "HTTPS" if https_only else "HTTP(S)"
+        raise ValueError(f"web origin must be an exact {scheme} origin without a path")
+    raw_host = parsed.hostname.lower()
+    try:
+        address = ipaddress.ip_address(raw_host)
+    except ValueError:
+        try:
+            host = raw_host.encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise ValueError(f"invalid web origin: {value}") from exc
+        labels = host.split(".")
+        if len(host) > 253 or any(
+            re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+            is None
+            for label in labels
+        ):
+            raise ValueError(f"invalid web origin: {value}") from None
+    else:
+        host = f"[{address.compressed}]" if address.version == 6 else address.compressed
+    default_port = 443 if parsed.scheme.lower() == "https" else 80
+    netloc = host if port in {None, default_port} else f"{host}:{port}"
+    return urlunsplit((parsed.scheme.lower(), netloc, "", "", ""))
 
 
 def _service_info() -> dict:
@@ -105,8 +168,14 @@ class WebDeck(DeckDriver):
         token_path: str | None = None,
         cols: int = 5,
         language: str = "en",
+        session_ttl: float = 8 * 60 * 60,
+        session_clock: Callable[[], float] | None = None,
+        base_path: str = "",
+        public_origin: str = "",
+        frame_ancestors: tuple[str, ...] = (),
     ):
         self._language = language
+        self._bind_host = host
         self._slots = slots
         self._cols = max(1, cols)  # grid width; the page lays cells out with it
         self._callback: Callable[[int], None] | None = None
@@ -115,6 +184,20 @@ class WebDeck(DeckDriver):
         self._terminal_lock = threading.Lock()
         self._terminal_streams: dict[str, _TerminalStream] = {}
         self._terminal_cancelled: dict[str, float] = {}
+        self._session_lock = threading.Lock()
+        self._sessions: dict[str, float] = {}
+        self._session_ttl = session_ttl
+        self._session_clock = session_clock or time.monotonic
+        self._base_path = normalize_web_base_path(base_path)
+        self._public_origin = normalize_web_origin(public_origin)
+        self._frame_ancestors = tuple(
+            normalize_web_origin(origin, https_only=True) for origin in frame_ancestors
+        )
+        if self._frame_ancestors and not self._public_origin.startswith("https://"):
+            raise ValueError("frame ancestors require an explicit HTTPS public origin")
+        self._cross_origin_embed = any(
+            origin != self._public_origin for origin in self._frame_ancestors
+        )
         self._lock = threading.Lock()
         # Long-poll support: /state?since=<version> HOLDS until _bump() fires.
         self._changed = threading.Condition(self._lock)
@@ -152,8 +235,14 @@ class WebDeck(DeckDriver):
         if serve:
             self._server = ThreadingHTTPServer((host, port), self._handler_class())
             self.host, self.port = self._server.server_address[0], self._server.server_address[1]
+            origin_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+            self._browser_origin = self._public_origin or normalize_web_origin(
+                f"http://{origin_host}:{self.port}"
+            )
             self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
             self._thread.start()
+        else:
+            self._browser_origin = ""
 
     # --- DeckDriver interface ---
     def slot_count(self) -> int:
@@ -171,6 +260,32 @@ class WebDeck(DeckDriver):
     TERMINAL_STREAM_LIMIT = 3
     TERMINAL_CANCEL_TTL = 30.0
     TERMINAL_CANCEL_LIMIT = 256
+    BROWSER_SESSION_LIMIT = 256
+
+    def _mint_browser_session(self) -> str:
+        now = self._session_clock()
+        token = secrets.token_urlsafe(32)
+        with self._session_lock:
+            self._sessions = {
+                value: expiry for value, expiry in self._sessions.items() if expiry > now
+            }
+            while len(self._sessions) >= self.BROWSER_SESSION_LIMIT:
+                self._sessions.pop(next(iter(self._sessions)))
+            self._sessions[token] = now + self._session_ttl
+        return token
+
+    def _valid_browser_session(self, token: str) -> bool:
+        if not token:
+            return False
+        now = self._session_clock()
+        with self._session_lock:
+            expiry = self._sessions.get(token)
+            if expiry is None:
+                return False
+            if expiry <= now:
+                self._sessions.pop(token, None)
+                return False
+            return True
 
     def _bump(self) -> int:
         """Assign the next monotonic version. Call while holding self._lock."""
@@ -374,7 +489,7 @@ class WebDeck(DeckDriver):
         deck = self
         forbidden = (
             b"herdeck simulator: missing or invalid access token.\n"
-            b"Open the full URL including the ?token=... part shown in herdeck's startup log.\n"
+            b"Open the full URL including the ?token=... part printed by herdeck-web url.\n"
         )
         forbidden_page = (
             b"<!doctype html><meta charset=utf-8><title>herdeck simulator</title>"
@@ -391,7 +506,8 @@ class WebDeck(DeckDriver):
                 "default-src 'self'; script-src 'self' 'unsafe-inline'; "
                 "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
                 "connect-src 'self'; object-src 'none'; base-uri 'none'; "
-                "frame-ancestors 'none'"
+                "frame-ancestors "
+                + (" ".join(deck._frame_ancestors) if deck._frame_ancestors else "'none'")
             ),
         }
 
@@ -452,15 +568,58 @@ class WebDeck(DeckDriver):
             def _query_token(self, url):
                 return parse_qs(url.query).get("token", [""])[0]
 
+            def _browser_session(self):
+                try:
+                    cookie = SimpleCookie(self.headers.get("Cookie", ""))
+                except CookieError:
+                    return ""
+                morsel = cookie.get("herdeck_session")
+                return morsel.value if morsel is not None else ""
+
             def _require_token(self, url):
-                if self._valid_token(self._query_token(url)):
+                if self._valid_token(self._query_token(url)) or deck._valid_browser_session(
+                    self._browser_session()
+                ):
                     return True
                 self._send(403, forbidden)
                 return False
 
+            def _valid_write_auth(self):
+                if self._valid_token(self.headers.get("X-Herdeck-Token", "")):
+                    return True
+                try:
+                    origin = normalize_web_origin(self.headers.get("Origin", ""))
+                    if deck._public_origin:
+                        expected_origin = deck._public_origin
+                    elif deck._bind_host in {"0.0.0.0", "::"}:
+                        expected_origin = normalize_web_origin(
+                            f"http://{self.headers.get('Host', '')}"
+                        )
+                    else:
+                        expected_origin = deck._browser_origin
+                except ValueError:
+                    return False
+                return (
+                    deck._valid_browser_session(self._browser_session())
+                    and bool(origin)
+                    and origin == expected_origin
+                )
+
+            def _route_path(self, raw_path):
+                if not deck._base_path:
+                    return raw_path
+                if raw_path == deck._base_path:
+                    return "/"
+                if not raw_path.startswith(deck._base_path + "/"):
+                    return None
+                return raw_path[len(deck._base_path) :]
+
             def do_GET(self):
                 url = urlsplit(self.path)
-                path = url.path
+                path = self._route_path(url.path)
+                if path is None:
+                    self._send(404)
+                    return
                 if path == "/healthz":
                     self._send(
                         200,
@@ -486,7 +645,25 @@ class WebDeck(DeckDriver):
                     )
                 elif path == "/":
                     token = self._query_token(url)
-                    if not self._valid_token(token):
+                    if self._valid_token(token):
+                        session = deck._mint_browser_session()
+                        self._send(
+                            303,
+                            headers={
+                                "Location": (deck._base_path or "") + "/",
+                                "Set-Cookie": (
+                                    f"herdeck_session={session}; "
+                                    f"Path={deck._base_path or '/'}{'/' if deck._base_path else ''}; "
+                                    "HttpOnly; SameSite="
+                                    + ("None" if deck._cross_origin_embed else "Strict")
+                                    + ("; Secure" if deck._public_origin.startswith("https://") else "")
+                                ),
+                                "Cache-Control": "no-store",
+                                "Referrer-Policy": "no-referrer",
+                            },
+                        )
+                        return
+                    if not deck._valid_browser_session(self._browser_session()):
                         # A browser tab is the only consumer of "/": a readable
                         # page beats a plaintext dead-end.
                         self._send(
@@ -496,7 +673,9 @@ class WebDeck(DeckDriver):
                             page_headers,
                         )
                         return
-                    page = _PAGE.replace("__PRESS_TOKEN_JSON__", json.dumps(deck._press_token)).replace(
+                    page = _PAGE.replace("__BASE_PATH__", deck._base_path).replace(
+                "__BASE_PATH_JSON__", json.dumps(deck._base_path)
+            ).replace(
                 "__L_JSON__",
                 json.dumps(
                     {
@@ -653,10 +832,12 @@ class WebDeck(DeckDriver):
                     deck._release_terminal_stream(stream_id, stream)
 
             def do_POST(self):
-                path = urlsplit(self.path).path
+                path = self._route_path(urlsplit(self.path).path)
+                if path is None:
+                    self._send(404)
+                    return
                 if path.startswith("/press/"):
-                    token = self.headers.get("X-Herdeck-Token", "")
-                    if not self._valid_token(token):
+                    if not self._valid_write_auth():
                         self._send(403, forbidden)
                         return
                     try:
@@ -665,8 +846,7 @@ class WebDeck(DeckDriver):
                     except ValueError:
                         self._send(400)
                 elif path.startswith("/term-stop/"):
-                    token = self.headers.get("X-Herdeck-Token", "")
-                    if not self._valid_token(token):
+                    if not self._valid_write_auth():
                         self._send(403, forbidden)
                         return
                     stream_id = path.rsplit("/", 1)[1]
@@ -684,9 +864,9 @@ class WebDeck(DeckDriver):
 _PAGE = """<!doctype html><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>Herdeck simulator</title>
-<link rel="stylesheet" href="/assets/xterm.css">
-<script src="/assets/xterm.js"></script>
-<script src="/assets/addon-fit.js"></script>
+<link rel="stylesheet" href="__BASE_PATH__/assets/xterm.css">
+<script src="__BASE_PATH__/assets/xterm.js"></script>
+<script src="__BASE_PATH__/assets/addon-fit.js"></script>
 <style>
  body{background:#0b0b0d;margin:0;font-family:-apple-system,sans-serif;
    display:flex;align-items:center;justify-content:center;min-height:100vh}
@@ -785,10 +965,10 @@ _PAGE = """<!doctype html><meta charset=utf-8>
 <script>
 const deck=document.getElementById('deck');
 const note=document.createElement('div');note.id='note';document.body.appendChild(note);
-const pressToken=__PRESS_TOKEN_JSON__;
+const basePath=__BASE_PATH_JSON__;
 let cells=[]; const btns=[]; let slotCount=0;
 function auth(path){
-  return path+(path.includes('?')?'&':'?')+'token='+encodeURIComponent(pressToken);
+  return basePath+path;
 }
 // Stale-state indication: a control surface silently showing dead state is
 // actively misleading — a 'blocked' tile may have been resolved minutes ago.
@@ -800,7 +980,7 @@ function clearStale(){fails=0;lastOk=Date.now();deck.classList.remove('stale');n
 async function press(i){
   let r;
   try{
-    r=await fetch('/press/'+i,{method:'POST',headers:{'X-Herdeck-Token':pressToken}});
+    r=await fetch(basePath+'/press/'+i,{method:'POST'});
   }catch(e){
     setStale(L.pressFailed);
     return;
@@ -841,8 +1021,8 @@ function newStreamId(){
 function stopRemote(current){
   if(current.stopSent)return;
   current.stopSent=true;
-  void fetch('/term-stop/'+encodeURIComponent(current.streamId),{
-    method:'POST',headers:{'X-Herdeck-Token':pressToken},keepalive:true
+  void fetch(basePath+'/term-stop/'+encodeURIComponent(current.streamId),{
+    method:'POST',keepalive:true
   }).catch(()=>{});
 }
 function disposePreview(current,notifyRemote){

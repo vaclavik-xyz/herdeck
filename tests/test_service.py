@@ -115,3 +115,24 @@ def test_install_rejects_unsafe_web_bind(tmp_path):
 
     with pytest.raises(ValueError, match="loopback or a Tailscale"):
         install_service(config, runner=lambda command: 0)
+
+
+def test_web_launch_agent_includes_reverse_proxy_policy(tmp_path):
+    from herdeck.service import ServiceConfig, render_launch_agent
+
+    config = ServiceConfig(
+        kind="web",
+        home=tmp_path,
+        python="/opt/herdeck/python",
+        bind="127.0.0.1",
+        port=8800,
+        base_path="/cockpit/herdeck",
+        public_origin="https://cockpit.example",
+        frame_ancestors=("https://cockpit.example",),
+    )
+
+    environment = plistlib.loads(render_launch_agent(config))["EnvironmentVariables"]
+
+    assert environment["HERDECK_WEB_BASE_PATH"] == "/cockpit/herdeck"
+    assert environment["HERDECK_WEB_PUBLIC_ORIGIN"] == "https://cockpit.example"
+    assert environment["HERDECK_WEB_FRAME_ANCESTORS"] == "https://cockpit.example"

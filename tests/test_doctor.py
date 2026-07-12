@@ -110,12 +110,12 @@ def test_check_deck_elgato_uses_streamdeck_import_name():
 def test_check_web_service_probes_health_without_leaking_capability_token():
     seen = []
     check = check_web_service(
-        "http://100.86.178.12:8800/?token=supersecret",
+        "https://cockpit.example/cockpit/herdeck/?token=supersecret",
         lambda url: seen.append(url)
         or {"ok": True, "service": "herdeck-web", "version": "0.1.0", "build": "abc"},
     )
 
-    assert seen == ["http://100.86.178.12:8800/healthz"]
+    assert seen == ["https://cockpit.example/cockpit/herdeck/healthz"]
     assert check.ok is True
     assert "0.1.0" in check.detail and "abc" in check.detail
     assert "supersecret" not in check.detail

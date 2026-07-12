@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .app import validate_web_bind
+from .driver.web import normalize_web_base_path, normalize_web_origin
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,9 @@ class ServiceConfig:
     server_id: str = "server"
     token_file: Path | None = None
     uid: int | None = None
+    base_path: str = ""
+    public_origin: str = ""
+    frame_ancestors: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
@@ -46,9 +50,18 @@ def render_launch_agent(config: ServiceConfig) -> bytes:
         }
     else:
         arguments = [config.python, "-m", "herdeck.web", "run"]
+        base_path = normalize_web_base_path(config.base_path)
+        public_origin = normalize_web_origin(config.public_origin)
+        frame_ancestors = tuple(
+            normalize_web_origin(origin, https_only=True)
+            for origin in config.frame_ancestors
+        )
         environment = {
             "HERDECK_WEB_BIND": config.bind,
             "HERDECK_WEB_PORT": str(config.port),
+            "HERDECK_WEB_BASE_PATH": base_path,
+            "HERDECK_WEB_PUBLIC_ORIGIN": public_origin,
+            "HERDECK_WEB_FRAME_ANCESTORS": ",".join(frame_ancestors),
         }
         if config.config_path is not None:
             environment["HERDECK_CONFIG"] = str(config.config_path)
@@ -140,6 +153,9 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--socket", type=Path)
             command.add_argument("--server-id", default="server")
             command.add_argument("--token-file", type=Path)
+            command.add_argument("--base-path", default="")
+            command.add_argument("--public-origin", default="")
+            command.add_argument("--frame-ancestor", action="append", default=[])
     return parser
 
 
@@ -158,6 +174,9 @@ def _config_from_args(args) -> ServiceConfig:
         server_id=getattr(args, "server_id", "server"),
         token_file=getattr(args, "token_file", None) or home / ".config/herdeck/bridge-token",
         uid=args.uid,
+        base_path=getattr(args, "base_path", ""),
+        public_origin=getattr(args, "public_origin", ""),
+        frame_ancestors=tuple(getattr(args, "frame_ancestor", ())),
     )
 
 

@@ -14,8 +14,11 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>HERDECK_CONFIG</key><string>/Users/you/.config/herdeck/config.toml</string>
-    <key>HERDECK_WEB_BIND</key><string>100.x.y.z</string>
+    <key>HERDECK_WEB_BIND</key><string>127.0.0.1</string>
     <key>HERDECK_WEB_PORT</key><string>8800</string>
+    <key>HERDECK_WEB_BASE_PATH</key><string>/herdeck</string>
+    <key>HERDECK_WEB_PUBLIC_ORIGIN</key><string>https://cockpit.example</string>
+    <key>HERDECK_WEB_FRAME_ANCESTORS</key><string>https://cockpit.example</string>
   </dict>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>

@@ -147,7 +147,8 @@ def check_web_service(base_url: str, probe) -> Check:
     parsed = urlsplit(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return Check("web service", False, "invalid web URL")
-    health_url = f"{parsed.scheme}://{parsed.netloc}/healthz"
+    base_path = parsed.path.rstrip("/")
+    health_url = f"{parsed.scheme}://{parsed.netloc}{base_path}/healthz"
     try:
         payload = probe(health_url)
     except Exception as exc:
