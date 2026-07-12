@@ -98,6 +98,45 @@ def test_semantic_server_stays_unavailable_until_fresh_reconnect_snapshot():
     assert app.orch.get_agent(fresh.key) is fresh
 
 
+def test_replaced_connector_cannot_publish_late_snapshot():
+    config = Config(
+        servers=[ServerConfig("local", "ws://local", "token")],
+        profiles={},
+        overview_order=["local"],
+        grid=(5, 3),
+    )
+    app = App(config, FakeRenderer(), lambda _command: None)
+    old = AgentState(
+        AgentKey("local", "p1"),
+        "codex",
+        "old",
+        Status.BLOCKED,
+        terminal_id="old-terminal",
+    )
+    fresh = AgentState(
+        AgentKey("local", "p1"),
+        "codex",
+        "fresh",
+        Status.WORKING,
+        terminal_id="fresh-terminal",
+    )
+
+    app.expect_connection("local", 1)
+    app.handle_connection("local", True, 1)
+    app.handle_snapshot("local", [old], 1)
+    assert app.server_available("local") is True
+
+    app.expect_connection("local", 2)
+    app.handle_snapshot("local", [old], 1)
+    assert app.server_available("local") is False
+    assert app.orch.get_agent(old.key) is old
+
+    app.handle_connection("local", True, 2)
+    app.handle_snapshot("local", [fresh], 2)
+    assert app.server_available("local") is True
+    assert app.orch.get_agent(fresh.key) is fresh
+
+
 class SemanticFakeDeck(FakeRenderer):
     def __init__(self):
         super().__init__()

@@ -233,6 +233,7 @@ class App:
         self._terminals: dict[str, TermSub] = {}
         self._servers_up: set[str] = set()
         self._semantic_ready_servers: set[str] = set()
+        self._connection_epochs: dict[str, int] = {}
         self._semantic_generations: OrderedDict[AgentKey, int] = OrderedDict()
         self._semantic_generation_serial = 0
         self._semantic_config_generation = 0
@@ -311,6 +312,13 @@ class App:
 
     def server_available(self, server_id: str) -> bool:
         return server_id in self._semantic_ready_servers
+
+    def expect_connection(self, server_id: str, epoch: int) -> None:
+        self._connection_epochs[server_id] = epoch
+        self._semantic_ready_servers.discard(server_id)
+
+    def _accept_connection_epoch(self, server_id: str, epoch: int | None) -> bool:
+        return epoch is None or self._connection_epochs.get(server_id) == epoch
 
     def next_req_for(self, cmd: Command) -> str | None:
         if cmd.kind == "list":
@@ -454,8 +462,12 @@ class App:
                     )
                 )
 
-    def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
-        if not self._server_allowed(server_id):
+    def handle_snapshot(
+        self, server_id: str, states: list[AgentState], epoch: int | None = None
+    ) -> None:
+        if not self._server_allowed(server_id) or not self._accept_connection_epoch(
+            server_id, epoch
+        ):
             return
         if log.isEnabledFor(logging.DEBUG):
             log.debug(
@@ -487,8 +499,10 @@ class App:
         self._maybe_notify(states, {k for k in self._blocked_keys if k.server_id == server_id})
         self._refresh()
 
-    def handle_event(self, server_id: str, state: AgentState) -> None:
-        if not self._server_allowed(server_id):
+    def handle_event(self, server_id: str, state: AgentState, epoch: int | None = None) -> None:
+        if not self._server_allowed(server_id) or not self._accept_connection_epoch(
+            server_id, epoch
+        ):
             return
         previous = self.orch.get_agent(state.key)
         if previous != state:
@@ -517,8 +531,10 @@ class App:
             and previous.terminal_id != current.terminal_id
         )
 
-    def handle_connection(self, server_id: str, up: bool) -> None:
-        if not self._server_allowed(server_id):
+    def handle_connection(self, server_id: str, up: bool, epoch: int | None = None) -> None:
+        if not self._server_allowed(server_id) or not self._accept_connection_epoch(
+            server_id, epoch
+        ):
             return
         self._bump_semantic_targets(
             agent.key for agent in self.orch.agents() if agent.key.server_id == server_id
@@ -532,8 +548,10 @@ class App:
         self.orch.set_connection(server_id, up)
         self._refresh()
 
-    def handle_result(self, server_id: str, req: str, data: dict) -> None:
-        if not self._server_allowed(server_id):
+    def handle_result(self, server_id: str, req: str, data: dict, epoch: int | None = None) -> None:
+        if not self._server_allowed(server_id) or not self._accept_connection_epoch(
+            server_id, epoch
+        ):
             return
         if self._runtime_control is not None:
             handled = self._runtime_control.handle_result(req, data, server_id=server_id)
@@ -664,8 +682,15 @@ class App:
                     tr(self._term_lang(), "web.term_disconnected"),
                 )
 
-    def handle_term(self, server_id: str, message: TermFrame | TermClosed) -> None:
+    def handle_term(
+        self,
+        server_id: str,
+        message: TermFrame | TermClosed,
+        epoch: int | None = None,
+    ) -> None:
         """Route an inbound terminal frame on the asyncio loop."""
+        if not self._accept_connection_epoch(server_id, epoch):
+            return
         sub = self._terminals.get(message.req)
         if sub is None or sub.server_id != server_id:
             return
@@ -1094,6 +1119,7 @@ async def _run(
     if not config.servers:
         raise ConfigError("no servers configured for remote run")
     loop = asyncio.get_running_loop()
+    connector_epochs: dict[str, int] = {}
 
     def send(cmd: Command) -> None:
         conn = manager.get(cmd.server_id)
@@ -1110,16 +1136,25 @@ async def _run(
         return True
 
     def make_connector(server: ServerConfig) -> Connector:
+        epoch = connector_epochs.get(server.id, 0) + 1
+        connector_epochs[server.id] = epoch
+        app.expect_connection(server.id, epoch)
         return Connector(
             server,
-            on_snapshot=lambda sid, st: loop.call_soon_threadsafe(app.handle_snapshot, sid, st),
-            on_event=lambda sid, s: loop.call_soon_threadsafe(app.handle_event, sid, s),
-            on_connection=lambda sid, up: loop.call_soon_threadsafe(app.handle_connection, sid, up),
-            on_result=lambda req, data, sid=server.id: loop.call_soon_threadsafe(
-                app.handle_result, sid, req, data
+            on_snapshot=lambda sid, st, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_snapshot, sid, st, epoch
             ),
-            on_term=lambda _sid, message, sid=server.id: loop.call_soon_threadsafe(
-                app.handle_term, sid, message
+            on_event=lambda sid, s, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_event, sid, s, epoch
+            ),
+            on_connection=lambda sid, up, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_connection, sid, up, epoch
+            ),
+            on_result=lambda req, data, sid=server.id, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_result, sid, req, data, epoch
+            ),
+            on_term=lambda _sid, message, sid=server.id, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_term, sid, message, epoch
             ),
         )
 
