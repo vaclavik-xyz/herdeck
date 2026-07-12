@@ -48,7 +48,19 @@ application log.
 Expose a browser-visible persOS handoff route on the public cockpit origin. That
 route authenticates the persOS user, calls Herdeck privately with the persistent
 credential, and forwards Herdeck's `Set-Cookie` header unchanged in its response
-to the browser:
+to the browser. These are two separate trust-boundary requests.
+
+The browser calls the public persOS route using only its normal persOS session
+and persOS CSRF protection. It never receives or sends the Herdeck credential:
+
+```http
+POST /api/cockpit/herdeck/session HTTP/1.1
+Cookie: persos_session=<persOS session>
+X-CSRF-Token: <persOS CSRF token>
+```
+
+After validating that request, the persOS backend calls the private Herdeck
+route over Tailscale:
 
 ```http
 POST /herdeck/api/v1/browser-sessions HTTP/1.1
