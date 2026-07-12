@@ -46,15 +46,15 @@ class RuntimeAgentControl:
         self._pending_confirm = None
 
     def reset_confirmation(self, key: AgentKey | None = None) -> None:
-        if key is None or (
-            self._pending_confirm is not None and self._pending_confirm[1] == key
-        ):
+        if key is None or (self._pending_confirm is not None and self._pending_confirm[1] == key):
             self._pending_confirm = None
 
     def current_agent(self, key: AgentKey) -> AgentState | None:
         return self._current_agent(key)
 
-    def handle_result(self, req: str, data: dict, *, server_id: str | None = None) -> Command | None:
+    def handle_result(
+        self, req: str, data: dict, *, server_id: str | None = None
+    ) -> Command | None:
         pending = self._pending.get(req)
         if pending is None:
             return None
@@ -89,8 +89,16 @@ class RuntimeAgentControl:
         timeout: float | None = 3.0,
         force: bool = False,
         always: bool = False,
+        confirmed: bool = False,
     ) -> ActionResult:
-        return await self._act("approve", key, timeout=timeout, force=force, always=always)
+        return await self._act(
+            "approve",
+            key,
+            timeout=timeout,
+            force=force,
+            always=always,
+            confirmed=confirmed,
+        )
 
     async def deny(
         self,
@@ -98,8 +106,16 @@ class RuntimeAgentControl:
         *,
         timeout: float | None = 3.0,
         force: bool = False,
+        confirmed: bool = False,
     ) -> ActionResult:
-        return await self._act("deny", key, timeout=timeout, force=force, always=False)
+        return await self._act(
+            "deny",
+            key,
+            timeout=timeout,
+            force=force,
+            always=False,
+            confirmed=confirmed,
+        )
 
     async def stop(
         self,
@@ -174,6 +190,13 @@ class RuntimeAgentControl:
         if action == "approve" and always:
             return "approve_always"
         return action
+
+    def requires_confirmation(
+        self, action: str, *, force: bool = False, always: bool = False
+    ) -> bool:
+        return self._action_id(action, force=force, always=always) in (
+            self._config.safety.require_confirm_for
+        )
 
     def _action_result(self, data: dict) -> ActionResult:
         return ActionResult(

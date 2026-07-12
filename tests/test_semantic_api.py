@@ -14,14 +14,20 @@ class FakeControl:
         self.result = ActionResult(True)
         self.error = None
         self.release = None
+        self.confirm_actions = set()
 
     def current_agent(self, key):
         return next((agent for agent in self.agents if agent.key == key), None)
 
-    async def approve(self, key):
+    def requires_confirmation(self, action):
+        return action in self.confirm_actions
+
+    async def approve(self, key, *, confirmed=False):
+        assert confirmed is ("approve" in self.confirm_actions)
         return await self._call("approve", key)
 
-    async def deny(self, key):
+    async def deny(self, key, *, confirmed=False):
+        assert confirmed is ("deny" in self.confirm_actions)
         return await self._call("deny", key)
 
     async def stop(self, key, *, confirmed=False):
@@ -141,6 +147,36 @@ async def test_approve_and_deny_are_semantic_and_idempotent():
         ("approve", AgentKey("local", "p1")),
         ("deny", AgentKey("local", "p1")),
     ]
+
+
+@pytest.mark.asyncio
+async def test_configured_approve_confirmation_is_caller_and_action_bound():
+    agents = [agent()]
+    api, control = make_api(agents)
+    control.confirm_actions.add("approve")
+
+    armed = await api.action("browser:a", target(action="approve"))
+    cross_action = await api.action(
+        "browser:a",
+        target(
+            action="deny",
+            confirmation=armed.body["confirmation"],
+            idempotency_key="deny-confirm",
+        ),
+    )
+    confirmed = await api.action(
+        "browser:a",
+        target(
+            action="approve",
+            confirmation=armed.body["confirmation"],
+            idempotency_key="approve-confirm",
+        ),
+    )
+
+    assert armed.body["outcome"] == "confirmation_required"
+    assert cross_action.status == 422
+    assert confirmed.body["outcome"] == "sent"
+    assert control.calls == [("approve", AgentKey("local", "p1"))]
 
 
 @pytest.mark.asyncio

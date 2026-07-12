@@ -34,8 +34,9 @@ class _StoredResult:
 
 
 @dataclass(frozen=True)
-class _StopChallenge:
+class _ActionChallenge:
     caller: str
+    action: str
     target: tuple[str, str, str]
     expires_at: float
     generation: object
@@ -91,7 +92,7 @@ class SemanticAPI:
         self._clock = clock or time.monotonic
         self._results: OrderedDict[tuple[str, str], _StoredResult] = OrderedDict()
         self._inflight: dict[tuple[str, str], tuple[str, asyncio.Future[SemanticResponse]]] = {}
-        self._challenges: OrderedDict[str, _StopChallenge] = OrderedDict()
+        self._challenges: OrderedDict[str, _ActionChallenge] = OrderedDict()
 
     async def handle(self, request: dict) -> SemanticResponse:
         operation = request.get("operation")
@@ -150,7 +151,8 @@ class SemanticAPI:
         if replay is not None:
             return replay
 
-        if action == "stop":
+        requires_confirmation = action == "stop" or self._control.requires_confirmation(action)
+        if requires_confirmation:
             confirmation = payload.get("confirmation")
             if confirmation is None:
                 agent = self._resolve_target(target)
@@ -162,8 +164,9 @@ class SemanticAPI:
                 self._prune()
                 while len(self._challenges) >= STOP_CONFIRM_LIMIT:
                     self._challenges.popitem(last=False)
-                self._challenges[challenge] = _StopChallenge(
+                self._challenges[challenge] = _ActionChallenge(
                     caller=caller,
+                    action=action,
                     target=target,
                     expires_at=self._clock() + STOP_CONFIRM_TTL_S,
                     generation=self._generation(target[0], target[1]),
@@ -185,6 +188,8 @@ class SemanticAPI:
                     ttl=STOP_CONFIRM_TTL_S,
                 )
                 return response
+        elif payload.get("confirmation") is not None:
+            return self._validation("confirmation is not valid for this action")
 
         owner, pending = self._claim(caller, idempotency_key, fingerprint)
         if not owner:
@@ -192,7 +197,9 @@ class SemanticAPI:
                 return pending
             return await asyncio.shield(pending)
         try:
-            response = await self._execute_action(caller, action, target, payload)
+            response = await self._execute_action(
+                caller, action, target, payload, requires_confirmation
+            )
         except BaseException:
             self._abandon(caller, idempotency_key)
             raise
@@ -250,6 +257,7 @@ class SemanticAPI:
         action: str,
         target: tuple[str, str, str],
         payload: dict,
+        requires_confirmation: bool,
     ) -> SemanticResponse:
         agent = self._resolve_target(target)
         if isinstance(agent, SemanticResponse):
@@ -258,15 +266,17 @@ class SemanticAPI:
             return self._outcome(503, "unavailable_target", "target server is offline")
         if action in {"approve", "deny"} and agent.status is not Status.BLOCKED:
             return self._outcome(200, "skipped", "agent is not blocked")
-        if action == "stop":
-            challenge_error = self._consume_challenge(payload.get("confirmation"), caller, target)
+        if requires_confirmation:
+            challenge_error = self._consume_challenge(
+                payload.get("confirmation"), caller, action, target
+            )
             if challenge_error is not None:
                 return challenge_error
         try:
             if action == "approve":
-                result = await self._control.approve(agent.key)
+                result = await self._control.approve(agent.key, confirmed=requires_confirmation)
             elif action == "deny":
-                result = await self._control.deny(agent.key)
+                result = await self._control.deny(agent.key, confirmed=requires_confirmation)
             else:
                 result = await self._control.stop(agent.key, confirmed=True)
         except TimeoutError:
@@ -306,7 +316,11 @@ class SemanticAPI:
         return agent
 
     def _consume_challenge(
-        self, confirmation: object, caller: str, target: tuple[str, str, str]
+        self,
+        confirmation: object,
+        caller: str,
+        action: str,
+        target: tuple[str, str, str],
     ) -> SemanticResponse | None:
         if not isinstance(confirmation, str) or not confirmation:
             return self._validation("confirmation must be a non-empty string")
@@ -316,6 +330,7 @@ class SemanticAPI:
             return self._outcome(409, "confirmation_expired", "confirmation is invalid")
         if (
             challenge.caller != caller
+            or challenge.action != action
             or challenge.target != target
             or challenge.generation != self._generation(target[0], target[1])
         ):

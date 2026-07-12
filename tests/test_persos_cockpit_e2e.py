@@ -381,3 +381,34 @@ def test_malformed_utf8_text_request_fails_without_backend_delivery(tmp_path):
         assert harness.sent == []
     finally:
         harness.close()
+
+
+def test_http_semantic_timeout_cancels_queued_runtime_request(tmp_path):
+    deck = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        press_token="persistent-secret-token",
+    )
+    deck.SEMANTIC_TIMEOUT = 0.01
+    pending = concurrent.futures.Future()
+    deck.on_semantic(lambda _request: pending)
+    try:
+        request = urllib.request.Request(
+            f"http://{deck.host}:{deck.port}/api/v1/actions",
+            data=json.dumps(action_payload("approve", "timeout-1")).encode(),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Herdeck-Token": deck.press_token,
+            },
+        )
+        with pytest.raises(urllib.error.HTTPError) as timed_out:
+            urllib.request.urlopen(request, timeout=2)
+        assert timed_out.value.code == 504
+        assert json.load(timed_out.value)["error"]["code"] == "timeout"
+        assert pending.cancelled()
+    finally:
+        deck.close()

@@ -157,6 +157,10 @@ The challenge is caller- and target-bound, expires after 60 seconds, is
 single-use, and is invalidated by target state changes, reconnects, terminal
 replacement, or configuration reload.
 
+If operator safety configuration also requires confirmation for `approve` or
+`deny`, those actions use the same caller-, action-, and target-bound challenge
+protocol. A confirmation can never cross actions or transports.
+
 ### Send text
 
 `POST /api/v1/text` accepts the same stable target, `idempotency_key`, and a

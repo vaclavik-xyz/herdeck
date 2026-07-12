@@ -609,6 +609,7 @@ class WebDeck(DeckDriver):
                 if deck._semantic_request is None:
                     self._api_error(503, "service_unavailable", "semantic runtime is unavailable")
                     return
+                future = None
                 try:
                     future = deck._semantic_request(
                         {"operation": operation, "caller": caller, "payload": payload}
@@ -616,6 +617,8 @@ class WebDeck(DeckDriver):
                     response = future.result(timeout=deck.SEMANTIC_TIMEOUT)
                     self._send_json(response.status, response.body)
                 except TimeoutError:
+                    if future is not None:
+                        future.cancel()
                     self._api_error(504, "timeout", "semantic runtime timed out")
                 except Exception:
                     self._api_error(503, "service_unavailable", "semantic runtime is unavailable")
