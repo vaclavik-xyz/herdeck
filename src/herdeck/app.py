@@ -1143,6 +1143,30 @@ def _resolve_tick_interval(config: Config | None) -> float:
     return config.hardware.tick_interval if config else TICK_INTERVAL
 
 
+def validate_web_bind(host: str, *, getenv=os.environ.get) -> str:
+    """Allow remote web control only on an explicit Tailscale interface."""
+    if str(getenv("HERDECK_ALLOW_UNSAFE_BIND", "")).lower() in {"1", "true", "yes"}:
+        return host
+    if host == "localhost" or host.endswith(".ts.net"):
+        return host
+    import ipaddress
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ValueError(
+            "HERDECK_WEB_BIND must be loopback or a Tailscale address; "
+            "set HERDECK_ALLOW_UNSAFE_BIND=1 to override"
+        ) from exc
+    tailscale = ipaddress.ip_network("100.64.0.0/10")
+    if address.is_loopback or address in tailscale:
+        return host
+    raise ValueError(
+        "HERDECK_WEB_BIND must be loopback or a Tailscale address; "
+        "set HERDECK_ALLOW_UNSAFE_BIND=1 to override"
+    )
+
+
 def make_deck(
     kind,
     slots,
@@ -1163,6 +1187,7 @@ def make_deck(
 
     def _call_web_factory():
         host = os.environ.get("HERDECK_WEB_BIND") or hardware.web_bind or "127.0.0.1"
+        host = validate_web_bind(host)
         env_port = os.environ.get("HERDECK_WEB_PORT")
         raw_port = env_port if env_port is not None else hardware.web_port
         port = int(raw_port if raw_port is not None else 8800)
@@ -1192,8 +1217,14 @@ def make_deck(
             except TypeError:
                 # injected test doubles may predate the cols/language parameters
                 d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir)
-            for url in _simulator_urls(d.host, d.port, d.press_token):
-                print(f"herdeck web simulator on {url}")
+            if os.environ.get("HERDECK_SHOW_URL_TOKEN") == "1":
+                for url in _simulator_urls(d.host, d.port, d.press_token):
+                    print(f"herdeck web simulator on {url}")
+            else:
+                print(
+                    f"herdeck web simulator listening on http://{d.host}:{d.port}/ "
+                    "(run 'herdeck-web url' to print the capability URL)"
+                )
             return d
 
     if d200_factory is None:

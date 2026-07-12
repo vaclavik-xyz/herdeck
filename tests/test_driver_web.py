@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import urllib.error
 import urllib.request
@@ -229,6 +230,31 @@ def test_http_press_requires_session_token():
         with urllib.request.urlopen(req, timeout=2) as resp:
             assert resp.status == 204
         assert seen == [0]
+    finally:
+        d.close()
+
+
+def test_web_health_is_minimal_and_readiness_requires_token(monkeypatch):
+    monkeypatch.setenv("HERDECK_BUILD_SHA", "abc123")
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
+    try:
+        base = f"http://{d.host}:{d.port}"
+        with urllib.request.urlopen(f"{base}/healthz", timeout=2) as response:
+            health = json.loads(response.read())
+        assert health == {"ok": True, "service": "herdeck-web", "version": "0.1.0", "build": "abc123"}
+        assert d.press_token not in json.dumps(health)
+
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"{base}/readyz", timeout=2)
+        assert exc.value.code == 403
+
+        with urllib.request.urlopen(
+            f"{base}/readyz?token={d.press_token}", timeout=2
+        ) as response:
+            ready = json.loads(response.read())
+        assert ready["ready"] is True
+        assert ready["state_version"] == 0
+        assert d.press_token not in json.dumps(ready)
     finally:
         d.close()
 

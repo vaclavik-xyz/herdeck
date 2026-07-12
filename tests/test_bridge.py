@@ -540,6 +540,35 @@ def test_bridge_main_rejects_empty_token(monkeypatch):
         bridge.main()
 
 
+def test_bridge_token_file_must_be_private_and_never_echoes_value(tmp_path, monkeypatch):
+    from herdeck.bridge import load_bridge_token
+
+    token_file = tmp_path / "bridge-token"
+    token_file.write_text("file-secret\n")
+    token_file.chmod(0o600)
+    monkeypatch.delenv("HERDECK_TOKEN", raising=False)
+    monkeypatch.setenv("HERDECK_TOKEN_FILE", str(token_file))
+
+    assert load_bridge_token() == "file-secret"
+
+    token_file.chmod(0o644)
+    with pytest.raises(SystemExit, match="permissions must be 0600") as exc:
+        load_bridge_token()
+    assert "file-secret" not in str(exc.value)
+
+
+def test_bridge_token_file_takes_precedence_over_legacy_environment(tmp_path, monkeypatch):
+    from herdeck.bridge import load_bridge_token
+
+    token_file = tmp_path / "bridge-token"
+    token_file.write_text("file-secret\n")
+    token_file.chmod(0o600)
+    monkeypatch.setenv("HERDECK_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("HERDECK_TOKEN", "stale-inline-secret")
+
+    assert load_bridge_token() == "file-secret"
+
+
 async def test_focus_calls_herdr_focus_agent(herdr):
     out = await handle_client_message(
         herdr, "workbox", '{"type":"focus","req":"f1","pane_id":"w1:p1"}'

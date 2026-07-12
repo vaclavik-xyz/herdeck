@@ -5,6 +5,7 @@ from herdeck.doctor import (
     check_deck,
     check_optional_deps,
     check_socket,
+    check_web_service,
     collect_checks,
     format_report,
 )
@@ -104,6 +105,20 @@ def test_check_deck_non_invasive():
 def test_check_deck_elgato_uses_streamdeck_import_name():
     c = check_deck(lib_available=lambda mod: mod == "StreamDeck")
     assert c.ok is True and "Elgato" in c.detail
+
+
+def test_check_web_service_probes_health_without_leaking_capability_token():
+    seen = []
+    check = check_web_service(
+        "http://100.86.178.12:8800/?token=supersecret",
+        lambda url: seen.append(url)
+        or {"ok": True, "service": "herdeck-web", "version": "0.1.0", "build": "abc"},
+    )
+
+    assert seen == ["http://100.86.178.12:8800/healthz"]
+    assert check.ok is True
+    assert "0.1.0" in check.detail and "abc" in check.detail
+    assert "supersecret" not in check.detail
 
 
 def test_format_report_marks_pass_and_fail():

@@ -110,6 +110,17 @@ herdr's socket lives at `~/.config/herdr/herdr.sock` (macOS & Linux).
    (`launchctl load -w ~/Library/LaunchAgents/dev.herdeck.bridge.plist`);
    **Linux** → `deploy/herdeck-bridge.service` (systemd).
 
+For a service installation, prefer a private token file over an environment
+value:
+
+```bash
+mkdir -p ~/.config/herdeck
+openssl rand -hex 32 > ~/.config/herdeck/bridge-token
+chmod 600 ~/.config/herdeck/bridge-token
+HERDECK_TOKEN_FILE=~/.config/herdeck/bridge-token \
+  HERDECK_BIND=100.x.y.z python -m herdeck.bridge
+```
+
 ## Mac setup (where the deck is)
 1. `pip install -e ".[deck]"` (pulls `strmdck` + `pillow`).
 2. Copy `config.example.toml` to `~/.config/herdeck/config.toml`, set the
@@ -177,6 +188,32 @@ The simulator URL token now grants both deck controls and visibility into agent
 terminals. Treat it as a credential and bind the simulator only to loopback or
 your trusted Tailscale interface — never `0.0.0.0`, a public IP, or an untrusted
 LAN.
+
+### Running as a service
+
+`herdeck-web` makes the browser runtime explicit, and `herdeck-service` installs
+macOS LaunchAgents without placing token values in plist files:
+
+```bash
+herdeck-service install bridge --bind 100.x.y.z --server-id workbox
+herdeck-service install web --bind 100.x.y.z --config ~/.config/herdeck/config.toml
+herdeck-service status web
+herdeck-web url --host 100.x.y.z --port 8800
+```
+
+The install command creates the bridge token at
+`~/.config/herdeck/bridge-token` with mode `0600` when needed. Web capability
+URLs are no longer written to normal startup logs; `herdeck-web url` prints one
+explicitly. Set `HERDECK_SHOW_URL_TOKEN=1` only for compatibility with an
+existing supervised log workflow.
+
+`GET /healthz` is an unauthenticated, non-sensitive liveness response. The
+token-protected `GET /readyz?token=...` also reports readiness. Probe a running
+web service without exposing its token with:
+
+```bash
+herdeck-doctor --web-url http://100.x.y.z:8800
+```
 
 ### Optional work/run context
 
@@ -404,9 +441,9 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   encrypted overlay (Tailscale/WireGuard) — the token is both the authentication
   and the only confidentiality boundary. Never bind it to a plain LAN or public
   IP. Non-idempotent key sends are never retried (no double-approve).
-- The token is read from an environment variable; never commit it. The example
-  launchd/systemd units store it inline — for real use keep them readable only by
-  your user (`chmod 600`) or source the token from a secret store / Keychain.
+- The bridge token is read from `HERDECK_TOKEN_FILE` (recommended) or the legacy
+  `HERDECK_TOKEN` environment variable. Keep token files mode `0600`; generated
+  launchd units contain only the file path, never the token value.
 
 ## Hardware notes (verified on a real D200, macOS)
 - Rendering and key input both work on macOS. The driver opens the deck's

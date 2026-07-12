@@ -4,6 +4,7 @@ import contextlib
 import hmac
 import io
 import json
+import os
 import queue
 import re
 import secrets
@@ -12,6 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
 from urllib.parse import parse_qs, urlsplit
 
@@ -27,6 +29,19 @@ _WEB_ASSET_TYPES = {
     "addon-fit.js": "text/javascript; charset=utf-8",
     "xterm.css": "text/css; charset=utf-8",
 }
+
+
+def _service_info() -> dict:
+    try:
+        release = version("herdeck")
+    except PackageNotFoundError:
+        release = "unknown"
+    return {
+        "ok": True,
+        "service": "herdeck-web",
+        "version": release,
+        "build": os.environ.get("HERDECK_BUILD_SHA", "unknown"),
+    }
 
 
 @dataclass
@@ -446,7 +461,30 @@ class WebDeck(DeckDriver):
             def do_GET(self):
                 url = urlsplit(self.path)
                 path = url.path
-                if path == "/":
+                if path == "/healthz":
+                    self._send(
+                        200,
+                        json.dumps(_service_info()).encode(),
+                        "application/json",
+                        {"Cache-Control": "no-store"},
+                    )
+                elif path == "/readyz":
+                    if not self._require_token(url):
+                        return
+                    state = deck._state()
+                    self._send(
+                        200,
+                        json.dumps(
+                            {
+                                **_service_info(),
+                                "ready": True,
+                                "state_version": state["version"],
+                            }
+                        ).encode(),
+                        "application/json",
+                        {"Cache-Control": "no-store"},
+                    )
+                elif path == "/":
                     token = self._query_token(url)
                     if not self._valid_token(token):
                         # A browser tab is the only consumer of "/": a readable

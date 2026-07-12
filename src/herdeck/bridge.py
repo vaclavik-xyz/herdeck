@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import time
 from typing import Protocol
 
@@ -1260,14 +1261,39 @@ async def serve(socket_path: str, host: str, port: int, server_id: str, token: s
         await _broadcast(events.stream(), clients, server_id)  # runs forever
 
 
+def load_bridge_token(*, getenv=os.environ.get) -> str:
+    token_file = getenv("HERDECK_TOKEN_FILE")
+    if token_file is not None:
+        if not token_file.strip():
+            raise SystemExit("HERDECK_TOKEN_FILE must not be empty")
+        path = os.path.abspath(os.path.expanduser(token_file))
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except OSError as exc:
+            raise SystemExit(f"could not read HERDECK_TOKEN_FILE: {exc}") from exc
+        if mode & 0o077:
+            raise SystemExit("HERDECK_TOKEN_FILE permissions must be 0600 or stricter")
+        try:
+            token = open(path, encoding="utf-8").read().strip()
+        except OSError as exc:
+            raise SystemExit(f"could not read HERDECK_TOKEN_FILE: {exc}") from exc
+        if not token:
+            raise SystemExit("HERDECK_TOKEN_FILE must not be empty")
+        return token
+    inline = getenv("HERDECK_TOKEN")
+    if inline is None:
+        raise SystemExit("set HERDECK_TOKEN_FILE or HERDECK_TOKEN")
+    if not inline.strip():
+        raise SystemExit("HERDECK_TOKEN must not be empty")
+    return inline.strip()
+
+
 def main() -> None:
     socket_path = resolve_herdr_socket_path()
     host = os.environ.get("HERDECK_BIND", "127.0.0.1")  # set to Tailscale IP
     port = int(os.environ.get("HERDECK_PORT", "8788"))
     server_id = os.environ.get("HERDECK_SERVER_ID", "server")
-    token = os.environ["HERDECK_TOKEN"]
-    if not token.strip():
-        raise SystemExit("HERDECK_TOKEN must not be empty")
+    token = load_bridge_token()
     asyncio.run(serve(socket_path, host, port, server_id, token))
 
 

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import importlib.util
+import json
 import os
 import sys
 import tomllib
+import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .config import ConfigError, Notifications
 from .secrets import get_secret
@@ -137,6 +141,24 @@ def check_deck(lib_available: Callable[[str], bool]) -> Check:
         False,
         f'no deck driver libraries importable; pip install ".[deck]" or ".[elgato]"; {note}',
     )
+
+
+def check_web_service(base_url: str, probe) -> Check:
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return Check("web service", False, "invalid web URL")
+    health_url = f"{parsed.scheme}://{parsed.netloc}/healthz"
+    try:
+        payload = probe(health_url)
+    except Exception as exc:
+        return Check("web service", False, f"health probe failed ({exc})")
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        return Check("web service", False, "health probe returned a malformed response")
+    if payload.get("service") != "herdeck-web":
+        return Check("web service", False, "health probe reached a different service")
+    release = str(payload.get("version") or "unknown")
+    build = str(payload.get("build") or "unknown")
+    return Check("web service", True, f"healthy; version={release}; build={build}")
 
 
 def _telegram_get_me(token: str) -> str | None:
@@ -379,7 +401,7 @@ def _read_config_facts(
     return bool(config.servers), token_envs, None, list(config.servers)
 
 
-def collect_checks() -> list[Check]:
+def collect_checks(web_url: str | None = None) -> list[Check]:
     from .app import _discover_config_path
 
     config_path = _discover_config_path()
@@ -423,11 +445,21 @@ def collect_checks() -> list[Check]:
             _check_configured_notifications(config_path),
         ]
     )
+    if web_url:
+        checks.append(check_web_service(web_url, _probe_web_health))
     return checks
 
 
-def main() -> None:
-    checks = collect_checks()
+def _probe_web_health(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=SERVER_PROBE_TIMEOUT) as response:
+        return json.loads(response.read())
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="herdeck-doctor")
+    parser.add_argument("--web-url", help="optional Herdeck web base URL to probe")
+    args = parser.parse_args(argv)
+    checks = collect_checks(args.web_url)
     print(format_report(checks))
     if any(not check.ok for check in checks):
         sys.exit(1)
