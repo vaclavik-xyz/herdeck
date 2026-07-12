@@ -46,15 +46,15 @@ class RuntimeAgentControl:
         self._pending_confirm = None
 
     def reset_confirmation(self, key: AgentKey | None = None) -> None:
-        if key is None or (
-            self._pending_confirm is not None and self._pending_confirm[1] == key
-        ):
+        if key is None or (self._pending_confirm is not None and self._pending_confirm[1] == key):
             self._pending_confirm = None
 
     def current_agent(self, key: AgentKey) -> AgentState | None:
         return self._current_agent(key)
 
-    def handle_result(self, req: str, data: dict, *, server_id: str | None = None) -> Command | None:
+    def handle_result(
+        self, req: str, data: dict, *, server_id: str | None = None
+    ) -> Command | None:
         pending = self._pending.get(req)
         if pending is None:
             return None
@@ -89,8 +89,16 @@ class RuntimeAgentControl:
         timeout: float | None = 3.0,
         force: bool = False,
         always: bool = False,
+        confirmed: bool = False,
     ) -> ActionResult:
-        return await self._act("approve", key, timeout=timeout, force=force, always=always)
+        return await self._act(
+            "approve",
+            key,
+            timeout=timeout,
+            force=force,
+            always=always,
+            confirmed=confirmed,
+        )
 
     async def deny(
         self,
@@ -98,11 +106,32 @@ class RuntimeAgentControl:
         *,
         timeout: float | None = 3.0,
         force: bool = False,
+        confirmed: bool = False,
     ) -> ActionResult:
-        return await self._act("deny", key, timeout=timeout, force=force, always=False)
+        return await self._act(
+            "deny",
+            key,
+            timeout=timeout,
+            force=force,
+            always=False,
+            confirmed=confirmed,
+        )
 
-    async def stop(self, key: AgentKey, *, timeout: float | None = 3.0) -> ActionResult:
-        return await self._act("stop", key, timeout=timeout, force=True, always=False)
+    async def stop(
+        self,
+        key: AgentKey,
+        *,
+        timeout: float | None = 3.0,
+        confirmed: bool = False,
+    ) -> ActionResult:
+        return await self._act(
+            "stop",
+            key,
+            timeout=timeout,
+            force=True,
+            always=False,
+            confirmed=confirmed,
+        )
 
     async def send_text(
         self, key: AgentKey, text: str, *, timeout: float | None = 3.0
@@ -130,12 +159,13 @@ class RuntimeAgentControl:
         timeout: float | None,
         force: bool,
         always: bool,
+        confirmed: bool = False,
     ) -> ActionResult:
         agent = self.current_agent(key)
         if agent is None:
             return ActionResult(False, message="agent is no longer available")
         action_id = self._action_id(action, force=force, always=always)
-        if action_id in self._config.safety.require_confirm_for:
+        if action_id in self._config.safety.require_confirm_for and not confirmed:
             armed = (
                 self._pending_confirm == (action_id, key)
                 and self._clock() - self._pending_confirm_at <= _CONFIRM_TTL_S
@@ -160,6 +190,13 @@ class RuntimeAgentControl:
         if action == "approve" and always:
             return "approve_always"
         return action
+
+    def requires_confirmation(
+        self, action: str, *, force: bool = False, always: bool = False
+    ) -> bool:
+        return self._action_id(action, force=force, always=always) in (
+            self._config.safety.require_confirm_for
+        )
 
     def _action_result(self, data: dict) -> ActionResult:
         return ActionResult(

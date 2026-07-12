@@ -6,8 +6,9 @@ import logging
 import os
 import queue
 import uuid
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .app_control import RuntimeAgentControl
 from .bootstrap import (
@@ -26,7 +27,7 @@ from .connector import Connector
 from .driver.base import DeckDriver, PanelView
 from .driver.fake import FakeRenderer
 from .i18n import tr
-from .model import AgentState, Status
+from .model import AgentKey, AgentState, Status
 from .notify import (
     BlockedAlertNotifier,
     BlockedNotificationRuntime,
@@ -51,6 +52,7 @@ FULL_REFRESH_TICKS = 25
 # without a hold the very next refresh overwrote it within one 0.4s tick and
 # the user never learned why their action had no effect.
 STATUS_PANEL_HOLD_S = 4.0
+SEMANTIC_GENERATION_LIMIT = 4096
 
 # Module-level indirection so tests can fake the clock.
 _monotonic = None  # set lazily to time.monotonic (keeps import cost at top low)
@@ -63,6 +65,7 @@ def _now() -> float:
 
         _monotonic = time.monotonic
     return _monotonic()
+
 
 log = logging.getLogger("herdeck")
 
@@ -149,9 +152,7 @@ def _build_blocked_notification_runtime(
                 skip_telegram=True,
             )
             notifiers: list[BlockedAlertNotifier] = [LegacyBlockedNotifier(legacy), interactor]
-            notifier = (
-                notifiers[0] if len(notifiers) == 1 else CompositeBlockedNotifier(notifiers)
-            )
+            notifier = notifiers[0] if len(notifiers) == 1 else CompositeBlockedNotifier(notifiers)
             return BlockedNotificationRuntime(notifier, interactor)
         log.warning(
             "interactive telegram notifications requested but inbound poller "
@@ -231,6 +232,11 @@ class App:
         # queue in TermSub is the only state shared with the HTTP thread.
         self._terminals: dict[str, TermSub] = {}
         self._servers_up: set[str] = set()
+        self._semantic_ready_servers: set[str] = set()
+        self._connection_epochs: dict[str, int] = {}
+        self._semantic_generations: OrderedDict[AgentKey, int] = OrderedDict()
+        self._semantic_generation_serial = 0
+        self._semantic_config_generation = 0
         self.notifier = notifier or NoopNotifier()
         self._blocked_runtime_factory = blocked_runtime_factory
         self.notification_poller = None
@@ -287,6 +293,32 @@ class App:
 
     def set_runtime_control(self, runtime_control: RuntimeAgentControl | None) -> None:
         self._runtime_control = runtime_control
+
+    def semantic_generation(self, server_id: str, pane_id: str) -> tuple[int, int]:
+        return (
+            self._semantic_config_generation,
+            self._semantic_generations.get(
+                AgentKey(server_id, pane_id), self._semantic_generation_serial
+            ),
+        )
+
+    def _bump_semantic_targets(self, keys) -> None:
+        for key in keys:
+            self._semantic_generation_serial += 1
+            self._semantic_generations[key] = self._semantic_generation_serial
+            self._semantic_generations.move_to_end(key)
+            while len(self._semantic_generations) > SEMANTIC_GENERATION_LIMIT:
+                self._semantic_generations.popitem(last=False)
+
+    def server_available(self, server_id: str) -> bool:
+        return server_id in self._semantic_ready_servers
+
+    def expect_connection(self, server_id: str, epoch: int) -> None:
+        self._connection_epochs[server_id] = epoch
+        self._semantic_ready_servers.discard(server_id)
+
+    def _accept_connection_epoch(self, server_id: str, epoch: int | None) -> bool:
+        return epoch is None or self._connection_epochs.get(server_id) == epoch
 
     def next_req_for(self, cmd: Command) -> str | None:
         if cmd.kind == "list":
@@ -405,9 +437,7 @@ class App:
     def _blocked_notification_body(self, agent: AgentState, *, multi_server: bool) -> str:
         label = agent.repo or agent.label
         parts = [
-            part
-            for part in (agent.branch, agent.key.server_id if multi_server else None)
-            if part
+            part for part in (agent.branch, agent.key.server_id if multi_server else None) if part
         ]
         return f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
 
@@ -432,8 +462,12 @@ class App:
                     )
                 )
 
-    def handle_snapshot(self, server_id: str, states: list[AgentState]) -> None:
-        if not self._server_allowed(server_id):
+    def handle_snapshot(
+        self, server_id: str, states: list[AgentState], epoch: int | None = None
+    ) -> None:
+        if not self._server_allowed(server_id) or not self._accept_connection_epoch(
+            server_id, epoch
+        ):
             return
         if log.isEnabledFor(logging.DEBUG):
             log.debug(
@@ -441,12 +475,20 @@ class App:
                 server_id,
                 [(s.key.pane_id, s.agent_type, s.label, s.status.value) for s in states],
             )
+        previous = {
+            agent.key: agent for agent in self.orch.agents() if agent.key.server_id == server_id
+        }
+        current = {state.key: state for state in states}
+        self._bump_semantic_targets(
+            key for key in previous.keys() | current.keys() if previous.get(key) != current.get(key)
+        )
         recycled = {
             state.key
             for state in states
             if self._terminal_identity_changed(self.orch.get_agent(state.key), state)
         }
         self._blocked_keys.difference_update(recycled)
+        self._semantic_ready_servers.add(server_id)
         key = self.orch.drill_key()
         self.orch.apply_snapshot(server_id, states)
         if key is not None and key.server_id == server_id:
@@ -457,10 +499,15 @@ class App:
         self._maybe_notify(states, {k for k in self._blocked_keys if k.server_id == server_id})
         self._refresh()
 
-    def handle_event(self, server_id: str, state: AgentState) -> None:
-        if not self._server_allowed(server_id):
+    def handle_event(self, server_id: str, state: AgentState, epoch: int | None = None) -> None:
+        if not self._server_allowed(server_id) or not self._accept_connection_epoch(
+            server_id, epoch
+        ):
             return
-        recycled = self._terminal_identity_changed(self.orch.get_agent(state.key), state)
+        previous = self.orch.get_agent(state.key)
+        if previous != state:
+            self._bump_semantic_targets((state.key,))
+        recycled = self._terminal_identity_changed(previous, state)
         if recycled:
             self._blocked_keys.discard(state.key)
         self.orch.apply_event(server_id, state)
@@ -484,9 +531,15 @@ class App:
             and previous.terminal_id != current.terminal_id
         )
 
-    def handle_connection(self, server_id: str, up: bool) -> None:
-        if not self._server_allowed(server_id):
+    def handle_connection(self, server_id: str, up: bool, epoch: int | None = None) -> None:
+        if not self._server_allowed(server_id) or not self._accept_connection_epoch(
+            server_id, epoch
+        ):
             return
+        self._bump_semantic_targets(
+            agent.key for agent in self.orch.agents() if agent.key.server_id == server_id
+        )
+        self._semantic_ready_servers.discard(server_id)
         if up:
             self._servers_up.add(server_id)
         else:
@@ -495,8 +548,10 @@ class App:
         self.orch.set_connection(server_id, up)
         self._refresh()
 
-    def handle_result(self, server_id: str, req: str, data: dict) -> None:
-        if not self._server_allowed(server_id):
+    def handle_result(self, server_id: str, req: str, data: dict, epoch: int | None = None) -> None:
+        if not self._server_allowed(server_id) or not self._accept_connection_epoch(
+            server_id, epoch
+        ):
             return
         if self._runtime_control is not None:
             handled = self._runtime_control.handle_result(req, data, server_id=server_id)
@@ -537,9 +592,7 @@ class App:
             req=f"t{uuid.uuid4().hex[:12]}",
             queue=queue.Queue(maxsize=self._TERM_QUEUE_MAX),
         )
-        self._schedule(
-            lambda: self._start_terminal(sub, index, cols, rows, tile_version)
-        )
+        self._schedule(lambda: self._start_terminal(sub, index, cols, rows, tile_version))
         return sub
 
     def close_terminal(self, sub: TermSub) -> None:
@@ -629,8 +682,15 @@ class App:
                     tr(self._term_lang(), "web.term_disconnected"),
                 )
 
-    def handle_term(self, server_id: str, message: TermFrame | TermClosed) -> None:
+    def handle_term(
+        self,
+        server_id: str,
+        message: TermFrame | TermClosed,
+        epoch: int | None = None,
+    ) -> None:
         """Route an inbound terminal frame on the asyncio loop."""
+        if not self._accept_connection_epoch(server_id, epoch):
+            return
         sub = self._terminals.get(message.req)
         if sub is None or sub.server_id != server_id:
             return
@@ -717,6 +777,7 @@ class App:
     def _apply_config(self, new_config: Config) -> None:
         # A successful apply supersedes any held "reload failed" notice.
         self._status_panel = None
+        self._semantic_config_generation += 1
         old_servers = {server.id for server in self.config.servers}
         self.config = new_config
         if self._runtime_control is not None:
@@ -731,6 +792,7 @@ class App:
         affected = (old_servers - allowed_servers) | restarted
         for server_id in affected:
             self._servers_up.discard(server_id)
+            self._semantic_ready_servers.discard(server_id)
             self._close_server_terminals(server_id)
         if restarted:
             self.orch.clear_server_state(restarted)
@@ -900,11 +962,40 @@ def _mock_agents():
     for pane, agent, repo, branch, status in rows:
         s = AgentState(AgentKey("mock", pane), agent, repo, status)
         s.repo, s.branch = repo, branch
+        s.terminal_id = f"mock-terminal-{pane}"
         out.append(s)
     return out
 
 
-async def _run_mock(config: Config, deck: DeckDriver) -> None:
+def _install_semantic_runtime(
+    app: App,
+    deck: DeckDriver,
+    runtime_control: RuntimeAgentControl,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    on_semantic = getattr(deck, "on_semantic", None)
+    if not callable(on_semantic):
+        return
+    from .semantic_api import SemanticAPI
+
+    semantic_api = SemanticAPI(
+        runtime_control,
+        agents=app.orch.agents,
+        server_available=app.server_available,
+        generation=app.semantic_generation,
+    )
+    on_semantic(
+        lambda request: asyncio.run_coroutine_threadsafe(semantic_api.handle(request), loop)
+    )
+
+
+async def _run_mock(
+    config: Config,
+    deck: DeckDriver,
+    *,
+    cycle_interval: float = 4.0,
+    on_transition: Callable[[AgentState], None] | None = None,
+) -> None:
     """Drive the app with synthetic, lively data — no bridge required."""
     from .model import Status
 
@@ -924,18 +1015,41 @@ async def _run_mock(config: Config, deck: DeckDriver) -> None:
     agents = _mock_agents()
     app.handle_snapshot(server, agents)
 
+    async def runtime_send(cmd: Command, req: str) -> None:
+        current = app.orch.get_agent(AgentKey(cmd.server_id, cmd.pane_id or ""))
+        if current is None:
+            data = {"sent": False, "message": "agent is no longer available"}
+        elif cmd.kind == "act_if_blocked" and current.status is not Status.BLOCKED:
+            data = {"sent": False, "skipped": True}
+        else:
+            data = {"sent": True}
+        loop.call_soon(app.handle_result, server, req, data)
+
+    runtime_control = RuntimeAgentControl(
+        config,
+        send=runtime_send,
+        current_agent=app.orch.get_agent,
+    )
+    app.set_runtime_control(runtime_control)
+    _install_semantic_runtime(app, deck, runtime_control, loop)
+
     async def cycle():  # flip a status periodically for life
         order = [Status.WORKING, Status.BLOCKED, Status.IDLE, Status.DONE]
         i = 0
         while True:
-            await asyncio.sleep(4)
-            a = agents[i % len(agents)]
-            a.status = (
-                order[(order.index(a.status) + 1) % len(order)]
-                if a.status in order
+            await asyncio.sleep(cycle_interval)
+            index = i % len(agents)
+            current = agents[index]
+            status = (
+                order[(order.index(current.status) + 1) % len(order)]
+                if current.status in order
                 else Status.WORKING
             )
-            app.handle_event(server, a)
+            updated = replace(current, status=status)
+            agents[index] = updated
+            app.handle_event(server, updated)
+            if on_transition is not None:
+                on_transition(updated)
             i += 1
 
     tasks = [_guard(_ticker(app, loop)), _guard(cycle())]
@@ -1005,6 +1119,7 @@ async def _run(
     if not config.servers:
         raise ConfigError("no servers configured for remote run")
     loop = asyncio.get_running_loop()
+    connector_epochs: dict[str, int] = {}
 
     def send(cmd: Command) -> None:
         conn = manager.get(cmd.server_id)
@@ -1021,16 +1136,25 @@ async def _run(
         return True
 
     def make_connector(server: ServerConfig) -> Connector:
+        epoch = connector_epochs.get(server.id, 0) + 1
+        connector_epochs[server.id] = epoch
+        app.expect_connection(server.id, epoch)
         return Connector(
             server,
-            on_snapshot=lambda sid, st: loop.call_soon_threadsafe(app.handle_snapshot, sid, st),
-            on_event=lambda sid, s: loop.call_soon_threadsafe(app.handle_event, sid, s),
-            on_connection=lambda sid, up: loop.call_soon_threadsafe(app.handle_connection, sid, up),
-            on_result=lambda req, data, sid=server.id: loop.call_soon_threadsafe(
-                app.handle_result, sid, req, data
+            on_snapshot=lambda sid, st, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_snapshot, sid, st, epoch
             ),
-            on_term=lambda _sid, message, sid=server.id: loop.call_soon_threadsafe(
-                app.handle_term, sid, message
+            on_event=lambda sid, s, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_event, sid, s, epoch
+            ),
+            on_connection=lambda sid, up, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_connection, sid, up, epoch
+            ),
+            on_result=lambda req, data, sid=server.id, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_result, sid, req, data, epoch
+            ),
+            on_term=lambda _sid, message, sid=server.id, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_term, sid, message, epoch
             ),
         )
 
@@ -1063,6 +1187,7 @@ async def _run(
         current_agent=app.orch.get_agent,
     )
     _install_telegram_runtime(app, config, runtime_control)
+    _install_semantic_runtime(app, deck, runtime_control, loop)
     for server in config.servers:
         app.orch.set_connection(server.id, False)
     app._refresh()
@@ -1071,7 +1196,9 @@ async def _run(
     if config_reloader is not None and config_paths:
         from .deckapp.watcher import ConfigWatcher
 
-        watcher = ConfigWatcher(config_paths, lambda: loop.call_soon_threadsafe(app.reload_from_disk))
+        watcher = ConfigWatcher(
+            config_paths, lambda: loop.call_soon_threadsafe(app.reload_from_disk)
+        )
         watcher.start()
 
     manager.update(config.servers)
