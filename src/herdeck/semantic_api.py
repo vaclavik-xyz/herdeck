@@ -6,7 +6,7 @@ import json
 import secrets
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .app_control import ActionResult, RuntimeAgentControl
@@ -92,6 +92,7 @@ class SemanticAPI:
         self._clock = clock or time.monotonic
         self._results: OrderedDict[tuple[str, str], _StoredResult] = OrderedDict()
         self._inflight: dict[tuple[str, str], tuple[str, asyncio.Future[SemanticResponse]]] = {}
+        self._executions: set[asyncio.Task[None]] = set()
         self._challenges: OrderedDict[str, _ActionChallenge] = OrderedDict()
 
     async def handle(self, request: dict) -> SemanticResponse:
@@ -199,19 +200,17 @@ class SemanticAPI:
             return self._validation("confirmation is not valid for this action")
 
         owner, pending = self._claim(caller, idempotency_key, fingerprint)
-        if not owner:
-            if isinstance(pending, SemanticResponse):
-                return pending
-            return await asyncio.shield(pending)
-        try:
-            response = await self._execute_action(
-                caller, action, target, payload, requires_confirmation
+        if isinstance(pending, SemanticResponse):
+            return pending
+        assert pending is not None
+        if owner:
+            self._start_execution(
+                caller,
+                idempotency_key,
+                fingerprint,
+                self._execute_action(caller, action, target, payload, requires_confirmation),
             )
-        except BaseException:
-            self._abandon(caller, idempotency_key)
-            raise
-        self._complete(caller, idempotency_key, fingerprint, response)
-        return response
+        return await asyncio.shield(pending)
 
     async def send_text(self, caller: str, payload: object) -> SemanticResponse:
         if not isinstance(payload, dict):
@@ -249,17 +248,17 @@ class SemanticAPI:
         if capacity_error is not None:
             return capacity_error
         owner, pending = self._claim(caller, idempotency_key, fingerprint)
-        if not owner:
-            if isinstance(pending, SemanticResponse):
-                return pending
-            return await asyncio.shield(pending)
-        try:
-            response = await self._execute_text(target, text)
-        except BaseException:
-            self._abandon(caller, idempotency_key)
-            raise
-        self._complete(caller, idempotency_key, fingerprint, response)
-        return response
+        if isinstance(pending, SemanticResponse):
+            return pending
+        assert pending is not None
+        if owner:
+            self._start_execution(
+                caller,
+                idempotency_key,
+                fingerprint,
+                self._execute_text(target, text),
+            )
+        return await asyncio.shield(pending)
 
     async def _execute_action(
         self,
@@ -409,7 +408,32 @@ class SemanticAPI:
             return False, capacity_error
         future = asyncio.get_running_loop().create_future()
         self._inflight[(caller, key)] = (fingerprint, future)
-        return True, None
+        return True, future
+
+    def _start_execution(
+        self,
+        caller: str,
+        key: str,
+        fingerprint: str,
+        operation: Awaitable[SemanticResponse],
+    ) -> None:
+        task = asyncio.create_task(self._finish_execution(caller, key, fingerprint, operation))
+        self._executions.add(task)
+        task.add_done_callback(self._executions.discard)
+
+    async def _finish_execution(
+        self,
+        caller: str,
+        key: str,
+        fingerprint: str,
+        operation: Awaitable[SemanticResponse],
+    ) -> None:
+        try:
+            response = await operation
+        except BaseException:
+            self._abandon(caller, key)
+            raise
+        self._complete(caller, key, fingerprint, response)
 
     def _capacity_error(self, caller: str, key: str) -> SemanticResponse | None:
         self._prune()

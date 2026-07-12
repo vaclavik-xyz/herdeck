@@ -210,6 +210,30 @@ async def test_concurrent_duplicate_action_joins_the_inflight_result():
 
 
 @pytest.mark.asyncio
+async def test_cancelled_transport_wait_keeps_started_action_idempotent():
+    agents = [agent()]
+    api, control = make_api(agents)
+    control.release = asyncio.Event()
+    payload = target(action="approve")
+
+    disconnected = asyncio.create_task(api.action("server:a", payload))
+    for _ in range(10):
+        if control.calls:
+            break
+        await asyncio.sleep(0)
+    assert control.calls == [("approve", AgentKey("local", "p1"))]
+
+    disconnected.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await disconnected
+    control.release.set()
+
+    retry = await api.action("server:a", payload)
+    assert retry.body["outcome"] == "sent"
+    assert control.calls == [("approve", AgentKey("local", "p1"))]
+
+
+@pytest.mark.asyncio
 async def test_nonblocked_and_stale_targets_send_nothing():
     agents = [agent(status=Status.WORKING)]
     api, control = make_api(agents)
