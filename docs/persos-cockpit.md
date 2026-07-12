@@ -197,7 +197,7 @@ curl --fail --silent -X POST \
   -H "X-Herdeck-Token: $HERDECK_WEB_TOKEN" \
   -D "$handoff_headers" \
   "https://persos.example/herdeck/api/v1/browser-sessions"
-grep -Eqi '^Set-Cookie: herdeck_session=[^;]+; Path=/herdeck/; HttpOnly;.*Secure([;[:space:]]|$)' \
+grep -Eqi '^Set-Cookie: herdeck_session=[^;]+; Path=/herdeck/; HttpOnly;.*;[[:space:]]*Secure([;[:space:]]|$)' \
   "$handoff_headers"
 ```
 
