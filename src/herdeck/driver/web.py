@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import hmac
 import io
 import ipaddress
@@ -82,8 +83,7 @@ def normalize_web_origin(value: str, *, https_only: bool = False) -> str:
             raise ValueError(f"invalid web origin: {value}") from exc
         labels = host.split(".")
         if len(host) > 253 or any(
-            re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
-            is None
+            re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) is None
             for label in labels
         ):
             raise ValueError(f"invalid web origin: {value}") from None
@@ -179,6 +179,7 @@ class WebDeck(DeckDriver):
         self._slots = slots
         self._cols = max(1, cols)  # grid width; the page lays cells out with it
         self._callback: Callable[[int], None] | None = None
+        self._semantic_request: Callable[[dict], object] | None = None
         self._terminal_open: Callable[[int, int, int, int], object] | None = None
         self._terminal_close: Callable[[object], None] | None = None
         self._terminal_lock = threading.Lock()
@@ -261,6 +262,8 @@ class WebDeck(DeckDriver):
     TERMINAL_CANCEL_TTL = 30.0
     TERMINAL_CANCEL_LIMIT = 256
     BROWSER_SESSION_LIMIT = 256
+    SEMANTIC_TIMEOUT = 8.0
+    JSON_BODY_LIMIT = 16 * 1024
 
     def _mint_browser_session(self) -> str:
         now = self._session_clock()
@@ -273,6 +276,14 @@ class WebDeck(DeckDriver):
                 self._sessions.pop(next(iter(self._sessions)))
             self._sessions[token] = now + self._session_ttl
         return token
+
+    def _browser_session_expiry(self, token: str) -> float | None:
+        with self._session_lock:
+            return self._sessions.get(token)
+
+    def _revoke_browser_session(self, token: str) -> bool:
+        with self._session_lock:
+            return self._sessions.pop(token, None) is not None
 
     def _valid_browser_session(self, token: str) -> bool:
         if not token:
@@ -340,6 +351,10 @@ class WebDeck(DeckDriver):
 
     def on_press(self, callback: Callable[[int], None]) -> None:
         self._callback = callback
+
+    def on_semantic(self, callback: Callable[[dict], object]) -> None:
+        """Register the app-loop adapter used by the versioned cockpit API."""
+        self._semantic_request = callback
 
     def on_terminal(
         self,
@@ -442,9 +457,7 @@ class WebDeck(DeckDriver):
                 if len(self._terminal_cancelled) >= self.TERMINAL_CANCEL_LIMIT:
                     oldest = min(self._terminal_cancelled, key=self._terminal_cancelled.get)
                     del self._terminal_cancelled[oldest]
-                self._terminal_cancelled[stream_id] = (
-                    time.monotonic() + self.TERMINAL_CANCEL_TTL
-                )
+                self._terminal_cancelled[stream_id] = time.monotonic() + self.TERMINAL_CANCEL_TTL
                 return
             stream.cancel.set()
         self._wake_terminal_stream(stream)
@@ -496,7 +509,9 @@ class WebDeck(DeckDriver):
             b'<body style="background:#0b0b0d;color:#e7ecf3;'
             b'font:14px/1.5 system-ui;padding:2em;max-width:32em">'
             b"<h2>Missing or invalid access token</h2>"
-            + b"<p>" + tr(deck._language, "web.forbidden").encode() + b"</p>"
+            + b"<p>"
+            + tr(deck._language, "web.forbidden").encode()
+            + b"</p>"
         )
         page_headers = {
             "Cache-Control": "no-store",
@@ -532,6 +547,78 @@ class WebDeck(DeckDriver):
                 self.end_headers()
                 if body:
                     self.wfile.write(body)
+
+            def _send_json(self, code, body, headers=None):
+                merged = {"Cache-Control": "no-store", **(headers or {})}
+                self._send(
+                    code,
+                    json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode(),
+                    "application/json; charset=utf-8",
+                    merged,
+                )
+
+            def _api_error(self, code, error_code, message):
+                self._send_json(
+                    code,
+                    {
+                        "api_version": "v1",
+                        "error": {"code": error_code, "message": message},
+                    },
+                )
+
+            def _read_json(self):
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    self.close_connection = True
+                    return None
+                if length <= 0 or length > deck.JSON_BODY_LIMIT:
+                    self.close_connection = True
+                    return None
+                try:
+                    return json.loads(self.rfile.read(length))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    self.close_connection = True
+                    return None
+
+            def _session_cookie(self, session, *, clear=False):
+                path = f"{deck._base_path}/" if deck._base_path else "/"
+                parts = [f"herdeck_session={'' if clear else session}", f"Path={path}", "HttpOnly"]
+                parts.append("SameSite=" + ("None" if deck._cross_origin_embed else "Strict"))
+                if deck._public_origin.startswith("https://"):
+                    parts.append("Secure")
+                if clear:
+                    parts.append("Max-Age=0")
+                else:
+                    parts.append(f"Max-Age={max(1, int(deck._session_ttl))}")
+                return "; ".join(parts)
+
+            def _api_caller(self, *, write=False, header_only=False):
+                token = self.headers.get("X-Herdeck-Token", "")
+                if self._valid_token(token):
+                    return "server:" + hashlib.sha256(token.encode()).hexdigest()
+                if not header_only:
+                    session = self._browser_session()
+                    if deck._valid_browser_session(session) and (
+                        not write or self._valid_write_auth()
+                    ):
+                        return "browser:" + hashlib.sha256(session.encode()).hexdigest()
+                return ""
+
+            def _semantic(self, operation, caller, payload=None):
+                if deck._semantic_request is None:
+                    self._api_error(503, "service_unavailable", "semantic runtime is unavailable")
+                    return
+                try:
+                    future = deck._semantic_request(
+                        {"operation": operation, "caller": caller, "payload": payload}
+                    )
+                    response = future.result(timeout=deck.SEMANTIC_TIMEOUT)
+                    self._send_json(response.status, response.body)
+                except TimeoutError:
+                    self._api_error(504, "timeout", "semantic runtime timed out")
+                except Exception:
+                    self._api_error(503, "service_unavailable", "semantic runtime is unavailable")
 
             def _begin_sse(self):
                 self.close_connection = True
@@ -651,13 +738,7 @@ class WebDeck(DeckDriver):
                             303,
                             headers={
                                 "Location": (deck._base_path or "") + "/",
-                                "Set-Cookie": (
-                                    f"herdeck_session={session}; "
-                                    f"Path={deck._base_path or '/'}{'/' if deck._base_path else ''}; "
-                                    "HttpOnly; SameSite="
-                                    + ("None" if deck._cross_origin_embed else "Strict")
-                                    + ("; Secure" if deck._public_origin.startswith("https://") else "")
-                                ),
+                                "Set-Cookie": self._session_cookie(session),
                                 "Cache-Control": "no-store",
                                 "Referrer-Policy": "no-referrer",
                             },
@@ -673,37 +754,45 @@ class WebDeck(DeckDriver):
                             page_headers,
                         )
                         return
-                    page = _PAGE.replace("__BASE_PATH__", deck._base_path).replace(
-                "__BASE_PATH_JSON__", json.dumps(deck._base_path)
-            ).replace(
-                "__L_JSON__",
-                json.dumps(
-                    {
-                        "pressFailed": tr(deck._language, "web.press_failed"),
-                        "tokenExpired": tr(deck._language, "web.token_expired"),
-                        "disconnected": tr(deck._language, "web.disconnected"),
-                        "termClose": tr(deck._language, "web.term_close"),
-                        "termConnecting": tr(deck._language, "web.term_connecting"),
-                        "termEnded": tr(deck._language, "web.term_ended"),
-                        "termDisconnected": tr(deck._language, "web.term_disconnected"),
-                        "termLive": tr(deck._language, "web.term_live"),
-                        "termReadOnly": tr(deck._language, "web.term_read_only"),
-                        "termTitle": tr(deck._language, "web.term_title"),
-                        "termHint": tr(deck._language, "web.term_hint"),
-                        "termConnectingBadge": tr(
-                            deck._language, "web.term_connecting_badge"
-                        ),
-                        "termEndedBadge": tr(deck._language, "web.term_ended_badge"),
-                    },
-                    ensure_ascii=False,  # keep em-dashes/diacritics readable in the page
-                ),
-            )
+                    page = (
+                        _PAGE.replace("__BASE_PATH__", deck._base_path)
+                        .replace("__BASE_PATH_JSON__", json.dumps(deck._base_path))
+                        .replace(
+                            "__L_JSON__",
+                            json.dumps(
+                                {
+                                    "pressFailed": tr(deck._language, "web.press_failed"),
+                                    "tokenExpired": tr(deck._language, "web.token_expired"),
+                                    "disconnected": tr(deck._language, "web.disconnected"),
+                                    "termClose": tr(deck._language, "web.term_close"),
+                                    "termConnecting": tr(deck._language, "web.term_connecting"),
+                                    "termEnded": tr(deck._language, "web.term_ended"),
+                                    "termDisconnected": tr(deck._language, "web.term_disconnected"),
+                                    "termLive": tr(deck._language, "web.term_live"),
+                                    "termReadOnly": tr(deck._language, "web.term_read_only"),
+                                    "termTitle": tr(deck._language, "web.term_title"),
+                                    "termHint": tr(deck._language, "web.term_hint"),
+                                    "termConnectingBadge": tr(
+                                        deck._language, "web.term_connecting_badge"
+                                    ),
+                                    "termEndedBadge": tr(deck._language, "web.term_ended_badge"),
+                                },
+                                ensure_ascii=False,  # keep em-dashes/diacritics readable in the page
+                            ),
+                        )
+                    )
                     self._send(
                         200,
                         page.encode(),
                         "text/html; charset=utf-8",
                         page_headers,
                     )
+                elif path == "/api/v1/agents":
+                    caller = self._api_caller()
+                    if not caller:
+                        self._api_error(401, "unauthorized", "missing or invalid credentials")
+                        return
+                    self._semantic("inventory", caller)
                 elif path == "/state":
                     if not self._require_token(url):
                         return
@@ -792,9 +881,7 @@ class WebDeck(DeckDriver):
                 subscription = None
                 try:
                     try:
-                        subscription = deck._terminal_open(
-                            index, cols, rows, tile_version
-                        )
+                        subscription = deck._terminal_open(index, cols, rows, tile_version)
                     except Exception:
                         self._emit_sse(
                             {
@@ -836,7 +923,33 @@ class WebDeck(DeckDriver):
                 if path is None:
                     self._send(404)
                     return
-                if path.startswith("/press/"):
+                if path == "/api/v1/browser-sessions":
+                    caller = self._api_caller(header_only=True)
+                    if not caller:
+                        self._api_error(401, "unauthorized", "missing or invalid credentials")
+                        return
+                    session = deck._mint_browser_session()
+                    self._send_json(
+                        201,
+                        {
+                            "api_version": "v1",
+                            "expires_in": max(1, int(deck._session_ttl)),
+                        },
+                        {"Set-Cookie": self._session_cookie(session)},
+                    )
+                elif path in {"/api/v1/actions", "/api/v1/text"}:
+                    caller = self._api_caller(write=True)
+                    if not caller:
+                        self._api_error(401, "unauthorized", "missing or invalid credentials")
+                        return
+                    payload = self._read_json()
+                    if payload is None:
+                        self._api_error(400, "invalid_json", "request body must be valid JSON")
+                        return
+                    self._semantic(
+                        "action" if path.endswith("actions") else "text", caller, payload
+                    )
+                elif path.startswith("/press/"):
                     if not self._valid_write_auth():
                         self._send(403, forbidden)
                         return
@@ -857,6 +970,23 @@ class WebDeck(DeckDriver):
                     self._send(204)
                 else:
                     self._send(404)
+
+            def do_DELETE(self):
+                path = self._route_path(urlsplit(self.path).path)
+                if path != "/api/v1/browser-sessions/current":
+                    self._send(404)
+                    return
+                caller = self._api_caller(write=True)
+                if not caller or not caller.startswith("browser:"):
+                    self._api_error(401, "unauthorized", "a valid browser session is required")
+                    return
+                session = self._browser_session()
+                deck._revoke_browser_session(session)
+                self._send_json(
+                    200,
+                    {"api_version": "v1", "revoked": True},
+                    {"Set-Cookie": self._session_cookie("", clear=True)},
+                )
 
         return Handler
 

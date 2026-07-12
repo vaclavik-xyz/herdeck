@@ -64,6 +64,7 @@ def _now() -> float:
         _monotonic = time.monotonic
     return _monotonic()
 
+
 log = logging.getLogger("herdeck")
 
 
@@ -149,9 +150,7 @@ def _build_blocked_notification_runtime(
                 skip_telegram=True,
             )
             notifiers: list[BlockedAlertNotifier] = [LegacyBlockedNotifier(legacy), interactor]
-            notifier = (
-                notifiers[0] if len(notifiers) == 1 else CompositeBlockedNotifier(notifiers)
-            )
+            notifier = notifiers[0] if len(notifiers) == 1 else CompositeBlockedNotifier(notifiers)
             return BlockedNotificationRuntime(notifier, interactor)
         log.warning(
             "interactive telegram notifications requested but inbound poller "
@@ -231,6 +230,7 @@ class App:
         # queue in TermSub is the only state shared with the HTTP thread.
         self._terminals: dict[str, TermSub] = {}
         self._servers_up: set[str] = set()
+        self._semantic_generation = 0
         self.notifier = notifier or NoopNotifier()
         self._blocked_runtime_factory = blocked_runtime_factory
         self.notification_poller = None
@@ -287,6 +287,12 @@ class App:
 
     def set_runtime_control(self, runtime_control: RuntimeAgentControl | None) -> None:
         self._runtime_control = runtime_control
+
+    def semantic_generation(self) -> int:
+        return self._semantic_generation
+
+    def server_available(self, server_id: str) -> bool:
+        return server_id in self._servers_up
 
     def next_req_for(self, cmd: Command) -> str | None:
         if cmd.kind == "list":
@@ -405,9 +411,7 @@ class App:
     def _blocked_notification_body(self, agent: AgentState, *, multi_server: bool) -> str:
         label = agent.repo or agent.label
         parts = [
-            part
-            for part in (agent.branch, agent.key.server_id if multi_server else None)
-            if part
+            part for part in (agent.branch, agent.key.server_id if multi_server else None) if part
         ]
         return f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
 
@@ -441,6 +445,7 @@ class App:
                 server_id,
                 [(s.key.pane_id, s.agent_type, s.label, s.status.value) for s in states],
             )
+        self._semantic_generation += 1
         recycled = {
             state.key
             for state in states
@@ -460,6 +465,7 @@ class App:
     def handle_event(self, server_id: str, state: AgentState) -> None:
         if not self._server_allowed(server_id):
             return
+        self._semantic_generation += 1
         recycled = self._terminal_identity_changed(self.orch.get_agent(state.key), state)
         if recycled:
             self._blocked_keys.discard(state.key)
@@ -487,6 +493,7 @@ class App:
     def handle_connection(self, server_id: str, up: bool) -> None:
         if not self._server_allowed(server_id):
             return
+        self._semantic_generation += 1
         if up:
             self._servers_up.add(server_id)
         else:
@@ -537,9 +544,7 @@ class App:
             req=f"t{uuid.uuid4().hex[:12]}",
             queue=queue.Queue(maxsize=self._TERM_QUEUE_MAX),
         )
-        self._schedule(
-            lambda: self._start_terminal(sub, index, cols, rows, tile_version)
-        )
+        self._schedule(lambda: self._start_terminal(sub, index, cols, rows, tile_version))
         return sub
 
     def close_terminal(self, sub: TermSub) -> None:
@@ -717,6 +722,7 @@ class App:
     def _apply_config(self, new_config: Config) -> None:
         # A successful apply supersedes any held "reload failed" notice.
         self._status_panel = None
+        self._semantic_generation += 1
         old_servers = {server.id for server in self.config.servers}
         self.config = new_config
         if self._runtime_control is not None:
@@ -1063,6 +1069,19 @@ async def _run(
         current_agent=app.orch.get_agent,
     )
     _install_telegram_runtime(app, config, runtime_control)
+    on_semantic = getattr(deck, "on_semantic", None)
+    if callable(on_semantic):
+        from .semantic_api import SemanticAPI
+
+        semantic_api = SemanticAPI(
+            runtime_control,
+            agents=app.orch.agents,
+            server_available=app.server_available,
+            generation=app.semantic_generation,
+        )
+        on_semantic(
+            lambda request: asyncio.run_coroutine_threadsafe(semantic_api.handle(request), loop)
+        )
     for server in config.servers:
         app.orch.set_connection(server.id, False)
     app._refresh()
@@ -1071,7 +1090,9 @@ async def _run(
     if config_reloader is not None and config_paths:
         from .deckapp.watcher import ConfigWatcher
 
-        watcher = ConfigWatcher(config_paths, lambda: loop.call_soon_threadsafe(app.reload_from_disk))
+        watcher = ConfigWatcher(
+            config_paths, lambda: loop.call_soon_threadsafe(app.reload_from_disk)
+        )
         watcher.start()
 
     manager.update(config.servers)
