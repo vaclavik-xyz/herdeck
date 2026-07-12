@@ -44,6 +44,8 @@ herdeck = "herdeck.app:main"
 herdeck-bridge = "herdeck.bridge:main"
 herdeck-doctor = "herdeck.doctor:main"
 herdeck-ctl = "herdeck.ctl:main"
+herdeck-web = "herdeck.web:main"
+herdeck-service = "herdeck.service:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

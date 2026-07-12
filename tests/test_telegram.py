@@ -1,6 +1,6 @@
 import pytest
 
-from herdeck.model import AgentKey, AgentState, Status
+from herdeck.model import AgentKey, AgentState, Status, WorkContext
 
 
 def test_request_json_http_error_with_non_json_body_raises_telegram_api_error(monkeypatch):
@@ -64,7 +64,9 @@ def test_bot_client_get_updates_uses_allowed_updates():
     from herdeck.telegram import TelegramBotClient
 
     calls = []
-    client = TelegramBotClient("TOK", request=lambda method, fields: calls.append((method, fields)) or [])
+    client = TelegramBotClient(
+        "TOK", request=lambda method, fields: calls.append((method, fields)) or []
+    )
 
     client.get_updates(offset=12, timeout=20)
 
@@ -84,7 +86,9 @@ def test_bot_client_send_message_uses_reply_parameters_for_replies():
     from herdeck.telegram import TelegramBotClient
 
     calls = []
-    client = TelegramBotClient("TOK", request=lambda method, fields: calls.append((method, fields)) or {})
+    client = TelegramBotClient(
+        "TOK", request=lambda method, fields: calls.append((method, fields)) or {}
+    )
 
     client.send_message(
         chat_id="-1001",
@@ -110,7 +114,9 @@ def test_bot_client_answer_callback_and_edit_message_text_payloads():
     from herdeck.telegram import TelegramBotClient
 
     calls = []
-    client = TelegramBotClient("TOK", request=lambda method, fields: calls.append((method, fields)) or True)
+    client = TelegramBotClient(
+        "TOK", request=lambda method, fields: calls.append((method, fields)) or True
+    )
 
     client.answer_callback_query("cb1", text="sent")
     client.edit_message_text(chat_id="-1001", message_id=9, text="updated", message_thread_id=456)
@@ -270,6 +276,7 @@ async def test_interactor_notify_blocked_sends_prompt_alert_and_stores_mapping()
         prompt_max_chars=1200,
     )
     agent = AgentState(AgentKey("local", "p1"), "codex", "herdeck", Status.BLOCKED)
+    agent.work = WorkContext(source="github", item="repo#123", run="run-42")
 
     await interactor.notify_blocked(agent, body="herdeck · main", sound=True, multi_server=False)
 
@@ -279,6 +286,7 @@ async def test_interactor_notify_blocked_sends_prompt_alert_and_stores_mapping()
     assert fields["chat_id"] == "-1001"
     assert fields["message_thread_id"] == "456"
     assert "Allow edit?" in fields["text"]
+    assert "herdeck · main · repo#123" in fields["text"]
     assert "h:tok1:approve" in fields["reply_markup"]
     assert store.by_message("-1001", 9).key == AgentKey("local", "p1")
 
@@ -764,8 +772,7 @@ async def test_callback_from_wrong_chat_or_topic_does_not_run_action():
         calls = []
         client = TelegramBotClient(
             "TOK",
-            request=lambda method, fields, calls=calls: calls.append((method, fields))
-            or True,
+            request=lambda method, fields, calls=calls: calls.append((method, fields)) or True,
         )
         store = TelegramAlertStore(token_factory=lambda: "tok1")
         record = store.create(AgentKey("local", "p1"), chat_id="-1001", message_id=9)
@@ -1192,9 +1199,7 @@ async def test_reply_to_known_alert_sends_text_to_agent():
     )
 
     assert ok is True
-    assert control.actions == [
-        ("send_text", AgentKey("local", "p1"), "please continue", 3.0)
-    ]
+    assert control.actions == [("send_text", AgentKey("local", "p1"), "please continue", 3.0)]
     assert calls[-1][0] == "sendMessage"
     assert "sent to local:p1" in calls[-1][1]["text"]
 
@@ -1241,9 +1246,7 @@ async def test_reply_send_text_timeout_reports_failure_status():
     )
 
     assert ok is False
-    assert control.actions == [
-        ("send_text", AgentKey("local", "p1"), "please continue", 3.0)
-    ]
+    assert control.actions == [("send_text", AgentKey("local", "p1"), "please continue", 3.0)]
     assert calls[-1] == (
         "sendMessage",
         {
@@ -1281,8 +1284,9 @@ async def test_reply_from_wrong_chat_or_topic_does_not_send_text():
         calls = []
         client = TelegramBotClient(
             "TOK",
-            request=lambda method, fields, calls=calls: calls.append((method, fields))
-            or {"message_id": 10},
+            request=lambda method, fields, calls=calls: (
+                calls.append((method, fields)) or {"message_id": 10}
+            ),
         )
         store = TelegramAlertStore(token_factory=lambda: "tok1")
         store.create(AgentKey("local", "p1"), chat_id="-1001", message_id=9)
@@ -1315,8 +1319,9 @@ async def test_status_requires_authorized_user_chat_and_topic():
         calls = []
         client = TelegramBotClient(
             "TOK",
-            request=lambda method, fields, calls=calls: calls.append((method, fields))
-            or {"message_id": 10},
+            request=lambda method, fields, calls=calls: (
+                calls.append((method, fields)) or {"message_id": 10}
+            ),
         )
         store = TelegramAlertStore(token_factory=lambda: "tok1")
         store.create(AgentKey("local", "p1"), chat_id="-1001", message_id=9)

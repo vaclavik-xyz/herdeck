@@ -26,6 +26,11 @@ management = "launcher_menu"
 show_profile_on_panel = true
 agent_slots = "max"
 tile_fields = ["repo", "branch", "status", "time", "server"]
+# Optional text-line tokens: repo, branch, workspace, tab, agent, source,
+# work_item, run. Work tokens are empty unless an orchestrator publishes the
+# corresponding Herdr state_labels.
+# tile_primary = ["work_item", "repo"]
+# tile_secondary = ["branch", "run"]
 # Language of rendered deck text (tiles/panel/websim) AND the desktop app UI.
 # "en" (default) or "cs".
 language = "en"

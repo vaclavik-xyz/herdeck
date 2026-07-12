@@ -110,10 +110,25 @@ def test_make_deck_uses_hardware_web_bind_and_port(monkeypatch):
         seen["port"] = port
         return _Web()
 
-    hw = HardwareConfig(web_bind="100.1.2.3", web_port=1234)
+    hw = HardwareConfig(web_bind="100.65.2.3", web_port=1234)
     make_deck("web", 13, web_factory=web_factory, hardware=hw)
 
-    assert seen == {"host": "100.1.2.3", "port": 1234}
+    assert seen == {"host": "100.65.2.3", "port": 1234}
+
+
+def test_web_bind_rejects_wildcard_public_and_lan_without_explicit_override(monkeypatch):
+    from herdeck.app import validate_web_bind
+
+    for host in ("0.0.0.0", "::", "8.8.8.8", "192.168.1.10"):
+        with pytest.raises(ValueError, match="loopback or a Tailscale"):
+            validate_web_bind(host)
+
+    assert validate_web_bind("127.0.0.1") == "127.0.0.1"
+    assert validate_web_bind("100.86.178.12") == "100.86.178.12"
+    assert validate_web_bind("mac-mini.tail123.ts.net") == "mac-mini.tail123.ts.net"
+
+    monkeypatch.setenv("HERDECK_ALLOW_UNSAFE_BIND", "1")
+    assert validate_web_bind("0.0.0.0") == "0.0.0.0"
 
 
 def test_make_deck_preserves_hardware_web_port_zero(monkeypatch):
@@ -200,6 +215,30 @@ def test_make_deck_prefers_env_web_bind_and_port(monkeypatch):
     assert seen == {"host": "127.9.9.9", "port": 9911}
 
 
+def test_make_deck_wires_reverse_proxy_environment(monkeypatch):
+    seen = {}
+
+    def web_factory(**kwargs):
+        seen.update(kwargs)
+        return _Web()
+
+    monkeypatch.setenv("HERDECK_WEB_BASE_PATH", "/cockpit/herdeck")
+    monkeypatch.setenv("HERDECK_WEB_PUBLIC_ORIGIN", "https://cockpit.example")
+    monkeypatch.setenv(
+        "HERDECK_WEB_FRAME_ANCESTORS",
+        "https://cockpit.example, https://admin.example",
+    )
+
+    make_deck("web", 13, web_factory=web_factory)
+
+    assert seen["base_path"] == "/cockpit/herdeck"
+    assert seen["public_origin"] == "https://cockpit.example"
+    assert seen["frame_ancestors"] == (
+        "https://cockpit.example",
+        "https://admin.example",
+    )
+
+
 def test_runtime_startup_settings_prefer_env_over_local(monkeypatch):
     from herdeck.app import _resolve_deck_kind, _resolve_socket_path, _resolve_tick_interval
     from herdeck.config import Config, HardwareConfig
@@ -238,8 +277,22 @@ def test_unknown_explicit_deck_kind_raises():
         make_deck("dw00", 13, d200_factory=_boom, web_factory=_Web)
 
 
-def test_default_web_deck_prints_tokenized_url(monkeypatch, capsys):
+def test_default_web_deck_redacts_capability_url_from_logs(monkeypatch, capsys):
     monkeypatch.setenv("HERDECK_WEB_PORT", "0")
+    monkeypatch.delenv("HERDECK_SHOW_URL_TOKEN", raising=False)
+    deck = make_deck("web", 4)
+    try:
+        out = capsys.readouterr().out
+        assert "herdeck-web url" in out
+        assert "/?token=" not in out
+        assert deck.press_token not in out
+    finally:
+        deck.close()
+
+
+def test_web_deck_can_explicitly_print_capability_url(monkeypatch, capsys):
+    monkeypatch.setenv("HERDECK_WEB_PORT", "0")
+    monkeypatch.setenv("HERDECK_SHOW_URL_TOKEN", "1")
     deck = make_deck("web", 4)
     try:
         out = capsys.readouterr().out

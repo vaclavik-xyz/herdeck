@@ -1,4 +1,6 @@
+import http.cookiejar
 import io
+import json
 import os
 import urllib.error
 import urllib.request
@@ -202,10 +204,10 @@ def test_http_press_requires_session_token():
             urllib.request.urlopen(f"http://{d.host}:{d.port}/", timeout=2)
         assert exc.value.code == 403
 
-        with urllib.request.urlopen(
-            f"http://{d.host}:{d.port}/?token={d._press_token}", timeout=2
-        ) as resp:
-            assert d._press_token in resp.read().decode()
+        opener = urllib.request.build_opener(_NoRedirect)
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            opener.open(f"http://{d.host}:{d.port}/?token={d._press_token}", timeout=2)
+        assert exc.value.code == 303
 
         for path in ("/state", "/panel", "/tile/0"):
             with pytest.raises(urllib.error.HTTPError) as exc:
@@ -229,6 +231,328 @@ def test_http_press_requires_session_token():
         with urllib.request.urlopen(req, timeout=2) as resp:
             assert resp.status == 204
         assert seen == [0]
+    finally:
+        d.close()
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_browser_page(deck, timeout=5):
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    return opener.open(
+        f"http://{deck.host}:{deck.port}{deck._base_path}/?token={deck.press_token}",
+        timeout=timeout,
+    )
+
+
+def test_browser_exchanges_capability_token_for_http_only_session():
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            opener.open(
+                f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=2
+            )
+        assert exc.value.code == 303
+        assert exc.value.headers["Location"] == "/"
+        assert exc.value.headers["Referrer-Policy"] == "no-referrer"
+        assert exc.value.headers["Cache-Control"] == "no-store"
+        cookie = exc.value.headers["Set-Cookie"]
+        assert "herdeck_session=" in cookie
+        assert "HttpOnly" in cookie
+        assert "SameSite=Strict" in cookie
+        assert "Path=/" in cookie
+        assert "Secure" not in cookie
+
+        request = urllib.request.Request(
+            f"http://{d.host}:{d.port}/",
+            headers={"Cookie": cookie.split(";", 1)[0]},
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            page = response.read().decode()
+        assert d.press_token not in page
+        assert "__PRESS_TOKEN_JSON__" not in page
+    finally:
+        d.close()
+
+
+def test_browser_session_post_requires_exact_origin():
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
+    seen = []
+    d.on_press(seen.append)
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            opener.open(
+                f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=2
+            )
+        cookie = exc.value.headers["Set-Cookie"].split(";", 1)[0]
+        url = f"http://{d.host}:{d.port}/press/1"
+
+        for origin in (None, "https://evil.example"):
+            headers = {"Cookie": cookie}
+            if origin is not None:
+                headers["Origin"] = origin
+            request = urllib.request.Request(url, method="POST", headers=headers)
+            with pytest.raises(urllib.error.HTTPError) as denied:
+                urllib.request.urlopen(request, timeout=2)
+            assert denied.value.code == 403
+
+        request = urllib.request.Request(
+            url,
+            method="POST",
+            headers={
+                "Cookie": cookie,
+                "Origin": f"http://{d.host}:{d.port}",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            assert response.status == 204
+        assert seen == [1]
+    finally:
+        d.close()
+
+
+def test_wildcard_direct_http_uses_request_host_for_browser_origin():
+    d = WebDeck(slots=4, host="0.0.0.0", port=0, serve=True, icon_provider=StubIcons())
+    seen = []
+    d.on_press(seen.append)
+    opener = urllib.request.build_opener(_NoRedirect)
+    base = f"http://127.0.0.1:{d.port}"
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exchanged:
+            opener.open(f"{base}/?token={d.press_token}", timeout=2)
+        cookie = exchanged.value.headers["Set-Cookie"].split(";", 1)[0]
+        wrong_origin = urllib.request.Request(
+            f"{base}/press/3",
+            method="POST",
+            headers={"Cookie": cookie, "Origin": "http://evil.example"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(wrong_origin, timeout=2)
+        assert denied.value.code == 403
+        request = urllib.request.Request(
+            f"{base}/press/3",
+            method="POST",
+            headers={"Cookie": cookie, "Origin": base},
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            assert response.status == 204
+        assert seen == [3]
+    finally:
+        d.close()
+
+
+def test_direct_http_default_port_uses_browser_normalized_origin(monkeypatch):
+    class FakeServer:
+        server_address = ("cockpit.example", 80)
+
+        def serve_forever(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(
+        "herdeck.driver.web.ThreadingHTTPServer", lambda address, handler: FakeServer()
+    )
+
+    d = WebDeck(
+        slots=4,
+        host="cockpit.example",
+        port=80,
+        serve=True,
+        icon_provider=StubIcons(),
+    )
+    try:
+        assert d._browser_origin == "http://cockpit.example"
+    finally:
+        d.close()
+
+
+def test_browser_session_expires():
+    now = [100.0]
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        session_ttl=30,
+        session_clock=lambda: now[0],
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            opener.open(
+                f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=2
+            )
+        cookie = exc.value.headers["Set-Cookie"].split(";", 1)[0]
+        now[0] += 31
+        request = urllib.request.Request(
+            f"http://{d.host}:{d.port}/state", headers={"Cookie": cookie}
+        )
+        with pytest.raises(urllib.error.HTTPError) as expired:
+            urllib.request.urlopen(request, timeout=2)
+        assert expired.value.code == 403
+    finally:
+        d.close()
+
+
+def test_reverse_proxy_prefix_and_https_frame_allowlist():
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        base_path="/herdeck",
+        public_origin="https://cockpit.example",
+        frame_ancestors=("https://cockpit.example",),
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        base = f"http://{d.host}:{d.port}"
+        with pytest.raises(urllib.error.HTTPError) as missing_prefix:
+            urllib.request.urlopen(f"{base}/healthz", timeout=2)
+        assert missing_prefix.value.code == 404
+
+        with urllib.request.urlopen(f"{base}/herdeck/healthz", timeout=2) as response:
+            assert response.status == 200
+
+        with pytest.raises(urllib.error.HTTPError) as exchanged:
+            opener.open(f"{base}/herdeck/?token={d.press_token}", timeout=2)
+        assert exchanged.value.code == 303
+        assert exchanged.value.headers["Location"] == "/herdeck/"
+        cookie = exchanged.value.headers["Set-Cookie"]
+        assert "Path=/herdeck/" in cookie
+        assert "Secure" in cookie
+
+        request = urllib.request.Request(
+            f"{base}/herdeck/", headers={"Cookie": cookie.split(";", 1)[0]}
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            page = response.read().decode()
+            csp = response.headers["Content-Security-Policy"]
+        assert 'href="/herdeck/assets/xterm.css"' in page
+        assert 'src="/herdeck/assets/xterm.js"' in page
+        assert 'const basePath="/herdeck"' in page
+        assert "frame-ancestors https://cockpit.example" in csp
+
+        session_headers = {"Cookie": cookie.split(";", 1)[0]}
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{base}/herdeck/state", headers=session_headers),
+            timeout=2,
+        ) as response:
+            assert json.loads(response.read())["slots"] == 4
+        with urllib.request.urlopen(f"{base}/herdeck/assets/xterm.css", timeout=2) as response:
+            assert response.headers["Content-Type"].startswith("text/css")
+
+        pressed = []
+        d.on_press(pressed.append)
+        request = urllib.request.Request(
+            f"{base}/herdeck/press/2",
+            method="POST",
+            headers={**session_headers, "Origin": "https://cockpit.example"},
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            assert response.status == 204
+        assert pressed == [2]
+
+        request = urllib.request.Request(
+            f"{base}/press/2",
+            method="POST",
+            headers={"X-Herdeck-Token": d.press_token},
+        )
+        with pytest.raises(urllib.error.HTTPError) as missing_prefix:
+            urllib.request.urlopen(request, timeout=2)
+        assert missing_prefix.value.code == 404
+    finally:
+        d.close()
+
+
+def test_cross_origin_embed_uses_secure_cross_site_session_cookie():
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        public_origin="https://deck.example",
+        frame_ancestors=("https://cockpit.example",),
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exchanged:
+            opener.open(
+                f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=2
+            )
+        cookie = exchanged.value.headers["Set-Cookie"]
+        assert "SameSite=None" in cookie
+        assert "Secure" in cookie
+    finally:
+        d.close()
+
+
+def test_embed_policy_requires_explicit_https_public_origin():
+    with pytest.raises(ValueError, match="HTTPS public origin"):
+        WebDeck(
+            serve=False,
+            icon_provider=StubIcons(),
+            frame_ancestors=("https://cockpit.example",),
+        )
+
+
+@pytest.mark.parametrize("base_path", ["herdeck", "/herdeck/", "/../herdeck", "/her%20deck"])
+def test_rejects_unsafe_reverse_proxy_base_path(base_path):
+    with pytest.raises(ValueError, match="base path"):
+        WebDeck(serve=False, icon_provider=StubIcons(), base_path=base_path)
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://cockpit.example",
+        "https://*.example",
+        "https://cockpit.example/path",
+        "https://cockpit.example;frame-src",
+        "https://cockpit.example; frame-src https://evil.example",
+        "",
+    ],
+)
+def test_frame_ancestors_require_explicit_https_origins(origin):
+    with pytest.raises(ValueError, match="origin"):
+        WebDeck(serve=False, icon_provider=StubIcons(), frame_ancestors=(origin,))
+
+
+def test_web_health_is_minimal_and_readiness_requires_token(monkeypatch):
+    monkeypatch.setenv("HERDECK_BUILD_SHA", "abc123")
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
+    try:
+        base = f"http://{d.host}:{d.port}"
+        with urllib.request.urlopen(f"{base}/healthz", timeout=2) as response:
+            health = json.loads(response.read())
+        assert health == {"ok": True, "service": "herdeck-web", "version": "0.1.0", "build": "abc123"}
+        assert d.press_token not in json.dumps(health)
+
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"{base}/readyz", timeout=2)
+        assert exc.value.code == 403
+
+        with urllib.request.urlopen(
+            f"{base}/readyz?token={d.press_token}", timeout=2
+        ) as response:
+            ready = json.loads(response.read())
+        assert ready["ready"] is True
+        assert ready["state_version"] == 0
+        assert d.press_token not in json.dumps(ready)
     finally:
         d.close()
 
@@ -421,16 +745,13 @@ def test_page_carries_stale_indicator_and_touch_feedback(tmp_path):
     """Smoke-level guards for the embedded page: stale-state indication,
     explicit 403 handling, wake-refresh and touch affordances
     (audit: websim-stale-indicator + websim-touch-feedback)."""
-    import urllib.request
 
     d = WebDeck(
         slots=4, host="127.0.0.1", port=0, serve=True,
         icon_provider=StubIcons(), token_path=str(tmp_path / "web-token"),
     )
     try:
-        with urllib.request.urlopen(
-            f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=5
-        ) as r:
+        with _open_browser_page(d) as r:
             page = r.read().decode()
         assert "setStale" in page and "disconnected — last update" in page
         assert "token expired" in page  # explicit 403 handling, no silent freeze
@@ -518,11 +839,8 @@ def test_state_carries_grid_cols_and_page_applies_them(tmp_path):
     )
     try:
         assert _get_json(d, "/state")["cols"] == 4
-        import urllib.request
 
-        with urllib.request.urlopen(
-            f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=5
-        ) as r:
+        with _open_browser_page(d) as r:
             page = r.read().decode()
         assert "applyGrid(s.cols)" in page
         assert "setTimeout(()=>b.classList.remove('active'),350)" in page  # transient outline
@@ -537,9 +855,7 @@ def test_page_speaks_czech_when_configured(tmp_path):
         language="cs",
     )
     try:
-        with urllib.request.urlopen(
-            f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=5
-        ) as r:
+        with _open_browser_page(d) as r:
             page = r.read().decode()
         assert "stisk selhal — odpojeno?" in page
         assert "token vypršel" in page
@@ -568,7 +884,7 @@ def _term_url(
         deck.render([TileView(index, "terminal", "blue")])
         tile_version = deck._state()["tiles"][index]
     return (
-        f"http://{deck.host}:{deck.port}/term/{index}"
+        f"http://{deck.host}:{deck.port}{deck._base_path}/term/{index}"
         f"?stream={stream}&v={tile_version}&cols={cols}&rows={rows}"
         f"&token={deck.press_token}"
     )
@@ -636,6 +952,32 @@ def test_terminal_sse_streams_provider_items_and_closes_subscription(tmp_path):
         assert [event["kind"] for event in events] == ["meta", "frame", "closed"]
         assert closed == [sub]
         assert d._terminal_streams == {}
+    finally:
+        d.close()
+
+
+def test_terminal_sse_respects_reverse_proxy_prefix(tmp_path):
+    d = WebDeck(
+        slots=4,
+        host="127.0.0.1",
+        port=0,
+        serve=True,
+        icon_provider=StubIcons(),
+        token_path=str(tmp_path / "web-token"),
+        base_path="/cockpit/herdeck",
+    )
+    sub = TerminalSub()
+    sub.queue.put_nowait({"kind": "closed", "reason": "done"})
+    d.on_terminal(lambda *args: sub, lambda subscription: None)
+    try:
+        with urllib.request.urlopen(_term_url(d), timeout=5) as response:
+            assert response.headers.get_content_type() == "text/event-stream"
+            assert '"kind": "closed"' in response.read().decode()
+        with pytest.raises(urllib.error.HTTPError) as unprefixed:
+            urllib.request.urlopen(
+                _term_url(d).replace("/cockpit/herdeck/term/", "/term/"), timeout=5
+            )
+        assert unprefixed.value.code == 404
     finally:
         d.close()
 
@@ -895,9 +1237,7 @@ def test_page_includes_accessible_generation_safe_terminal_overlay(tmp_path):
         token_path=str(tmp_path / "web-token"),
     )
     try:
-        with urllib.request.urlopen(
-            f"http://{d.host}:{d.port}/?token={d.press_token}", timeout=5
-        ) as response:
+        with _open_browser_page(d) as response:
             page = response.read().decode()
             assert response.headers["Cache-Control"] == "no-store"
             assert response.headers["Referrer-Policy"] == "no-referrer"

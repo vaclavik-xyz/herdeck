@@ -63,7 +63,16 @@ DEFAULT_STATUS_COLORS: dict[str, str] = {
 
 DEFAULT_SERVER_ACCENTS: list[str] = ["teal", "violet", "orange", "pink", "lime"]
 DEFAULT_TILE_FIELDS: list[str] = ["repo", "branch", "status", "time", "server"]
-TILE_LINE_TOKENS: tuple[str, ...] = ("repo", "branch", "workspace", "tab", "agent")
+TILE_LINE_TOKENS: tuple[str, ...] = (
+    "repo",
+    "branch",
+    "workspace",
+    "tab",
+    "agent",
+    "source",
+    "work_item",
+    "run",
+)
 WORKING_ANIMATIONS: tuple[str, ...] = ("spin", "comet", "pulse", "sweep", "none")
 # How an agent tile is filled with its status colour:
 #   none  = dark tile, colour only in the status word + bottom accent bar (default)
@@ -233,17 +242,14 @@ def _parse_telegram_int_list(name: str, value) -> list[int]:
         try:
             parsed.append(_parse_telegram_int(name, item))
         except ConfigError as exc:
-            raise ConfigError(
-                f"notifications.telegram.{name} must contain integers"
-            ) from exc
+            raise ConfigError(f"notifications.telegram.{name} must contain integers") from exc
     return parsed
 
 
 def _parse_telegram_config(tg_raw: dict) -> TelegramConfig | None:
     if "token_env" not in tg_raw or "chat_id" not in tg_raw:
         log.warning(
-            "[notifications.telegram] needs both token_env and "
-            "chat_id; ignoring telegram config"
+            "[notifications.telegram] needs both token_env and chat_id; ignoring telegram config"
         )
         return None
     thread = tg_raw.get("message_thread_id")
@@ -255,7 +261,9 @@ def _parse_telegram_config(tg_raw: dict) -> TelegramConfig | None:
         allowed_user_ids=_parse_telegram_int_list(
             "allowed_user_ids", tg_raw.get("allowed_user_ids", [])
         ),
-        prompt_max_chars=_parse_telegram_int("prompt_max_chars", tg_raw.get("prompt_max_chars", 1200)),
+        prompt_max_chars=_parse_telegram_int(
+            "prompt_max_chars", tg_raw.get("prompt_max_chars", 1200)
+        ),
     )
 
 

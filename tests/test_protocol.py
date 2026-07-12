@@ -1,6 +1,6 @@
 import pytest
 
-from herdeck.model import AgentKey, AgentState, Status
+from herdeck.model import AgentKey, AgentState, Status, WorkContext
 from herdeck.protocol import (
     Error,
     Event,
@@ -54,6 +54,41 @@ def test_decode_snapshot_preserves_terminal_identity():
     msg = decode_inbound(raw)
 
     assert msg.states[0].terminal_id == "term-123"
+
+
+def test_decode_snapshot_preserves_work_context_and_capabilities():
+    raw = (
+        '{"type":"snapshot","server_id":"workbox","protocol":2,'
+        '"capabilities":["work_context","terminal_preview"],"panes":'
+        '[{"pane_id":"w1:p1","agent_type":"codex","label":"api",'
+        '"status":"working","title":"Fix issue 123","display_agent":"Codex reviewer",'
+        '"work":{"source":"github","item":"repo#123","run":"run-42",'
+        '"url":"https://example.test/issues/123"}}]}'
+    )
+
+    msg = decode_inbound(raw)
+
+    assert msg.protocol == 2
+    assert msg.capabilities == ("work_context", "terminal_preview")
+    assert msg.states[0].title == "Fix issue 123"
+    assert msg.states[0].display_agent == "Codex reviewer"
+    assert msg.states[0].work == WorkContext(
+        source="github",
+        item="repo#123",
+        run="run-42",
+        url="https://example.test/issues/123",
+    )
+
+
+def test_decode_legacy_snapshot_defaults_capabilities_and_work_context():
+    msg = decode_inbound(
+        '{"type":"snapshot","server_id":"old","panes":'
+        '[{"pane_id":"p1","agent_type":"codex","label":"api","status":"idle"}]}'
+    )
+
+    assert msg.protocol == 1
+    assert msg.capabilities == ()
+    assert msg.states[0].work == WorkContext()
 
 
 def test_decode_event_to_state():

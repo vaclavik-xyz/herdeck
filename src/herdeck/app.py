@@ -1106,21 +1106,31 @@ def _iface_addr(probe_host: str) -> str | None:
         s.close()
 
 
-def _simulator_urls(host: str, port: int, token: str) -> list[str]:
+def _simulator_urls(
+    host: str,
+    port: int,
+    token: str,
+    *,
+    base_path: str = "",
+    public_origin: str = "",
+) -> list[str]:
     """URLs worth printing for the simulator. A wildcard bind is literally
     unroutable (http://0.0.0.0:…) and the README's primary workflow opens the
     page from a phone over Tailscale — so for wildcard binds the Tailscale
     (100.64/10) and default-route addresses are announced too."""
+    suffix = f"{base_path}/?token={token}"
+    if public_origin:
+        return [f"{public_origin}{suffix}"]
     if host not in ("0.0.0.0", "::"):
-        return [f"http://{host}:{port}/?token={token}"]
+        return [f"http://{host}:{port}{suffix}"]
     urls: list[str] = []
     tailscale = _iface_addr("100.100.100.100")  # MagicDNS resolver -> ts iface
     if tailscale and tailscale.startswith("100."):
-        urls.append(f"http://{tailscale}:{port}/?token={token}")
+        urls.append(f"http://{tailscale}:{port}{suffix}")
     lan = _iface_addr("1.1.1.1")
-    if lan and f"http://{lan}:{port}/?token={token}" not in urls:
-        urls.append(f"http://{lan}:{port}/?token={token}")
-    urls.append(f"http://127.0.0.1:{port}/?token={token}")
+    if lan and f"http://{lan}:{port}{suffix}" not in urls:
+        urls.append(f"http://{lan}:{port}{suffix}")
+    urls.append(f"http://127.0.0.1:{port}{suffix}")
     return urls
 
 
@@ -1143,6 +1153,30 @@ def _resolve_tick_interval(config: Config | None) -> float:
     return config.hardware.tick_interval if config else TICK_INTERVAL
 
 
+def validate_web_bind(host: str, *, getenv=os.environ.get) -> str:
+    """Allow remote web control only on an explicit Tailscale interface."""
+    if str(getenv("HERDECK_ALLOW_UNSAFE_BIND", "")).lower() in {"1", "true", "yes"}:
+        return host
+    if host == "localhost" or host.endswith(".ts.net"):
+        return host
+    import ipaddress
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ValueError(
+            "HERDECK_WEB_BIND must be loopback or a Tailscale address; "
+            "set HERDECK_ALLOW_UNSAFE_BIND=1 to override"
+        ) from exc
+    tailscale = ipaddress.ip_network("100.64.0.0/10")
+    if address.is_loopback or address in tailscale:
+        return host
+    raise ValueError(
+        "HERDECK_WEB_BIND must be loopback or a Tailscale address; "
+        "set HERDECK_ALLOW_UNSAFE_BIND=1 to override"
+    )
+
+
 def make_deck(
     kind,
     slots,
@@ -1163,11 +1197,26 @@ def make_deck(
 
     def _call_web_factory():
         host = os.environ.get("HERDECK_WEB_BIND") or hardware.web_bind or "127.0.0.1"
+        host = validate_web_bind(host)
         env_port = os.environ.get("HERDECK_WEB_PORT")
         raw_port = env_port if env_port is not None else hardware.web_port
         port = int(raw_port if raw_port is not None else 8800)
+        base_path = os.environ.get("HERDECK_WEB_BASE_PATH", "")
+        public_origin = os.environ.get("HERDECK_WEB_PUBLIC_ORIGIN", "")
+        frame_ancestors = tuple(
+            value.strip()
+            for value in os.environ.get("HERDECK_WEB_FRAME_ANCESTORS", "").split(",")
+            if value.strip()
+        )
         try:
-            return web_factory(host=host, port=port, cols=cols)
+            return web_factory(
+                host=host,
+                port=port,
+                cols=cols,
+                base_path=base_path,
+                public_origin=public_origin,
+                frame_ancestors=frame_ancestors,
+            )
         except TypeError:
             pass
         try:
@@ -1177,7 +1226,14 @@ def make_deck(
 
     if web_factory is None:
 
-        def web_factory(host=None, port=None, cols=5):
+        def web_factory(
+            host=None,
+            port=None,
+            cols=5,
+            base_path="",
+            public_origin="",
+            frame_ancestors=(),
+        ):
             from .driver.web import WebDeck
 
             try:
@@ -1188,12 +1244,28 @@ def make_deck(
                     icons_dir=hardware.icons_dir,
                     cols=cols,
                     language=language,
+                    base_path=base_path,
+                    public_origin=public_origin,
+                    frame_ancestors=frame_ancestors,
                 )
             except TypeError:
                 # injected test doubles may predate the cols/language parameters
                 d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir)
-            for url in _simulator_urls(d.host, d.port, d.press_token):
-                print(f"herdeck web simulator on {url}")
+            if os.environ.get("HERDECK_SHOW_URL_TOKEN") == "1":
+                for url in _simulator_urls(
+                    d.host,
+                    d.port,
+                    d.press_token,
+                    base_path=getattr(d, "_base_path", ""),
+                    public_origin=getattr(d, "_public_origin", ""),
+                ):
+                    print(f"herdeck web simulator on {url}")
+            else:
+                print(
+                    f"herdeck web simulator listening on "
+                    f"http://{d.host}:{d.port}{getattr(d, '_base_path', '')}/ "
+                    "(run 'herdeck-web url' to print the capability URL)"
+                )
             return d
 
     if d200_factory is None:

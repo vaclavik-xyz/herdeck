@@ -311,6 +311,24 @@ def test_dispatch_rekeys_inbound_to_config_server_id():
     assert seen["states"][0].agent_type == "claude"
 
 
+def test_dispatch_exposes_negotiated_bridge_capabilities():
+    cfg = ServerConfig("dev", "ws://x", "t")
+    conn = Connector(
+        cfg,
+        on_snapshot=lambda sid, states: None,
+        on_event=lambda sid, state: None,
+        on_connection=lambda sid, up: None,
+    )
+
+    conn._dispatch(
+        '{"type":"snapshot","server_id":"bridge","protocol":2,'
+        '"capabilities":["work_context","terminal_preview"],"panes":[]}'
+    )
+
+    assert conn.protocol == 2
+    assert conn.capabilities == frozenset({"work_context", "terminal_preview"})
+
+
 def test_dispatch_rekey_preserves_workspace_and_tab():
     cfg = ServerConfig("dev", "ws://x", "t")
     seen = {}

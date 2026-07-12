@@ -110,6 +110,17 @@ herdr's socket lives at `~/.config/herdr/herdr.sock` (macOS & Linux).
    (`launchctl load -w ~/Library/LaunchAgents/dev.herdeck.bridge.plist`);
    **Linux** → `deploy/herdeck-bridge.service` (systemd).
 
+For a service installation, prefer a private token file over an environment
+value:
+
+```bash
+mkdir -p ~/.config/herdeck
+openssl rand -hex 32 > ~/.config/herdeck/bridge-token
+chmod 600 ~/.config/herdeck/bridge-token
+HERDECK_TOKEN_FILE=~/.config/herdeck/bridge-token \
+  HERDECK_BIND=100.x.y.z python -m herdeck.bridge
+```
+
 ## Mac setup (where the deck is)
 1. `pip install -e ".[deck]"` (pulls `strmdck` + `pillow`).
 2. Copy `config.example.toml` to `~/.config/herdeck/config.toml`, set the
@@ -177,6 +188,89 @@ The simulator URL token now grants both deck controls and visibility into agent
 terminals. Treat it as a credential and bind the simulator only to loopback or
 your trusted Tailscale interface — never `0.0.0.0`, a public IP, or an untrusted
 LAN.
+
+### Running as a service
+
+`herdeck-web` makes the browser runtime explicit, and `herdeck-service` installs
+macOS LaunchAgents without placing token values in plist files:
+
+```bash
+herdeck-service install bridge --bind 100.x.y.z --server-id workbox
+herdeck-service install web --bind 100.x.y.z --config ~/.config/herdeck/config.toml
+herdeck-service status web
+herdeck-web url --host 100.x.y.z --port 8800
+```
+
+The install command creates the bridge token at
+`~/.config/herdeck/bridge-token` with mode `0600` when needed. Web capability
+URLs are no longer written to normal startup logs; `herdeck-web url` prints one
+explicitly. Set `HERDECK_SHOW_URL_TOKEN=1` only for compatibility with an
+existing supervised log workflow.
+
+`GET /healthz` is an unauthenticated, non-sensitive liveness response. The
+token-protected `GET /readyz?token=...` also reports readiness. Probe a running
+web service without exposing its token with:
+
+```bash
+herdeck-doctor --web-url http://100.x.y.z:8800
+```
+
+### Reverse proxy and cockpit embed
+
+Herdeck can run behind an HTTPS reverse proxy under a preserved path prefix.
+Keep the backend on loopback, forward `/herdeck/` without stripping the prefix,
+and opt in only the exact HTTPS origin allowed to frame the deck:
+
+```bash
+herdeck-service install web \
+  --bind 127.0.0.1 \
+  --config ~/.config/herdeck/config.toml \
+  --base-path /herdeck \
+  --public-origin https://cockpit.example \
+  --frame-ancestor https://cockpit.example
+
+herdeck-web url \
+  --host 127.0.0.1 \
+  --base-path /herdeck \
+  --public-origin https://cockpit.example
+
+herdeck-doctor --web-url https://cockpit.example/herdeck/
+```
+
+By default the Content Security Policy uses `frame-ancestors 'none'`. Frame
+ancestors must be explicit HTTPS origins; wildcards, paths, and forwarded trust
+headers are not accepted. `HERDECK_WEB_FRAME_ANCESTORS` is the comma-separated
+environment equivalent of repeated `--frame-ancestor` options.
+
+An embed policy requires an explicit HTTPS `public_origin`. Hosting Herdeck
+under the cockpit's own origin (as in the `/herdeck` example) is the most robust
+setup and keeps `SameSite=Strict`. If an allowed parent has a different origin,
+Herdeck emits `SameSite=None; Secure`; that deployment also depends on the
+browser allowing third-party cookies for the iframe.
+
+The capability URL is only a bootstrap credential. A browser exchanges its
+`?token=...` value for a bounded, expiring `HttpOnly; SameSite=Strict` session
+cookie and is redirected to a clean URL. Browser writes additionally require an
+exact `Origin` match. Existing automation can continue to use
+`X-Herdeck-Token`; query-token reads remain compatible. When
+`HERDECK_WEB_PUBLIC_ORIGIN` is HTTPS the session cookie is also `Secure`.
+
+### Optional work/run context
+
+Orchestrators can attach display-only work identity to a Herdr pane through
+`pane.report_metadata` state labels. Herdeck recognizes only these bounded keys:
+
+```text
+work.source = github
+work.item   = vaclavik-xyz/herdeck#123
+work.run    = run-42
+work.url    = https://github.com/vaclavik-xyz/herdeck/issues/123
+```
+
+Unknown labels never cross the Herdeck bridge. `work.url` must be HTTPS and is
+display metadata only; Herdeck never opens or executes it automatically. Add
+`source`, `work_item`, or `run` to `view.tile_primary` / `tile_secondary` to
+render the context. Interactive Telegram alerts include `work.item` when set.
 
 **Headless.** `HERDECK_FAKE_DECK=1 python -m herdeck.app` uses an in-memory
 renderer (no UI). `scripts/e2e_verify.py` connects the pipeline to a bridge and
@@ -387,9 +481,9 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   encrypted overlay (Tailscale/WireGuard) — the token is both the authentication
   and the only confidentiality boundary. Never bind it to a plain LAN or public
   IP. Non-idempotent key sends are never retried (no double-approve).
-- The token is read from an environment variable; never commit it. The example
-  launchd/systemd units store it inline — for real use keep them readable only by
-  your user (`chmod 600`) or source the token from a secret store / Keychain.
+- The bridge token is read from `HERDECK_TOKEN_FILE` (recommended) or the legacy
+  `HERDECK_TOKEN` environment variable. Keep token files mode `0600`; generated
+  launchd units contain only the file path, never the token value.
 
 ## Hardware notes (verified on a real D200, macOS)
 - Rendering and key input both work on macOS. The driver opens the deck's

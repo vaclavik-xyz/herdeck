@@ -2,7 +2,7 @@
 <!-- macOS LaunchAgent for the herdeck bridge (runs on the herdr host).
      Install: copy to ~/Library/LaunchAgents/, fill in the values, then
        launchctl load -w ~/Library/LaunchAgents/dev.herdeck.bridge.plist
-     Keep it readable only by your user: chmod 600 (it holds the token). -->
+     Create ~/.config/herdeck/bridge-token with mode 0600. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -21,7 +21,7 @@
     <key>HERDECK_BIND</key><string>100.x.y.z</string>
     <key>HERDECK_PORT</key><string>8788</string>
     <key>HERDECK_SERVER_ID</key><string>dev</string>
-    <key>HERDECK_TOKEN</key><string>change-me</string>
+    <key>HERDECK_TOKEN_FILE</key><string>/Users/you/.config/herdeck/bridge-token</string>
     <key>PYTHONPATH</key><string>/Users/you/herdeck/src</string>
   </dict>
   <key>KeepAlive</key><true/>

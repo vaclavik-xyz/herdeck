@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.herdeck.web</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/herdeck/.venv/bin/python</string>
+    <string>-m</string>
+    <string>herdeck.web</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HERDECK_CONFIG</key><string>/Users/you/.config/herdeck/config.toml</string>
+    <key>HERDECK_WEB_BIND</key><string>127.0.0.1</string>
+    <key>HERDECK_WEB_PORT</key><string>8800</string>
+    <key>HERDECK_WEB_BASE_PATH</key><string>/herdeck</string>
+    <key>HERDECK_WEB_PUBLIC_ORIGIN</key><string>https://cockpit.example</string>
+    <key>HERDECK_WEB_FRAME_ANCESTORS</key><string>https://cockpit.example</string>
+  </dict>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/you/Library/Logs/herdeck-web.log</string>
+  <key>StandardErrorPath</key><string>/Users/you/Library/Logs/herdeck-web.log</string>
+</dict>
+</plist>

@@ -10,8 +10,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Live terminal preview in the browser deck: long-press, right-click, or use
   `Shift+Enter` on an agent tile to watch that pane read-only, streamed from
   herdr (`terminal session observe`, herdr >= 0.7.3) through the bridge.
+- Generic work item/run metadata in snapshots and deck/Telegram views.
+- Production web and bridge service commands with private token-file support,
+  health probes, reverse-proxy path prefixes, and explicit HTTPS embed policy.
 
 ### Changed
+- Browser capability URLs now exchange into expiring HttpOnly sessions and
+  redirect to clean URLs; browser writes require an exact origin match.
 - The bridge now bootstraps fleet state from herdr's `session.snapshot` API and
   subscribes to tab/workspace/worktree events, so workspace, tab, and branch
   labels update instantly. **herdr >= 0.7.2 is now required** — check with
