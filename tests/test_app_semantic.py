@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from herdeck.app import App, _mock_config, _run_mock
+from herdeck.app import SEMANTIC_GENERATION_LIMIT, App, _mock_config, _run_mock
 from herdeck.config import Config, ServerConfig
 from herdeck.driver.fake import FakeRenderer
 from herdeck.model import AgentKey, AgentState, Status
@@ -32,6 +32,28 @@ def test_semantic_generation_changes_only_for_affected_target():
         AgentState(AgentKey("local", "p1"), "codex", "first", Status.WORKING),
     )
     assert app.semantic_generation("local", "p1") != first_generation
+
+
+def test_semantic_generation_history_is_bounded_and_never_reuses_serials():
+    config = Config(
+        servers=[ServerConfig("local", "ws://local", "token")],
+        profiles={},
+        overview_order=["local"],
+        grid=(5, 3),
+    )
+    app = App(config, FakeRenderer(), lambda _command: None)
+    first = AgentKey("local", "first")
+    app._bump_semantic_targets((first,))
+    first_generation = app.semantic_generation("local", "first")
+
+    app._bump_semantic_targets(
+        AgentKey("local", f"pane-{index}") for index in range(SEMANTIC_GENERATION_LIMIT + 1)
+    )
+    assert len(app._semantic_generations) == SEMANTIC_GENERATION_LIMIT
+    assert first not in app._semantic_generations
+
+    app._bump_semantic_targets((first,))
+    assert app.semantic_generation("local", "first") != first_generation
 
 
 class SemanticFakeDeck(FakeRenderer):

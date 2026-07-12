@@ -6,6 +6,7 @@ import logging
 import os
 import queue
 import uuid
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
@@ -51,6 +52,7 @@ FULL_REFRESH_TICKS = 25
 # without a hold the very next refresh overwrote it within one 0.4s tick and
 # the user never learned why their action had no effect.
 STATUS_PANEL_HOLD_S = 4.0
+SEMANTIC_GENERATION_LIMIT = 4096
 
 # Module-level indirection so tests can fake the clock.
 _monotonic = None  # set lazily to time.monotonic (keeps import cost at top low)
@@ -230,7 +232,8 @@ class App:
         # queue in TermSub is the only state shared with the HTTP thread.
         self._terminals: dict[str, TermSub] = {}
         self._servers_up: set[str] = set()
-        self._semantic_generations: dict[AgentKey, int] = {}
+        self._semantic_generations: OrderedDict[AgentKey, int] = OrderedDict()
+        self._semantic_generation_serial = 0
         self._semantic_config_generation = 0
         self.notifier = notifier or NoopNotifier()
         self._blocked_runtime_factory = blocked_runtime_factory
@@ -297,7 +300,11 @@ class App:
 
     def _bump_semantic_targets(self, keys) -> None:
         for key in keys:
-            self._semantic_generations[key] = self._semantic_generations.get(key, 0) + 1
+            self._semantic_generation_serial += 1
+            self._semantic_generations[key] = self._semantic_generation_serial
+            self._semantic_generations.move_to_end(key)
+            while len(self._semantic_generations) > SEMANTIC_GENERATION_LIMIT:
+                self._semantic_generations.popitem(last=False)
 
     def server_available(self, server_id: str) -> bool:
         return server_id in self._servers_up
