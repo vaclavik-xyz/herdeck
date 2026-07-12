@@ -232,6 +232,7 @@ class App:
         # queue in TermSub is the only state shared with the HTTP thread.
         self._terminals: dict[str, TermSub] = {}
         self._servers_up: set[str] = set()
+        self._semantic_ready_servers: set[str] = set()
         self._semantic_generations: OrderedDict[AgentKey, int] = OrderedDict()
         self._semantic_generation_serial = 0
         self._semantic_config_generation = 0
@@ -307,7 +308,7 @@ class App:
                 self._semantic_generations.popitem(last=False)
 
     def server_available(self, server_id: str) -> bool:
-        return server_id in self._servers_up
+        return server_id in self._semantic_ready_servers
 
     def next_req_for(self, cmd: Command) -> str | None:
         if cmd.kind == "list":
@@ -473,6 +474,7 @@ class App:
             if self._terminal_identity_changed(self.orch.get_agent(state.key), state)
         }
         self._blocked_keys.difference_update(recycled)
+        self._semantic_ready_servers.add(server_id)
         key = self.orch.drill_key()
         self.orch.apply_snapshot(server_id, states)
         if key is not None and key.server_id == server_id:
@@ -519,6 +521,7 @@ class App:
         self._bump_semantic_targets(
             agent.key for agent in self.orch.agents() if agent.key.server_id == server_id
         )
+        self._semantic_ready_servers.discard(server_id)
         if up:
             self._servers_up.add(server_id)
         else:
@@ -762,6 +765,7 @@ class App:
         affected = (old_servers - allowed_servers) | restarted
         for server_id in affected:
             self._servers_up.discard(server_id)
+            self._semantic_ready_servers.discard(server_id)
             self._close_server_terminals(server_id)
         if restarted:
             self.orch.clear_server_state(restarted)

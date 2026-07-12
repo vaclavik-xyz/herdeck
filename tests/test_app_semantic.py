@@ -56,6 +56,44 @@ def test_semantic_generation_history_is_bounded_and_never_reuses_serials():
     assert app.semantic_generation("local", "first") != first_generation
 
 
+def test_semantic_server_stays_unavailable_until_fresh_reconnect_snapshot():
+    config = Config(
+        servers=[ServerConfig("local", "ws://local", "token")],
+        profiles={},
+        overview_order=["local"],
+        grid=(5, 3),
+    )
+    app = App(config, FakeRenderer(), lambda _command: None)
+    stale = AgentState(
+        AgentKey("local", "p1"),
+        "codex",
+        "stale",
+        Status.BLOCKED,
+        terminal_id="old-terminal",
+    )
+
+    app.handle_connection("local", True)
+    assert app.server_available("local") is False
+    app.handle_snapshot("local", [stale])
+    assert app.server_available("local") is True
+
+    app.handle_connection("local", False)
+    app.handle_connection("local", True)
+    assert app.orch.get_agent(stale.key) is stale
+    assert app.server_available("local") is False
+
+    fresh = AgentState(
+        AgentKey("local", "p1"),
+        "codex",
+        "fresh",
+        Status.WORKING,
+        terminal_id="new-terminal",
+    )
+    app.handle_snapshot("local", [fresh])
+    assert app.server_available("local") is True
+    assert app.orch.get_agent(fresh.key) is fresh
+
+
 class SemanticFakeDeck(FakeRenderer):
     def __init__(self):
         super().__init__()
