@@ -66,7 +66,7 @@ def agent(
 
 def make_api(agents, *, available=True, generation=None, clock=None):
     control = FakeControl(agents)
-    current_generation = generation or (lambda: 1)
+    current_generation = generation or (lambda _server, _pane: 1)
     api = SemanticAPI(
         control,
         agents=lambda: list(agents),
@@ -222,7 +222,7 @@ async def test_confirmed_stop_executes_once_and_replays_result():
 async def test_stop_confirmation_invalidates_on_generation_change():
     agents = [agent()]
     generation = [1]
-    api, control = make_api(agents, generation=lambda: generation[0])
+    api, control = make_api(agents, generation=lambda _server, _pane: generation[0])
     armed = await api.action("browser:a", target(action="stop"))
     generation[0] += 1
 

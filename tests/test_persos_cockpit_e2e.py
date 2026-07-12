@@ -56,7 +56,7 @@ class CockpitHarness:
             self.control,
             agents=lambda: [self.agent],
             server_available=lambda _server: self.available,
-            generation=lambda: self.generation,
+            generation=lambda _server, _pane: self.generation,
         )
         self.deck = WebDeck(
             slots=4,

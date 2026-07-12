@@ -552,7 +552,7 @@ class WebDeck(DeckDriver):
                 merged = {"Cache-Control": "no-store", **(headers or {})}
                 self._send(
                     code,
-                    json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode(),
+                    json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode(),
                     "application/json; charset=utf-8",
                     merged,
                 )

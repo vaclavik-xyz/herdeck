@@ -26,7 +26,7 @@ from .connector import Connector
 from .driver.base import DeckDriver, PanelView
 from .driver.fake import FakeRenderer
 from .i18n import tr
-from .model import AgentState, Status
+from .model import AgentKey, AgentState, Status
 from .notify import (
     BlockedAlertNotifier,
     BlockedNotificationRuntime,
@@ -230,7 +230,8 @@ class App:
         # queue in TermSub is the only state shared with the HTTP thread.
         self._terminals: dict[str, TermSub] = {}
         self._servers_up: set[str] = set()
-        self._semantic_generation = 0
+        self._semantic_generations: dict[AgentKey, int] = {}
+        self._semantic_config_generation = 0
         self.notifier = notifier or NoopNotifier()
         self._blocked_runtime_factory = blocked_runtime_factory
         self.notification_poller = None
@@ -288,8 +289,15 @@ class App:
     def set_runtime_control(self, runtime_control: RuntimeAgentControl | None) -> None:
         self._runtime_control = runtime_control
 
-    def semantic_generation(self) -> int:
-        return self._semantic_generation
+    def semantic_generation(self, server_id: str, pane_id: str) -> tuple[int, int]:
+        return (
+            self._semantic_config_generation,
+            self._semantic_generations.get(AgentKey(server_id, pane_id), 0),
+        )
+
+    def _bump_semantic_targets(self, keys) -> None:
+        for key in keys:
+            self._semantic_generations[key] = self._semantic_generations.get(key, 0) + 1
 
     def server_available(self, server_id: str) -> bool:
         return server_id in self._servers_up
@@ -445,7 +453,13 @@ class App:
                 server_id,
                 [(s.key.pane_id, s.agent_type, s.label, s.status.value) for s in states],
             )
-        self._semantic_generation += 1
+        previous = {
+            agent.key: agent for agent in self.orch.agents() if agent.key.server_id == server_id
+        }
+        current = {state.key: state for state in states}
+        self._bump_semantic_targets(
+            key for key in previous.keys() | current.keys() if previous.get(key) != current.get(key)
+        )
         recycled = {
             state.key
             for state in states
@@ -465,8 +479,10 @@ class App:
     def handle_event(self, server_id: str, state: AgentState) -> None:
         if not self._server_allowed(server_id):
             return
-        self._semantic_generation += 1
-        recycled = self._terminal_identity_changed(self.orch.get_agent(state.key), state)
+        previous = self.orch.get_agent(state.key)
+        if previous != state:
+            self._bump_semantic_targets((state.key,))
+        recycled = self._terminal_identity_changed(previous, state)
         if recycled:
             self._blocked_keys.discard(state.key)
         self.orch.apply_event(server_id, state)
@@ -493,7 +509,9 @@ class App:
     def handle_connection(self, server_id: str, up: bool) -> None:
         if not self._server_allowed(server_id):
             return
-        self._semantic_generation += 1
+        self._bump_semantic_targets(
+            agent.key for agent in self.orch.agents() if agent.key.server_id == server_id
+        )
         if up:
             self._servers_up.add(server_id)
         else:
@@ -722,7 +740,7 @@ class App:
     def _apply_config(self, new_config: Config) -> None:
         # A successful apply supersedes any held "reload failed" notice.
         self._status_panel = None
-        self._semantic_generation += 1
+        self._semantic_config_generation += 1
         old_servers = {server.id for server in self.config.servers}
         self.config = new_config
         if self._runtime_control is not None:
@@ -906,8 +924,31 @@ def _mock_agents():
     for pane, agent, repo, branch, status in rows:
         s = AgentState(AgentKey("mock", pane), agent, repo, status)
         s.repo, s.branch = repo, branch
+        s.terminal_id = f"mock-terminal-{pane}"
         out.append(s)
     return out
+
+
+def _install_semantic_runtime(
+    app: App,
+    deck: DeckDriver,
+    runtime_control: RuntimeAgentControl,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    on_semantic = getattr(deck, "on_semantic", None)
+    if not callable(on_semantic):
+        return
+    from .semantic_api import SemanticAPI
+
+    semantic_api = SemanticAPI(
+        runtime_control,
+        agents=app.orch.agents,
+        server_available=app.server_available,
+        generation=app.semantic_generation,
+    )
+    on_semantic(
+        lambda request: asyncio.run_coroutine_threadsafe(semantic_api.handle(request), loop)
+    )
 
 
 async def _run_mock(config: Config, deck: DeckDriver) -> None:
@@ -929,6 +970,24 @@ async def _run_mock(config: Config, deck: DeckDriver) -> None:
     app.handle_connection(server, True)
     agents = _mock_agents()
     app.handle_snapshot(server, agents)
+
+    async def runtime_send(cmd: Command, req: str) -> None:
+        current = app.orch.get_agent(AgentKey(cmd.server_id, cmd.pane_id or ""))
+        if current is None:
+            data = {"sent": False, "message": "agent is no longer available"}
+        elif cmd.kind == "act_if_blocked" and current.status is not Status.BLOCKED:
+            data = {"sent": False, "skipped": True}
+        else:
+            data = {"sent": True}
+        loop.call_soon(app.handle_result, server, req, data)
+
+    runtime_control = RuntimeAgentControl(
+        config,
+        send=runtime_send,
+        current_agent=app.orch.get_agent,
+    )
+    app.set_runtime_control(runtime_control)
+    _install_semantic_runtime(app, deck, runtime_control, loop)
 
     async def cycle():  # flip a status periodically for life
         order = [Status.WORKING, Status.BLOCKED, Status.IDLE, Status.DONE]
@@ -1069,19 +1128,7 @@ async def _run(
         current_agent=app.orch.get_agent,
     )
     _install_telegram_runtime(app, config, runtime_control)
-    on_semantic = getattr(deck, "on_semantic", None)
-    if callable(on_semantic):
-        from .semantic_api import SemanticAPI
-
-        semantic_api = SemanticAPI(
-            runtime_control,
-            agents=app.orch.agents,
-            server_available=app.server_available,
-            generation=app.semantic_generation,
-        )
-        on_semantic(
-            lambda request: asyncio.run_coroutine_threadsafe(semantic_api.handle(request), loop)
-        )
+    _install_semantic_runtime(app, deck, runtime_control, loop)
     for server in config.servers:
         app.orch.set_connection(server.id, False)
     app._refresh()

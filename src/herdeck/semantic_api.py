@@ -38,7 +38,7 @@ class _StopChallenge:
     caller: str
     target: tuple[str, str, str]
     expires_at: float
-    generation: int
+    generation: object
 
 
 def _bounded(value: object, limit: int) -> str:
@@ -81,7 +81,7 @@ class SemanticAPI:
         *,
         agents: Callable[[], list[AgentState]],
         server_available: Callable[[str], bool],
-        generation: Callable[[], int],
+        generation: Callable[[str, str], object],
         clock: Callable[[], float] | None = None,
     ) -> None:
         self._control = control
@@ -166,7 +166,7 @@ class SemanticAPI:
                     caller=caller,
                     target=target,
                     expires_at=self._clock() + STOP_CONFIRM_TTL_S,
-                    generation=self._generation(),
+                    generation=self._generation(target[0], target[1]),
                 )
                 response = SemanticResponse(
                     409,
@@ -317,7 +317,7 @@ class SemanticAPI:
         if (
             challenge.caller != caller
             or challenge.target != target
-            or challenge.generation != self._generation()
+            or challenge.generation != self._generation(target[0], target[1])
         ):
             return self._outcome(409, "confirmation_expired", "confirmation is invalid")
         return None
