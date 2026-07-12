@@ -190,12 +190,18 @@ curl --fail --silent "https://persos.example/herdeck/healthz"
 curl --fail --silent \
   -H "X-Herdeck-Token: $HERDECK_WEB_TOKEN" \
   "https://persos.example/herdeck/api/v1/agents"
+handoff_headers=$(mktemp "${TMPDIR:-/tmp}/herdeck-handoff.XXXXXX")
+chmod 600 "$handoff_headers"
+trap 'rm -f "$handoff_headers"' EXIT HUP INT TERM
 curl --fail --silent -X POST \
   -H "X-Herdeck-Token: $HERDECK_WEB_TOKEN" \
-  -D /tmp/herdeck-handoff.headers \
+  -D "$handoff_headers" \
   "https://persos.example/herdeck/api/v1/browser-sessions"
+grep -Eqi '^Set-Cookie: herdeck_session=[^;]+; Path=/herdeck/; HttpOnly;.*Secure' \
+  "$handoff_headers"
 ```
 
 Confirm `/api/v1/agents` outside `/herdeck` returns 404, the handoff response
-contains `Path=/herdeck/; HttpOnly; Secure`, and ordinary output contains no
-credential, browser-session value, prompt, or terminal content.
+cookie passed the attribute-only `grep` check, and ordinary output contains no
+credential, browser-session value, prompt, or terminal content. Never print the
+unredacted headers file.
