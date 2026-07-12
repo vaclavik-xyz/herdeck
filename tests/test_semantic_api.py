@@ -180,6 +180,20 @@ async def test_configured_approve_confirmation_is_caller_and_action_bound():
 
 
 @pytest.mark.asyncio
+async def test_configured_confirmation_still_skips_nonblocked_agent_without_challenge():
+    agents = [agent(status=Status.WORKING)]
+    api, control = make_api(agents)
+    control.confirm_actions.add("approve")
+
+    response = await api.action("browser:a", target(action="approve"))
+
+    assert response.status == 200
+    assert response.body["outcome"] == "skipped"
+    assert "confirmation" not in response.body
+    assert control.calls == []
+
+
+@pytest.mark.asyncio
 async def test_concurrent_duplicate_action_joins_the_inflight_result():
     agents = [agent()]
     api, control = make_api(agents)

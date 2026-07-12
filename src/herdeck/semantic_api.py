@@ -160,6 +160,10 @@ class SemanticAPI:
                     return agent
                 if not self._server_available(agent.key.server_id):
                     return self._outcome(503, "unavailable_target", "target server is offline")
+                if action in {"approve", "deny"} and agent.status is not Status.BLOCKED:
+                    response = self._outcome(200, "skipped", "agent is not blocked")
+                    self._remember(caller, idempotency_key, fingerprint, response)
+                    return response
                 challenge = secrets.token_urlsafe(24)
                 self._prune()
                 while len(self._challenges) >= STOP_CONFIRM_LIMIT:
