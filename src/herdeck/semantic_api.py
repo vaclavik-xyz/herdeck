@@ -17,6 +17,7 @@ TEXT_MAX_BYTES = 4096
 IDEMPOTENCY_TTL_S = 10 * 60.0
 IDEMPOTENCY_LIMIT = 1024
 STOP_CONFIRM_TTL_S = 60.0
+STOP_CONFIRM_LIMIT = 1024
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,7 @@ class SemanticAPI:
         self._clock = clock or time.monotonic
         self._results: OrderedDict[tuple[str, str], _StoredResult] = OrderedDict()
         self._inflight: dict[tuple[str, str], tuple[str, asyncio.Future[SemanticResponse]]] = {}
-        self._challenges: dict[str, _StopChallenge] = {}
+        self._challenges: OrderedDict[str, _StopChallenge] = OrderedDict()
 
     async def handle(self, request: dict) -> SemanticResponse:
         operation = request.get("operation")
@@ -159,13 +160,15 @@ class SemanticAPI:
                     return self._outcome(503, "unavailable_target", "target server is offline")
                 challenge = secrets.token_urlsafe(24)
                 self._prune()
+                while len(self._challenges) >= STOP_CONFIRM_LIMIT:
+                    self._challenges.popitem(last=False)
                 self._challenges[challenge] = _StopChallenge(
                     caller=caller,
                     target=target,
                     expires_at=self._clock() + STOP_CONFIRM_TTL_S,
                     generation=self._generation(),
                 )
-                return SemanticResponse(
+                response = SemanticResponse(
                     409,
                     {
                         "api_version": API_VERSION,
@@ -174,6 +177,14 @@ class SemanticAPI:
                         "expires_in": int(STOP_CONFIRM_TTL_S),
                     },
                 )
+                self._remember(
+                    caller,
+                    idempotency_key,
+                    fingerprint,
+                    response,
+                    ttl=STOP_CONFIRM_TTL_S,
+                )
+                return response
 
         owner, pending = self._claim(caller, idempotency_key, fingerprint)
         if not owner:
@@ -344,14 +355,18 @@ class SemanticAPI:
         return stored.response
 
     def _remember(
-        self, caller: str, key: str, fingerprint: str, response: SemanticResponse
+        self,
+        caller: str,
+        key: str,
+        fingerprint: str,
+        response: SemanticResponse,
+        *,
+        ttl: float = IDEMPOTENCY_TTL_S,
     ) -> None:
         self._prune()
         while len(self._results) >= IDEMPOTENCY_LIMIT:
             self._results.popitem(last=False)
-        self._results[(caller, key)] = _StoredResult(
-            fingerprint, response, self._clock() + IDEMPOTENCY_TTL_S
-        )
+        self._results[(caller, key)] = _StoredResult(fingerprint, response, self._clock() + ttl)
 
     def _claim(
         self, caller: str, key: str, fingerprint: str
@@ -388,13 +403,13 @@ class SemanticAPI:
         self._results = OrderedDict(
             (key, value) for key, value in self._results.items() if value.expires_at > now
         )
-        self._challenges = {
-            key: value for key, value in self._challenges.items() if value.expires_at > now
-        }
+        self._challenges = OrderedDict(
+            (key, value) for key, value in self._challenges.items() if value.expires_at > now
+        )
 
     @staticmethod
     def _fingerprint(operation: str, payload: dict) -> str:
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(f"{operation}\0{canonical}".encode()).hexdigest()
 
     @staticmethod

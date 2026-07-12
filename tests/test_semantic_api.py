@@ -204,7 +204,11 @@ async def test_confirmed_stop_executes_once_and_replays_result():
     agents = [agent()]
     api, control = make_api(agents)
     armed = await api.action("browser:a", target(action="stop"))
-    payload = target(action="stop", confirmation=armed.body["confirmation"])
+    payload = target(
+        action="stop",
+        confirmation=armed.body["confirmation"],
+        idempotency_key="request-confirm",
+    )
 
     sent = await api.action("browser:a", payload)
     replay = await api.action("browser:a", payload)
@@ -223,7 +227,12 @@ async def test_stop_confirmation_invalidates_on_generation_change():
     generation[0] += 1
 
     response = await api.action(
-        "browser:a", target(action="stop", confirmation=armed.body["confirmation"])
+        "browser:a",
+        target(
+            action="stop",
+            confirmation=armed.body["confirmation"],
+            idempotency_key="request-confirm",
+        ),
     )
 
     assert response.body["outcome"] == "confirmation_expired"
@@ -262,6 +271,30 @@ async def test_stop_confirmation_expires_and_cannot_cross_targets():
     )
     assert expired.body["outcome"] == "confirmation_expired"
     assert control.calls == []
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_stop_reuses_challenge_for_duplicate_request():
+    agents = [agent()]
+    api, control = make_api(agents)
+
+    first = await api.action("browser:a", target(action="stop"))
+    duplicate = await api.action("browser:a", target(action="stop"))
+
+    assert duplicate == first
+    assert len(api._challenges) == 1
+    assert control.calls == []
+
+
+@pytest.mark.asyncio
+async def test_surrogate_in_idempotency_key_does_not_raise_internal_error():
+    agents = [agent()]
+    api, control = make_api(agents)
+
+    response = await api.action("server:a", target(action="approve", idempotency_key="bad-\ud800"))
+
+    assert response.body["outcome"] == "sent"
+    assert control.calls == [("approve", AgentKey("local", "p1"))]
 
 
 @pytest.mark.asyncio
