@@ -43,6 +43,10 @@ class SemanticFakeDeck(FakeRenderer):
         self.semantic_callback = callback
 
 
+async def semantic_request(deck, request):
+    return await asyncio.to_thread(lambda: deck.semantic_callback(request).result(timeout=2))
+
+
 @pytest.mark.asyncio
 async def test_mock_runtime_registers_live_semantic_inventory():
     deck = SemanticFakeDeck()
@@ -54,16 +58,61 @@ async def test_mock_runtime_registers_live_semantic_inventory():
             await asyncio.sleep(0)
         assert deck.semantic_callback is not None
 
-        response = await asyncio.to_thread(
-            lambda: deck.semantic_callback(
-                {"operation": "inventory", "caller": "server:test", "payload": None}
-            ).result(timeout=2)
+        response = await semantic_request(
+            deck,
+            {"operation": "inventory", "caller": "server:test", "payload": None},
         )
         assert response.status == 200
         assert len(response.body["agents"]) == 5
         assert all(
             row["terminal_id"].startswith("mock-terminal-") for row in response.body["agents"]
         )
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.asyncio
+async def test_mock_transition_invalidates_stop_confirmation_for_changed_target():
+    deck = SemanticFakeDeck()
+    task = asyncio.create_task(_run_mock(_mock_config(), deck, cycle_interval=0.05))
+    try:
+        while deck.semantic_callback is None:
+            await asyncio.sleep(0)
+        armed = await semantic_request(
+            deck,
+            {
+                "operation": "action",
+                "caller": "browser:test",
+                "payload": {
+                    "server_id": "mock",
+                    "pane_id": "p1",
+                    "terminal_id": "mock-terminal-p1",
+                    "idempotency_key": "stop-arm",
+                    "action": "stop",
+                },
+            },
+        )
+        assert armed.body["outcome"] == "confirmation_required"
+
+        await asyncio.sleep(0.08)
+        confirmed = await semantic_request(
+            deck,
+            {
+                "operation": "action",
+                "caller": "browser:test",
+                "payload": {
+                    "server_id": "mock",
+                    "pane_id": "p1",
+                    "terminal_id": "mock-terminal-p1",
+                    "idempotency_key": "stop-confirm",
+                    "action": "stop",
+                    "confirmation": armed.body["confirmation"],
+                },
+            },
+        )
+        assert confirmed.body["outcome"] == "confirmation_expired"
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

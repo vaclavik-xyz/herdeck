@@ -951,7 +951,7 @@ def _install_semantic_runtime(
     )
 
 
-async def _run_mock(config: Config, deck: DeckDriver) -> None:
+async def _run_mock(config: Config, deck: DeckDriver, *, cycle_interval: float = 4.0) -> None:
     """Drive the app with synthetic, lively data — no bridge required."""
     from .model import Status
 
@@ -993,7 +993,7 @@ async def _run_mock(config: Config, deck: DeckDriver) -> None:
         order = [Status.WORKING, Status.BLOCKED, Status.IDLE, Status.DONE]
         i = 0
         while True:
-            await asyncio.sleep(4)
+            await asyncio.sleep(cycle_interval)
             index = i % len(agents)
             current = agents[index]
             status = (
