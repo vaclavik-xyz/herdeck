@@ -255,6 +255,10 @@ exact `Origin` match. Existing automation can continue to use
 `X-Herdeck-Token`; query-token reads remain compatible. When
 `HERDECK_WEB_PUBLIC_ORIGIN` is HTTPS the session cookie is also `Secure`.
 
+For a persOS cockpit, including the semantic agent API, server-to-server browser
+session handoff, guarded approve/deny/stop/send-text calls, and the deployment
+contract, see [docs/persos-cockpit.md](docs/persos-cockpit.md).
+
 ### Optional work/run context
 
 Orchestrators can attach display-only work identity to a Herdr pane through
