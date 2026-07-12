@@ -382,6 +382,26 @@ async def test_idempotency_key_cannot_be_reused_for_different_payload():
 
 
 @pytest.mark.asyncio
+async def test_idempotency_capacity_fails_closed_without_evicting_live_results(monkeypatch):
+    import herdeck.semantic_api as semantic_api
+
+    monkeypatch.setattr(semantic_api, "IDEMPOTENCY_LIMIT", 2)
+    agents = [agent(status=Status.WORKING)]
+    api, control = make_api(agents)
+    first_payload = target(action="approve", idempotency_key="request-1")
+
+    first = await api.action("server:a", first_payload)
+    await api.action("server:a", target(action="approve", idempotency_key="request-2"))
+    rejected = await api.action("server:a", target(action="approve", idempotency_key="request-3"))
+    replay = await api.action("server:a", first_payload)
+
+    assert rejected.status == 429
+    assert rejected.body["error"]["code"] == "idempotency_capacity"
+    assert replay == first
+    assert control.calls == []
+
+
+@pytest.mark.asyncio
 async def test_timeout_and_backend_failure_are_structured_and_redacted():
     agents = [agent()]
     api, control = make_api(agents)

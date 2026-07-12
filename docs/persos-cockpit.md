@@ -176,6 +176,10 @@ Action responses use the stable `outcome` values `sent`, `skipped`,
 `unavailable_target`, `timeout`, and `backend_failure`. Validation errors use
 `error.code: "validation_error"`; reusing an idempotency key for a different
 request returns `idempotency_conflict`.
+When all protected idempotency slots are occupied by unexpired requests, new
+unique keys fail closed with HTTP 429 and `idempotency_capacity`; callers retry
+after the oldest ten-minute window expires. Live results are never evicted
+early.
 
 Clients must ignore unknown response fields. New optional fields and new error
 details may be added compatibly within v1. Existing fields do not change meaning

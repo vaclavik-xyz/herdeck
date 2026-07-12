@@ -296,7 +296,9 @@ class App:
     def semantic_generation(self, server_id: str, pane_id: str) -> tuple[int, int]:
         return (
             self._semantic_config_generation,
-            self._semantic_generations.get(AgentKey(server_id, pane_id), 0),
+            self._semantic_generations.get(
+                AgentKey(server_id, pane_id), self._semantic_generation_serial
+            ),
         )
 
     def _bump_semantic_targets(self, keys) -> None:

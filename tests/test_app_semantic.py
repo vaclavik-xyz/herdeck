@@ -51,6 +51,10 @@ def test_semantic_generation_history_is_bounded_and_never_reuses_serials():
     )
     assert len(app._semantic_generations) == SEMANTIC_GENERATION_LIMIT
     assert first not in app._semantic_generations
+    evicted_generation = app.semantic_generation("local", "first")
+
+    app._bump_semantic_targets((AgentKey("local", "unrelated"),))
+    assert app.semantic_generation("local", "first") != evicted_generation
 
     app._bump_semantic_targets((first,))
     assert app.semantic_generation("local", "first") != first_generation

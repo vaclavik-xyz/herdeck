@@ -150,6 +150,9 @@ class SemanticAPI:
         replay = self._replay(caller, idempotency_key, fingerprint)
         if replay is not None:
             return replay
+        capacity_error = self._capacity_error(caller, idempotency_key)
+        if capacity_error is not None:
+            return capacity_error
 
         requires_confirmation = action == "stop" or self._control.requires_confirmation(action)
         if requires_confirmation:
@@ -242,6 +245,9 @@ class SemanticAPI:
         replay = self._replay(caller, idempotency_key, fingerprint)
         if replay is not None:
             return replay
+        capacity_error = self._capacity_error(caller, idempotency_key)
+        if capacity_error is not None:
+            return capacity_error
         owner, pending = self._claim(caller, idempotency_key, fingerprint)
         if not owner:
             if isinstance(pending, SemanticResponse):
@@ -383,8 +389,6 @@ class SemanticAPI:
         ttl: float = IDEMPOTENCY_TTL_S,
     ) -> None:
         self._prune()
-        while len(self._results) >= IDEMPOTENCY_LIMIT:
-            self._results.popitem(last=False)
         self._results[(caller, key)] = _StoredResult(fingerprint, response, self._clock() + ttl)
 
     def _claim(
@@ -400,9 +404,25 @@ class SemanticAPI:
                     "idempotency key is in use by a different request",
                 )
             return False, future
+        capacity_error = self._capacity_error(caller, key)
+        if capacity_error is not None:
+            return False, capacity_error
         future = asyncio.get_running_loop().create_future()
         self._inflight[(caller, key)] = (fingerprint, future)
         return True, None
+
+    def _capacity_error(self, caller: str, key: str) -> SemanticResponse | None:
+        self._prune()
+        request_key = (caller, key)
+        if request_key in self._results or request_key in self._inflight:
+            return None
+        if len(self._results) + len(self._inflight) < IDEMPOTENCY_LIMIT:
+            return None
+        return self._error(
+            429,
+            "idempotency_capacity",
+            "idempotency capacity is temporarily exhausted",
+        )
 
     def _complete(
         self, caller: str, key: str, fingerprint: str, response: SemanticResponse
