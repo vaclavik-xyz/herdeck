@@ -40,6 +40,12 @@ class ElgatoSession:
 
     # --- inbound agent state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        recycled = {
+            state.key
+            for state in states
+            if self._identity_changed(self._agents.get(state.key), state)
+        }
+        self._invalidate_recycled(recycled)
         self._bump_block_gen(states)
         self._agents = {k: v for k, v in self._agents.items() if k.server_id != server_id}
         for s in states:
@@ -51,6 +57,12 @@ class ElgatoSession:
         self._reconcile_arm()
 
     def apply_event(self, server_id: str, state: AgentState) -> None:
+        recycled = (
+            {state.key}
+            if self._identity_changed(self._agents.get(state.key), state)
+            else set()
+        )
+        self._invalidate_recycled(recycled)
         self._bump_block_gen([state])
         self._agents[state.key] = state
         if state.key == self._pending_act:
@@ -58,6 +70,28 @@ class ElgatoSession:
         self._release()
         self._prune_detection()
         self._reconcile_arm()
+
+    @staticmethod
+    def _identity_changed(previous: AgentState | None, current: AgentState) -> bool:
+        return bool(
+            previous is not None
+            and previous.terminal_id
+            and current.terminal_id
+            and previous.terminal_id != current.terminal_id
+        )
+
+    def _invalidate_recycled(self, keys: set[AgentKey]) -> None:
+        if not keys:
+            return
+        for key in keys:
+            self._detection.pop(key, None)
+            # Make a blocked->blocked replacement a fresh block generation so
+            # late read results for the old terminal cannot be accepted.
+            self._agents.pop(key, None)
+        if self._pending_act in keys:
+            self._pending_act = None
+        if self._armed_for in keys:
+            self._armed_for = None
 
     def set_connection(self, server_id: str, up: bool) -> None:
         if up:
@@ -171,6 +205,9 @@ class ElgatoSession:
         key = self.selected()
         return self._agents.get(key) if key is not None else None
 
+    def get_agent(self, key: AgentKey) -> AgentState | None:
+        return self._agents.get(key)
+
     def action_enabled(self, kind: str) -> bool:
         if kind == "pager":
             return True
@@ -229,9 +266,21 @@ class ElgatoSession:
         key = self._slot_instance_key(instance_id)
         if key is not None:
             self.select(key)
+            agent = self._agents[key]
             return [
-                Command("focus", key.server_id, key.pane_id),
-                Command("read", key.server_id, key.pane_id, source="detection"),
+                Command(
+                    "focus",
+                    key.server_id,
+                    key.pane_id,
+                    terminal_id=agent.terminal_id or None,
+                ),
+                Command(
+                    "read",
+                    key.server_id,
+                    key.pane_id,
+                    source="detection",
+                    terminal_id=agent.terminal_id or None,
+                ),
             ]
         kind = self._action_kind(instance_id)
         if kind == "pager":

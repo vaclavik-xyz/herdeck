@@ -46,7 +46,8 @@ If herdr runs on the same machine as your deck, no config or token is needed:
 
 herdeck auto-detects the local herdr socket and starts an embedded loopback
 bridge for you. If no Stream Deck is attached it falls back to the web
-simulator and prints its URL. Set `HERDR_SOCKET` if herdr's socket lives
+simulator and prints its URL. Set `HERDR_SOCKET` (Herdeck compatibility) or
+Herdr's native `HERDR_SOCKET_PATH` / `HERDR_SESSION` if the socket lives
 elsewhere. For a remote deck (herdr on another host) see **Server setup**
 below — that path uses an explicit config with `[[servers]]` and a token.
 

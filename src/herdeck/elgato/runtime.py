@@ -163,7 +163,16 @@ async def serve_elgato(config: Config, *, socket_path: str, token: str, make_ses
     def _proactive_reads() -> None:
         for key in session.blocked_without_detection():
             if not correlator.has_pending(key) and not correlator.in_cooldown(key):
-                send(Command("read", key.server_id, key.pane_id, source="detection"))
+                agent = session.get_agent(key)
+                send(
+                    Command(
+                        "read",
+                        key.server_id,
+                        key.pane_id,
+                        source="detection",
+                        terminal_id=(agent.terminal_id or None) if agent else None,
+                    )
+                )
 
     def _apply(fn, *args) -> None:
         # snapshot / event / read-result: mutate the session, proactively read any

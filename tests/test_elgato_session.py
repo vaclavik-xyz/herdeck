@@ -20,8 +20,14 @@ def make_config():
     )
 
 
-def state(pane, status, label="api"):
-    s = AgentState(AgentKey("dev", pane), "claude", label, status)
+def state(pane, status, label="api", terminal_id=""):
+    s = AgentState(
+        AgentKey("dev", pane),
+        "claude",
+        label,
+        status,
+        terminal_id=terminal_id,
+    )
     s.repo = label
     return s
 
@@ -204,6 +210,21 @@ def test_changing_selection_disarms():
     assert sess.is_armed() is True
     sess.select(AgentKey("dev", "p2"))
     assert sess.is_armed() is False
+
+
+def test_recycled_pane_identity_disarms_and_drops_cached_prompt():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    key = AgentKey("dev", "p1")
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED, terminal_id="term-old")])
+    sess.set_detection(key, "Proceed? (y/n)")
+    sess.select(key)
+    sess._arm()
+
+    sess.apply_snapshot("dev", [state("p1", Status.BLOCKED, terminal_id="term-new")])
+
+    assert sess.is_armed() is False
+    assert sess.action_enabled("approve") is False
+    assert sess.block_generation(key) == 2
 
 
 def test_is_armed_expires_without_explicit_tick():

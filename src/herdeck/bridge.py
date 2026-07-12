@@ -27,10 +27,140 @@ _SNAPSHOT_UNSUPPORTED = (
 # Startup probe bound: a herdr that accepts but never answers (e.g. mid
 # live-handoff) must not block bridge startup; timeout = transient, not fatal.
 _PROBE_TIMEOUT = 5.0
+_HERDR_RPC_TIMEOUT = 10.0
+_HERDR_SUBSCRIBE_TIMEOUT = 10.0
+_HERDR_LINE_LIMIT = 1024 * 1024 + 1  # 1 MiB payload plus NDJSON newline
 
 # Module-level indirection so tests can fake the clock without touching the
 # shared stdlib time module (which asyncio's loop may also consult).
 _monotonic = time.monotonic
+
+
+def _decode_json_object(line: bytes, context: str) -> dict:
+    try:
+        message = json.loads(line)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{context} returned invalid JSON") from exc
+    if not isinstance(message, dict):
+        raise RuntimeError(f"{context} returned a non-object response")
+    return message
+
+
+def _validate_subscription_ack(line: bytes) -> None:
+    message = _decode_json_object(line, "herdr subscription")
+    if "error" in message:
+        error = message["error"]
+        detail = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        raise RuntimeError(f"herdr subscription failed: {detail}")
+    result = message.get("result")
+    if not isinstance(result, dict) or result.get("type") != "subscription_started":
+        raise RuntimeError("herdr subscription ACK must be subscription_started")
+
+
+def _decode_event_line(line: bytes) -> dict | None:
+    try:
+        event = json.loads(line)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(event, dict) or not isinstance(event.get("event"), str):
+        return None
+    data = event.get("data")
+    if data is not None and not isinstance(data, dict):
+        return None
+    return event
+
+
+def _reconnect_backoff(
+    current: float,
+    *,
+    base: float,
+    maximum: float,
+    connected: bool,
+) -> tuple[float, float]:
+    if connected:
+        return base, base
+    return current, min(current * 2, maximum)
+
+
+def resolve_herdr_socket_path(*, getenv=os.environ.get, fallback: str | None = None) -> str:
+    explicit = getenv("HERDR_SOCKET") or getenv("HERDR_SOCKET_PATH")
+    if explicit:
+        return os.path.expanduser(explicit)
+    if fallback:
+        return os.path.expanduser(fallback)
+    session = getenv("HERDR_SESSION")
+    if session:
+        return os.path.expanduser(f"~/.config/herdr/sessions/{session}/herdr.sock")
+    return os.path.expanduser("~/.config/herdr/herdr.sock")
+
+
+def _validate_snapshot(snapshot: object) -> dict:
+    if not isinstance(snapshot, dict):
+        raise RuntimeError("session.snapshot snapshot must be an object")
+    for field in ("agents", "panes", "workspaces", "tabs"):
+        if field == "agents" or field in snapshot:
+            rows = snapshot.get(field)
+            if not isinstance(rows, list):
+                raise RuntimeError(f"session.snapshot snapshot {field} must be a list")
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise RuntimeError(
+                        f"session.snapshot snapshot {field} entries must be objects"
+                    )
+    for record in snapshot["agents"]:
+        pane_id = record.get("pane_id")
+        if not isinstance(pane_id, str) or not pane_id:
+            raise RuntimeError("session.snapshot agent pane_id must be a string")
+        terminal_id = record.get("terminal_id")
+        if terminal_id is not None and (
+            not isinstance(terminal_id, str) or not terminal_id
+        ):
+            raise RuntimeError(
+                "session.snapshot agent terminal_id must be a nonempty string or null"
+            )
+        for field in (
+            "agent",
+            "agent_status",
+            "cwd",
+            "foreground_cwd",
+            "custom_status",
+            "workspace_id",
+            "tab_id",
+        ):
+            value = record.get(field)
+            if value is not None and not isinstance(value, str):
+                raise RuntimeError(
+                    f"session.snapshot agent {field} must be a string or null"
+                )
+    for record in snapshot.get("panes", []):
+        pane_id = record.get("pane_id")
+        if not isinstance(pane_id, str) or not pane_id:
+            raise RuntimeError("session.snapshot pane pane_id must be a string")
+    for collection, id_field in (("workspaces", "workspace_id"), ("tabs", "tab_id")):
+        for record in snapshot.get(collection, []):
+            identifier = record.get(id_field)
+            if not isinstance(identifier, str) or not identifier:
+                raise RuntimeError(
+                    f"session.snapshot {collection} {id_field} must be a string"
+                )
+            label = record.get("label")
+            if label is not None and not isinstance(label, str):
+                raise RuntimeError(
+                    f"session.snapshot {collection} label must be a string or null"
+                )
+    return snapshot
+
+
+async def _wait_until(awaitable, deadline: float, message: str):
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        raise TimeoutError(message)
+    try:
+        return await asyncio.wait_for(awaitable, timeout=remaining)
+    except TimeoutError as exc:
+        raise TimeoutError(message) from exc
 
 
 class HerdrClient(Protocol):
@@ -99,6 +229,7 @@ def _herdr_pane_to_wire(
         # report-agent --custom-status` (herdwatch's "⏳ ci" etc.); absent
         # otherwise. Clients derive the WAITING state from it.
         "custom_status": p.get("custom_status", ""),
+        "terminal_id": p.get("terminal_id") or "",
     }
 
 
@@ -200,22 +331,33 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
         panes = await _wired_snapshot(herdr)
         return encode({"type": "snapshot", "server_id": server_id, "panes": panes})
     if kind == "read":
+        if await _pane_identity_changed(herdr, msg):
+            return _identity_changed_result(msg)
         text = await herdr.read_pane(msg["pane_id"], msg.get("source", "detection"))
         return encode(
             {"type": "result", "req": msg["req"], "data": {"text": text, "pane_id": msg["pane_id"]}}
         )
     if kind == "act":
         guard = msg.get("guard", True)
-        if guard:
+        pane = None
+        if guard or msg.get("terminal_id"):
             pane = await herdr.get_pane(msg["pane_id"])
+        if _pane_record_identity_changed(pane, msg.get("terminal_id")):
+            return _identity_changed_result(msg)
+        if guard:
+            assert pane is not None
             if pane.get("agent_status") != "blocked":
                 return encode({"type": "result", "req": msg["req"], "data": {"skipped": True}})
         await herdr.send_keys(msg["pane_id"], msg["keys"])
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "focus":
+        if await _pane_identity_changed(herdr, msg):
+            return _identity_changed_result(msg)
         await herdr.focus_agent(msg["pane_id"])
         return encode({"type": "result", "req": msg["req"], "data": {"focused": True}})
     if kind == "send_text":
+        if await _pane_identity_changed(herdr, msg):
+            return _identity_changed_result(msg)
         await herdr.send_text(msg["pane_id"], msg["text"])
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "start":
@@ -224,9 +366,50 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     raise ValueError(f"unknown client message: {kind}")
 
 
+def _pane_record_identity_changed(pane: dict | None, expected: object) -> bool:
+    if not isinstance(expected, str) or not expected:
+        return False
+    if not isinstance(pane, dict):
+        return True
+    actual = pane.get("terminal_id")
+    return actual != expected
+
+
+async def _pane_identity_changed(herdr: HerdrClient, msg: dict) -> bool:
+    expected = msg.get("terminal_id")
+    if not isinstance(expected, str) or not expected:
+        return False
+    pane = await herdr.get_pane(msg["pane_id"])
+    return _pane_record_identity_changed(pane, expected)
+
+
+def _identity_changed_result(msg: dict) -> str:
+    return encode(
+        {
+            "type": "result",
+            "req": msg["req"],
+            "data": {"skipped": True, "message": "agent identity changed"},
+        }
+    )
+
+
 # herdr events that change fleet membership (need a status re-subscribe after).
-_GLOBAL_EVENT_TYPES = ("pane.created", "pane.closed", "pane.exited", "pane.agent_detected")
-_FLEET_EVENT_NAMES = {"pane_created", "pane_closed", "pane_exited", "pane_agent_detected"}
+_GLOBAL_EVENT_TYPES = (
+    "pane.created",
+    "pane.closed",
+    "pane.exited",
+    "pane.moved",
+    "workspace.closed",
+    "tab.closed",
+)
+_FLEET_EVENT_NAMES = {
+    "pane_created",
+    "pane_closed",
+    "pane_exited",
+    "pane_moved",
+    "workspace_closed",
+    "tab_closed",
+}
 # Label-bearing events. Workspace/tab labels ride along in every snapshot, so
 # these only need to wake the stream; worktree events additionally invalidate
 # the cached worktree list (branch labels are not in the snapshot).
@@ -422,11 +605,18 @@ class HerdrEvents:
     """
 
     def __init__(
-        self, herdr: HerdrClient, socket_path: str | None = None, poll_interval: float = 5.0
+        self,
+        herdr: HerdrClient,
+        socket_path: str | None = None,
+        poll_interval: float = 5.0,
+        backoff_base: float = 0.3,
+        backoff_max: float = 30.0,
     ):
         self._herdr = herdr
         self._socket_path = socket_path
         self._interval = poll_interval
+        self._backoff_base = backoff_base
+        self._backoff_max = backoff_max
         self._wake = asyncio.Event()
         # Cached worktree list (branch labels — the one thing session.snapshot
         # does not carry). A pane.agent_status_changed wake cannot change it, so
@@ -485,41 +675,76 @@ class HerdrEvents:
     def _note_event(
         self, name: str | None, pane_id: str | None = None, subscribed: set[str] | None = None
     ) -> bool:
-        """Digest one push event; True means fleet membership changed and the
-        per-pane status subscriptions must be rebuilt.
+        """Digest one push event; True asks the listener to verify topology.
 
-        herdr re-emits ``pane.agent_detected`` continuously for panes it is
-        already tracking (several times a second on a busy fleet); re-detection
-        of a pane we already hold a status subscription for is just a wake, not
-        a membership change — breaking on it spins the subscribe loop."""
-        if name in _WORKTREE_EVENT_NAMES:
+        Herdr 0.7.3 replays retained lifecycle events to new subscribers, so a
+        lifecycle event alone is never proof that the current pane set changed.
+        ``_topology_changed`` compares a fresh authoritative snapshot before a
+        subscription is rebuilt."""
+        normalized = name.replace(".", "_") if isinstance(name, str) else None
+        if normalized in _WORKTREE_EVENT_NAMES:
             self._worktrees_stale = True
-        if name in _FLEET_EVENT_NAMES:
-            if (
-                name == "pane_agent_detected"
-                and pane_id is not None
-                and pane_id in (subscribed or ())
-            ):
-                return False
+        if normalized in _FLEET_EVENT_NAMES:
             self._worktrees_stale = True  # a new pane may sit in an unseen workspace
             return True
         return False
 
+    @staticmethod
+    def _snapshot_pane_ids(snapshot: dict) -> set[str]:
+        if not isinstance(snapshot, dict):
+            raise RuntimeError("session.snapshot must be an object")
+        field = "panes" if "panes" in snapshot else "agents"
+        rows = snapshot.get(field)
+        if not isinstance(rows, list):
+            raise RuntimeError(f"session.snapshot {field} must be a list")
+        pane_ids: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise RuntimeError(f"session.snapshot {field} entries must be objects")
+            pane_id = row.get("pane_id")
+            if not isinstance(pane_id, str) or not pane_id:
+                raise RuntimeError(f"session.snapshot {field} pane_id must be a string")
+            pane_ids.add(pane_id)
+        return pane_ids
+
+    @staticmethod
+    def _subscriptions_for(pane_ids: set[str]) -> list[dict]:
+        subscriptions = [
+            {"type": event_type}
+            for event_type in _GLOBAL_EVENT_TYPES + _LABEL_EVENT_TYPES
+        ]
+        subscriptions.extend(
+            {"type": "pane.agent_status_changed", "pane_id": pane_id}
+            for pane_id in sorted(pane_ids)
+        )
+        return subscriptions
+
+    async def _topology_changed(self, name: str | None, subscribed: set[str]) -> bool:
+        normalized = name.replace(".", "_") if isinstance(name, str) else None
+        if normalized not in _FLEET_EVENT_NAMES:
+            return False
+        snapshot = await self._herdr.snapshot()
+        return self._snapshot_pane_ids(snapshot) != subscribed
+
     async def _listen(self) -> None:
         """Hold a herdr event subscription; wake the stream on every event."""
+        backoff = self._backoff_base
         while True:
             writer = None
+            connected = False
             try:
-                reader, writer = await asyncio.open_unix_connection(self._socket_path)
-                agent_panes = {
-                    p["pane_id"]
-                    for p in _wire_panes((await self._herdr.snapshot()).get("agents", []))
-                }
-                subs = [{"type": t} for t in _GLOBAL_EVENT_TYPES + _LABEL_EVENT_TYPES]
-                subs += [
-                    {"type": "pane.agent_status_changed", "pane_id": pid}
-                    for pid in sorted(agent_panes)
-                ]
+                deadline = asyncio.get_running_loop().time() + _HERDR_SUBSCRIBE_TIMEOUT
+                reader, writer = await _wait_until(
+                    asyncio.open_unix_connection(
+                        self._socket_path,
+                        limit=_HERDR_LINE_LIMIT,
+                    ),
+                    deadline,
+                    "herdr subscription handshake timed out",
+                )
+                snapshot = await self._herdr.snapshot()
+                subscribed_panes = self._snapshot_pane_ids(snapshot)
+                subs = self._subscriptions_for(subscribed_panes)
                 writer.write(
                     (
                         json.dumps(
@@ -532,31 +757,56 @@ class HerdrEvents:
                         + "\n"
                     ).encode()
                 )
-                await writer.drain()
-                await reader.readline()  # subscription ack
+                await _wait_until(
+                    writer.drain(),
+                    deadline,
+                    "herdr subscription handshake timed out",
+                )
+                ack = await _wait_until(
+                    reader.readline(),
+                    deadline,
+                    "herdr subscription handshake timed out",
+                )
+                if not ack:
+                    raise ConnectionError("herdr subscription closed before ACK")
+                _validate_subscription_ack(ack)
+                connected = True
+                # Close the snapshot->subscribe race: if topology changed while
+                # the stream was being installed, rebuild against the new set.
+                if self._snapshot_pane_ids(await self._herdr.snapshot()) != subscribed_panes:
+                    continue
                 while True:
                     line = await reader.readline()
                     if not line:
                         break
+                    evt = _decode_event_line(line)
+                    if evt is None:
+                        continue
                     self._wake.set()
-                    try:
-                        evt = json.loads(line)
-                        name = evt.get("event")
-                        pane_id = (evt.get("data") or {}).get("pane_id")
-                    except Exception:
-                        name = pane_id = None
-                    if self._note_event(name, pane_id, agent_panes):
-                        break  # fleet changed -> re-subscribe panes
+                    name = evt["event"]
+                    pane_id = (evt.get("data") or {}).get("pane_id")
+                    if self._note_event(name, pane_id, subscribed_panes) and await self._topology_changed(
+                        name, subscribed_panes
+                    ):
+                        break  # real topology change -> re-subscribe panes
             except Exception:
                 pass
             finally:
                 if writer is not None:
                     writer.close()
                     try:
-                        await writer.wait_closed()
+                        remaining = deadline - asyncio.get_running_loop().time()
+                        if remaining > 0:
+                            await asyncio.wait_for(writer.wait_closed(), timeout=remaining)
                     except Exception:
                         pass
-            await asyncio.sleep(0.3)  # brief backoff before re-subscribe
+            delay, backoff = _reconnect_backoff(
+                backoff,
+                base=self._backoff_base,
+                maximum=self._backoff_max,
+                connected=connected,
+            )
+            await asyncio.sleep(delay)
 
 
 # A client whose TCP buffer is full (e.g. a laptop that closed its lid with the
@@ -608,8 +858,16 @@ async def _broadcast(snapshot_stream, clients: dict, server_id: str) -> None:
 class SocketHerdr:
     """Talks to a real herdr instance over its Unix socket (newline JSON)."""
 
-    def __init__(self, socket_path: str):
+    def __init__(
+        self,
+        socket_path: str,
+        *,
+        timeout: float = _HERDR_RPC_TIMEOUT,
+        line_limit: int = _HERDR_LINE_LIMIT,
+    ):
         self._path = socket_path
+        self._timeout = timeout
+        self._line_limit = line_limit
 
     async def _rpc(self, method: str, params: dict, *, retry: bool = True) -> dict:
         # herdr closes the unix socket after each request (one-shot), so we open
@@ -623,20 +881,29 @@ class SocketHerdr:
         # run in parallel (latency = max instead of sum).
         attempts = 2 if retry else 1
         last_exc: Exception | None = None
+        deadline = asyncio.get_running_loop().time() + self._timeout
         for _ in range(attempts):
             reader = writer = None
             try:
-                reader, writer = await asyncio.open_unix_connection(self._path)
+                timeout_message = f"herdr RPC {method} timed out"
+                reader, writer = await _wait_until(
+                    asyncio.open_unix_connection(self._path, limit=self._line_limit),
+                    deadline,
+                    timeout_message,
+                )
                 writer.write(
                     (json.dumps({"id": "b", "method": method, "params": params}) + "\n").encode()
                 )
-                await writer.drain()
-                line = await reader.readline()
+                await _wait_until(writer.drain(), deadline, timeout_message)
+                try:
+                    line = await _wait_until(reader.readline(), deadline, timeout_message)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"herdr RPC {method} response exceeds {self._line_limit - 1} bytes"
+                    ) from exc
                 if not line:  # EOF before a response
                     raise ConnectionError("herdr socket closed")
-                res = json.loads(line.decode())
-                if not isinstance(res, dict):
-                    raise RuntimeError(f"herdr RPC {method} returned non-object response")
+                res = _decode_json_object(line, f"herdr RPC {method}")
                 if "error" in res:
                     err = res["error"]
                     if isinstance(err, dict):
@@ -644,8 +911,8 @@ class SocketHerdr:
                     else:
                         message = str(err)
                     raise RuntimeError(f"herdr RPC {method} failed: {message}")
-                if "result" not in res:
-                    raise RuntimeError(f"herdr RPC {method} missing result")
+                if not isinstance(res.get("result"), dict):
+                    raise RuntimeError(f"herdr RPC {method} result must be an object")
                 return res
             except (OSError, ConnectionError) as exc:
                 last_exc = exc
@@ -653,16 +920,28 @@ class SocketHerdr:
                 if writer is not None:
                     writer.close()
                     try:
-                        await writer.wait_closed()
+                        remaining = deadline - asyncio.get_running_loop().time()
+                        if remaining > 0:
+                            await asyncio.wait_for(writer.wait_closed(), timeout=remaining)
                     except Exception:
                         pass
+        assert last_exc is not None
         raise last_exc
 
     async def list_panes(self) -> list[dict]:
         # Kept for get_pane's act guard only (herdr has no working pane.get);
         # fleet state comes from snapshot().
         res = await self._rpc("pane.list", {})
-        return res.get("result", {}).get("panes", [])
+        panes = res["result"].get("panes")
+        if not isinstance(panes, list):
+            raise RuntimeError("herdr RPC pane.list panes must be a list")
+        for pane in panes:
+            if not isinstance(pane, dict):
+                raise RuntimeError("herdr RPC pane.list entries must be objects")
+            pane_id = pane.get("pane_id")
+            if not isinstance(pane_id, str) or not pane_id:
+                raise RuntimeError("herdr RPC pane.list pane_id must be a string")
+        return panes
 
     async def snapshot(self) -> dict:
         # session.snapshot (herdr >= 0.7.2) returns agents + workspace/tab labels
@@ -673,7 +952,8 @@ class SocketHerdr:
             if "unknown variant" in str(exc):
                 raise RuntimeError(_SNAPSHOT_UNSUPPORTED) from exc
             raise
-        return res.get("result", {}).get("snapshot", {})
+        result = res["result"]
+        return _validate_snapshot(result.get("snapshot"))
 
     async def get_pane(self, pane_id: str) -> dict:
         # herdr has no working `pane.get`; derive the pane from the (supported)
@@ -805,6 +1085,17 @@ async def _serve_connection(
                                 "type": "term_closed",
                                 "req": req,
                                 "reason": "invalid terminal target",
+                            }
+                        )
+                    )
+                    continue
+                if await _pane_identity_changed(herdr, msg):
+                    await send(
+                        encode(
+                            {
+                                "type": "term_closed",
+                                "req": req,
+                                "reason": "agent identity changed",
                             }
                         )
                     )
@@ -947,7 +1238,7 @@ async def serve(socket_path: str, host: str, port: int, server_id: str, token: s
 
 
 def main() -> None:
-    socket_path = os.environ["HERDR_SOCKET"]
+    socket_path = resolve_herdr_socket_path()
     host = os.environ.get("HERDECK_BIND", "127.0.0.1")  # set to Tailscale IP
     port = int(os.environ.get("HERDECK_PORT", "8788"))
     server_id = os.environ.get("HERDECK_SERVER_ID", "server")

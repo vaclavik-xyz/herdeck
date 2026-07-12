@@ -36,6 +36,7 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         workspace=pane.get("workspace", ""),
         tab=pane.get("tab", ""),
         custom_status=custom,
+        terminal_id=pane.get("terminal_id") or "",
     )
 
 

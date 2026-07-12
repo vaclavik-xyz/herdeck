@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable, Callable
 
-from .bridge import start_local_bridge
+from .bridge import resolve_herdr_socket_path, start_local_bridge
 from .config import (
     DEFAULT_MACROS,
     DEFAULT_PROFILES,
@@ -20,12 +20,17 @@ from .config import (
 
 
 def resolve_socket_path(config=None, *, getenv=os.environ.get) -> str:
-    """Resolve the herdr Unix socket path: HERDR_SOCKET env, else the config's
-    hardware override, else the XDG default. Shared by the CLI and the deckapp."""
-    raw = getenv("HERDR_SOCKET") or (
-        config.hardware.herdr_socket if config and config.hardware.herdr_socket else None
+    """Resolve the Herdr socket using Herdeck and native Herdr conventions."""
+    if any(getenv(name) for name in ("HERDR_SOCKET", "HERDR_SOCKET_PATH", "HERDR_SESSION")):
+        return resolve_herdr_socket_path(getenv=getenv)
+    configured = (
+        config.hardware.herdr_socket
+        if config and config.hardware.herdr_socket
+        else None
     )
-    return os.path.expanduser(raw or "~/.config/herdr/herdr.sock")
+    if configured:
+        return os.path.expanduser(configured)
+    return resolve_herdr_socket_path(getenv=getenv)
 
 
 def resolve_mode(*, mock, config_path, config_has_servers, socket_path, socket_exists):
@@ -39,7 +44,7 @@ def resolve_mode(*, mock, config_path, config_has_servers, socket_path, socket_e
     return (
         "error",
         f"No herdr socket at {socket_path} and no [[servers]] config. "
-        f"Is herdr running? Set HERDR_SOCKET or create a config "
+        f"Is herdr running? Set HERDR_SOCKET/HERDR_SOCKET_PATH or create a config "
         f"(see config.example.toml).",
     )
 

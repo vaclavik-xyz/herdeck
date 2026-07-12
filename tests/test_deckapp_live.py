@@ -130,9 +130,15 @@ def live_config(token=SECRET):
     return config, server
 
 
-def agent(sid, pane, status, agent_type="claude", label=None):
+def agent(sid, pane, status, agent_type="claude", label=None, terminal_id=""):
     return AgentState(
-        AgentKey(sid, pane), agent_type, label or pane, status, repo=pane, branch="main"
+        AgentKey(sid, pane),
+        agent_type,
+        label or pane,
+        status,
+        repo=pane,
+        branch="main",
+        terminal_id=terminal_id,
     )
 
 
@@ -414,6 +420,27 @@ def test_preread_issued_once_while_blocked():
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
     assert _reads(runner) == []
+
+
+def test_recycled_blocked_pane_drops_preread_and_reads_new_terminal():
+    app, src, server, runner = make_live()
+    src._on_connection(server.id, True)
+    src._on_snapshot(
+        server.id,
+        [agent(server.id, "p0", Status.BLOCKED, terminal_id="term-old")],
+    )
+    stale = _reads(runner)[-1]
+    src._on_result(stale["req"], {"text": "1. OLD", "pane_id": "p0"})
+    runner.sent.clear()
+
+    src._on_snapshot(
+        server.id,
+        [agent(server.id, "p0", Status.BLOCKED, terminal_id="term-new")],
+    )
+
+    reads = _reads(runner)
+    assert len(reads) == 1
+    assert reads[0]["terminal_id"] == "term-new"
 
 
 def test_blocked_drill_not_double_read_when_press_registered_it():

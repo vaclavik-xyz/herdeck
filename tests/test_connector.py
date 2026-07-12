@@ -92,6 +92,50 @@ async def test_stop_terminates_run_without_cancel(ws_server):
     assert task.done()
 
 
+async def test_stop_during_handshake_exits_without_connecting():
+    handshake_started = asyncio.Event()
+    release_handshake = asyncio.Event()
+    received = []
+    connection_states = []
+
+    async def process_request(connection, request):
+        handshake_started.set()
+        await release_handshake.wait()
+
+    async def handler(ws):
+        async for msg in ws:
+            received.append(msg)
+
+    server = await websockets.serve(
+        handler,
+        "127.0.0.1",
+        0,
+        process_request=process_request,
+    )
+    port = server.sockets[0].getsockname()[1]
+    conn = Connector(
+        ServerConfig("workbox", f"ws://127.0.0.1:{port}", "tok"),
+        on_snapshot=lambda sid, st: None,
+        on_event=lambda sid, s: None,
+        on_connection=lambda sid, up: connection_states.append(up),
+    )
+    task = asyncio.create_task(conn.run())
+    try:
+        await asyncio.wait_for(handshake_started.wait(), timeout=2.0)
+        conn.stop()
+        release_handshake.set()
+        await asyncio.wait_for(task, timeout=2.0)
+        assert received == []
+        assert connection_states == []
+    finally:
+        release_handshake.set()
+        conn.stop()
+        if not task.done():
+            task.cancel()
+        server.close()
+        await server.wait_closed()
+
+
 async def test_error_frame_goes_to_on_error(ws_server):
     # server that sends one error frame then idles
     errors = []

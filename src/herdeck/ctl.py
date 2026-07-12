@@ -340,6 +340,21 @@ def _target_error(args, exc: TargetError) -> int:
     return EXIT_TARGET
 
 
+def _direct_command_result(args, data: dict, success: str) -> int:
+    if data.get("skipped"):
+        message = data.get("message")
+        payload = {"result": "skipped"}
+        if isinstance(message, str) and message:
+            payload["message"] = message
+        if args.json:
+            _emit(args, payload)
+        else:
+            print(payload.get("message", "skipped"))
+        return EXIT_SKIPPED
+    _emit(args, {"result": success})
+    return EXIT_OK
+
+
 async def dispatch(args, session) -> int:
     if args.cmd == "ls":
         rows = [_agent_row(a) for a in session.agents.values()
@@ -391,18 +406,28 @@ async def dispatch(args, session) -> int:
         return _target_error(args, e)
 
     if args.cmd == "send":
-        await session.request(
-            Command("send_text", agent.key.server_id, agent.key.pane_id, text=args.text),
+        data = await session.request(
+            Command(
+                "send_text",
+                agent.key.server_id,
+                agent.key.pane_id,
+                text=args.text,
+                terminal_id=agent.terminal_id or None,
+            ),
             timeout=args.timeout,
         )
-        _emit(args, {"result": "sent"})
-        return EXIT_OK
+        return _direct_command_result(args, data, "sent")
     if args.cmd == "focus":
-        await session.request(
-            Command("focus", agent.key.server_id, agent.key.pane_id), timeout=args.timeout
+        data = await session.request(
+            Command(
+                "focus",
+                agent.key.server_id,
+                agent.key.pane_id,
+                terminal_id=agent.terminal_id or None,
+            ),
+            timeout=args.timeout,
         )
-        _emit(args, {"result": "focused"})
-        return EXIT_OK
+        return _direct_command_result(args, data, "focused")
 
     result = await session.act(
         args.cmd, agent,

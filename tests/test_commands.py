@@ -41,6 +41,25 @@ def test_command_to_msg_act_guard_flags():
     assert command_to_msg(Command("act_force", "dev", "p1", keys=["ctrl+c"]), "r6")["guard"] is False
 
 
+def test_action_command_carries_expected_terminal_identity():
+    from herdeck.config import AnswerProfile
+    from herdeck.model import AgentKey, AgentState, Status
+
+    agent = AgentState(
+        AgentKey("dev", "p1"),
+        "claude",
+        "api",
+        Status.BLOCKED,
+        terminal_id="term-123",
+    )
+    profile = AnswerProfile(["1"], ["2"], ["ctrl+c"], ["3"])
+
+    command = build_action_command("approve", agent, profile, force=False, always=False)
+
+    assert command.terminal_id == "term-123"
+    assert command_to_msg(command, "r7")["terminal_id"] == "term-123"
+
+
 def test_command_to_msg_unknown_raises():
     import pytest
     with pytest.raises(ValueError):
