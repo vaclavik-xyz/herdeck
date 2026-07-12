@@ -101,8 +101,21 @@ class RuntimeAgentControl:
     ) -> ActionResult:
         return await self._act("deny", key, timeout=timeout, force=force, always=False)
 
-    async def stop(self, key: AgentKey, *, timeout: float | None = 3.0) -> ActionResult:
-        return await self._act("stop", key, timeout=timeout, force=True, always=False)
+    async def stop(
+        self,
+        key: AgentKey,
+        *,
+        timeout: float | None = 3.0,
+        confirmed: bool = False,
+    ) -> ActionResult:
+        return await self._act(
+            "stop",
+            key,
+            timeout=timeout,
+            force=True,
+            always=False,
+            confirmed=confirmed,
+        )
 
     async def send_text(
         self, key: AgentKey, text: str, *, timeout: float | None = 3.0
@@ -130,12 +143,13 @@ class RuntimeAgentControl:
         timeout: float | None,
         force: bool,
         always: bool,
+        confirmed: bool = False,
     ) -> ActionResult:
         agent = self.current_agent(key)
         if agent is None:
             return ActionResult(False, message="agent is no longer available")
         action_id = self._action_id(action, force=force, always=always)
-        if action_id in self._config.safety.require_confirm_for:
+        if action_id in self._config.safety.require_confirm_for and not confirmed:
             armed = (
                 self._pending_confirm == (action_id, key)
                 and self._clock() - self._pending_confirm_at <= _CONFIRM_TTL_S
