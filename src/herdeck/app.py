@@ -7,7 +7,7 @@ import os
 import queue
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .app_control import RuntimeAgentControl
 from .bootstrap import (
@@ -994,13 +994,16 @@ async def _run_mock(config: Config, deck: DeckDriver) -> None:
         i = 0
         while True:
             await asyncio.sleep(4)
-            a = agents[i % len(agents)]
-            a.status = (
-                order[(order.index(a.status) + 1) % len(order)]
-                if a.status in order
+            index = i % len(agents)
+            current = agents[index]
+            status = (
+                order[(order.index(current.status) + 1) % len(order)]
+                if current.status in order
                 else Status.WORKING
             )
-            app.handle_event(server, a)
+            updated = replace(current, status=status)
+            agents[index] = updated
+            app.handle_event(server, updated)
             i += 1
 
     tasks = [_guard(_ticker(app, loop)), _guard(cycle())]
