@@ -11,12 +11,15 @@ from herdeck.layout import (
     status_color,
     summary,
 )
-from herdeck.model import AgentKey, AgentState, Status
+from herdeck.model import AgentKey, AgentState, Status, WorkContext
 
 
-def _astate(repo="herdeck", branch="main", workspace="herdeck", tab="2", label="herdeck", agent="claude"):
+def _astate(
+    repo="herdeck", branch="main", workspace="herdeck", tab="2", label="herdeck", agent="claude"
+):
     s = AgentState(AgentKey("dev", "w2:p1"), agent, label, Status.WORKING)
     s.repo, s.branch, s.workspace, s.tab = repo, branch, workspace, tab
+    s.work = WorkContext(source="github", item="repo#123", run="run-42")
     return s
 
 
@@ -37,6 +40,10 @@ def test_compose_line_tab_only_when_present():
 def test_compose_line_repo_falls_back_to_label():
     s = _astate(repo="", label="api")
     assert compose_line(s, ["repo"]) == "api"
+
+
+def test_compose_line_renders_optional_work_context_tokens():
+    assert compose_line(_astate(), ["source", "work_item", "run"]) == ("github · repo#123 · run-42")
 
 
 def test_compose_line_empty_when_all_values_empty():
@@ -65,7 +72,7 @@ def test_resolve_tile_lines_explicit_wins_per_key_including_empty():
     view.tile_secondary = []  # explicit off
     primary, secondary = resolve_tile_lines(view, ["repo"], ["branch"])
     assert primary == ["workspace"]  # explicit wins
-    assert secondary == []           # explicit [] wins over fallback
+    assert secondary == []  # explicit [] wins over fallback
 
 
 def test_resolve_tile_lines_partial_override_one_key():

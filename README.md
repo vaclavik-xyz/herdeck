@@ -178,6 +178,23 @@ terminals. Treat it as a credential and bind the simulator only to loopback or
 your trusted Tailscale interface — never `0.0.0.0`, a public IP, or an untrusted
 LAN.
 
+### Optional work/run context
+
+Orchestrators can attach display-only work identity to a Herdr pane through
+`pane.report_metadata` state labels. Herdeck recognizes only these bounded keys:
+
+```text
+work.source = github
+work.item   = vaclavik-xyz/herdeck#123
+work.run    = run-42
+work.url    = https://github.com/vaclavik-xyz/herdeck/issues/123
+```
+
+Unknown labels never cross the Herdeck bridge. `work.url` must be HTTPS and is
+display metadata only; Herdeck never opens or executes it automatically. Add
+`source`, `work_item`, or `run` to `view.tile_primary` / `tile_secondary` to
+render the context. Interactive Telegram alerts include `work.item` when set.
+
 **Headless.** `HERDECK_FAKE_DECK=1 python -m herdeck.app` uses an in-memory
 renderer (no UI). `scripts/e2e_verify.py` connects the pipeline to a bridge and
 prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).

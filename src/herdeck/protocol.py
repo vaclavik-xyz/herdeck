@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from .model import AgentKey, AgentState, Status
+from .model import AgentKey, AgentState, Status, WorkContext
 
 
 def encode(msg: dict) -> str:
@@ -25,6 +25,12 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
     # work (CI, review, a marker). Surface that as the distinct WAITING state.
     if status is Status.WORKING and custom:
         status = Status.WAITING
+    wire_work = pane.get("work")
+    work_labels = (
+        {f"work.{key}": value for key, value in wire_work.items()}
+        if isinstance(wire_work, dict)
+        else {}
+    )
     return AgentState(
         key=AgentKey(server_id, pane["pane_id"]),
         agent_type=pane.get("agent_type", "default"),
@@ -37,6 +43,9 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         tab=pane.get("tab", ""),
         custom_status=custom,
         terminal_id=pane.get("terminal_id") or "",
+        title=pane.get("title") or "",
+        display_agent=pane.get("display_agent") or "",
+        work=WorkContext.from_state_labels(work_labels),
     )
 
 
@@ -44,6 +53,8 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
 class Snapshot:
     server_id: str
     states: list[AgentState]
+    protocol: int = 1
+    capabilities: tuple[str, ...] = ()
 
 
 @dataclass
@@ -89,7 +100,21 @@ def decode_inbound(
     kind = msg["type"]
     if kind == "snapshot":
         sid = msg["server_id"]
-        return Snapshot(sid, [_pane_to_state(sid, p) for p in msg["panes"]])
+        protocol = msg.get("protocol", 1)
+        if type(protocol) is not int or protocol < 1:
+            protocol = 1
+        raw_capabilities = msg.get("capabilities", [])
+        capabilities = (
+            tuple(value for value in raw_capabilities if isinstance(value, str))
+            if isinstance(raw_capabilities, list)
+            else ()
+        )
+        return Snapshot(
+            sid,
+            [_pane_to_state(sid, p) for p in msg["panes"]],
+            protocol,
+            capabilities,
+        )
     if kind == "event":
         sid = msg["server_id"]
         return Event(sid, _pane_to_state(sid, msg["pane"]))

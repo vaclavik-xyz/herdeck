@@ -36,6 +36,7 @@ def status_rank(status: Status) -> int:
     """Overview sort rank of a status (lower = shown first)."""
     return _STATUS_PRIORITY.get(status, 99)
 
+
 STATUS_COLOR = {
     Status.WORKING: "green",
     Status.IDLE: "blue",
@@ -68,6 +69,12 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
             value = f"›{state.tab}" if state.tab else ""
         elif token == "agent":
             value = state.agent_type
+        elif token == "source":
+            value = state.work.source
+        elif token == "work_item":
+            value = state.work.item
+        elif token == "run":
+            value = state.work.run
         else:
             value = ""
         if value:
@@ -283,9 +290,7 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
     the actual font — the old 36-character wrap systematically overflowed the
     360px pixel budget, so nearly every full line lost its tail mid-sentence."""
     raw_lines = [
-        _ANSI_RE.sub("", ln).strip()
-        for ln in text.splitlines()
-        if _ANSI_RE.sub("", ln).strip()
+        _ANSI_RE.sub("", ln).strip() for ln in text.splitlines() if _ANSI_RE.sub("", ln).strip()
     ]
     option_keys = {opt.key for opt in parse_options("\n".join(raw_lines))}
     lines: list[str] = []

@@ -16,6 +16,11 @@ from .model import AgentKey, AgentState, Status
 log = logging.getLogger("herdeck.telegram")
 
 
+def _metadata_body(agent: AgentState, body: str) -> str:
+    item = agent.work.item
+    return f"{body} · {item}" if item and item not in body else body
+
+
 class TelegramApiError(RuntimeError):
     def __init__(self, error_code: int, description: str):
         super().__init__(description)
@@ -116,7 +121,9 @@ class TelegramAlertFormatter:
         self, agent: AgentState, *, metadata_body: str, prompt: str, token: str
     ) -> tuple[str, dict]:
         has_prompt = bool(prompt.strip())
-        prompt = self._truncate(prompt.strip()) if has_prompt else "Prompt unavailable; use Read again."
+        prompt = (
+            self._truncate(prompt.strip()) if has_prompt else "Prompt unavailable; use Read again."
+        )
         text = (
             f"{agent.agent_type} {Status.BLOCKED.value}\n"
             f"{metadata_body} · {agent.key.server_id}:{agent.key.pane_id}\n\n"
@@ -189,9 +196,7 @@ class TelegramAlertStore:
         self._by_token[token] = record
         return record
 
-    def attach_message(
-        self, token: str, *, chat_id: str, message_id: int
-    ) -> TelegramAlertRecord:
+    def attach_message(self, token: str, *, chat_id: str, message_id: int) -> TelegramAlertRecord:
         record = self._by_token[token]
         self._by_message.pop((record.chat_id, record.message_id), None)
         record.chat_id = str(chat_id)
@@ -268,7 +273,7 @@ class TelegramInteractor:
             prompt = ""
         text, markup = self._formatter.blocked_alert(
             agent,
-            metadata_body=body,
+            metadata_body=_metadata_body(agent, body),
             prompt=str(prompt or ""),
             token=record.token,
         )
@@ -306,9 +311,8 @@ class TelegramInteractor:
                 agent = self._control.current_agent(record.key)
             except Exception:
                 continue
-            identity_matches = (
-                agent is not None
-                and (not record.terminal_id or agent.terminal_id == record.terminal_id)
+            identity_matches = agent is not None and (
+                not record.terminal_id or agent.terminal_id == record.terminal_id
             )
             if identity_matches and agent.status is Status.BLOCKED:
                 live.add(record.key)
@@ -418,7 +422,7 @@ class TelegramInteractor:
                 prompt = ""
             text, markup = self._formatter.blocked_alert(
                 agent,
-                metadata_body=f"{agent.repo or agent.label}",
+                metadata_body=_metadata_body(agent, agent.repo or agent.label),
                 prompt=str(prompt or ""),
                 token=record.token,
             )

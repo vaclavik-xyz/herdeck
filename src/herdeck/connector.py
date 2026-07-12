@@ -70,12 +70,22 @@ class Connector:
         self._stopping_terms: set[str] = set()
         self._last_connect_error: str | None = None
         self._last_logged_error: str | None = None
+        self._protocol = 1
+        self._capabilities: frozenset[str] = frozenset()
 
     @property
     def last_connect_error(self) -> str | None:
         """The most recent connect-failure reason (None after a successful
         connect). Surfaced e.g. by ctl's first-snapshot timeout message."""
         return self._last_connect_error
+
+    @property
+    def protocol(self) -> int:
+        return self._protocol
+
+    @property
+    def capabilities(self) -> frozenset[str]:
+        return self._capabilities
 
     def stop(self) -> None:
         self._stop = True
@@ -175,6 +185,8 @@ class Connector:
     def _dispatch(self, raw: str) -> None:
         msg = decode_inbound(raw)
         if isinstance(msg, Snapshot):
+            self._protocol = msg.protocol
+            self._capabilities = frozenset(msg.capabilities)
             self._on_snapshot(self.server.id, [self._rekey(s) for s in msg.states])
         elif isinstance(msg, Event):
             self._on_event(self.server.id, self._rekey(msg.state))

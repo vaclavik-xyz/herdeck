@@ -12,6 +12,7 @@ from typing import Protocol
 
 import websockets
 
+from .model import WorkContext
 from .protocol import encode
 
 log = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ _PROBE_TIMEOUT = 5.0
 _HERDR_RPC_TIMEOUT = 10.0
 _HERDR_SUBSCRIBE_TIMEOUT = 10.0
 _HERDR_LINE_LIMIT = 1024 * 1024 + 1  # 1 MiB payload plus NDJSON newline
+_WIRE_PROTOCOL = 2
+_WIRE_CAPABILITIES = ("work_context", "terminal_preview")
 
 # Module-level indirection so tests can fake the clock without touching the
 # shared stdlib time module (which asyncio's loop may also consult).
@@ -104,17 +107,13 @@ def _validate_snapshot(snapshot: object) -> dict:
                 raise RuntimeError(f"session.snapshot snapshot {field} must be a list")
             for row in rows:
                 if not isinstance(row, dict):
-                    raise RuntimeError(
-                        f"session.snapshot snapshot {field} entries must be objects"
-                    )
+                    raise RuntimeError(f"session.snapshot snapshot {field} entries must be objects")
     for record in snapshot["agents"]:
         pane_id = record.get("pane_id")
         if not isinstance(pane_id, str) or not pane_id:
             raise RuntimeError("session.snapshot agent pane_id must be a string")
         terminal_id = record.get("terminal_id")
-        if terminal_id is not None and (
-            not isinstance(terminal_id, str) or not terminal_id
-        ):
+        if terminal_id is not None and (not isinstance(terminal_id, str) or not terminal_id):
             raise RuntimeError(
                 "session.snapshot agent terminal_id must be a nonempty string or null"
             )
@@ -124,14 +123,24 @@ def _validate_snapshot(snapshot: object) -> dict:
             "cwd",
             "foreground_cwd",
             "custom_status",
+            "display_agent",
+            "title",
             "workspace_id",
             "tab_id",
         ):
             value = record.get(field)
             if value is not None and not isinstance(value, str):
-                raise RuntimeError(
-                    f"session.snapshot agent {field} must be a string or null"
-                )
+                raise RuntimeError(f"session.snapshot agent {field} must be a string or null")
+        labels = record.get("state_labels")
+        if labels is not None:
+            if not isinstance(labels, dict):
+                raise RuntimeError("session.snapshot agent state_labels must be an object")
+            if len(labels) > 64:
+                raise RuntimeError("session.snapshot agent state_labels exceeds 64 entries")
+            if not all(isinstance(key, str) for key in labels):
+                raise RuntimeError("session.snapshot agent state_labels keys must be strings")
+            if not all(isinstance(value, str) for value in labels.values()):
+                raise RuntimeError("session.snapshot agent state_labels values must be strings")
     for record in snapshot.get("panes", []):
         pane_id = record.get("pane_id")
         if not isinstance(pane_id, str) or not pane_id:
@@ -140,14 +149,10 @@ def _validate_snapshot(snapshot: object) -> dict:
         for record in snapshot.get(collection, []):
             identifier = record.get(id_field)
             if not isinstance(identifier, str) or not identifier:
-                raise RuntimeError(
-                    f"session.snapshot {collection} {id_field} must be a string"
-                )
+                raise RuntimeError(f"session.snapshot {collection} {id_field} must be a string")
             label = record.get("label")
             if label is not None and not isinstance(label, str):
-                raise RuntimeError(
-                    f"session.snapshot {collection} label must be a string or null"
-                )
+                raise RuntimeError(f"session.snapshot {collection} label must be a string or null")
     return snapshot
 
 
@@ -215,6 +220,7 @@ def _herdr_pane_to_wire(
     wt = (wt_by_ws or {}).get(p.get("workspace_id", ""), {})
     repo = wt.get("label") or label
     branch = wt.get("branch") or ""
+    work = WorkContext.from_state_labels(p.get("state_labels"))
     return {
         "pane_id": p["pane_id"],
         "agent_type": p.get("agent", "default"),
@@ -230,6 +236,14 @@ def _herdr_pane_to_wire(
         # otherwise. Clients derive the WAITING state from it.
         "custom_status": p.get("custom_status", ""),
         "terminal_id": p.get("terminal_id") or "",
+        "title": (p.get("title") or "")[:160],
+        "display_agent": (p.get("display_agent") or "")[:160],
+        "work": {
+            "source": work.source,
+            "item": work.item,
+            "run": work.run,
+            "url": work.url,
+        },
     }
 
 
@@ -329,7 +343,7 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     kind = msg["type"]
     if kind == "list":
         panes = await _wired_snapshot(herdr)
-        return encode({"type": "snapshot", "server_id": server_id, "panes": panes})
+        return encode(_snapshot_message(server_id, panes))
     if kind == "read":
         if await _pane_identity_changed(herdr, msg):
             return _identity_changed_result(msg)
@@ -364,6 +378,16 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
         await herdr.start_agent(msg["name"], msg["argv"])
         return encode({"type": "result", "req": msg["req"], "data": {"started": True}})
     raise ValueError(f"unknown client message: {kind}")
+
+
+def _snapshot_message(server_id: str, panes: list[dict]) -> dict:
+    return {
+        "type": "snapshot",
+        "server_id": server_id,
+        "protocol": _WIRE_PROTOCOL,
+        "capabilities": list(_WIRE_CAPABILITIES),
+        "panes": panes,
+    }
 
 
 def _pane_record_identity_changed(pane: dict | None, expected: object) -> bool:
@@ -710,8 +734,7 @@ class HerdrEvents:
     @staticmethod
     def _subscriptions_for(pane_ids: set[str]) -> list[dict]:
         subscriptions = [
-            {"type": event_type}
-            for event_type in _GLOBAL_EVENT_TYPES + _LABEL_EVENT_TYPES
+            {"type": event_type} for event_type in _GLOBAL_EVENT_TYPES + _LABEL_EVENT_TYPES
         ]
         subscriptions.extend(
             {"type": "pane.agent_status_changed", "pane_id": pane_id}
@@ -785,9 +808,9 @@ class HerdrEvents:
                     self._wake.set()
                     name = evt["event"]
                     pane_id = (evt.get("data") or {}).get("pane_id")
-                    if self._note_event(name, pane_id, subscribed_panes) and await self._topology_changed(
-                        name, subscribed_panes
-                    ):
+                    if self._note_event(
+                        name, pane_id, subscribed_panes
+                    ) and await self._topology_changed(name, subscribed_panes):
                         break  # real topology change -> re-subscribe panes
             except Exception:
                 pass
@@ -848,7 +871,7 @@ async def _broadcast(snapshot_stream, clients: dict, server_id: str) -> None:
     updates for the physical deck.
     """
     async for panes in snapshot_stream:
-        msg = encode({"type": "snapshot", "server_id": server_id, "panes": panes})
+        msg = encode(_snapshot_message(server_id, panes))
         if clients:
             await asyncio.gather(
                 *(_send_to_client(ws, msg, lock) for ws, lock in list(clients.items()))
@@ -1031,7 +1054,7 @@ async def _serve_connection(
         return await _send_to_client(ws, msg, send_lock)
 
     panes = await _wired_snapshot(herdr)
-    if not await send(encode({"type": "snapshot", "server_id": server_id, "panes": panes})):
+    if not await send(encode(_snapshot_message(server_id, panes))):
         return
     clients[ws] = send_lock
     observes: dict[str, tuple[asyncio.Task, dict]] = {}

@@ -56,6 +56,9 @@ def test_herdr_pane_to_wire_maps_fields():
         "tab": "",
         "custom_status": "",
         "terminal_id": "",
+        "title": "",
+        "display_agent": "",
+        "work": {"source": "", "item": "", "run": "", "url": ""},
     }
 
 
@@ -72,6 +75,35 @@ def test_herdr_pane_to_wire_passes_terminal_identity_through():
     raw["terminal_id"] = "term-123"
 
     assert _herdr_pane_to_wire(raw)["terminal_id"] == "term-123"
+
+
+def test_herdr_pane_to_wire_exposes_allowlisted_work_context():
+    raw = raw_pane()
+    raw.update(
+        {
+            "title": "Fix issue 123",
+            "display_agent": "Codex reviewer",
+            "state_labels": {
+                "work.source": "github",
+                "work.item": "vaclavik-xyz/persOS#123",
+                "work.run": "run-42",
+                "work.url": "https://github.com/vaclavik-xyz/persOS/issues/123",
+                "private.note": "must not cross the bridge",
+            },
+        }
+    )
+
+    wire = _herdr_pane_to_wire(raw)
+
+    assert wire["title"] == "Fix issue 123"
+    assert wire["display_agent"] == "Codex reviewer"
+    assert wire["work"] == {
+        "source": "github",
+        "item": "vaclavik-xyz/persOS#123",
+        "run": "run-42",
+        "url": "https://github.com/vaclavik-xyz/persOS/issues/123",
+    }
+    assert "state_labels" not in wire
 
 
 def test_herdr_pane_to_wire_adds_repo_and_branch_from_worktree():
@@ -109,6 +141,8 @@ async def test_list_returns_mapped_filtered_snapshot(herdr):
     msg = json.loads(out)
     assert msg["type"] == "snapshot"
     assert msg["server_id"] == "workbox"
+    assert msg["protocol"] == 2
+    assert msg["capabilities"] == ["work_context", "terminal_preview"]
     p = msg["panes"][0]
     assert p["pane_id"] == "w1:p1"
     assert p["agent_type"] == "claude"  # mapped from herdr "agent"
@@ -457,10 +491,10 @@ def test_subscription_ack_requires_started_result():
 @pytest.mark.parametrize(
     "line",
     [
-        b'[]\n',
+        b"[]\n",
         b'{"event":42,"data":{}}\n',
         b'{"event":"pane.created","data":[]}\n',
-        b'not-json\n',
+        b"not-json\n",
     ],
 )
 def test_event_decoder_rejects_malformed_payloads(line):
@@ -851,6 +885,32 @@ async def test_socket_herdr_snapshot_returns_snapshot():
     assert snap == {"agents": [], "workspaces": [], "tabs": []}
 
 
+async def test_socket_herdr_snapshot_rejects_malformed_state_labels():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        return {
+            "result": {
+                "snapshot": {
+                    "agents": [
+                        {
+                            "pane_id": "w1:p1",
+                            "terminal_id": "term-1",
+                            "state_labels": {"work.item": 123},
+                        }
+                    ]
+                }
+            }
+        }
+
+    h._rpc = fake_rpc
+
+    with pytest.raises(RuntimeError, match="state_labels values must be strings"):
+        await h.snapshot()
+
+
 async def test_socket_herdr_snapshot_maps_unknown_method_to_version_hint():
     from herdeck.bridge import SocketHerdr
 
@@ -966,9 +1026,7 @@ def test_event_subscriptions_cover_all_snapshot_panes_not_only_agents():
     subscriptions = HerdrEvents._subscriptions_for(pane_ids)
 
     status_ids = {
-        sub["pane_id"]
-        for sub in subscriptions
-        if sub.get("type") == "pane.agent_status_changed"
+        sub["pane_id"] for sub in subscriptions if sub.get("type") == "pane.agent_status_changed"
     }
     assert status_ids == {"w1:p1", "w1:p2"}
 
