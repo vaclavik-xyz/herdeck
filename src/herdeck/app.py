@@ -951,7 +951,13 @@ def _install_semantic_runtime(
     )
 
 
-async def _run_mock(config: Config, deck: DeckDriver, *, cycle_interval: float = 4.0) -> None:
+async def _run_mock(
+    config: Config,
+    deck: DeckDriver,
+    *,
+    cycle_interval: float = 4.0,
+    on_transition: Callable[[AgentState], None] | None = None,
+) -> None:
     """Drive the app with synthetic, lively data — no bridge required."""
     from .model import Status
 
@@ -1004,6 +1010,8 @@ async def _run_mock(config: Config, deck: DeckDriver, *, cycle_interval: float =
             updated = replace(current, status=status)
             agents[index] = updated
             app.handle_event(server, updated)
+            if on_transition is not None:
+                on_transition(updated)
             i += 1
 
     tasks = [_guard(_ticker(app, loop)), _guard(cycle())]

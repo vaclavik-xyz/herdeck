@@ -76,7 +76,15 @@ async def test_mock_runtime_registers_live_semantic_inventory():
 @pytest.mark.asyncio
 async def test_mock_transition_invalidates_stop_confirmation_for_changed_target():
     deck = SemanticFakeDeck()
-    task = asyncio.create_task(_run_mock(_mock_config(), deck, cycle_interval=0.05))
+    p1_changed = asyncio.Event()
+    task = asyncio.create_task(
+        _run_mock(
+            _mock_config(),
+            deck,
+            cycle_interval=0.02,
+            on_transition=lambda agent: p1_changed.set() if agent.key.pane_id == "p1" else None,
+        )
+    )
     try:
         while deck.semantic_callback is None:
             await asyncio.sleep(0)
@@ -96,7 +104,8 @@ async def test_mock_transition_invalidates_stop_confirmation_for_changed_target(
         )
         assert armed.body["outcome"] == "confirmation_required"
 
-        await asyncio.sleep(0.08)
+        p1_changed.clear()
+        await asyncio.wait_for(p1_changed.wait(), timeout=1)
         confirmed = await semantic_request(
             deck,
             {
