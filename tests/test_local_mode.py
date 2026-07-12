@@ -225,6 +225,8 @@ def test_runtime_startup_settings_use_local_when_env_absent(monkeypatch):
     monkeypatch.delenv("HERDECK_DECK", raising=False)
     monkeypatch.delenv("HERDECK_FAKE_DECK", raising=False)
     monkeypatch.delenv("HERDR_SOCKET", raising=False)
+    monkeypatch.delenv("HERDR_SOCKET_PATH", raising=False)
+    monkeypatch.delenv("HERDR_SESSION", raising=False)
 
     assert _resolve_deck_kind(cfg) == "web"
     assert _resolve_socket_path(cfg) == "/local.sock"

@@ -21,9 +21,8 @@ from .config import (
 
 def resolve_socket_path(config=None, *, getenv=os.environ.get) -> str:
     """Resolve the Herdr socket using Herdeck and native Herdr conventions."""
-    legacy = getenv("HERDR_SOCKET")
-    if legacy:
-        return os.path.expanduser(legacy)
+    if any(getenv(name) for name in ("HERDR_SOCKET", "HERDR_SOCKET_PATH", "HERDR_SESSION")):
+        return resolve_herdr_socket_path(getenv=getenv)
     configured = (
         config.hardware.herdr_socket
         if config and config.hardware.herdr_socket

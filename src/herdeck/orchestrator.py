@@ -183,8 +183,19 @@ class Orchestrator:
                 self._detection = ""
 
     def apply_event(self, server_id: str, state: AgentState) -> None:
-        if self._drill == state.key and self._agents.get(state.key) != state:
+        previous = self._agents.get(state.key)
+        recycled = (
+            previous is not None
+            and previous.terminal_id
+            and state.terminal_id
+            and previous.terminal_id != state.terminal_id
+        )
+        if recycled:
+            self._since.pop(state.key, None)
+        if self._drill == state.key and previous != state:
             self._pending_confirm = None
+            if recycled:
+                self._detection = ""
         self._agents[state.key] = state
         if self._touch(state):
             self._on_new_block()

@@ -99,6 +99,30 @@ async def test_dispatch_skipped_exit3(capsys):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["send", "focus"])
+async def test_dispatch_direct_command_surfaces_identity_skip(command, capsys):
+    a = AgentState(
+        AgentKey("dev", "p1"),
+        "claude",
+        "auth",
+        Status.BLOCKED,
+        terminal_id="term-old",
+    )
+
+    class SkipRequestSession(StubSession):
+        async def request(self, cmd, *, timeout):
+            return {"skipped": True, "message": "agent identity changed"}
+
+    argv = [command, "dev:p1"]
+    if command == "send":
+        argv.append("hello")
+    args = build_parser().parse_args(argv)
+
+    assert await dispatch(args, SkipRequestSession([a])) == EXIT_SKIPPED
+    assert "agent identity changed" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
 async def test_dispatch_wait_any_returns_matched_agent(capsys):
     a = AgentState(AgentKey("dev", "p1"), "claude", "auth", Status.BLOCKED)
     args = build_parser().parse_args(["wait", "--any", "--until", "blocked", "--json"])
@@ -138,6 +162,8 @@ async def test_amain_resolves_socket_from_the_loaded_config(tmp_path, monkeypatc
     config.write_text("")  # serverless config; the socket override lives in local.toml
     (tmp_path / "local.toml").write_text(f'[local]\nherdr_socket = "{sock}"\n')
     monkeypatch.delenv("HERDR_SOCKET", raising=False)
+    monkeypatch.delenv("HERDR_SOCKET_PATH", raising=False)
+    monkeypatch.delenv("HERDR_SESSION", raising=False)
     monkeypatch.delenv("HERDECK_LOCAL_CONFIG", raising=False)
     seen = {}
     real = bootstrap_mod.resolve_socket_path

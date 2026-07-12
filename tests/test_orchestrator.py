@@ -104,6 +104,32 @@ def test_event_updates_tile():
     assert o.render().tiles[0].color == "amber"
 
 
+def test_event_recycled_terminal_starts_fresh_block_episode():
+    now = [1.0]
+    key = AgentKey("dev", "p1")
+    o = Orchestrator(make_config(), slots=13, clock=lambda: now[0])
+    o.apply_snapshot(
+        "dev",
+        [AgentState(key, "claude", "old", Status.BLOCKED, terminal_id="term-old")],
+    )
+    o._force_adopt = False
+    now[0] = 10.0
+
+    o.apply_event(
+        "dev",
+        AgentState(
+            key,
+            "codex",
+            "new",
+            Status.BLOCKED,
+            terminal_id="term-new",
+        ),
+    )
+
+    assert o._since[key] == (Status.BLOCKED, 10.0)
+    assert o._force_adopt is True
+
+
 def test_agent_for_preview_reads_rendered_slot_without_mutating_order_state():
     now = [10.0]
     o = Orchestrator(make_config(), slots=13, clock=lambda: now[0])

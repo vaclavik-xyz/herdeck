@@ -111,6 +111,9 @@ class Connector:
                     ping_timeout=20,
                 ) as ws:
                     self._ws = ws
+                    if self._stop:
+                        await ws.close()
+                        break
                     self._stopping_terms.clear()
                     attempt = 0
                     connected = True
