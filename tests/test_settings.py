@@ -603,6 +603,7 @@ def test_usage_config_defaults_to_disabled():
 
     usage = _usage_config(None)
     assert usage.providers == []
+    assert usage.paid_only is False
     assert usage.refresh_secs == 300
     assert usage.codex_path == "codex"
     assert usage.claude_cache_path == "~/.cache/herdeck/claude-usage.json"
@@ -615,6 +616,7 @@ def test_usage_config_parses_fields():
     usage = _usage_config(
         {
             "providers": ["claude", "codex"],
+            "paid_only": True,
             "refresh_secs": 120,
             "codex_path": "/opt/x/codex",
             "claude_cache_path": "/tmp/claude-usage.json",
@@ -622,6 +624,7 @@ def test_usage_config_parses_fields():
         }
     )
     assert usage.providers == ["claude", "codex"]
+    assert usage.paid_only is True
     assert usage.refresh_secs == 120
     assert usage.codex_path == "/opt/x/codex"
     assert usage.claude_cache_path == "/tmp/claude-usage.json"
@@ -639,6 +642,8 @@ def test_usage_config_validates():
         _usage_config({"refresh_secs": 5})
     with pytest.raises(ConfigError, match="usage.refresh_secs"):
         _usage_config({"refresh_secs": "fast"})
+    with pytest.raises(ConfigError, match="usage.paid_only"):
+        _usage_config({"paid_only": 1})
     with pytest.raises(ConfigError, match="usage.codexbar_path"):
         _usage_config({"codexbar_path": 1})
     with pytest.raises(ConfigError, match="usage.codex_path"):

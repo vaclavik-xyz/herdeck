@@ -285,6 +285,11 @@ def _usage_config(raw: dict | None) -> UsageConfig:
                     " (letters, digits, '-', '_')"
                 )
         usage.providers = list(providers)
+    if "paid_only" in raw:
+        paid_only = raw["paid_only"]
+        if type(paid_only) is not bool:
+            raise ConfigError("usage.paid_only must be true or false")
+        usage.paid_only = paid_only
     if "refresh_secs" in raw:
         secs = raw["refresh_secs"]
         if type(secs) is not int or secs < 30:

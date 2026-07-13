@@ -40,6 +40,20 @@ class UsageWindow:
 class ProviderUsage:
     provider: str
     windows: list[UsageWindow] = field(default_factory=list)
+    subscription: str = "unknown"
+    plan: str | None = None
+
+
+def _subscription_from_plan(plan) -> tuple[str, str | None]:
+    """Classify a provider-reported subscription tier conservatively."""
+    if not isinstance(plan, str) or not plan.strip():
+        return "unknown", None
+    normalized = plan.strip().lower()
+    if normalized == "free":
+        return "free", normalized
+    if normalized == "unknown":
+        return "unknown", normalized
+    return "paid", normalized
 
 
 def _window_label(minutes) -> str:
@@ -125,12 +139,29 @@ def parse_usage(raw: str) -> list[ProviderUsage]:
     return out
 
 
-def parse_codex_rate_limits(message: dict) -> ProviderUsage | None:
+def parse_codex_account(message: dict) -> tuple[str, str | None]:
+    """Read the ChatGPT subscription tier from ``account/read``."""
+    result = message.get("result") if isinstance(message, dict) else None
+    account = result.get("account") if isinstance(result, dict) else None
+    if not isinstance(account, dict) or account.get("type") != "chatgpt":
+        return "unknown", None
+    return _subscription_from_plan(account.get("planType"))
+
+
+def parse_codex_rate_limits(
+    message: dict,
+    *,
+    subscription: str = "unknown",
+    plan: str | None = None,
+) -> ProviderUsage | None:
     """Normalize an ``account/rateLimits/read`` app-server response."""
     result = message.get("result") if isinstance(message, dict) else None
     limits = result.get("rateLimits") if isinstance(result, dict) else None
     if not isinstance(limits, dict):
         return None
+    limit_subscription, limit_plan = _subscription_from_plan(limits.get("planType"))
+    if limit_subscription != "unknown":
+        subscription, plan = limit_subscription, limit_plan
     windows = [
         parsed
         for slot in ("primary", "secondary")
@@ -144,7 +175,7 @@ def parse_codex_rate_limits(message: dict) -> ProviderUsage | None:
         )
         is not None
     ]
-    return ProviderUsage("codex", windows) if windows else None
+    return ProviderUsage("codex", windows, subscription, plan) if windows else None
 
 
 def parse_claude_statusline(raw: str) -> ProviderUsage | None:
@@ -171,7 +202,10 @@ def parse_claude_statusline(raw: str) -> ProviderUsage | None:
         )
         if parsed is not None:
             windows.append(parsed)
-    return ProviderUsage("claude", windows) if windows else None
+    # Claude documents rate_limits as subscriber-only data. Its absence is
+    # inconclusive (the field appears only after the first API response), but
+    # its presence is a positive paid-subscription signal.
+    return ProviderUsage("claude", windows, "paid") if windows else None
 
 
 def capture_claude_statusline(
@@ -268,10 +302,18 @@ class CodexAppServerSource:
     def fetch(self) -> ProviderUsage | None:
         try:
             self._ensure_started()
-            request_id = self._next_id
+            account_id = self._next_id
             self._next_id += 1
-            self._send({"method": "account/rateLimits/read", "id": request_id, "params": {}})
-            return parse_codex_rate_limits(self._read_response(request_id))
+            self._send(
+                {"method": "account/read", "id": account_id, "params": {"refreshToken": False}}
+            )
+            subscription, plan = parse_codex_account(self._read_response(account_id))
+            limits_id = self._next_id
+            self._next_id += 1
+            self._send({"method": "account/rateLimits/read", "id": limits_id, "params": {}})
+            return parse_codex_rate_limits(
+                self._read_response(limits_id), subscription=subscription, plan=plan
+            )
         except Exception:
             self.close()
             log.warning("Codex app-server usage poll failed", exc_info=True)
@@ -368,6 +410,7 @@ class UsagePoller:
     def __init__(
         self,
         providers: list[str],
+        paid_only: bool = False,
         refresh_secs: float = 300.0,
         codex_path: str = "codex",
         claude_cache_path: str = "~/.cache/herdeck/claude-usage.json",
@@ -379,6 +422,7 @@ class UsagePoller:
         claude_reader=read_claude_cache,
     ):
         self._providers = list(providers)
+        self._paid_only = paid_only
         self._refresh = max(30.0, float(refresh_secs))
         self._codexbar_path = codexbar_path
         self._runner = runner
@@ -411,7 +455,11 @@ class UsagePoller:
             return [
                 self._data[provider][0]
                 for provider in self._providers
-                if provider in self._data and self._data[provider][1] >= cutoff
+                if provider in self._data
+                and self._data[provider][1] >= cutoff
+                and (
+                    not self._paid_only or self._data[provider][0].subscription == "paid"
+                )
             ]
 
     def _run(self) -> None:
@@ -431,7 +479,14 @@ class UsagePoller:
             if usage is not None:
                 fresh["claude"] = usage
 
-        missing = [provider for provider in self._providers if provider not in fresh]
+        # CodexBar does not expose a stable paid-subscription entitlement. In
+        # paid-only mode an unknown fallback would be hidden anyway, so avoid
+        # both the subprocess and the risk of presenting login as payment.
+        missing = (
+            []
+            if self._paid_only
+            else [provider for provider in self._providers if provider not in fresh]
+        )
         for usage in self._fetch_codexbar(missing):
             if usage.provider in requested and usage.provider not in fresh:
                 fresh[usage.provider] = usage
@@ -475,6 +530,7 @@ def poller_from_config(usage_config) -> UsagePoller | None:
         return None
     return UsagePoller(
         providers=usage_config.providers,
+        paid_only=usage_config.paid_only,
         refresh_secs=usage_config.refresh_secs,
         codex_path=usage_config.codex_path,
         claude_cache_path=usage_config.claude_cache_path,

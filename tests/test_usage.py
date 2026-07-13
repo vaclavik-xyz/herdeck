@@ -18,6 +18,7 @@ from herdeck.usage import (
     UsageWindow,
     capture_claude_statusline,
     parse_claude_statusline,
+    parse_codex_account,
     parse_codex_rate_limits,
     parse_usage,
     poller_from_config,
@@ -267,8 +268,11 @@ def test_poller_from_config_gates_on_providers():
 
     assert poller_from_config(UsageConfig()) is None
     assert poller_from_config(None) is None
-    p = poller_from_config(UsageConfig(providers=["claude"], refresh_secs=120))
+    p = poller_from_config(
+        UsageConfig(providers=["claude"], paid_only=True, refresh_secs=120)
+    )
     assert p is not None and p._providers == ["claude"]
+    assert p._paid_only is True
     assert p._claude_cache_path == "~/.cache/herdeck/claude-usage.json"
 
 
@@ -333,6 +337,46 @@ def test_parse_codex_app_server_rate_limits():
     assert usage.windows[0].resets_at == "2026-07-19T18:59:11Z"
 
 
+def test_parse_codex_account_distinguishes_paid_free_and_api_key():
+    assert parse_codex_account(
+        {"result": {"account": {"type": "chatgpt", "planType": "pro"}}}
+    ) == ("paid", "pro")
+    assert parse_codex_account(
+        {"result": {"account": {"type": "chatgpt", "planType": "free"}}}
+    ) == ("free", "free")
+    assert parse_codex_account({"result": {"account": {"type": "apiKey"}}}) == (
+        "unknown",
+        None,
+    )
+
+
+def test_paid_only_hides_unconfirmed_providers_without_codexbar_fallback(monkeypatch):
+    calls = []
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codexbar")
+    paid = ProviderUsage("codex", [UsageWindow("5h", 12, None)], "paid", "pro")
+    poller = UsagePoller(
+        ["claude", "codex"],
+        paid_only=True,
+        codex_source=_Source(paid),
+        claude_reader=lambda _path: None,
+        runner=lambda *args, **kwargs: calls.append(args) or _Proc(stdout=_CODEXBAR_JSON),
+    )
+
+    poller.poll_once()
+
+    assert [usage.provider for usage in poller.snapshot()] == ["codex"]
+    assert calls == []
+
+
+def test_paid_only_hides_free_native_subscription():
+    free = ProviderUsage("codex", [UsageWindow("5h", 12, None)], "free", "free")
+    poller = UsagePoller(
+        ["codex"], paid_only=True, codex_source=_Source(free), codexbar_path=""
+    )
+    poller.poll_once()
+    assert poller.snapshot() == []
+
+
 def test_codex_app_server_source_handshakes_and_reads_limits(monkeypatch):
     class FakeAppServer:
         def __init__(self):
@@ -340,7 +384,8 @@ def test_codex_app_server_source_handshakes_and_reads_limits(monkeypatch):
             self.stdout = io.StringIO(
                 '{"id":0,"result":{"codexHome":"/tmp"}}\n'
                 '{"method":"account/updated","params":{}}\n'
-                '{"id":1,"result":{"rateLimits":{"primary":'
+                '{"id":1,"result":{"account":{"type":"chatgpt","planType":"pro"}}}\n'
+                '{"id":2,"result":{"rateLimits":{"primary":'
                 '{"usedPercent":9,"windowDurationMins":300,"resetsAt":1784487551}}}}\n'
             )
             self.returncode = None
@@ -370,10 +415,12 @@ def test_codex_app_server_source_handshakes_and_reads_limits(monkeypatch):
 
     assert argv == ["/opt/homebrew/bin/codex", "app-server"]
     assert usage is not None and usage.windows[0].used_percent == 9
+    assert (usage.subscription, usage.plan) == ("paid", "pro")
     sent = [json.loads(line) for line in proc.stdin.getvalue().splitlines()]
     assert [message["method"] for message in sent] == [
         "initialize",
         "initialized",
+        "account/read",
         "account/rateLimits/read",
     ]
     source.close()
@@ -409,7 +456,8 @@ def test_codex_app_server_reader_handles_coalesced_pipe_responses(monkeypatch):
         write_fd,
         b'{"id":0,"result":{"codexHome":"/tmp"}}\n'
         b'{"method":"account/updated","params":{}}\n'
-        b'{"id":1,"result":{"rateLimits":{"primary":'
+        b'{"id":1,"result":{"account":{"type":"chatgpt","planType":"plus"}}}\n'
+        b'{"id":2,"result":{"rateLimits":{"primary":'
         b'{"usedPercent":8,"windowDurationMins":300,"resetsAt":1784487551}}}}\n',
     )
     os.close(write_fd)
@@ -419,6 +467,7 @@ def test_codex_app_server_reader_handles_coalesced_pipe_responses(monkeypatch):
     usage = source.fetch()
 
     assert usage is not None and usage.windows[0].used_percent == 8
+    assert usage.subscription == "paid"
     source.close()
 
 
@@ -451,6 +500,7 @@ def test_parse_claude_statusline_subscription_windows():
     usage = parse_claude_statusline(_CLAUDE_STATUSLINE_JSON)
     assert usage is not None
     assert [(w.label, w.used_percent) for w in usage.windows] == [("5h", 17), ("7d", 44)]
+    assert usage.subscription == "paid"
 
 
 def test_capture_claude_statusline_writes_minimal_private_cache(tmp_path):

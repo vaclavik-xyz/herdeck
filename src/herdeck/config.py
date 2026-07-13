@@ -121,8 +121,12 @@ class SafetyConfig:
 
 @dataclass
 class UsageConfig:
-    # Provider ids to show; empty keeps the usage panel off.
+    # Provider ids to poll; empty keeps the usage panel off. This is also the
+    # explicit per-provider allow-list used by the settings UI.
     providers: list[str] = field(default_factory=list)
+    # Hide providers unless their native source confirms a paid subscription.
+    # Disabled by default so existing CodexBar-only configurations keep working.
+    paid_only: bool = False
     refresh_secs: int = 300
     codex_path: str = "codex"
     claude_cache_path: str = "~/.cache/herdeck/claude-usage.json"
