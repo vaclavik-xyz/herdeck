@@ -494,6 +494,10 @@ class Orchestrator:
                 title,
                 layout.usage_detail_lines(self._usage, page=self._usage_detail_page),
                 "grey",
+                gauges=layout.usage_detail_gauges(
+                    self._usage,
+                    page=self._usage_detail_page,
+                ),
             )
             return RenderState(tiles, panel)
         panel = layout.panel_overview(
@@ -505,6 +509,7 @@ class Orchestrator:
             spotlight,
             lang=self.config.view.language,
             usage_lines=layout.usage_summary_lines(self._usage) if self._usage else None,
+            usage_gauges=layout.usage_summary_gauges(self._usage) if self._usage else None,
         )
         if panel.color == "red":
             panel.color = self.config.theme.colors.get("offline", panel.color)

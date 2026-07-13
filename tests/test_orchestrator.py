@@ -425,6 +425,11 @@ def test_overview_panel_carries_usage_lines():
     rs = o.render()
     assert "Claude 5h 19% · 7d 43%" in rs.panel.lines
     assert "Codex 5h 2%" in rs.panel.lines
+    assert [(g.label, g.window) for g in rs.panel.gauges] == [
+        ("Claude", "5H"),
+        ("Claude", "7D"),
+        ("Codex", "5H"),
+    ]
 
 
 def test_overview_panel_without_usage_keeps_online_line():
@@ -443,6 +448,7 @@ def test_panel_press_toggles_usage_detail_on_single_page():
     rs = o.render()
     assert rs.panel.title == "usage limits"
     assert rs.panel.lines[0].startswith("Claude 5h 19%")
+    assert rs.panel.gauges[0].label == "Claude"
     # second press hides the detail again
     o.on_press(13)
     assert o.render().panel.title == "1 agents"

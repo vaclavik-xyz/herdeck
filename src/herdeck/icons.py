@@ -349,6 +349,8 @@ def compose_panel(panel: PanelView, width: int = PANEL_W) -> Image.Image:
     images; the web simulator and desktop window display the PNG at its true
     aspect either way.
     """
+    if panel.gauges:
+        return _compose_gauge_panel(panel, width)
     bg = _panel_bg(panel.color)
     img = Image.new("RGB", (width, PANEL_H), bg)
     d = ImageDraw.Draw(img)
@@ -365,6 +367,86 @@ def compose_panel(panel: PanelView, width: int = PANEL_W) -> Image.Image:
         # _truncate is a safety net for unbreakable tokens wider than the panel.
         d.text((16, y), _truncate(d, line, line_f, width - 32), font=line_f, fill=(232, 232, 236))
         y += 40
+    return img
+
+
+_GAUGE_BG = (15, 17, 22)
+_GAUGE_CARD = (25, 28, 35)
+_GAUGE_LINE = (49, 54, 65)
+_GAUGE_MUTED = (146, 153, 166)
+_GAUGE_TEXT = (244, 246, 250)
+
+
+def _gauge_tone(color: str, used_percent: int) -> tuple[int, int, int]:
+    if used_percent >= 85:
+        return COLORS["red"]
+    if used_percent >= 65:
+        return COLORS["amber"]
+    return COLORS.get(color, COLORS["violet"])
+
+
+def _draw_gauge_rail(draw, box, used_percent: int, tone) -> None:
+    x0, y0, x1, y1 = box
+    radius = max(1, (y1 - y0) // 2)
+    draw.rounded_rectangle(box, radius=radius, fill=_GAUGE_LINE)
+    fill_w = round((x1 - x0) * max(0, min(100, used_percent)) / 100)
+    if fill_w:
+        draw.rounded_rectangle((x0, y0, x0 + max(fill_w, 4), y1), radius=radius, fill=tone)
+
+
+def _compose_gauge_panel(panel: PanelView, width: int) -> Image.Image:
+    """Render usage as compact instrument gauges for the physical status window."""
+    img = Image.new("RGB", (width, PANEL_H), _GAUGE_BG)
+    draw = ImageDraw.Draw(img)
+    detail = any(gauge.hint for gauge in panel.gauges)
+    title_font = _font(25)
+    draw.text((16, 10), _truncate(draw, panel.title, title_font, width * 0.56), font=title_font, fill=_GAUGE_TEXT)
+    if panel.lines or detail:
+        meta_font = _font(15)
+        meta = "USED / RESET" if detail else panel.lines[0].upper()
+        meta = _truncate(draw, meta, meta_font, width * 0.38)
+        meta_w = draw.textlength(meta, font=meta_font)
+        draw.text((width - 16 - meta_w, 17), meta, font=meta_font, fill=_GAUGE_MUTED)
+    draw.line((16, 45, width - 16, 45), fill=_GAUGE_LINE, width=1)
+
+    columns = min(3, len(panel.gauges)) if detail else 2
+    rows = math.ceil(len(panel.gauges) / columns)
+    gap = 8
+    left = 16
+    top = 54
+    available_w = width - 2 * left - gap * (columns - 1)
+    available_h = PANEL_H - top - 10 - gap * (rows - 1)
+    cell_w = available_w / columns
+    cell_h = available_h / rows
+
+    for index, gauge in enumerate(panel.gauges):
+        row, col = divmod(index, columns)
+        x0 = round(left + col * (cell_w + gap))
+        y0 = round(top + row * (cell_h + gap))
+        x1 = round(x0 + cell_w)
+        y1 = round(y0 + cell_h)
+        draw.rounded_rectangle((x0, y0, x1, y1), radius=8, fill=_GAUGE_CARD)
+        tone = _gauge_tone(gauge.color, gauge.used_percent)
+
+        if detail:
+            label_font = _font(16)
+            value_font = _font(31)
+            hint_font = _font(13)
+            label = f"{gauge.label.upper()} · {gauge.window}"
+            draw.text((x0 + 10, y0 + 9), _truncate(draw, label, label_font, cell_w - 20), font=label_font, fill=COLORS.get(gauge.color, _GAUGE_MUTED))
+            draw.text((x0 + 10, y0 + 34), f"{gauge.used_percent}%", font=value_font, fill=_GAUGE_TEXT)
+            if gauge.hint:
+                draw.text((x0 + 10, y1 - 36), _truncate(draw, gauge.hint, hint_font, cell_w - 20), font=hint_font, fill=_GAUGE_MUTED)
+            _draw_gauge_rail(draw, (x0 + 10, y1 - 15, x1 - 10, y1 - 10), gauge.used_percent, tone)
+        else:
+            label_font = _font(14)
+            value_font = _font(22)
+            label = f"{gauge.label.upper()}  {gauge.window}"
+            draw.text((x0 + 9, y0 + 7), _truncate(draw, label, label_font, cell_w - 62), font=label_font, fill=COLORS.get(gauge.color, _GAUGE_MUTED))
+            value = f"{gauge.used_percent}%"
+            value_w = draw.textlength(value, font=value_font)
+            draw.text((x1 - 9 - value_w, y0 + 3), value, font=value_font, fill=_GAUGE_TEXT)
+            _draw_gauge_rail(draw, (x0 + 9, y1 - 12, x1 - 9, y1 - 7), gauge.used_percent, tone)
     return img
 
 

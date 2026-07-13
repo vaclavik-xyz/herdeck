@@ -203,7 +203,7 @@ class DeckApp:
         # Memoize the encoded panel by content: panel text changes every few
         # seconds at most, while refreshes run per tick — recomposing + PNG-encoding
         # an identical panel dominated the steady-state tick cost.
-        panel_key = (rs.panel.title, tuple(rs.panel.lines), rs.panel.color)
+        panel_key = rs.panel.cache_key()
         memo = self._panel_memo
         if memo is not None and memo[0] == panel_key:
             panel_png = memo[1]

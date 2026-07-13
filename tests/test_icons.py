@@ -227,6 +227,36 @@ def test_compose_panel_uses_theme_color_background():
     assert themed.getpixel((0, 0)) != default.getpixel((0, 0))
 
 
+def test_compose_usage_panel_draws_instrument_cards_and_rails():
+    from herdeck.driver.base import PanelGauge, PanelView
+    from herdeck.icons import compose_panel
+
+    panel = PanelView(
+        "4 agents",
+        ["W2 · I2 · D0"],
+        gauges=[
+            PanelGauge("Claude", "5H", 50, color="orange"),
+            PanelGauge("Claude", "7D", 70, color="orange"),
+            PanelGauge("Codex", "5H", 10, color="teal"),
+            PanelGauge("Codex", "7D", 90, color="teal"),
+        ],
+    )
+    image = compose_panel(panel)
+
+    assert image.getpixel((0, 0)) == (15, 17, 22)  # dedicated usage canvas
+    assert image.getpixel((18, 58)) == (25, 28, 35)  # first instrument card
+    assert image.getpixel((28, 107)) == (220, 115, 35)  # Claude rail
+    assert image.getpixel((200, 107)) == (49, 54, 65)  # unused rail segment
+
+
+def test_panel_cache_key_includes_usage_gauges():
+    from herdeck.driver.base import PanelGauge, PanelView
+
+    low = PanelView("usage", gauges=[PanelGauge("Codex", "5H", 10, color="teal")])
+    high = PanelView("usage", gauges=[PanelGauge("Codex", "5H", 90, color="teal")])
+    assert low.cache_key() != high.cache_key()
+
+
 def test_drill_option_subtext_is_drawn_under_label(tmp_path):
     # A drill choice tile renders the big number (label) AND the small choice
     # text (subtext) under it, so the subtext must change the rendered bytes.

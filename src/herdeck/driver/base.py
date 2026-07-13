@@ -45,10 +45,30 @@ class TileView:
 
 
 @dataclass
+class PanelGauge:
+    label: str
+    window: str
+    used_percent: int
+    hint: str = ""
+    color: str = "grey"
+
+
+@dataclass
 class PanelView:
     title: str
     lines: list[str] = field(default_factory=list)
     color: str = "grey"
+    gauges: list[PanelGauge] = field(default_factory=list)
+
+    def cache_key(self) -> tuple:
+        return (
+            self.title,
+            tuple(self.lines),
+            self.color,
+            tuple(
+                (g.label, g.window, g.used_percent, g.hint, g.color) for g in self.gauges
+            ),
+        )
 
 
 class DeckDriver(ABC):

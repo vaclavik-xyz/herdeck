@@ -5,7 +5,12 @@ import queue
 import threading
 from datetime import UTC
 
-from herdeck.layout import usage_detail_lines, usage_summary_lines
+from herdeck.layout import (
+    usage_detail_gauges,
+    usage_detail_lines,
+    usage_summary_gauges,
+    usage_summary_lines,
+)
 from herdeck.usage import (
     CodexAppServerSource,
     ProviderUsage,
@@ -84,6 +89,16 @@ def test_usage_summary_lines_are_compact():
     ]
 
 
+def test_usage_summary_gauges_keep_provider_identity_and_windows():
+    gauges = usage_summary_gauges(parse_usage(_CODEXBAR_JSON))
+    assert [(g.label, g.window, g.used_percent, g.color) for g in gauges] == [
+        ("Claude", "5H", 19, "orange"),
+        ("Claude", "7D", 43, "orange"),
+        ("Codex", "5H", 2, "teal"),
+        ("Codex", "7D", 30, "teal"),
+    ]
+
+
 def test_usage_detail_lines_carry_reset_times():
     from datetime import datetime
 
@@ -99,6 +114,16 @@ def test_usage_detail_lines_carry_reset_times():
     data[0].windows[0].resets_at = None
     (line,) = usage_detail_lines(data, now=now)
     assert line == "Claude 5h 19%"  # no reset -> no dangling arrow
+
+
+def test_usage_detail_gauges_include_reset_hint():
+    from datetime import datetime
+
+    data = [ProviderUsage("claude", [UsageWindow("5h", 19, "2026-07-02T23:00:00Z")])]
+    now = datetime(2026, 7, 2, 20, 0, tzinfo=UTC)
+    (gauge,) = usage_detail_gauges(data, now=now)
+    assert (gauge.label, gauge.window, gauge.used_percent) == ("Claude", "5H", 19)
+    assert gauge.hint.startswith("reset ")
 
 
 def test_usage_detail_lines_page_through_all_windows():

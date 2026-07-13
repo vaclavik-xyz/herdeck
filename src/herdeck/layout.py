@@ -4,7 +4,7 @@ import math
 import re
 from dataclasses import dataclass
 
-from .driver.base import PanelView
+from .driver.base import PanelGauge, PanelView
 from .i18n import tr
 from .model import AgentState, Status
 
@@ -148,6 +148,7 @@ def panel_overview(
     spotlight: tuple[str, str] | None,
     lang: str = "en",
     usage_lines: list[str] | None = None,
+    usage_gauges: list[PanelGauge] | None = None,
 ) -> PanelView:
     page_line = -1  # which line carries the "· p/n" page marker
     if down:
@@ -184,7 +185,7 @@ def panel_overview(
             page_line = 0
     if page_count > 1 and lines:
         lines[page_line] = f"{lines[page_line]} · {page_index + 1}/{page_count}"
-    return PanelView(title=title, lines=lines, color=color)
+    return PanelView(title=title, lines=lines, color=color, gauges=usage_gauges or [])
 
 
 def _fmt_reset(resets_at: str | None, now) -> str:
@@ -217,6 +218,28 @@ def usage_summary_lines(data, max_providers: int = 2) -> list[str]:
     return lines
 
 
+def _provider_gauge_color(provider: str) -> str:
+    return {"claude": "orange", "codex": "teal"}.get(provider.lower(), "violet")
+
+
+def usage_summary_gauges(data, max_gauges: int = 4) -> list[PanelGauge]:
+    """Structured 5h/7d gauges for the compact overview renderer."""
+    gauges: list[PanelGauge] = []
+    for provider in data:
+        for window in provider.windows:
+            gauges.append(
+                PanelGauge(
+                    label=_provider_name(provider.provider),
+                    window=window.label.upper(),
+                    used_percent=window.used_percent,
+                    color=_provider_gauge_color(provider.provider),
+                )
+            )
+            if len(gauges) == max_gauges:
+                return gauges
+    return gauges
+
+
 def usage_detail_pages(data) -> int:
     """How many panel pages the detail spans (one line per provider window)."""
     count = sum(len(p.windows) for p in data)
@@ -242,6 +265,26 @@ def usage_detail_lines(
     page = min(max(0, page), usage_detail_pages(data) - 1)
     start = page * max_lines
     return lines[start : start + max_lines]
+
+
+def usage_detail_gauges(data, now=None, page: int = 0) -> list[PanelGauge]:
+    """One detail-page gauge per provider window, including its reset time."""
+    gauges: list[PanelGauge] = []
+    for provider in data:
+        for window in provider.windows:
+            reset = _fmt_reset(window.resets_at, now)
+            gauges.append(
+                PanelGauge(
+                    label=_provider_name(provider.provider),
+                    window=window.label.upper(),
+                    used_percent=window.used_percent,
+                    hint=f"reset {reset}" if reset else "",
+                    color=_provider_gauge_color(provider.provider),
+                )
+            )
+    page = min(max(0, page), usage_detail_pages(data) - 1)
+    start = page * _DETAIL_MAX_LINES
+    return gauges[start : start + _DETAIL_MAX_LINES]
 
 
 @dataclass
