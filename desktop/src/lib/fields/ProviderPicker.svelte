@@ -55,20 +55,37 @@
     );
   }
 
-  function setOther(next: string[]): void {
-    // Replace custom slots in place so editing ["zai", "claude"] never
-    // silently changes the panel order to ["claude", "zai"].
-    let customIndex = 0;
-    const merged: string[] = [];
-    for (const provider of providers) {
-      if (KNOWN_IDS.has(provider)) {
-        merged.push(provider);
-      } else if (customIndex < next.length) {
-        merged.push(next[customIndex++]);
-      }
+  function providerIndexForCustom(customIndex: number): number {
+    let seen = 0;
+    for (let index = 0; index < providers.length; index += 1) {
+      if (KNOWN_IDS.has(providers[index])) continue;
+      if (seen === customIndex) return index;
+      seen += 1;
     }
-    merged.push(...next.slice(customIndex));
-    syncedOthers = JSON.stringify(next);
+    return -1;
+  }
+
+  function resetDraft(index: number): string {
+    const providerIndex = providerIndexForCustom(index);
+    const value = providerIndex >= 0 ? providers[providerIndex] : "";
+    setDraft(index, value);
+    return value;
+  }
+
+  function commitDraft(index: number, input: HTMLInputElement): void {
+    const value = drafts[index];
+    const providerIndex = providerIndexForCustom(index);
+    const duplicate = providers.some((provider, i) => provider === value && i !== providerIndex);
+    if (KNOWN_IDS.has(value) || duplicate) {
+      // The browser input may already contain the rejected text even when the
+      // reactive value returns to its previous value in the same event tick.
+      input.value = resetDraft(index);
+      return;
+    }
+    const merged = [...providers];
+    if (providerIndex >= 0) merged[providerIndex] = value;
+    else merged.push(value);
+    syncedOthers = JSON.stringify(merged.filter((id) => !KNOWN_IDS.has(id)));
     onchange(merged);
   }
 
@@ -82,7 +99,11 @@
 
   function removeDraft(index: number): void {
     drafts = drafts.filter((_, i) => i !== index);
-    setOther(drafts);
+    const providerIndex = providerIndexForCustom(index);
+    if (providerIndex < 0) return;
+    const merged = providers.filter((_, i) => i !== providerIndex);
+    syncedOthers = JSON.stringify(merged.filter((id) => !KNOWN_IDS.has(id)));
+    onchange(merged);
   }
 </script>
 
@@ -116,7 +137,7 @@
         <input
           value={draft}
           oninput={(event) => setDraft(index, (event.target as HTMLInputElement).value)}
-          onchange={() => setOther(drafts)}
+          onchange={(event) => commitDraft(index, event.target as HTMLInputElement)}
         />
         <button type="button" class="remove" title={t("widget.remove_row")} onclick={() => removeDraft(index)}>×</button>
       </div>
