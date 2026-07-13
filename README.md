@@ -335,7 +335,9 @@ printf '%s' "$input" | herdeck-usage capture-claude >/dev/null 2>&1 || true
 ```
 
 The default Claude snapshot is `~/.cache/herdeck/claude-usage.json`. Configure
-`codex_path` or `claude_cache_path` when the authenticated tools live elsewhere.
+`codex_path` when Codex lives elsewhere. If you change `claude_cache_path`, pass
+the same path to the status-line collector, for example
+`herdeck-usage capture-claude --output /path/to/claude-usage.json`.
 CodexBar remains an automatic compatibility fallback for missing providers;
 set `codexbar_path = ""` to disable it. Pressing the status window holds a
 detail view with reset times. Blocked and offline alerts always take priority.
