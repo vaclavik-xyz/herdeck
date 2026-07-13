@@ -1,5 +1,6 @@
 <script lang="ts">
   import BooleanField from "../fields/BooleanField.svelte";
+  import ListField from "../fields/ListField.svelte";
   import NumberField from "../fields/NumberField.svelte";
   import TextField from "../fields/TextField.svelte";
   import ProviderPicker from "../fields/ProviderPicker.svelte";
@@ -30,6 +31,8 @@
       title: "Usage limits",
       intro: "Choose which subscriptions belong on the deck. Native account data confirms paid plans; CodexBar remains a compatibility fallback.",
       active_only: "Active subscriptions only",
+      advanced: "Advanced provider order",
+      provider_ids: "Provider ids",
       enabled: "Enabled",
       none: "(none)",
     },
@@ -37,6 +40,8 @@
       title: "Limity využití",
       intro: "Vyberte předplatná pro deck. Placený tarif potvrzují nativní data účtu; CodexBar zůstává jen jako záloha.",
       active_only: "Jen aktivní předplatná",
+      advanced: "Pokročilé pořadí providerů",
+      provider_ids: "ID poskytovatelů",
       enabled: "Zapnuto",
       none: "(nic)",
     },
@@ -85,6 +90,10 @@
 {#if overlay}
   <OverrideField label="providers" help={HELP.providers} state={scState("providers")} inheritedDisplay={hint("providers")} onstate={(s) => setScState("providers", s)}>
     <ProviderPicker providers={ovProviders()} help={HELP.providers} onchange={setOvProviders} />
+    <details class="advanced">
+      <summary>{lm.advanced}</summary>
+      <ListField label={lm.provider_ids} help={HELP.providers} value={ovProviders()} onchange={setOvProviders} />
+    </details>
   </OverrideField>
   <OverrideField label="paid_only" help={HELP.paid_only} state={scState("paid_only")} inheritedDisplay={hint("paid_only")} onstate={(s) => setScState("paid_only", s)}>
     <BooleanField label={lm.enabled} help={HELP.paid_only} value={Boolean(scValue("paid_only"))} onchange={(v) => setSc("paid_only", v)} />
@@ -97,6 +106,10 @@
   </OverrideField>
 {:else}
   <ProviderPicker providers={providers} help={HELP.providers} onchange={setBaseProviders} />
+  <details class="advanced">
+    <summary>{lm.advanced}</summary>
+    <ListField label={lm.provider_ids} help={HELP.providers} value={providers} onchange={setBaseProviders} />
+  </details>
   <BooleanField label={lm.active_only} help={HELP.paid_only} value={paidOnly} onchange={(v) => set("paid_only", v)} />
   <NumberField label="refresh_secs" help={HELP.refresh_secs} int value={refreshSecs} onchange={(v) => setOrRemove("refresh_secs", v)} />
   <TextField label="codexbar_path" help={HELP.codexbar_path} value={codexbarPath} oninput={(v) => setOrRemove("codexbar_path", v.trim() === "" ? "" : v)} />
@@ -105,4 +118,7 @@
 <style>
   h2 { margin: 0 0 8px; }
   .hint { color: #8a8a92; font-size: 12px; margin: 0 0 10px; }
+  .advanced { margin: 2px 0 8px; color: #858892; font-size: 11px; }
+  .advanced summary { cursor: pointer; user-select: none; }
+  .advanced[open] summary { margin-bottom: 5px; color: #aeb2bd; }
 </style>

@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { untrack } from "svelte";
-  import { defineMessages, locale, t } from "../i18n.svelte";
+  import { defineMessages, locale } from "../i18n.svelte";
 
   let { providers, onchange, help = "" }:
     { providers: string[]; onchange: (providers: string[]) => void; help?: string } = $props();
@@ -9,7 +8,6 @@
     { id: "claude", name: "Claude", mark: "A", tone: "claude" },
     { id: "codex", name: "Codex", mark: "O", tone: "codex" },
   ] as const;
-  const KNOWN_IDS = new Set<string>(KNOWN.map((provider) => provider.id));
 
   const LM = defineMessages({
     en: {
@@ -17,35 +15,15 @@
       codex: "ChatGPT plan limits from the Codex account API",
       on: "Included",
       off: "Hidden",
-      other: "Other provider ids",
     },
     cs: {
       claude: "Limity předplatného Anthropic z Claude Code",
       codex: "Limity tarifu ChatGPT z Codex account API",
       on: "Zobrazeno",
       off: "Skryto",
-      other: "Další ID poskytovatelů",
     },
   });
   const lm = $derived(LM[locale.lang]);
-  let drafts = $state<string[]>(
-    untrack(() => providers.filter((id) => !KNOWN_IDS.has(id))),
-  );
-  let syncedOthers = $state(
-    untrack(() => JSON.stringify(providers.filter((id) => !KNOWN_IDS.has(id)))),
-  );
-
-  // Do not publish every keystroke. A draft such as "claude-enterprise"
-  // passes through the exact text "claude" while being typed; publishing that
-  // prefix would make it disappear into the built-in Claude toggle.
-  $effect(() => {
-    const next = providers.filter((id) => !KNOWN_IDS.has(id));
-    const serialized = JSON.stringify(next);
-    if (serialized !== syncedOthers) {
-      drafts = next;
-      syncedOthers = serialized;
-    }
-  });
 
   function toggle(id: string): void {
     onchange(
@@ -53,57 +31,6 @@
         ? providers.filter((provider) => provider !== id)
         : [...providers, id],
     );
-  }
-
-  function providerIndexForCustom(customIndex: number): number {
-    let seen = 0;
-    for (let index = 0; index < providers.length; index += 1) {
-      if (KNOWN_IDS.has(providers[index])) continue;
-      if (seen === customIndex) return index;
-      seen += 1;
-    }
-    return -1;
-  }
-
-  function resetDraft(index: number): string {
-    const providerIndex = providerIndexForCustom(index);
-    const value = providerIndex >= 0 ? providers[providerIndex] : "";
-    setDraft(index, value);
-    return value;
-  }
-
-  function commitDraft(index: number, input: HTMLInputElement): void {
-    const value = drafts[index];
-    const providerIndex = providerIndexForCustom(index);
-    const duplicate = providers.some((provider, i) => provider === value && i !== providerIndex);
-    if (KNOWN_IDS.has(value) || duplicate) {
-      // The browser input may already contain the rejected text even when the
-      // reactive value returns to its previous value in the same event tick.
-      input.value = resetDraft(index);
-      return;
-    }
-    const merged = [...providers];
-    if (providerIndex >= 0) merged[providerIndex] = value;
-    else merged.push(value);
-    syncedOthers = JSON.stringify(merged.filter((id) => !KNOWN_IDS.has(id)));
-    onchange(merged);
-  }
-
-  function setDraft(index: number, value: string): void {
-    drafts = drafts.map((draft, i) => (i === index ? value : draft));
-  }
-
-  function addDraft(): void {
-    drafts = [...drafts, ""];
-  }
-
-  function removeDraft(index: number): void {
-    drafts = drafts.filter((_, i) => i !== index);
-    const providerIndex = providerIndexForCustom(index);
-    if (providerIndex < 0) return;
-    const merged = providers.filter((_, i) => i !== providerIndex);
-    syncedOthers = JSON.stringify(merged.filter((id) => !KNOWN_IDS.has(id)));
-    onchange(merged);
   }
 </script>
 
@@ -129,29 +56,8 @@
   {/each}
 </div>
 
-<div class="other">
-  <span class="other-label fieldlabel" class:hashelp={!!help} title={help || undefined}>{lm.other}</span>
-  <div class="other-rows">
-    {#each drafts as draft, index (index)}
-      <div class="other-row">
-        <input
-          value={draft}
-          oninput={(event) => setDraft(index, (event.target as HTMLInputElement).value)}
-          onchange={(event) => commitDraft(index, event.target as HTMLInputElement)}
-        />
-        <button type="button" class="remove" title={t("widget.remove_row")} onclick={() => removeDraft(index)}>×</button>
-      </div>
-    {/each}
-    <button type="button" class="add" onclick={addDraft}>{t("widget.add")}</button>
-  </div>
-</div>
-
 <style>
-  .providers {
-    display: grid;
-    gap: 6px;
-    margin: 2px 0 8px;
-  }
+  .providers { display: grid; gap: 6px; margin: 2px 0 8px; }
   .provider {
     display: grid;
     grid-template-columns: 28px minmax(0, 1fr) auto 36px;
@@ -164,10 +70,7 @@
     background: #111217;
     transition: border-color 120ms ease, background 120ms ease;
   }
-  .provider.enabled {
-    border-color: #353944;
-    background: #15171d;
-  }
+  .provider.enabled { border-color: #353944; background: #15171d; }
   .mark {
     display: grid;
     place-items: center;
@@ -182,7 +85,7 @@
   .mark.claude { background: #b85f42; }
   .mark.codex { background: #147d69; }
   .identity { display: flex; flex-direction: column; min-width: 0; }
-  .name { color: #eeeeF2; font-size: 13px; font-weight: 650; }
+  .name { color: #eeeef2; font-size: 13px; font-weight: 650; }
   .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
   .source { color: #797c87; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .state { color: #696c75; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
@@ -210,35 +113,6 @@
   .switch.on { border-color: #287e70; background: #1b554c; }
   .switch.on span { transform: translateX(14px); background: #e7fff9; }
   .switch:focus-visible { outline: 2px solid #6bd8c2; outline-offset: 2px; }
-  .other {
-    display: grid;
-    grid-template-columns: var(--field-label-w, 120px) 1fr;
-    align-items: start;
-    gap: 8px;
-    margin: 6px 0;
-  }
-  .other-label { color: #aaa; padding-top: 4px; }
-  .other-rows { display: flex; flex-direction: column; gap: 4px; }
-  .other-row { display: flex; gap: 6px; }
-  .other-row input {
-    flex: 1;
-    min-width: 0;
-    background: #141417;
-    border: 1px solid #2a2a30;
-    color: inherit;
-    padding: 4px 6px;
-    border-radius: 4px;
-  }
-  .other button {
-    background: #1b1b1f;
-    border: 1px solid #2a2a30;
-    color: inherit;
-    border-radius: 4px;
-    padding: 4px 8px;
-    cursor: pointer;
-  }
-  .other .remove { color: #e05050; }
-  .other .add { align-self: flex-start; }
   @media (prefers-reduced-motion: reduce) {
     .provider, .switch span { transition: none; }
   }
