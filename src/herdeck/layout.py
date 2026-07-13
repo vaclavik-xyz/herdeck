@@ -224,16 +224,18 @@ def _provider_gauge_color(provider: str) -> str:
     return {"claude": "orange", "codex": "teal"}.get(provider.lower(), "violet")
 
 
-def usage_summary_gauges(data, max_gauges: int = 4) -> list[PanelGauge]:
-    """Structured 5h/7d gauges for the compact overview renderer."""
+def usage_summary_gauges(data, max_gauges: int = 4, now=None, lang: str = "en") -> list[PanelGauge]:
+    """Structured overview gauges, including reset times when available."""
     gauges: list[PanelGauge] = []
     for provider in data:
         for window in provider.windows:
+            reset = _fmt_reset(window.resets_at, now)
             gauges.append(
                 PanelGauge(
                     label=_provider_name(provider.provider),
                     window=window.label.upper(),
                     used_percent=window.used_percent,
+                    hint=f"{tr(lang, 'usage_reset')} {reset}" if reset else "",
                     color=_provider_gauge_color(provider.provider),
                 )
             )

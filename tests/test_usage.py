@@ -129,6 +129,19 @@ def test_usage_detail_gauges_include_reset_hint():
     assert gauge_cs.hint.startswith("obnova ")
 
 
+def test_usage_summary_gauges_include_localized_reset_hint_when_available():
+    from datetime import datetime
+
+    data = [ProviderUsage("codex", [UsageWindow("7d", 38, "2026-07-19T18:59:11Z")])]
+    now = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
+
+    (gauge,) = usage_summary_gauges(data, now=now, lang="cs")
+
+    assert gauge.hint.startswith("obnova ")
+    data[0].windows[0].resets_at = None
+    assert usage_summary_gauges(data, now=now, lang="cs")[0].hint == ""
+
+
 def test_usage_detail_lines_page_through_all_windows():
     from herdeck.layout import usage_detail_pages
 
@@ -268,9 +281,7 @@ def test_poller_from_config_gates_on_providers():
 
     assert poller_from_config(UsageConfig()) is None
     assert poller_from_config(None) is None
-    p = poller_from_config(
-        UsageConfig(providers=["claude"], paid_only=True, refresh_secs=120)
-    )
+    p = poller_from_config(UsageConfig(providers=["claude"], paid_only=True, refresh_secs=120))
     assert p is not None and p._providers == ["claude"]
     assert p._paid_only is True
     assert p._claude_cache_path == "~/.cache/herdeck/claude-usage.json"
@@ -338,12 +349,14 @@ def test_parse_codex_app_server_rate_limits():
 
 
 def test_parse_codex_account_distinguishes_paid_free_and_api_key():
-    assert parse_codex_account(
-        {"result": {"account": {"type": "chatgpt", "planType": "pro"}}}
-    ) == ("paid", "pro")
-    assert parse_codex_account(
-        {"result": {"account": {"type": "chatgpt", "planType": "go"}}}
-    ) == ("paid", "go")
+    assert parse_codex_account({"result": {"account": {"type": "chatgpt", "planType": "pro"}}}) == (
+        "paid",
+        "pro",
+    )
+    assert parse_codex_account({"result": {"account": {"type": "chatgpt", "planType": "go"}}}) == (
+        "paid",
+        "go",
+    )
     assert parse_codex_account(
         {"result": {"account": {"type": "chatgpt", "planType": "free"}}}
     ) == ("free", "free")
@@ -376,9 +389,7 @@ def test_paid_only_hides_unconfirmed_providers_without_codexbar_fallback(monkeyp
 
 def test_paid_only_hides_free_native_subscription():
     free = ProviderUsage("codex", [UsageWindow("5h", 12, None)], "free", "free")
-    poller = UsagePoller(
-        ["codex"], paid_only=True, codex_source=_Source(free), codexbar_path=""
-    )
+    poller = UsagePoller(["codex"], paid_only=True, codex_source=_Source(free), codexbar_path="")
     poller.poll_once()
     assert poller.snapshot() == []
 
