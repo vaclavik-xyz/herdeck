@@ -476,7 +476,30 @@ def test_blocked_spotlight_preempts_held_usage_detail():
     o.on_press(13)
     assert o.render().panel.title == "usage limits"
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
-    assert o.render().panel.title == "▲ needs you"  # attention beats detail
+    panel = o.render().panel
+    assert panel.title == "▲ needs you"  # attention beats detail
+    assert panel.gauges == []  # alert content must not be replaced by usage cards
+
+
+def test_offline_panel_preempts_usage_gauges():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.set_connection("dev", False)
+    panel = o.render().panel
+    assert panel.title == "OFFLINE"
+    assert panel.gauges == []
+
+
+def test_usage_detail_gauge_metadata_is_localized():
+    cfg = make_config()
+    cfg.view.language = "cs"
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.on_press(13)
+    panel = o.render().panel
+    assert panel.gauge_meta == "využito / obnova"
 
 
 def test_usage_detail_pages_via_repeated_presses():

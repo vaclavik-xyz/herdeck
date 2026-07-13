@@ -497,7 +497,9 @@ class Orchestrator:
                 gauges=layout.usage_detail_gauges(
                     self._usage,
                     page=self._usage_detail_page,
+                    lang=self.config.view.language,
                 ),
+                gauge_meta=self._tr("usage_meta"),
             )
             return RenderState(tiles, panel)
         panel = layout.panel_overview(

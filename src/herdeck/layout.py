@@ -151,6 +151,7 @@ def panel_overview(
     usage_gauges: list[PanelGauge] | None = None,
 ) -> PanelView:
     page_line = -1  # which line carries the "· p/n" page marker
+    gauges: list[PanelGauge] = []
     if down:
         title, lines, color = tr(lang, "offline_title"), [tr(lang, "reconnecting")], "red"
         if counts.blocked:
@@ -183,9 +184,10 @@ def panel_overview(
             # Blocked/offline panels keep their priority — no usage there.
             lines = [lines[0], *usage_lines[: _DETAIL_MAX_LINES - 1]]
             page_line = 0
+            gauges = usage_gauges or []
     if page_count > 1 and lines:
         lines[page_line] = f"{lines[page_line]} · {page_index + 1}/{page_count}"
-    return PanelView(title=title, lines=lines, color=color, gauges=usage_gauges or [])
+    return PanelView(title=title, lines=lines, color=color, gauges=gauges)
 
 
 def _fmt_reset(resets_at: str | None, now) -> str:
@@ -267,7 +269,7 @@ def usage_detail_lines(
     return lines[start : start + max_lines]
 
 
-def usage_detail_gauges(data, now=None, page: int = 0) -> list[PanelGauge]:
+def usage_detail_gauges(data, now=None, page: int = 0, lang: str = "en") -> list[PanelGauge]:
     """One detail-page gauge per provider window, including its reset time."""
     gauges: list[PanelGauge] = []
     for provider in data:
@@ -278,7 +280,7 @@ def usage_detail_gauges(data, now=None, page: int = 0) -> list[PanelGauge]:
                     label=_provider_name(provider.provider),
                     window=window.label.upper(),
                     used_percent=window.used_percent,
-                    hint=f"reset {reset}" if reset else "",
+                    hint=f"{tr(lang, 'usage_reset')} {reset}" if reset else "",
                     color=_provider_gauge_color(provider.provider),
                 )
             )

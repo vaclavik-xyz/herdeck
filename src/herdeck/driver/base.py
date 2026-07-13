@@ -59,6 +59,7 @@ class PanelView:
     lines: list[str] = field(default_factory=list)
     color: str = "grey"
     gauges: list[PanelGauge] = field(default_factory=list)
+    gauge_meta: str = ""
 
     def cache_key(self) -> tuple:
         return (
@@ -68,6 +69,7 @@ class PanelView:
             tuple(
                 (g.label, g.window, g.used_percent, g.hint, g.color) for g in self.gauges
             ),
+            self.gauge_meta,
         )
 
 

@@ -124,6 +124,8 @@ def test_usage_detail_gauges_include_reset_hint():
     (gauge,) = usage_detail_gauges(data, now=now)
     assert (gauge.label, gauge.window, gauge.used_percent) == ("Claude", "5H", 19)
     assert gauge.hint.startswith("reset ")
+    (gauge_cs,) = usage_detail_gauges(data, now=now, lang="cs")
+    assert gauge_cs.hint.startswith("obnova ")
 
 
 def test_usage_detail_lines_page_through_all_windows():

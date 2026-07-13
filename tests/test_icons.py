@@ -255,6 +255,12 @@ def test_panel_cache_key_includes_usage_gauges():
     low = PanelView("usage", gauges=[PanelGauge("Codex", "5H", 10, color="teal")])
     high = PanelView("usage", gauges=[PanelGauge("Codex", "5H", 90, color="teal")])
     assert low.cache_key() != high.cache_key()
+    localized = PanelView(
+        "usage",
+        gauges=[PanelGauge("Codex", "5H", 10, color="teal")],
+        gauge_meta="využito / obnova",
+    )
+    assert low.cache_key() != localized.cache_key()
 
 
 def test_drill_option_subtext_is_drawn_under_label(tmp_path):

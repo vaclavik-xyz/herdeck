@@ -398,12 +398,13 @@ def _compose_gauge_panel(panel: PanelView, width: int) -> Image.Image:
     """Render usage as compact instrument gauges for the physical status window."""
     img = Image.new("RGB", (width, PANEL_H), _GAUGE_BG)
     draw = ImageDraw.Draw(img)
-    detail = any(gauge.hint for gauge in panel.gauges)
+    detail = bool(panel.gauge_meta)
     title_font = _font(25)
     draw.text((16, 10), _truncate(draw, panel.title, title_font, width * 0.56), font=title_font, fill=_GAUGE_TEXT)
-    if panel.lines or detail:
+    meta = panel.gauge_meta if detail else panel.lines[0] if panel.lines else ""
+    if meta:
         meta_font = _font(15)
-        meta = "USED / RESET" if detail else panel.lines[0].upper()
+        meta = meta.upper()
         meta = _truncate(draw, meta, meta_font, width * 0.38)
         meta_w = draw.textlength(meta, font=meta_font)
         draw.text((width - 16 - meta_w, 17), meta, font=meta_font, fill=_GAUGE_MUTED)

@@ -26,6 +26,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "agents_total": "{n} agents",
         "online": "online",
         "usage_title": "usage limits",
+        "usage_meta": "used / reset",
+        "usage_reset": "reset",
         # drill detail (layout.panel_detail)
         "reading_prompt": "reading prompt...",
         "waiting_on": "waiting on: {label}",
@@ -90,6 +92,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "agents_total": "agentů: {n}",
         "online": "online",
         "usage_title": "limity využití",
+        "usage_meta": "využito / obnova",
+        "usage_reset": "obnova",
         "reading_prompt": "čtu prompt...",
         "waiting_on": "čeká na: {label}",
         "new_agent": "+ Nový",
