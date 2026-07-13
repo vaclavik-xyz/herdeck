@@ -53,6 +53,7 @@ require_confirm_for = ["act_force"]
 # CodexBar is used only as a compatibility fallback. Empty providers = off.
 [usage]
 providers = []                # e.g. ["claude", "codex"]
+paid_only = false             # true = show only natively confirmed paid plans
 refresh_secs = 300            # poll cadence (min 30)
 codex_path = "codex"
 claude_cache_path = "~/.cache/herdeck/claude-usage.json"

@@ -1,15 +1,15 @@
 <script lang="ts">
-  import ListField from "../fields/ListField.svelte";
+  import BooleanField from "../fields/BooleanField.svelte";
   import NumberField from "../fields/NumberField.svelte";
   import TextField from "../fields/TextField.svelte";
-  import TriStateListField from "../fields/TriStateListField.svelte";
+  import ProviderPicker from "../fields/ProviderPicker.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import {
-    getAt, setAt, removeAt, putList,
+    getAt, setAt, removeAt,
     inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
-    type ListFieldState, type ConfigPayload,
+    type ConfigPayload,
   } from "../configClient";
-  import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
+  import { defineMessages, fieldHelp, locale } from "../i18n.svelte";
 
   let { payload = $bindable(), onChange, editProfile = null }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
@@ -19,30 +19,33 @@
   const prof = $derived(editProfile ?? "");
 
   // Mirror of backend defaults (settings.py _usage_config) — keep in sync.
-  const USAGE_DEFAULTS: Record<string, unknown> = { refresh_secs: 300, codexbar_path: "codexbar" };
+  const USAGE_DEFAULTS: Record<string, unknown> = {
+    providers: [], paid_only: false, refresh_secs: 300, codexbar_path: "codexbar",
+  };
 
   const HELP = $derived(fieldHelp("usage"));
 
   const LM = defineMessages({
     en: {
       title: "Usage limits",
-      intro: "Provider usage limits (via the CodexBar CLI) shown on the deck's status panel. Empty providers = off.",
+      intro: "Choose which subscriptions belong on the deck. Native account data confirms paid plans; CodexBar remains a compatibility fallback.",
+      active_only: "Active subscriptions only",
+      enabled: "Enabled",
       none: "(none)",
-      inherit: "Inherit",
-      inherited_hint: "inherited: {value}",
     },
     cs: {
       title: "Limity využití",
-      intro: "Limity poskytovatelů (přes CodexBar CLI) zobrazené na stavovém panelu decku. Prázdní provideři = vypnuto.",
+      intro: "Vyberte předplatná pro deck. Placený tarif potvrzují nativní data účtu; CodexBar zůstává jen jako záloha.",
+      active_only: "Jen aktivní předplatná",
+      enabled: "Zapnuto",
       none: "(nic)",
-      inherit: "Zdědit",
-      inherited_hint: "zděděno: {value}",
     },
   });
   const lm = $derived(LM[locale.lang]);
 
   // --- base mode ---
   const providers = $derived((getAt(payload, "base", SEC, "providers") as string[]) ?? []);
+  const paidOnly = $derived((getAt(payload, "base", SEC, "paid_only") as boolean) ?? false);
   const refreshSecs = $derived((getAt(payload, "base", SEC, "refresh_secs") as number) ?? 300);
   const codexbarPath = $derived((getAt(payload, "base", SEC, "codexbar_path") as string) ?? "codexbar");
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
@@ -52,7 +55,7 @@
     payload = value == null || value === "" ? removeAt(payload, "base", SEC, key) : setAt(payload, "base", SEC, key, value);
     onChange();
   }
-  function setBaseProviders(list: string[]): void { payload = putList(payload, "base", SEC, "providers", list); onChange(); }
+  function setBaseProviders(list: string[]): void { set("providers", list); }
 
   // --- overlay mode (same shape as SafetySection) ---
   function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? USAGE_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
@@ -73,17 +76,19 @@
     }
     setSc(key, v);
   }
-  function ovProviders(): string[] { const v = overrideValue(payload, prof, SEC, "providers"); return Array.isArray(v) ? v as string[] : []; }
-  function setOvProviders(state: ListFieldState, list: string[]): void {
-    payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, "providers") : setOverride(payload.profiles, prof, SEC, "providers", state === "empty" ? [] : list) };
-    onChange();
-  }
+  function ovProviders(): string[] { const v = scValue("providers"); return Array.isArray(v) ? v as string[] : []; }
+  function setOvProviders(list: string[]): void { setSc("providers", list); }
 </script>
 
 <h2>{lm.title}{#if overlay} · overlay: {editProfile}{/if}</h2>
 <p class="hint">{lm.intro}</p>
 {#if overlay}
-  <TriStateListField label="providers" help={HELP.providers} state={overrideState(payload, prof, SEC, "providers")} list={ovProviders()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("providers") })} onchange={setOvProviders} />
+  <OverrideField label="providers" help={HELP.providers} state={scState("providers")} inheritedDisplay={hint("providers")} onstate={(s) => setScState("providers", s)}>
+    <ProviderPicker providers={ovProviders()} help={HELP.providers} onchange={setOvProviders} />
+  </OverrideField>
+  <OverrideField label="paid_only" help={HELP.paid_only} state={scState("paid_only")} inheritedDisplay={hint("paid_only")} onstate={(s) => setScState("paid_only", s)}>
+    <BooleanField label={lm.enabled} help={HELP.paid_only} value={Boolean(scValue("paid_only"))} onchange={(v) => setSc("paid_only", v)} />
+  </OverrideField>
   <OverrideField label="refresh_secs" help={HELP.refresh_secs} state={scState("refresh_secs")} inheritedDisplay={hint("refresh_secs")} onstate={(s) => setScState("refresh_secs", s)}>
     <NumberField label="" int value={Number(scValue("refresh_secs"))} onchange={(v) => setScOrInherit("refresh_secs", v)} />
   </OverrideField>
@@ -91,7 +96,8 @@
     <TextField label="" value={String(scValue("codexbar_path") ?? "")} oninput={(v) => setScOrInherit("codexbar_path", v.trim() === "" ? "" : v)} />
   </OverrideField>
 {:else}
-  <ListField label="providers" help={HELP.providers} value={providers} onchange={setBaseProviders} />
+  <ProviderPicker providers={providers} help={HELP.providers} onchange={setBaseProviders} />
+  <BooleanField label={lm.active_only} help={HELP.paid_only} value={paidOnly} onchange={(v) => set("paid_only", v)} />
   <NumberField label="refresh_secs" help={HELP.refresh_secs} int value={refreshSecs} onchange={(v) => setOrRemove("refresh_secs", v)} />
   <TextField label="codexbar_path" help={HELP.codexbar_path} value={codexbarPath} oninput={(v) => setOrRemove("codexbar_path", v.trim() === "" ? "" : v)} />
 {/if}

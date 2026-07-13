@@ -338,6 +338,11 @@ The default Claude snapshot is `~/.cache/herdeck/claude-usage.json`. Configure
 `codex_path` when Codex lives elsewhere. If you change `claude_cache_path`, pass
 the same path to the status-line collector, for example
 `herdeck-usage capture-claude --output /path/to/claude-usage.json`.
+Set `paid_only = true` to hide providers unless native account data confirms a
+paid subscription. Codex uses the ChatGPT plan reported by app-server. Claude's
+subscriber-only rate limits confirm Pro/Max after the first API response in a
+Claude Code session; until then the state is unknown and stays hidden. Removing
+a provider from `providers` disables it completely.
 CodexBar remains an automatic compatibility fallback for missing providers;
 set `codexbar_path = ""` to disable it. Pressing the status window holds a
 detail view with reset times. Blocked and offline alerts always take priority.
