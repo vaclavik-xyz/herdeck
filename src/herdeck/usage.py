@@ -292,9 +292,11 @@ class CodexAppServerSource:
             text=True,
             bufsize=1,
         )
-        self._messages = queue.Queue()
+        messages: queue.Queue[dict | None] = queue.Queue()
+        self._messages = messages
         self._reader_thread = threading.Thread(
             target=self._read_stdout,
+            args=(self._proc, messages),
             name="herdeck-codex-app-server-reader",
             daemon=True,
         )
@@ -341,10 +343,10 @@ class CodexAppServerSource:
                 raise RuntimeError(str(message["error"]))
             return message
 
-    def _read_stdout(self) -> None:
-        proc = self._proc
+    @staticmethod
+    def _read_stdout(proc, messages: queue.Queue[dict | None]) -> None:
         if proc is None or proc.stdout is None:
-            self._messages.put(None)
+            messages.put(None)
             return
         try:
             for line in proc.stdout:
@@ -355,9 +357,9 @@ class CodexAppServerSource:
                 # Notifications have no id and are irrelevant to this polling
                 # client. Drop them here so an idle daemon cannot grow the queue.
                 if "id" in message:
-                    self._messages.put(message)
+                    messages.put(message)
         finally:
-            self._messages.put(None)
+            messages.put(None)
 
 
 class UsagePoller:

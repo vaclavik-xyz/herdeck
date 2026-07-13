@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import queue
 import threading
 from datetime import UTC
 
@@ -392,6 +393,20 @@ def test_codex_app_server_reader_handles_coalesced_pipe_responses(monkeypatch):
 
     assert usage is not None and usage.windows[0].used_percent == 8
     source.close()
+
+
+def test_codex_app_server_reader_cannot_write_into_replacement_session():
+    old_messages = queue.Queue()
+    replacement_messages = queue.Queue()
+    source = CodexAppServerSource()
+    source._messages = replacement_messages
+    proc = type("Proc", (), {"stdout": io.StringIO('{"id":1,"result":{}}\n')})()
+
+    source._read_stdout(proc, old_messages)
+
+    assert old_messages.get_nowait()["id"] == 1
+    assert old_messages.get_nowait() is None
+    assert replacement_messages.empty()
 
 
 _CLAUDE_STATUSLINE_JSON = json.dumps(
