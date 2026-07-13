@@ -284,6 +284,8 @@ def _usage_config(raw: dict | None) -> UsageConfig:
                     f"usage.providers entry {p!r} is not a provider id"
                     " (letters, digits, '-', '_')"
                 )
+        if len(set(providers)) != len(providers):
+            raise ConfigError("usage.providers must not contain duplicate provider ids")
         usage.providers = list(providers)
     if "paid_only" in raw:
         paid_only = raw["paid_only"]

@@ -677,6 +677,8 @@ def test_usage_config_rejects_blank_or_malformed_provider_ids():
         _usage_config({"providers": ["  "]})
     with pytest.raises(ConfigError, match="usage.providers"):
         _usage_config({"providers": ["claude,codex"]})
+    with pytest.raises(ConfigError, match="duplicate"):
+        _usage_config({"providers": ["claude", "codex", "claude"]})
     assert _usage_config({"providers": ["alibaba-coding-plan", "zai"]}).providers == [
         "alibaba-coding-plan",
         "zai",
