@@ -1,6 +1,6 @@
 <script lang="ts">
-  import ListField from "./ListField.svelte";
-  import { defineMessages, locale } from "../i18n.svelte";
+  import { untrack } from "svelte";
+  import { defineMessages, locale, t } from "../i18n.svelte";
 
   let { providers, onchange, help = "" }:
     { providers: string[]; onchange: (providers: string[]) => void; help?: string } = $props();
@@ -28,7 +28,24 @@
     },
   });
   const lm = $derived(LM[locale.lang]);
-  const otherProviders = $derived(providers.filter((id) => !KNOWN_IDS.has(id)));
+  let drafts = $state<string[]>(
+    untrack(() => providers.filter((id) => !KNOWN_IDS.has(id))),
+  );
+  let syncedOthers = $state(
+    untrack(() => JSON.stringify(providers.filter((id) => !KNOWN_IDS.has(id)))),
+  );
+
+  // Do not publish every keystroke. A draft such as "claude-enterprise"
+  // passes through the exact text "claude" while being typed; publishing that
+  // prefix would make it disappear into the built-in Claude toggle.
+  $effect(() => {
+    const next = providers.filter((id) => !KNOWN_IDS.has(id));
+    const serialized = JSON.stringify(next);
+    if (serialized !== syncedOthers) {
+      drafts = next;
+      syncedOthers = serialized;
+    }
+  });
 
   function toggle(id: string): void {
     onchange(
@@ -39,7 +56,33 @@
   }
 
   function setOther(next: string[]): void {
-    onchange([...providers.filter((id) => KNOWN_IDS.has(id)), ...next]);
+    // Replace custom slots in place so editing ["zai", "claude"] never
+    // silently changes the panel order to ["claude", "zai"].
+    let customIndex = 0;
+    const merged: string[] = [];
+    for (const provider of providers) {
+      if (KNOWN_IDS.has(provider)) {
+        merged.push(provider);
+      } else if (customIndex < next.length) {
+        merged.push(next[customIndex++]);
+      }
+    }
+    merged.push(...next.slice(customIndex));
+    syncedOthers = JSON.stringify(next);
+    onchange(merged);
+  }
+
+  function setDraft(index: number, value: string): void {
+    drafts = drafts.map((draft, i) => (i === index ? value : draft));
+  }
+
+  function addDraft(): void {
+    drafts = [...drafts, ""];
+  }
+
+  function removeDraft(index: number): void {
+    drafts = drafts.filter((_, i) => i !== index);
+    setOther(drafts);
   }
 </script>
 
@@ -66,7 +109,20 @@
 </div>
 
 <div class="other">
-  <ListField label={lm.other} help={help} value={otherProviders} onchange={setOther} />
+  <span class="other-label fieldlabel" class:hashelp={!!help} title={help || undefined}>{lm.other}</span>
+  <div class="other-rows">
+    {#each drafts as draft, index (index)}
+      <div class="other-row">
+        <input
+          value={draft}
+          oninput={(event) => setDraft(index, (event.target as HTMLInputElement).value)}
+          onchange={() => setOther(drafts)}
+        />
+        <button type="button" class="remove" title={t("widget.remove_row")} onclick={() => removeDraft(index)}>×</button>
+      </div>
+    {/each}
+    <button type="button" class="add" onclick={addDraft}>{t("widget.add")}</button>
+  </div>
 </div>
 
 <style>
@@ -133,7 +189,35 @@
   .switch.on { border-color: #287e70; background: #1b554c; }
   .switch.on span { transform: translateX(14px); background: #e7fff9; }
   .switch:focus-visible { outline: 2px solid #6bd8c2; outline-offset: 2px; }
-  .other { margin-top: 2px; }
+  .other {
+    display: grid;
+    grid-template-columns: var(--field-label-w, 120px) 1fr;
+    align-items: start;
+    gap: 8px;
+    margin: 6px 0;
+  }
+  .other-label { color: #aaa; padding-top: 4px; }
+  .other-rows { display: flex; flex-direction: column; gap: 4px; }
+  .other-row { display: flex; gap: 6px; }
+  .other-row input {
+    flex: 1;
+    min-width: 0;
+    background: #141417;
+    border: 1px solid #2a2a30;
+    color: inherit;
+    padding: 4px 6px;
+    border-radius: 4px;
+  }
+  .other button {
+    background: #1b1b1f;
+    border: 1px solid #2a2a30;
+    color: inherit;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  .other .remove { color: #e05050; }
+  .other .add { align-self: flex-start; }
   @media (prefers-reduced-motion: reduce) {
     .provider, .switch span { transition: none; }
   }
