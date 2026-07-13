@@ -32,6 +32,7 @@ _PAID_CODEX_PLANS = {
     "edu",
     "education",
     "enterprise",
+    "go",
     "plus",
     "pro",
     "prolite",

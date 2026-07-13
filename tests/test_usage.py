@@ -342,6 +342,9 @@ def test_parse_codex_account_distinguishes_paid_free_and_api_key():
         {"result": {"account": {"type": "chatgpt", "planType": "pro"}}}
     ) == ("paid", "pro")
     assert parse_codex_account(
+        {"result": {"account": {"type": "chatgpt", "planType": "go"}}}
+    ) == ("paid", "go")
+    assert parse_codex_account(
         {"result": {"account": {"type": "chatgpt", "planType": "free"}}}
     ) == ("free", "free")
     assert parse_codex_account({"result": {"account": {"type": "apiKey"}}}) == (
