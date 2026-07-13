@@ -1,14 +1,20 @@
+import io
 import json
 import threading
 from datetime import UTC
 
 from herdeck.layout import usage_detail_lines, usage_summary_lines
 from herdeck.usage import (
+    CodexAppServerSource,
     ProviderUsage,
     UsagePoller,
     UsageWindow,
+    capture_claude_statusline,
+    parse_claude_statusline,
+    parse_codex_rate_limits,
     parse_usage,
     poller_from_config,
+    read_claude_cache,
     resolve_cli,
 )
 
@@ -115,7 +121,21 @@ class _Proc:
         self.stderr = stderr
 
 
+class _Source:
+    def __init__(self, usage=None):
+        self.usage = usage
+        self.closed = False
+
+    def fetch(self):
+        return self.usage
+
+    def close(self):
+        self.closed = True
+
+
 def _poller(runner, **kw):
+    kw.setdefault("codex_source", _Source())
+    kw.setdefault("claude_reader", lambda _path: None)
     p = UsagePoller(["claude", "codex"], runner=runner, **kw)
     return p
 
@@ -133,6 +153,34 @@ def test_poller_fetches_and_snapshots(monkeypatch):
     snap = p.snapshot()
     assert [x.provider for x in snap] == ["claude", "codex"]
     assert calls[0][1:] == ["usage", "--format", "json", "--provider", "claude,codex"]
+
+
+def test_poller_prefers_native_sources_and_falls_back_only_for_missing(monkeypatch):
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append(argv)
+        return _Proc(
+            stdout=json.dumps(
+                [
+                    {
+                        "provider": "claude",
+                        "usage": {"primary": {"windowMinutes": 300, "usedPercent": 20}},
+                    }
+                ]
+            )
+        )
+
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: f"/fake/{p}")
+    native = ProviderUsage("codex", [UsageWindow("7d", 31, None)])
+    poller = _poller(runner, codex_source=_Source(native))
+    poller.poll_once()
+
+    assert calls[0][-1] == "claude"
+    assert [(p.provider, p.windows[0].used_percent) for p in poller.snapshot()] == [
+        ("claude", 20),
+        ("codex", 31),
+    ]
 
 
 def test_poller_failure_keeps_last_snapshot_until_stale(monkeypatch):
@@ -178,6 +226,13 @@ def test_poller_thread_lifecycle(monkeypatch):
     assert p._thread is None
 
 
+def test_poller_close_closes_codex_source():
+    source = _Source()
+    p = UsagePoller(["codex"], codex_source=source, codexbar_path="")
+    p.close()
+    assert source.closed
+
+
 def test_poller_from_config_gates_on_providers():
     from herdeck.config import UsageConfig
 
@@ -185,6 +240,7 @@ def test_poller_from_config_gates_on_providers():
     assert poller_from_config(None) is None
     p = poller_from_config(UsageConfig(providers=["claude"], refresh_secs=120))
     assert p is not None and p._providers == ["claude"]
+    assert p._claude_cache_path == "~/.cache/herdeck/claude-usage.json"
 
 
 def test_resolve_cli_explicit_path(tmp_path):
@@ -221,3 +277,110 @@ def test_poller_orders_providers_by_config(monkeypatch):
     p = UsagePoller(["claude", "codex"], runner=lambda *a, **k: _Proc(stdout=reversed_json))
     p.poll_once()
     assert [x.provider for x in p.snapshot()] == ["claude", "codex"]
+
+
+def test_parse_codex_app_server_rate_limits():
+    usage = parse_codex_rate_limits(
+        {
+            "id": 7,
+            "result": {
+                "rateLimits": {
+                    "primary": {
+                        "usedPercent": 12.6,
+                        "windowDurationMins": 300,
+                        "resetsAt": 1784487551,
+                    },
+                    "secondary": {
+                        "usedPercent": 29,
+                        "windowDurationMins": 10080,
+                        "resetsAt": 1784543782,
+                    },
+                }
+            },
+        }
+    )
+    assert usage is not None
+    assert [(w.label, w.used_percent) for w in usage.windows] == [("5h", 13), ("7d", 29)]
+    assert usage.windows[0].resets_at == "2026-07-19T18:59:11Z"
+
+
+def test_codex_app_server_source_handshakes_and_reads_limits(monkeypatch):
+    class FakeAppServer:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = io.StringIO(
+                '{"id":0,"result":{"codexHome":"/tmp"}}\n'
+                '{"method":"account/updated","params":{}}\n'
+                '{"id":1,"result":{"rateLimits":{"primary":'
+                '{"usedPercent":9,"windowDurationMins":300,"resetsAt":1784487551}}}}\n'
+            )
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    proc = FakeAppServer()
+    argv = []
+
+    def popen(command, **kwargs):
+        argv.extend(command)
+        return proc
+
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/opt/homebrew/bin/codex")
+    source = CodexAppServerSource(popen=popen, wait_readable=lambda stream, timeout: True)
+    usage = source.fetch()
+
+    assert argv == ["/opt/homebrew/bin/codex", "app-server"]
+    assert usage is not None and usage.windows[0].used_percent == 9
+    sent = [json.loads(line) for line in proc.stdin.getvalue().splitlines()]
+    assert [message["method"] for message in sent] == [
+        "initialize",
+        "initialized",
+        "account/rateLimits/read",
+    ]
+    source.close()
+
+
+_CLAUDE_STATUSLINE_JSON = json.dumps(
+    {
+        "model": {"display_name": "Sonnet"},
+        "rate_limits": {
+            "five_hour": {"used_percentage": 17.4, "resets_at": 1784487551},
+            "seven_day": {"used_percentage": 44, "resets_at": 1784543782},
+        },
+    }
+)
+
+
+def test_parse_claude_statusline_subscription_windows():
+    usage = parse_claude_statusline(_CLAUDE_STATUSLINE_JSON)
+    assert usage is not None
+    assert [(w.label, w.used_percent) for w in usage.windows] == [("5h", 17), ("7d", 44)]
+
+
+def test_capture_claude_statusline_writes_minimal_private_cache(tmp_path):
+    target = tmp_path / "nested" / "usage.json"
+    assert capture_claude_statusline(_CLAUDE_STATUSLINE_JSON, str(target), wall_clock=lambda: 10)
+    stored = json.loads(target.read_text())
+
+    assert stored.keys() == {"captured_at", "rate_limits"}
+    assert stored["captured_at"] == 10
+    assert not target.stat().st_mode & 0o077
+
+
+def test_read_claude_cache_rejects_stale_or_invalid_snapshot(tmp_path):
+    target = tmp_path / "usage.json"
+    capture_claude_statusline(_CLAUDE_STATUSLINE_JSON, str(target), wall_clock=lambda: 10)
+    assert read_claude_cache(str(target), wall_clock=lambda: 20, max_age_s=15) is not None
+    assert read_claude_cache(str(target), wall_clock=lambda: 30, max_age_s=15) is None
+    target.write_text("not json")
+    assert read_claude_cache(str(target)) is None

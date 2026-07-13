@@ -47,13 +47,16 @@ approve_always = true
 # unconditional interrupt one key away from Back. Set to [] to opt out.
 require_confirm_for = ["act_force"]
 
-# Provider usage limits (CodexBar CLI) on the status panel. Requires the
-# codexbar CLI (https://github.com/steipete/CodexBar) authenticated on the
-# machine that renders the deck. Empty providers (the default) = off.
+# Provider subscription limits on the status panel. Codex uses its documented
+# app-server account API. Claude reads the snapshot written by
+# `herdeck-usage capture-claude` from a Claude Code status-line command.
+# CodexBar is used only as a compatibility fallback. Empty providers = off.
 [usage]
 providers = []                # e.g. ["claude", "codex"]
-refresh_secs = 300            # CLI poll cadence (min 30)
-codexbar_path = "codexbar"    # bare names also resolve via /opt/homebrew/bin
+refresh_secs = 300            # poll cadence (min 30)
+codex_path = "codex"
+claude_cache_path = "~/.cache/herdeck/claude-usage.json"
+codexbar_path = "codexbar"    # empty string disables the fallback
 
 [[macros]]
 label = "continue"

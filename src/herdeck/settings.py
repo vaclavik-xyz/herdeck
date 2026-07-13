@@ -290,11 +290,13 @@ def _usage_config(raw: dict | None) -> UsageConfig:
         if type(secs) is not int or secs < 30:
             raise ConfigError("usage.refresh_secs must be an integer >= 30")
         usage.refresh_secs = secs
-    if "codexbar_path" in raw:
-        path = raw["codexbar_path"]
-        if not isinstance(path, str) or not path.strip():
-            raise ConfigError("usage.codexbar_path must be a non-empty string")
-        usage.codexbar_path = path
+    for key in ("codex_path", "claude_cache_path", "codexbar_path"):
+        if key not in raw:
+            continue
+        path = raw[key]
+        if not isinstance(path, str) or (key != "codexbar_path" and not path.strip()):
+            raise ConfigError(f"usage.{key} must be a non-empty string")
+        setattr(usage, key, path)
     return usage
 
 

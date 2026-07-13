@@ -263,7 +263,7 @@ class App:
         self._ticks = 0
         self._status_panel: PanelView | None = None
         self._status_panel_until = 0.0
-        # CodexBar usage poller (None when [usage] is off); renders read its
+        # Provider usage poller (None when [usage] is off); renders read its
         # latest snapshot only, never block on the CLI.
         self._usage_cfg = getattr(config, "usage", None)
         self._usage_poller = self._build_usage_poller(self._usage_cfg)
