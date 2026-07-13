@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import threading
 from datetime import UTC
 
@@ -336,7 +337,7 @@ def test_codex_app_server_source_handshakes_and_reads_limits(monkeypatch):
         return proc
 
     monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/opt/homebrew/bin/codex")
-    source = CodexAppServerSource(popen=popen, wait_readable=lambda stream, timeout: True)
+    source = CodexAppServerSource(popen=popen)
     usage = source.fetch()
 
     assert argv == ["/opt/homebrew/bin/codex", "app-server"]
@@ -347,6 +348,49 @@ def test_codex_app_server_source_handshakes_and_reads_limits(monkeypatch):
         "initialized",
         "account/rateLimits/read",
     ]
+    source.close()
+
+
+def test_codex_app_server_reader_handles_coalesced_pipe_responses(monkeypatch):
+    read_fd, write_fd = os.pipe()
+
+    class PipeAppServer:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = os.fdopen(read_fd, encoding="utf-8")
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+            self.stdout.close()
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    proc = PipeAppServer()
+    # One OS write deliberately coalesces the initialize response, a
+    # notification, and the later rate-limit response. A select()+readline()
+    # client can strand the final line in TextIOWrapper's private buffer.
+    os.write(
+        write_fd,
+        b'{"id":0,"result":{"codexHome":"/tmp"}}\n'
+        b'{"method":"account/updated","params":{}}\n'
+        b'{"id":1,"result":{"rateLimits":{"primary":'
+        b'{"usedPercent":8,"windowDurationMins":300,"resetsAt":1784487551}}}}\n',
+    )
+    os.close(write_fd)
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/opt/homebrew/bin/codex")
+    source = CodexAppServerSource(popen=lambda *args, **kwargs: proc)
+
+    usage = source.fetch()
+
+    assert usage is not None and usage.windows[0].used_percent == 8
     source.close()
 
 

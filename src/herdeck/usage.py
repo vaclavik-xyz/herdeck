@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import select
+import queue
 import shutil
 import subprocess
 import threading
@@ -233,11 +233,6 @@ def resolve_cli(path: str) -> str | None:
     return None
 
 
-def _wait_readable(stream, timeout: float) -> bool:
-    readable, _, _ = select.select([stream], [], [], timeout)
-    return bool(readable)
-
-
 class CodexAppServerSource:
     """Small persistent JSON-RPC client for Codex account rate limits."""
 
@@ -246,13 +241,13 @@ class CodexAppServerSource:
         path: str = "codex",
         *,
         popen=subprocess.Popen,
-        wait_readable=_wait_readable,
     ):
         self._path = path
         self._popen = popen
-        self._wait_readable = wait_readable
         self._proc = None
         self._next_id = 1
+        self._messages: queue.Queue[dict | None] = queue.Queue()
+        self._reader_thread: threading.Thread | None = None
 
     def close(self) -> None:
         proc, self._proc = self._proc, None
@@ -266,6 +261,9 @@ class CodexAppServerSource:
                 proc.kill()
             except Exception:
                 pass
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=1.0)
+            self._reader_thread = None
 
     def fetch(self) -> ProviderUsage | None:
         try:
@@ -294,6 +292,13 @@ class CodexAppServerSource:
             text=True,
             bufsize=1,
         )
+        self._messages = queue.Queue()
+        self._reader_thread = threading.Thread(
+            target=self._read_stdout,
+            name="herdeck-codex-app-server-reader",
+            daemon=True,
+        )
+        self._reader_thread.start()
         self._send(
             {
                 "method": "initialize",
@@ -317,25 +322,42 @@ class CodexAppServerSource:
         self._proc.stdin.flush()
 
     def _read_response(self, request_id: int) -> dict:
-        if self._proc is None or self._proc.stdout is None:
+        if self._proc is None:
             raise RuntimeError("Codex app-server is not running")
         deadline = time.monotonic() + _APP_SERVER_TIMEOUT_S
         while True:
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or not self._wait_readable(self._proc.stdout, remaining):
+            if remaining <= 0:
                 raise TimeoutError(f"Codex app-server request {request_id} timed out")
-            line = self._proc.stdout.readline()
-            if not line:
-                raise RuntimeError("Codex app-server closed its output")
             try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+                message = self._messages.get(timeout=remaining)
+            except queue.Empty as exc:
+                raise TimeoutError(f"Codex app-server request {request_id} timed out") from exc
+            if message is None:
+                raise RuntimeError("Codex app-server closed its output")
             if message.get("id") != request_id:
                 continue
             if "error" in message:
                 raise RuntimeError(str(message["error"]))
             return message
+
+    def _read_stdout(self) -> None:
+        proc = self._proc
+        if proc is None or proc.stdout is None:
+            self._messages.put(None)
+            return
+        try:
+            for line in proc.stdout:
+                try:
+                    message = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                # Notifications have no id and are irrelevant to this polling
+                # client. Drop them here so an idle daemon cannot grow the queue.
+                if "id" in message:
+                    self._messages.put(message)
+        finally:
+            self._messages.put(None)
 
 
 class UsagePoller:
