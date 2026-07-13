@@ -27,6 +27,16 @@ _APP_SERVER_TIMEOUT_S = 15.0
 _STALE_REFRESHES = 4
 _CLAUDE_CACHE_MAX_AGE_S = 6 * 60 * 60
 _FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
+_PAID_CODEX_PLANS = {
+    "business",
+    "edu",
+    "education",
+    "enterprise",
+    "plus",
+    "pro",
+    "prolite",
+    "team",
+}
 
 
 @dataclass
@@ -51,9 +61,9 @@ def _subscription_from_plan(plan) -> tuple[str, str | None]:
     normalized = plan.strip().lower()
     if normalized == "free":
         return "free", normalized
-    if normalized == "unknown":
-        return "unknown", normalized
-    return "paid", normalized
+    if normalized in _PAID_CODEX_PLANS:
+        return "paid", normalized
+    return "unknown", normalized
 
 
 def _window_label(minutes) -> str:
@@ -307,7 +317,14 @@ class CodexAppServerSource:
             self._send(
                 {"method": "account/read", "id": account_id, "params": {"refreshToken": False}}
             )
-            subscription, plan = parse_codex_account(self._read_response(account_id))
+            try:
+                subscription, plan = parse_codex_account(self._read_response(account_id))
+            except Exception:
+                # Entitlement discovery is additive. Older or temporarily
+                # degraded app-servers must still provide usage in the default
+                # (non-paid-only) mode.
+                subscription, plan = "unknown", None
+                log.debug("Codex account subscription read failed", exc_info=True)
             limits_id = self._next_id
             self._next_id += 1
             self._send({"method": "account/rateLimits/read", "id": limits_id, "params": {}})

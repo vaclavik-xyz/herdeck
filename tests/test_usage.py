@@ -348,6 +348,9 @@ def test_parse_codex_account_distinguishes_paid_free_and_api_key():
         "unknown",
         None,
     )
+    assert parse_codex_account(
+        {"result": {"account": {"type": "chatgpt", "planType": "future-sentinel"}}}
+    ) == ("unknown", "future-sentinel")
 
 
 def test_paid_only_hides_unconfirmed_providers_without_codexbar_fallback(monkeypatch):
@@ -468,6 +471,40 @@ def test_codex_app_server_reader_handles_coalesced_pipe_responses(monkeypatch):
 
     assert usage is not None and usage.windows[0].used_percent == 8
     assert usage.subscription == "paid"
+    source.close()
+
+
+def test_codex_app_server_keeps_limits_when_account_read_fails(monkeypatch):
+    class FakeAppServer:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = io.StringIO(
+                '{"id":0,"result":{"codexHome":"/tmp"}}\n'
+                '{"id":1,"error":{"code":-32601,"message":"unknown method"}}\n'
+                '{"id":2,"result":{"rateLimits":{"primary":'
+                '{"usedPercent":7,"windowDurationMins":300,"resetsAt":1784487551}}}}\n'
+            )
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/opt/homebrew/bin/codex")
+    source = CodexAppServerSource(popen=lambda *args, **kwargs: FakeAppServer())
+
+    usage = source.fetch()
+
+    assert usage is not None and usage.windows[0].used_percent == 7
+    assert usage.subscription == "unknown"
     source.close()
 
 
