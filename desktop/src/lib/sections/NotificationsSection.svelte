@@ -173,6 +173,7 @@
   }
   function tgInheritedDisplay(k: string): string {
     const value = tgInheritedRaw(k);
+    if (k === "message_thread_id" && value === 0) return lm.none;
     if (Array.isArray(value)) return value.length > 0 ? value.join(", ") : lm.none;
     return value == null ? lm.none : String(value);
   }

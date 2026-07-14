@@ -234,7 +234,7 @@ def _parse_telegram_int(name: str, value) -> int:
 def _parse_telegram_optional_int(name: str, value) -> int | None:
     # TOML has no null. Zero is the persisted sentinel for an explicit
     # profile override that disables an inherited forum topic.
-    if value is None or value == 0:
+    if value is None or (type(value) is int and value == 0):
         return None
     return _parse_telegram_int(name, value)
 

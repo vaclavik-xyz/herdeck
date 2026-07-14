@@ -365,6 +365,20 @@ def test_notifications_message_thread_id_rejects_float(tmp_path):
         )
 
 
+@pytest.mark.parametrize("value", ["false", "0.0"])
+def test_notifications_message_thread_id_zero_sentinel_rejects_other_types(tmp_path, value):
+    with pytest.raises(ConfigError, match="message_thread_id"):
+        load_config(
+            _write(
+                tmp_path,
+                "[notifications.telegram]\n"
+                'token_env="HERDECK_TG"\n'
+                'chat_id="42"\n'
+                f"message_thread_id={value}\n",
+            )
+        )
+
+
 def test_notifications_prompt_max_chars_rejects_bool(tmp_path):
     with pytest.raises(ConfigError):
         load_config(
