@@ -8,6 +8,7 @@
     type ListFieldState, type ConfigPayload,
   } from "../configClient";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
+  import defaults from "../configDefaults.json";
 
   let { payload = $bindable(), onChange, reloadRev = 0, editProfile = null }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
@@ -16,11 +17,7 @@
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
-  // Mirror of backend defaults (settings.py _safety_config) — keep in sync.
-  const SAFETY_DEFAULTS: Record<string, unknown> = {
-    approve_always: true,
-    require_confirm_for: ["act_force"],
-  };
+  const SAFETY_DEFAULTS: Record<string, unknown> = defaults.safety;
 
   // Tooltips for every field come from the central catalog (help.ts) in the
   // current language — required for each labelled field
@@ -43,7 +40,7 @@
   });
   const lm = $derived(LM[locale.lang]);
 
-  const approveAlways = $derived((getAt(payload, "base", SEC, "approve_always") as boolean) ?? true);
+  const approveAlways = $derived((getAt(payload, "base", SEC, "approve_always") as boolean) ?? defaults.safety.approve_always);
   const requireConfirmFor = $derived((getAt(payload, "base", SEC, "require_confirm_for") as string[]) ?? SAFETY_DEFAULTS.require_confirm_for as string[]);
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseRcf(state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, "require_confirm_for", state, list); onChange(); }

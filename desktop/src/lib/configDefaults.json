@@ -1,0 +1,73 @@
+{
+  "grid": "5x3",
+  "theme": {
+    "colors": {
+      "working": "green",
+      "idle": "blue",
+      "blocked": "amber",
+      "done": "cyan",
+      "waiting": "violet",
+      "unknown": "grey",
+      "offline": "red"
+    },
+    "server_accents": ["teal", "violet", "orange", "pink", "lime"]
+  },
+  "view": {
+    "management": "launcher_menu",
+    "bottom_row": ["profiles", "notifications", "safety", "theme", "new_agent"],
+    "show_profile_on_panel": false,
+    "agent_slots": "max",
+    "tile_fields": ["repo", "branch", "status", "time", "server"],
+    "working_animation": "spin",
+    "tile_fill": "none",
+    "language": "en"
+  },
+  "safety": {
+    "approve_always": true,
+    "require_confirm_for": ["act_force"]
+  },
+  "usage": {
+    "providers": [],
+    "paid_only": false,
+    "refresh_secs": 300,
+    "codex_path": "codex",
+    "claude_cache_path": "~/.cache/herdeck/claude-usage.json",
+    "codexbar_path": "codexbar"
+  },
+  "hardware": {
+    "brightness": 80,
+    "debounce": 0.25,
+    "keep_alive_interval": 5.0,
+    "tick_interval": 0.4
+  },
+  "notifications": {
+    "enabled": false,
+    "on": ["blocked"],
+    "sound": true,
+    "backends": ["macos"],
+    "telegram": {
+      "message_thread_id": 0,
+      "interactive": false,
+      "allowed_user_ids": [],
+      "prompt_max_chars": 1200
+    }
+  },
+  "macros": [
+    { "label": "continue", "text": "continue" },
+    { "label": "run tests", "text": "run the tests" },
+    { "label": "commit", "text": "commit the changes" },
+    { "label": "/compact", "text": "/compact" }
+  ],
+  "start_profiles": {
+    "claude": ["claude"],
+    "codex": ["codex"],
+    "cursor": ["cursor-agent"],
+    "gemini": ["gemini"],
+    "opencode": ["opencode"]
+  },
+  "answer_profiles": {
+    "claude": { "approve": ["1", "enter"], "deny": ["esc"], "stop": ["ctrl+c"], "approve_always": ["2", "enter"] },
+    "codex": { "approve": ["y", "enter"], "deny": ["n", "enter"], "stop": ["ctrl+c"], "approve_always": ["y", "enter"] },
+    "default": { "approve": ["enter"], "deny": ["esc"], "stop": ["ctrl+c"], "approve_always": ["enter"] }
+  }
+}

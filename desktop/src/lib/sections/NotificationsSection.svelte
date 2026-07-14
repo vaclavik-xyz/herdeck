@@ -13,6 +13,7 @@
     setOverride, clearOverride, setOverridePath, clearOverridePath, updateBaseTelegram,
   } from "../configClient";
   import { defineMessages, fieldHelp, fmt, locale, t } from "../i18n.svelte";
+  import defaults from "../configDefaults.json";
 
   let { payload = $bindable(), onChange, onError, reloadRev = 0, editProfile = null }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
@@ -22,15 +23,15 @@
   const SEC = "notifications";
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
-  // Mirror of backend defaults (settings._notifications_config) — keep in sync.
-  const NOTIF_DEFAULTS: Record<string, boolean> = { enabled: false, sound: true };
-  const NOTIF_LIST_DEFAULTS: Record<string, string[]> = { on: ["blocked"], backends: ["macos"] };
-  const TELEGRAM_DEFAULTS: Record<string, unknown> = {
-    message_thread_id: 0,
-    interactive: false,
-    allowed_user_ids: [],
-    prompt_max_chars: 1200,
+  const NOTIF_DEFAULTS: Record<string, boolean> = {
+    enabled: defaults.notifications.enabled,
+    sound: defaults.notifications.sound,
   };
+  const NOTIF_LIST_DEFAULTS: Record<string, string[]> = {
+    on: [...defaults.notifications.on],
+    backends: [...defaults.notifications.backends],
+  };
+  const TELEGRAM_DEFAULTS: Record<string, unknown> = defaults.notifications.telegram;
 
   // Tooltips for every field (current language) — required for each labelled
   // field (enforced by sections.help.test.ts); catalog lives in help.ts.
@@ -60,8 +61,8 @@
   });
   const lm = $derived(LM[locale.lang]);
 
-  const enabled = $derived((getAt(payload, "base", "notifications", "enabled") as boolean) ?? false);
-  const sound = $derived((getAt(payload, "base", "notifications", "sound") as boolean) ?? true);
+  const enabled = $derived((getAt(payload, "base", "notifications", "enabled") as boolean) ?? NOTIF_DEFAULTS.enabled);
+  const sound = $derived((getAt(payload, "base", "notifications", "sound") as boolean) ?? NOTIF_DEFAULTS.sound);
   const on = $derived((getAt(payload, "base", "notifications", "on") as string[]) ?? NOTIF_LIST_DEFAULTS.on);
   const onState = $derived(listFieldState(payload, "base", "notifications", "on"));
   const backends = $derived((getAt(payload, "base", "notifications", "backends") as string[]) ?? NOTIF_LIST_DEFAULTS.backends);
@@ -85,7 +86,9 @@
       allowed_user_ids: Array.isArray(t.allowed_user_ids)
         ? t.allowed_user_ids.filter((value): value is number => typeof value === "number")
         : typeof t.allowed_user_ids === "string" ? t.allowed_user_ids : [],
-      prompt_max_chars: typeof t.prompt_max_chars === "number" ? t.prompt_max_chars : 1200,
+      prompt_max_chars: typeof t.prompt_max_chars === "number"
+        ? t.prompt_max_chars
+        : TELEGRAM_DEFAULTS.prompt_max_chars as number,
     };
   })());
 

@@ -4,6 +4,7 @@
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
+  import defaults from "../configDefaults.json";
   import {
     getAt, setAt, removeAt, listFieldState, setListField, serversOf,
     inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
@@ -14,13 +15,8 @@
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
 
   const SEC = "deck";
-  const DEFAULT_GRID = "5x3";
-  const HARDWARE_DEFAULTS = {
-    brightness: 80,
-    debounce: 0.25,
-    keep_alive_interval: 5.0,
-    tick_interval: 0.4,
-  } as const;
+  const DEFAULT_GRID = defaults.grid;
+  const HARDWARE_DEFAULTS = defaults.hardware;
 
   // Field tooltips in the current language — required for each labelled field
   // (enforced by sections.help.test.ts); texts live in help.ts under "deck".

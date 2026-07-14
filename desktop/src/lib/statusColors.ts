@@ -1,18 +1,7 @@
-// Mirror of the backend DEFAULT_STATUS_COLORS (src/herdeck/config.py) — keep in
-// sync. The config editor uses it as the fallback colour shown/written for a
-// status when a profile has no inherited theme.colors.<status> override.
-export const DEFAULT_STATUS_COLORS: Record<string, string> = {
-  working: "green",
-  idle: "blue",
-  blocked: "amber",
-  done: "cyan",
-  waiting: "violet", // pane held pending background work (herdwatch)
-  unknown: "grey",
-  offline: "red",
-};
+import defaults from "./configDefaults.json";
 
-/** Mirror of backend DEFAULT_SERVER_ACCENTS (src/herdeck/config.py). */
-export const DEFAULT_SERVER_ACCENTS: string[] = ["teal", "violet", "orange", "pink", "lime"];
+export const DEFAULT_STATUS_COLORS: Record<string, string> = { ...defaults.theme.colors };
+export const DEFAULT_SERVER_ACCENTS: string[] = [...defaults.theme.server_accents];
 
 // Mirror of the backend named tile palette (src/herdeck/driver/base.py COLORS)
 // — keep in sync. Status colours resolve STRICTLY through this palette on the

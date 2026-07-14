@@ -11,6 +11,7 @@
     type ConfigPayload,
   } from "../configClient";
   import { defineMessages, fieldHelp, locale } from "../i18n.svelte";
+  import defaults from "../configDefaults.json";
 
   let { payload = $bindable(), onChange, editProfile = null }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
@@ -19,15 +20,7 @@
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
-  // Mirror of backend defaults (settings.py _usage_config) — keep in sync.
-  const USAGE_DEFAULTS: Record<string, unknown> = {
-    providers: [],
-    paid_only: false,
-    refresh_secs: 300,
-    codex_path: "codex",
-    claude_cache_path: "~/.cache/herdeck/claude-usage.json",
-    codexbar_path: "codexbar",
-  };
+  const USAGE_DEFAULTS: Record<string, unknown> = defaults.usage;
 
   const HELP = $derived(fieldHelp("usage"));
 
@@ -54,12 +47,12 @@
   const lm = $derived(LM[locale.lang]);
 
   // --- base mode ---
-  const providers = $derived((getAt(payload, "base", SEC, "providers") as string[]) ?? []);
-  const paidOnly = $derived((getAt(payload, "base", SEC, "paid_only") as boolean) ?? false);
-  const refreshSecs = $derived((getAt(payload, "base", SEC, "refresh_secs") as number) ?? 300);
-  const codexPath = $derived((getAt(payload, "base", SEC, "codex_path") as string) ?? "codex");
-  const claudeCachePath = $derived((getAt(payload, "base", SEC, "claude_cache_path") as string) ?? "~/.cache/herdeck/claude-usage.json");
-  const codexbarPath = $derived((getAt(payload, "base", SEC, "codexbar_path") as string) ?? "codexbar");
+  const providers = $derived((getAt(payload, "base", SEC, "providers") as string[]) ?? defaults.usage.providers);
+  const paidOnly = $derived((getAt(payload, "base", SEC, "paid_only") as boolean) ?? defaults.usage.paid_only);
+  const refreshSecs = $derived((getAt(payload, "base", SEC, "refresh_secs") as number) ?? defaults.usage.refresh_secs);
+  const codexPath = $derived((getAt(payload, "base", SEC, "codex_path") as string) ?? defaults.usage.codex_path);
+  const claudeCachePath = $derived((getAt(payload, "base", SEC, "claude_cache_path") as string) ?? defaults.usage.claude_cache_path);
+  const codexbarPath = $derived((getAt(payload, "base", SEC, "codexbar_path") as string) ?? defaults.usage.codexbar_path);
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   // Empty text / cleared number returns the key to the backend default instead
   // of persisting "" (rejected by validation) or a hard-coded literal.

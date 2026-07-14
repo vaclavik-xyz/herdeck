@@ -3,6 +3,7 @@
 // the whole client is unit-testable under Vitest without a Tauri WebView. The
 // sidecar access token is NEVER here — the Rust shell injects it inside the
 // token-free config_* commands (see src-tauri/src/lib.rs).
+import defaults from "./configDefaults.json";
 
 /** A redacted secret flag: presence + where it resolves, never a value. */
 export interface SecretFlag {
@@ -305,23 +306,11 @@ export function macrosOf(payload: ConfigPayload): MacroRecord[] {
     : macroRecords(payload.base.macros);
 }
 
-// Frontend mirrors of backend defaults (config.py DEFAULT_*) — keep in sync.
-// Backend resolves ABSENT start_profiles/macros to these (REPLACE); answer_profiles
-// ALWAYS seeds these built-ins, config overriding per-name (settings._build_config).
-export const DEFAULT_START_PROFILES: Record<string, string[]> = {
-  claude: ["claude"], codex: ["codex"], cursor: ["cursor-agent"], gemini: ["gemini"], opencode: ["opencode"],
-};
-export const DEFAULT_MACROS: MacroRecord[] = [
-  { label: "continue", text: "continue" },
-  { label: "run tests", text: "run the tests" },
-  { label: "commit", text: "commit the changes" },
-  { label: "/compact", text: "/compact" },
-];
-export const DEFAULT_ANSWER_PROFILES: Record<string, Record<string, string[]>> = {
-  claude: { approve: ["1", "enter"], deny: ["esc"], stop: ["ctrl+c"], approve_always: ["2", "enter"] },
-  codex: { approve: ["y", "enter"], deny: ["n", "enter"], stop: ["ctrl+c"], approve_always: ["y", "enter"] },
-  default: { approve: ["enter"], deny: ["esc"], stop: ["ctrl+c"], approve_always: ["enter"] },
-};
+// Shared defaults are loaded from configDefaults.json. A Python contract test
+// compares that file with the backend dataclasses/constants.
+export const DEFAULT_START_PROFILES: Record<string, string[]> = clone(defaults.start_profiles);
+export const DEFAULT_MACROS: MacroRecord[] = clone(defaults.macros);
+export const DEFAULT_ANSWER_PROFILES: Record<string, Record<string, string[]>> = clone(defaults.answer_profiles);
 
 function withMacros(payload: ConfigPayload, macros: MacroRecord[]): ConfigPayload {
   // Once the user edits the effective list, materialize it — including `[]`,

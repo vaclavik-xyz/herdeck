@@ -5,6 +5,7 @@
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
+  import defaults from "../configDefaults.json";
   import {
     getAt, setAt, listFieldState, setListField,
     inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
@@ -23,11 +24,10 @@
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
 
-  // Mirror of backend defaults (config.py ViewConfig) — keep in sync.
-  const VIEW_DEFAULTS: Record<string, unknown> = { management: "launcher_menu", agent_slots: "max", show_profile_on_panel: false, working_animation: "spin", tile_fill: "none", language: "en" };
+  const VIEW_DEFAULTS: Record<string, unknown> = defaults.view;
   const VIEW_LIST_DEFAULTS: Record<string, string[]> = {
-    bottom_row: ["profiles", "notifications", "safety", "theme", "new_agent"],
-    tile_fields: ["repo", "branch", "status", "time", "server"],
+    bottom_row: [...defaults.view.bottom_row],
+    tile_fields: [...defaults.view.tile_fields],
   };
 
   // Field tooltips in the current language — required for each labelled field
@@ -50,13 +50,12 @@
   });
   const lm = $derived(LM[locale.lang]);
 
-  // --- base mode (unchanged from α) ---
-  const management = $derived((getAt(payload, "base", SEC, "management") as string) ?? "launcher_menu");
-  const agentSlots = $derived((getAt(payload, "base", SEC, "agent_slots") as string) ?? "max");
-  const showProfile = $derived((getAt(payload, "base", SEC, "show_profile_on_panel") as boolean) ?? false);
-  const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? "spin");
-  const tileFill = $derived((getAt(payload, "base", SEC, "tile_fill") as string) ?? "none");
-  const uiLanguage = $derived((getAt(payload, "base", SEC, "language") as string) ?? "en");
+  const management = $derived((getAt(payload, "base", SEC, "management") as string) ?? defaults.view.management);
+  const agentSlots = $derived((getAt(payload, "base", SEC, "agent_slots") as string) ?? defaults.view.agent_slots);
+  const showProfile = $derived((getAt(payload, "base", SEC, "show_profile_on_panel") as boolean) ?? defaults.view.show_profile_on_panel);
+  const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? defaults.view.working_animation);
+  const tileFill = $derived((getAt(payload, "base", SEC, "tile_fill") as string) ?? defaults.view.tile_fill);
+  const uiLanguage = $derived((getAt(payload, "base", SEC, "language") as string) ?? defaults.view.language);
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
 
