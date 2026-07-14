@@ -43,26 +43,22 @@ def test_first_run():
     assert k() == ("mock", "first_run")
 
 
-def test_resolve_source_kind_uses_configured_local_socket(monkeypatch):
-    class Hardware:
-        herdr_socket = "/custom/herdr.sock"
-
-    class Config:
-        hardware = Hardware()
-
-    seen = {}
-
-    def resolve_socket_path(config):
-        seen["config"] = config
-        return config.hardware.herdr_socket
-
-    config = Config()
-    monkeypatch.setattr(server_module, "_load_partial_config", lambda: config)
-    monkeypatch.setattr("herdeck.bootstrap.resolve_socket_path", resolve_socket_path)
-    monkeypatch.setattr(server_module, "_default_config_paths", lambda: ("/config.toml", None))
+def test_resolve_source_kind_uses_configured_local_socket(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[[servers]]\nid = "remote"\nurl = "ws://remote"\ntoken_env = "MISSING_TOKEN"\n'
+    )
+    socket_path = tmp_path / "custom.sock"
+    socket_path.touch()
+    (tmp_path / "local.toml").write_text(
+        f'[local]\nherdr_socket = "{socket_path}"\n'
+    )
+    monkeypatch.delenv("MISSING_TOKEN", raising=False)
+    monkeypatch.delenv("HERDR_SOCKET", raising=False)
+    monkeypatch.delenv("HERDR_SOCKET_PATH", raising=False)
+    monkeypatch.delenv("HERDR_SESSION", raising=False)
+    monkeypatch.setattr(server_module, "_default_config_paths", lambda: (str(config_path), None))
     monkeypatch.setattr(server_module, "select_live", lambda: None)
     monkeypatch.setattr("herdeck.deckapp.onboarding.read_choice", lambda path: "local")
-    monkeypatch.setattr(server_module.os.path, "exists", lambda path: path == "/custom/herdr.sock")
 
-    assert server_module._resolve_source_kind() == ("local", "/custom/herdr.sock")
-    assert seen["config"] is config
+    assert server_module._resolve_source_kind() == ("local", str(socket_path))

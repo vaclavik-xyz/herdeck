@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import tomllib
 from collections.abc import Awaitable, Callable
+from pathlib import Path
+from types import SimpleNamespace
 
 from .bridge import resolve_herdr_socket_path, start_local_bridge
 from .config import (
@@ -32,6 +35,27 @@ def resolve_socket_path(config=None, *, getenv=os.environ.get) -> str:
     if configured:
         return os.path.expanduser(configured)
     return resolve_herdr_socket_path(getenv=getenv)
+
+
+def resolve_saved_socket_path(config_path: str | None = None, *, getenv=os.environ.get) -> str:
+    """Resolve the socket from env or the local overlay without resolving servers.
+
+    Reading only ``local.toml`` is intentional: a missing remote token must not
+    hide the local Herdr socket that can be used to recover from that remote
+    configuration.
+    """
+    local_path = _discover_local_config_path(config_path or _discover_config_path())
+    configured = None
+    try:
+        local_data = tomllib.loads(Path(local_path).read_text(encoding="utf-8"))
+        local_section = local_data.get("local")
+        if isinstance(local_section, dict):
+            value = local_section.get("herdr_socket")
+            configured = value if isinstance(value, str) and value else None
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        pass
+    config = SimpleNamespace(hardware=SimpleNamespace(herdr_socket=configured))
+    return resolve_socket_path(config, getenv=getenv)
 
 
 def resolve_mode(*, mock, config_path, config_has_servers, socket_path, socket_exists):

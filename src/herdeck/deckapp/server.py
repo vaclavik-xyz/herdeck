@@ -460,12 +460,12 @@ class DeckApp:
         }
 
     def _setup_status(self) -> dict:
-        from ..bootstrap import resolve_socket_path
+        from ..bootstrap import resolve_saved_socket_path
         from .onboarding import read_choice
 
-        socket_path = resolve_socket_path(None)
-        socket_exists = os.path.exists(socket_path)
         config_path = str(self._config_service._config_path) if self._config_service else None
+        socket_path = resolve_saved_socket_path(config_path)
+        socket_exists = os.path.exists(socket_path)
         choice = read_choice(config_path)
         live = self._source.source_name == "live"
         if live:
@@ -857,11 +857,11 @@ def select_source_kind(*, mock_env, remote, choice, socket_path, socket_exists):
 
 def _resolve_source_kind():
     """Gather the facts and apply select_source_kind."""
-    from ..bootstrap import resolve_socket_path
+    from ..bootstrap import resolve_saved_socket_path
     from .onboarding import read_choice
 
-    socket_path = resolve_socket_path(_load_partial_config())
     config_path = _default_config_paths()[0]
+    socket_path = resolve_saved_socket_path(config_path)
     return select_source_kind(
         mock_env=bool(os.environ.get("HERDECK_MOCK")),
         remote=select_live(),
@@ -1116,10 +1116,10 @@ def connect(app, body) -> dict | None:
         return {"ok": True}
 
     if choice == "local":
-        from ..bootstrap import resolve_socket_path
+        from ..bootstrap import resolve_saved_socket_path
         from ..bridge import _SNAPSHOT_UNSUPPORTED
 
-        socket_path = resolve_socket_path(None)
+        socket_path = resolve_saved_socket_path(config_path)
         if not os.path.exists(socket_path):
             return {"ok": False, "error": f"herdr socket not found at {socket_path}"}
         new_source = None

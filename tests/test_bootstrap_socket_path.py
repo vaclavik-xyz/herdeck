@@ -1,6 +1,6 @@
 import os
 
-from herdeck.bootstrap import resolve_socket_path
+from herdeck.bootstrap import resolve_saved_socket_path, resolve_socket_path
 
 
 def test_env_override_wins():
@@ -53,3 +53,17 @@ def test_native_herdr_env_overrides_config_socket():
     )
     expected = os.path.expanduser("~/.config/herdr/sessions/review/herdr.sock")
     assert resolve_socket_path(_Cfg(), getenv={"HERDR_SESSION": "review"}.get) == expected
+
+
+def test_saved_socket_path_reads_only_local_overlay(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[[servers]]\nid = "remote"\nurl = "ws://remote"\ntoken_env = "MISSING_TOKEN"\n'
+    )
+    (tmp_path / "local.toml").write_text(
+        '[local]\nherdr_socket = "~/custom/herdr.sock"\n'
+    )
+
+    assert resolve_saved_socket_path(str(config), getenv={}.get) == os.path.expanduser(
+        "~/custom/herdr.sock"
+    )

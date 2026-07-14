@@ -80,6 +80,53 @@ def test_setup_status_demo_reason(tmp_path, monkeypatch):
         app.close()
 
 
+def test_setup_status_uses_configured_local_socket(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    socket_path = tmp_path / "custom.sock"
+    socket_path.touch()
+    (tmp_path / "local.toml").write_text(
+        f'[local]\nherdr_socket = "{socket_path}"\n'
+    )
+    monkeypatch.setenv("HERDECK_CONFIG", str(config_path))
+    monkeypatch.delenv("HERDR_SOCKET", raising=False)
+    monkeypatch.delenv("HERDR_SOCKET_PATH", raising=False)
+    monkeypatch.delenv("HERDR_SESSION", raising=False)
+    app = srv.create_mock_app(serve=False, config_service=srv._default_config_service())
+    try:
+        status = app._setup_status()
+        assert status["socket_path"] == str(socket_path)
+        assert status["local_herdr_available"] is True
+    finally:
+        app.close()
+
+
+def test_connect_local_uses_configured_local_socket(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    socket_path = tmp_path / "custom.sock"
+    socket_path.touch()
+    (tmp_path / "local.toml").write_text(
+        f'[local]\nherdr_socket = "{socket_path}"\n'
+    )
+    monkeypatch.setenv("HERDECK_CONFIG", str(config_path))
+    monkeypatch.delenv("HERDR_SOCKET", raising=False)
+    monkeypatch.delenv("HERDR_SOCKET_PATH", raising=False)
+    monkeypatch.delenv("HERDR_SESSION", raising=False)
+    seen = []
+
+    def fail_start(path):
+        seen.append(path)
+        raise RuntimeError("stop after socket resolution")
+
+    monkeypatch.setattr(srv, "_start_local_bridge", fail_start)
+    app = srv.create_mock_app(serve=False, config_service=srv._default_config_service())
+    try:
+        result = srv.connect(app, {"choice": "local"})
+        assert result == {"ok": False, "error": "could not start local source"}
+        assert seen == [str(socket_path)]
+    finally:
+        app.close()
+
+
 def test_setup_status_requires_token(tmp_path, monkeypatch):
     monkeypatch.setenv("HERDECK_CONFIG", str(tmp_path / "config.toml"))
     app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
