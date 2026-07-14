@@ -6,6 +6,23 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_web_launch_agent_disables_legacy_query_token_by_default(tmp_path):
+    from herdeck.service import ServiceConfig, render_launch_agent
+
+    raw = render_launch_agent(
+        ServiceConfig(
+            kind="web",
+            home=tmp_path,
+            python="/opt/herdeck/python",
+            bind="100.86.178.12",
+            port=8801,
+        )
+    )
+    plist = plistlib.loads(raw)
+
+    assert plist["EnvironmentVariables"]["HERDECK_WEB_ALLOW_QUERY_TOKEN"] == "0"
+
+
 def test_bridge_launch_agent_references_token_file_without_secret(tmp_path):
     from herdeck.service import ServiceConfig, render_launch_agent
 

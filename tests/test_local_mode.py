@@ -283,7 +283,7 @@ def test_default_web_deck_redacts_capability_url_from_logs(monkeypatch, capsys):
     deck = make_deck("web", 4)
     try:
         out = capsys.readouterr().out
-        assert "herdeck-web url" in out
+        assert "authenticated browser session required" in out
         assert "/?token=" not in out
         assert deck.press_token not in out
     finally:
@@ -293,6 +293,7 @@ def test_default_web_deck_redacts_capability_url_from_logs(monkeypatch, capsys):
 def test_web_deck_can_explicitly_print_capability_url(monkeypatch, capsys):
     monkeypatch.setenv("HERDECK_WEB_PORT", "0")
     monkeypatch.setenv("HERDECK_SHOW_URL_TOKEN", "1")
+    monkeypatch.setenv("HERDECK_WEB_ALLOW_QUERY_TOKEN", "1")
     deck = make_deck("web", 4)
     try:
         out = capsys.readouterr().out

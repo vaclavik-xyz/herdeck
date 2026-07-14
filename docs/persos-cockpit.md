@@ -91,8 +91,9 @@ Rotation procedure:
 3. Update the persOS secret and verify a new handoff.
 4. Existing browser sessions are lost on restart and must be minted again.
 
-The older `?token=` capability bootstrap and header-token automation remain
-supported for compatibility, but new cockpit integrations use the handoff.
+The older `?token=` capability bootstrap is disabled by default and must stay
+disabled for a persOS cockpit. Header-token automation remains supported for
+private server-to-server requests; browser integrations use the handoff.
 
 ## API v1
 

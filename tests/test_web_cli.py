@@ -16,6 +16,7 @@ def test_web_url_command_prints_explicit_capability_url(tmp_path, capsys):
             "8800",
             "--token-file",
             str(token_file),
+            "--allow-query-token",
         ]
     )
 
@@ -59,6 +60,7 @@ def test_web_url_command_uses_public_reverse_proxy_url(tmp_path, capsys):
             "https://cockpit.example",
             "--token-file",
             str(token_file),
+            "--allow-query-token",
         ]
     )
 
@@ -75,6 +77,23 @@ def test_web_url_command_fails_if_token_cannot_be_persisted(tmp_path, capsys):
     parent_file.write_text("occupied")
 
     with pytest.raises(SystemExit, match="persist web token"):
-        main(["url", "--token-file", str(parent_file / "web-token")])
+        main(
+            [
+                "url",
+                "--token-file",
+                str(parent_file / "web-token"),
+                "--allow-query-token",
+            ]
+        )
 
+    assert capsys.readouterr().out == ""
+
+
+def test_web_url_command_requires_explicit_legacy_opt_in(tmp_path, capsys):
+    from herdeck.web import main
+
+    with pytest.raises(SystemExit, match="query-token URL is disabled"):
+        main(["url", "--token-file", str(tmp_path / "web-token")])
+
+    assert not (tmp_path / "web-token").exists()
     assert capsys.readouterr().out == ""

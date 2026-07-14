@@ -198,17 +198,18 @@ macOS LaunchAgents without placing token values in plist files:
 herdeck-service install bridge --bind 100.x.y.z --server-id workbox
 herdeck-service install web --bind 100.x.y.z --config ~/.config/herdeck/config.toml
 herdeck-service status web
-herdeck-web url --host 100.x.y.z --port 8800
+herdeck-web url --host 100.x.y.z --port 8800 --allow-query-token
 ```
 
 The install command creates the bridge token at
 `~/.config/herdeck/bridge-token` with mode `0600` when needed. Web capability
-URLs are no longer written to normal startup logs; `herdeck-web url` prints one
-explicitly. Set `HERDECK_SHOW_URL_TOKEN=1` only for compatibility with an
-existing supervised log workflow.
+URLs are disabled by default and are no longer written to normal startup logs.
+`herdeck-web url --allow-query-token` prints one only when the server was also
+started with that explicit legacy opt-in. Do not enable it for a persOS cockpit.
 
 `GET /healthz` is an unauthenticated, non-sensitive liveness response. The
-token-protected `GET /readyz?token=...` also reports readiness. Probe a running
+token-protected `GET /readyz` also reports readiness when called with
+`X-Herdeck-Token`. Probe a running
 web service without exposing its token with:
 
 ```bash
@@ -232,7 +233,8 @@ herdeck-service install web \
 herdeck-web url \
   --host 127.0.0.1 \
   --base-path /herdeck \
-  --public-origin https://cockpit.example
+  --public-origin https://cockpit.example \
+  --allow-query-token
 
 herdeck-doctor --web-url https://cockpit.example/herdeck/
 ```
@@ -248,11 +250,12 @@ setup and keeps `SameSite=Strict`. If an allowed parent has a different origin,
 Herdeck emits `SameSite=None; Secure`; that deployment also depends on the
 browser allowing third-party cookies for the iframe.
 
-The capability URL is only a bootstrap credential. A browser exchanges its
-`?token=...` value for a bounded, expiring `HttpOnly; SameSite=Strict` session
-cookie and is redirected to a clean URL. Browser writes additionally require an
-exact `Origin` match. Existing automation can continue to use
-`X-Herdeck-Token`; query-token reads remain compatible. When
+The persistent `?token=...` browser bootstrap is disabled by default. It is
+available only with the explicit `--allow-query-token` legacy opt-in. A persOS
+cockpit instead mints a bounded `HttpOnly; SameSite=Strict` browser session
+through its authenticated server-side handoff. Browser writes additionally
+require an exact `Origin` match. Existing automation continues to use
+`X-Herdeck-Token`. When
 `HERDECK_WEB_PUBLIC_ORIGIN` is HTTPS the session cookie is also `Secure`.
 
 For a persOS cockpit, including the semantic agent API, server-to-server browser

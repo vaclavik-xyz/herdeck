@@ -17,6 +17,9 @@ def _isolated_token_state(tmp_path, monkeypatch):
     """Serving decks persist their press token under XDG_STATE_HOME — keep
     tests out of the user's real state dir."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    # Most tests exercise the legacy browser simulator flow explicitly. The
+    # production default is covered separately with this opt-in removed.
+    monkeypatch.setenv("HERDECK_WEB_ALLOW_QUERY_TOKEN", "1")
 
 
 class StubIcons:
@@ -231,6 +234,30 @@ def test_http_press_requires_session_token():
         with urllib.request.urlopen(req, timeout=2) as resp:
             assert resp.status == 204
         assert seen == [0]
+    finally:
+        d.close()
+
+
+def test_legacy_query_token_is_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("HERDECK_WEB_ALLOW_QUERY_TOKEN")
+    d = WebDeck(slots=4, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
+    try:
+        base = f"http://{d.host}:{d.port}"
+
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(f"{base}/?token={d.press_token}", timeout=2)
+        assert denied.value.code == 403
+        assert denied.value.headers.get("Set-Cookie") is None
+
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(f"{base}/state?token={d.press_token}", timeout=2)
+        assert denied.value.code == 403
+
+        request = urllib.request.Request(
+            f"{base}/readyz", headers={"X-Herdeck-Token": d.press_token}
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            assert response.status == 200
     finally:
         d.close()
 
