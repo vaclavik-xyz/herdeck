@@ -114,6 +114,7 @@ token_env = "HERDECK_TELEGRAM_TOKEN"
 chat_id = "123456789"
 # Optional Hermes/forum topic and interactive controls.
 # message_thread_id = 456
+# In a profile overlay, message_thread_id = 0 explicitly selects the main chat.
 interactive = false
 allowed_user_ids = []
 prompt_max_chars = 1200

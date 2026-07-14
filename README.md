@@ -437,7 +437,7 @@ Add it to the `[start_profiles]` section (base config) or override it per profil
 myagent = ["myagent", "--flag"]
 ```
 
-Custom `[answer_profiles.<name>]` sections can be defined in the base config and overridden per-profile via `[profiles.<name>.answer_profiles.<type>]`; a profile can only override a type that the base defines.
+Custom `[answer_profiles.<name>]` sections can be defined in the base config and overridden per-profile via `[profiles.<name>.answer_profiles.<type>]`. The built-in `claude`, `codex`, and `default` types are always available for profile overrides even when omitted from the base config.
 
 ## Notifications
 Get notified when an agent enters the **blocked** state, so you don't have to
@@ -458,6 +458,7 @@ chat_id = "123456789"
 
 # Optional: route alerts into a Telegram forum topic, e.g. a Hermes topic.
 message_thread_id = 456
+# In a profile overlay, use 0 to explicitly return an inherited topic to the main chat.
 
 # Optional: enable buttons and reply-to-agent routing.
 interactive = true

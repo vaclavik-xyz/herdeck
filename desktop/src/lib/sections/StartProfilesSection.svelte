@@ -70,7 +70,7 @@
 
   // --- base mode: local rows (re-seed only on reloadRev) + explicit-empty mode ---
   let rows = $state<StartProfileRow[]>(startProfileRows(payload));
-  let seenRev = $state(reloadRev);
+  let seenRev = $state<number | null>(null);
   let mode = $state<ListFieldState>(mapSectionState(payload, SEC));
 
   $effect(() => {

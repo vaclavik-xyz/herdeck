@@ -262,12 +262,6 @@
     color: #6b7785;
     font-size: 12px;
   }
-  .hint code {
-    color: #8b97a4;
-    background: #17171b;
-    padding: 1px 4px;
-    border-radius: 4px;
-  }
   .actions,
   .footer {
     display: flex;

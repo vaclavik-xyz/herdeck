@@ -3,7 +3,8 @@
   import NotificationsSection from "./NotificationsSection.svelte";
 
   let { initial, editProfile = null }: { initial: ConfigPayload; editProfile?: string | null } = $props();
-  let payload = $state(initial);
+  function initialPayload(): ConfigPayload { return initial; }
+  let payload = $state(initialPayload());
 
   const allowedUsers = $derived(
     (getAt(payload, "base", "notifications", "telegram") as Record<string, unknown> | undefined)

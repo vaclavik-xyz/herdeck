@@ -64,7 +64,7 @@
   // Local editor rows (source of truth while editing); re-seeded only when ConfigApp bumps
   // `reloadRev` (load/discard/Apply-reload) — same pattern as StartProfilesSection.
   let rows = $state<AnswerProfileRow[]>(answerProfileRows(payload));
-  let seenRev = $state(reloadRev);
+  let seenRev = $state<number | null>(null);
   let rejectedRenameRev = $state(0);
 
   $effect(() => {
