@@ -279,6 +279,22 @@ def test_multi_server_tiles_get_server_tag():
     assert all(tile.server_accent for tile in tiles)
 
 
+def test_empty_server_accent_palette_disables_tile_accents():
+    cfg = make_multi_config()
+    cfg.theme.server_accents = []
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot(
+        "alpha",
+        [AgentState(AgentKey("alpha", "p1"), "claude", "ra", Status.IDLE)],
+    )
+    o.apply_event("bravo", AgentState(AgentKey("bravo", "p1"), "codex", "rb", Status.IDLE))
+
+    tiles = [tile for tile in o.render().tiles if tile.repo]
+
+    assert all(tile.server_tag for tile in tiles)
+    assert all(tile.server_accent is None for tile in tiles)
+
+
 def test_multi_server_tags_stay_visible_on_single_server_page():
     o = Orchestrator(make_multi_config(), slots=3)
     o.apply_snapshot(
@@ -315,6 +331,7 @@ def test_server_accent_returns_stable_palette_color():
 
     assert server_accent("alpha") == server_accent("alpha")
     assert server_accent("alpha") in SERVER_ACCENTS
+    assert server_accent("alpha", []) is None
 
 
 def test_theme_status_colors_apply_to_agent_tiles():

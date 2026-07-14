@@ -40,8 +40,10 @@ _ACTION_COLORS = {"approve": "green", "approve_always": "amber", "deny": "red"}
 _MGMT_SECTION = {"profiles": "profiles", "new_agent": "start_profiles"}
 
 
-def server_accent(server_id: str, accents: list[str] | None = None) -> str:
-    palette = accents or list(SERVER_ACCENTS)
+def server_accent(server_id: str, accents: list[str] | None = None) -> str | None:
+    palette = list(SERVER_ACCENTS) if accents is None else accents
+    if not palette:
+        return None
     digest = hashlib.sha1(server_id.encode()).digest()
     return palette[digest[0] % len(palette)]
 
