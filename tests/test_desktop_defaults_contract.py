@@ -17,7 +17,6 @@ from herdeck.config import (
 )
 from herdeck.settings import _build_config
 
-
 DEFAULTS_PATH = Path(__file__).parents[1] / "desktop" / "src" / "lib" / "configDefaults.json"
 
 
