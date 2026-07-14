@@ -325,6 +325,35 @@ async def test_runtime_agent_control_send_text_returns_missing_agent():
 
 
 @pytest.mark.asyncio
+async def test_runtime_agent_control_sends_guarded_decision_revision():
+    from herdeck.app_control import RuntimeAgentControl
+    from herdeck.config import Config
+
+    sender = FakeSender()
+    key = AgentKey("local", "p1")
+    cfg = Config(servers=[], profiles={}, overview_order=[], grid=(5, 3))
+    agent = AgentState(key, "codex", "herdeck", Status.BLOCKED, terminal_id="term-1")
+    control = RuntimeAgentControl(
+        cfg, send=sender.send, current_agent=lambda candidate: agent if candidate == key else None
+    )
+
+    task = asyncio.create_task(control.choose_if_blocked(key, "2", "a" * 64, timeout=1))
+    await asyncio.sleep(0)
+
+    command, request_id = sender.sent[0]
+    assert command == Command(
+        "choose_if_blocked",
+        "local",
+        "p1",
+        text="2",
+        terminal_id="term-1",
+        decision_revision="a" * 64,
+    )
+    control.handle_result(request_id, {"sent": True}, server_id="local")
+    assert (await task).sent is True
+
+
+@pytest.mark.asyncio
 async def test_runtime_agent_control_uses_bounded_default_timeout(monkeypatch):
     from herdeck import app_control
     from herdeck.app_control import RuntimeAgentControl

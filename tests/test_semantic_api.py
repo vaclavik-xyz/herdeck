@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from herdeck.app_control import ActionResult
+from herdeck.commands import decision_revision
 from herdeck.model import AgentKey, AgentState, Status, WorkContext
 from herdeck.semantic_api import TEXT_MAX_BYTES, SemanticAPI
 
@@ -36,6 +37,9 @@ class FakeControl:
 
     async def send_text(self, key, text):
         return await self._call("text", key, text)
+
+    async def choose_if_blocked(self, key, choice, revision):
+        return await self._call("choose_if_blocked", key, choice, revision)
 
     async def read_prompt(self, key):
         self.calls.append(("read_prompt", key))
@@ -149,9 +153,11 @@ async def test_decisions_return_only_bounded_structured_choices_for_blocked_agen
     )
 
     assert response.status == 200
+    revision = decision_revision("local", "p1", "t1", control.prompt)
     assert response.body == {
         "api_version": "v1",
         "outcome": "ready",
+        "decision_revision": revision,
         "choices": [
             {"key": "1", "label": "Continue safely"},
             {"key": "2", "label": "Explain first"},
@@ -179,15 +185,15 @@ async def test_choose_revalidates_current_prompt_and_is_idempotent():
     agents = [agent()]
     api, control = make_api(agents)
 
-    payload = target(choice="2")
+    revision = decision_revision("local", "p1", "t1", control.prompt)
+    payload = target(choice="2", decision_revision=revision)
     chosen = await api.choose("server:a", payload)
     replay = await api.choose("server:a", payload)
 
     assert chosen.body["outcome"] == "sent"
     assert replay == chosen
     assert control.calls == [
-        ("read_prompt", AgentKey("local", "p1")),
-        ("text", AgentKey("local", "p1"), "2"),
+        ("choose_if_blocked", AgentKey("local", "p1"), "2", revision),
     ]
 
 
@@ -195,12 +201,31 @@ async def test_choose_revalidates_current_prompt_and_is_idempotent():
 async def test_choose_rejects_stale_choice_without_sending_text():
     agents = [agent()]
     api, control = make_api(agents)
+    control.result = ActionResult(False, skipped=True, message="stale_choice")
+    revision = decision_revision("local", "p1", "t1", control.prompt)
 
-    response = await api.choose("server:a", target(choice="9"))
+    response = await api.choose(
+        "server:a", target(choice="2", decision_revision=revision)
+    )
 
     assert response.status == 409
     assert response.body["outcome"] == "stale_choice"
-    assert control.calls == [("read_prompt", AgentKey("local", "p1"))]
+    assert control.calls == [
+        ("choose_if_blocked", AgentKey("local", "p1"), "2", revision)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_decisions_drop_oversized_option_keys_instead_of_truncating_them():
+    agents = [agent()]
+    api, control = make_api(agents)
+    control.prompt = "12345678901234567. Too long\n2. Safe"
+
+    response = await api.decisions(
+        {"server_id": "local", "pane_id": "p1", "terminal_id": "t1"}
+    )
+
+    assert response.body["choices"] == [{"key": "2", "label": "Safe"}]
 
 
 @pytest.mark.asyncio

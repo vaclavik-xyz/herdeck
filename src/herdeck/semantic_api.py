@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .app_control import ActionResult, RuntimeAgentControl
+from .commands import decision_revision
 from .layout import parse_options
 from .model import AgentKey, AgentState, Status
 
@@ -293,11 +294,20 @@ class SemanticAPI:
         except Exception:
             return self._outcome(502, "backend_failure", "backend request failed")
         choices = self._parse_choices(prompt)
+        current = self._resolve_target(target)
+        if isinstance(current, SemanticResponse):
+            return current
+        if current.status is not Status.BLOCKED:
+            return SemanticResponse(
+                200,
+                {"api_version": API_VERSION, "outcome": "not_blocked", "choices": []},
+            )
         return SemanticResponse(
             200,
             {
                 "api_version": API_VERSION,
                 "outcome": "ready" if choices else "no_choices",
+                "decision_revision": decision_revision(*target, prompt),
                 "choices": choices,
             },
         )
@@ -311,6 +321,7 @@ class SemanticAPI:
             "terminal_id",
             "idempotency_key",
             "choice",
+            "decision_revision",
         }
         if set(payload) - allowed:
             return self._validation("unknown fields are not allowed")
@@ -323,6 +334,16 @@ class SemanticAPI:
         choice = payload.get("choice")
         if not isinstance(choice, str) or not choice.isdecimal() or len(choice) > 16:
             return self._validation("choice must be a numeric option key", field="choice")
+        revision = payload.get("decision_revision")
+        if (
+            not isinstance(revision, str)
+            or len(revision) != 64
+            or any(character not in "0123456789abcdef" for character in revision)
+        ):
+            return self._validation(
+                "decision_revision must be an opaque decision revision",
+                field="decision_revision",
+            )
 
         fingerprint = self._fingerprint("choice", payload)
         replay = self._replay(caller, idempotency_key, fingerprint)
@@ -340,7 +361,7 @@ class SemanticAPI:
                 caller,
                 idempotency_key,
                 fingerprint,
-                self._execute_choice(target, choice),
+                self._execute_choice(target, choice, revision),
             )
         return await asyncio.shield(pending)
 
@@ -397,7 +418,7 @@ class SemanticAPI:
         return self._action_response(result)
 
     async def _execute_choice(
-        self, target: tuple[str, str, str], choice: str
+        self, target: tuple[str, str, str], choice: str, revision: str
     ) -> SemanticResponse:
         agent = self._resolve_target(target)
         if isinstance(agent, SemanticResponse):
@@ -407,17 +428,17 @@ class SemanticAPI:
         if agent.status is not Status.BLOCKED:
             return self._outcome(409, "not_blocked", "agent is no longer blocked")
         try:
-            prompt = await self._control.read_prompt(agent.key)
-            valid_choices = {item["key"] for item in self._parse_choices(prompt)}
-            if choice not in valid_choices:
-                return self._outcome(409, "stale_choice", "choice is no longer available")
-            result = await self._control.send_text(agent.key, choice)
+            result = await self._control.choose_if_blocked(agent.key, choice, revision)
         except TimeoutError:
             return self._outcome(504, "timeout", "backend request timed out")
         except (ConnectionError, OSError):
             return self._outcome(503, "backend_failure", "backend request failed")
         except Exception:
             return self._outcome(502, "backend_failure", "backend request failed")
+        if result.message == "not_blocked":
+            return self._outcome(409, "not_blocked", "agent is no longer blocked")
+        if result.message == "stale_choice":
+            return self._outcome(409, "stale_choice", "choice is no longer available")
         return self._action_response(result)
 
     def invalidate_challenges(self) -> None:
@@ -479,7 +500,7 @@ class SemanticAPI:
                 "label": _bounded(option.label, DECISION_LABEL_MAX_CHARS),
             }
             for option in parse_options(prompt)[:DECISION_MAX_CHOICES]
-            if option.key and option.label
+            if option.key and len(option.key) <= 16 and option.label
         ]
 
     def _idempotency_key(self, payload: dict) -> str | SemanticResponse:

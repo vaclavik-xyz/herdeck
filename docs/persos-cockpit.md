@@ -174,16 +174,17 @@ sequences, commands, or action variants.
 `POST /api/v1/decisions` accepts only `server_id`, `pane_id`, and
 `terminal_id`. For a currently blocked agent it reads the current prompt and
 returns at most 12 bounded numbered choices as `choices` records containing
-only `key` and `label`. It never returns the question, terminal frame, or any
-other prompt text. A non-blocked agent returns `outcome: "not_blocked"` with an
-empty list.
+only `key` and `label`, plus an opaque `decision_revision` bound to the stable
+target and complete prompt. It never returns the question, terminal frame, or
+any other prompt text. A non-blocked agent returns `outcome: "not_blocked"`
+with an empty list.
 
 `POST /api/v1/choices` accepts the same stable target, an `idempotency_key`,
-and the numeric `choice` key. Herdeck reads and parses the current prompt again
-before submitting the choice. If the agent is no longer blocked or the option
-is no longer present, the request fails closed with `not_blocked` or
-`stale_choice`; arbitrary text and stale menu keys are never submitted through
-this endpoint.
+the numeric `choice` key, and the exact `decision_revision` returned with the
+menu. The bridge reads the current prompt and rechecks blocked status
+immediately before submitting the choice. If the agent is no longer blocked or
+the menu changed, the request fails closed with `not_blocked` or `stale_choice`;
+arbitrary text and stale menu keys are never submitted through this endpoint.
 
 ### Outcomes and compatibility
 

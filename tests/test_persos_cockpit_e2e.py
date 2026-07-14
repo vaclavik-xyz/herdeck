@@ -231,6 +231,7 @@ def test_persos_cockpit_full_contract_through_prefixed_live_http(tmp_path):
         assert decisions == {
             "api_version": "v1",
             "outcome": "ready",
+            "decision_revision": decisions["decision_revision"],
             "choices": [
                 {"key": "1", "label": "Continue"},
                 {"key": "2", "label": "Explain first"},
@@ -243,6 +244,7 @@ def test_persos_cockpit_full_contract_through_prefixed_live_http(tmp_path):
             "terminal_id": "terminal-1",
             "idempotency_key": "choice-1",
             "choice": "2",
+            "decision_revision": decisions["decision_revision"],
         }
         _, chosen, _ = harness.json_request(
             "/api/v1/choices",
@@ -257,8 +259,7 @@ def test_persos_cockpit_full_contract_through_prefixed_live_http(tmp_path):
             "act_force",
             "send_text",
             "read",
-            "read",
-            "send_text",
+            "choose_if_blocked",
         ]
 
         with pytest.raises(urllib.error.HTTPError) as outside:
