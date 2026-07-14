@@ -151,6 +151,30 @@ class RuntimeAgentControl:
         )
         return self._action_result(data)
 
+    async def choose_if_blocked(
+        self,
+        key: AgentKey,
+        choice: str,
+        decision_revision: str,
+        *,
+        timeout: float | None = 3.0,
+    ) -> ActionResult:
+        agent = self.current_agent(key)
+        if agent is None:
+            return ActionResult(False, message="agent is no longer available")
+        data = await self._request(
+            Command(
+                "choose_if_blocked",
+                agent.key.server_id,
+                agent.key.pane_id,
+                text=choice,
+                terminal_id=agent.terminal_id or None,
+                decision_revision=decision_revision,
+            ),
+            timeout=timeout,
+        )
+        return self._action_result(data)
+
     async def _act(
         self,
         action: str,

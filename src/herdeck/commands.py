@@ -8,13 +8,14 @@ from .model import AgentState
 
 @dataclass
 class Command:
-    kind: str  # list|read|focus|act_if_blocked|act_force|send_text|start|switch_profile
+    kind: str  # list|read|focus|act_if_blocked|act_force|send_text|choose_if_blocked|start|switch_profile
     server_id: str
     pane_id: str | None = None
     source: str | None = None
     keys: list[str] = field(default_factory=list)
     text: str | None = None  # for send_text (macros) / start (agent name)
     terminal_id: str | None = None  # expected stable identity for pane-bound commands
+    decision_revision: str | None = None
 
 
 def command_to_msg(cmd: Command, req: str | None) -> dict:
@@ -35,6 +36,16 @@ def command_to_msg(cmd: Command, req: str | None) -> dict:
     if cmd.kind == "send_text":
         return with_identity(
             {"type": "send_text", "req": req, "pane_id": cmd.pane_id, "text": cmd.text}
+        )
+    if cmd.kind == "choose_if_blocked":
+        return with_identity(
+            {
+                "type": "choose_if_blocked",
+                "req": req,
+                "pane_id": cmd.pane_id,
+                "choice": cmd.text,
+                "decision_revision": cmd.decision_revision,
+            }
         )
     if cmd.kind == "start":
         return {"type": "start", "req": req, "name": cmd.text, "argv": cmd.keys}

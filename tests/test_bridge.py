@@ -16,6 +16,7 @@ from herdeck.bridge import (
     _worktrees_by_workspace,
     handle_client_message,
 )
+from herdeck.decisions import decision_revision
 
 
 def raw_pane(pane_id="w1:p1", agent="claude", status="blocked", cwd="/home/user/projects/api"):
@@ -617,6 +618,106 @@ async def test_send_text_calls_herdr(herdr):
     msg = json.loads(out)
     assert msg["data"]["sent"] is True
     assert herdr.sent == [("w1:p1", "continue")]
+
+
+async def test_guarded_choice_rechecks_prompt_and_blocked_status_before_send(herdr):
+    herdr.panes[0]["terminal_id"] = "term-1"
+    prompt = "Choose:\n1. Continue\n2. Explain first"
+    herdr.detection["w1:p1"] = prompt
+    revision = decision_revision("workbox", "w1:p1", "term-1", prompt)
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps(
+            {
+                "type": "choose_if_blocked",
+                "req": "c1",
+                "pane_id": "w1:p1",
+                "terminal_id": "term-1",
+                "choice": "2",
+                "decision_revision": revision,
+            }
+        ),
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    assert herdr.sent == [("w1:p1", "2")]
+
+
+async def test_guarded_choice_rejects_changed_prompt(herdr):
+    prompt = "Choose:\n1. Continue\n2. Different action"
+    herdr.detection["w1:p1"] = prompt
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps(
+            {
+                "type": "choose_if_blocked",
+                "req": "c2",
+                "pane_id": "w1:p1",
+                "choice": "2",
+                "decision_revision": decision_revision(
+                    "workbox", "w1:p1", "", "Choose:\n1. Continue\n2. Explain first"
+                ),
+            }
+        ),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "stale_choice"}
+    assert herdr.sent == []
+
+
+async def test_guarded_choice_rejects_missing_option_with_valid_revision(herdr):
+    prompt = "Choose:\n1. Continue\n2. Explain first"
+    herdr.detection["w1:p1"] = prompt
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps(
+            {
+                "type": "choose_if_blocked",
+                "req": "c-missing",
+                "pane_id": "w1:p1",
+                "choice": "999",
+                "decision_revision": decision_revision("workbox", "w1:p1", "", prompt),
+            }
+        ),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "stale_choice"}
+    assert herdr.sent == []
+
+
+async def test_guarded_choice_rejects_status_change_during_prompt_read(herdr):
+    class StatusChangingHerdr(StubHerdr):
+        async def read_pane(self, pane_id, source):
+            text = await super().read_pane(pane_id, source)
+            self.panes[0]["agent_status"] = "working"
+            return text
+
+    changing = StatusChangingHerdr([raw_pane()])
+    prompt = "Choose:\n1. Continue"
+    changing.detection["w1:p1"] = prompt
+
+    out = await handle_client_message(
+        changing,
+        "workbox",
+        json.dumps(
+            {
+                "type": "choose_if_blocked",
+                "req": "c3",
+                "pane_id": "w1:p1",
+                "choice": "1",
+                "decision_revision": decision_revision("workbox", "w1:p1", "", prompt),
+            }
+        ),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "not_blocked"}
+    assert changing.sent == []
 
 
 async def test_start_calls_herdr(herdr):

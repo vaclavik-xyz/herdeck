@@ -31,6 +31,26 @@ def test_command_to_msg_send_text():
     assert m == {"type": "send_text", "req": "r3", "pane_id": "p1", "text": "hi"}
 
 
+def test_command_to_msg_guarded_choice():
+    command = Command(
+        "choose_if_blocked",
+        "dev",
+        "p1",
+        text="2",
+        terminal_id="term-1",
+        decision_revision="a" * 64,
+    )
+
+    assert command_to_msg(command, "r4") == {
+        "type": "choose_if_blocked",
+        "req": "r4",
+        "pane_id": "p1",
+        "choice": "2",
+        "terminal_id": "term-1",
+        "decision_revision": "a" * 64,
+    }
+
+
 def test_command_to_msg_start():
     m = command_to_msg(Command("start", "dev", text="claude", keys=["claude"]), "r4")
     assert m == {"type": "start", "req": "r4", "name": "claude", "argv": ["claude"]}

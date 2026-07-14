@@ -13,6 +13,7 @@ from typing import Protocol
 
 import websockets
 
+from .decisions import decision_choices, decision_revision
 from .model import WorkContext
 from .protocol import encode
 
@@ -374,6 +375,55 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
         if await _pane_identity_changed(herdr, msg):
             return _identity_changed_result(msg)
         await herdr.send_text(msg["pane_id"], msg["text"])
+        return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
+    if kind == "choose_if_blocked":
+        pane = await herdr.get_pane(msg["pane_id"])
+        if _pane_record_identity_changed(pane, msg.get("terminal_id")):
+            return _identity_changed_result(msg)
+        if pane.get("agent_status") != "blocked":
+            return encode(
+                {
+                    "type": "result",
+                    "req": msg["req"],
+                    "data": {"skipped": True, "message": "not_blocked"},
+                }
+            )
+        prompt = await herdr.read_pane(msg["pane_id"], "detection")
+        pane = await herdr.get_pane(msg["pane_id"])
+        if _pane_record_identity_changed(pane, msg.get("terminal_id")):
+            return _identity_changed_result(msg)
+        if pane.get("agent_status") != "blocked":
+            return encode(
+                {
+                    "type": "result",
+                    "req": msg["req"],
+                    "data": {"skipped": True, "message": "not_blocked"},
+                }
+            )
+        current_revision = decision_revision(
+            server_id,
+            msg["pane_id"],
+            str(msg.get("terminal_id") or ""),
+            prompt,
+        )
+        if current_revision != msg.get("decision_revision"):
+            return encode(
+                {
+                    "type": "result",
+                    "req": msg["req"],
+                    "data": {"skipped": True, "message": "stale_choice"},
+                }
+            )
+        valid_choices = {item["key"] for item in decision_choices(prompt)}
+        if msg.get("choice") not in valid_choices:
+            return encode(
+                {
+                    "type": "result",
+                    "req": msg["req"],
+                    "data": {"skipped": True, "message": "stale_choice"},
+                }
+            )
+        await herdr.send_text(msg["pane_id"], msg["choice"])
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "start":
         await herdr.start_agent(msg["name"], msg["argv"])
