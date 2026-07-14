@@ -27,6 +27,7 @@ import {
   inheritedMacros,
   inheritedAnswerProfiles,
   DEFAULT_START_PROFILES,
+  DEFAULT_ANSWER_PROFILES,
   DEFAULT_MACROS,
   overrideStatePath,
   macroRecords,
@@ -392,13 +393,16 @@ describe("map-section serialization helpers", () => {
     expect(getAt(set, "base", "view", "tile_fields")).toEqual(["repo"]);
   });
 
-  it("startProfileRows reads name→argv rows (or [])", () => {
+  it("startProfileRows reads custom rows and exposes backend defaults when absent", () => {
     const p = parseConfig({ base: { start_profiles: { claude: ["claude"], codex: ["codex", "--x"] } } })!;
     expect(startProfileRows(p)).toEqual([
       { name: "claude", argv: ["claude"] },
       { name: "codex", argv: ["codex", "--x"] },
     ]);
-    expect(startProfileRows(parseConfig({})!)).toEqual([]);
+    expect(startProfileRows(parseConfig({})!)).toEqual(
+      Object.entries(DEFAULT_START_PROFILES).map(([name, argv]) => ({ name, argv })),
+    );
+    expect(startProfileRows(parseConfig({ base: { start_profiles: {} } })!)).toEqual([]);
   });
 
   it("answerProfileRows preserves approve_always ABSENCE as null (not [])", () => {
@@ -413,6 +417,12 @@ describe("map-section serialization helpers", () => {
     const rows = answerProfileRows(p);
     expect(rows[0].approve_always).toEqual(["2"]);
     expect(rows[1].approve_always).toBeNull(); // absent — NOT []
+  });
+
+  it("answerProfileRows exposes built-in profiles when the section is absent", () => {
+    const rows = answerProfileRows(parseConfig({})!);
+    expect(rows.map((row) => row.name)).toEqual(["claude", "codex", "default"]);
+    expect(rows[0]).toEqual({ name: "claude", ...DEFAULT_ANSWER_PROFILES.claude });
   });
 
   it("serializeNamedRows skips blank names and omits an empty section (undefined)", () => {
@@ -493,6 +503,7 @@ describe("profile CRUD", () => {
     const next = deleteProfile(p, "mobile");
     expect("active_profile" in next.local).toBe(false); // dangling selection cleared
     expect((next.local.hardware as Record<string, unknown>).brightness).toBe(70); // rest kept
+    expect(next.activeProfile).toBe("default"); // leave the deleted overlay immediately
   });
 
   it("deleteProfile keeps an unrelated local active_profile", () => {

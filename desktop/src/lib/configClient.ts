@@ -374,13 +374,17 @@ function strList(v: unknown): string[] {
 
 /** The base `start_profiles` map (`name → argv`) as editor rows. */
 export function startProfileRows(payload: ConfigPayload): StartProfileRow[] {
-  const sec = asDict((payload.base as Record<string, unknown>).start_profiles);
+  const raw = (payload.base as Record<string, unknown>).start_profiles;
+  const sec = raw == null ? DEFAULT_START_PROFILES : asDict(raw);
   return Object.entries(sec).map(([name, argv]) => ({ name, argv: strList(argv) }));
 }
 
 /** The base `answer_profiles` map as editor rows, preserving `approve_always` absence. */
 export function answerProfileRows(payload: ConfigPayload): AnswerProfileRow[] {
-  const sec = asDict((payload.base as Record<string, unknown>).answer_profiles);
+  const sec = {
+    ...DEFAULT_ANSWER_PROFILES,
+    ...asDict((payload.base as Record<string, unknown>).answer_profiles),
+  };
   return Object.entries(sec).map(([name, raw]) => {
     const o = asDict(raw);
     return {
@@ -728,7 +732,8 @@ export function deleteProfile(payload: ConfigPayload, name: string): ConfigPaylo
     base = { ...clone(payload.base) };
     delete (base as Record<string, unknown>).active_profile;
   }
-  return { ...payload, profiles, local, base };
+  const activeProfile = payload.activeProfile === name ? "default" : payload.activeProfile;
+  return { ...payload, profiles, local, base, activeProfile };
 }
 
 /** The `extends` target of profile `name` ("default" = inherit base, when absent). */

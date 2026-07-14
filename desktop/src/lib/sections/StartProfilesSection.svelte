@@ -4,7 +4,7 @@
   import OverrideField from "../fields/OverrideField.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import {
-    startProfileRows, serializeNamedRows, applyMapSection,
+    DEFAULT_START_PROFILES, startProfileRows, serializeNamedRows, applyMapSection,
     mapSectionState, setMapSectionState, inheritedStartProfiles,
     overrideValuePath, setOverridePath, clearOverridePath,
     type ConfigPayload, type StartProfileRow, type ListFieldState,
@@ -92,14 +92,30 @@
   }
   function setMode(m: ListFieldState): void {
     mode = m;
-    if (m === "custom") { commit(rows); return; } // reveal editor; rows drive the map
+    if (m === "custom") {
+      const seeded = rows.length > 0
+        ? rows
+        : Object.entries(DEFAULT_START_PROFILES).map(([name, argv]) => ({ name, argv: [...argv] }));
+      commit(seeded);
+      return;
+    }
     payload = setMapSectionState(payload, SEC, m);
     onChange();
   }
   function rename(i: number, name: string): void { commit(rows.map((r, j) => (j === i ? { ...r, name } : r))); }
   function setArgv(i: number, argv: string[]): void { commit(rows.map((r, j) => (j === i ? { ...r, argv } : r))); }
   function add(): void { commit([...rows, { name: "", argv: [] }]); }
-  function remove(i: number): void { commit(rows.filter((_, j) => j !== i)); }
+  function remove(i: number): void {
+    const next = rows.filter((_, j) => j !== i);
+    if (next.length === 0) {
+      rows = [];
+      mode = "empty";
+      payload = setMapSectionState(payload, SEC, "empty");
+      onChange();
+      return;
+    }
+    commit(next);
+  }
 
   // --- overlay mode: per-entry override (read live, no local rows) ---
   // inhMap is default-aware: when base omits start_profiles the inherited map is
