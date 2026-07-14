@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 
 import TriStateListField from "./TriStateListField.svelte";
+import TriStateListFieldHarness from "./TriStateListFieldHarness.svelte";
 
 describe("TriStateListField", () => {
   it("seeds Custom with the effective default list", () => {
@@ -69,6 +70,27 @@ describe("TriStateListField", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       flushSync();
       expect(changes).toEqual([["custom", ["repo"]]]);
+    } finally {
+      unmount(instance);
+    }
+  });
+
+  it("drops an empty local draft when the editing context changes", () => {
+    const changes: Array<[string, string[]]> = [];
+    const target = document.createElement("div");
+    const instance = mount(TriStateListFieldHarness, {
+      target,
+      props: { onchange: (state, list) => changes.push([state, list]) },
+    });
+    try {
+      (target.querySelector(".field .seg button:nth-child(2)") as HTMLButtonElement).click();
+      flushSync();
+      expect(target.querySelector(".field input")).not.toBeNull();
+
+      (target.querySelector(".switch") as HTMLButtonElement).click();
+      flushSync();
+      expect(target.querySelector(".field input")).toBeNull();
+      expect(changes).toEqual([]);
     } finally {
       unmount(instance);
     }

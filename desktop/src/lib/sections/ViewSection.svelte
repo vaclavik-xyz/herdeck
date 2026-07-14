@@ -62,8 +62,7 @@
 
   // --- overlay mode helpers ---
   function lineFallback(key: string, fields: string[]): string[] {
-    const deck = getAt(payload, "local", "local", "deck");
-    if (deck === "elgato") {
+    if (payload.runtimeDeck === "elgato-plugin") {
       if (key === "tile_primary") return ["repo"];
       if (key === "tile_secondary") return ["branch"];
     }
@@ -122,7 +121,7 @@
     <SelectField label="" value={String(scValue("language") ?? "en")} options={UI_LANGUAGES} onchange={(v) => setSc("language", v)} />
   </OverrideField>
   {#each LIST_KEYS as key}
-    <TriStateListField label={key} help={HELP[key]} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} customSeed={effectiveList(key)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint(key) })} onchange={(s, l) => setOvList(key, s, l)} />
+    <TriStateListField label={key} help={HELP[key]} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} customSeed={effectiveList(key)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint(key) })} resetKey={`${prof}:${payload.revision ?? ""}:view:${key}`} onchange={(s, l) => setOvList(key, s, l)} />
   {/each}
 {:else}
   <SelectField label="management" help={HELP.management} value={management} options={MANAGEMENT} onchange={(v) => set("management", v)} />

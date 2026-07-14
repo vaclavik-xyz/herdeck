@@ -79,6 +79,7 @@ describe("parseConfig", () => {
       secrets: {},
       envLocked: false,
       activeProfile: "default",
+      runtimeDeck: null,
       revision: null,
     });
   });
@@ -87,6 +88,11 @@ describe("parseConfig", () => {
     const c = parseConfig({ base: {}, env_locked: true, active_profile: "mobile" })!;
     expect(c.envLocked).toBe(true);
     expect(c.activeProfile).toBe("mobile");
+  });
+
+  it("parses the effective explicit runtime renderer", () => {
+    expect(parseConfig({ runtime_deck: "elgato-plugin" })!.runtimeDeck).toBe("elgato-plugin");
+    expect(parseConfig({ runtime_deck: 7 })!.runtimeDeck).toBeNull();
   });
 
   it("coerces a non-string active_profile back to default", () => {

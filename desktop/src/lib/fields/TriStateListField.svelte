@@ -3,7 +3,7 @@
   import { t } from "../i18n.svelte";
   import type { ListFieldState } from "../configClient";
 
-  let { label, state: fieldState, list, customSeed, defaultHint, inheritLabel, inheritHint, onchange, help = "" }:
+  let { label, state: fieldState, list, customSeed, defaultHint, inheritLabel, inheritHint, resetKey = "", onchange, help = "" }:
     {
       label: string;
       state: ListFieldState;
@@ -12,6 +12,7 @@
       defaultHint?: string;
       inheritLabel?: string;
       inheritHint?: string;
+      resetKey?: string;
       onchange: (state: ListFieldState, list: string[]) => void;
       help?: string;
     } = $props();
@@ -22,6 +23,14 @@
     { value: "empty", text: t("widget.off") },
   ]);
   let draft = $state<string[] | null>(null);
+  let previousResetKey = "";
+  let resetKeySeen = false;
+  $effect(() => {
+    const nextResetKey = resetKey;
+    if (resetKeySeen && nextResetKey !== previousResetKey) draft = null;
+    previousResetKey = nextResetKey;
+    resetKeySeen = true;
+  });
   const visibleState = $derived(draft === null ? fieldState : "custom");
   const visibleList = $derived(draft === null ? list : draft);
 

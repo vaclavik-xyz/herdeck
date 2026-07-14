@@ -90,7 +90,7 @@
   {/if}
 </fieldset>
 {#if overlay}
-  <TriStateListField label="server_accents" help={HELP.server_accents} state={overrideState(payload, prof, SEC, "server_accents")} list={ovAccents()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: accentHint() })} onchange={setOvAccents} />
+  <TriStateListField label="server_accents" help={HELP.server_accents} state={overrideState(payload, prof, SEC, "server_accents")} list={ovAccents()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: accentHint() })} resetKey={`${prof}:${payload.revision ?? ""}:theme:server_accents`} onchange={setOvAccents} />
 {:else}
   <ListField label="server_accents" help={HELP.server_accents} value={accents} onchange={setBaseAccents} />
 {/if}

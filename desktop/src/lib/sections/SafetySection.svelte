@@ -69,7 +69,7 @@
   <OverrideField label="approve_always" help={HELP.approve_always} state={scState("approve_always")} inheritedDisplay={hint("approve_always")} onstate={(s) => setScState("approve_always", s)}>
     <BooleanField label="" value={Boolean(scValue("approve_always"))} onchange={(v) => setSc("approve_always", v)} />
   </OverrideField>
-  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} customSeed={inheritedRcf()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("require_confirm_for") })} onchange={setOvRcf} />
+  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} customSeed={inheritedRcf()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("require_confirm_for") })} resetKey={`${prof}:${payload.revision ?? ""}:safety:require_confirm_for`} onchange={setOvRcf} />
 {:else}
   <BooleanField label="approve_always" help={HELP.approve_always} value={approveAlways} onchange={(v) => set("approve_always", v)} />
   <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={listFieldState(payload, "base", SEC, "require_confirm_for")} list={requireConfirmFor} customSeed={SAFETY_DEFAULTS.require_confirm_for as string[]} defaultHint={(SAFETY_DEFAULTS.require_confirm_for as string[]).join(" · ")} onchange={setBaseRcf} />

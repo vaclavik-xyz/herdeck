@@ -90,7 +90,7 @@
   <OverrideField label="grid" help={HELP.grid} state={scState("grid")} inheritedDisplay={hint("grid")} onstate={(s) => setScState("grid", s)}>
     <TextField label="" value={String(scValue("grid") ?? "")} oninput={(v) => setSc("grid", v)} />
   </OverrideField>
-  <TriStateListField label="overview_order" help={HELP.overview_order} state={overrideState(payload, prof, SEC, "overview_order")} list={ovOverviewList()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("overview_order") })} onchange={setOvOverview} />
+  <TriStateListField label="overview_order" help={HELP.overview_order} state={overrideState(payload, prof, SEC, "overview_order")} list={ovOverviewList()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("overview_order") })} resetKey={`${prof}:${payload.revision ?? ""}:deck:overview_order`} onchange={setOvOverview} />
 {:else}
   <TextField label="grid" help={HELP.grid} value={grid} oninput={(v) => setBase("grid", v)} />
   <TriStateListField label="overview_order" help={HELP.overview_order} state={overviewState} list={overviewOrder} defaultHint={serverHint} onchange={setBaseOverview} />

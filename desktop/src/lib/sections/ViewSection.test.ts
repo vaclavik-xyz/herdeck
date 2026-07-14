@@ -50,11 +50,11 @@ describe("ViewSection", () => {
     }
   });
 
-  it("shows Elgato's fixed repo and branch fallbacks", () => {
+  it("shows the Elgato plugin's fixed repo and branch fallbacks", () => {
     setLang("en");
     const payload = parseConfig({
       base: { view: { tile_fields: ["status"] } },
-      local: { local: { deck: "elgato" } },
+      runtime_deck: "elgato-plugin",
     })!;
     const target = document.createElement("div");
     const instance = mount(ViewSection, {

@@ -106,7 +106,17 @@ def test_read_missing_config_is_empty_for_onboarding(tmp_path, monkeypatch):
         "secrets": {},
         "env_locked": False,
         "active_profile": "default",
+        "runtime_deck": None,
     }
+
+
+def test_read_reports_effective_explicit_runtime_deck(tmp_path, monkeypatch):
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    svc = _svc(tmp_path, local='[local]\ndeck = "d200"\n')
+    assert svc.read()["runtime_deck"] == "d200"
+
+    monkeypatch.setenv("HERDECK_DECK", "elgato-plugin")
+    assert svc.read()["runtime_deck"] == "elgato-plugin"
 
 
 def test_read_reports_env_locked_and_active_profile(tmp_path, monkeypatch):

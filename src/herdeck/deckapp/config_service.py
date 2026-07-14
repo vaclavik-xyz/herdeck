@@ -90,6 +90,9 @@ class ConfigService:
             or data.get("active_profile")
             or "default"
         )
+        local_section = local.get("local")
+        local_deck = local_section.get("deck") if isinstance(local_section, dict) else None
+        runtime_deck = os.environ.get("HERDECK_DECK") or local_deck
         return {
             "base": base,
             "profiles": profiles,
@@ -97,6 +100,7 @@ class ConfigService:
             "secrets": self._secret_flags(base, profiles),
             "env_locked": env_profile is not None,
             "active_profile": active,
+            "runtime_deck": runtime_deck if isinstance(runtime_deck, str) else None,
             "revision": self.revision(),
         }
 

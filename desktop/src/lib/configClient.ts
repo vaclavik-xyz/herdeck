@@ -20,6 +20,8 @@ export interface ConfigPayload {
   envLocked: boolean;
   /** The effective active profile name (env > local > base > "default"). */
   activeProfile: string;
+  /** Effective explicit renderer selection (env > local), or null for auto-detection. */
+  runtimeDeck: string | null;
   /** On-disk content revision the payload was loaded from (staleness guard). */
   revision: string | null;
 }
@@ -55,8 +57,9 @@ export function parseConfig(raw: unknown): ConfigPayload | null {
   for (const [name, flag] of Object.entries(obj(v.secrets))) secrets[name] = parseSecretFlag(flag);
   const envLocked = v.env_locked === true;
   const activeProfile = typeof v.active_profile === "string" ? v.active_profile : "default";
+  const runtimeDeck = typeof v.runtime_deck === "string" ? v.runtime_deck : null;
   const revision = typeof v.revision === "string" ? v.revision : null;
-  return { base: obj(v.base), profiles, local: obj(v.local), secrets, envLocked, activeProfile, revision };
+  return { base: obj(v.base), profiles, local: obj(v.local), secrets, envLocked, activeProfile, runtimeDeck, revision };
 }
 
 /** Extract the `errors` string list from a `{errors: [...]}` reply, dropping
