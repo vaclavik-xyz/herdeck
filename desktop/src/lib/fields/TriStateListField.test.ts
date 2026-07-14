@@ -45,4 +45,25 @@ describe("TriStateListField", () => {
       unmount(instance);
     }
   });
+
+  it("preserves an explicitly empty effective seed", () => {
+    const changes: Array<[string, string[]]> = [];
+    const target = document.createElement("div");
+    const instance = mount(TriStateListField, {
+      target,
+      props: {
+        label: "tile_primary",
+        state: "default",
+        list: [],
+        customSeed: [],
+        onchange: (state, list) => changes.push([state, list]),
+      },
+    });
+    try {
+      (target.querySelectorAll("button")[1] as HTMLButtonElement).click();
+      expect(changes).toEqual([["custom", []]]);
+    } finally {
+      unmount(instance);
+    }
+  });
 });

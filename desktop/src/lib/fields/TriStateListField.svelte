@@ -3,7 +3,7 @@
   import { t } from "../i18n.svelte";
   import type { ListFieldState } from "../configClient";
 
-  let { label, state, list, customSeed = [], defaultHint, inheritLabel, inheritHint, onchange, help = "" }:
+  let { label, state, list, customSeed, defaultHint, inheritLabel, inheritHint, onchange, help = "" }:
     {
       label: string;
       state: ListFieldState;
@@ -29,7 +29,7 @@
   function pick(next: ListFieldState): void {
     if (next === state) return;
     if (next === "custom") {
-      onchange("custom", list.length > 0 ? list : customSeed.length > 0 ? customSeed : [""]);
+      onchange("custom", list.length > 0 ? list : customSeed !== undefined ? customSeed : [""]);
     } else {
       onchange(next, list);
     }

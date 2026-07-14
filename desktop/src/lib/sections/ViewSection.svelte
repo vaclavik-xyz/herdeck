@@ -28,8 +28,6 @@
   const VIEW_LIST_DEFAULTS: Record<string, string[]> = {
     bottom_row: ["profiles", "notifications", "safety", "theme", "new_agent"],
     tile_fields: ["repo", "branch", "status", "time", "server"],
-    tile_primary: ["repo"],
-    tile_secondary: ["branch"],
   };
 
   // Field tooltips in the current language — required for each labelled field
@@ -63,7 +61,20 @@
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
 
   // --- overlay mode helpers ---
-  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key] ?? VIEW_LIST_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
+  function lineFallback(key: string, fields: string[]): string[] {
+    if (key === "tile_primary") return fields.includes("repo") ? ["repo"] : [];
+    if (key === "tile_secondary") return fields.includes("branch") ? ["branch"] : [];
+    return VIEW_LIST_DEFAULTS[key] ?? [];
+  }
+  function baseDefaultList(key: string): string[] {
+    const fields = (getAt(payload, "base", SEC, "tile_fields") as string[]) ?? VIEW_LIST_DEFAULTS.tile_fields;
+    return lineFallback(key, fields);
+  }
+  function hint(key: string): string {
+    const inherited = inheritedFor(payload, prof, SEC, key);
+    const v = inherited ?? VIEW_DEFAULTS[key] ?? effectiveList(key);
+    return Array.isArray(v) ? v.join(" · ") || lm.none : v == null ? lm.none : String(v);
+  }
   function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
   function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? (inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key]) : v; }
   function setScState(key: string, s: "inherit" | "override"): void {
@@ -72,7 +83,12 @@
   }
   function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }
   function ovListValue(key: string): string[] { const v = overrideValue(payload, prof, SEC, key); return Array.isArray(v) ? v as string[] : []; }
-  function effectiveList(key: string): string[] { const v = inheritedFor(payload, prof, SEC, key) ?? VIEW_LIST_DEFAULTS[key]; return Array.isArray(v) ? v as string[] : []; }
+  function effectiveList(key: string): string[] {
+    const value = inheritedFor(payload, prof, SEC, key);
+    if (Array.isArray(value)) return value as string[];
+    const fields = inheritedFor(payload, prof, SEC, "tile_fields") ?? VIEW_LIST_DEFAULTS.tile_fields;
+    return lineFallback(key, Array.isArray(fields) ? fields as string[] : []);
+  }
   function setOvList(key: string, state: ListFieldState, list: string[]): void {
     payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, state === "empty" ? [] : list) };
     onChange();
@@ -110,7 +126,7 @@
   <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
   <SelectField label="language" help={HELP.language} value={uiLanguage} options={UI_LANGUAGES} onchange={(v) => set("language", v)} />
   {#each LIST_KEYS as key}
-    <TriStateListField label={key} help={HELP[key]} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? VIEW_LIST_DEFAULTS[key]} customSeed={VIEW_LIST_DEFAULTS[key]} defaultHint={VIEW_LIST_DEFAULTS[key].join(" · ")} onchange={(s, l) => setBaseTri(key, s, l)} />
+    <TriStateListField label={key} help={HELP[key]} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? baseDefaultList(key)} customSeed={baseDefaultList(key)} defaultHint={baseDefaultList(key).join(" · ")} onchange={(s, l) => setBaseTri(key, s, l)} />
   {/each}
 {/if}
 
