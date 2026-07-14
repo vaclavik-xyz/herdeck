@@ -456,7 +456,7 @@ class _FakeSource:
     connected = True
     server_id = None
 
-    def __init__(self, grid, *, tick_interval=0.4, brightness=80):
+    def __init__(self, grid, *, tick_interval=0.4, brightness=80, icons_dir=None):
         from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
 
         self._cfg = Config(
@@ -467,6 +467,7 @@ class _FakeSource:
         )
         self._cfg.hardware.tick_interval = tick_interval
         self._cfg.hardware.brightness = brightness
+        self._cfg.hardware.icons_dir = icons_dir
 
     @property
     def config(self):
@@ -598,6 +599,59 @@ def test_shorter_tick_interval_wakes_running_ticker_immediately():
     try:
         app.swap_source(_FakeSource((5, 3), tick_interval=0.01))
         assert ticked.wait(0.3)
+    finally:
+        app.close()
+
+
+def test_swap_source_rebuilds_owned_icons_before_render(monkeypatch):
+    from herdeck.deckapp import server as server_module
+
+    class Icons:
+        def __init__(self, directory):
+            self.directory = directory
+
+        def render_tile_bytes(self, tile):
+            return str(self.directory).encode()
+
+    created = []
+
+    def icons(directory=None):
+        provider = Icons(directory)
+        created.append(provider)
+        return provider
+
+    monkeypatch.setattr(server_module, "_default_icons", icons)
+    app = server_module.DeckApp(_FakeSource((5, 3), icons_dir="/old"), serve=False)
+
+    app.swap_source(_FakeSource((5, 3), icons_dir="/new"))
+
+    assert [provider.directory for provider in created] == ["/old", "/new"]
+    assert app._icons is created[-1]
+    assert set(app._tiles.values()) == {b"/new"}
+
+
+def test_mock_reload_preserves_device_local_hardware(tmp_path, monkeypatch):
+    from herdeck.deckapp import server as server_module
+
+    config_path = tmp_path / "config.toml"
+    local_path = tmp_path / "local.toml"
+    local_path.write_text(
+        '[hardware]\nbrightness = 35\ntick_interval = 1.25\n'
+    )
+    monkeypatch.setenv("HERDECK_CONFIG", str(config_path))
+    monkeypatch.setenv("HERDECK_MOCK", "1")
+    app = server_module.create_app(serve=False)
+    try:
+        assert app.config.hardware.brightness == 35
+        assert app._tick_interval == 1.25
+
+        local_path.write_text(
+            '[hardware]\nbrightness = 45\ntick_interval = 2.5\n'
+        )
+        app.reload()
+
+        assert app.config.hardware.brightness == 45
+        assert app._tick_interval == 2.5
     finally:
         app.close()
 

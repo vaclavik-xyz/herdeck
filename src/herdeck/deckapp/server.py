@@ -74,7 +74,11 @@ class DeckApp:
         # A fixed clock keeps the mock fully deterministic (stable elapsed text,
         # so repeated /state polls do not churn tile versions).
         self._orch = Orchestrator(config, slots=self._slots, clock=self._clock)
-        self._icons = icon_provider if icon_provider is not None else _default_icons()
+        self._owns_icons = icon_provider is None
+        self._icons_dir = config.hardware.icons_dir
+        self._icons = (
+            icon_provider if icon_provider is not None else _default_icons(self._icons_dir)
+        )
         self._token = token or secrets.token_urlsafe(24)
         self._config_service = config_service
         self._reloader = reloader
@@ -184,7 +188,7 @@ class DeckApp:
         with self._lock:
             self._refresh_locked()
 
-    def _render_locked(self, source, orch, slots):
+    def _render_locked(self, source, orch, slots, *, icons=None):
         """Render `source` through `orch` → (tiles, panel_png, sections). This is the
         FALLIBLE part of a refresh (apply_to / orchestrator render / icon raster / panel
         compose); apart from the value-keyed panel memo it mutates no self state, so it
@@ -201,7 +205,10 @@ class DeckApp:
         orch.set_usage(poller.snapshot() if poller is not None else [])
         source.apply_to(orch)
         rs = orch.render()
-        tiles = {t.index: self._icons.render_tile_bytes(t) for t in rs.tiles if t.index < slots}
+        icon_provider = icons if icons is not None else self._icons
+        tiles = {
+            t.index: icon_provider.render_tile_bytes(t) for t in rs.tiles if t.index < slots
+        }
         # Memoize the encoded panel by content: panel text changes every few
         # seconds at most, while refreshes run per tick — recomposing + PNG-encoding
         # an identical panel dominated the steady-state tick cost.
@@ -427,7 +434,8 @@ class DeckApp:
     def _prepare_swap(self, new_source, *, clock=None):
         """Build the orchestrator AND render `new_source` into it — all the FALLIBLE parts
         of a swap (grid parse, Orchestrator construction, render). Returns a prepared bundle
-        `(slots, orch, clock, rs, tiles, panel_png, sections)` for an assignment-only commit;
+        `(slots, orch, clock, icons, icons_dir, rs, tiles, panel_png, sections)` for an
+        assignment-only commit;
         mutates NO live deck state (throwaway orchestrator), so any failure raises here,
         BEFORE anything is swapped or persisted. Pass `clock=time.monotonic` for a LIVE
         source so its elapsed-time text advances (else a connect from the mock app keeps
@@ -436,8 +444,16 @@ class DeckApp:
         cols, rows = new_source.config.grid
         slots = cols * rows - 2
         orch = Orchestrator(new_source.config, slots=slots, clock=clk)
-        rs, tiles, panel_png, sections = self._render_locked(new_source, orch, slots)
-        return slots, orch, clk, rs, tiles, panel_png, sections
+        icons_dir = new_source.config.hardware.icons_dir
+        icons = (
+            _default_icons(icons_dir)
+            if self._owns_icons and icons_dir != self._icons_dir
+            else self._icons
+        )
+        rs, tiles, panel_png, sections = self._render_locked(
+            new_source, orch, slots, icons=icons
+        )
+        return slots, orch, clk, icons, icons_dir, rs, tiles, panel_png, sections
 
     def _commit_swap(self, new_source, prepared) -> None:
         """Assign the prepared source/orchestrator/clock + its pre-rendered tiles under the
@@ -445,7 +461,7 @@ class DeckApp:
         the post-persist swap is guaranteed not to half-swap. The single lock serializes
         against in-flight reads/presses. After applying the new tiles the sink list is
         fanned out a full frame so physical sinks repaint immediately on swap."""
-        slots, orch, clk, rs, tiles, panel_png, sections = prepared
+        slots, orch, clk, icons, icons_dir, rs, tiles, panel_png, sections = prepared
         usage_changed = self._adopt_usage_config(new_source.config)
         with self._lock:
             old = self._source
@@ -456,6 +472,8 @@ class DeckApp:
             self._slots = slots
             self._orch = orch
             self._clock = clk  # adopt the clock the orchestrator was built with
+            self._icons = icons
+            self._icons_dir = icons_dir
             new_source.attach(orch, lock=self._lock, refresh_locked=self._refresh_locked)
             self._adopt_tick_interval_locked(new_source.config.hardware.tick_interval)
             for sink in self._sinks:
@@ -797,7 +815,7 @@ class DeckApp:
         return Handler
 
 
-def _default_icons():
+def _default_icons(overrides_dir: str | None = None):
     """The shared IconProvider, configured for the mock: no network fetch, so the
     deck renders deterministically and offline (bundled SVG assets, else a letter
     glyph). Reuses herdeck.icons — no rendering logic is reimplemented here.
@@ -817,6 +835,9 @@ def _default_icons():
         return IconProvider(
             cache_dir=cache,
             slug_map=DEFAULT_AGENT_SLUGS,
+            overrides_dir=(
+                os.path.abspath(os.path.expanduser(overrides_dir)) if overrides_dir else None
+            ),
             fetch=lambda slug: None,  # offline-first when frozen
             rasterize=make_png_rasterizer(baked),
             assets_dir=baked,
@@ -825,8 +846,32 @@ def _default_icons():
     return IconProvider(
         cache_dir=cache,
         slug_map=DEFAULT_AGENT_SLUGS,
+        overrides_dir=(
+            os.path.abspath(os.path.expanduser(overrides_dir)) if overrides_dir else None
+        ),
         fetch=lambda slug: None,  # mock stays offline + deterministic
     )
+
+
+def _device_local_hardware(config_service=None):
+    import tomllib
+    from pathlib import Path
+
+    from ..settings import load_local_hardware
+
+    local_path = getattr(config_service, "_local_path", None) or _default_config_paths()[1]
+    hardware = load_local_hardware(local_path)
+    try:
+        data = tomllib.loads(Path(local_path).read_text(encoding="utf-8"))
+        section = data.get("hardware")
+        explicit_tick = isinstance(section, dict) and "tick_interval" in section
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        explicit_tick = False
+    if not explicit_tick:
+        # Mock/demo mode stays deterministic unless the user explicitly opts
+        # into a ticker in local.toml.
+        hardware.tick_interval = 0.0
+    return hardware
 
 
 def create_mock_app(
@@ -841,12 +886,14 @@ def create_mock_app(
     """Build a serving DeckApp backed by the deterministic MockSource."""
     from .mock import MockSource
 
+    hardware = _device_local_hardware(config_service)
     return DeckApp(
-        MockSource(),
+        MockSource(hardware),
         host=host,
         port=port,
         icon_provider=icon_provider,
         serve=serve,
+        tick_interval=hardware.tick_interval,
         config_service=config_service,
         reloader=reloader,
     )
@@ -1013,7 +1060,7 @@ def _select_source():
         return build_live_source(kind[1], kind[2])
     from .mock import MockSource
 
-    return MockSource()
+    return MockSource(_device_local_hardware())
 
 
 def _load_partial_config():

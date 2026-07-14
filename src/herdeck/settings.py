@@ -373,6 +373,17 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
     )
 
 
+def load_local_hardware(path: str | Path | None) -> HardwareConfig:
+    """Load only device-local hardware, independent of servers and their tokens."""
+    if path is None:
+        return HardwareConfig()
+    try:
+        data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+        return _hardware_config(data)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ConfigError):
+        return HardwareConfig()
+
+
 _OVERLAY_SECTIONS = (
     "deck",
     "answer_profiles",

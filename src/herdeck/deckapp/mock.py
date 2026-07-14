@@ -4,6 +4,7 @@ from .. import layout
 from ..config import (
     DEFAULT_PROFILES,
     Config,
+    HardwareConfig,
     ServerConfig,
 )
 from ..model import AgentKey, AgentState, Status
@@ -64,7 +65,7 @@ def demo_agents() -> list[AgentState]:
     ]
 
 
-def mock_config() -> Config:
+def mock_config(hardware: HardwareConfig | None = None) -> Config:
     """A minimal Config wired to the two demo servers, with built-in defaults for
     everything else, so the core Orchestrator renders the mock fleet exactly as a
     real deck would. The server tokens are empty (no secret in mock)."""
@@ -74,6 +75,7 @@ def mock_config() -> Config:
         profiles=dict(DEFAULT_PROFILES),
         overview_order=list(MOCK_SERVERS),
         grid=(5, 3),
+        hardware=hardware or HardwareConfig(),
     )
 
 
@@ -87,9 +89,9 @@ class MockSource(StateSource):
 
     source_name = "mock"
 
-    def __init__(self) -> None:
+    def __init__(self, hardware: HardwareConfig | None = None) -> None:
         self._agents = demo_agents()
-        self._config = mock_config()
+        self._config = mock_config(hardware)
 
     @property
     def config(self) -> Config:

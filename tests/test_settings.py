@@ -10,6 +10,7 @@ from herdeck.settings import (
     _view_config,
     list_profiles,
     load_settings,
+    load_local_hardware,
     resolve_profile,
     set_active_profile,
     validate_settings,
@@ -175,6 +176,18 @@ def test_hardware_allows_automatic_web_port(tmp_path):
     local = write(tmp_path / "local.toml", "[local]\nweb_port = 0\n")
 
     assert resolve_profile(load_settings(config, local)).config.hardware.web_port == 0
+
+
+def test_load_local_hardware_does_not_resolve_remote_tokens(tmp_path):
+    local = write(
+        tmp_path / "local.toml",
+        '[local]\nherdr_socket = "/tmp/herdr.sock"\n[hardware]\nbrightness = 35\n',
+    )
+
+    hardware = load_local_hardware(local)
+
+    assert hardware.herdr_socket == "/tmp/herdr.sock"
+    assert hardware.brightness == 35
 
 
 def test_missing_token_still_fails_without_secret_value(tmp_path, monkeypatch):
