@@ -330,9 +330,9 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
 
     web_port = raw.get("web_port")
     if web_port is not None and (
-        not isinstance(web_port, int) or isinstance(web_port, bool) or not 1 <= web_port <= 65535
+        not isinstance(web_port, int) or isinstance(web_port, bool) or not 0 <= web_port <= 65535
     ):
-        raise ConfigError("local.web_port must be an integer from 1 to 65535")
+        raise ConfigError("local.web_port must be an integer from 0 to 65535")
 
     brightness = hw.get("brightness", 80)
     if (
@@ -343,10 +343,10 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
         raise ConfigError("hardware.brightness must be an integer from 0 to 100")
 
     intervals = {}
-    for key, default in (
-        ("debounce", 0.25),
-        ("keep_alive_interval", 5.0),
-        ("tick_interval", 0.4),
+    for key, default, maximum in (
+        ("debounce", 0.25, 60.0),
+        ("keep_alive_interval", 5.0, 86400.0),
+        ("tick_interval", 0.4, 60.0),
     ):
         value = hw.get(key, default)
         if (
@@ -354,8 +354,11 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
             or isinstance(value, bool)
             or not math.isfinite(float(value))
             or value <= 0
+            or value > maximum
         ):
-            raise ConfigError(f"hardware.{key} must be a positive number")
+            raise ConfigError(
+                f"hardware.{key} must be a positive number no greater than {maximum:g}"
+            )
         intervals[key] = float(value)
 
     return HardwareConfig(
