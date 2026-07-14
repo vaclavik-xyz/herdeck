@@ -5,6 +5,8 @@
     onchange,
     int = false,
     step = 1,
+    min,
+    max,
     help = "",
   }: {
     label: string;
@@ -12,6 +14,8 @@
     onchange: (v: number | null) => void;
     int?: boolean;
     step?: number;
+    min?: number;
+    max?: number;
     help?: string;
   } = $props();
 
@@ -35,6 +39,8 @@
   <input
     type="number"
     {step}
+    {min}
+    {max}
     value={value ?? ""}
     onchange={(e) => emit((e.target as HTMLInputElement).value)}
   />

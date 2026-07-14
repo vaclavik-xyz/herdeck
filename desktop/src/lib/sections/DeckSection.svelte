@@ -14,6 +14,13 @@
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
 
   const SEC = "deck";
+  const DEFAULT_GRID = "5x3";
+  const HARDWARE_DEFAULTS = {
+    brightness: 80,
+    debounce: 0.25,
+    keep_alive_interval: 5.0,
+    tick_interval: 0.4,
+  } as const;
 
   // Field tooltips in the current language — required for each labelled field
   // (enforced by sections.help.test.ts); texts live in help.ts under "deck".
@@ -44,18 +51,22 @@
   const serverHint = $derived(serversOf(payload).map((s) => s.id).filter((id) => id !== "").join(" · "));
 
   // --- base mode (grid + overview_order) ---
-  const grid = $derived((getAt(payload, "base", SEC, "grid") as string) ?? "");
+  const grid = $derived((getAt(payload, "base", SEC, "grid") as string) ?? DEFAULT_GRID);
   const overviewState = $derived(listFieldState(payload, "base", SEC, "overview_order"));
   const overviewOrder = $derived((getAt(payload, "base", SEC, "overview_order") as string[]) ?? []);
   function setBase(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseOverview(state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, "overview_order", state, list); onChange(); }
 
   // --- overlay helpers (grid + overview_order) ---
-  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key); return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
+  function inheritedScalar(key: string): unknown {
+    const v = inheritedFor(payload, prof, SEC, key);
+    return key === "grid" && v === undefined ? DEFAULT_GRID : v;
+  }
+  function hint(key: string): string { const v = inheritedScalar(key); return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
   function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
-  function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? inheritedFor(payload, prof, SEC, key) : v; }
+  function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? inheritedScalar(key) : v; }
   function setScState(key: string, s: "inherit" | "override"): void {
-    payload = { ...payload, profiles: s === "inherit" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, inheritedFor(payload, prof, SEC, key)) };
+    payload = { ...payload, profiles: s === "inherit" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, inheritedScalar(key)) };
     onChange();
   }
   function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }
@@ -71,10 +82,10 @@
   const hwBind = $derived((getAt(payload, "local", "local", "web_bind") as string) ?? "");
   const hwIcons = $derived((getAt(payload, "local", "local", "icons_dir") as string) ?? "");
   const hwPort = $derived((getAt(payload, "local", "local", "web_port") as number | null) ?? null);
-  const brightness = $derived((getAt(payload, "local", "hardware", "brightness") as number | null) ?? null);
-  const debounce = $derived((getAt(payload, "local", "hardware", "debounce") as number | null) ?? null);
-  const keepAlive = $derived((getAt(payload, "local", "hardware", "keep_alive_interval") as number | null) ?? null);
-  const tick = $derived((getAt(payload, "local", "hardware", "tick_interval") as number | null) ?? null);
+  const brightness = $derived((getAt(payload, "local", "hardware", "brightness") as number | null) ?? HARDWARE_DEFAULTS.brightness);
+  const debounce = $derived((getAt(payload, "local", "hardware", "debounce") as number | null) ?? HARDWARE_DEFAULTS.debounce);
+  const keepAlive = $derived((getAt(payload, "local", "hardware", "keep_alive_interval") as number | null) ?? HARDWARE_DEFAULTS.keep_alive_interval);
+  const tick = $derived((getAt(payload, "local", "hardware", "tick_interval") as number | null) ?? HARDWARE_DEFAULTS.tick_interval);
   function setLocalStr(table: string, key: string, v: string): void {
     payload = v.trim() === "" ? removeAt(payload, "local", table, key) : setAt(payload, "local", table, key, v);
     onChange();
@@ -102,12 +113,12 @@
   <TextField label="deck" help={HELP.deck} value={hwDeck} oninput={(v) => setLocalStr("local", "deck", v)} />
   <TextField label="herdr_socket" help={HELP.herdr_socket} value={hwSocket} oninput={(v) => setLocalStr("local", "herdr_socket", v)} />
   <TextField label="web_bind" help={HELP.web_bind} value={hwBind} oninput={(v) => setLocalStr("local", "web_bind", v)} />
-  <NumberField label="web_port" help={HELP.web_port} value={hwPort} int onchange={(v) => setLocalNum("local", "web_port", v)} />
+  <NumberField label="web_port" help={HELP.web_port} value={hwPort} int min={0} max={65535} onchange={(v) => setLocalNum("local", "web_port", v)} />
   <TextField label="icons_dir" help={HELP.icons_dir} value={hwIcons} oninput={(v) => setLocalStr("local", "icons_dir", v)} />
-  <NumberField label="brightness" help={HELP.brightness} value={brightness} int onchange={(v) => setLocalNum("hardware", "brightness", v)} />
-  <NumberField label="debounce" help={HELP.debounce} value={debounce} step={0.05} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
-  <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step={0.5} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
-  <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step={0.05} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
+  <NumberField label="brightness" help={HELP.brightness} value={brightness} int min={0} max={100} onchange={(v) => setLocalNum("hardware", "brightness", v)} />
+  <NumberField label="debounce" help={HELP.debounce} value={debounce} step={0.05} min={0.001} max={60} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
+  <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step={0.5} min={0.001} max={86400} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
+  <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step={0.05} min={0.001} max={60} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
 </fieldset>
 
 <style>
