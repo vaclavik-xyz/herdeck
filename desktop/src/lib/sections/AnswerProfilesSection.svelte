@@ -5,7 +5,7 @@
   import OverrideField from "../fields/OverrideField.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import {
-    answerProfileRows, serializeNamedRows, applyMapSection,
+    DEFAULT_ANSWER_PROFILES, answerProfileRows, serializeNamedRows, applyMapSection,
     inheritedAnswerProfiles, overrideValuePath, setOverridePath, clearOverridePath,
     type ConfigPayload, type AnswerProfileRow, type ListFieldState,
   } from "../configClient";
@@ -106,6 +106,7 @@
   function add(): void {
     commit([...rows, { name: "", approve: [], deny: [], stop: [], approve_always: null }]);
   }
+  function isBuiltIn(name: string): boolean { return name in DEFAULT_ANSWER_PROFILES; }
   function remove(i: number): void { commit(rows.filter((_, j) => j !== i)); }
 
   // --- overlay mode: per-entry override (whole entry dict) ---
@@ -208,7 +209,7 @@
   <p class="hint">{lm.base_hint}</p>
   {#each rows as e, i (i)}
     <fieldset>
-      <legend>{e.name || lm.new_profile} <button type="button" title={lm.remove_profile} onclick={() => remove(i)}>×</button></legend>
+      <legend>{e.name || lm.new_profile}{#if !isBuiltIn(e.name)} <button type="button" title={lm.remove_profile} onclick={() => remove(i)}>×</button>{/if}</legend>
       <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
       {#if e.name.trim() !== ""}
         {#each LIST_KEYS as k}
