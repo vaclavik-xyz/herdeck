@@ -50,8 +50,13 @@ class StateSource(ABC):
         """Push the current agent state into the orchestrator."""
 
     @abstractmethod
-    def press(self, index: int) -> None:
-        """Handle a tile press. Out-of-range indices must be ignored."""
+    def press(self, index: int):
+        """Handle a tile press and optionally return local-only commands.
+
+        Out-of-range indices must be ignored. Bridge-backed sources return
+        commands such as ``switch_profile`` for the owning DeckApp to execute
+        after releasing its render lock.
+        """
 
     @abstractmethod
     def summary(self) -> dict:

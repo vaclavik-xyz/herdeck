@@ -130,10 +130,10 @@ class LiveSource(StateSource):
         orch.apply_snapshot(self._server.id, states)
         orch.set_connection(self._server.id, connected)
 
-    def press(self, index: int) -> None:
+    def press(self, index: int) -> list[Command]:
         orch, runner = self._orch, self._runner
         if orch is None or runner is None:
-            return
+            return []
         was_drilling = orch.is_drilling()
         cmds = orch.on_press(index)
         # If this press just opened a drill into a blocked pane whose prompt we
@@ -142,14 +142,19 @@ class LiveSource(StateSource):
         # read (in cmds) still fires as a refresh, correcting any in-place change.
         if not was_drilling:
             self._seed_detection_from_preread(orch)
+        local_commands: list[Command] = []
         for cmd in cmds:
             try:
                 msg = command_to_msg(cmd, self._next_req(cmd))
             except ValueError:
-                # Local-only commands (e.g. switch_profile) are not bridge messages;
-                # phase 1 does not reload config from the deck, so they are ignored.
+                # Local-only commands are handed back to DeckApp. It executes
+                # them after releasing the render lock, because a profile switch
+                # swaps the source and needs to acquire that same lock.
+                if cmd.kind == "switch_profile":
+                    local_commands.append(cmd)
                 continue
             runner.send(msg)
+        return local_commands
 
     def _seed_detection_from_preread(self, orch) -> None:
         """Paint a freshly-opened blocked drill from the pre-read cache (caller holds

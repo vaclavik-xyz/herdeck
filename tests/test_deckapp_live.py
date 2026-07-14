@@ -685,10 +685,10 @@ def test_snapshot_transition_is_atomic_under_deck_lock():
         assert set(src._agents) == {AgentKey(server.id, "p1")}
 
 
-# --- non-bridge commands (switch_profile) must not crash the press ------------
+# --- non-bridge commands (switch_profile) return to the owning DeckApp --------
 
 
-def test_press_skips_local_only_commands(monkeypatch):
+def test_press_returns_local_only_commands_without_sending_them(monkeypatch):
     from herdeck.commands import Command
 
     app, src, server, runner = make_live()
@@ -697,8 +697,38 @@ def test_press_skips_local_only_commands(monkeypatch):
         "on_press",
         lambda i: [Command("focus", server.id, "p0"), Command("switch_profile", "x", text="x")],
     )
-    src.press(0)  # switch_profile is local-only -> skipped, not sent, no crash
+    local = src.press(0)
     assert [m["type"] for m in runner.sent] == ["focus"]
+    assert [(cmd.kind, cmd.text) for cmd in local] == [("switch_profile", "x")]
+
+
+def test_deck_profile_switch_persists_and_reloads_after_press(monkeypatch):
+    from herdeck.commands import Command
+
+    app, src, _, _ = make_live()
+    calls = []
+
+    class ConfigService:
+        def set_active(self, name):
+            calls.append(("set_active", name))
+            return True
+
+    class Watcher:
+        def resync(self):
+            calls.append(("resync",))
+
+    app._config_service = ConfigService()
+    app._reloader = lambda: calls.append(("reload",))
+    app._watcher = Watcher()
+    monkeypatch.setattr(
+        src._orch,
+        "on_press",
+        lambda i: [Command("switch_profile", "mobile", text="mobile")],
+    )
+
+    app.press(0)
+
+    assert calls == [("set_active", "mobile"), ("reload",), ("resync",)]
 
 
 # --- offline handling -------------------------------------------------------

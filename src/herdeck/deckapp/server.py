@@ -287,10 +287,29 @@ class DeckApp:
     def press(self, index: int) -> None:
         """Inject a press (called from the HTTP thread). Out-of-range/crafted
         indices are ignored; valid ones update mock state and re-render."""
+        local_commands = []
         if 0 <= index < self._slots + 2:
             with self._lock:
-                self._source.press(index)
+                local_commands = self._source.press(index) or []
                 self._refresh_locked()
+        for command in local_commands:
+            if command.kind == "switch_profile":
+                self._switch_profile_from_deck(command.text or command.server_id)
+
+    def _switch_profile_from_deck(self, name: str) -> None:
+        """Persist and immediately apply a profile selected on the physical deck."""
+        if self._config_service is None:
+            return
+        try:
+            with self._setup_lock:
+                if not self._config_service.set_active(name):
+                    return
+                self.reload()
+                watcher = getattr(self, "_watcher", None)
+                if watcher is not None:
+                    watcher.resync()
+        except (ConfigError, OSError):
+            log.warning("deck profile switch failed for %s", name, exc_info=True)
 
     def close(self) -> None:
         ticker = getattr(self, "_ticker_thread", None)
