@@ -59,4 +59,26 @@ describe("DeckSection", () => {
       unmount(instance);
     }
   });
+
+  it("accepts positive interval overrides below the displayed defaults", () => {
+    const target = document.createElement("div");
+    const instance = mount(DeckSection, {
+      target,
+      props: {
+        payload: parseConfig({ local: { hardware: { debounce: 0.01, tick_interval: 0.01 } } })!,
+        onChange: () => {},
+        onError: () => {},
+      },
+    });
+    try {
+      for (const label of ["debounce", "tick_interval"]) {
+        const input = inputFor(target, label);
+        expect(input.value).toBe("0.01");
+        expect(input.step).toBe("any");
+        expect(input.validity.rangeUnderflow).toBe(false);
+      }
+    } finally {
+      unmount(instance);
+    }
+  });
 });

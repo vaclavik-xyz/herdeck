@@ -13,7 +13,7 @@
     value: number | null;
     onchange: (v: number | null) => void;
     int?: boolean;
-    step?: number;
+    step?: number | "any";
     min?: number;
     max?: number;
     help?: string;
