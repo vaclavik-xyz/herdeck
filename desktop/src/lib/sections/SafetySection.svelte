@@ -1,10 +1,9 @@
 <script lang="ts">
   import BooleanField from "../fields/BooleanField.svelte";
-  import ListField from "../fields/ListField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import {
-    getAt, setAt, putList,
+    getAt, setAt, listFieldState, setListField,
     inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
     type ListFieldState, type ConfigPayload,
   } from "../configClient";
@@ -18,7 +17,10 @@
   const prof = $derived(editProfile ?? "");
 
   // Mirror of backend defaults (settings.py _safety_config) — keep in sync.
-  const SAFETY_DEFAULTS: Record<string, unknown> = { approve_always: true };
+  const SAFETY_DEFAULTS: Record<string, unknown> = {
+    approve_always: true,
+    require_confirm_for: ["act_force"],
+  };
 
   // Tooltips for every field come from the central catalog (help.ts) in the
   // current language — required for each labelled field
@@ -41,11 +43,10 @@
   });
   const lm = $derived(LM[locale.lang]);
 
-  // --- base mode: UNCHANGED from today (ListField + putList) ---
   const approveAlways = $derived((getAt(payload, "base", SEC, "approve_always") as boolean) ?? true);
-  const requireConfirmFor = $derived((getAt(payload, "base", SEC, "require_confirm_for") as string[]) ?? []);
+  const requireConfirmFor = $derived((getAt(payload, "base", SEC, "require_confirm_for") as string[]) ?? SAFETY_DEFAULTS.require_confirm_for as string[]);
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
-  function setBaseRcf(list: string[]): void { payload = putList(payload, "base", SEC, "require_confirm_for", list); onChange(); }
+  function setBaseRcf(state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, "require_confirm_for", state, list); onChange(); }
 
   function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? SAFETY_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
   function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
@@ -56,6 +57,7 @@
   }
   function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }
   function ovRcfList(): string[] { const v = overrideValue(payload, prof, SEC, "require_confirm_for"); return Array.isArray(v) ? v as string[] : []; }
+  function inheritedRcf(): string[] { const v = inheritedFor(payload, prof, SEC, "require_confirm_for") ?? SAFETY_DEFAULTS.require_confirm_for; return Array.isArray(v) ? v as string[] : []; }
   function setOvRcf(state: ListFieldState, list: string[]): void {
     payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, "require_confirm_for") : setOverride(payload.profiles, prof, SEC, "require_confirm_for", state === "empty" ? [] : list) };
     onChange();
@@ -67,10 +69,10 @@
   <OverrideField label="approve_always" help={HELP.approve_always} state={scState("approve_always")} inheritedDisplay={hint("approve_always")} onstate={(s) => setScState("approve_always", s)}>
     <BooleanField label="" value={Boolean(scValue("approve_always"))} onchange={(v) => setSc("approve_always", v)} />
   </OverrideField>
-  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("require_confirm_for") })} onchange={setOvRcf} />
+  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} customSeed={inheritedRcf()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("require_confirm_for") })} onchange={setOvRcf} />
 {:else}
   <BooleanField label="approve_always" help={HELP.approve_always} value={approveAlways} onchange={(v) => set("approve_always", v)} />
-  <ListField label="require_confirm_for" help={HELP.require_confirm_for} value={requireConfirmFor} onchange={setBaseRcf} />
+  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={listFieldState(payload, "base", SEC, "require_confirm_for")} list={requireConfirmFor} customSeed={SAFETY_DEFAULTS.require_confirm_for as string[]} defaultHint={(SAFETY_DEFAULTS.require_confirm_for as string[]).join(" · ")} onchange={setBaseRcf} />
 {/if}
 
 <style>
