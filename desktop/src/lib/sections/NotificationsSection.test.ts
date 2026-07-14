@@ -138,7 +138,7 @@ describe("NotificationsSection", () => {
       flushSync();
 
       const draft = JSON.parse(target.querySelector(".profile-telegram")?.textContent ?? "null");
-      expect(draft.message_thread_id).toBeNull();
+      expect(draft.message_thread_id).toBe(0);
       expect(draft.allowed_user_ids).toEqual([]);
     } finally {
       unmount(instance);

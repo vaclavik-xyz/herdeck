@@ -119,6 +119,34 @@ def test_read_reports_effective_explicit_runtime_deck(tmp_path, monkeypatch):
     assert svc.read()["runtime_deck"] == "elgato-plugin"
 
 
+def test_write_persists_profile_main_chat_override_as_zero(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "real")
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    svc = _svc(tmp_path)
+    payload = svc.read()
+    payload["profiles"]["mobile"].setdefault("notifications", {})["telegram"] = {
+        "message_thread_id": 0,
+    }
+
+    errors = svc.write(
+        {
+            "base": payload["base"],
+            "profiles": payload["profiles"],
+            "local": payload["local"],
+            "revision": payload["revision"],
+        }
+    )
+
+    assert errors == []
+    written = _tomllib.loads((tmp_path / "config.toml").read_text())
+    assert written["profiles"]["mobile"]["notifications"]["telegram"]["message_thread_id"] == 0
+
+    from herdeck.settings import load_settings, resolve_profile
+
+    resolved = resolve_profile(load_settings(tmp_path / "config.toml", tmp_path / "local.toml"), "mobile")
+    assert resolved.config.notifications.telegram.message_thread_id is None
+
+
 def test_read_reports_env_locked_and_active_profile(tmp_path, monkeypatch):
     monkeypatch.delenv("TOK", raising=False)
     monkeypatch.delenv("TG", raising=False)

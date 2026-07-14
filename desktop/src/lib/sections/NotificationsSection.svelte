@@ -26,7 +26,7 @@
   const NOTIF_DEFAULTS: Record<string, boolean> = { enabled: false, sound: true };
   const NOTIF_LIST_DEFAULTS: Record<string, string[]> = { on: ["blocked"], backends: ["macos"] };
   const TELEGRAM_DEFAULTS: Record<string, unknown> = {
-    message_thread_id: null,
+    message_thread_id: 0,
     interactive: false,
     allowed_user_ids: [],
     prompt_max_chars: 1200,
@@ -178,6 +178,7 @@
   }
   function tgNumber(k: string): number | null {
     const value = tgRaw(k);
+    if (k === "message_thread_id" && value === 0) return null;
     return typeof value === "number" ? value : null;
   }
   function tgBoolean(k: string): boolean { return tgRaw(k) === true; }
@@ -242,7 +243,7 @@
     />
     <TextField label={`chat_id (${tgOrigin("chat_id")})`} help={HELP.chat_id} value={tgValue("chat_id")} oninput={(v) => setTg("chat_id", v)} />
     <OverrideField label="message_thread_id" help={HELP.message_thread_id} state={tgFieldState("message_thread_id")} inheritedDisplay={tgInheritedDisplay("message_thread_id")} onstate={(s) => setTgFieldState("message_thread_id", s)}>
-      <NumberField label="" int value={tgNumber("message_thread_id")} onchange={(v) => setTgScalar("message_thread_id", v)} />
+      <NumberField label="" int value={tgNumber("message_thread_id")} onchange={(v) => setTgScalar("message_thread_id", v ?? 0)} />
     </OverrideField>
     <OverrideField label="interactive" help={HELP.interactive} state={tgFieldState("interactive")} inheritedDisplay={tgInheritedDisplay("interactive")} onstate={(s) => setTgFieldState("interactive", s)}>
       <BooleanField label="" value={tgBoolean("interactive")} onchange={(v) => setTgScalar("interactive", v)} />
