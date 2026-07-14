@@ -55,9 +55,9 @@
 
   const enabled = $derived((getAt(payload, "base", "notifications", "enabled") as boolean) ?? false);
   const sound = $derived((getAt(payload, "base", "notifications", "sound") as boolean) ?? true);
-  const on = $derived((getAt(payload, "base", "notifications", "on") as string[]) ?? []);
+  const on = $derived((getAt(payload, "base", "notifications", "on") as string[]) ?? NOTIF_LIST_DEFAULTS.on);
   const onState = $derived(listFieldState(payload, "base", "notifications", "on"));
-  const backends = $derived((getAt(payload, "base", "notifications", "backends") as string[]) ?? []);
+  const backends = $derived((getAt(payload, "base", "notifications", "backends") as string[]) ?? NOTIF_LIST_DEFAULTS.backends);
   const backendsState = $derived(listFieldState(payload, "base", "notifications", "backends"));
 
   const telegram = $derived(((): { token_env: string; chat_id: string } => {
@@ -110,6 +110,7 @@
 
   // --- overlay list (on/backends) ---
   function listHint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? NOTIF_LIST_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : lm.none; }
+  function effectiveList(key: string): string[] { const v = inheritedFor(payload, prof, SEC, key) ?? NOTIF_LIST_DEFAULTS[key]; return Array.isArray(v) ? v as string[] : []; }
   function ovList(key: string): string[] { const v = overrideValue(payload, prof, SEC, key); return Array.isArray(v) ? (v as string[]) : []; }
   function setOvList(key: string, state: ListFieldState, list: string[]): void {
     payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, state === "empty" ? [] : list) };
@@ -148,8 +149,8 @@
   <OverrideField label="sound" help={HELP.sound} state={scState("sound")} inheritedDisplay={scHint("sound")} onstate={(s) => setScState("sound", s)}>
     <BooleanField label="" value={scBool("sound")} onchange={(v) => setSc("sound", v)} />
   </OverrideField>
-  <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} onchange={(s, l) => setOvList("on", s, l)} />
-  <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} onchange={(s, l) => setOvList("backends", s, l)} />
+  <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} customSeed={effectiveList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} onchange={(s, l) => setOvList("on", s, l)} />
+  <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} customSeed={effectiveList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} onchange={(s, l) => setOvList("backends", s, l)} />
   <fieldset class="tg">
     <legend>Telegram</legend>
     <p class="hint">{lm.tg_hint}</p>
@@ -167,8 +168,8 @@
 {:else}
   <BooleanField label="enabled" help={HELP.enabled} value={enabled} onchange={(v) => set("enabled", v)} />
   <BooleanField label="sound" help={HELP.sound} value={sound} onchange={(v) => set("sound", v)} />
-  <TriStateListField label="on" help={HELP.on} state={onState} list={on} onchange={(s, l) => setTri("on", s, l)} />
-  <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} onchange={(s, l) => setTri("backends", s, l)} />
+  <TriStateListField label="on" help={HELP.on} state={onState} list={on} customSeed={NOTIF_LIST_DEFAULTS.on} defaultHint={NOTIF_LIST_DEFAULTS.on.join(" · ")} onchange={(s, l) => setTri("on", s, l)} />
+  <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} onchange={(s, l) => setTri("backends", s, l)} />
   <fieldset class="tg">
     <legend>Telegram</legend>
     <TokenSecretField label="token" help={HELP.token} value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />

@@ -24,7 +24,13 @@
   const prof = $derived(editProfile ?? "");
 
   // Mirror of backend defaults (config.py ViewConfig) — keep in sync.
-  const VIEW_DEFAULTS: Record<string, unknown> = { management: "launcher_menu", agent_slots: "max", show_profile_on_panel: false, working_animation: "spin", tile_fill: "none" };
+  const VIEW_DEFAULTS: Record<string, unknown> = { management: "launcher_menu", agent_slots: "max", show_profile_on_panel: false, working_animation: "spin", tile_fill: "none", language: "en" };
+  const VIEW_LIST_DEFAULTS: Record<string, string[]> = {
+    bottom_row: ["profiles", "notifications", "safety", "theme", "new_agent"],
+    tile_fields: ["repo", "branch", "status", "time", "server"],
+    tile_primary: ["repo"],
+    tile_secondary: ["branch"],
+  };
 
   // Field tooltips in the current language — required for each labelled field
   // (enforced by sections.help.test.ts); texts live in help.ts under "view".
@@ -48,7 +54,7 @@
 
   // --- base mode (unchanged from α) ---
   const management = $derived((getAt(payload, "base", SEC, "management") as string) ?? "launcher_menu");
-  const agentSlots = $derived((getAt(payload, "base", SEC, "agent_slots") as string) ?? "");
+  const agentSlots = $derived((getAt(payload, "base", SEC, "agent_slots") as string) ?? "max");
   const showProfile = $derived((getAt(payload, "base", SEC, "show_profile_on_panel") as boolean) ?? false);
   const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? "spin");
   const tileFill = $derived((getAt(payload, "base", SEC, "tile_fill") as string) ?? "none");
@@ -57,7 +63,7 @@
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
 
   // --- overlay mode helpers ---
-  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
+  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key] ?? VIEW_LIST_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
   function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
   function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? (inheritedFor(payload, prof, SEC, key) ?? VIEW_DEFAULTS[key]) : v; }
   function setScState(key: string, s: "inherit" | "override"): void {
@@ -66,6 +72,7 @@
   }
   function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }
   function ovListValue(key: string): string[] { const v = overrideValue(payload, prof, SEC, key); return Array.isArray(v) ? v as string[] : []; }
+  function effectiveList(key: string): string[] { const v = inheritedFor(payload, prof, SEC, key) ?? VIEW_LIST_DEFAULTS[key]; return Array.isArray(v) ? v as string[] : []; }
   function setOvList(key: string, state: ListFieldState, list: string[]): void {
     payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, state === "empty" ? [] : list) };
     onChange();
@@ -89,8 +96,11 @@
   <OverrideField label="tile_fill" help={HELP.tile_fill} state={scState("tile_fill")} inheritedDisplay={hint("tile_fill")} onstate={(s) => setScState("tile_fill", s)}>
     <SelectField label="" value={String(scValue("tile_fill") ?? "none")} options={TILE_FILLS} onchange={(v) => setSc("tile_fill", v)} />
   </OverrideField>
+  <OverrideField label="language" help={HELP.language} state={scState("language")} inheritedDisplay={hint("language")} onstate={(s) => setScState("language", s)}>
+    <SelectField label="" value={String(scValue("language") ?? "en")} options={UI_LANGUAGES} onchange={(v) => setSc("language", v)} />
+  </OverrideField>
   {#each LIST_KEYS as key}
-    <TriStateListField label={key} help={HELP[key]} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint(key) })} onchange={(s, l) => setOvList(key, s, l)} />
+    <TriStateListField label={key} help={HELP[key]} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} customSeed={effectiveList(key)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint(key) })} onchange={(s, l) => setOvList(key, s, l)} />
   {/each}
 {:else}
   <SelectField label="management" help={HELP.management} value={management} options={MANAGEMENT} onchange={(v) => set("management", v)} />
@@ -100,7 +110,7 @@
   <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
   <SelectField label="language" help={HELP.language} value={uiLanguage} options={UI_LANGUAGES} onchange={(v) => set("language", v)} />
   {#each LIST_KEYS as key}
-    <TriStateListField label={key} help={HELP[key]} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? []} onchange={(s, l) => setBaseTri(key, s, l)} />
+    <TriStateListField label={key} help={HELP[key]} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? VIEW_LIST_DEFAULTS[key]} customSeed={VIEW_LIST_DEFAULTS[key]} defaultHint={VIEW_LIST_DEFAULTS[key].join(" · ")} onchange={(s, l) => setBaseTri(key, s, l)} />
   {/each}
 {/if}
 
