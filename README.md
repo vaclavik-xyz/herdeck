@@ -198,7 +198,6 @@ macOS LaunchAgents without placing token values in plist files:
 herdeck-service install bridge --bind 100.x.y.z --server-id workbox
 herdeck-service install web --bind 100.x.y.z --config ~/.config/herdeck/config.toml
 herdeck-service status web
-herdeck-web url --host 100.x.y.z --port 8800 --allow-query-token
 ```
 
 The install command creates the bridge token at
@@ -229,12 +228,6 @@ herdeck-service install web \
   --base-path /herdeck \
   --public-origin https://cockpit.example \
   --frame-ancestor https://cockpit.example
-
-herdeck-web url \
-  --host 127.0.0.1 \
-  --base-path /herdeck \
-  --public-origin https://cockpit.example \
-  --allow-query-token
 
 herdeck-doctor --web-url https://cockpit.example/herdeck/
 ```

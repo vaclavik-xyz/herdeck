@@ -51,6 +51,8 @@ def render_launch_agent(config: ServiceConfig) -> bytes:
         }
     else:
         arguments = [config.python, "-m", "herdeck.web", "run"]
+        if config.allow_query_token:
+            arguments.append("--allow-query-token")
         base_path = normalize_web_base_path(config.base_path)
         public_origin = normalize_web_origin(config.public_origin)
         frame_ancestors = tuple(

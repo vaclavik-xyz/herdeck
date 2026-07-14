@@ -21,6 +21,26 @@ def test_web_launch_agent_disables_legacy_query_token_by_default(tmp_path):
     plist = plistlib.loads(raw)
 
     assert plist["EnvironmentVariables"]["HERDECK_WEB_ALLOW_QUERY_TOKEN"] == "0"
+    assert "--allow-query-token" not in plist["ProgramArguments"]
+
+
+def test_web_launch_agent_preserves_explicit_legacy_opt_in(tmp_path):
+    from herdeck.service import ServiceConfig, render_launch_agent
+
+    raw = render_launch_agent(
+        ServiceConfig(
+            kind="web",
+            home=tmp_path,
+            python="/opt/herdeck/python",
+            bind="127.0.0.1",
+            port=8800,
+            allow_query_token=True,
+        )
+    )
+    plist = plistlib.loads(raw)
+
+    assert plist["EnvironmentVariables"]["HERDECK_WEB_ALLOW_QUERY_TOKEN"] == "1"
+    assert plist["ProgramArguments"][-1] == "--allow-query-token"
 
 
 def test_bridge_launch_agent_references_token_file_without_secret(tmp_path):
