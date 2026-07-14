@@ -11,7 +11,7 @@ describe("AnswerProfilesSection", () => {
     const payload = parseConfig({
       base: {
         answer_profiles: {
-          custom: { approve: ["a"], deny: ["d"], stop: ["s"] },
+          constructor: { approve: ["a"], deny: ["d"], stop: ["s"] },
         },
       },
     })!;
@@ -31,9 +31,14 @@ describe("AnswerProfilesSection", () => {
         const legend = legends.find((item) => item.textContent?.trim() === name);
         expect(legend).toBeTruthy();
         expect(legend?.querySelector("button")).toBeNull();
+        const fieldset = legend?.closest("fieldset");
+        const labels = Array.from(fieldset?.querySelectorAll(".fieldlabel") ?? []);
+        expect(labels.some((label) => label.textContent?.trim() === "name")).toBe(false);
       }
-      const custom = legends.find((item) => item.textContent?.includes("custom"));
+      const custom = legends.find((item) => item.textContent?.includes("constructor"));
       expect(custom?.querySelector('button[title="Remove answer profile"]')).toBeTruthy();
+      const customLabels = Array.from(custom?.closest("fieldset")?.querySelectorAll(".fieldlabel") ?? []);
+      expect(customLabels.some((label) => label.textContent?.trim() === "name")).toBe(true);
     } finally {
       unmount(instance);
     }

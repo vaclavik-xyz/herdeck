@@ -106,7 +106,7 @@
   function add(): void {
     commit([...rows, { name: "", approve: [], deny: [], stop: [], approve_always: null }]);
   }
-  function isBuiltIn(name: string): boolean { return name in DEFAULT_ANSWER_PROFILES; }
+  function isBuiltIn(name: string): boolean { return Object.hasOwn(DEFAULT_ANSWER_PROFILES, name); }
   function remove(i: number): void { commit(rows.filter((_, j) => j !== i)); }
 
   // --- overlay mode: per-entry override (whole entry dict) ---
@@ -210,7 +210,9 @@
   {#each rows as e, i (i)}
     <fieldset>
       <legend>{e.name || lm.new_profile}{#if !isBuiltIn(e.name)} <button type="button" title={lm.remove_profile} onclick={() => remove(i)}>×</button>{/if}</legend>
-      <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
+      {#if !isBuiltIn(e.name)}
+        <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
+      {/if}
       {#if e.name.trim() !== ""}
         {#each LIST_KEYS as k}
           <ListField label={k} help={HELP[k]} value={e[k] ?? []} onchange={(v) => setList(i, k, v)} />
