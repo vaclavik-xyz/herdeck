@@ -18,9 +18,7 @@ import threading
 
 from .deckapp.discovery import clear_runtime_file, runtime_file_path, write_runtime_file
 from .deckapp.server import create_app
-from .deckapp.sinks import D200Sink
-
-log = logging.getLogger(__name__)
+from .deckapp.sinks import ReconnectingD200Sink
 
 
 def _default_driver_factory(config):
@@ -37,14 +35,12 @@ def _default_driver_factory(config):
 
 
 def _build_d200_sink(app, *, driver_factory):
-    """Probe + attach a D200 sink. Returns the sink, or None when no device is
-    present / strmdck is unavailable (the runtime then serves HTTP only)."""
-    try:
-        driver = driver_factory(app.config)
-    except Exception as exc:  # device absent, busy, or strmdck/hid missing
-        log.info("no D200 attached (%s); running HTTP-only", exc)
-        return None
-    sink = D200Sink(driver, on_press=app.press, slots=app.slots)
+    """Attach a persistent D200 sink that survives USB loss and Mac sleep."""
+    sink = ReconnectingD200Sink(
+        lambda: driver_factory(app.config),
+        on_press=app.press,
+        slots=app.slots,
+    )
     app.add_sink(sink)
     return sink
 
@@ -57,8 +53,11 @@ def build_runtime(
     driver_factory=None,
     write_discovery: bool = True,
 ):
-    """Build the serving deck app, attach a D200 sink when possible, and publish
-    runtime.json. Returns (app, sink_or_None, info, path)."""
+    """Build the serving deck app, supervise its D200, and publish runtime.json.
+
+    Returns ``(app, reconnecting_sink, info, path)``. The sink remains present
+    in HTTP-only mode and keeps probing until a D200 becomes available.
+    """
     app_factory = app_factory or (lambda host, port: create_app(host=host, port=port))
     driver_factory = driver_factory or _default_driver_factory
     app = app_factory(host, port)

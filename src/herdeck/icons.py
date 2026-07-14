@@ -65,9 +65,7 @@ def prune_generated(cache_dir: str, max_age_s: float = PRUNE_MAX_AGE_S) -> int:
             if not name.endswith(".png"):
                 continue
             if not (
-                name.startswith("tile_")
-                or name.startswith("icon_v")
-                or name.startswith("panel_")
+                name.startswith("tile_") or name.startswith("icon_v") or name.startswith("panel_")
             ):
                 continue
             try:
@@ -77,6 +75,7 @@ def prune_generated(cache_dir: str, max_age_s: float = PRUNE_MAX_AGE_S) -> int:
             except OSError:
                 pass  # raced/unreadable entry: skip
     return removed
+
 
 # The agent mark is inset (not edge-to-edge) so the comet ring has clean room
 # around it and tiles look deliberate rather than cramped.
@@ -204,7 +203,9 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 #    frames keyed by the old raw phase must not be served).
 # 9: the panel composes at the small window's native 458px (was 392) and the
 #    D200 sends it as ONE 3_2 background icon instead of two stretched cells.
-TILE_VERSION = 9
+# 10: the usage panel uses a lighter slate palette and shows reset hints in the
+#     overview cards.
+TILE_VERSION = 10
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -250,7 +251,6 @@ def _tile_text_colors(fill, bg_col, accent):
     if solid:  # darker colour -> light text, brighter subtext than on the dark bg
         return (255, 255, 255), (230, 230, 236), (215, 215, 222), (255, 255, 255)
     return (255, 255, 255), (180, 180, 188), (165, 165, 170), accent  # none / tint
-
 
 
 SERVER_CHIP_COLORS: dict[str, tuple[int, int, int]] = {
@@ -349,6 +349,8 @@ def compose_panel(panel: PanelView, width: int = PANEL_W) -> Image.Image:
     images; the web simulator and desktop window display the PNG at its true
     aspect either way.
     """
+    if panel.gauges:
+        return _compose_gauge_panel(panel, width)
     bg = _panel_bg(panel.color)
     img = Image.new("RGB", (width, PANEL_H), bg)
     d = ImageDraw.Draw(img)
@@ -365,6 +367,134 @@ def compose_panel(panel: PanelView, width: int = PANEL_W) -> Image.Image:
         # _truncate is a safety net for unbreakable tokens wider than the panel.
         d.text((16, y), _truncate(d, line, line_f, width - 32), font=line_f, fill=(232, 232, 236))
         y += 40
+    return img
+
+
+_GAUGE_BG = (49, 55, 65)
+_GAUGE_CARD = (66, 73, 85)
+_GAUGE_LINE = (104, 112, 126)
+_GAUGE_MUTED = (200, 205, 215)
+_GAUGE_TEXT = (251, 252, 253)
+
+
+def _gauge_tone(color: str, used_percent: int) -> tuple[int, int, int]:
+    if used_percent >= 85:
+        return COLORS["red"]
+    if used_percent >= 65:
+        return COLORS["amber"]
+    return COLORS.get(color, COLORS["violet"])
+
+
+def _draw_gauge_rail(draw, box, used_percent: int, tone) -> None:
+    x0, y0, x1, y1 = box
+    radius = max(1, (y1 - y0) // 2)
+    draw.rounded_rectangle(box, radius=radius, fill=_GAUGE_LINE)
+    fill_w = round((x1 - x0) * max(0, min(100, used_percent)) / 100)
+    if fill_w:
+        draw.rounded_rectangle((x0, y0, x0 + max(fill_w, 4), y1), radius=radius, fill=tone)
+
+
+def _compose_gauge_panel(panel: PanelView, width: int) -> Image.Image:
+    """Render usage as compact instrument gauges for the physical status window."""
+    img = Image.new("RGB", (width, PANEL_H), _GAUGE_BG)
+    draw = ImageDraw.Draw(img)
+    detail = bool(panel.gauge_meta)
+    title_font = _font(25)
+    draw.text(
+        (16, 10),
+        _truncate(draw, panel.title, title_font, width * 0.56),
+        font=title_font,
+        fill=_GAUGE_TEXT,
+    )
+    meta = panel.gauge_meta if detail else panel.lines[0] if panel.lines else ""
+    if meta:
+        meta_font = _font(15)
+        meta = meta.upper()
+        meta = _truncate(draw, meta, meta_font, width * 0.38)
+        meta_w = draw.textlength(meta, font=meta_font)
+        draw.text((width - 16 - meta_w, 17), meta, font=meta_font, fill=_GAUGE_MUTED)
+    draw.line((16, 45, width - 16, 45), fill=_GAUGE_LINE, width=1)
+
+    columns = min(3, len(panel.gauges)) if detail else min(2, len(panel.gauges))
+    rows = math.ceil(len(panel.gauges) / columns)
+    gap = 8
+    left = 16
+    top = 54
+    available_w = width - 2 * left - gap * (columns - 1)
+    available_h = PANEL_H - top - 10 - gap * (rows - 1)
+    cell_w = available_w / columns
+    cell_h = available_h / rows
+
+    for index, gauge in enumerate(panel.gauges):
+        row, col = divmod(index, columns)
+        x0 = round(left + col * (cell_w + gap))
+        y0 = round(top + row * (cell_h + gap))
+        x1 = round(x0 + cell_w)
+        y1 = round(y0 + cell_h)
+        draw.rounded_rectangle((x0, y0, x1, y1), radius=8, fill=_GAUGE_CARD)
+        tone = _gauge_tone(gauge.color, gauge.used_percent)
+
+        if detail:
+            label_font = _font(16)
+            value_font = _font(31)
+            hint_font = _font(13)
+            label = f"{gauge.label.upper()} · {gauge.window}"
+            draw.text(
+                (x0 + 10, y0 + 9),
+                _truncate(draw, label, label_font, cell_w - 20),
+                font=label_font,
+                fill=COLORS.get(gauge.color, _GAUGE_MUTED),
+            )
+            draw.text(
+                (x0 + 10, y0 + 34), f"{gauge.used_percent}%", font=value_font, fill=_GAUGE_TEXT
+            )
+            if gauge.hint:
+                draw.text(
+                    (x0 + 10, y1 - 36),
+                    _truncate(draw, gauge.hint, hint_font, cell_w - 20),
+                    font=hint_font,
+                    fill=_GAUGE_MUTED,
+                )
+            _draw_gauge_rail(draw, (x0 + 10, y1 - 15, x1 - 10, y1 - 10), gauge.used_percent, tone)
+        else:
+            roomy = cell_h >= 90
+            label_font = _font(16 if roomy else 14)
+            value_font = _font(36 if roomy else 22)
+            hint_font = _font(14 if roomy else 12)
+            label = f"{gauge.label.upper()}  {gauge.window}"
+            label_space = cell_w - 18 if roomy else cell_w - 62
+            draw.text(
+                (x0 + 9, y0 + (10 if roomy else 7)),
+                _truncate(draw, label, label_font, label_space),
+                font=label_font,
+                fill=COLORS.get(gauge.color, _GAUGE_MUTED),
+            )
+            value = f"{gauge.used_percent}%"
+            if roomy:
+                draw.text((x0 + 9, y0 + 35), value, font=value_font, fill=_GAUGE_TEXT)
+            else:
+                value_w = draw.textlength(value, font=value_font)
+                draw.text(
+                    (x1 - 9 - value_w, y0 + 3),
+                    value,
+                    font=value_font,
+                    fill=_GAUGE_TEXT,
+                )
+            if gauge.hint:
+                hint = gauge.hint.upper()
+                hint_y = y1 - (43 if roomy else 31)
+                draw.text(
+                    (x0 + 9, hint_y),
+                    _truncate(draw, hint, hint_font, cell_w - 18),
+                    font=hint_font,
+                    fill=_GAUGE_MUTED,
+                )
+            _draw_gauge_rail(
+                draw,
+                (x0 + 9, y1 - (17 if roomy else 12), x1 - 9, y1 - (11 if roomy else 7)),
+                gauge.used_percent,
+                tone,
+            )
     return img
 
 

@@ -81,7 +81,7 @@ class DeckApp:
         self._suppress_reload = False  # set by the onboarding commit to mute the watcher
         self._setup_lock = threading.RLock()  # shared mutation lock (/setup/connect + config-write routes + reload); RLock because the config routes call reload() while holding it
 
-        # CodexBar usage poller (a daemon thread; None when [usage] is off).
+        # Provider usage poller (a daemon thread; None when [usage] is off).
         # Renders read its latest snapshot; no render ever blocks on the CLI.
         self._usage_cfg = getattr(config, "usage", None)
         self._usage_poller = self._build_usage_poller(self._usage_cfg)
@@ -203,7 +203,7 @@ class DeckApp:
         # Memoize the encoded panel by content: panel text changes every few
         # seconds at most, while refreshes run per tick — recomposing + PNG-encoding
         # an identical panel dominated the steady-state tick cost.
-        panel_key = (rs.panel.title, tuple(rs.panel.lines), rs.panel.color)
+        panel_key = rs.panel.cache_key()
         memo = self._panel_memo
         if memo is not None and memo[0] == panel_key:
             panel_png = memo[1]

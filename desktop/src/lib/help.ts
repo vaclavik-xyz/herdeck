@@ -71,8 +71,9 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       require_confirm_for: "Actions needing a second confirming press within 5 s (default act_force = Stop); empty list turns it off.",
     },
     usage: {
-      providers: "CodexBar provider ids polled for usage limits (e.g. claude, codex) and shown on the status panel; empty = off.",
-      refresh_secs: "How often, in seconds, the codexbar CLI is polled (min 30, default 300); limits move slowly, keep it high.",
+      providers: "Providers shown on the deck; Claude and Codex use native account data, while other ids use the CodexBar fallback.",
+      paid_only: "Show only providers whose native account data confirms a paid subscription; unknown or free accounts stay hidden.",
+      refresh_secs: "How often provider limits are refreshed in seconds (min 30, default 300); limits move slowly, keep it high.",
       codexbar_path: "codexbar executable name or path; bare names also search /opt/homebrew/bin and /usr/local/bin.",
     },
     answer_profiles: {
@@ -155,8 +156,9 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       require_confirm_for: "Akce vyžadující druhý potvrzovací stisk do 5 s (výchozí act_force = Stop); prázdný seznam potvrzování vypne.",
     },
     usage: {
-      providers: "Provideři CodexBaru, jejichž limity se stahují (např. claude, codex) a ukazují na stavovém panelu; prázdné = vypnuto.",
-      refresh_secs: "Jak často se v sekundách volá codexbar CLI (min 30, výchozí 300); limity se mění pomalu, nechte vysoké.",
+      providers: "Poskytovatelé zobrazení na decku; Claude a Codex používají nativní data účtu, ostatní ID záložní CodexBar.",
+      paid_only: "Zobrazí jen poskytovatele, u kterých nativní data účtu potvrdí placené předplatné; neznámé a bezplatné účty skryje.",
+      refresh_secs: "Jak často se limity poskytovatelů obnoví v sekundách (min 30, výchozí 300); limity se mění pomalu, nechte vysoké.",
       codexbar_path: "Název nebo cesta k binárce codexbar; holé jméno se hledá i v /opt/homebrew/bin a /usr/local/bin.",
     },
     answer_profiles: {

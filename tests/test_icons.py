@@ -227,6 +227,60 @@ def test_compose_panel_uses_theme_color_background():
     assert themed.getpixel((0, 0)) != default.getpixel((0, 0))
 
 
+def test_compose_usage_panel_draws_instrument_cards_and_rails():
+    from herdeck.driver.base import PanelGauge, PanelView
+    from herdeck.icons import compose_panel
+
+    panel = PanelView(
+        "4 agents",
+        ["W2 · I2 · D0"],
+        gauges=[
+            PanelGauge("Claude", "5H", 50, color="orange"),
+            PanelGauge("Claude", "7D", 70, color="orange"),
+            PanelGauge("Codex", "5H", 10, color="teal"),
+            PanelGauge("Codex", "7D", 90, color="teal"),
+        ],
+    )
+    image = compose_panel(panel)
+
+    assert image.getpixel((0, 0)) == (49, 55, 65)  # lighter slate usage canvas
+    assert image.getpixel((18, 58)) == (66, 73, 85)  # first instrument card
+    assert image.getpixel((28, 107)) == (220, 115, 35)  # Claude rail
+    assert image.getpixel((200, 107)) == (104, 112, 126)  # unused rail segment
+
+
+def test_single_usage_gauge_spans_panel_and_draws_reset_hint():
+    from herdeck.driver.base import PanelGauge, PanelView
+    from herdeck.icons import compose_panel
+
+    without_reset = compose_panel(
+        PanelView("11 agents", gauges=[PanelGauge("Codex", "7D", 38, color="teal")])
+    )
+    with_reset = compose_panel(
+        PanelView(
+            "11 agents",
+            gauges=[PanelGauge("Codex", "7D", 38, hint="obnova 19.7. 20:59", color="teal")],
+        )
+    )
+
+    assert with_reset.getpixel((440, 60)) == (66, 73, 85)  # one card uses full width
+    assert with_reset.tobytes() != without_reset.tobytes()
+
+
+def test_panel_cache_key_includes_usage_gauges():
+    from herdeck.driver.base import PanelGauge, PanelView
+
+    low = PanelView("usage", gauges=[PanelGauge("Codex", "5H", 10, color="teal")])
+    high = PanelView("usage", gauges=[PanelGauge("Codex", "5H", 90, color="teal")])
+    assert low.cache_key() != high.cache_key()
+    localized = PanelView(
+        "usage",
+        gauges=[PanelGauge("Codex", "5H", 10, color="teal")],
+        gauge_meta="využito / obnova",
+    )
+    assert low.cache_key() != localized.cache_key()
+
+
 def test_drill_option_subtext_is_drawn_under_label(tmp_path):
     # A drill choice tile renders the big number (label) AND the small choice
     # text (subtext) under it, so the subtext must change the rendered bytes.
@@ -242,9 +296,17 @@ def _tile_ns(**over):
     from types import SimpleNamespace
 
     base = dict(
-        color="green", label="repo", subtext=None, agent_type="claude", spinner=None,
-        repo="repo", branch="main", status_text="idle", time_text="1m",
-        server_tag=None, server_accent=None,
+        color="green",
+        label="repo",
+        subtext=None,
+        agent_type="claude",
+        spinner=None,
+        repo="repo",
+        branch="main",
+        status_text="idle",
+        time_text="1m",
+        server_tag=None,
+        server_accent=None,
     )
     base.update(over)
     return SimpleNamespace(**base)
@@ -280,7 +342,7 @@ def test_render_cache_key_changes_when_bundled_asset_set_changes(tmp_path):
     name_b = _provider(tmp_path / "cb", b).render_tile(tile)
     name_a2 = _provider(tmp_path / "ca2", a).render_tile(tile)
 
-    assert name_a != name_b   # different bundled-asset set -> distinct cache key
+    assert name_a != name_b  # different bundled-asset set -> distinct cache key
     assert name_a == name_a2  # same asset set -> stable cache key (still cacheable)
 
 
@@ -342,9 +404,19 @@ def _agent_tile(**over):
     from types import SimpleNamespace
 
     base = dict(
-        color="green", label="", subtext=None, agent_type="claude", spinner=1,
-        repo="api", branch="main", status_text="WORKING", time_text="1m",
-        server_tag=None, server_accent=None, working_animation="spin", tile_fill="none",
+        color="green",
+        label="",
+        subtext=None,
+        agent_type="claude",
+        spinner=1,
+        repo="api",
+        branch="main",
+        status_text="WORKING",
+        time_text="1m",
+        server_tag=None,
+        server_accent=None,
+        working_animation="spin",
+        tile_fill="none",
     )
     base.update(over)
     return SimpleNamespace(**base)
@@ -571,9 +643,17 @@ def test_launcher_tile_renders_dark_not_status_green(tmp_path):
 
     p = make_provider(tmp_path)
     launcher = SimpleNamespace(
-        color="launcher", label="+ New", subtext=None, agent_type=None, spinner=None,
-        repo=None, branch=None, status_text=None, time_text=None,
-        server_tag=None, server_accent=None,
+        color="launcher",
+        label="+ New",
+        subtext=None,
+        agent_type=None,
+        spinner=None,
+        repo=None,
+        branch=None,
+        status_text=None,
+        time_text=None,
+        server_tag=None,
+        server_accent=None,
     )
     img = Image.open(io.BytesIO(p.render_tile_bytes(launcher))).convert("RGB")
     assert img.getpixel((5, 5)) == (26, 26, 30)  # dark management background

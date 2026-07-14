@@ -143,7 +143,7 @@ class ElgatoDriver(DeckDriver):
             self._last_png[tile.index] = png
 
     def _write_panel(self, panel: PanelView) -> None:
-        key = (panel.title, tuple(panel.lines), panel.color)
+        key = panel.cache_key()
         if key == self._panel_key:
             return  # the two panel keys already show exactly this content
         from ..icons import PANEL_W_TWO_CELL, compose_panel

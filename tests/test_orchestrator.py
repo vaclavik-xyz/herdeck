@@ -425,6 +425,11 @@ def test_overview_panel_carries_usage_lines():
     rs = o.render()
     assert "Claude 5h 19% · 7d 43%" in rs.panel.lines
     assert "Codex 5h 2%" in rs.panel.lines
+    assert [(g.label, g.window) for g in rs.panel.gauges] == [
+        ("Claude", "5H"),
+        ("Claude", "7D"),
+        ("Codex", "5H"),
+    ]
 
 
 def test_overview_panel_without_usage_keeps_online_line():
@@ -443,6 +448,7 @@ def test_panel_press_toggles_usage_detail_on_single_page():
     rs = o.render()
     assert rs.panel.title == "usage limits"
     assert rs.panel.lines[0].startswith("Claude 5h 19%")
+    assert rs.panel.gauges[0].label == "Claude"
     # second press hides the detail again
     o.on_press(13)
     assert o.render().panel.title == "1 agents"
@@ -470,7 +476,30 @@ def test_blocked_spotlight_preempts_held_usage_detail():
     o.on_press(13)
     assert o.render().panel.title == "usage limits"
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
-    assert o.render().panel.title == "▲ needs you"  # attention beats detail
+    panel = o.render().panel
+    assert panel.title == "▲ needs you"  # attention beats detail
+    assert panel.gauges == []  # alert content must not be replaced by usage cards
+
+
+def test_offline_panel_preempts_usage_gauges():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.set_connection("dev", False)
+    panel = o.render().panel
+    assert panel.title == "OFFLINE"
+    assert panel.gauges == []
+
+
+def test_usage_detail_gauge_metadata_is_localized():
+    cfg = make_config()
+    cfg.view.language = "cs"
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.on_press(13)
+    panel = o.render().panel
+    assert panel.gauge_meta == "využito / obnova"
 
 
 def test_usage_detail_pages_via_repeated_presses():

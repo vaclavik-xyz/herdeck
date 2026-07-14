@@ -324,15 +324,28 @@ the desktop app UI speak `[view].language` — `"en"` (default) or `"cs"`; the
 desktop settings window offers it as the View → `language` select and switches
 live.
 
-The status window can also show **provider usage limits** via the
-[CodexBar](https://github.com/steipete/CodexBar) CLI: set
-`[usage] providers = ["claude", "codex"]` (any provider id the installed
-`codexbar` understands). The calm overview panel then carries one line per
-provider (`Claude 5h 13% · 7d 42%`); on a single-page deck, pressing the
-status window holds a detail view with per-window reset times for a few
-seconds — repeated presses page through windows beyond the panel's three
-lines, then hide it. Blocked/offline alerts always take the panel back. The
-CLI must be installed and authenticated on the machine that renders the deck.
+The status window can also show **provider subscription limits**. Set
+`[usage] providers = ["claude", "codex"]`. Codex is read from the authenticated
+`codex app-server` account API. Claude Code exposes its 5-hour and weekly
+limits to status-line commands; add this sidecar call near the top of your
+existing status-line script, after it has read stdin into `$input`:
+
+```bash
+printf '%s' "$input" | herdeck-usage capture-claude >/dev/null 2>&1 || true
+```
+
+The default Claude snapshot is `~/.cache/herdeck/claude-usage.json`. Configure
+`codex_path` when Codex lives elsewhere. If you change `claude_cache_path`, pass
+the same path to the status-line collector, for example
+`herdeck-usage capture-claude --output /path/to/claude-usage.json`.
+Set `paid_only = true` to hide providers unless native account data confirms a
+paid subscription. Codex uses the ChatGPT plan reported by app-server. Claude's
+subscriber-only rate limits confirm Pro/Max after the first API response in a
+Claude Code session; until then the state is unknown and stays hidden. Removing
+a provider from `providers` disables it completely.
+CodexBar remains an automatic compatibility fallback for missing providers;
+set `codexbar_path = ""` to disable it. Pressing the status window holds a
+detail view with reset times. Blocked and offline alerts always take priority.
 
 ## Stream Deck (Elgato) plugin backend
 herdeck can also drive a native **Elgato Stream Deck** as a plugin. A thin

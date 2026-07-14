@@ -37,7 +37,7 @@ function demoPayload(): ConfigPayload {
       },
       notifications: { enabled: true, telegram: { token_env: "TG_TOKEN", chat_id: "1" } },
       safety: { approve_always: true, require_confirm_for: ["act_force"] },
-      usage: { providers: ["claude"], refresh_secs: 300, codexbar_path: "codexbar" },
+      usage: { providers: ["claude"], paid_only: true, refresh_secs: 300, codexbar_path: "codexbar" },
       desktop: { window_mode: "floating" },
     },
     profiles: { night: { view: { tile_fill: "solid" } } },

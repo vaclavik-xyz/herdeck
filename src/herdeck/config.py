@@ -121,12 +121,16 @@ class SafetyConfig:
 
 @dataclass
 class UsageConfig:
-    # CodexBar provider ids to poll (e.g. ["claude", "codex"]); empty = the
-    # usage panel is off. Any id the installed CLI understands is allowed.
+    # Provider ids to poll; empty keeps the usage panel off. This is also the
+    # explicit per-provider allow-list used by the settings UI.
     providers: list[str] = field(default_factory=list)
+    # Hide providers unless their native source confirms a paid subscription.
+    # Disabled by default so existing CodexBar-only configurations keep working.
+    paid_only: bool = False
     refresh_secs: int = 300
-    # Executable name or path; bare names also resolve via the Homebrew dirs
-    # (launchd services don't have /opt/homebrew/bin on PATH).
+    codex_path: str = "codex"
+    claude_cache_path: str = "~/.cache/herdeck/claude-usage.json"
+    # Compatibility fallback for missing native providers. Empty disables it.
     codexbar_path: str = "codexbar"
 
 

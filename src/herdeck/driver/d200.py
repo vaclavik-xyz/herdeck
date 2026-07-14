@@ -441,7 +441,7 @@ class D200Driver(DeckDriver):
         (panel key hash + TILE_VERSION) so a frame with an unchanged panel is
         byte-identical to the previous one (frame-skip) and a composition
         change re-bakes."""
-        key = (panel.title, tuple(panel.lines), panel.color)
+        key = panel.cache_key()
         names = self._panel_names
         paths_ok = names is not None and all(
             os.path.exists(os.path.join(_ICON_DIR, n)) for n in names

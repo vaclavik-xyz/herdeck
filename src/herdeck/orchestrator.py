@@ -142,11 +142,7 @@ class Orchestrator:
 
     # --- inbound state ---
     def apply_snapshot(self, server_id: str, states: list[AgentState]) -> None:
-        previous = {
-            key: state
-            for key, state in self._agents.items()
-            if key.server_id == server_id
-        }
+        previous = {key: state for key, state in self._agents.items() if key.server_id == server_id}
         drilled_before = (
             self._agents.get(self._drill)
             if self._drill is not None and self._drill.server_id == server_id
@@ -264,11 +260,7 @@ class Orchestrator:
         elif self._drill is not None and self._drill in self._agents:
             rendered = {index: self._drill for index in range(self.slots)}
         else:
-            ordered = [
-                self._agents[key]
-                for key in self._display_order
-                if key in self._agents
-            ]
+            ordered = [self._agents[key] for key in self._display_order if key in self._agents]
             shown, _ = layout.page(ordered, self._page, self._agent_slots())
             rendered = {index: agent.key for index, agent in enumerate(shown)}
 
@@ -332,9 +324,7 @@ class Orchestrator:
             self._target_since = now
         by_key = {s.key: s for s in target}
         ranks = {s.key: layout.status_rank(s.status) for s in target}
-        rank_changed = any(
-            ranks[k] != r for k, r in self._display_ranks.items() if k in ranks
-        )
+        rank_changed = any(ranks[k] != r for k, r in self._display_ranks.items() if k in ranks)
         if (
             not self._display_order
             or self._force_adopt
@@ -428,11 +418,20 @@ class Orchestrator:
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i in management:
-                tiles.append(TileView(i, self._management_label(management[i]), "grey", section=_MGMT_SECTION.get(management[i])))
+                tiles.append(
+                    TileView(
+                        i,
+                        self._management_label(management[i]),
+                        "grey",
+                        section=_MGMT_SECTION.get(management[i]),
+                    )
+                )
             elif not management_mode and i == self.slots - 1:  # reserved launcher tile
                 # "launcher" renders dark with a green label — full status-green
                 # here read as one more WORKING agent under solid fill.
-                tiles.append(TileView(i, self._tr("new_agent"), "launcher", section="start_profiles"))
+                tiles.append(
+                    TileView(i, self._tr("new_agent"), "launcher", section="start_profiles")
+                )
             elif i < len(shown):
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
@@ -494,6 +493,12 @@ class Orchestrator:
                 title,
                 layout.usage_detail_lines(self._usage, page=self._usage_detail_page),
                 "grey",
+                gauges=layout.usage_detail_gauges(
+                    self._usage,
+                    page=self._usage_detail_page,
+                    lang=self.config.view.language,
+                ),
+                gauge_meta=self._tr("usage_meta"),
             )
             return RenderState(tiles, panel)
         panel = layout.panel_overview(
@@ -505,6 +510,14 @@ class Orchestrator:
             spotlight,
             lang=self.config.view.language,
             usage_lines=layout.usage_summary_lines(self._usage) if self._usage else None,
+            usage_gauges=(
+                layout.usage_summary_gauges(
+                    self._usage,
+                    lang=self.config.view.language,
+                )
+                if self._usage
+                else None
+            ),
         )
         if panel.color == "red":
             panel.color = self.config.theme.colors.get("offline", panel.color)
@@ -552,12 +565,22 @@ class Orchestrator:
                 # "Profiles" is a logic sentinel matched by _press_launcher — translate
                 # only the rendered label, never the entries list.
                 label = self._tr("profiles_entry") if agent_type is None else entry
-                tiles.append(TileView(i, label, "blue", agent_type=agent_type, section=("start_profiles" if agent_type else "profiles")))
+                tiles.append(
+                    TileView(
+                        i,
+                        label,
+                        "blue",
+                        agent_type=agent_type,
+                        section=("start_profiles" if agent_type else "profiles"),
+                    )
+                )
             elif i == back_i:
                 tiles.append(TileView(i, self._tr("back"), "grey"))
             else:
                 tiles.append(TileView(i, "", "empty"))
-        return RenderState(tiles, PanelView(self._tr("new_agent_title"), [self._tr("pick_type")], "grey"))
+        return RenderState(
+            tiles, PanelView(self._tr("new_agent_title"), [self._tr("pick_type")], "grey")
+        )
 
     def tick(self) -> list[int]:
         """Advance the spinner phase; return overview tile indices that are working.
@@ -710,10 +733,20 @@ class Orchestrator:
                 if armed is not None and actions[i].get("confirm_key") == armed:
                     label = self._tr("sure")
                 color = "grey" if down else _ACTION_COLORS.get(actions[i].get("id"), "blue")
-                tiles.append(TileView(i, label, color, subtext=actions[i].get("subtext"), section="answer_profiles"))
+                tiles.append(
+                    TileView(
+                        i,
+                        label,
+                        color,
+                        subtext=actions[i].get("subtext"),
+                        section="answer_profiles",
+                    )
+                )
             elif i == stop_i:
                 stop_label = self._tr("sure") if armed == "act_force" else self._tr("stop")
-                tiles.append(TileView(i, stop_label, "grey" if down else "red", section="answer_profiles"))
+                tiles.append(
+                    TileView(i, stop_label, "grey" if down else "red", section="answer_profiles")
+                )
             elif i == back_i:
                 tiles.append(TileView(i, self._tr("back"), "grey"))
             else:
@@ -727,7 +760,9 @@ class Orchestrator:
             offline = self.config.theme.colors.get("offline", "red")
             panel = PanelView(panel.title, [self._tr("offline_reconnecting")], offline)
         elif armed is not None and agent is not None:
-            panel = PanelView(panel.title, [self._tr("press_to_confirm"), *panel.lines], panel.color)
+            panel = PanelView(
+                panel.title, [self._tr("press_to_confirm"), *panel.lines], panel.color
+            )
         return RenderState(tiles, panel)
 
     # --- presses ---
@@ -759,9 +794,7 @@ class Orchestrator:
     def _press_overview(self, index: int) -> list[Command]:
         if index in self._panel_indices():
             _, pages = layout.page(self._ordered(), self._page, self._agent_slots())
-            detail_can_show = (
-                self._usage and not self._down and self._blocked_spotlight() is None
-            )
+            detail_can_show = self._usage and not self._down and self._blocked_spotlight() is None
             if pages == 1 and detail_can_show:
                 # Nothing to page through: the press shows a held usage detail
                 # instead (reset times per provider window); repeated presses
@@ -892,9 +925,8 @@ class Orchestrator:
             return []
         if index == stop_i:  # Stop — always, unconditional
             action = "act_force"
-            if (
-                action in self.config.safety.require_confirm_for
-                and not self._confirm_armed(action, key)
+            if action in self.config.safety.require_confirm_for and not self._confirm_armed(
+                action, key
             ):
                 self._arm_confirm(action, key)  # (re-)arm; an expired arm never fires
                 return []
@@ -914,9 +946,8 @@ class Orchestrator:
         if index < len(actions):  # send option number or macro text
             action_id = actions[index].get("id")
             confirm_key = actions[index].get("confirm_key") or f"idx:{index}"
-            if (
-                action_id in self.config.safety.require_confirm_for
-                and not self._confirm_armed(confirm_key, key)
+            if action_id in self.config.safety.require_confirm_for and not self._confirm_armed(
+                confirm_key, key
             ):
                 self._arm_confirm(confirm_key, key)  # (re-)arm; an expired arm never fires
                 return []

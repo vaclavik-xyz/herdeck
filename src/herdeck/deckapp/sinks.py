@@ -59,9 +59,12 @@ class D200Sink:
         on_press: Callable[[int], None],
         slots: int,
         start_reader: bool = True,
+        on_disconnect: Callable[[], None] | None = None,
     ):
         self._driver = driver
         self._slots = slots
+        self._on_disconnect = on_disconnect
+        self._closing = threading.Event()
         driver.on_press(on_press)
         self._reader_thread: threading.Thread | None = None
         if start_reader:
@@ -92,10 +95,125 @@ class D200Sink:
         try:
             asyncio.run(self._driver.run_reader())
         except Exception:
-            log.warning("D200 press reader stopped", exc_info=True)
+            if not self._closing.is_set():
+                log.warning("D200 press reader stopped", exc_info=True)
+        finally:
+            if not self._closing.is_set() and self._on_disconnect is not None:
+                try:
+                    self._on_disconnect()
+                except Exception:
+                    log.warning("D200 disconnect callback failed", exc_info=True)
 
     def close(self) -> None:
+        if self._closing.is_set():
+            return
+        self._closing.set()
         try:
             self._driver.close()  # closes the device, which ends run_reader()
         except Exception:
             log.warning("D200 driver close failed", exc_info=True)
+        reader = self._reader_thread
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=2.0)
+        self._reader_thread = None
+
+
+class ReconnectingD200Sink:
+    """Persistent D200 sink that reopens the USB device after HID disconnects.
+
+    macOS invalidates the existing HID handle while the machine sleeps. The
+    runtime process survives, so without a supervisor the reader thread exits
+    and the deck stays on its firmware-default page forever. This sink retains
+    the newest full render frame, replaces the failed driver, and immediately
+    repaints that frame when the device becomes available again.
+    """
+
+    def __init__(
+        self,
+        driver_factory: Callable[[], object],
+        *,
+        on_press: Callable[[int], None],
+        slots: int,
+        retry_interval: float = 2.0,
+    ):
+        self._driver_factory = driver_factory
+        self._on_press = on_press
+        self._slots = slots
+        self._retry_interval = max(0.01, retry_interval)
+        self._lock = threading.Lock()
+        self._latest_frame: RenderFrame | None = None
+        self._active: D200Sink | None = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="herdeck-d200-reconnect",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def deliver(self, frame: RenderFrame) -> None:
+        with self._lock:
+            self._latest_frame = frame
+            active = self._active
+        if active is not None:
+            active.deliver(frame)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                driver = self._driver_factory()
+            except Exception as exc:
+                log.info(
+                    "no D200 attached (%s); retrying in %.1fs",
+                    exc,
+                    self._retry_interval,
+                )
+                self._stop.wait(self._retry_interval)
+                continue
+
+            if self._stop.is_set():
+                try:
+                    driver.close()
+                except Exception:
+                    pass
+                return
+
+            disconnected = threading.Event()
+            active = D200Sink(
+                driver,
+                on_press=self._on_press,
+                slots=self._slots,
+                on_disconnect=disconnected.set,
+            )
+            with self._lock:
+                latest = self._latest_frame
+                # Paint the retained frame before publishing the new sink while
+                # holding the same lock as deliver(). Otherwise a concurrent new
+                # frame could land first and then be overwritten by this older one.
+                if latest is not None:
+                    active.deliver(latest)
+                self._active = active
+            log.info("D200 attached")
+
+            while not self._stop.wait(0.25):
+                if disconnected.is_set():
+                    break
+
+            with self._lock:
+                if self._active is active:
+                    self._active = None
+            active.close()
+            if disconnected.is_set() and not self._stop.is_set():
+                log.info("D200 disconnected; reopening")
+
+    def close(self) -> None:
+        if self._stop.is_set():
+            return
+        self._stop.set()
+        with self._lock:
+            active = self._active
+            self._active = None
+        if active is not None:
+            active.close()
+        if self._thread is not threading.current_thread():
+            self._thread.join(timeout=7.0)

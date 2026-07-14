@@ -594,7 +594,7 @@ def test_view_config_rejects_unknown_language():
 
 
 # ---------------------------------------------------------------------------
-# [usage] — CodexBar usage-limit polling
+# [usage] — provider usage-limit polling
 # ---------------------------------------------------------------------------
 
 
@@ -603,7 +603,10 @@ def test_usage_config_defaults_to_disabled():
 
     usage = _usage_config(None)
     assert usage.providers == []
+    assert usage.paid_only is False
     assert usage.refresh_secs == 300
+    assert usage.codex_path == "codex"
+    assert usage.claude_cache_path == "~/.cache/herdeck/claude-usage.json"
     assert usage.codexbar_path == "codexbar"
 
 
@@ -611,11 +614,21 @@ def test_usage_config_parses_fields():
     from herdeck.settings import _usage_config
 
     usage = _usage_config(
-        {"providers": ["claude", "codex"], "refresh_secs": 120, "codexbar_path": "/opt/x/codexbar"}
+        {
+            "providers": ["claude", "codex"],
+            "paid_only": True,
+            "refresh_secs": 120,
+            "codex_path": "/opt/x/codex",
+            "claude_cache_path": "/tmp/claude-usage.json",
+            "codexbar_path": "",
+        }
     )
     assert usage.providers == ["claude", "codex"]
+    assert usage.paid_only is True
     assert usage.refresh_secs == 120
-    assert usage.codexbar_path == "/opt/x/codexbar"
+    assert usage.codex_path == "/opt/x/codex"
+    assert usage.claude_cache_path == "/tmp/claude-usage.json"
+    assert usage.codexbar_path == ""
 
 
 def test_usage_config_validates():
@@ -629,8 +642,14 @@ def test_usage_config_validates():
         _usage_config({"refresh_secs": 5})
     with pytest.raises(ConfigError, match="usage.refresh_secs"):
         _usage_config({"refresh_secs": "fast"})
+    with pytest.raises(ConfigError, match="usage.paid_only"):
+        _usage_config({"paid_only": 1})
     with pytest.raises(ConfigError, match="usage.codexbar_path"):
-        _usage_config({"codexbar_path": " "})
+        _usage_config({"codexbar_path": 1})
+    with pytest.raises(ConfigError, match="usage.codex_path"):
+        _usage_config({"codex_path": " "})
+    with pytest.raises(ConfigError, match="usage.claude_cache_path"):
+        _usage_config({"claude_cache_path": ""})
 
 
 def test_usage_section_flows_through_profiles(tmp_path, monkeypatch):
@@ -658,6 +677,8 @@ def test_usage_config_rejects_blank_or_malformed_provider_ids():
         _usage_config({"providers": ["  "]})
     with pytest.raises(ConfigError, match="usage.providers"):
         _usage_config({"providers": ["claude,codex"]})
+    with pytest.raises(ConfigError, match="duplicate"):
+        _usage_config({"providers": ["claude", "codex", "claude"]})
     assert _usage_config({"providers": ["alibaba-coding-plan", "zai"]}).providers == [
         "alibaba-coding-plan",
         "zai",
