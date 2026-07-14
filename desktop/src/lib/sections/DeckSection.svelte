@@ -116,9 +116,9 @@
   <NumberField label="web_port" help={HELP.web_port} value={hwPort} int min={0} max={65535} onchange={(v) => setLocalNum("local", "web_port", v)} />
   <TextField label="icons_dir" help={HELP.icons_dir} value={hwIcons} oninput={(v) => setLocalStr("local", "icons_dir", v)} />
   <NumberField label="brightness" help={HELP.brightness} value={brightness} int min={0} max={100} onchange={(v) => setLocalNum("hardware", "brightness", v)} />
-  <NumberField label="debounce" help={HELP.debounce} value={debounce} step={0.05} min={0.001} max={60} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
-  <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step={0.5} min={0.001} max={86400} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
-  <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step={0.05} min={0.001} max={60} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
+  <NumberField label="debounce" help={HELP.debounce} value={debounce} step={0.05} min={0.05} max={60} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
+  <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step={0.5} min={0.5} max={86400} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
+  <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step={0.05} min={0.05} max={60} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
 </fieldset>
 
 <style>

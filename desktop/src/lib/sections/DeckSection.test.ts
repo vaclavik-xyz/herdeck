@@ -31,6 +31,9 @@ describe("DeckSection", () => {
       expect(inputFor(target, "brightness").max).toBe("100");
       expect(inputFor(target, "debounce").max).toBe("60");
       expect(inputFor(target, "keep_alive_interval").max).toBe("86400");
+      expect(inputFor(target, "debounce").validity.stepMismatch).toBe(false);
+      expect(inputFor(target, "keep_alive_interval").validity.stepMismatch).toBe(false);
+      expect(inputFor(target, "tick_interval").validity.stepMismatch).toBe(false);
     } finally {
       unmount(instance);
     }
