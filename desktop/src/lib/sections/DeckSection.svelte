@@ -10,8 +10,8 @@
     type ListFieldState, type ConfigPayload,
   } from "../configClient";
 
-  let { payload = $bindable(), onChange, editProfile = null }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
+  let { payload = $bindable(), onChange, reloadRev = 0, editProfile = null }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
 
   const SEC = "deck";
 
@@ -90,10 +90,10 @@
   <OverrideField label="grid" help={HELP.grid} state={scState("grid")} inheritedDisplay={hint("grid")} onstate={(s) => setScState("grid", s)}>
     <TextField label="" value={String(scValue("grid") ?? "")} oninput={(v) => setSc("grid", v)} />
   </OverrideField>
-  <TriStateListField label="overview_order" help={HELP.overview_order} state={overrideState(payload, prof, SEC, "overview_order")} list={ovOverviewList()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("overview_order") })} resetKey={`${prof}:${payload.revision ?? ""}:deck:overview_order`} onchange={setOvOverview} />
+  <TriStateListField label="overview_order" help={HELP.overview_order} state={overrideState(payload, prof, SEC, "overview_order")} list={ovOverviewList()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("overview_order") })} resetKey={`${prof}:${reloadRev}:deck:overview_order`} onchange={setOvOverview} />
 {:else}
   <TextField label="grid" help={HELP.grid} value={grid} oninput={(v) => setBase("grid", v)} />
-  <TriStateListField label="overview_order" help={HELP.overview_order} state={overviewState} list={overviewOrder} defaultHint={serverHint} onchange={setBaseOverview} />
+  <TriStateListField label="overview_order" help={HELP.overview_order} state={overviewState} list={overviewOrder} defaultHint={serverHint} resetKey={`base:${reloadRev}:deck:overview_order`} onchange={setBaseOverview} />
 {/if}
 
 <fieldset class="hw">

@@ -13,8 +13,8 @@
   } from "../configClient";
   import { defineMessages, fieldHelp, fmt, locale, t } from "../i18n.svelte";
 
-  let { payload = $bindable(), onChange, onError, editProfile = null }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
+  let { payload = $bindable(), onChange, onError, reloadRev = 0, editProfile = null }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
 
@@ -149,8 +149,8 @@
   <OverrideField label="sound" help={HELP.sound} state={scState("sound")} inheritedDisplay={scHint("sound")} onstate={(s) => setScState("sound", s)}>
     <BooleanField label="" value={scBool("sound")} onchange={(v) => setSc("sound", v)} />
   </OverrideField>
-  <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} customSeed={effectiveList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} resetKey={`${prof}:${payload.revision ?? ""}:notifications:on`} onchange={(s, l) => setOvList("on", s, l)} />
-  <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} customSeed={effectiveList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} resetKey={`${prof}:${payload.revision ?? ""}:notifications:backends`} onchange={(s, l) => setOvList("backends", s, l)} />
+  <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} customSeed={effectiveList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} resetKey={`${prof}:${reloadRev}:notifications:on`} onchange={(s, l) => setOvList("on", s, l)} />
+  <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} customSeed={effectiveList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} resetKey={`${prof}:${reloadRev}:notifications:backends`} onchange={(s, l) => setOvList("backends", s, l)} />
   <fieldset class="tg">
     <legend>Telegram</legend>
     <p class="hint">{lm.tg_hint}</p>
@@ -168,8 +168,8 @@
 {:else}
   <BooleanField label="enabled" help={HELP.enabled} value={enabled} onchange={(v) => set("enabled", v)} />
   <BooleanField label="sound" help={HELP.sound} value={sound} onchange={(v) => set("sound", v)} />
-  <TriStateListField label="on" help={HELP.on} state={onState} list={on} customSeed={NOTIF_LIST_DEFAULTS.on} defaultHint={NOTIF_LIST_DEFAULTS.on.join(" · ")} onchange={(s, l) => setTri("on", s, l)} />
-  <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} onchange={(s, l) => setTri("backends", s, l)} />
+  <TriStateListField label="on" help={HELP.on} state={onState} list={on} customSeed={NOTIF_LIST_DEFAULTS.on} defaultHint={NOTIF_LIST_DEFAULTS.on.join(" · ")} resetKey={`base:${reloadRev}:notifications:on`} onchange={(s, l) => setTri("on", s, l)} />
+  <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} resetKey={`base:${reloadRev}:notifications:backends`} onchange={(s, l) => setTri("backends", s, l)} />
   <fieldset class="tg">
     <legend>Telegram</legend>
     <TokenSecretField label="token" help={HELP.token} value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />

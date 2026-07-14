@@ -95,4 +95,23 @@ describe("TriStateListField", () => {
       unmount(instance);
     }
   });
+
+  it("drops an empty local draft when saved config reloads at the same revision", () => {
+    const target = document.createElement("div");
+    const instance = mount(TriStateListFieldHarness, {
+      target,
+      props: { onchange: () => {} },
+    });
+    try {
+      (target.querySelector(".field .seg button:nth-child(2)") as HTMLButtonElement).click();
+      flushSync();
+      expect(target.querySelector(".field input")).not.toBeNull();
+
+      (target.querySelector(".reload") as HTMLButtonElement).click();
+      flushSync();
+      expect(target.querySelector(".field input")).toBeNull();
+    } finally {
+      unmount(instance);
+    }
+  });
 });

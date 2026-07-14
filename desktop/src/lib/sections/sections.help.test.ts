@@ -58,13 +58,13 @@ type SectionSpec = {
 
 const SECTIONS: SectionSpec[] = [
   { name: "ServersSection", key: "servers", component: ServersSection, overlay: false, reloadRev: false },
-  { name: "DeckSection", key: "deck", component: DeckSection, overlay: true, reloadRev: false },
-  { name: "ViewSection", key: "view", component: ViewSection, overlay: true, reloadRev: false },
-  { name: "ThemeSection", key: "theme", component: ThemeSection, overlay: true, reloadRev: false },
+  { name: "DeckSection", key: "deck", component: DeckSection, overlay: true, reloadRev: true },
+  { name: "ViewSection", key: "view", component: ViewSection, overlay: true, reloadRev: true },
+  { name: "ThemeSection", key: "theme", component: ThemeSection, overlay: true, reloadRev: true },
   { name: "MacrosSection", key: "macros", component: MacrosSection, overlay: true, reloadRev: false },
   { name: "StartProfilesSection", key: "start_profiles", component: StartProfilesSection, overlay: true, reloadRev: true },
-  { name: "NotificationsSection", key: "notifications", component: NotificationsSection, overlay: true, reloadRev: false },
-  { name: "SafetySection", key: "safety", component: SafetySection, overlay: true, reloadRev: false },
+  { name: "NotificationsSection", key: "notifications", component: NotificationsSection, overlay: true, reloadRev: true },
+  { name: "SafetySection", key: "safety", component: SafetySection, overlay: true, reloadRev: true },
   { name: "UsageSection", key: "usage", component: UsageSection, overlay: true, reloadRev: false },
   { name: "AnswerProfilesSection", key: "answer_profiles", component: AnswerProfilesSection, overlay: true, reloadRev: true },
   { name: "ProfilesSection", key: "profiles", component: ProfilesSection, overlay: false, reloadRev: false },

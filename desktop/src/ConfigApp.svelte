@@ -372,19 +372,19 @@ import UsageSection from "./lib/sections/UsageSection.svelte";
         {/if}
         <ServersSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "deck"}
-        <DeckSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+        <DeckSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "view"}
-        <ViewSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+        <ViewSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "theme"}
-        <ThemeSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+        <ThemeSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "macros"}
         <MacrosSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "start_profiles"}
         <StartProfilesSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "notifications"}
-        <NotificationsSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+        <NotificationsSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "safety"}
-        <SafetySection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+        <SafetySection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "usage"}
         <UsageSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
       {:else if active === "answer_profiles"}

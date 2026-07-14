@@ -9,8 +9,8 @@
   } from "../configClient";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
 
-  let { payload = $bindable(), onChange, editProfile = null }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
+  let { payload = $bindable(), onChange, reloadRev = 0, editProfile = null }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
 
   const SEC = "safety";
   const overlay = $derived(editProfile != null && editProfile !== "default");
@@ -69,10 +69,10 @@
   <OverrideField label="approve_always" help={HELP.approve_always} state={scState("approve_always")} inheritedDisplay={hint("approve_always")} onstate={(s) => setScState("approve_always", s)}>
     <BooleanField label="" value={Boolean(scValue("approve_always"))} onchange={(v) => setSc("approve_always", v)} />
   </OverrideField>
-  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} customSeed={inheritedRcf()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("require_confirm_for") })} resetKey={`${prof}:${payload.revision ?? ""}:safety:require_confirm_for`} onchange={setOvRcf} />
+  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={overrideState(payload, prof, SEC, "require_confirm_for")} list={ovRcfList()} customSeed={inheritedRcf()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint("require_confirm_for") })} resetKey={`${prof}:${reloadRev}:safety:require_confirm_for`} onchange={setOvRcf} />
 {:else}
   <BooleanField label="approve_always" help={HELP.approve_always} value={approveAlways} onchange={(v) => set("approve_always", v)} />
-  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={listFieldState(payload, "base", SEC, "require_confirm_for")} list={requireConfirmFor} customSeed={SAFETY_DEFAULTS.require_confirm_for as string[]} defaultHint={(SAFETY_DEFAULTS.require_confirm_for as string[]).join(" · ")} onchange={setBaseRcf} />
+  <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={listFieldState(payload, "base", SEC, "require_confirm_for")} list={requireConfirmFor} customSeed={SAFETY_DEFAULTS.require_confirm_for as string[]} defaultHint={(SAFETY_DEFAULTS.require_confirm_for as string[]).join(" · ")} resetKey={`base:${reloadRev}:safety:require_confirm_for`} onchange={setBaseRcf} />
 {/if}
 
 <style>

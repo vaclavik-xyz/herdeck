@@ -208,7 +208,7 @@
         {#each LIST_KEYS as k}
           <ListField label={k} help={HELP[k]} value={entryKeyValue(name, k)} onchange={(v) => setEntryKey(name, k, v)} />
         {/each}
-        <TriStateListField label="approve_always" help={HELP.approve_always} state={aaStateOv(name)} list={aaListOv(name)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: aaHint(name) })} resetKey={`${prof}:${payload.revision ?? ""}:answer_profiles:${name}:approve_always`} onchange={(s, l) => setAAOv(name, s, l)} />
+        <TriStateListField label="approve_always" help={HELP.approve_always} state={aaStateOv(name)} list={aaListOv(name)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: aaHint(name) })} resetKey={`${prof}:${reloadRev}:answer_profiles:${name}:approve_always`} onchange={(s, l) => setAAOv(name, s, l)} />
       </OverrideField>
     </fieldset>
   {/each}
@@ -230,7 +230,7 @@
         {#each LIST_KEYS as k}
           <ListField label={k} help={HELP[k]} value={e[k] ?? []} onchange={(v) => setList(i, k, v)} />
         {/each}
-        <TriStateListField label="approve_always" help={HELP.approve_always} state={aaState(e)} list={e.approve_always ?? []} onchange={(s, l) => setApproveAlways(i, s, l)} />
+        <TriStateListField label="approve_always" help={HELP.approve_always} state={aaState(e)} list={e.approve_always ?? []} resetKey={`base:${reloadRev}:answer_profiles:${e.name}:approve_always`} onchange={(s, l) => setApproveAlways(i, s, l)} />
       {:else}
         <p class="hint">{lm.name_first_hint}</p>
       {/if}

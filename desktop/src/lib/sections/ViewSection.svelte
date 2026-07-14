@@ -11,8 +11,8 @@
     type ListFieldState, type ConfigPayload,
   } from "../configClient";
 
-  let { payload = $bindable(), onChange, editProfile = null }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
+  let { payload = $bindable(), onChange, reloadRev = 0, editProfile = null }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
 
   const SEC = "view";
   const MANAGEMENT = ["launcher_menu", "bottom_row"];
@@ -121,7 +121,7 @@
     <SelectField label="" value={String(scValue("language") ?? "en")} options={UI_LANGUAGES} onchange={(v) => setSc("language", v)} />
   </OverrideField>
   {#each LIST_KEYS as key}
-    <TriStateListField label={key} help={HELP[key]} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} customSeed={effectiveList(key)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint(key) })} resetKey={`${prof}:${payload.revision ?? ""}:view:${key}`} onchange={(s, l) => setOvList(key, s, l)} />
+    <TriStateListField label={key} help={HELP[key]} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} customSeed={effectiveList(key)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint(key) })} resetKey={`${prof}:${reloadRev}:view:${key}`} onchange={(s, l) => setOvList(key, s, l)} />
   {/each}
 {:else}
   <SelectField label="management" help={HELP.management} value={management} options={MANAGEMENT} onchange={(v) => set("management", v)} />
@@ -131,7 +131,7 @@
   <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
   <SelectField label="language" help={HELP.language} value={uiLanguage} options={UI_LANGUAGES} onchange={(v) => set("language", v)} />
   {#each LIST_KEYS as key}
-    <TriStateListField label={key} help={HELP[key]} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? baseDefaultList(key)} customSeed={baseDefaultList(key)} defaultHint={baseDefaultList(key).join(" · ")} onchange={(s, l) => setBaseTri(key, s, l)} />
+    <TriStateListField label={key} help={HELP[key]} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? baseDefaultList(key)} customSeed={baseDefaultList(key)} defaultHint={baseDefaultList(key).join(" · ")} resetKey={`base:${reloadRev}:view:${key}`} onchange={(s, l) => setBaseTri(key, s, l)} />
   {/each}
 {/if}
 

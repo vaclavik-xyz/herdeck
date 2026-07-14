@@ -12,8 +12,8 @@
   import { DEFAULT_STATUS_COLORS } from "../statusColors";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
 
-  let { payload = $bindable(), onChange, editProfile = null }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
+  let { payload = $bindable(), onChange, reloadRev = 0, editProfile = null }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
 
   const SEC = "theme";
   const STATUS = ["working", "idle", "blocked", "done", "waiting", "unknown", "offline"];
@@ -90,7 +90,7 @@
   {/if}
 </fieldset>
 {#if overlay}
-  <TriStateListField label="server_accents" help={HELP.server_accents} state={overrideState(payload, prof, SEC, "server_accents")} list={ovAccents()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: accentHint() })} resetKey={`${prof}:${payload.revision ?? ""}:theme:server_accents`} onchange={setOvAccents} />
+  <TriStateListField label="server_accents" help={HELP.server_accents} state={overrideState(payload, prof, SEC, "server_accents")} list={ovAccents()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: accentHint() })} resetKey={`${prof}:${reloadRev}:theme:server_accents`} onchange={setOvAccents} />
 {:else}
   <ListField label="server_accents" help={HELP.server_accents} value={accents} onchange={setBaseAccents} />
 {/if}
