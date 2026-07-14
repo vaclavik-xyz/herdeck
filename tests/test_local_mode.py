@@ -377,6 +377,25 @@ def test_local_config_preserves_notifications():
     assert cfg.notifications.sound is False
 
 
+def test_local_config_preserves_usage():
+    partial = Config(
+        servers=[],
+        profiles={},
+        overview_order=[],
+        grid=(5, 3),
+    )
+    partial.usage.providers = ["codex", "claude"]
+    partial.usage.paid_only = True
+    partial.usage.refresh_secs = 45
+    partial.usage.codex_path = "/opt/codex"
+    partial.usage.claude_cache_path = "/tmp/claude-usage.json"
+    partial.usage.codexbar_path = "/opt/codexbar"
+
+    cfg = local_config(1, "t", partial)
+
+    assert cfg.usage == partial.usage
+
+
 def test_discover_prefers_env(monkeypatch, tmp_path):
     p = tmp_path / "c.toml"
     p.write_text("")

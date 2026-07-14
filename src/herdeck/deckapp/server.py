@@ -860,7 +860,7 @@ def _resolve_source_kind():
     from ..bootstrap import resolve_socket_path
     from .onboarding import read_choice
 
-    socket_path = resolve_socket_path(None)
+    socket_path = resolve_socket_path(_load_partial_config())
     config_path = _default_config_paths()[0]
     return select_source_kind(
         mock_env=bool(os.environ.get("HERDECK_MOCK")),

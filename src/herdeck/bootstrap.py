@@ -15,6 +15,7 @@ from .config import (
     SafetyConfig,
     ServerConfig,
     ThemeConfig,
+    UsageConfig,
     ViewConfig,
 )
 
@@ -64,6 +65,7 @@ def _local_config_for_server(server: ServerConfig, partial=None) -> Config:
         theme=partial.theme if partial else ThemeConfig(),
         view=partial.view if partial else ViewConfig(),
         safety=partial.safety if partial else SafetyConfig(),
+        usage=partial.usage if partial else UsageConfig(),
         hardware=partial.hardware if partial else HardwareConfig(),
         meta=partial.meta if partial else ConfigMeta(),
     )
