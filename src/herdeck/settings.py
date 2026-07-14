@@ -47,7 +47,6 @@ class SettingsSnapshot:
 class ResolvedSettings:
     config: Config
     local_path: Path | None
-    startup_only_changed: bool = False
 
 
 def load_settings(

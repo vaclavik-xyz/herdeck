@@ -456,7 +456,7 @@ class _FakeSource:
     connected = True
     server_id = None
 
-    def __init__(self, grid):
+    def __init__(self, grid, *, tick_interval=0.4, brightness=80):
         from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
 
         self._cfg = Config(
@@ -465,6 +465,8 @@ class _FakeSource:
             overview_order=["m"],
             grid=grid,
         )
+        self._cfg.hardware.tick_interval = tick_interval
+        self._cfg.hardware.brightness = brightness
 
     @property
     def config(self):
@@ -518,6 +520,86 @@ def test_swap_source_updates_sink_geometry_when_grid_expands():
     app.swap_source(_FakeSource((5, 3)))
 
     assert sink.slots == [10, 13]
+
+
+def test_swap_source_adopts_tick_interval_and_reconfigures_hardware_sink():
+    from herdeck.deckapp.server import DeckApp
+
+    class HardwareSink:
+        def __init__(self):
+            self.reconfigured = 0
+
+        def reconfigure(self):
+            self.reconfigured += 1
+
+        def deliver(self, frame):
+            pass
+
+        def close(self):
+            pass
+
+    app = DeckApp(
+        _FakeSource((5, 3), tick_interval=0.4, brightness=80),
+        serve=False,
+        tick_interval=0.4,
+    )
+    sink = HardwareSink()
+    app.add_sink(sink)
+
+    app.swap_source(_FakeSource((5, 3), tick_interval=1.25, brightness=35))
+
+    assert app._tick_interval == 1.25
+    assert sink.reconfigured == 1
+
+
+def test_tick_only_reload_does_not_reopen_hardware_sink():
+    from herdeck.deckapp.server import DeckApp
+
+    class HardwareSink:
+        def __init__(self):
+            self.reconfigured = 0
+
+        def reconfigure(self):
+            self.reconfigured += 1
+
+        def deliver(self, frame):
+            pass
+
+        def close(self):
+            pass
+
+    app = DeckApp(
+        _FakeSource((5, 3), tick_interval=0.4),
+        serve=False,
+        tick_interval=0.4,
+    )
+    sink = HardwareSink()
+    app.add_sink(sink)
+
+    app.swap_source(_FakeSource((5, 3), tick_interval=1.25))
+
+    assert app._tick_interval == 1.25
+    assert sink.reconfigured == 0
+
+
+def test_shorter_tick_interval_wakes_running_ticker_immediately():
+    import threading
+
+    from herdeck.deckapp.server import DeckApp
+
+    app = DeckApp(
+        _FakeSource((5, 3), tick_interval=1.0),
+        serve=True,
+        port=0,
+        tick_interval=1.0,
+    )
+    ticked = threading.Event()
+    app._tick_once = ticked.set
+    try:
+        app.swap_source(_FakeSource((5, 3), tick_interval=0.01))
+        assert ticked.wait(0.3)
+    finally:
+        app.close()
 
 
 def test_config_get_requires_token_and_returns_redacted(tmp_path, monkeypatch):

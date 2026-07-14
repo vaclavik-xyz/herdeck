@@ -148,6 +148,7 @@ class ReconnectingD200Sink:
         self._latest_frame: RenderFrame | None = None
         self._active: D200Sink | None = None
         self._stop = threading.Event()
+        self._reconfigure = threading.Event()
         self._thread = threading.Thread(
             target=self._run,
             name="herdeck-d200-reconnect",
@@ -170,8 +171,15 @@ class ReconnectingD200Sink:
             if active is not None:
                 active.set_slots(slots)
 
+    def reconfigure(self) -> None:
+        """Reopen the active driver so it adopts the latest hardware config."""
+        self._reconfigure.set()
+
     def _run(self) -> None:
         while not self._stop.is_set():
+            # If configuration changed while no device was attached, the next
+            # factory call already reads the newest app.config.
+            self._reconfigure.clear()
             try:
                 driver = self._driver_factory()
             except Exception as exc:
@@ -211,7 +219,7 @@ class ReconnectingD200Sink:
             log.info("D200 attached")
 
             while not self._stop.wait(0.25):
-                if disconnected.is_set():
+                if disconnected.is_set() or self._reconfigure.is_set():
                     break
 
             with self._lock:
@@ -220,6 +228,8 @@ class ReconnectingD200Sink:
             active.close()
             if disconnected.is_set() and not self._stop.is_set():
                 log.info("D200 disconnected; reopening")
+            elif self._reconfigure.is_set() and not self._stop.is_set():
+                log.info("D200 configuration changed; reopening")
 
     def close(self) -> None:
         if self._stop.is_set():

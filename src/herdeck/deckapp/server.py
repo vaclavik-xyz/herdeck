@@ -62,6 +62,7 @@ class DeckApp:
         config_service=None,
         reloader=None,
     ):
+        self._serve_enabled = serve
         self._source = source
         config = source.config
         cols, rows = config.grid
@@ -120,6 +121,7 @@ class DeckApp:
         # Only when actually serving (mock/test path leaves it off -> deterministic).
         self._tick_interval = tick_interval
         self._ticker_stop = threading.Event()
+        self._ticker_wake = threading.Event()
         self._ticker_thread: threading.Thread | None = None
         if serve and tick_interval > 0:
             self._ticker_thread = threading.Thread(
@@ -272,6 +274,36 @@ class DeckApp:
         except Exception:
             log.warning("render sink %r failed to adopt %s slots", sink, slots, exc_info=True)
 
+    @staticmethod
+    def _reconfigure_sink_locked(sink) -> None:
+        reconfigure = getattr(sink, "reconfigure", None)
+        if reconfigure is None:
+            return
+        try:
+            reconfigure()
+        except Exception:
+            log.warning("render sink %r failed to reconfigure", sink, exc_info=True)
+
+    @staticmethod
+    def _d200_hardware_signature(hardware) -> tuple:
+        return (
+            hardware.brightness,
+            hardware.debounce,
+            hardware.keep_alive_interval,
+            hardware.icons_dir,
+        )
+
+    def _adopt_tick_interval_locked(self, interval: float) -> None:
+        if interval == self._tick_interval:
+            return
+        self._tick_interval = interval
+        self._ticker_wake.set()
+        if self._serve_enabled and self._ticker_thread is None:
+            self._ticker_thread = threading.Thread(
+                target=self._ticker_loop, name="herdeck-deckapp-tick", daemon=True
+            )
+            self._ticker_thread.start()
+
     def _tick_once(self) -> None:
         """Advance the spinner phase and re-render, atomically w.r.t. presses
         and bridge updates (same lock). A tick renders only when something
@@ -290,9 +322,12 @@ class DeckApp:
                 self._refresh_locked(working=working, full=False)
 
     def _ticker_loop(self) -> None:
-        # Event.wait returns False on timeout (a tick is due) and True once close()
-        # sets the event (clean stop) — so this never busy-waits and exits promptly.
-        while not self._ticker_stop.wait(self._tick_interval):
+        # A config reload wakes the current wait so a shorter interval takes
+        # effect immediately; close sets both stop+wake for a prompt exit.
+        while not self._ticker_stop.is_set():
+            if self._ticker_wake.wait(self._tick_interval):
+                self._ticker_wake.clear()
+                continue
             self._tick_once()
 
     def press(self, index: int) -> None:
@@ -326,6 +361,7 @@ class DeckApp:
         ticker = getattr(self, "_ticker_thread", None)
         if ticker is not None:
             self._ticker_stop.set()
+            self._ticker_wake.set()
             if ticker is not threading.current_thread():
                 ticker.join(timeout=2)
             self._ticker_thread = None
@@ -413,13 +449,19 @@ class DeckApp:
         usage_changed = self._adopt_usage_config(new_source.config)
         with self._lock:
             old = self._source
+            hardware_changed = self._d200_hardware_signature(
+                old.config.hardware
+            ) != self._d200_hardware_signature(new_source.config.hardware)
             self._source = new_source
             self._slots = slots
             self._orch = orch
             self._clock = clk  # adopt the clock the orchestrator was built with
             new_source.attach(orch, lock=self._lock, refresh_locked=self._refresh_locked)
+            self._adopt_tick_interval_locked(new_source.config.hardware.tick_interval)
             for sink in self._sinks:
                 self._set_sink_slots_locked(sink, slots)
+                if hardware_changed:
+                    self._reconfigure_sink_locked(sink)
             self._apply_rendered_locked(tiles, panel_png, sections)
             self._fan_out_locked(rs, None, True)
             if usage_changed:

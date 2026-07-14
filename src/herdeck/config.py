@@ -152,7 +152,6 @@ class ConfigMeta:
     active_profile: str = "default"
     profile_names: list[str] = field(default_factory=lambda: ["default"])
     env_locked_profile: bool = False
-    restart_required: bool = False
 
 
 # Quick-send macros shown when drilling into a non-blocked agent.

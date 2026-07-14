@@ -185,6 +185,54 @@ def test_reconnecting_sink_retries_initially_missing_device_and_paints_latest_fr
         sink.close()
 
 
+def test_reconnecting_sink_reopens_active_driver_on_reconfigure():
+    class ConnectedDriver(FrameDriver):
+        def __init__(self):
+            super().__init__()
+            self.release_reader = threading.Event()
+
+        async def run_reader(self):
+            await asyncio.to_thread(self.release_reader.wait)
+
+        def close(self):
+            super().close()
+            self.release_reader.set()
+
+    drivers = []
+
+    def factory():
+        driver = ConnectedDriver()
+        drivers.append(driver)
+        return driver
+
+    sink = ReconnectingD200Sink(
+        factory,
+        on_press=lambda i: None,
+        slots=13,
+        retry_interval=0.01,
+    )
+    frame = RenderFrame(render=_RS([_Tile(0)], panel="latest"), working=None, full=True)
+    try:
+        sink.deliver(frame)
+        deadline = time.monotonic() + 2.0
+        while (not drivers or not drivers[0].frames) and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        sink.reconfigure()
+
+        deadline = time.monotonic() + 2.0
+        while len(drivers) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(drivers) >= 2
+        assert drivers[0].closed is True
+        deadline = time.monotonic() + 2.0
+        while not drivers[1].frames and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert drivers[1].frames == [([0], "latest")]
+    finally:
+        sink.close()
+
+
 def test_reconnecting_sink_cannot_overwrite_concurrent_frame_with_stale_repaint():
     class BlockingDriver(FakeDriver):
         def __init__(self):
