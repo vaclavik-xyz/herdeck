@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from herdeck.app_control import ActionResult
-from herdeck.commands import decision_revision
+from herdeck.decisions import decision_revision
 from herdeck.model import AgentKey, AgentState, Status, WorkContext
 from herdeck.semantic_api import TEXT_MAX_BYTES, SemanticAPI
 

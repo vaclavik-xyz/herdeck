@@ -13,7 +13,7 @@ from typing import Protocol
 
 import websockets
 
-from .commands import decision_revision
+from .decisions import decision_choices, decision_revision
 from .model import WorkContext
 from .protocol import encode
 
@@ -407,6 +407,15 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
             prompt,
         )
         if current_revision != msg.get("decision_revision"):
+            return encode(
+                {
+                    "type": "result",
+                    "req": msg["req"],
+                    "data": {"skipped": True, "message": "stale_choice"},
+                }
+            )
+        valid_choices = {item["key"] for item in decision_choices(prompt)}
+        if msg.get("choice") not in valid_choices:
             return encode(
                 {
                     "type": "result",

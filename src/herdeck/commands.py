@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, field
 
 from .config import AnswerProfile, Config
@@ -18,17 +16,6 @@ class Command:
     text: str | None = None  # for send_text (macros) / start (agent name)
     terminal_id: str | None = None  # expected stable identity for pane-bound commands
     decision_revision: str | None = None
-
-
-def decision_revision(
-    server_id: str, pane_id: str, terminal_id: str, prompt: str
-) -> str:
-    encoded = json.dumps(
-        [server_id, pane_id, terminal_id, prompt],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def command_to_msg(cmd: Command, req: str | None) -> dict:

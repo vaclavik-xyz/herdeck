@@ -16,7 +16,7 @@ from herdeck.bridge import (
     _worktrees_by_workspace,
     handle_client_message,
 )
-from herdeck.commands import decision_revision
+from herdeck.decisions import decision_revision
 
 
 def raw_pane(pane_id="w1:p1", agent="claude", status="blocked", cwd="/home/user/projects/api"):
@@ -661,6 +661,28 @@ async def test_guarded_choice_rejects_changed_prompt(herdr):
                 "decision_revision": decision_revision(
                     "workbox", "w1:p1", "", "Choose:\n1. Continue\n2. Explain first"
                 ),
+            }
+        ),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "stale_choice"}
+    assert herdr.sent == []
+
+
+async def test_guarded_choice_rejects_missing_option_with_valid_revision(herdr):
+    prompt = "Choose:\n1. Continue\n2. Explain first"
+    herdr.detection["w1:p1"] = prompt
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps(
+            {
+                "type": "choose_if_blocked",
+                "req": "c-missing",
+                "pane_id": "w1:p1",
+                "choice": "999",
+                "decision_revision": decision_revision("workbox", "w1:p1", "", prompt),
             }
         ),
     )

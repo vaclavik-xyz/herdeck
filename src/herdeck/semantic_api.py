@@ -10,8 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .app_control import ActionResult, RuntimeAgentControl
-from .commands import decision_revision
-from .layout import parse_options
+from .decisions import decision_choices, decision_revision
 from .model import AgentKey, AgentState, Status
 
 API_VERSION = "v1"
@@ -20,8 +19,6 @@ IDEMPOTENCY_TTL_S = 10 * 60.0
 IDEMPOTENCY_LIMIT = 1024
 STOP_CONFIRM_TTL_S = 60.0
 STOP_CONFIRM_LIMIT = 1024
-DECISION_MAX_CHOICES = 12
-DECISION_LABEL_MAX_CHARS = 240
 
 
 @dataclass(frozen=True)
@@ -293,7 +290,7 @@ class SemanticAPI:
             return self._outcome(503, "backend_failure", "backend request failed")
         except Exception:
             return self._outcome(502, "backend_failure", "backend request failed")
-        choices = self._parse_choices(prompt)
+        choices = decision_choices(prompt)
         current = self._resolve_target(target)
         if isinstance(current, SemanticResponse):
             return current
@@ -491,17 +488,6 @@ class SemanticAPI:
         if set(payload) - allowed:
             return self._validation("unknown fields are not allowed")
         return self._target(payload)
-
-    @staticmethod
-    def _parse_choices(prompt: str) -> list[dict[str, str]]:
-        return [
-            {
-                "key": _bounded(option.key, 16),
-                "label": _bounded(option.label, DECISION_LABEL_MAX_CHARS),
-            }
-            for option in parse_options(prompt)[:DECISION_MAX_CHOICES]
-            if option.key and len(option.key) <= 16 and option.label
-        ]
 
     def _idempotency_key(self, payload: dict) -> str | SemanticResponse:
         value = payload.get("idempotency_key")
