@@ -62,6 +62,11 @@
 
   // --- overlay mode helpers ---
   function lineFallback(key: string, fields: string[]): string[] {
+    const deck = getAt(payload, "local", "local", "deck");
+    if (deck === "elgato") {
+      if (key === "tile_primary") return ["repo"];
+      if (key === "tile_secondary") return ["branch"];
+    }
     if (key === "tile_primary") return fields.includes("repo") ? ["repo"] : [];
     if (key === "tile_secondary") return fields.includes("branch") ? ["branch"] : [];
     return VIEW_LIST_DEFAULTS[key] ?? [];
@@ -86,7 +91,8 @@
   function effectiveList(key: string): string[] {
     const value = inheritedFor(payload, prof, SEC, key);
     if (Array.isArray(value)) return value as string[];
-    const fields = inheritedFor(payload, prof, SEC, "tile_fields") ?? VIEW_LIST_DEFAULTS.tile_fields;
+    const ownFields = overrideValue(payload, prof, SEC, "tile_fields");
+    const fields = ownFields ?? inheritedFor(payload, prof, SEC, "tile_fields") ?? VIEW_LIST_DEFAULTS.tile_fields;
     return lineFallback(key, Array.isArray(fields) ? fields as string[] : []);
   }
   function setOvList(key: string, state: ListFieldState, list: string[]): void {

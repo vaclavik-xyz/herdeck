@@ -3,7 +3,7 @@
   import { t } from "../i18n.svelte";
   import type { ListFieldState } from "../configClient";
 
-  let { label, state, list, customSeed, defaultHint, inheritLabel, inheritHint, onchange, help = "" }:
+  let { label, state: fieldState, list, customSeed, defaultHint, inheritLabel, inheritHint, onchange, help = "" }:
     {
       label: string;
       state: ListFieldState;
@@ -21,18 +21,35 @@
     { value: "custom", text: t("widget.custom") },
     { value: "empty", text: t("widget.off") },
   ]);
+  let draft = $state<string[] | null>(null);
+  const visibleState = $derived(draft === null ? fieldState : "custom");
+  const visibleList = $derived(draft === null ? list : draft);
 
   // Switching to "custom" carries the current list (user then edits it); if the list is
   // empty, seed one blank row so the write is non-empty ([] persists as "empty", not
   // "custom", because setListField writes [] for both — see configClient comment).
   // "default"/"empty" pass list through unchanged (write-time state drives the output).
   function pick(next: ListFieldState): void {
-    if (next === state) return;
+    if (next === visibleState) return;
     if (next === "custom") {
-      onchange("custom", list.length > 0 ? list : customSeed !== undefined ? customSeed : [""]);
+      const seed = list.length > 0 ? list : customSeed !== undefined ? customSeed : [""];
+      if (seed.length === 0) {
+        draft = [""];
+        return;
+      }
+      onchange("custom", seed);
     } else {
+      draft = null;
       onchange(next, list);
     }
+  }
+  function editCustom(next: string[]): void {
+    if (draft !== null && !next.some((item) => item.trim() !== "")) {
+      draft = next.length > 0 ? next : [""];
+      return;
+    }
+    draft = null;
+    onchange("custom", next);
   }
 </script>
 
@@ -43,15 +60,15 @@
       {#each SEGMENTS as s}
         <button
           type="button"
-          class:on={s.value === state}
-          aria-pressed={s.value === state}
+          class:on={s.value === visibleState}
+          aria-pressed={s.value === visibleState}
           onclick={() => pick(s.value)}
         >{s.text}</button>
       {/each}
     </div>
-    {#if state === "custom"}
-      <ListField label="" value={list} onchange={(v) => onchange("custom", v)} />
-    {:else if state === "default"}
+    {#if visibleState === "custom"}
+      <ListField label="" value={visibleList} onchange={editCustom} />
+    {:else if visibleState === "default"}
       <p class="hint">{inheritHint ?? (defaultHint ? `${t("widget.default_prefix")} ${defaultHint}` : t("widget.default_empty"))}</p>
     {:else}
       <p class="hint">{t("widget.empty_off")}</p>

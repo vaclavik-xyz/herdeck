@@ -26,4 +26,53 @@ describe("ViewSection", () => {
       unmount(instance);
     }
   });
+
+  it("uses the profile's own tile_fields override for line fallbacks", () => {
+    setLang("en");
+    const payload = parseConfig({
+      profiles: { night: { view: { tile_fields: ["status"] } } },
+    })!;
+    const target = document.createElement("div");
+    const instance = mount(ViewSection, {
+      target,
+      props: { payload, editProfile: "night", onChange: () => {}, onError: () => {} },
+    });
+    try {
+      const fields = Array.from(target.querySelectorAll(".tristate"));
+      for (const name of ["tile_primary", "tile_secondary"]) {
+        const field = fields.find(
+          (item) => item.querySelector(".label")?.textContent?.trim() === name,
+        );
+        expect(field?.querySelector(".hint")?.textContent).not.toMatch(/repo|branch/);
+      }
+    } finally {
+      unmount(instance);
+    }
+  });
+
+  it("shows Elgato's fixed repo and branch fallbacks", () => {
+    setLang("en");
+    const payload = parseConfig({
+      base: { view: { tile_fields: ["status"] } },
+      local: { local: { deck: "elgato" } },
+    })!;
+    const target = document.createElement("div");
+    const instance = mount(ViewSection, {
+      target,
+      props: { payload, onChange: () => {}, onError: () => {} },
+    });
+    try {
+      const fields = Array.from(target.querySelectorAll(".tristate"));
+      const primary = fields.find(
+        (item) => item.querySelector(".label")?.textContent?.trim() === "tile_primary",
+      );
+      const secondary = fields.find(
+        (item) => item.querySelector(".label")?.textContent?.trim() === "tile_secondary",
+      );
+      expect(primary?.querySelector(".hint")?.textContent).toContain("repo");
+      expect(secondary?.querySelector(".hint")?.textContent).toContain("branch");
+    } finally {
+      unmount(instance);
+    }
+  });
 });
