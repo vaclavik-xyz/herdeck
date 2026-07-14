@@ -142,6 +142,31 @@ tick_interval = 1.25
     assert cfg.hardware.tick_interval == 1.25
 
 
+@pytest.mark.parametrize(
+    ("local_text", "error"),
+    [
+        ('[local]\nweb_port = 0\n', "local.web_port"),
+        ('[local]\nweb_port = 65536\n', "local.web_port"),
+        ('[local]\nweb_port = "8800"\n', "local.web_port"),
+        ('[local]\nweb_port = true\n', "local.web_port"),
+        ('[hardware]\nbrightness = -1\n', "hardware.brightness"),
+        ('[hardware]\nbrightness = 101\n', "hardware.brightness"),
+        ('[hardware]\nbrightness = 80.5\n', "hardware.brightness"),
+        ('[hardware]\nbrightness = true\n', "hardware.brightness"),
+        ('[hardware]\ndebounce = 0\n', "hardware.debounce"),
+        ('[hardware]\ndebounce = nan\n', "hardware.debounce"),
+        ('[hardware]\nkeep_alive_interval = -1\n', "hardware.keep_alive_interval"),
+        ('[hardware]\ntick_interval = 0\n', "hardware.tick_interval"),
+    ],
+)
+def test_hardware_rejects_invalid_types_and_ranges(tmp_path, local_text, error):
+    config = write(tmp_path / "config.toml", '[deck]\ngrid = "5x3"\n')
+    local = write(tmp_path / "local.toml", local_text)
+
+    with pytest.raises(ConfigError, match=error):
+        resolve_profile(load_settings(config, local))
+
+
 def test_missing_token_still_fails_without_secret_value(tmp_path, monkeypatch):
     monkeypatch.delenv("TOK", raising=False)
     snap = load_settings(_write(tmp_path, OVERLAY_CONFIG))

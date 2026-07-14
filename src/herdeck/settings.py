@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tomllib
@@ -322,16 +323,51 @@ def _launcher(raw) -> dict[str, list[str]]:
 def _hardware_config(local_data: dict) -> HardwareConfig:
     raw = local_data.get("local", {})
     hw = local_data.get("hardware", {})
+    if not isinstance(raw, dict):
+        raise ConfigError("local must be a table")
+    if not isinstance(hw, dict):
+        raise ConfigError("hardware must be a table")
+
+    web_port = raw.get("web_port")
+    if web_port is not None and (
+        not isinstance(web_port, int) or isinstance(web_port, bool) or not 1 <= web_port <= 65535
+    ):
+        raise ConfigError("local.web_port must be an integer from 1 to 65535")
+
+    brightness = hw.get("brightness", 80)
+    if (
+        not isinstance(brightness, int)
+        or isinstance(brightness, bool)
+        or not 0 <= brightness <= 100
+    ):
+        raise ConfigError("hardware.brightness must be an integer from 0 to 100")
+
+    intervals = {}
+    for key, default in (
+        ("debounce", 0.25),
+        ("keep_alive_interval", 5.0),
+        ("tick_interval", 0.4),
+    ):
+        value = hw.get(key, default)
+        if (
+            not isinstance(value, int | float)
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+            or value <= 0
+        ):
+            raise ConfigError(f"hardware.{key} must be a positive number")
+        intervals[key] = float(value)
+
     return HardwareConfig(
         deck=raw.get("deck"),
         herdr_socket=raw.get("herdr_socket"),
         web_bind=raw.get("web_bind"),
-        web_port=raw.get("web_port"),
+        web_port=web_port,
         icons_dir=raw.get("icons_dir"),
-        brightness=hw.get("brightness", 80),
-        debounce=hw.get("debounce", 0.25),
-        keep_alive_interval=hw.get("keep_alive_interval", 5.0),
-        tick_interval=hw.get("tick_interval", 0.4),
+        brightness=brightness,
+        debounce=intervals["debounce"],
+        keep_alive_interval=intervals["keep_alive_interval"],
+        tick_interval=intervals["tick_interval"],
     )
 
 
