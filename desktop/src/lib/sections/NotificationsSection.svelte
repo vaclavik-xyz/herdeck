@@ -72,7 +72,7 @@
     chat_id: string;
     message_thread_id: number | null;
     interactive: boolean;
-    allowed_user_ids: number[];
+    allowed_user_ids: number[] | string;
     prompt_max_chars: number;
   } => {
     const v = getAt(payload, "base", "notifications", "telegram");
@@ -84,7 +84,7 @@
       interactive: t.interactive === true,
       allowed_user_ids: Array.isArray(t.allowed_user_ids)
         ? t.allowed_user_ids.filter((value): value is number => typeof value === "number")
-        : [],
+        : typeof t.allowed_user_ids === "string" ? t.allowed_user_ids : [],
       prompt_max_chars: typeof t.prompt_max_chars === "number" ? t.prompt_max_chars : 1200,
     };
   })());
@@ -102,16 +102,18 @@
     payload = updateBaseTelegram(payload, field, v);
     onChange();
   }
-  function parseIntegerList(raw: string): number[] | null {
+  function parseIntegerList(raw: string): number[] | string {
     if (raw.trim() === "") return [];
     const values = raw.split(",").map((part) => part.trim());
-    if (values.some((part) => !/^-?\d+$/.test(part))) return null;
+    if (values.some((part) => !/^-?\d+$/.test(part))) return raw;
     const parsed = values.map(Number);
-    return parsed.every(Number.isSafeInteger) ? parsed : null;
+    return parsed.every(Number.isSafeInteger) ? parsed : raw;
   }
   function setBaseAllowedUsers(raw: string): void {
-    const parsed = parseIntegerList(raw);
-    if (parsed !== null) setTelegram("allowed_user_ids", parsed);
+    setTelegram("allowed_user_ids", parseIntegerList(raw));
+  }
+  function integerListText(value: unknown): string {
+    return Array.isArray(value) ? value.join(", ") : typeof value === "string" ? value : "";
   }
   async function setSecret(name: string, value: string): Promise<void> {
     const code = await cfg.setSecret(name, value);
@@ -163,14 +165,24 @@
     if (own !== undefined) return own;
     return inheritedForPath(payload, prof, tgPath(k)) ?? TELEGRAM_DEFAULTS[k];
   }
+  function tgInheritedRaw(k: string): unknown {
+    return inheritedForPath(payload, prof, tgPath(k)) ?? TELEGRAM_DEFAULTS[k];
+  }
+  function tgFieldState(k: string): "inherit" | "override" {
+    return overrideValuePath(payload, prof, tgPath(k)) === undefined ? "inherit" : "override";
+  }
+  function tgInheritedDisplay(k: string): string {
+    const value = tgInheritedRaw(k);
+    if (Array.isArray(value)) return value.length > 0 ? value.join(", ") : lm.none;
+    return value == null ? lm.none : String(value);
+  }
   function tgNumber(k: string): number | null {
     const value = tgRaw(k);
     return typeof value === "number" ? value : null;
   }
   function tgBoolean(k: string): boolean { return tgRaw(k) === true; }
   function tgIntegerList(k: string): string {
-    const value = tgRaw(k);
-    return Array.isArray(value) ? value.join(", ") : "";
+    return integerListText(tgRaw(k));
   }
   function tgOrigin(k: string): string {
     if (overrideValuePath(payload, prof, tgPath(k)) !== undefined) return lm.origin_own;
@@ -188,15 +200,21 @@
   function setTgScalar(k: string, value: unknown): void {
     payload = {
       ...payload,
-      profiles: value === null
+      profiles: setOverridePath(payload.profiles, prof, tgPath(k), value),
+    };
+    onChange();
+  }
+  function setTgFieldState(k: string, state: "inherit" | "override"): void {
+    payload = {
+      ...payload,
+      profiles: state === "inherit"
         ? clearOverridePath(payload.profiles, prof, tgPath(k))
-        : setOverridePath(payload.profiles, prof, tgPath(k), value),
+        : setOverridePath(payload.profiles, prof, tgPath(k), tgInheritedRaw(k)),
     };
     onChange();
   }
   function setTgAllowedUsers(raw: string): void {
-    const parsed = parseIntegerList(raw);
-    if (parsed !== null) setTgScalar("allowed_user_ids", parsed);
+    setTgScalar("allowed_user_ids", parseIntegerList(raw));
   }
 </script>
 
@@ -223,10 +241,18 @@
       onclear={() => clearSecret(tgValue("token_env"))}
     />
     <TextField label={`chat_id (${tgOrigin("chat_id")})`} help={HELP.chat_id} value={tgValue("chat_id")} oninput={(v) => setTg("chat_id", v)} />
-    <NumberField label={`message_thread_id (${tgOrigin("message_thread_id")})`} help={HELP.message_thread_id} int value={tgNumber("message_thread_id")} onchange={(v) => setTgScalar("message_thread_id", v)} />
-    <BooleanField label={`interactive (${tgOrigin("interactive")})`} help={HELP.interactive} value={tgBoolean("interactive")} onchange={(v) => setTgScalar("interactive", v)} />
-    <TextField label={`allowed_user_ids (${tgOrigin("allowed_user_ids")})`} help={HELP.allowed_user_ids} value={tgIntegerList("allowed_user_ids")} oninput={setTgAllowedUsers} />
-    <NumberField label={`prompt_max_chars (${tgOrigin("prompt_max_chars")})`} help={HELP.prompt_max_chars} int value={tgNumber("prompt_max_chars")} onchange={(v) => setTgScalar("prompt_max_chars", v)} />
+    <OverrideField label="message_thread_id" help={HELP.message_thread_id} state={tgFieldState("message_thread_id")} inheritedDisplay={tgInheritedDisplay("message_thread_id")} onstate={(s) => setTgFieldState("message_thread_id", s)}>
+      <NumberField label="" int value={tgNumber("message_thread_id")} onchange={(v) => setTgScalar("message_thread_id", v)} />
+    </OverrideField>
+    <OverrideField label="interactive" help={HELP.interactive} state={tgFieldState("interactive")} inheritedDisplay={tgInheritedDisplay("interactive")} onstate={(s) => setTgFieldState("interactive", s)}>
+      <BooleanField label="" value={tgBoolean("interactive")} onchange={(v) => setTgScalar("interactive", v)} />
+    </OverrideField>
+    <OverrideField label="allowed_user_ids" help={HELP.allowed_user_ids} state={tgFieldState("allowed_user_ids")} inheritedDisplay={tgInheritedDisplay("allowed_user_ids")} onstate={(s) => setTgFieldState("allowed_user_ids", s)}>
+      <TextField label="" value={tgIntegerList("allowed_user_ids")} oninput={setTgAllowedUsers} />
+    </OverrideField>
+    <OverrideField label="prompt_max_chars" help={HELP.prompt_max_chars} state={tgFieldState("prompt_max_chars")} inheritedDisplay={tgInheritedDisplay("prompt_max_chars")} onstate={(s) => setTgFieldState("prompt_max_chars", s)}>
+      <NumberField label="" int value={tgNumber("prompt_max_chars")} onchange={(v) => setTgScalar("prompt_max_chars", v)} />
+    </OverrideField>
   </fieldset>
 {:else}
   <BooleanField label="enabled" help={HELP.enabled} value={enabled} onchange={(v) => set("enabled", v)} />
@@ -239,7 +265,7 @@
     <TextField label="chat_id" help={HELP.chat_id} value={telegram.chat_id} oninput={(v) => setTelegram("chat_id", v)} />
     <NumberField label="message_thread_id" help={HELP.message_thread_id} int value={telegram.message_thread_id} onchange={(v) => setTelegram("message_thread_id", v)} />
     <BooleanField label="interactive" help={HELP.interactive} value={telegram.interactive} onchange={(v) => setTelegram("interactive", v)} />
-    <TextField label="allowed_user_ids" help={HELP.allowed_user_ids} value={telegram.allowed_user_ids.join(", ")} oninput={setBaseAllowedUsers} />
+    <TextField label="allowed_user_ids" help={HELP.allowed_user_ids} value={integerListText(telegram.allowed_user_ids)} oninput={setBaseAllowedUsers} />
     <NumberField label="prompt_max_chars" help={HELP.prompt_max_chars} int value={telegram.prompt_max_chars} onchange={(v) => setTelegram("prompt_max_chars", v)} />
   </fieldset>
 {/if}
