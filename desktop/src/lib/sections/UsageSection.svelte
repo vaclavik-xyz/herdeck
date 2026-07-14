@@ -21,7 +21,12 @@
 
   // Mirror of backend defaults (settings.py _usage_config) — keep in sync.
   const USAGE_DEFAULTS: Record<string, unknown> = {
-    providers: [], paid_only: false, refresh_secs: 300, codexbar_path: "codexbar",
+    providers: [],
+    paid_only: false,
+    refresh_secs: 300,
+    codex_path: "codex",
+    claude_cache_path: "~/.cache/herdeck/claude-usage.json",
+    codexbar_path: "codexbar",
   };
 
   const HELP = $derived(fieldHelp("usage"));
@@ -52,6 +57,8 @@
   const providers = $derived((getAt(payload, "base", SEC, "providers") as string[]) ?? []);
   const paidOnly = $derived((getAt(payload, "base", SEC, "paid_only") as boolean) ?? false);
   const refreshSecs = $derived((getAt(payload, "base", SEC, "refresh_secs") as number) ?? 300);
+  const codexPath = $derived((getAt(payload, "base", SEC, "codex_path") as string) ?? "codex");
+  const claudeCachePath = $derived((getAt(payload, "base", SEC, "claude_cache_path") as string) ?? "~/.cache/herdeck/claude-usage.json");
   const codexbarPath = $derived((getAt(payload, "base", SEC, "codexbar_path") as string) ?? "codexbar");
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   // Empty text / cleared number returns the key to the backend default instead
@@ -99,10 +106,16 @@
     <BooleanField label={lm.enabled} help={HELP.paid_only} value={Boolean(scValue("paid_only"))} onchange={(v) => setSc("paid_only", v)} />
   </OverrideField>
   <OverrideField label="refresh_secs" help={HELP.refresh_secs} state={scState("refresh_secs")} inheritedDisplay={hint("refresh_secs")} onstate={(s) => setScState("refresh_secs", s)}>
-    <NumberField label="" int value={Number(scValue("refresh_secs"))} onchange={(v) => setScOrInherit("refresh_secs", v)} />
+    <NumberField label="" int min={30} value={Number(scValue("refresh_secs"))} onchange={(v) => setScOrInherit("refresh_secs", v)} />
+  </OverrideField>
+  <OverrideField label="codex_path" help={HELP.codex_path} state={scState("codex_path")} inheritedDisplay={hint("codex_path")} onstate={(s) => setScState("codex_path", s)}>
+    <TextField label="" value={String(scValue("codex_path") ?? "")} oninput={(v) => setScOrInherit("codex_path", v.trim() === "" ? "" : v)} />
+  </OverrideField>
+  <OverrideField label="claude_cache_path" help={HELP.claude_cache_path} state={scState("claude_cache_path")} inheritedDisplay={hint("claude_cache_path")} onstate={(s) => setScState("claude_cache_path", s)}>
+    <TextField label="" value={String(scValue("claude_cache_path") ?? "")} oninput={(v) => setScOrInherit("claude_cache_path", v.trim() === "" ? "" : v)} />
   </OverrideField>
   <OverrideField label="codexbar_path" help={HELP.codexbar_path} state={scState("codexbar_path")} inheritedDisplay={hint("codexbar_path")} onstate={(s) => setScState("codexbar_path", s)}>
-    <TextField label="" value={String(scValue("codexbar_path") ?? "")} oninput={(v) => setScOrInherit("codexbar_path", v.trim() === "" ? "" : v)} />
+    <TextField label="" value={String(scValue("codexbar_path") ?? "")} oninput={(v) => setSc("codexbar_path", v)} />
   </OverrideField>
 {:else}
   <ProviderPicker providers={providers} help={HELP.providers} onchange={setBaseProviders} />
@@ -111,8 +124,10 @@
     <ListField label={lm.provider_ids} help={HELP.providers} value={providers} onchange={setBaseProviders} />
   </details>
   <BooleanField label={lm.active_only} help={HELP.paid_only} value={paidOnly} onchange={(v) => set("paid_only", v)} />
-  <NumberField label="refresh_secs" help={HELP.refresh_secs} int value={refreshSecs} onchange={(v) => setOrRemove("refresh_secs", v)} />
-  <TextField label="codexbar_path" help={HELP.codexbar_path} value={codexbarPath} oninput={(v) => setOrRemove("codexbar_path", v.trim() === "" ? "" : v)} />
+  <NumberField label="refresh_secs" help={HELP.refresh_secs} int min={30} value={refreshSecs} onchange={(v) => setOrRemove("refresh_secs", v)} />
+  <TextField label="codex_path" help={HELP.codex_path} value={codexPath} oninput={(v) => setOrRemove("codex_path", v.trim() === "" ? "" : v)} />
+  <TextField label="claude_cache_path" help={HELP.claude_cache_path} value={claudeCachePath} oninput={(v) => setOrRemove("claude_cache_path", v.trim() === "" ? "" : v)} />
+  <TextField label="codexbar_path" help={HELP.codexbar_path} value={codexbarPath} oninput={(v) => set("codexbar_path", v)} />
 {/if}
 
 <style>

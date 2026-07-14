@@ -74,6 +74,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       providers: "Providers shown on the deck; Claude and Codex use native account data, while other ids use the CodexBar fallback.",
       paid_only: "Show only providers whose native account data confirms a paid subscription; unknown or free accounts stay hidden.",
       refresh_secs: "How often provider limits are refreshed in seconds (min 30, default 300); limits move slowly, keep it high.",
+      codex_path: "Codex executable name or path used to read native account limits (default codex).",
+      claude_cache_path: "Path to the Claude usage cache JSON written by the native integration.",
       codexbar_path: "codexbar executable name or path; bare names also search /opt/homebrew/bin and /usr/local/bin.",
     },
     answer_profiles: {
@@ -159,6 +161,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       providers: "Poskytovatelé zobrazení na decku; Claude a Codex používají nativní data účtu, ostatní ID záložní CodexBar.",
       paid_only: "Zobrazí jen poskytovatele, u kterých nativní data účtu potvrdí placené předplatné; neznámé a bezplatné účty skryje.",
       refresh_secs: "Jak často se limity poskytovatelů obnoví v sekundách (min 30, výchozí 300); limity se mění pomalu, nechte vysoké.",
+      codex_path: "Název nebo cesta k binárce Codexu, ze které se čtou nativní limity účtu (výchozí codex).",
+      claude_cache_path: "Cesta k JSON cache využití Claude zapisované nativní integrací.",
       codexbar_path: "Název nebo cesta k binárce codexbar; holé jméno se hledá i v /opt/homebrew/bin a /usr/local/bin.",
     },
     answer_profiles: {
