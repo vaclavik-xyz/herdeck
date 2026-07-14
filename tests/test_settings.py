@@ -159,6 +159,7 @@ tick_interval = 1.25
         ('[hardware]\nkeep_alive_interval = 86401\n', "hardware.keep_alive_interval"),
         ('[hardware]\ntick_interval = 0\n', "hardware.tick_interval"),
         ('[hardware]\ntick_interval = 61\n', "hardware.tick_interval"),
+        (f'[hardware]\ntick_interval = {10**400}\n', "hardware.tick_interval"),
     ],
 )
 def test_hardware_rejects_invalid_types_and_ranges(tmp_path, local_text, error):

@@ -352,9 +352,9 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
         if (
             not isinstance(value, int | float)
             or isinstance(value, bool)
-            or not math.isfinite(float(value))
             or value <= 0
             or value > maximum
+            or not math.isfinite(float(value))
         ):
             raise ConfigError(
                 f"hardware.{key} must be a positive number no greater than {maximum:g}"
