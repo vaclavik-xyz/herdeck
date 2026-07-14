@@ -16,6 +16,7 @@ describe("AnswerProfilesSection", () => {
       },
     })!;
     const target = document.createElement("div");
+    document.body.appendChild(target);
     const instance = mount(AnswerProfilesSection, {
       target,
       props: {
@@ -41,6 +42,7 @@ describe("AnswerProfilesSection", () => {
       expect(customLabels.some((label) => label.textContent?.trim() === "name")).toBe(true);
     } finally {
       unmount(instance);
+      target.remove();
     }
   });
 
@@ -55,6 +57,7 @@ describe("AnswerProfilesSection", () => {
       },
     })!;
     const target = document.createElement("div");
+    document.body.appendChild(target);
     const instance = mount(AnswerProfilesSection, {
       target,
       props: {
@@ -68,17 +71,25 @@ describe("AnswerProfilesSection", () => {
       const customLegend = Array.from(target.querySelectorAll("legend"))
         .find((item) => item.textContent?.includes("custom"));
       const nameInput = customLegend?.closest("fieldset")?.querySelector("label.field input") as HTMLInputElement;
+      nameInput.focus();
+      nameInput.value = "customx";
+      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      expect(document.activeElement).toBe(nameInput);
+      expect(customLegend?.textContent).toContain("customx");
+
       nameInput.value = "claude";
       nameInput.dispatchEvent(new Event("input", { bubbles: true }));
       flushSync();
 
       expect(errors).toEqual([expect.stringContaining("built-in")]);
-      expect(customLegend?.textContent).toContain("custom");
+      expect(customLegend?.textContent).toContain("customx");
       expect(customLegend?.querySelector("button")).toBeTruthy();
       const resetInput = customLegend?.closest("fieldset")?.querySelector("label.field input") as HTMLInputElement;
-      expect(resetInput.value).toBe("custom");
+      expect(resetInput.value).toBe("customx");
     } finally {
       unmount(instance);
+      target.remove();
     }
   });
 });

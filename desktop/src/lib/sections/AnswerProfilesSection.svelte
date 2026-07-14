@@ -222,7 +222,7 @@
     <fieldset>
       <legend>{e.name || lm.new_profile}{#if !isBuiltIn(e.name)} <button type="button" title={lm.remove_profile} onclick={() => remove(i)}>×</button>{/if}</legend>
       {#if !isBuiltIn(e.name)}
-        {#key `${i}:${e.name}:${rejectedRenameRev}`}
+        {#key `${i}:${rejectedRenameRev}`}
           <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
         {/key}
       {/if}
