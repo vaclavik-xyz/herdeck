@@ -603,6 +603,39 @@ def test_shorter_tick_interval_wakes_running_ticker_immediately():
         app.close()
 
 
+def test_zero_tick_interval_parks_running_ticker():
+    import threading
+    import time
+
+    from herdeck.deckapp.server import DeckApp
+
+    app = DeckApp(
+        _FakeSource((5, 3), tick_interval=0.01),
+        serve=True,
+        port=0,
+        tick_interval=0.01,
+    )
+    lock = threading.Lock()
+    ticks = 0
+
+    def count_tick():
+        nonlocal ticks
+        with lock:
+            ticks += 1
+
+    app._tick_once = count_tick
+    try:
+        app.swap_source(_FakeSource((5, 3), tick_interval=0.0))
+        time.sleep(0.03)  # let any tick already in flight finish
+        with lock:
+            parked_at = ticks
+        time.sleep(0.05)
+        with lock:
+            assert ticks == parked_at
+    finally:
+        app.close()
+
+
 def test_swap_source_rebuilds_owned_icons_before_render(monkeypatch):
     from herdeck.deckapp import server as server_module
 

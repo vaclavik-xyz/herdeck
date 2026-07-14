@@ -332,7 +332,12 @@ class DeckApp:
         # A config reload wakes the current wait so a shorter interval takes
         # effect immediately; close sets both stop+wake for a prompt exit.
         while not self._ticker_stop.is_set():
-            if self._ticker_wake.wait(self._tick_interval):
+            interval = self._tick_interval
+            if interval <= 0:
+                self._ticker_wake.wait()
+                self._ticker_wake.clear()
+                continue
+            if self._ticker_wake.wait(interval):
                 self._ticker_wake.clear()
                 continue
             self._tick_once()
@@ -1223,7 +1228,7 @@ def connect(app, body) -> dict | None:
     if choice == "demo":
         # Transactional like local/remote: prepare (render mock) BEFORE the marker, commit after.
         prior_choice = read_choice(config_path)
-        new_source = MockSource()
+        new_source = MockSource(_device_local_hardware(app._config_service))
         try:
             prepared = app._prepare_swap(new_source)  # render mock (fallible) BEFORE persisting
             write_choice(config_path, "demo")  # persist

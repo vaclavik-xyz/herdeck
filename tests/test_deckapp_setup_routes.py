@@ -142,12 +142,17 @@ def test_setup_status_requires_token(tmp_path, monkeypatch):
 
 def test_connect_demo_persists(tmp_path, monkeypatch):
     cfg = str(tmp_path / "config.toml")
+    local = tmp_path / "local.toml"
+    local.write_text("[hardware]\nbrightness = 35\ntick_interval = 1.0\n")
     monkeypatch.setenv("HERDECK_CONFIG", cfg)
     monkeypatch.delenv("HERDECK_MOCK", raising=False)
     app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
     try:
+        local.write_text("[hardware]\nbrightness = 45\ntick_interval = 2.0\n")
         status, body = _post(app, "/setup/connect", {"choice": "demo"})
         assert status == 200 and body["ok"] is True
+        assert app.config.hardware.brightness == 45
+        assert app._tick_interval == 2.0
         from herdeck.deckapp import onboarding
 
         assert onboarding.read_choice(cfg) == "demo"
