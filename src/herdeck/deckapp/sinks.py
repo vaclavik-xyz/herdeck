@@ -186,11 +186,14 @@ class ReconnectingD200Sink:
                 on_disconnect=disconnected.set,
             )
             with self._lock:
-                self._active = active
                 latest = self._latest_frame
+                # Paint the retained frame before publishing the new sink while
+                # holding the same lock as deliver(). Otherwise a concurrent new
+                # frame could land first and then be overwritten by this older one.
+                if latest is not None:
+                    active.deliver(latest)
+                self._active = active
             log.info("D200 attached")
-            if latest is not None:
-                active.deliver(latest)
 
             while not self._stop.wait(0.25):
                 if disconnected.is_set():

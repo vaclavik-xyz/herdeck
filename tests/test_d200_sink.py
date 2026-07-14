@@ -171,3 +171,54 @@ def test_reconnecting_sink_retries_initially_missing_device_and_paints_latest_fr
         assert driver.frames == [([0, 1], "latest")]
     finally:
         sink.close()
+
+
+def test_reconnecting_sink_cannot_overwrite_concurrent_frame_with_stale_repaint():
+    class BlockingDriver(FakeDriver):
+        def __init__(self):
+            super().__init__()
+            self.frames = []
+            self.reader_release = threading.Event()
+            self.old_frame_started = threading.Event()
+            self.old_frame_release = threading.Event()
+
+        async def run_reader(self):
+            await asyncio.to_thread(self.reader_release.wait)
+
+        def render_frame(self, tiles, panel):
+            if panel == "old":
+                self.old_frame_started.set()
+                self.old_frame_release.wait(timeout=2.0)
+            self.frames.append(panel)
+
+        def close(self):
+            super().close()
+            self.reader_release.set()
+            self.old_frame_release.set()
+
+    driver = BlockingDriver()
+    allow_attach = threading.Event()
+
+    def factory():
+        allow_attach.wait(timeout=2.0)
+        return driver
+
+    sink = ReconnectingD200Sink(factory, on_press=lambda i: None, slots=13)
+    old = RenderFrame(render=_RS([], panel="old"), working=None, full=True)
+    new = RenderFrame(render=_RS([], panel="new"), working=None, full=True)
+    new_done = threading.Event()
+    try:
+        sink.deliver(old)
+        allow_attach.set()
+        assert driver.old_frame_started.wait(timeout=2.0)
+
+        delivery = threading.Thread(target=lambda: (sink.deliver(new), new_done.set()))
+        delivery.start()
+        new_done.wait(timeout=0.2)
+        driver.old_frame_release.set()
+        delivery.join(timeout=2.0)
+
+        assert driver.frames == ["old", "new"]
+    finally:
+        driver.old_frame_release.set()
+        sink.close()
