@@ -83,10 +83,15 @@ class CockpitHarness:
 
     async def _send(self, command, request_id):
         self.sent.append(command)
+        result = (
+            {"text": "Choose the next step:\n1. Continue\n2) Explain first"}
+            if command.kind == "read"
+            else {"sent": True}
+        )
         asyncio.get_running_loop().call_soon(
             lambda: self.control.handle_result(
                 request_id,
-                {"sent": True},
+                result,
                 server_id=command.server_id,
             )
         )
@@ -212,10 +217,47 @@ def test_persos_cockpit_full_contract_through_prefixed_live_http(tmp_path):
             headers=write_headers,
         )
         assert sent_text == replayed_text
+
+        _, decisions, _ = harness.json_request(
+            "/api/v1/decisions",
+            method="POST",
+            body={
+                "server_id": "local",
+                "pane_id": "pane-1",
+                "terminal_id": "terminal-1",
+            },
+            headers=write_headers,
+        )
+        assert decisions == {
+            "api_version": "v1",
+            "outcome": "ready",
+            "choices": [
+                {"key": "1", "label": "Continue"},
+                {"key": "2", "label": "Explain first"},
+            ],
+        }
+
+        choice_body = {
+            "server_id": "local",
+            "pane_id": "pane-1",
+            "terminal_id": "terminal-1",
+            "idempotency_key": "choice-1",
+            "choice": "2",
+        }
+        _, chosen, _ = harness.json_request(
+            "/api/v1/choices",
+            method="POST",
+            body=choice_body,
+            headers=write_headers,
+        )
+        assert chosen["outcome"] == "sent"
         assert [command.kind for command in harness.sent] == [
             "act_if_blocked",
             "act_if_blocked",
             "act_force",
+            "send_text",
+            "read",
+            "read",
             "send_text",
         ]
 

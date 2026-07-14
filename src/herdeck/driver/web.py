@@ -940,7 +940,12 @@ class WebDeck(DeckDriver):
                         },
                         {"Set-Cookie": self._session_cookie(session)},
                     )
-                elif path in {"/api/v1/actions", "/api/v1/text"}:
+                elif path in {
+                    "/api/v1/actions",
+                    "/api/v1/text",
+                    "/api/v1/decisions",
+                    "/api/v1/choices",
+                }:
                     caller = self._api_caller(write=True)
                     if not caller:
                         self._api_error(401, "unauthorized", "missing or invalid credentials")
@@ -949,9 +954,13 @@ class WebDeck(DeckDriver):
                     if payload is None:
                         self._api_error(400, "invalid_json", "request body must be valid JSON")
                         return
-                    self._semantic(
-                        "action" if path.endswith("actions") else "text", caller, payload
-                    )
+                    operation = {
+                        "/api/v1/actions": "action",
+                        "/api/v1/text": "text",
+                        "/api/v1/decisions": "decisions",
+                        "/api/v1/choices": "choice",
+                    }[path]
+                    self._semantic(operation, caller, payload)
                 elif path.startswith("/press/"):
                     if not self._valid_write_auth():
                         self._send(403, forbidden)

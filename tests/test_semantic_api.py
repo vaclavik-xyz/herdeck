@@ -37,6 +37,12 @@ class FakeControl:
     async def send_text(self, key, text):
         return await self._call("text", key, text)
 
+    async def read_prompt(self, key):
+        self.calls.append(("read_prompt", key))
+        if self.error is not None:
+            raise self.error
+        return self.prompt
+
     async def _call(self, *call):
         self.calls.append(call)
         if self.release is not None:
@@ -72,6 +78,7 @@ def agent(
 
 def make_api(agents, *, available=True, generation=None, clock=None):
     control = FakeControl(agents)
+    control.prompt = "Choose:\n1. Continue\n2) Stop and explain"
     current_generation = generation or (lambda _server, _pane: 1)
     api = SemanticAPI(
         control,
@@ -129,6 +136,71 @@ def test_inventory_tracks_removal_and_terminal_replacement_without_stale_rows():
 
     agents.clear()
     assert api.inventory().body["agents"] == []
+
+
+@pytest.mark.asyncio
+async def test_decisions_return_only_bounded_structured_choices_for_blocked_agent():
+    agents = [agent()]
+    api, control = make_api(agents)
+    control.prompt = "SECRET question\n1. Continue safely\n2) Explain first"
+
+    response = await api.decisions(
+        {"server_id": "local", "pane_id": "p1", "terminal_id": "t1"}
+    )
+
+    assert response.status == 200
+    assert response.body == {
+        "api_version": "v1",
+        "outcome": "ready",
+        "choices": [
+            {"key": "1", "label": "Continue safely"},
+            {"key": "2", "label": "Explain first"},
+        ],
+    }
+    assert "SECRET" not in str(response.body)
+    assert control.calls == [("read_prompt", AgentKey("local", "p1"))]
+
+
+@pytest.mark.asyncio
+async def test_decisions_do_not_read_non_blocked_agent():
+    agents = [agent(status=Status.WORKING)]
+    api, control = make_api(agents)
+
+    response = await api.decisions(
+        {"server_id": "local", "pane_id": "p1", "terminal_id": "t1"}
+    )
+
+    assert response.body == {"api_version": "v1", "outcome": "not_blocked", "choices": []}
+    assert control.calls == []
+
+
+@pytest.mark.asyncio
+async def test_choose_revalidates_current_prompt_and_is_idempotent():
+    agents = [agent()]
+    api, control = make_api(agents)
+
+    payload = target(choice="2")
+    chosen = await api.choose("server:a", payload)
+    replay = await api.choose("server:a", payload)
+
+    assert chosen.body["outcome"] == "sent"
+    assert replay == chosen
+    assert control.calls == [
+        ("read_prompt", AgentKey("local", "p1")),
+        ("text", AgentKey("local", "p1"), "2"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_choose_rejects_stale_choice_without_sending_text():
+    agents = [agent()]
+    api, control = make_api(agents)
+
+    response = await api.choose("server:a", target(choice="9"))
+
+    assert response.status == 409
+    assert response.body["outcome"] == "stale_choice"
+    assert control.calls == [("read_prompt", AgentKey("local", "p1"))]
 
 
 @pytest.mark.asyncio

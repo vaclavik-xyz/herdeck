@@ -169,11 +169,28 @@ and single-line. C0 controls, DEL, tabs, carriage returns, and newlines are
 rejected; input is never silently truncated. The endpoint cannot encode key
 sequences, commands, or action variants.
 
+### Blocked decisions
+
+`POST /api/v1/decisions` accepts only `server_id`, `pane_id`, and
+`terminal_id`. For a currently blocked agent it reads the current prompt and
+returns at most 12 bounded numbered choices as `choices` records containing
+only `key` and `label`. It never returns the question, terminal frame, or any
+other prompt text. A non-blocked agent returns `outcome: "not_blocked"` with an
+empty list.
+
+`POST /api/v1/choices` accepts the same stable target, an `idempotency_key`,
+and the numeric `choice` key. Herdeck reads and parses the current prompt again
+before submitting the choice. If the agent is no longer blocked or the option
+is no longer present, the request fails closed with `not_blocked` or
+`stale_choice`; arbitrary text and stale menu keys are never submitted through
+this endpoint.
+
 ### Outcomes and compatibility
 
 Action responses use the stable `outcome` values `sent`, `skipped`,
 `confirmation_required`, `confirmation_expired`, `stale_identity`,
-`unavailable_target`, `timeout`, and `backend_failure`. Validation errors use
+`unavailable_target`, `not_blocked`, `stale_choice`, `timeout`, and
+`backend_failure`. Validation errors use
 `error.code: "validation_error"`; reusing an idempotency key for a different
 request returns `idempotency_conflict`.
 When all protected idempotency slots are occupied by unexpired requests, new

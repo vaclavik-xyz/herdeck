@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .app_control import ActionResult, RuntimeAgentControl
+from .layout import parse_options
 from .model import AgentKey, AgentState, Status
 
 API_VERSION = "v1"
@@ -18,6 +19,8 @@ IDEMPOTENCY_TTL_S = 10 * 60.0
 IDEMPOTENCY_LIMIT = 1024
 STOP_CONFIRM_TTL_S = 60.0
 STOP_CONFIRM_LIMIT = 1024
+DECISION_MAX_CHOICES = 12
+DECISION_LABEL_MAX_CHARS = 240
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,13 @@ class SemanticAPI:
             )
         if operation == "text":
             return await self.send_text(
+                request.get("caller", ""),
+                request.get("payload"),
+            )
+        if operation == "decisions":
+            return await self.decisions(request.get("payload"))
+        if operation == "choice":
+            return await self.choose(
                 request.get("caller", ""),
                 request.get("payload"),
             )
@@ -260,6 +270,80 @@ class SemanticAPI:
             )
         return await asyncio.shield(pending)
 
+    async def decisions(self, payload: object) -> SemanticResponse:
+        target = self._decision_target(payload)
+        if isinstance(target, SemanticResponse):
+            return target
+        agent = self._resolve_target(target)
+        if isinstance(agent, SemanticResponse):
+            return agent
+        if not self._server_available(agent.key.server_id):
+            return self._outcome(503, "unavailable_target", "target server is offline")
+        if agent.status is not Status.BLOCKED:
+            return SemanticResponse(
+                200,
+                {"api_version": API_VERSION, "outcome": "not_blocked", "choices": []},
+            )
+        try:
+            prompt = await self._control.read_prompt(agent.key)
+        except TimeoutError:
+            return self._outcome(504, "timeout", "backend request timed out")
+        except (ConnectionError, OSError):
+            return self._outcome(503, "backend_failure", "backend request failed")
+        except Exception:
+            return self._outcome(502, "backend_failure", "backend request failed")
+        choices = self._parse_choices(prompt)
+        return SemanticResponse(
+            200,
+            {
+                "api_version": API_VERSION,
+                "outcome": "ready" if choices else "no_choices",
+                "choices": choices,
+            },
+        )
+
+    async def choose(self, caller: str, payload: object) -> SemanticResponse:
+        if not isinstance(payload, dict):
+            return self._validation("request body must be a JSON object")
+        allowed = {
+            "server_id",
+            "pane_id",
+            "terminal_id",
+            "idempotency_key",
+            "choice",
+        }
+        if set(payload) - allowed:
+            return self._validation("unknown fields are not allowed")
+        target = self._target(payload)
+        if isinstance(target, SemanticResponse):
+            return target
+        idempotency_key = self._idempotency_key(payload)
+        if isinstance(idempotency_key, SemanticResponse):
+            return idempotency_key
+        choice = payload.get("choice")
+        if not isinstance(choice, str) or not choice.isdecimal() or len(choice) > 16:
+            return self._validation("choice must be a numeric option key", field="choice")
+
+        fingerprint = self._fingerprint("choice", payload)
+        replay = self._replay(caller, idempotency_key, fingerprint)
+        if replay is not None:
+            return replay
+        capacity_error = self._capacity_error(caller, idempotency_key)
+        if capacity_error is not None:
+            return capacity_error
+        owner, pending = self._claim(caller, idempotency_key, fingerprint)
+        if isinstance(pending, SemanticResponse):
+            return pending
+        assert pending is not None
+        if owner:
+            self._start_execution(
+                caller,
+                idempotency_key,
+                fingerprint,
+                self._execute_choice(target, choice),
+            )
+        return await asyncio.shield(pending)
+
     async def _execute_action(
         self,
         caller: str,
@@ -312,6 +396,30 @@ class SemanticAPI:
             return self._outcome(502, "backend_failure", "backend request failed")
         return self._action_response(result)
 
+    async def _execute_choice(
+        self, target: tuple[str, str, str], choice: str
+    ) -> SemanticResponse:
+        agent = self._resolve_target(target)
+        if isinstance(agent, SemanticResponse):
+            return agent
+        if not self._server_available(agent.key.server_id):
+            return self._outcome(503, "unavailable_target", "target server is offline")
+        if agent.status is not Status.BLOCKED:
+            return self._outcome(409, "not_blocked", "agent is no longer blocked")
+        try:
+            prompt = await self._control.read_prompt(agent.key)
+            valid_choices = {item["key"] for item in self._parse_choices(prompt)}
+            if choice not in valid_choices:
+                return self._outcome(409, "stale_choice", "choice is no longer available")
+            result = await self._control.send_text(agent.key, choice)
+        except TimeoutError:
+            return self._outcome(504, "timeout", "backend request timed out")
+        except (ConnectionError, OSError):
+            return self._outcome(503, "backend_failure", "backend request failed")
+        except Exception:
+            return self._outcome(502, "backend_failure", "backend request failed")
+        return self._action_response(result)
+
     def invalidate_challenges(self) -> None:
         self._challenges.clear()
 
@@ -354,6 +462,25 @@ class SemanticAPI:
                 return self._validation(f"{field} must be a non-empty string", field=field)
             values.append(value)
         return values[0], values[1], values[2]
+
+    def _decision_target(self, payload: object) -> tuple[str, str, str] | SemanticResponse:
+        if not isinstance(payload, dict):
+            return self._validation("request body must be a JSON object")
+        allowed = {"server_id", "pane_id", "terminal_id"}
+        if set(payload) - allowed:
+            return self._validation("unknown fields are not allowed")
+        return self._target(payload)
+
+    @staticmethod
+    def _parse_choices(prompt: str) -> list[dict[str, str]]:
+        return [
+            {
+                "key": _bounded(option.key, 16),
+                "label": _bounded(option.label, DECISION_LABEL_MAX_CHARS),
+            }
+            for option in parse_options(prompt)[:DECISION_MAX_CHOICES]
+            if option.key and option.label
+        ]
 
     def _idempotency_key(self, payload: dict) -> str | SemanticResponse:
         value = payload.get("idempotency_key")
