@@ -259,7 +259,18 @@ class DeckApp:
         animated thereafter)."""
         with self._lock:
             self._sinks.append(sink)
+            self._set_sink_slots_locked(sink, self._slots)
             self._refresh_locked(working=None, full=True)
+
+    @staticmethod
+    def _set_sink_slots_locked(sink, slots: int) -> None:
+        setter = getattr(sink, "set_slots", None)
+        if setter is None:
+            return
+        try:
+            setter(slots)
+        except Exception:
+            log.warning("render sink %r failed to adopt %s slots", sink, slots, exc_info=True)
 
     def _tick_once(self) -> None:
         """Advance the spinner phase and re-render, atomically w.r.t. presses
@@ -407,6 +418,8 @@ class DeckApp:
             self._orch = orch
             self._clock = clk  # adopt the clock the orchestrator was built with
             new_source.attach(orch, lock=self._lock, refresh_locked=self._refresh_locked)
+            for sink in self._sinks:
+                self._set_sink_slots_locked(sink, slots)
             self._apply_rendered_locked(tiles, panel_png, sections)
             self._fan_out_locked(rs, None, True)
             if usage_changed:

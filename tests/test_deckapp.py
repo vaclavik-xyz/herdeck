@@ -495,6 +495,31 @@ def test_swap_source_rebuilds_orchestrator_on_grid_change():
     assert app._slots == 4 * 3 - 2  # orchestrator + slots rebuilt from the new config
 
 
+def test_swap_source_updates_sink_geometry_when_grid_expands():
+    from herdeck.deckapp.server import DeckApp
+
+    class GeometrySink:
+        def __init__(self):
+            self.slots = []
+
+        def set_slots(self, slots):
+            self.slots.append(slots)
+
+        def deliver(self, frame):
+            pass
+
+        def close(self):
+            pass
+
+    app = DeckApp(_FakeSource((4, 3)), serve=False)
+    sink = GeometrySink()
+    app.add_sink(sink)
+
+    app.swap_source(_FakeSource((5, 3)))
+
+    assert sink.slots == [10, 13]
+
+
 def test_config_get_requires_token_and_returns_redacted(tmp_path, monkeypatch):
     from herdeck.deckapp.config_service import ConfigService
 

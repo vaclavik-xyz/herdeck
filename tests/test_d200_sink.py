@@ -62,6 +62,18 @@ def test_full_frame_renders_all_in_range_tiles_and_panel():
     assert drv.working_renders == []
 
 
+def test_slot_geometry_can_expand_after_profile_switch():
+    drv = FakeDriver()
+    sink = _sink(drv, slots=10)
+    rs = _RS([_Tile(i) for i in range(13)])
+
+    sink.deliver(RenderFrame(render=rs, working=None, full=True))
+    sink.set_slots(13)
+    sink.deliver(RenderFrame(render=rs, working=None, full=True))
+
+    assert drv.full_renders == [list(range(10)), list(range(13))]
+
+
 def test_working_frame_renders_full_frame():
     # D200Sink always renders a full frame regardless of frame.full/frame.working.
     # The D200 firmware drops cells absent from a partial write, so even a

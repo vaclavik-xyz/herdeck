@@ -91,6 +91,10 @@ class D200Sink:
             self._driver.render(tiles)
             self._driver.render_panel(rs.panel)
 
+    def set_slots(self, slots: int) -> None:
+        """Adopt a new profile/grid geometry for subsequent frames."""
+        self._slots = slots
+
     def _run_reader(self) -> None:
         try:
             asyncio.run(self._driver.run_reader())
@@ -158,6 +162,14 @@ class ReconnectingD200Sink:
         if active is not None:
             active.deliver(frame)
 
+    def set_slots(self, slots: int) -> None:
+        """Update both the current device and any future reconnected device."""
+        with self._lock:
+            self._slots = slots
+            active = self._active
+            if active is not None:
+                active.set_slots(slots)
+
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
@@ -186,6 +198,9 @@ class ReconnectingD200Sink:
                 on_disconnect=disconnected.set,
             )
             with self._lock:
+                # set_slots() may have raced device construction before this
+                # active sink was published; adopt the newest value here too.
+                active.set_slots(self._slots)
                 latest = self._latest_frame
                 # Paint the retained frame before publishing the new sink while
                 # holding the same lock as deliver(). Otherwise a concurrent new
