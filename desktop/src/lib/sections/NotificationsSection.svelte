@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import BooleanField from "../fields/BooleanField.svelte";
+  import NumberField from "../fields/NumberField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import TextField from "../fields/TextField.svelte";
   import TokenSecretField from "../fields/TokenSecretField.svelte";
@@ -24,6 +25,12 @@
   // Mirror of backend defaults (settings._notifications_config) — keep in sync.
   const NOTIF_DEFAULTS: Record<string, boolean> = { enabled: false, sound: true };
   const NOTIF_LIST_DEFAULTS: Record<string, string[]> = { on: ["blocked"], backends: ["macos"] };
+  const TELEGRAM_DEFAULTS: Record<string, unknown> = {
+    message_thread_id: null,
+    interactive: false,
+    allowed_user_ids: [],
+    prompt_max_chars: 1200,
+  };
 
   // Tooltips for every field (current language) — required for each labelled
   // field (enforced by sections.help.test.ts); catalog lives in help.ts.
@@ -60,10 +67,26 @@
   const backends = $derived((getAt(payload, "base", "notifications", "backends") as string[]) ?? NOTIF_LIST_DEFAULTS.backends);
   const backendsState = $derived(listFieldState(payload, "base", "notifications", "backends"));
 
-  const telegram = $derived(((): { token_env: string; chat_id: string } => {
+  const telegram = $derived(((): {
+    token_env: string;
+    chat_id: string;
+    message_thread_id: number | null;
+    interactive: boolean;
+    allowed_user_ids: number[];
+    prompt_max_chars: number;
+  } => {
     const v = getAt(payload, "base", "notifications", "telegram");
     const t = v != null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
-    return { token_env: String(t.token_env ?? ""), chat_id: String(t.chat_id ?? "") };
+    return {
+      token_env: String(t.token_env ?? ""),
+      chat_id: String(t.chat_id ?? ""),
+      message_thread_id: typeof t.message_thread_id === "number" ? t.message_thread_id : null,
+      interactive: t.interactive === true,
+      allowed_user_ids: Array.isArray(t.allowed_user_ids)
+        ? t.allowed_user_ids.filter((value): value is number => typeof value === "number")
+        : [],
+      prompt_max_chars: typeof t.prompt_max_chars === "number" ? t.prompt_max_chars : 1200,
+    };
   })());
 
   function set(key: string, value: unknown): void {
@@ -75,11 +98,20 @@
     payload = setListField(payload, "base", "notifications", key, state, list);
     onChange();
   }
-  function setTelegram(field: "token_env" | "chat_id", v: string): void {
-    // Patch only the edited key. Rebuilding from `telegram` (which intentionally
-    // exposes just these two fields) used to erase interactive/topic/user limits.
+  function setTelegram(field: string, v: unknown): void {
     payload = updateBaseTelegram(payload, field, v);
     onChange();
+  }
+  function parseIntegerList(raw: string): number[] | null {
+    if (raw.trim() === "") return [];
+    const values = raw.split(",").map((part) => part.trim());
+    if (values.some((part) => !/^-?\d+$/.test(part))) return null;
+    const parsed = values.map(Number);
+    return parsed.every(Number.isSafeInteger) ? parsed : null;
+  }
+  function setBaseAllowedUsers(raw: string): void {
+    const parsed = parseIntegerList(raw);
+    if (parsed !== null) setTelegram("allowed_user_ids", parsed);
   }
   async function setSecret(name: string, value: string): Promise<void> {
     const code = await cfg.setSecret(name, value);
@@ -126,6 +158,20 @@
     const v = overrideValuePath(payload, prof, tgPath(k));
     return v !== undefined ? String(v) : String(inheritedForPath(payload, prof, tgPath(k)) ?? "");
   }
+  function tgRaw(k: string): unknown {
+    const own = overrideValuePath(payload, prof, tgPath(k));
+    if (own !== undefined) return own;
+    return inheritedForPath(payload, prof, tgPath(k)) ?? TELEGRAM_DEFAULTS[k];
+  }
+  function tgNumber(k: string): number | null {
+    const value = tgRaw(k);
+    return typeof value === "number" ? value : null;
+  }
+  function tgBoolean(k: string): boolean { return tgRaw(k) === true; }
+  function tgIntegerList(k: string): string {
+    const value = tgRaw(k);
+    return Array.isArray(value) ? value.join(", ") : "";
+  }
   function tgOrigin(k: string): string {
     if (overrideValuePath(payload, prof, tgPath(k)) !== undefined) return lm.origin_own;
     return inheritedForPath(payload, prof, tgPath(k)) != null ? lm.origin_inherited : lm.origin_unset;
@@ -138,6 +184,19 @@
         : setOverridePath(payload.profiles, prof, tgPath(k), v),
     };
     onChange();
+  }
+  function setTgScalar(k: string, value: unknown): void {
+    payload = {
+      ...payload,
+      profiles: value === null
+        ? clearOverridePath(payload.profiles, prof, tgPath(k))
+        : setOverridePath(payload.profiles, prof, tgPath(k), value),
+    };
+    onChange();
+  }
+  function setTgAllowedUsers(raw: string): void {
+    const parsed = parseIntegerList(raw);
+    if (parsed !== null) setTgScalar("allowed_user_ids", parsed);
   }
 </script>
 
@@ -164,6 +223,10 @@
       onclear={() => clearSecret(tgValue("token_env"))}
     />
     <TextField label={`chat_id (${tgOrigin("chat_id")})`} help={HELP.chat_id} value={tgValue("chat_id")} oninput={(v) => setTg("chat_id", v)} />
+    <NumberField label={`message_thread_id (${tgOrigin("message_thread_id")})`} help={HELP.message_thread_id} int value={tgNumber("message_thread_id")} onchange={(v) => setTgScalar("message_thread_id", v)} />
+    <BooleanField label={`interactive (${tgOrigin("interactive")})`} help={HELP.interactive} value={tgBoolean("interactive")} onchange={(v) => setTgScalar("interactive", v)} />
+    <TextField label={`allowed_user_ids (${tgOrigin("allowed_user_ids")})`} help={HELP.allowed_user_ids} value={tgIntegerList("allowed_user_ids")} oninput={setTgAllowedUsers} />
+    <NumberField label={`prompt_max_chars (${tgOrigin("prompt_max_chars")})`} help={HELP.prompt_max_chars} int value={tgNumber("prompt_max_chars")} onchange={(v) => setTgScalar("prompt_max_chars", v)} />
   </fieldset>
 {:else}
   <BooleanField label="enabled" help={HELP.enabled} value={enabled} onchange={(v) => set("enabled", v)} />
@@ -174,6 +237,10 @@
     <legend>Telegram</legend>
     <TokenSecretField label="token" help={HELP.token} value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />
     <TextField label="chat_id" help={HELP.chat_id} value={telegram.chat_id} oninput={(v) => setTelegram("chat_id", v)} />
+    <NumberField label="message_thread_id" help={HELP.message_thread_id} int value={telegram.message_thread_id} onchange={(v) => setTelegram("message_thread_id", v)} />
+    <BooleanField label="interactive" help={HELP.interactive} value={telegram.interactive} onchange={(v) => setTelegram("interactive", v)} />
+    <TextField label="allowed_user_ids" help={HELP.allowed_user_ids} value={telegram.allowed_user_ids.join(", ")} oninput={setBaseAllowedUsers} />
+    <NumberField label="prompt_max_chars" help={HELP.prompt_max_chars} int value={telegram.prompt_max_chars} onchange={(v) => setTelegram("prompt_max_chars", v)} />
   </fieldset>
 {/if}
 

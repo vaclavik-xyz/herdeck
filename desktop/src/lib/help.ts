@@ -65,6 +65,10 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       backends: "Where notifications go: macos (Notification Center) and/or telegram (a bot message, e.g. to your phone).",
       token: "Name under which the Telegram bot token is stored (env var or keychain) — not the token itself.",
       chat_id: "Numeric ID of the Telegram chat or group where the bot sends blocked-agent notifications.",
+      message_thread_id: "Optional Telegram forum-topic id; leave blank to post to the main chat.",
+      interactive: "Allow Telegram users to approve, deny, or stop blocked agents from the notification.",
+      allowed_user_ids: "Comma-separated Telegram user ids allowed to use interactive controls; keep this allow-list strict.",
+      prompt_max_chars: "Maximum blocked-prompt characters included in an interactive Telegram message (default 1200).",
     },
     safety: {
       approve_always: "Whether a blocked agent also offers an Approve! button (approve and don't ask again); turn off to hide it.",
@@ -152,6 +156,10 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       backends: "Kam se upozornění doručí: macos (oznamovací centrum) a/nebo telegram (zpráva botem, třeba na mobil).",
       token: "Název, pod kterým je uložen token Telegram bota (proměnná prostředí či klíčenka) — ne token samotný.",
       chat_id: "Číselné ID Telegram chatu či skupiny, kam bot posílá upozornění na zablokované agenty.",
+      message_thread_id: "Volitelné ID tématu ve fórové Telegram skupině; prázdné posílá do hlavního chatu.",
+      interactive: "Povolí uživatelům Telegramu schválit, zamítnout nebo zastavit blokovaného agenta přímo z notifikace.",
+      allowed_user_ids: "Čárkami oddělená Telegram user ID oprávněná používat interaktivní ovládání; seznam držte striktní.",
+      prompt_max_chars: "Maximum znaků blokujícího promptu vložených do interaktivní Telegram zprávy (výchozí 1200).",
     },
     safety: {
       approve_always: "Zda se u blokovaného agenta nabízí i tlačítko Approve! (schválit a příště se neptat); vypnutím ho skryjete.",
