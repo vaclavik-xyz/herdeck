@@ -46,6 +46,7 @@ import {
   errorCountLabel,
   effectiveLanguage,
   isStaleRevisionError,
+  updateBaseTelegram,
 } from "./configClient";
 
 function rawConfig(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -158,6 +159,49 @@ describe("toWriteBody", () => {
     // deep copy: mutating the body must not touch the source payload
     (body.base.deck as Record<string, unknown>).grid = "4x3";
     expect(payload.base.deck).toEqual({ grid: "5x3" });
+  });
+});
+
+describe("updateBaseTelegram", () => {
+  it("updates one visible field without dropping advanced Telegram settings", () => {
+    const payload = parseConfig({
+      base: {
+        notifications: {
+          telegram: {
+            token_env: "OLD_TOKEN",
+            chat_id: "-1001",
+            message_thread_id: 456,
+            interactive: true,
+            allowed_user_ids: [111, 222],
+            prompt_max_chars: 777,
+          },
+        },
+      },
+    })!;
+
+    const next = updateBaseTelegram(payload, "token_env", "NEW_TOKEN");
+
+    expect((next.base.notifications as any).telegram).toEqual({
+      token_env: "NEW_TOKEN",
+      chat_id: "-1001",
+      message_thread_id: 456,
+      interactive: true,
+      allowed_user_ids: [111, 222],
+      prompt_max_chars: 777,
+    });
+    expect((payload.base.notifications as any).telegram.token_env).toBe("OLD_TOKEN");
+  });
+
+  it("removes only a cleared field and drops the table only when it becomes empty", () => {
+    const payload = parseConfig({
+      base: { notifications: { telegram: { token_env: "TG", chat_id: "42" } } },
+    })!;
+
+    const withoutToken = updateBaseTelegram(payload, "token_env", "  ");
+    expect((withoutToken.base.notifications as any).telegram).toEqual({ chat_id: "42" });
+
+    const empty = updateBaseTelegram(withoutToken, "chat_id", "");
+    expect((empty.base.notifications as any).telegram).toBeUndefined();
   });
 });
 

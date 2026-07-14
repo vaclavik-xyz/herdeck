@@ -6,10 +6,10 @@
   import TokenSecretField from "../fields/TokenSecretField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import {
-    commandTransport as cfgTransport, getAt, setAt, removeAt, listFieldState, setListField,
+    commandTransport as cfgTransport, getAt, setAt, listFieldState, setListField,
     secretFlag, type ListFieldState, type ConfigPayload,
     inheritedFor, inheritedForPath, overrideValue, overrideValuePath, overrideState,
-    setOverride, clearOverride, setOverridePath, clearOverridePath,
+    setOverride, clearOverride, setOverridePath, clearOverridePath, updateBaseTelegram,
   } from "../configClient";
   import { defineMessages, fieldHelp, fmt, locale, t } from "../i18n.svelte";
 
@@ -76,21 +76,9 @@
     onChange();
   }
   function setTelegram(field: "token_env" | "chat_id", v: string): void {
-    const next = { ...telegram, [field]: v };
-    if (next.token_env.trim() === "" && next.chat_id.trim() === "") {
-      // Both cleared → drop the table entirely (no empty [telegram]).
-      payload = removeAt(payload, "base", "notifications", "telegram");
-    } else {
-      // Omit a BLANK sub-field rather than writing `token_env = ""`: the backend token
-      // collector would treat "" as an env-var name and crash validation outside the
-      // normal error path. A telegram table is only fully valid with BOTH fields; a
-      // partial one is ignored by the backend (with a warning) but kept here so the
-      // half-entered value (e.g. chat_id typed before token_env) is not lost.
-      const tg: Record<string, string> = {};
-      if (next.token_env.trim() !== "") tg.token_env = next.token_env;
-      if (next.chat_id.trim() !== "") tg.chat_id = next.chat_id;
-      payload = setAt(payload, "base", "notifications", "telegram", tg);
-    }
+    // Patch only the edited key. Rebuilding from `telegram` (which intentionally
+    // exposes just these two fields) used to erase interactive/topic/user limits.
+    payload = updateBaseTelegram(payload, field, v);
     onChange();
   }
   async function setSecret(name: string, value: string): Promise<void> {

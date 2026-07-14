@@ -99,6 +99,24 @@ export function toWriteBody(payload: ConfigPayload): WriteBody {
   return body;
 }
 
+/** Update one base Telegram setting without rebuilding the table from the
+ * editor's visible subset. This preserves advanced keys the current panel may
+ * not render and treats blank/null as deleting only the edited field. */
+export function updateBaseTelegram(
+  payload: ConfigPayload,
+  field: string,
+  value: unknown,
+): ConfigPayload {
+  const current = obj(getAt(payload, "base", "notifications", "telegram"));
+  const telegram: Record<string, unknown> = { ...clone(current) };
+  const cleared = value == null || (typeof value === "string" && value.trim() === "");
+  if (cleared) delete telegram[field];
+  else telegram[field] = value;
+  return Object.keys(telegram).length === 0
+    ? removeAt(payload, "base", "notifications", "telegram")
+    : setAt(payload, "base", "notifications", "telegram", telegram);
+}
+
 /** Is this validation error the write-rejected-as-stale signal? */
 export function isStaleRevisionError(error: string): boolean {
   return error.startsWith("stale_revision");
