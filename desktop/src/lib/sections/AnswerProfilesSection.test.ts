@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mount, unmount } from "svelte";
+import { flushSync, mount, unmount } from "svelte";
 
 import { parseConfig } from "../configClient";
 import { setLang } from "../i18n.svelte";
@@ -39,6 +39,44 @@ describe("AnswerProfilesSection", () => {
       expect(custom?.querySelector('button[title="Remove answer profile"]')).toBeTruthy();
       const customLabels = Array.from(custom?.closest("fieldset")?.querySelectorAll(".fieldlabel") ?? []);
       expect(customLabels.some((label) => label.textContent?.trim() === "name")).toBe(true);
+    } finally {
+      unmount(instance);
+    }
+  });
+
+  it("rejects renaming a custom profile to a built-in identity", () => {
+    setLang("en");
+    const errors: string[] = [];
+    const payload = parseConfig({
+      base: {
+        answer_profiles: {
+          custom: { approve: ["a"], deny: ["d"], stop: ["s"] },
+        },
+      },
+    })!;
+    const target = document.createElement("div");
+    const instance = mount(AnswerProfilesSection, {
+      target,
+      props: {
+        payload,
+        reloadRev: 0,
+        onChange: () => {},
+        onError: (message) => errors.push(message),
+      },
+    });
+    try {
+      const customLegend = Array.from(target.querySelectorAll("legend"))
+        .find((item) => item.textContent?.includes("custom"));
+      const nameInput = customLegend?.closest("fieldset")?.querySelector("label.field input") as HTMLInputElement;
+      nameInput.value = "claude";
+      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+
+      expect(errors).toEqual([expect.stringContaining("built-in")]);
+      expect(customLegend?.textContent).toContain("custom");
+      expect(customLegend?.querySelector("button")).toBeTruthy();
+      const resetInput = customLegend?.closest("fieldset")?.querySelector("label.field input") as HTMLInputElement;
+      expect(resetInput.value).toBe("custom");
     } finally {
       unmount(instance);
     }

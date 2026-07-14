@@ -37,6 +37,7 @@
       add_profile: "+ add profile",
       err_duplicate: "duplicate answer profile name — it won't save until you rename it",
       err_exists: "entry '{name}' already exists",
+      err_builtin_name: "'{name}' is a built-in answer profile and cannot replace a custom profile",
     },
     cs: {
       heading: "Profily odpovědí",
@@ -55,6 +56,7 @@
       add_profile: "+ přidat profil",
       err_duplicate: "duplicitní jméno answer profilu — neuloží se, dokud nepřejmenuješ",
       err_exists: "položka '{name}' už existuje",
+      err_builtin_name: "„{name}“ je vestavěný answer profil a nemůže nahradit vlastní profil",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -63,6 +65,7 @@
   // `reloadRev` (load/discard/Apply-reload) — same pattern as StartProfilesSection.
   let rows = $state<AnswerProfileRow[]>(answerProfileRows(payload));
   let seenRev = $state(reloadRev);
+  let rejectedRenameRev = $state(0);
 
   $effect(() => {
     if (reloadRev !== seenRev) {
@@ -90,7 +93,15 @@
     onChange();
   }
 
-  function rename(i: number, name: string): void { commit(rows.map((r, j) => (j === i ? { ...r, name } : r))); }
+  function rename(i: number, name: string): void {
+    const nextName = name.trim();
+    if (!isBuiltIn(rows[i].name) && isBuiltIn(nextName)) {
+      rejectedRenameRev += 1;
+      onError(fmt(lm.err_builtin_name, { name: nextName }));
+      return;
+    }
+    commit(rows.map((r, j) => (j === i ? { ...r, name } : r)));
+  }
   function setList(i: number, key: (typeof LIST_KEYS)[number], v: string[]): void {
     commit(rows.map((r, j) => (j === i ? { ...r, [key]: v } : r)));
   }
@@ -211,7 +222,9 @@
     <fieldset>
       <legend>{e.name || lm.new_profile}{#if !isBuiltIn(e.name)} <button type="button" title={lm.remove_profile} onclick={() => remove(i)}>×</button>{/if}</legend>
       {#if !isBuiltIn(e.name)}
-        <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
+        {#key `${i}:${e.name}:${rejectedRenameRev}`}
+          <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
+        {/key}
       {/if}
       {#if e.name.trim() !== ""}
         {#each LIST_KEYS as k}
