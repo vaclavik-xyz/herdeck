@@ -28,6 +28,7 @@ class ServiceConfig:
     base_path: str = ""
     public_origin: str = ""
     frame_ancestors: tuple[str, ...] = ()
+    allow_query_token: bool = False
 
     @property
     def label(self) -> str:
@@ -50,6 +51,8 @@ def render_launch_agent(config: ServiceConfig) -> bytes:
         }
     else:
         arguments = [config.python, "-m", "herdeck.web", "run"]
+        if config.allow_query_token:
+            arguments.append("--allow-query-token")
         base_path = normalize_web_base_path(config.base_path)
         public_origin = normalize_web_origin(config.public_origin)
         frame_ancestors = tuple(
@@ -62,6 +65,7 @@ def render_launch_agent(config: ServiceConfig) -> bytes:
             "HERDECK_WEB_BASE_PATH": base_path,
             "HERDECK_WEB_PUBLIC_ORIGIN": public_origin,
             "HERDECK_WEB_FRAME_ANCESTORS": ",".join(frame_ancestors),
+            "HERDECK_WEB_ALLOW_QUERY_TOKEN": "1" if config.allow_query_token else "0",
         }
         if config.config_path is not None:
             environment["HERDECK_CONFIG"] = str(config.config_path)
@@ -156,6 +160,7 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--base-path", default="")
             command.add_argument("--public-origin", default="")
             command.add_argument("--frame-ancestor", action="append", default=[])
+            command.add_argument("--allow-query-token", action="store_true")
     return parser
 
 
@@ -177,6 +182,7 @@ def _config_from_args(args) -> ServiceConfig:
         base_path=getattr(args, "base_path", ""),
         public_origin=getattr(args, "public_origin", ""),
         frame_ancestors=tuple(getattr(args, "frame_ancestor", ())),
+        allow_query_token=getattr(args, "allow_query_token", False),
     )
 
 

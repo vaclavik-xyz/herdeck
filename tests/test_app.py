@@ -378,6 +378,7 @@ def test_terminal_preview_flows_end_to_end_through_webdeck_sse(tmp_path):
         serve=True,
         icon_provider=TinyIcons(),
         token_path=str(tmp_path / "web-token"),
+        allow_query_token=True,
     )
     scheduled = queue.Queue()
     sent = []

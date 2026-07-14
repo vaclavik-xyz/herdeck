@@ -1378,7 +1378,10 @@ def make_deck(
             except TypeError:
                 # injected test doubles may predate the cols/language parameters
                 d = WebDeck(slots, host=host, port=port, icons_dir=hardware.icons_dir)
-            if os.environ.get("HERDECK_SHOW_URL_TOKEN") == "1":
+            if (
+                getattr(d, "_allow_query_token", False)
+                and os.environ.get("HERDECK_SHOW_URL_TOKEN") == "1"
+            ):
                 for url in _simulator_urls(
                     d.host,
                     d.port,
@@ -1388,10 +1391,16 @@ def make_deck(
                 ):
                     print(f"herdeck web simulator on {url}")
             else:
+                access_hint = (
+                    "run 'herdeck-web url --allow-query-token' to print the legacy "
+                    "capability URL"
+                    if getattr(d, "_allow_query_token", False)
+                    else "authenticated browser session required"
+                )
                 print(
                     f"herdeck web simulator listening on "
                     f"http://{d.host}:{d.port}{getattr(d, '_base_path', '')}/ "
-                    "(run 'herdeck-web url' to print the capability URL)"
+                    f"({access_hint})"
                 )
             return d
 

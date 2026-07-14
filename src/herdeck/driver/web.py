@@ -147,6 +147,18 @@ def _load_or_create_token(path: str) -> str:
     return token
 
 
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"", "0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean flag")
+
+
 class WebDeck(DeckDriver):
     """A browser-based D200 simulator.
 
@@ -173,6 +185,7 @@ class WebDeck(DeckDriver):
         base_path: str = "",
         public_origin: str = "",
         frame_ancestors: tuple[str, ...] = (),
+        allow_query_token: bool | None = None,
     ):
         self._language = language
         self._bind_host = host
@@ -198,6 +211,11 @@ class WebDeck(DeckDriver):
             raise ValueError("frame ancestors require an explicit HTTPS public origin")
         self._cross_origin_embed = any(
             origin != self._public_origin for origin in self._frame_ancestors
+        )
+        self._allow_query_token = (
+            _env_flag("HERDECK_WEB_ALLOW_QUERY_TOKEN", default=False)
+            if allow_query_token is None
+            else allow_query_token
         )
         self._lock = threading.Lock()
         # Long-poll support: /state?since=<version> HOLDS until _bump() fires.
@@ -500,17 +518,21 @@ class WebDeck(DeckDriver):
     # --- HTTP ---
     def _handler_class(self):
         deck = self
-        forbidden = (
-            b"herdeck simulator: missing or invalid access token.\n"
-            b"Open the full URL including the ?token=... part printed by herdeck-web url.\n"
-        )
+        forbidden = b"herdeck simulator: a valid browser session is required.\n"
+        if deck._allow_query_token:
+            forbidden += (
+                b"Open the full URL including the ?token=... part printed by herdeck-web url.\n"
+            )
         forbidden_page = (
             b"<!doctype html><meta charset=utf-8><title>herdeck simulator</title>"
             b'<body style="background:#0b0b0d;color:#e7ecf3;'
             b'font:14px/1.5 system-ui;padding:2em;max-width:32em">'
-            b"<h2>Missing or invalid access token</h2>"
+            b"<h2>Browser session required</h2>"
             + b"<p>"
-            + tr(deck._language, "web.forbidden").encode()
+            + tr(
+                deck._language,
+                "web.forbidden" if deck._allow_query_token else "web.session_required",
+            ).encode()
             + b"</p>"
         )
         page_headers = {
@@ -667,8 +689,16 @@ class WebDeck(DeckDriver):
                 return morsel.value if morsel is not None else ""
 
             def _require_token(self, url):
-                if self._valid_token(self._query_token(url)) or deck._valid_browser_session(
-                    self._browser_session()
+                legacy_token_valid = deck._allow_query_token and self._valid_token(
+                    self._query_token(url)
+                )
+                header_token_valid = self._valid_token(
+                    self.headers.get("X-Herdeck-Token", "")
+                )
+                if (
+                    legacy_token_valid
+                    or header_token_valid
+                    or deck._valid_browser_session(self._browser_session())
                 ):
                     return True
                 self._send(403, forbidden)
@@ -735,7 +765,7 @@ class WebDeck(DeckDriver):
                     )
                 elif path == "/":
                     token = self._query_token(url)
-                    if self._valid_token(token):
+                    if deck._allow_query_token and self._valid_token(token):
                         session = deck._mint_browser_session()
                         self._send(
                             303,
