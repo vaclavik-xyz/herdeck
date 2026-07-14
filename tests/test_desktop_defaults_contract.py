@@ -13,8 +13,9 @@ from herdeck.config import (
     ThemeConfig,
     UsageConfig,
     ViewConfig,
-    _parse_grid,
+    _parse_telegram_optional_int,
 )
+from herdeck.settings import _build_config
 
 
 DEFAULTS_PATH = Path(__file__).parents[1] / "desktop" / "src" / "lib" / "configDefaults.json"
@@ -31,7 +32,8 @@ def _assert_subset(actual: dict, expected_subset: dict):
 def test_desktop_defaults_match_backend_contract():
     defaults = _defaults()
 
-    assert _parse_grid(defaults["grid"]) == (5, 3)
+    runtime = _build_config({}, {}, None, {}, profile_name="default", env_profile=None)
+    assert defaults["grid"] == f"{runtime.grid[0]}x{runtime.grid[1]}"
     assert defaults["theme"] == asdict(ThemeConfig())
     _assert_subset(asdict(ViewConfig()), defaults["view"])
     assert defaults["safety"] == asdict(SafetyConfig())
@@ -45,6 +47,12 @@ def test_desktop_defaults_match_backend_contract():
     telegram.pop("chat_id")
     telegram["message_thread_id"] = 0  # serializable sentinel for runtime None
     assert defaults["notifications"]["telegram"] == telegram
+    assert (
+        _parse_telegram_optional_int(
+            "message_thread_id", defaults["notifications"]["telegram"]["message_thread_id"]
+        )
+        is None
+    )
 
     assert defaults["macros"] == [asdict(macro) for macro in DEFAULT_MACROS]
     assert defaults["start_profiles"] == DEFAULT_START_PROFILES
