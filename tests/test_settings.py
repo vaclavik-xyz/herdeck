@@ -494,6 +494,13 @@ def test_build_config_reads_flat_base_including_theme_view_safety():
     assert cfg.overview_order == ["local"]
 
 
+def test_build_config_keeps_explicit_empty_server_accents():
+    data = {"theme": {"server_accents": []}}
+    merged, selection = _merged_sections(data, "default")
+    cfg = _build_config(data, merged, selection, {}, profile_name="default", env_profile=None)
+    assert cfg.theme.server_accents == []
+
+
 def test_profile_overlays_extends_default_terminates_at_base():
     profiles = {"mobile": {"extends": "default", "view": {"management": "bottom_row"}}}
     assert _profile_overlays(profiles, "mobile") == [profiles["mobile"]]

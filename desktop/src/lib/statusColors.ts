@@ -11,6 +11,9 @@ export const DEFAULT_STATUS_COLORS: Record<string, string> = {
   offline: "red",
 };
 
+/** Mirror of backend DEFAULT_SERVER_ACCENTS (src/herdeck/config.py). */
+export const DEFAULT_SERVER_ACCENTS: string[] = ["teal", "violet", "orange", "pink", "lime"];
+
 // Mirror of the backend named tile palette (src/herdeck/driver/base.py COLORS)
 // — keep in sync. Status colours resolve STRICTLY through this palette on the
 // backend (COLORS.get(name, dim)): a typo silently renders as the empty-tile
