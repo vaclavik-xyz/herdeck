@@ -276,9 +276,12 @@ export function macroRecords(raw: unknown): MacroRecord[] {
   });
 }
 
-/** The base `macros` list as editable records (always an array). */
+/** The effective base `macros` list as editable records. An absent/null value
+ *  means the backend defaults, while an explicit empty list disables macros. */
 export function macrosOf(payload: ConfigPayload): MacroRecord[] {
-  return macroRecords(payload.base.macros);
+  return payload.base.macros == null
+    ? DEFAULT_MACROS.map((m) => ({ ...m }))
+    : macroRecords(payload.base.macros);
 }
 
 // Frontend mirrors of backend defaults (config.py DEFAULT_*) — keep in sync.
@@ -300,11 +303,10 @@ export const DEFAULT_ANSWER_PROFILES: Record<string, Record<string, string[]>> =
 };
 
 function withMacros(payload: ConfigPayload, macros: MacroRecord[]): ConfigPayload {
-  // Absent `macros` means "use DEFAULT_MACROS"; an empty list would disable them. So when
-  // the last macro is removed, OMIT the key (return to defaults) rather than write `[]`.
+  // Once the user edits the effective list, materialize it — including `[]`,
+  // which is the backend's explicit opt-out rather than "restore defaults".
   const base = { ...clone(payload.base) };
-  if (macros.length === 0) delete base.macros;
-  else base.macros = macros;
+  base.macros = macros;
   return { ...payload, base };
 }
 

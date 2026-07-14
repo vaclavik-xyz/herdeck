@@ -289,9 +289,15 @@ describe("macros mutators", () => {
   const withMacros = () =>
     parseConfig({ base: { macros: [{ label: "go", text: "continue" }] } })!;
 
-  it("macrosOf returns the base macros list or []", () => {
+  it("macrosOf returns explicit base macros and materializes defaults when absent", () => {
     expect(macrosOf(withMacros())).toEqual([{ label: "go", text: "continue" }]);
-    expect(macrosOf(parseConfig({})!)).toEqual([]);
+    const defaults = macrosOf(parseConfig({})!);
+    expect(defaults).toEqual(DEFAULT_MACROS);
+    expect(defaults).not.toBe(DEFAULT_MACROS);
+  });
+
+  it("macrosOf preserves an explicit empty list", () => {
+    expect(macrosOf(parseConfig({ base: { macros: [] } })!)).toEqual([]);
   });
 
   it("addMacro appends a blank record without touching the input", () => {
@@ -300,6 +306,13 @@ describe("macros mutators", () => {
     expect(macrosOf(next)).toHaveLength(2);
     expect(macrosOf(next)[1]).toEqual({ label: "", text: "" });
     expect(macrosOf(p)).toHaveLength(1); // input untouched
+  });
+
+  it("addMacro materializes defaults before appending the first custom row", () => {
+    const p = parseConfig({})!;
+    const next = addMacro(p);
+    expect(macrosOf(next)).toEqual([...DEFAULT_MACROS, { label: "", text: "" }]);
+    expect(p.base.macros).toBeUndefined();
   });
 
   it("updateMacro sets one field on a copy", () => {
@@ -316,11 +329,11 @@ describe("macros mutators", () => {
     expect(macrosOf(next)[0]).toEqual({ label: "", text: "" });
   });
 
-  it("removing the LAST macro omits base.macros (→ DEFAULT_MACROS, not [])", () => {
+  it("removing the last macro writes an explicit empty list instead of restoring defaults", () => {
     const p = parseConfig({ base: { macros: [{ label: "go", text: "continue" }] } })!;
     const next = removeMacro(p, 0);
     expect(macrosOf(next)).toEqual([]);
-    expect("macros" in (next.base as Record<string, unknown>)).toBe(false);
+    expect(next.base.macros).toEqual([]);
   });
 });
 
