@@ -395,20 +395,21 @@ def test_slot_tile_renders_configured_lines():
     assert tile.branch == "›2 · main"    # secondary = tab + branch
 
 
-def test_slot_tile_fallback_is_fixed_repo_branch_ignoring_tile_fields():
-    # Elgato path never honored tile_fields: even tile_fields=["repo"] keeps branch.
+def test_slot_tile_fallback_is_fixed_repo_tab_branch_ignoring_tile_fields():
+    # Elgato path never honored tile_fields: its compact fallback always shows
+    # repo on the first line and tab before branch on the second.
     cfg = make_config()
     cfg.view.tile_fields = ["repo"]
     sess = ElgatoSession(cfg, FakeIcons())
     sess.set_slots([("s0", (0, 0))])
     s = state("p1", Status.WORKING, "api")
-    s.branch = "feat/x"
+    s.branch, s.tab = "feat/x", "review"
     sess.apply_snapshot("dev", [s])
 
     tile = sess._slot_tile(0)
 
     assert tile.repo == "api"
-    assert tile.branch == "feat/x"
+    assert tile.branch == "›review · feat/x"
 
 
 def test_slot_tile_keeps_selected_marker_on_primary():

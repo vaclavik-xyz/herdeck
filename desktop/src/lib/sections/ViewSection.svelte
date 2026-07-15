@@ -63,10 +63,10 @@
   function lineFallback(key: string, fields: string[]): string[] {
     if (payload.runtimeDeck === "elgato-plugin") {
       if (key === "tile_primary") return ["repo"];
-      if (key === "tile_secondary") return ["branch"];
+      if (key === "tile_secondary") return ["tab", "branch"];
     }
     if (key === "tile_primary") return fields.includes("repo") ? ["repo"] : [];
-    if (key === "tile_secondary") return fields.includes("branch") ? ["branch"] : [];
+    if (key === "tile_secondary") return ["tab", "branch"].filter((token) => fields.includes(token));
     return VIEW_LIST_DEFAULTS[key] ?? [];
   }
   function baseDefaultList(key: string): string[] {

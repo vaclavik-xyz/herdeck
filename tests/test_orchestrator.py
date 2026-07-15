@@ -392,13 +392,26 @@ def test_overview_renders_configured_tile_lines():
     assert tile.branch == "›2 · main"    # secondary = tab + branch
 
 
+def test_overview_default_secondary_shows_tab_before_branch():
+    cfg = make_config()
+    o = Orchestrator(cfg, slots=13)
+    s = AgentState(AgentKey("dev", "w2:p1"), "claude", "herdeck", Status.WORKING)
+    s.repo, s.branch, s.tab = "herdeck", "main", "codex"
+    o.apply_snapshot("dev", [s])
+
+    tile = o.render().tiles[0]
+
+    assert tile.repo == "herdeck"
+    assert tile.branch == "›codex · main"
+
+
 def test_overview_tile_lines_fall_back_to_tile_fields():
-    # No new keys set; tile_fields=["repo"] must still hide branch (today's behavior).
+    # No explicit line config: tile_fields=["repo"] still hides tab and branch.
     cfg = make_multi_config()
     cfg.view.tile_fields = ["repo"]
     o = Orchestrator(cfg, slots=13)
     s = AgentState(AgentKey("alpha", "p1"), "claude", "api", Status.IDLE)
-    s.repo, s.branch = "repo", "feat/x"
+    s.repo, s.branch, s.tab = "repo", "feat/x", "hidden-tab"
     o.apply_snapshot("alpha", [s])
 
     tile = o.render().tiles[0]

@@ -50,7 +50,7 @@ describe("ViewSection", () => {
     }
   });
 
-  it("shows the Elgato plugin's fixed repo and branch fallbacks", () => {
+  it("shows the Elgato plugin's fixed repo and tab-plus-branch fallbacks", () => {
     setLang("en");
     const payload = parseConfig({
       base: { view: { tile_fields: ["status"] } },
@@ -70,7 +70,26 @@ describe("ViewSection", () => {
         (item) => item.querySelector(".label")?.textContent?.trim() === "tile_secondary",
       );
       expect(primary?.querySelector(".hint")?.textContent).toContain("repo");
+      expect(secondary?.querySelector(".hint")?.textContent).toContain("tab");
       expect(secondary?.querySelector(".hint")?.textContent).toContain("branch");
+    } finally {
+      unmount(instance);
+    }
+  });
+
+  it("shows tab before branch in the default D200 secondary line", () => {
+    setLang("en");
+    const payload = parseConfig({ base: { view: {} } })!;
+    const target = document.createElement("div");
+    const instance = mount(ViewSection, {
+      target,
+      props: { payload, onChange: () => {}, onError: () => {} },
+    });
+    try {
+      const secondary = Array.from(target.querySelectorAll(".tristate")).find(
+        (item) => item.querySelector(".label")?.textContent?.trim() === "tile_secondary",
+      );
+      expect(secondary?.querySelector(".hint")?.textContent).toContain("tab · branch");
     } finally {
       unmount(instance);
     }

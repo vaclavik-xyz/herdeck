@@ -25,7 +25,7 @@ offline = "red"
 management = "launcher_menu"
 show_profile_on_panel = true
 agent_slots = "max"
-tile_fields = ["repo", "branch", "status", "time", "server"]
+tile_fields = ["repo", "tab", "branch", "status", "time", "server"]
 # Optional text-line tokens: repo, branch, workspace, tab, agent, source,
 # work_item, run. Work tokens are empty unless an orchestrator publishes the
 # corresponding Herdr state_labels.
@@ -100,7 +100,7 @@ management = "bottom_row"
 bottom_row = ["profiles", "new_agent"]
 show_profile_on_panel = true
 agent_slots = "max"
-tile_fields = ["repo", "branch", "status", "time", "server"]
+tile_fields = ["repo", "tab", "branch", "status", "time", "server"]
 
 [profiles.mobile.notifications]
 enabled = false

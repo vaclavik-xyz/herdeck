@@ -343,9 +343,9 @@ class ElgatoSession:
             return TileView(ordinal, "", "empty")
         s = self._agents[key]
         down = s.key.server_id in self._down
-        # Elgato never honored tile_fields -> fixed repo/branch fallback.
+        # Elgato never honored tile_fields -> fixed compact fallback.
         primary_tokens, secondary_tokens = layout.resolve_tile_lines(
-            self.config.view, ["repo"], ["branch"]
+            self.config.view, ["repo"], ["tab", "branch"]
         )
         primary = layout.compose_line(s, primary_tokens)
         secondary = layout.compose_line(s, secondary_tokens)

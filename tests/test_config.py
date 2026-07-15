@@ -470,7 +470,7 @@ def test_runtime_customization_defaults_on_config():
     assert isinstance(cfg.view, ViewConfig)
     assert cfg.view.management == "launcher_menu"
     assert cfg.view.bottom_row == ["profiles", "notifications", "safety", "theme", "new_agent"]
-    assert cfg.view.tile_fields == ["repo", "branch", "status", "time", "server"]
+    assert cfg.view.tile_fields == ["repo", "tab", "branch", "status", "time", "server"]
     assert cfg.view.tile_primary is None
     assert cfg.view.tile_secondary is None
     assert isinstance(cfg.safety, SafetyConfig)

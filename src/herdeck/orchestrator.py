@@ -410,7 +410,9 @@ class Orchestrator:
         shown, pages = layout.page(ordered, self._page, agent_slots)
         fields = self.config.view.tile_fields
         fb_primary = ["repo"] if "repo" in fields else []
-        fb_secondary = ["branch"] if "branch" in fields else []
+        # The compact second line identifies the Herdr tab first; branch is
+        # useful context but may be ellipsized when the physical tile is tight.
+        fb_secondary = [token for token in ("tab", "branch") if token in fields]
         primary_tokens, secondary_tokens = layout.resolve_tile_lines(
             self.config.view, fb_primary, fb_secondary
         )
