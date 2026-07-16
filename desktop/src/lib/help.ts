@@ -35,8 +35,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_fill: "Fill the tile with the agent status color: none = text and bar only, tint = dimmed shade, solid = full color.",
       bottom_row: "Which buttons fill the bottom row in bottom_row mode; only profiles and new_agent (+ New) work for now.",
       tile_fields: "Which fields the agent tile shows: repo, tab, branch, status, time (time in state), server (server label).",
-      tile_primary: "First tile line from repo/branch/workspace/tab/agent/source/work_item/run; unset = repo, empty = off.",
-      tile_secondary: "Second tile line from the same fields; unset = tab then branch, an empty list turns the line off.",
+      tile_primary: "First tile line from built-in fields or $name metadata tokens; unset = repo, empty = off.",
+      tile_secondary: "Second line from built-in fields or $name metadata tokens; unset = tab then branch, empty = off.",
       language: "Language of the deck and this app: en (English) or cs (Czech). Applies after Apply.",
     },
     theme: {
@@ -126,8 +126,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_fill: "Vyplnění dlaždice barvou stavu agenta: none = jen text a proužek, tint = ztmavený odstín, solid = plná barva.",
       bottom_row: "Která tlačítka obsadí spodní řadu v režimu bottom_row; nyní fungují jen profiles a new_agent (+ New).",
       tile_fields: "Které údaje dlaždice agenta zobrazí: repo, tab, branch, status, time (doba ve stavu), server (štítek serveru).",
-      tile_primary: "První řádek z repo/branch/workspace/tab/agent/source/work_item/run; nevyplněno = repo, prázdné = vypnuto.",
-      tile_secondary: "Druhý řádek ze stejných polí; nevyplněno = tab a potom branch, prázdný seznam řádek vypne.",
+      tile_primary: "První řádek z vestavěných polí nebo metadata tokenů $name; nevyplněno = repo, prázdné = vypnuto.",
+      tile_secondary: "Druhý řádek z polí nebo tokenů $name; nevyplněno = tab a branch, prázdné = vypnuto.",
       language: "Jazyk decku i této aplikace: en (angličtina) nebo cs (čeština). Projeví se po Použít.",
     },
     theme: {

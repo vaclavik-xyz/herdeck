@@ -148,21 +148,38 @@ def test_decode_snapshot_defaults_workspace_and_tab_to_empty():
     assert msg.states[0].tab == ""
 
 
-def test_working_pane_with_custom_status_derives_waiting():
+def test_working_pane_with_waiting_on_derives_waiting():
     from herdeck.model import Status
     from herdeck.protocol import _pane_to_state
 
     # herdwatch asserts `working` + a label while holding a pane on background
     # work; herdeck surfaces that as the distinct WAITING state.
-    held = _pane_to_state("dev", {"pane_id": "p1", "status": "working", "custom_status": "⏳ ci"})
+    held = _pane_to_state("dev", {"pane_id": "p1", "status": "working", "waiting_on": "⏳ ci"})
     assert held.status is Status.WAITING
-    assert held.custom_status == "⏳ ci"
+    assert held.waiting_on == "⏳ ci"
     # genuinely working pane (no label) stays WORKING
     plain = _pane_to_state("dev", {"pane_id": "p1", "status": "working"})
-    assert plain.status is Status.WORKING and plain.custom_status == ""
-    # a custom status on a non-working pane never flips the state
-    idle = _pane_to_state("dev", {"pane_id": "p1", "status": "idle", "custom_status": "⏳ x"})
-    assert idle.status is Status.IDLE
+    assert plain.status is Status.WORKING and plain.waiting_on == ""
+    # waiting metadata is authoritative for idle/done panes too
+    idle = _pane_to_state("dev", {"pane_id": "p1", "status": "idle", "waiting_on": "⏳ x"})
+    assert idle.status is Status.WAITING
+
+
+def test_progress_keeps_working_state_and_metadata():
+    from herdeck.protocol import _pane_to_state
+
+    active = _pane_to_state(
+        "dev",
+        {
+            "pane_id": "p1",
+            "status": "working",
+            "progress": "2/5 Run tests",
+            "metadata": {"progress": "2/5 Run tests", "model": "gpt-5"},
+        },
+    )
+    assert active.status is Status.WORKING
+    assert active.progress == "2/5 Run tests"
+    assert active.metadata["model"] == "gpt-5"
 
 
 def test_decode_terminal_frame_preserves_wire_values():

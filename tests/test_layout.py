@@ -46,6 +46,13 @@ def test_compose_line_renders_optional_work_context_tokens():
     assert compose_line(_astate(), ["source", "work_item", "run"]) == ("github · repo#123 · run-42")
 
 
+def test_compose_line_renders_dynamic_metadata_tokens():
+    state = _astate()
+    state.metadata = {"summary": "reviewing auth", "model": "opus"}
+    assert compose_line(state, ["$summary", "$model"]) == "reviewing auth · opus"
+    assert compose_line(state, ["$missing"]) == ""
+
+
 def test_compose_line_empty_when_all_values_empty():
     s = _astate(workspace="", tab="")
     assert compose_line(s, ["workspace", "tab"]) == ""
@@ -375,10 +382,17 @@ def test_panel_detail_leads_with_waiting_label():
     from herdeck.layout import panel_detail
 
     agent = AgentState(
-        AgentKey("dev", "p1"), "claude", "api", Status.WAITING, custom_status="⏳ review +1"
+        AgentKey("dev", "p1"), "claude", "api", Status.WAITING, waiting_on="⏳ review +1"
     )
     pv = panel_detail(agent, "", lang="en")
     assert pv.lines[0] == "waiting on: review +1"
     assert pv.color == "violet"
     pv_cs = panel_detail(agent, "", lang="cs")
     assert pv_cs.lines[0] == "čeká na: review +1"
+
+
+def test_panel_detail_leads_with_active_progress():
+    agent = AgentState(
+        AgentKey("dev", "p1"), "claude", "api", Status.WORKING, progress="2/5 Run tests"
+    )
+    assert panel_detail(agent, "").lines == ["2/5 Run tests"]

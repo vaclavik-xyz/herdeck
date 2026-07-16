@@ -53,7 +53,7 @@ def demo_agents() -> list[AgentState]:
             Status.WAITING,
             repo="cli",
             branch="main",
-            custom_status="⏳ ci",
+            waiting_on="⏳ ci",
         ),
         AgentState(
             AgentKey(gpu, "p0"), "claude", "train", Status.WORKING, repo="ml", branch="exp/lora"

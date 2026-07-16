@@ -75,6 +75,8 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
             value = state.work.item
         elif token == "run":
             value = state.work.run
+        elif token.startswith("$"):
+            value = state.metadata.get(token[1:], "")
         else:
             value = ""
         if value:
@@ -353,11 +355,11 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
     return raw_lines, lines
 
 
-def waiting_status_text(custom_status: str, lang: str = "en") -> str:
+def waiting_status_text(waiting_on: str, lang: str = "en") -> str:
     """Tile status word for a WAITING agent: the holder's label ('⏳ ci' ->
     'CI') beats a generic word. The hourglass is stripped — the tile font has
     no emoji glyphs (it would render as a tofu box)."""
-    text = (custom_status or "").replace("⏳", "").strip()
+    text = (waiting_on or "").replace("⏳", "").strip()
     if not text:
         return tr(lang, "status.waiting")
     return text.upper()[:12]
@@ -369,11 +371,13 @@ def panel_detail(agent: AgentState, text: str, lang: str = "en") -> PanelView:
     raw_lines, lines = _detail_lines(text) if text else ([], [])
     if agent.status is Status.BLOCKED and not raw_lines:
         lines = [tr(lang, "reading_prompt")]
-    if agent.status is Status.WAITING and agent.custom_status:
+    if agent.status is Status.WAITING and agent.waiting_on:
         # The full holder label leads the drill detail — the tile only fits
         # the short status word.
-        label = agent.custom_status.replace("⏳", "").strip()
+        label = agent.waiting_on.replace("⏳", "").strip()
         lines = [tr(lang, "waiting_on", label=label), *lines]
+    elif agent.status is Status.WORKING and agent.progress:
+        lines = [agent.progress, *lines]
     return PanelView(
         title=f"{agent.agent_type}: {agent.label}",
         lines=lines,

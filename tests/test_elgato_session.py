@@ -480,7 +480,7 @@ def test_waiting_slot_shows_holder_label_not_generic_word():
     sess = ElgatoSession(make_config(), FakeIcons())
     sess.set_slots([("s1", (0, 0))])
     held = state("p1", Status.WAITING)
-    held.custom_status = "⏳ ci"
+    held.waiting_on = "⏳ ci"
     sess.apply_snapshot("dev", [held])
     slot = sess._slot_tile(0)
     assert slot.status_text == "CI"  # holder label, not "WAITING"

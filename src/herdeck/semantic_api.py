@@ -59,7 +59,13 @@ def _agent_record(agent: AgentState, *, available: bool) -> dict:
         "available": available,
         "agent_type": _bounded(agent.agent_type, 64),
         "label": _bounded(agent.label, 160),
-        "custom_status": _bounded(agent.custom_status, 160),
+        "waiting_on": _bounded(agent.waiting_on, 80),
+        "progress": _bounded(agent.progress, 80),
+        "metadata": {
+            _bounded(key, 32): _bounded(value, 80)
+            for key, value in agent.metadata.items()
+            if _bounded(key, 32)
+        },
         "repository": _bounded(agent.repo, 256),
         "branch": _bounded(agent.branch, 256),
         "project": _bounded(agent.project, 256),

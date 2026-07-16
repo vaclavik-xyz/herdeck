@@ -21,6 +21,7 @@
     <key>HERDECK_WEB_FRAME_ANCESTORS</key><string>https://cockpit.example</string>
   </dict>
   <key>KeepAlive</key><true/>
+  <key>LimitLoadToSessionType</key><string>Background</string>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>/Users/you/Library/Logs/herdeck-web.log</string>
   <key>StandardErrorPath</key><string>/Users/you/Library/Logs/herdeck-web.log</string>

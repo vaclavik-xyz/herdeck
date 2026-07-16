@@ -178,8 +178,7 @@ class Connector:
         """
         if state.key.server_id == self.server.id:
             return state
-        # Re-stamp ONLY the key; replace() copies every other field so a new
-        # AgentState field (e.g. custom_status) is never silently dropped here.
+        # Re-stamp ONLY the key; replace() copies every other AgentState field.
         return dataclasses.replace(state, key=AgentKey(self.server.id, state.key.pane_id))
 
     def _dispatch(self, raw: str) -> None:

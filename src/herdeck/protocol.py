@@ -19,18 +19,19 @@ def _status(value: str) -> Status:
 
 def _pane_to_state(server_id: str, pane: dict) -> AgentState:
     status = _status(pane.get("status", "unknown"))
-    custom = pane.get("custom_status") or ""
-    # A `working` pane carrying a custom_status is not the agent typing — it is
-    # an external holder (herdwatch) keeping the pane pending on background
-    # work (CI, review, a marker). Surface that as the distinct WAITING state.
-    if status is Status.WORKING and custom:
+    waiting_on = pane.get("waiting_on") or ""
+    # A user-facing block remains more important. Otherwise explicit passive
+    # metadata owns the derived state across Herdr's idle/done/working states.
+    if status in (Status.WORKING, Status.IDLE, Status.DONE) and waiting_on:
         status = Status.WAITING
-    wire_work = pane.get("work")
-    work_labels = (
-        {f"work.{key}": value for key, value in wire_work.items()}
-        if isinstance(wire_work, dict)
-        else {}
-    )
+    metadata = pane.get("metadata") if isinstance(pane.get("metadata"), dict) else {}
+    wire_work = pane.get("work") if isinstance(pane.get("work"), dict) else {}
+    work_tokens = {
+        "work_source": wire_work.get("source", ""),
+        "work_item": wire_work.get("item", ""),
+        "work_run": wire_work.get("run", ""),
+        "work_url": wire_work.get("url", ""),
+    }
     return AgentState(
         key=AgentKey(server_id, pane["pane_id"]),
         agent_type=pane.get("agent_type", "default"),
@@ -41,11 +42,13 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         branch=pane.get("branch", ""),
         workspace=pane.get("workspace", ""),
         tab=pane.get("tab", ""),
-        custom_status=custom,
+        waiting_on=waiting_on,
+        progress=pane.get("progress") or "",
+        metadata={str(key): str(value) for key, value in metadata.items()},
         terminal_id=pane.get("terminal_id") or "",
         title=pane.get("title") or "",
         display_agent=pane.get("display_agent") or "",
-        work=WorkContext.from_state_labels(work_labels),
+        work=WorkContext.from_tokens(work_tokens),
     )
 
 

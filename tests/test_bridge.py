@@ -55,7 +55,9 @@ def test_herdr_pane_to_wire_maps_fields():
         "branch": "",
         "workspace": "",
         "tab": "",
-        "custom_status": "",
+        "waiting_on": "",
+        "progress": "",
+        "metadata": {},
         "terminal_id": "",
         "title": "",
         "display_agent": "",
@@ -63,12 +65,11 @@ def test_herdr_pane_to_wire_maps_fields():
     }
 
 
-def test_herdr_pane_to_wire_passes_custom_status_through():
-    # herdwatch holds panes via `herdr pane report-agent --custom-status`;
-    # the label must reach clients so they can derive the WAITING state.
+def test_herdr_pane_to_wire_passes_waiting_on_through():
+    # herdwatch holds panes via the explicit Herdr metadata token.
     raw = raw_pane(agent="claude", status="working", cwd="/x/api")
-    raw["custom_status"] = "\u23f3 ci"
-    assert _herdr_pane_to_wire(raw)["custom_status"] == "\u23f3 ci"
+    raw["tokens"] = {"waiting_on": "\u23f3 ci"}
+    assert _herdr_pane_to_wire(raw)["waiting_on"] == "\u23f3 ci"
 
 
 def test_herdr_pane_to_wire_passes_terminal_identity_through():
@@ -84,12 +85,12 @@ def test_herdr_pane_to_wire_exposes_allowlisted_work_context():
         {
             "title": "Fix issue 123",
             "display_agent": "Codex reviewer",
-            "state_labels": {
-                "work.source": "github",
-                "work.item": "vaclavik-xyz/persOS#123",
-                "work.run": "run-42",
-                "work.url": "https://github.com/vaclavik-xyz/persOS/issues/123",
-                "private.note": "must not cross the bridge",
+            "tokens": {
+                "work_source": "github",
+                "work_item": "vaclavik-xyz/persOS#123",
+                "work_run": "run-42",
+                "work_url": "https://github.com/vaclavik-xyz/persOS/issues/123",
+                "summary": "reviewing auth",
             },
         }
     )
@@ -104,7 +105,13 @@ def test_herdr_pane_to_wire_exposes_allowlisted_work_context():
         "run": "run-42",
         "url": "https://github.com/vaclavik-xyz/persOS/issues/123",
     }
-    assert "state_labels" not in wire
+    assert wire["metadata"]["summary"] == "reviewing auth"
+
+
+def test_herdr_pane_to_wire_uses_stripped_terminal_title_as_fallback():
+    raw = raw_pane()
+    raw["terminal_title_stripped"] = "Review authentication"
+    assert _herdr_pane_to_wire(raw)["title"] == "Review authentication"
 
 
 def test_herdr_pane_to_wire_adds_repo_and_branch_from_worktree():
@@ -142,8 +149,12 @@ async def test_list_returns_mapped_filtered_snapshot(herdr):
     msg = json.loads(out)
     assert msg["type"] == "snapshot"
     assert msg["server_id"] == "workbox"
-    assert msg["protocol"] == 2
-    assert msg["capabilities"] == ["work_context", "terminal_preview"]
+    assert msg["protocol"] == 3
+    assert msg["capabilities"] == [
+        "work_context",
+        "terminal_preview",
+        "metadata_tokens",
+    ]
     p = msg["panes"][0]
     assert p["pane_id"] == "w1:p1"
     assert p["agent_type"] == "claude"  # mapped from herdr "agent"
@@ -1015,7 +1026,7 @@ async def test_socket_herdr_snapshot_returns_snapshot():
     assert snap == {"agents": [], "workspaces": [], "tabs": []}
 
 
-async def test_socket_herdr_snapshot_rejects_malformed_state_labels():
+async def test_socket_herdr_snapshot_rejects_malformed_tokens():
     from herdeck.bridge import SocketHerdr
 
     h = SocketHerdr("/nonexistent")
@@ -1028,7 +1039,7 @@ async def test_socket_herdr_snapshot_rejects_malformed_state_labels():
                         {
                             "pane_id": "w1:p1",
                             "terminal_id": "term-1",
-                            "state_labels": {"work.item": 123},
+                            "tokens": {"work_item": 123},
                         }
                     ]
                 }
@@ -1037,7 +1048,7 @@ async def test_socket_herdr_snapshot_rejects_malformed_state_labels():
 
     h._rpc = fake_rpc
 
-    with pytest.raises(RuntimeError, match="state_labels values must be strings"):
+    with pytest.raises(RuntimeError, match="token values must be strings"):
         await h.snapshot()
 
 
@@ -1122,9 +1133,11 @@ def test_listen_subscribes_to_label_and_worktree_events():
     from herdeck.bridge import _GLOBAL_EVENT_TYPES, _LABEL_EVENT_TYPES
 
     assert set(_LABEL_EVENT_TYPES) == {
+        "pane.updated",
         "tab.renamed",
         "workspace.renamed",
         "workspace.updated",
+        "workspace.metadata_updated",
         "worktree.created",
         "worktree.opened",
         "worktree.removed",

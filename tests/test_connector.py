@@ -350,9 +350,9 @@ def test_dispatch_rekey_preserves_workspace_and_tab():
     assert seen["states"][0].tab == "2"
 
 
-def test_dispatch_rekey_preserves_custom_status_and_waiting():
+def test_dispatch_rekey_preserves_waiting_on_and_waiting():
     # A server-id mismatch (bridge "some-bridge-id" vs config "dev") triggers
-    # the rekey reconstruction; it must carry custom_status through, else a
+    # the rekey reconstruction; it must carry waiting_on through, else a
     # herdwatch-held pane rendered WAITING with no holder label (fell back to
     # the generic word). dataclasses.replace copies every field.
     from herdeck.model import Status
@@ -368,13 +368,13 @@ def test_dispatch_rekey_preserves_custom_status_and_waiting():
     raw = (
         '{"type":"snapshot","server_id":"some-bridge-id","panes":'
         '[{"pane_id":"w2:p1","agent_type":"claude","label":"cli",'
-        '"status":"working","custom_status":"\\u23f3 ci"}]}'
+        '"status":"working","waiting_on":"\\u23f3 ci"}]}'
     )
     conn._dispatch(raw)
     s = seen["states"][0]
     assert s.key.server_id == "dev"  # rekeyed
-    assert s.status is Status.WAITING  # derived from working + custom_status
-    assert s.custom_status == "⏳ ci"  # carried through rekey (was dropped)
+    assert s.status is Status.WAITING  # derived from working + waiting_on
+    assert s.waiting_on == "⏳ ci"  # carried through rekey (was dropped)
 
 
 async def test_connector_serializes_concurrent_sends_in_call_order():

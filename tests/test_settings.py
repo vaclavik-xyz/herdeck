@@ -577,6 +577,17 @@ def test_view_config_rejects_unknown_tile_token():
         _view_config({"tile_secondary": ["branch", "bogus"]})
 
 
+def test_view_config_accepts_bounded_metadata_tile_tokens():
+    view = _view_config({"tile_primary": ["repo", "$summary", "$model-name"]})
+    assert view.tile_primary == ["repo", "$summary", "$model-name"]
+
+
+@pytest.mark.parametrize("token", ["$", "$bad.name", "$" + "x" * 33])
+def test_view_config_rejects_invalid_metadata_tile_tokens(token):
+    with pytest.raises(ConfigError, match="unknown tile token"):
+        _view_config({"tile_primary": [token]})
+
+
 def test_view_config_parses_working_animation():
     assert _view_config({"working_animation": "pulse"}).working_animation == "pulse"
 

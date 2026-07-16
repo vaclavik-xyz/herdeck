@@ -121,7 +121,7 @@ Stable v1 fields are:
 
 - top level: `api_version`, `agents`
 - identity/state: `server_id`, `pane_id`, `terminal_id`, `status`, `available`
-- display: `agent_type`, `label`, `custom_status`, `repository`, `branch`,
+- display: `agent_type`, `label`, `waiting_on`, `progress`, `metadata`, `repository`, `branch`,
   `project`, `workspace`, `tab`
 - work: `source`, `item`, `run`, `url`
 
