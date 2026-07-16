@@ -33,8 +33,8 @@ _PROBE_TIMEOUT = 5.0
 _HERDR_RPC_TIMEOUT = 10.0
 _HERDR_SUBSCRIBE_TIMEOUT = 10.0
 _HERDR_LINE_LIMIT = 1024 * 1024 + 1  # 1 MiB payload plus NDJSON newline
-_WIRE_PROTOCOL = 2
-_WIRE_CAPABILITIES = ("work_context", "terminal_preview")
+_WIRE_PROTOCOL = 3
+_WIRE_CAPABILITIES = ("work_context", "terminal_preview", "metadata_tokens")
 
 # Module-level indirection so tests can fake the clock without touching the
 # shared stdlib time module (which asyncio's loop may also consult).
@@ -124,25 +124,26 @@ def _validate_snapshot(snapshot: object) -> dict:
             "agent_status",
             "cwd",
             "foreground_cwd",
-            "custom_status",
             "display_agent",
             "title",
+            "terminal_title",
+            "terminal_title_stripped",
             "workspace_id",
             "tab_id",
         ):
             value = record.get(field)
             if value is not None and not isinstance(value, str):
                 raise RuntimeError(f"session.snapshot agent {field} must be a string or null")
-        labels = record.get("state_labels")
-        if labels is not None:
-            if not isinstance(labels, dict):
-                raise RuntimeError("session.snapshot agent state_labels must be an object")
-            if len(labels) > 64:
-                raise RuntimeError("session.snapshot agent state_labels exceeds 64 entries")
-            if not all(isinstance(key, str) for key in labels):
-                raise RuntimeError("session.snapshot agent state_labels keys must be strings")
-            if not all(isinstance(value, str) for value in labels.values()):
-                raise RuntimeError("session.snapshot agent state_labels values must be strings")
+        tokens = record.get("tokens")
+        if tokens is not None:
+            if not isinstance(tokens, dict):
+                raise RuntimeError("session.snapshot agent tokens must be an object")
+            if len(tokens) > 32:
+                raise RuntimeError("session.snapshot agent tokens exceeds 32 entries")
+            if not all(isinstance(key, str) for key in tokens):
+                raise RuntimeError("session.snapshot agent token keys must be strings")
+            if not all(isinstance(value, str) for value in tokens.values()):
+                raise RuntimeError("session.snapshot agent token values must be strings")
     for record in snapshot.get("panes", []):
         pane_id = record.get("pane_id")
         if not isinstance(pane_id, str) or not pane_id:
@@ -222,7 +223,8 @@ def _herdr_pane_to_wire(
     wt = (wt_by_ws or {}).get(p.get("workspace_id", ""), {})
     repo = wt.get("label") or label
     branch = wt.get("branch") or ""
-    work = WorkContext.from_state_labels(p.get("state_labels"))
+    tokens = p.get("tokens") if isinstance(p.get("tokens"), dict) else {}
+    work = WorkContext.from_tokens(tokens)
     return {
         "pane_id": p["pane_id"],
         "agent_type": p.get("agent", "default"),
@@ -233,12 +235,11 @@ def _herdr_pane_to_wire(
         "branch": branch,
         "workspace": (ws_by_id or {}).get(p.get("workspace_id", ""), ""),
         "tab": (tab_by_id or {}).get(p.get("tab_id", ""), ""),
-        # Set when an external source holds the pane via `herdr pane
-        # report-agent --custom-status` (herdwatch's "⏳ ci" etc.); absent
-        # otherwise. Clients derive the WAITING state from it.
-        "custom_status": p.get("custom_status", ""),
+        "waiting_on": tokens.get("waiting_on", ""),
+        "progress": tokens.get("progress", ""),
+        "metadata": tokens,
         "terminal_id": p.get("terminal_id") or "",
-        "title": (p.get("title") or "")[:160],
+        "title": (p.get("title") or p.get("terminal_title_stripped") or "")[:160],
         "display_agent": (p.get("display_agent") or "")[:160],
         "work": {
             "source": work.source,
@@ -489,9 +490,11 @@ _FLEET_EVENT_NAMES = {
 # these only need to wake the stream; worktree events additionally invalidate
 # the cached worktree list (branch labels are not in the snapshot).
 _LABEL_EVENT_TYPES = (
+    "pane.updated",
     "tab.renamed",
     "workspace.renamed",
     "workspace.updated",
+    "workspace.metadata_updated",
     "worktree.created",
     "worktree.opened",
     "worktree.removed",
@@ -1018,7 +1021,8 @@ class SocketHerdr:
         return panes
 
     async def snapshot(self) -> dict:
-        # session.snapshot (herdr >= 0.7.2) returns agents + workspace/tab labels
+        # session.snapshot (herdr >= 0.7.4) returns agents, metadata tokens, and
+        # workspace/tab labels
         # in one response; worktrees are NOT included (see worktrees()).
         try:
             res = await self._rpc("session.snapshot", {})

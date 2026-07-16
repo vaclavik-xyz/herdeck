@@ -26,12 +26,12 @@ def test_agent_state_defaults():
 
 
 def test_work_context_accepts_bounded_labels_and_https_urls():
-    context = WorkContext.from_state_labels(
+    context = WorkContext.from_tokens(
         {
-            "work.source": "github",
-            "work.item": "vaclavik-xyz/persOS#123",
-            "work.run": "run-42",
-            "work.url": "https://github.com/vaclavik-xyz/persOS/issues/123",
+            "work_source": "github",
+            "work_item": "vaclavik-xyz/persOS#123",
+            "work_run": "run-42",
+            "work_url": "https://github.com/vaclavik-xyz/persOS/issues/123",
         }
     )
 
@@ -42,12 +42,12 @@ def test_work_context_accepts_bounded_labels_and_https_urls():
         url="https://github.com/vaclavik-xyz/persOS/issues/123",
     )
 
-    rejected = WorkContext.from_state_labels(
+    rejected = WorkContext.from_tokens(
         {
-            "work.source": "x" * 100,
-            "work.item": "i" * 300,
-            "work.run": "r" * 300,
-            "work.url": "http://insecure.example/run",
+            "work_source": "x" * 100,
+            "work_item": "i" * 300,
+            "work_run": "r" * 300,
+            "work_url": "http://insecure.example/run",
         }
     )
     assert rejected.source == "x" * 64
@@ -57,4 +57,4 @@ def test_work_context_accepts_bounded_labels_and_https_urls():
 
 
 def test_work_context_rejects_malformed_https_url_without_breaking_snapshot():
-    assert WorkContext.from_state_labels({"work.url": "https://["}).url == ""
+    assert WorkContext.from_tokens({"work_url": "https://["}).url == ""

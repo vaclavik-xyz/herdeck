@@ -367,7 +367,7 @@ class ElgatoSession:
             status_text=(
                 self._tr("status.offline")
                 if down
-                else layout.waiting_status_text(s.custom_status, self.config.view.language)
+                else layout.waiting_status_text(s.waiting_on, self.config.view.language)
                 if s.status is Status.WAITING
                 else self._tr(f"status.{s.status.value}")
             ),

@@ -258,19 +258,21 @@ contract, see [docs/persos-cockpit.md](docs/persos-cockpit.md).
 ### Optional work/run context
 
 Orchestrators can attach display-only work identity to a Herdr pane through
-`pane.report_metadata` state labels. Herdeck recognizes only these bounded keys:
+`pane.report_metadata` tokens. Herdeck recognizes these bounded keys:
 
 ```text
-work.source = github
-work.item   = vaclavik-xyz/herdeck#123
-work.run    = run-42
-work.url    = https://github.com/vaclavik-xyz/herdeck/issues/123
+work_source = github
+work_item   = vaclavik-xyz/herdeck#123
+work_run    = run-42
+work_url    = https://github.com/vaclavik-xyz/herdeck/issues/123
 ```
 
-Unknown labels never cross the Herdeck bridge. `work.url` must be HTTPS and is
-display metadata only; Herdeck never opens or executes it automatically. Add
+`work_url` must be HTTPS and is display metadata only; Herdeck never opens or
+executes it automatically. Add
 `source`, `work_item`, or `run` to `view.tile_primary` / `tile_secondary` to
-render the context. Interactive Telegram alerts include `work.item` when set.
+render the context. Any Herdr token can be rendered with `$name`, for example
+`$summary`, `$model`, `$waiting_on`, or `$progress`. Interactive Telegram alerts
+include `work_item` when set.
 
 **Headless.** `HERDECK_FAKE_DECK=1 python -m herdeck.app` uses an in-memory
 renderer (no UI). `scripts/e2e_verify.py` connects the pipeline to a bridge and

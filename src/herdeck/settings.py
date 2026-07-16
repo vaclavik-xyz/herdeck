@@ -33,6 +33,8 @@ from .config import (
 )
 from .i18n import LANGUAGES
 
+_METADATA_TILE_TOKEN_RE = re.compile(r"^\$[A-Za-z0-9_-]{1,32}$")
+
 
 @dataclass
 class SettingsSnapshot:
@@ -212,7 +214,9 @@ def _view_config(raw: dict | None) -> ViewConfig:
         if key in raw:
             tokens = list(raw[key])
             for tok in tokens:
-                if tok not in TILE_LINE_TOKENS:
+                if tok not in TILE_LINE_TOKENS and not (
+                    isinstance(tok, str) and _METADATA_TILE_TOKEN_RE.fullmatch(tok)
+                ):
                     raise ConfigError(f"unknown tile token '{tok}' in view.{key}")
             setattr(view, key, tokens)
     if "working_animation" in raw:

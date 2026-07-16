@@ -602,7 +602,7 @@ def test_waiting_agent_renders_violet_with_holder_label():
                 "claude",
                 "api",
                 Status.WAITING,
-                custom_status="⏳ ci",
+                waiting_on="⏳ ci",
             ),
             state("p2", Status.WORKING),
         ],

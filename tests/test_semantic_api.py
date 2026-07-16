@@ -73,7 +73,7 @@ def agent(
         branch="feat/api",
         workspace="workspace",
         tab="tab",
-        custom_status="needs user",
+        waiting_on="needs user",
         terminal_id=terminal,
         title="SECRET PROMPT",
         work=WorkContext("github", "#28", "run-1", "https://example.test/28"),

@@ -12,7 +12,7 @@ class Status(str, Enum):
     DONE = "done"
     # Herdeck-side derived state: the agent itself is done/idle but an external
     # holder (herdwatch) keeps the pane pending on background work (CI, review,
-    # a marker) — reported to herdr as `working` + a custom_status label.
+    # a marker) — reported through the explicit `waiting_on` metadata token.
     # herdr's own screen detection never emits this value.
     WAITING = "waiting"
     UNKNOWN = "unknown"
@@ -26,7 +26,7 @@ class AgentKey:
 
 @dataclass(frozen=True)
 class WorkContext:
-    """Small, display-only work identity supplied through Herdr state labels."""
+    """Small, display-only work identity supplied through Herdr metadata tokens."""
 
     source: str = ""
     item: str = ""
@@ -34,15 +34,15 @@ class WorkContext:
     url: str = ""
 
     @classmethod
-    def from_state_labels(cls, labels: object) -> WorkContext:
-        if not isinstance(labels, dict):
+    def from_tokens(cls, tokens: object) -> WorkContext:
+        if not isinstance(tokens, dict):
             return cls()
 
         def bounded(name: str, limit: int) -> str:
-            value = labels.get(name)
+            value = tokens.get(name)
             return value[:limit] if isinstance(value, str) else ""
 
-        url = bounded("work.url", 2048)
+        url = bounded("work_url", 2048)
         try:
             parsed = urlsplit(url)
         except ValueError:
@@ -51,9 +51,9 @@ class WorkContext:
             if parsed.scheme != "https" or not parsed.netloc:
                 url = ""
         return cls(
-            source=bounded("work.source", 64),
-            item=bounded("work.item", 160),
-            run=bounded("work.run", 160),
+            source=bounded("work_source", 64),
+            item=bounded("work_item", 160),
+            run=bounded("work_run", 160),
             url=url,
         )
 
@@ -69,9 +69,11 @@ class AgentState:
     branch: str = ""  # git branch (from herdr worktree)
     workspace: str = ""  # herdr workspace label (workspace.list)
     tab: str = ""  # herdr tab label (tab.list)
-    # Label asserted via `herdr pane report-agent --custom-status` (herdwatch:
-    # "⏳ ci", "⏳ review +1"); empty when no source holds the pane.
-    custom_status: str = ""
+    # Explicit Herdr 0.7.4 metadata tokens. ``waiting_on`` marks passive
+    # background work; ``progress`` describes an actively working agent.
+    waiting_on: str = ""
+    progress: str = ""
+    metadata: dict[str, str] = field(default_factory=dict)
     # Stable Herdr terminal identity. ``pane_id`` is a public location and may
     # be moved or recycled; long-lived controls must bind to this value too.
     terminal_id: str = ""
