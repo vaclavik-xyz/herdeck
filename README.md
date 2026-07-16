@@ -106,8 +106,8 @@ herdr's socket lives at `~/.config/herdr/herdr.sock` (macOS & Linux).
    The Mac routes commands by the **config `id`** of the server it connects to,
    so `HERDECK_SERVER_ID` is only a cosmetic label — the connector re-stamps
    inbound state to the config id (they need not match).
-3. To keep it running: **macOS** → `deploy/dev.herdeck.bridge.plist`
-   (`launchctl load -w ~/Library/LaunchAgents/dev.herdeck.bridge.plist`);
+3. To keep it running: **macOS** → install it as a background agent with
+   `herdeck-service install bridge --bind 100.x.y.z --server-id workbox`;
    **Linux** → `deploy/herdeck-bridge.service` (systemd).
 
 For a service installation, prefer a private token file over an environment
@@ -192,7 +192,9 @@ LAN.
 ### Running as a service
 
 `herdeck-web` makes the browser runtime explicit, and `herdeck-service` installs
-macOS LaunchAgents without placing token values in plist files:
+macOS background LaunchAgents without placing token values in plist files. The
+agents run in the user domain, so they survive a GUI logout or WindowServer
+restart:
 
 ```bash
 herdeck-service install bridge --bind 100.x.y.z --server-id workbox

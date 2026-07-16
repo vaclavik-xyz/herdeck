@@ -75,6 +75,7 @@ def render_launch_agent(config: ServiceConfig) -> bytes:
         "ProgramArguments": arguments,
         "EnvironmentVariables": environment,
         "KeepAlive": True,
+        "LimitLoadToSessionType": "Background",
         "RunAtLoad": True,
         "StandardOutPath": str(log_path),
         "StandardErrorPath": str(log_path),
@@ -118,9 +119,10 @@ def install_service(
     existed = plist_path.exists()
     if existed:
         runner(["launchctl", "bootout", f"gui/{uid}/{config.label}"])
+        runner(["launchctl", "bootout", f"user/{uid}/{config.label}"])
     plist_path.write_bytes(render_launch_agent(config))
     plist_path.chmod(0o644)
-    result = runner(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)])
+    result = runner(["launchctl", "bootstrap", f"user/{uid}", str(plist_path)])
     if result != 0:
         raise SystemExit(f"launchctl bootstrap failed for {config.label}")
     return plist_path
@@ -128,11 +130,12 @@ def install_service(
 
 def service_status(config: ServiceConfig, *, runner=_run) -> int:
     uid = os.getuid() if config.uid is None else config.uid
-    return runner(["launchctl", "print", f"gui/{uid}/{config.label}"])
+    return runner(["launchctl", "print", f"user/{uid}/{config.label}"])
 
 
 def uninstall_service(config: ServiceConfig, *, runner=_run) -> None:
     uid = os.getuid() if config.uid is None else config.uid
+    runner(["launchctl", "bootout", f"user/{uid}/{config.label}"])
     runner(["launchctl", "bootout", f"gui/{uid}/{config.label}"])
     plist_path = config.home / "Library/LaunchAgents" / f"{config.label}.plist"
     try:

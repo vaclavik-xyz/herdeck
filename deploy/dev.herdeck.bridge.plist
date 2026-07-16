@@ -25,6 +25,7 @@
     <key>PYTHONPATH</key><string>/Users/you/herdeck/src</string>
   </dict>
   <key>KeepAlive</key><true/>
+  <key>LimitLoadToSessionType</key><string>Background</string>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>/Users/you/herdeck/bridge.log</string>
   <key>StandardErrorPath</key><string>/Users/you/herdeck/bridge.log</string>
