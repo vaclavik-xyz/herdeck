@@ -212,9 +212,15 @@ The installer creates the token file when absent and rejects permissive token
 file modes. For Linux, copy
 [`deploy/herdeck-bridge.service`](../deploy/herdeck-bridge.service) to
 `~/.config/systemd/user/herdeck-bridge.service`, replace its placeholder
-address and paths, then enable the user unit:
+address and paths, securely create the token file named by
+`HERDECK_TOKEN_FILE`, then enable the user unit:
 
 ```bash
+install -d -m 700 "$HOME/.config/herdeck"
+umask 077
+test -s "$HOME/.config/herdeck/bridge-token" ||
+  openssl rand -hex 32 > "$HOME/.config/herdeck/bridge-token"
+chmod 600 "$HOME/.config/herdeck/bridge-token"
 systemctl --user daemon-reload
 systemctl --user enable --now herdeck-bridge.service
 systemctl --user status herdeck-bridge.service --no-pager
@@ -288,6 +294,16 @@ change all of these per instance:
 - `HERDECK_TOKEN_FILE`;
 - log paths.
 
+Before loading a manual unit, securely create its unique token file:
+
+```bash
+install -d -m 700 "$HOME/.config/herdeck"
+umask 077
+test -s "$HOME/.config/herdeck/bridge-workbox-review.token" ||
+  openssl rand -hex 32 > "$HOME/.config/herdeck/bridge-workbox-review.token"
+chmod 600 "$HOME/.config/herdeck/bridge-workbox-review.token"
+```
+
 Install each distinct plist with:
 
 ```bash
@@ -353,14 +369,25 @@ Local sessions are device-local and are not listed in profile `servers`.
 Before editing existing state:
 
 ```bash
+CONFIG_PATH="${HERDECK_CONFIG:-$HOME/.config/herdeck/config.toml}"
+if [ -n "${HERDECK_LOCAL_CONFIG:-}" ]; then
+  LOCAL_PATH="$HERDECK_LOCAL_CONFIG"
+else
+  LOCAL_PATH="$(dirname "$CONFIG_PATH")/local.toml"
+fi
+ONBOARDING_PATH="$(dirname "$CONFIG_PATH")/onboarding.toml"
+
 STAMP="$(date +%Y%m%d-%H%M%S)"
-cp -p ~/.config/herdeck/config.toml \
-  ~/.config/herdeck/config.toml."$STAMP".bak 2>/dev/null || true
-cp -p ~/.config/herdeck/local.toml \
-  ~/.config/herdeck/local.toml."$STAMP".bak 2>/dev/null || true
-cp -p ~/.config/herdeck/onboarding.toml \
-  ~/.config/herdeck/onboarding.toml."$STAMP".bak 2>/dev/null || true
+for path in "$CONFIG_PATH" "$LOCAL_PATH" "$ONBOARDING_PATH"; do
+  if [ -e "$path" ]; then
+    cp -p "$path" "$path.$STAMP.bak"
+  fi
+done
 ```
+
+Use these resolved variables consistently for inventory, edits, verification,
+and rollback. `onboarding.toml` always lives beside the effective
+`config.toml`, even when `HERDECK_LOCAL_CONFIG` points elsewhere.
 
 Use an atomic temp-file-and-rename write or the agent's structured patch tool.
 Never truncate an existing TOML file and reconstruct only the keys understood
@@ -394,9 +421,9 @@ Verification is mandatory and should be proportional to the topology.
 ```bash
 herdr session list --json
 herdr --session default api snapshot |
-  jq -e '.result.snapshot.type == "session_snapshot"'
+  jq -e '.result.snapshot.agents | type == "array"'
 herdr --session review api snapshot |
-  jq -e '.result.snapshot.type == "session_snapshot"'
+  jq -e '.result.snapshot.agents | type == "array"'
 ```
 
 Run the snapshot command for each selected running session. A deliberately
@@ -406,7 +433,9 @@ and offline rather than connected.
 ### 2. Validate remote configuration and bridges
 
 ```bash
-HERDECK_CONFIG="$HOME/.config/herdeck/config.toml" herdeck-doctor
+HERDECK_CONFIG="$CONFIG_PATH" \
+HERDECK_LOCAL_CONFIG="$LOCAL_PATH" \
+  herdeck-doctor
 ```
 
 `herdeck-doctor` parses the effective config, resolves env/keychain secrets,

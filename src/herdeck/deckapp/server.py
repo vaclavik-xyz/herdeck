@@ -1028,15 +1028,23 @@ def _resolve_source_kind():
     """Gather the facts and apply select_source_kind."""
     from ..bootstrap import resolve_saved_socket_path
     from .onboarding import read_choice
+    from .sessions import selected_local_sessions
 
-    config_path = _default_config_paths()[0]
+    config_path, local_path = _default_config_paths()
     socket_path = resolve_saved_socket_path(config_path)
+    choice = read_choice(config_path)
+    socket_exists = os.path.exists(socket_path)
+    if choice == "local" and not socket_exists:
+        selected = selected_local_sessions(local_path)
+        if selected:
+            socket_path = selected[0].socket_path
+            socket_exists = True
     return select_source_kind(
         mock_env=bool(os.environ.get("HERDECK_MOCK")),
         remote=select_live(),
-        choice=read_choice(config_path),
+        choice=choice,
         socket_path=socket_path,
-        socket_exists=os.path.exists(socket_path),
+        socket_exists=socket_exists,
     )
 
 
