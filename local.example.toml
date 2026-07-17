@@ -1,0 +1,20 @@
+# Device-local Herdeck settings. Copy to ~/.config/herdeck/local.toml or place
+# next to the config selected by HERDECK_CONFIG. Do not commit the real file.
+
+active_profile = "default"
+
+[local]
+# Conventional local Herdr sessions. "default" uses
+# ~/.config/herdr/herdr.sock; a name such as "review" uses
+# ~/.config/herdr/sessions/review/herdr.sock.
+herdr_sessions = ["default", "review"]
+
+# Optional device-only settings:
+# deck = "web"
+# web_bind = "127.0.0.1"
+# web_port = 8800
+# icons_dir = "~/herdeck-icons"
+
+# Use one custom socket only when conventional Herdr session paths do not fit.
+# An explicit HERDR_SOCKET environment variable overrides normal discovery.
+# herdr_socket = "~/custom/herdr.sock"

@@ -17,3 +17,12 @@
 ## GitHub
 
 - Pro GitHub operace používej lokální `gh` CLI.
+
+## Nastavení Herdecku
+
+- Při žádosti o instalaci, připojení nebo změnu lokálních/vzdálených Herdr sessions postupuj podle `docs/agent-setup.md`; je to source of truth.
+- Preferuj ověřitelné CLI a konfigurační soubory před Settings UI. Uživatel nemá ručně přepisovat TOML ani přenášet tokeny.
+- Nejdřív zjisti skutečnou topologii (`herdr status --json`, `herdr session list --json`, Tailscale a existující config), zachovej nesouvisející nastavení a vytvoř zálohy.
+- Tokeny nikdy nevypisuj ani neukládej do TOML, argumentů, logů nebo commitu. Remote bridge binduj jen na loopback/Tailscale adresu.
+- Bez výslovného souhlasu nevytvářej DNS, Tailscale Funnel/Serve, Cloudflare tunnel, veřejný proxy ani firewall pravidla.
+- Úkol nekončí zápisem konfigurace: ověř všechny lokální sessions, remote bridges, efektivní profil a runtime `connections`; výsledek předej bez secretů.

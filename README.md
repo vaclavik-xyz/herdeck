@@ -74,6 +74,12 @@ Tailscale network; Tailscale SSH is not part of the data path. Local and remote
 agents are keyed by server/session id, so commands always return to the bridge
 that supplied the pane.
 
+For agent-managed setup without the connection UI, use the
+**[agent setup runbook](docs/agent-setup.md)**. It covers topology discovery,
+safe token transfer, local/remote/mixed configuration, multiple bridge
+services, verification, troubleshooting, and rollback. A device-local template
+is available as [`local.example.toml`](local.example.toml).
+
 Run `herdeck-doctor` to diagnose setup problems — it checks the herdr socket,
 config/mode, deck availability, and (for remote) token presence, printing a
 pass/fail checklist with hints (it never prints token values).
@@ -121,9 +127,15 @@ herdr's socket lives at `~/.config/herdr/herdr.sock` (macOS & Linux).
    `python3 -m venv ~/herdeck/.venv && ~/herdeck/.venv/bin/pip install websockets`
 2. Run the bridge bound to the host's **Tailscale IP** with a bearer token:
    ```bash
+   mkdir -p ~/.config/herdeck
+   umask 077
+   test -s ~/.config/herdeck/bridge-token ||
+     openssl rand -hex 32 > ~/.config/herdeck/bridge-token
+   chmod 600 ~/.config/herdeck/bridge-token
    HERDR_SOCKET=~/.config/herdr/herdr.sock \
    HERDECK_BIND=100.x.y.z HERDECK_PORT=8788 \
-   HERDECK_SERVER_ID=workbox HERDECK_TOKEN=<random-token> \
+   HERDECK_SERVER_ID=workbox \
+   HERDECK_TOKEN_FILE=~/.config/herdeck/bridge-token \
    PYTHONPATH=~/herdeck/src ~/herdeck/.venv/bin/python -m herdeck.bridge
    ```
    The Mac routes commands by the **config `id`** of the server it connects to,
@@ -160,7 +172,8 @@ Herdeck supports a shareable `config.toml` and a device-local `local.toml`.
 The shareable file defines profiles and reusable blocks for theme, view,
 launcher, macros, notifications, and safety. The local file stores the active
 profile and device-specific settings such as deck type, socket path, web bind,
-icon overrides, and hardware tuning.
+icon overrides, selected Herdr sessions, and hardware tuning. Start from
+[`local.example.toml`](local.example.toml) when configuring it outside the UI.
 
 Switch profiles from the deck through `+ New` -> `Profiles`, or set
 `HERDECK_PROFILE=mobile` to lock a process to a profile. Use `local.toml` for
