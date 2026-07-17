@@ -45,7 +45,9 @@ def test_reloader_swaps_in_mock_or_remote_mode():
     assert calls == ["NEWSRC"]
 
 
-def test_mock_reloader_promotes_explicit_settings_selection_to_local(monkeypatch):
+def test_mock_reloader_promotes_new_settings_selection_to_local(
+    tmp_path, monkeypatch
+):
     session = types.SimpleNamespace(
         name="review",
         server_id="local:review",
@@ -56,19 +58,22 @@ def test_mock_reloader_promotes_explicit_settings_selection_to_local(monkeypatch
     config = types.SimpleNamespace(servers=[types.SimpleNamespace(id="local:review")])
     runner = types.SimpleNamespace(close=lambda: None)
     calls = []
+    local = tmp_path / "local.toml"
+    local.write_text('[local]\nherdr_sessions = []\n')
     fake_app = types.SimpleNamespace(
-        _config_service=types.SimpleNamespace(_local_path="/local.toml"),
+        _config_service=types.SimpleNamespace(_local_path=local),
         swap_source=lambda source: calls.append(("swap", source)),
         _set_local_bridges=lambda runners: calls.append(("bridges", runners)),
     )
+    selected = []
     monkeypatch.setattr(
-        "herdeck.deckapp.sessions.has_explicit_local_session_selection",
-        lambda path: True,
+        "herdeck.deckapp.sessions.discover_local_sessions",
+        lambda path: list(selected),
     )
     monkeypatch.setattr(
         srv,
         "_explicit_selected_local_sessions",
-        lambda service: [session],
+        lambda service: list(selected),
     )
     monkeypatch.setattr(
         srv,
@@ -82,12 +87,61 @@ def test_mock_reloader_promotes_explicit_settings_selection_to_local(monkeypatch
     )
     monkeypatch.setattr(srv, "_load_partial_config", lambda: None)
 
-    srv._reloader_for(fake_app, ("mock", "demo"), lambda: "MOCK")()
+    reload = srv._reloader_for(fake_app, ("mock", "demo"), lambda: "MOCK")
+    selected.append(session)
+    reload()
 
     assert calls == [
         ("swap", "LIVE"),
         ("bridges", {"local:review": runner}),
     ]
+
+
+def test_mock_reloader_does_not_revive_unchanged_demo_selection(
+    tmp_path, monkeypatch
+):
+    local = tmp_path / "local.toml"
+    local.write_text('[local]\nherdr_sessions = ["review"]\n')
+    session = types.SimpleNamespace(name="review", selected=True)
+    monkeypatch.setattr(
+        "herdeck.deckapp.sessions.discover_local_sessions",
+        lambda path: [session],
+    )
+    calls = []
+    fake_app = types.SimpleNamespace(
+        _config_service=types.SimpleNamespace(_local_path=local),
+        swap_source=lambda source: calls.append(source),
+    )
+
+    srv._reloader_for(fake_app, ("mock", "demo"), lambda: "MOCK")()
+
+    assert calls == ["MOCK"]
+
+
+def test_mock_env_blocks_new_local_selection(tmp_path, monkeypatch):
+    local = tmp_path / "local.toml"
+    local.write_text('[local]\nherdr_sessions = []\n')
+    selected = []
+    monkeypatch.setattr(
+        "herdeck.deckapp.sessions.discover_local_sessions",
+        lambda path: list(selected),
+    )
+    monkeypatch.setattr(
+        srv,
+        "_explicit_selected_local_sessions",
+        lambda service: list(selected),
+    )
+    calls = []
+    fake_app = types.SimpleNamespace(
+        _config_service=types.SimpleNamespace(_local_path=local),
+        swap_source=lambda source: calls.append(source),
+    )
+    reload = srv._reloader_for(fake_app, ("mock", "mock_env"), lambda: "MOCK")
+    selected.append(types.SimpleNamespace(name="review", selected=True))
+
+    reload()
+
+    assert calls == ["MOCK"]
 
 
 def _stub_runner_factory(socket_path):

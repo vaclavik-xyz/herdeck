@@ -1362,19 +1362,30 @@ def _local_reloader(app):
 
 
 def _mock_reloader(app, kind, select_source):
-    """Keep demo mode sticky unless Settings explicitly selects local sessions.
+    """Keep explicit mock/demo mode sticky across unrelated reloads.
 
-    A mock caused by an unavailable saved local session also promotes itself to
-    live as soon as the selected socket appears.
+    A genuinely new Settings selection may promote mock to local live, while a
+    mock caused by an unavailable saved local session promotes itself when the
+    socket appears. ``HERDECK_MOCK`` always wins.
     """
+    from .sessions import discover_local_sessions
+
+    config_service = getattr(app, "_config_service", None)
+    local_path = getattr(config_service, "_local_path", None)
+
+    def selection() -> tuple[str, ...]:
+        return tuple(
+            session.name
+            for session in discover_local_sessions(local_path)
+            if session.selected
+        )
+
+    initial_selection = selection()
 
     def reload_() -> None:
-        from .sessions import has_explicit_local_session_selection
-
-        config_service = getattr(app, "_config_service", None)
-        local_path = getattr(config_service, "_local_path", None)
-        should_try_local = has_explicit_local_session_selection(local_path) or (
-            len(kind) > 1 and kind[1] == "local_unavailable"
+        reason = kind[1] if len(kind) > 1 else None
+        should_try_local = reason != "mock_env" and (
+            reason == "local_unavailable" or selection() != initial_selection
         )
         sessions = (
             _explicit_selected_local_sessions(config_service)
