@@ -1034,10 +1034,11 @@ def _resolve_source_kind():
     socket_path = resolve_saved_socket_path(config_path)
     choice = read_choice(config_path)
     socket_exists = os.path.exists(socket_path)
-    exact_socket_override = bool(
-        os.environ.get("HERDR_SOCKET") or os.environ.get("HERDR_SOCKET_PATH")
+    exact_session_override = any(
+        os.environ.get(name)
+        for name in ("HERDR_SOCKET", "HERDR_SOCKET_PATH", "HERDR_SESSION")
     )
-    if choice == "local" and not socket_exists and not exact_socket_override:
+    if choice == "local" and not socket_exists and not exact_session_override:
         selected = selected_local_sessions(local_path)
         if selected:
             socket_path = selected[0].socket_path
