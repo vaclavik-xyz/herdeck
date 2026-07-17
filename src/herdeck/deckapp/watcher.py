@@ -13,9 +13,18 @@ from pathlib import Path
 
 
 class ConfigWatcher:
-    def __init__(self, paths, on_change: Callable[[], None], *, interval: float = 1.0,
-                 clock=time.monotonic, adopt_before_fire: bool = True):
+    def __init__(
+        self,
+        paths,
+        on_change: Callable[[], None],
+        *,
+        interval: float = 1.0,
+        clock=time.monotonic,
+        adopt_before_fire: bool = True,
+        paths_provider: Callable[[], list[str]] | None = None,
+    ):
         self._paths = [Path(p) for p in paths]
+        self._paths_provider = paths_provider
         self._on_change = on_change
         self._interval = interval
         self._clock = clock
@@ -32,7 +41,10 @@ class ConfigWatcher:
 
     def _snapshot(self) -> dict:
         out = {}
-        for p in self._paths:
+        paths = list(self._paths)
+        if self._paths_provider is not None:
+            paths.extend(Path(p) for p in self._paths_provider())
+        for p in dict.fromkeys(paths):
             try:
                 out[p] = p.stat().st_mtime_ns
             except OSError:

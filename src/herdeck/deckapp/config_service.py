@@ -56,6 +56,8 @@ class ConfigService:
         return h.hexdigest()[:16]
 
     def read(self) -> dict:
+        from .sessions import discover_local_sessions
+
         env_profile = os.environ.get("HERDECK_PROFILE")
         # Load local.toml unconditionally so a local-only setup (no config.toml)
         # still keeps its hardware overrides.
@@ -101,6 +103,10 @@ class ConfigService:
             "env_locked": env_profile is not None,
             "active_profile": active,
             "runtime_deck": runtime_deck if isinstance(runtime_deck, str) else None,
+            "local_sessions": [
+                session.public()
+                for session in discover_local_sessions(self._local_path)
+            ],
             "revision": self.revision(),
         }
 
@@ -145,14 +151,8 @@ class ConfigService:
         uses this so editing never shows an error Apply would accept."""
         return self._structural_errors(data)
 
-    def resolve_selected_server(self, data: dict, *, assume_present: str | None = None):
-        """The resolved `(config, servers[0])` for the active profile, or None if there is
-        no server / it cannot resolve. Only `assume_present` (the token_env about to be
-        stored) is placeholdered so a not-yet-stored secret doesn't block resolution; every
-        OTHER selected server's token_env must resolve for REAL. That way a config which
-        would NOT load on restart (another selected server's token missing) is rejected
-        here, never persisted. A caller that needs to CONNECT replaces the chosen server's
-        token with the real one (`dataclasses.replace`) before building the live source."""
+    def resolve_config(self, data: dict, *, assume_present: str | None = None):
+        """Resolve the active profile, optionally placeholdering one pending secret."""
         from ..settings import resolve_profile
 
         saved: dict[str, str | None] = {}
@@ -161,7 +161,7 @@ class ConfigService:
                 saved[assume_present] = os.environ.get(assume_present)
                 os.environ[assume_present] = "x"
             config = resolve_profile(self._snapshot_for(data)).config
-            return (config, config.servers[0]) if config.servers else None
+            return config
         except (ConfigError, KeyError, TypeError, ValueError, AttributeError):
             return None  # a parseable-but-malformed config (missing/odd keys) → not a 500
         finally:
@@ -170,6 +170,11 @@ class ConfigService:
                     os.environ.pop(n, None)
                 else:
                     os.environ[n] = original
+
+    def resolve_selected_server(self, data: dict, *, assume_present: str | None = None):
+        """Backward-compatible ``(config, servers[0])`` resolver."""
+        config = self.resolve_config(data, assume_present=assume_present)
+        return (config, config.servers[0]) if config and config.servers else None
 
     HEADER = "# Managed by herdeck-config — generated; manual comments are not preserved\n"
 
@@ -238,6 +243,19 @@ class ConfigService:
     def set_active(self, name: str) -> bool:
         snapshot = load_settings(self._config_path, self._local_path)
         return set_active_profile(snapshot, name)
+
+    def set_local_sessions(self, names: list[str]) -> None:
+        """Persist selected Herdr session names in device-local ``local.toml``."""
+        local = (
+            tomllib.loads(self._local_path.read_text(encoding="utf-8"))
+            if self._local_path.exists()
+            else {}
+        )
+        section = local.get("local")
+        section = dict(section) if isinstance(section, dict) else {}
+        section["herdr_sessions"] = list(dict.fromkeys(names))
+        local["local"] = section
+        self._atomic_write(self._local_path, tomli_w.dumps(local))
 
     def create_profile(self, data: dict, name: str) -> dict:
         if name == "default":

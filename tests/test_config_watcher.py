@@ -48,3 +48,19 @@ def test_watcher_swallows_callback_errors(tmp_path):
         assert w._thread.is_alive()  # survived the raising callback
     finally:
         w.close()
+
+
+def test_dynamic_path_provider_notices_selected_socket_appearing(tmp_path):
+    config = tmp_path / "local.toml"
+    config.write_text('[local]\nherdr_sessions = ["review"]\n')
+    socket = tmp_path / "sessions" / "review" / "herdr.sock"
+    w = ConfigWatcher(
+        [config],
+        lambda: None,
+        paths_provider=lambda: [str(socket)],
+    )
+
+    assert w.dirty() is False
+    socket.parent.mkdir(parents=True)
+    socket.touch()
+    assert w.dirty() is True

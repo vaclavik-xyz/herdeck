@@ -1,5 +1,6 @@
 # tests/test_deckapp_setup_routes.py
 import json
+import tomllib
 import urllib.error
 import urllib.request
 
@@ -123,6 +124,78 @@ def test_connect_local_uses_configured_local_socket(tmp_path, monkeypatch):
         result = srv.connect(app, {"choice": "local"})
         assert result == {"ok": False, "error": "could not start local source"}
         assert seen == [str(socket_path)]
+    finally:
+        app.close()
+
+
+def test_connect_sessions_persists_selection_and_adopts_bridge_group(tmp_path, monkeypatch):
+    socket_path = tmp_path / "custom.sock"
+    socket_path.touch()
+    monkeypatch.setenv("HERDR_SOCKET", str(socket_path))
+    monkeypatch.setenv("HERDECK_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.delenv("HERDECK_MOCK", raising=False)
+
+    class _Runner:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    runner = _Runner()
+    config = MockSource().config
+    monkeypatch.setattr(
+        srv,
+        "_start_local_session_bridges",
+        lambda sessions, partial=None: (config, {"local": runner}),
+    )
+    monkeypatch.setattr(
+        srv,
+        "build_live_source_for_connect",
+        lambda config, server: _DisconnectedSource(),
+    )
+    monkeypatch.setattr(srv, "select_live", lambda: None)
+    app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
+    try:
+        status, body = _post(
+            app,
+            "/setup/connect",
+            {
+                "choice": "sessions",
+                "sessions": ["custom"],
+                "include_saved": False,
+            },
+        )
+        assert status == 200 and body["ok"] is True
+        local = tomllib.loads((tmp_path / "local.toml").read_text())
+        assert local["local"]["herdr_sessions"] == ["custom"]
+        assert app._local_bridges == {"local": runner}
+        assert runner.closed is False
+    finally:
+        app.close()
+
+
+def test_connect_sessions_remembers_stopped_session_for_auto_reconnect(tmp_path, monkeypatch):
+    socket_path = tmp_path / "stopped.sock"
+    monkeypatch.setenv("HERDR_SOCKET", str(socket_path))
+    monkeypatch.setenv("HERDECK_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.delenv("HERDECK_MOCK", raising=False)
+    app = srv.create_mock_app(serve=True, config_service=srv._default_config_service())
+    try:
+        status, body = _post(
+            app,
+            "/setup/connect",
+            {
+                "choice": "sessions",
+                "sessions": ["custom"],
+                "include_saved": False,
+            },
+        )
+        assert status == 200 and body["ok"] is True and body["connected"] is False
+        setup = app._setup_status()
+        assert setup["reason"] == "local_unavailable"
+        assert setup["socket_path"] == str(socket_path)
+        local = tomllib.loads((tmp_path / "local.toml").read_text())
+        assert local["local"]["herdr_sessions"] == ["custom"]
     finally:
         app.close()
 
@@ -291,10 +364,9 @@ def test_connect_remote_probe_fail_persists_nothing(tmp_path, monkeypatch):
         app.close()
 
 
-def test_connect_remote_selection_mismatch_persists_nothing(tmp_path, monkeypatch):
+def test_connect_remote_adds_second_selected_server(tmp_path, monkeypatch):
     cfg = tmp_path / "config.toml"
-    # Pre-existing config whose default-selected server is "other" (servers[0]); the
-    # upserted "herdr" is appended, so the resolved selection stays "other" -> mismatch.
+    # The new bridge is appended to the existing selected fleet.
     cfg.write_text('[[servers]]\nid = "other"\nurl = "ws://1.2.3.4:8788"\ntoken_env = "OTHER_TOK"\n')
     monkeypatch.setenv("HERDECK_CONFIG", str(cfg))
     monkeypatch.delenv("HERDECK_MOCK", raising=False)
@@ -308,10 +380,10 @@ def test_connect_remote_selection_mismatch_persists_nothing(tmp_path, monkeypatc
             app, "/setup/connect",
             {"choice": "remote", "url": "ws://10.0.0.5:8788", "token": "secret-tok", "id": "herdr"},
         )
-        assert status == 200 and body["ok"] is False and "resolve to this server" in body["error"]
-        # nothing about herdr persisted: no new server, no keychain entry
-        assert "herdr" not in cfg.read_text().lower()
-        assert ("herdeck", "HERDECK_HERDR_TOKEN") not in fake.store
+        assert status == 200 and body["ok"] is True
+        data = tomllib.loads(cfg.read_text())
+        assert [server["id"] for server in data["servers"]] == ["other", "herdr"]
+        assert fake.store[("herdeck", "HERDECK_HERDR_TOKEN")] == "secret-tok"
     finally:
         app.close()
 

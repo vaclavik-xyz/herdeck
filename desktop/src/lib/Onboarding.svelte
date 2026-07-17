@@ -47,6 +47,12 @@
       fill_url_token: "Fill in both URL and token.",
       demo: "Explore the demo",
       back_to_deck: "← back to the deck",
+      sessions_h: "Active sessions",
+      sessions_hint: "Choose any local sessions and optionally keep the saved remote bridge.",
+      saved_remote: "Saved remote bridge",
+      apply_connections: "Apply connections",
+      running: "running",
+      stopped: "not running",
     },
     cs: {
       connecting: "Připojuji…",
@@ -68,6 +74,12 @@
       fill_url_token: "Vyplň URL i token.",
       demo: "Prozkoumat demo",
       back_to_deck: "← zpět na deck",
+      sessions_h: "Aktivní sessions",
+      sessions_hint: "Vyber libovolné lokální sessions a případně ponech uložený vzdálený bridge.",
+      saved_remote: "Uložený vzdálený bridge",
+      apply_connections: "Použít připojení",
+      running: "běží",
+      stopped: "neběží",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -81,9 +93,23 @@
   let busyAction = $state<string | null>(null);
   const busy = $derived(busyAction != null);
   let error = $state<string | null>(null);
+  let selectedSessions = $state<string[]>([]);
+  let includeSaved = $state(false);
+  let seededSessions = $state(false);
 
   const localAvailable = $derived(status?.localHerdrAvailable === true);
   const savedAvailable = $derived(status?.savedRemoteAvailable === true);
+  const localSessions = $derived(status?.localSessions ?? []);
+
+  $effect(() => {
+    if (!status || seededSessions) return;
+    selectedSessions = status.localSessions
+      .filter((session) => session.selected)
+      .map((session) => session.name);
+    includeSaved = status.savedRemoteAvailable
+      && (status.mode === "remote" || status.mode === "mixed");
+    seededSessions = true;
+  });
 
   // Latch (not derive) the remote form open when there is no local herdr: a
   // derived condition made the form vanish mid-typing when herdr appeared
@@ -111,7 +137,22 @@
       })
     ) {
       autoReconnectTried = true;
-      connectLocal();
+      const remembered = status?.localSessions
+        .filter((session) => session.selected)
+        .map((session) => session.name) ?? [];
+      if (remembered.length > 0) {
+        void run(
+          {
+            choice: "sessions",
+            sessions: remembered,
+            include_saved: status?.savedRemoteAvailable === true
+              && (status?.mode === "remote" || status?.mode === "mixed"),
+          },
+          "sessions",
+        );
+      } else {
+        connectLocal();
+      }
     }
   });
 
@@ -147,6 +188,21 @@
     const id = serverId.trim();
     if (id) (req as { id?: string }).id = id;
     void run(req, "remote");
+  }
+  function toggleSession(name: string, selected: boolean): void {
+    selectedSessions = selected
+      ? [...new Set([...selectedSessions, name])]
+      : selectedSessions.filter((item) => item !== name);
+  }
+  function applyConnections(): void {
+    void run(
+      {
+        choice: "sessions",
+        sessions: selectedSessions,
+        include_saved: includeSaved,
+      },
+      "sessions",
+    );
   }
 
   function focusOnMount(node: HTMLInputElement): void {
@@ -210,6 +266,40 @@
       <!-- the latched-open remote form below IS the primary action here — the
            old extra 'Vzdálený herdr…' primary above it visibly did nothing -->
     {/if}
+  {/if}
+
+  {#if localSessions.length > 0 || savedAvailable}
+    <section class="sessions" aria-labelledby="sessions-heading">
+      <h2 id="sessions-heading">{lm.sessions_h}</h2>
+      <p>{lm.sessions_hint}</p>
+      <div class="session-list">
+        {#each localSessions as session (session.name)}
+          <label class:unavailable={!session.available}>
+            <input
+              type="checkbox"
+              checked={selectedSessions.includes(session.name)}
+              onchange={(event) =>
+                toggleSession(session.name, (event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class:online={session.available} class="dot"></span>
+            <span>
+              <strong>{session.name}</strong>
+              <small>{session.available ? lm.running : lm.stopped}</small>
+            </span>
+          </label>
+        {/each}
+        {#if savedAvailable}
+          <label>
+            <input type="checkbox" bind:checked={includeSaved} />
+            <span class:online={status?.mode === "remote" || status?.mode === "mixed"} class="dot"></span>
+            <span><strong>{lm.saved_remote}</strong><small>Tailscale</small></span>
+          </label>
+        {/if}
+      </div>
+      <button class="primary" disabled={busy} onclick={applyConnections}>
+        {label(lm.apply_connections, "sessions")}
+      </button>
+    </section>
   {/if}
 
   {#if showRemote || (view === "welcome" && status != null && !localAvailable)}
@@ -277,6 +367,35 @@
     border-radius: 10px;
     background: #17171b;
   }
+  .sessions {
+    padding: 10px;
+    border: 1px solid #263142;
+    border-radius: 10px;
+    background: #11151b;
+  }
+  .sessions h2 { margin: 0; font-size: 13px; color: #dce7f5; }
+  .sessions > p { margin: 3px 0 9px; color: #78879a; font-size: 11px; }
+  .session-list { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 9px; }
+  .session-list label {
+    display: grid;
+    grid-template-columns: auto 7px 1fr;
+    align-items: center;
+    gap: 6px;
+    min-width: 115px;
+    padding: 7px 8px;
+    border: 1px solid #2a3546;
+    border-radius: 8px;
+    background: #171d26;
+    cursor: pointer;
+  }
+  .session-list label:has(input:checked) { border-color: #3979bd; }
+  .session-list label.unavailable { opacity: .58; }
+  .session-list input { margin: 0; accent-color: #58a6ff; }
+  .session-list .dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; }
+  .session-list .dot.online { background: #3fb950; box-shadow: 0 0 0 2px #1f4d2b; }
+  .session-list span:last-child { display: flex; flex-direction: column; min-width: 0; }
+  .session-list strong { font: 600 11px/1.2 ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; }
+  .session-list small { color: #78879a; font-size: 9px; }
   .remote label {
     display: flex;
     flex-direction: column;

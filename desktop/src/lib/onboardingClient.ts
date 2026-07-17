@@ -13,13 +13,23 @@ import type { InvokeFn } from "./deckClient";
 /** Shaped `GET /setup` status (snake_case JSON -> camelCase). `reason` is one of
  *  "mock_env" | "demo" | "first_run" | "local_unavailable" | null. */
 export interface SetupStatus {
-  mode: string; // "mock" | "local" | "remote"
+  mode: string; // "mock" | "local" | "remote" | "mixed"
   connected: boolean;
   reason: string | null;
   localHerdrAvailable: boolean;
   savedRemoteAvailable: boolean;
   choice: string | null; // "local" | "demo" | null
   socketPath: string;
+  localSessions: SetupLocalSession[];
+  connections: Record<string, boolean>;
+}
+
+export interface SetupLocalSession {
+  name: string;
+  serverId: string;
+  socketPath: string;
+  available: boolean;
+  selected: boolean;
 }
 
 /** Narrow a raw `setup_status` result into a SetupStatus, or null when it is not
@@ -28,6 +38,31 @@ export function parseSetupStatus(raw: unknown): SetupStatus | null {
   if (raw == null || typeof raw !== "object") return null;
   const v = raw as Record<string, unknown>;
   if (typeof v.mode !== "string") return null;
+  const localSessions: SetupLocalSession[] = [];
+  if (Array.isArray(v.local_sessions)) {
+    for (const rawSession of v.local_sessions) {
+      if (rawSession == null || typeof rawSession !== "object") continue;
+      const session = rawSession as Record<string, unknown>;
+      if (
+        typeof session.name !== "string"
+        || typeof session.server_id !== "string"
+        || typeof session.socket_path !== "string"
+      ) continue;
+      localSessions.push({
+        name: session.name,
+        serverId: session.server_id,
+        socketPath: session.socket_path,
+        available: session.available === true,
+        selected: session.selected === true,
+      });
+    }
+  }
+  const connections: Record<string, boolean> = {};
+  if (v.connections != null && typeof v.connections === "object" && !Array.isArray(v.connections)) {
+    for (const [id, connected] of Object.entries(v.connections as Record<string, unknown>)) {
+      connections[id] = connected === true;
+    }
+  }
   return {
     mode: v.mode,
     connected: v.connected === true,
@@ -36,6 +71,8 @@ export function parseSetupStatus(raw: unknown): SetupStatus | null {
     savedRemoteAvailable: v.saved_remote_available === true,
     choice: typeof v.choice === "string" ? v.choice : null,
     socketPath: typeof v.socket_path === "string" ? v.socket_path : "",
+    localSessions,
+    connections,
   };
 }
 
@@ -67,6 +104,7 @@ export type ConnectRequest =
   | { choice: "local" }
   | { choice: "demo" }
   | { choice: "saved" }
+  | { choice: "sessions"; sessions: string[]; include_saved: boolean }
   | { choice: "remote"; url: string; token: string; id?: string };
 
 /** Shaped `/setup/connect` result. `ok` gates the flip-to-deck; `error` is the

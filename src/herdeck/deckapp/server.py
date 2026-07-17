@@ -82,7 +82,8 @@ class DeckApp:
         self._token = token or secrets.token_urlsafe(24)
         self._config_service = config_service
         self._reloader = reloader
-        self._local_bridge = None  # LocalBridgeRunner when in local mode, else None
+        self._local_bridge = None  # compatibility alias for the first local bridge
+        self._local_bridges: dict[str, object] = {}
         self._suppress_reload = False  # set by the onboarding commit to mute the watcher
         self._setup_lock = threading.RLock()  # shared mutation lock (/setup/connect + config-write routes + reload); RLock because the config routes call reload() while holding it
 
@@ -398,13 +399,17 @@ class DeckApp:
             except Exception:
                 pass
             self._usage_poller = None
-        bridge = getattr(self, "_local_bridge", None)
-        if bridge is not None:
+        bridges = dict(getattr(self, "_local_bridges", {}))
+        legacy_bridge = getattr(self, "_local_bridge", None)
+        if legacy_bridge is not None and legacy_bridge not in bridges.values():
+            bridges["local"] = legacy_bridge
+        for bridge in bridges.values():
             try:
                 bridge.close()
             except Exception:
                 pass
-            self._local_bridge = None
+        self._local_bridges = {}
+        self._local_bridge = None
         try:
             self._source.close()  # stop the live connector/loop (no-op for mock)
         except Exception:
@@ -428,13 +433,24 @@ class DeckApp:
     def _set_local_bridge(self, runner) -> None:
         """Adopt `runner` as the embedded-bridge owner, closing any previous one.
         Pass None to drop the bridge (e.g. when switching to remote/mock)."""
-        old = getattr(self, "_local_bridge", None)
-        if old is not None and old is not runner:
+        self._set_local_bridges({"local": runner} if runner is not None else {})
+
+    def _set_local_bridges(self, runners: dict[str, object]) -> None:
+        """Adopt all embedded bridges, closing only runners no longer owned."""
+        old = dict(getattr(self, "_local_bridges", {}))
+        legacy = getattr(self, "_local_bridge", None)
+        if legacy is not None and legacy not in old.values():
+            old["local"] = legacy
+        kept = set(runners.values())
+        for previous in old.values():
+            if previous in kept:
+                continue
             try:
-                old.close()
+                previous.close()
             except Exception:
                 pass
-        self._local_bridge = runner
+        self._local_bridges = dict(runners)
+        self._local_bridge = next(iter(runners.values()), None)
 
     def _prepare_swap(self, new_source, *, clock=None):
         """Build the orchestrator AND render `new_source` into it — all the FALLIBLE parts
@@ -535,7 +551,7 @@ class DeckApp:
     # --- state snapshots ---
     def _state(self) -> dict:
         with self._lock:
-            return {
+            state = {
                 "version": self._version,
                 "slots": self._slots,
                 "has_panel": self._panel is not None,
@@ -547,26 +563,50 @@ class DeckApp:
                 "connected": self._source.connected,
                 "language": getattr(self._source, "language", "en"),
             }
+            connections = getattr(self._source, "connections", None)
+            if isinstance(connections, dict):
+                state["connections"] = connections
+            return state
 
     def _health(self) -> dict:
-        return {
+        health = {
             "ok": True,
             "source": self._source.source_name,
             "connected": self._source.connected,
             "server_id": self._source.server_id,
         }
+        connections = getattr(self._source, "connections", None)
+        if isinstance(connections, dict):
+            health["connections"] = connections
+            health["server_ids"] = list(connections)
+        return health
 
     def _setup_status(self) -> dict:
         from ..bootstrap import resolve_saved_socket_path
         from .onboarding import read_choice
+        from .sessions import discover_local_sessions
 
         config_path = str(self._config_service._config_path) if self._config_service else None
         socket_path = resolve_saved_socket_path(config_path)
-        socket_exists = os.path.exists(socket_path)
+        local_sessions = discover_local_sessions(
+            getattr(self._config_service, "_local_path", None)
+        )
+        selected_sessions = [session for session in local_sessions if session.selected]
+        socket_exists = any(session.available for session in local_sessions)
+        selected_socket_exists = any(session.available for session in selected_sessions)
+        if selected_sessions:
+            socket_path = selected_sessions[0].socket_path
         choice = read_choice(config_path)
         live = self._source.source_name == "live"
         if live:
-            mode = "local" if getattr(self, "_local_bridge", None) is not None else "remote"
+            local_ids = set(getattr(self, "_local_bridges", {}))
+            source_ids = set(getattr(self._source, "server_ids", []))
+            if local_ids and source_ids - local_ids:
+                mode = "mixed"
+            elif local_ids:
+                mode = "local"
+            else:
+                mode = "remote"
             reason = None
         else:
             mode = "mock"
@@ -574,7 +614,7 @@ class DeckApp:
                 reason = "mock_env"
             elif choice == "demo":
                 reason = "demo"
-            elif choice == "local" and not socket_exists:
+            elif choice == "local" and not selected_socket_exists:
                 reason = "local_unavailable"
             else:
                 reason = "first_run"
@@ -586,6 +626,8 @@ class DeckApp:
             "saved_remote_available": _has_saved_remote(self._config_service),
             "choice": choice,
             "socket_path": socket_path,
+            "local_sessions": [session.public() for session in local_sessions],
+            "connections": getattr(self._source, "connections", {}),
         }
 
     def _tile_png(self, index: int) -> bytes | None:
@@ -907,7 +949,8 @@ def create_mock_app(
 def select_live():
     """Decide live vs mock from the on-disk config + bridge-token presence.
 
-    Returns ``(config, server)`` to drive a LiveSource, or ``None`` to fall back to
+    Returns ``(config, first_server)`` for compatibility; LiveSource connects
+    every selected server in ``config.servers``. Returns ``None`` to fall back to
     the deterministic mock. Mock wins when ``HERDECK_MOCK`` is set, when no config
     file is discovered, or when the resolved server has no bridge token — the token
     lives in env/keychain (``ServerConfig.token``), never in the config file, so a
@@ -985,15 +1028,27 @@ def _resolve_source_kind():
     """Gather the facts and apply select_source_kind."""
     from ..bootstrap import resolve_saved_socket_path
     from .onboarding import read_choice
+    from .sessions import selected_local_sessions
 
-    config_path = _default_config_paths()[0]
+    config_path, local_path = _default_config_paths()
     socket_path = resolve_saved_socket_path(config_path)
+    choice = read_choice(config_path)
+    socket_exists = os.path.exists(socket_path)
+    exact_session_override = any(
+        os.environ.get(name)
+        for name in ("HERDR_SOCKET", "HERDR_SOCKET_PATH", "HERDR_SESSION")
+    )
+    if choice == "local" and not socket_exists and not exact_session_override:
+        selected = selected_local_sessions(local_path)
+        if selected:
+            socket_path = selected[0].socket_path
+            socket_exists = True
     return select_source_kind(
         mock_env=bool(os.environ.get("HERDECK_MOCK")),
         remote=select_live(),
-        choice=read_choice(config_path),
+        choice=choice,
         socket_path=socket_path,
-        socket_exists=os.path.exists(socket_path),
+        socket_exists=socket_exists,
     )
 
 
@@ -1008,6 +1063,7 @@ def create_live_app(
     connector_factory=None,
     config_service=None,
     reloader=None,
+    include_selected_locals: bool = True,
 ) -> DeckApp:
     """Build a serving DeckApp backed by a LiveSource (real bridge via Connector).
 
@@ -1018,9 +1074,17 @@ def create_live_app(
 
     from .live import build_live_source
 
-    kwargs = {} if connector_factory is None else {"connector_factory": connector_factory}
-    source = build_live_source(config, server, **kwargs)
-    return DeckApp(
+    local_runners = {}
+    if config_service is not None and include_selected_locals:
+        source, local_runners = _build_remote_source_with_selected_locals(
+            config,
+            config_service=config_service,
+            connector_factory=connector_factory,
+        )
+    else:
+        kwargs = {} if connector_factory is None else {"connector_factory": connector_factory}
+        source = build_live_source(config, server, **kwargs)
+    app = DeckApp(
         source,
         host=host,
         port=port,
@@ -1031,6 +1095,9 @@ def create_live_app(
         config_service=config_service,
         reloader=reloader,
     )
+    if local_runners:
+        app._set_local_bridges(local_runners)
+    return app
 
 
 def _default_config_paths():
@@ -1068,6 +1135,34 @@ def _select_source():
     return MockSource(_device_local_hardware())
 
 
+def _remote_reloader(app):
+    """Reload a remote/mixed fleet, including device-local session selection."""
+
+    def reload_() -> None:
+        selected = select_live()
+        if selected is None:
+            from .mock import MockSource
+
+            app.swap_source(MockSource(_device_local_hardware(app._config_service)))
+            app._set_local_bridges({})
+            return
+        config, _server = selected
+        source, runners = _build_remote_source_with_selected_locals(
+            config,
+            config_service=app._config_service,
+        )
+        try:
+            app.swap_source(source)
+        except Exception:
+            source.close()
+            for runner in runners.values():
+                runner.close()
+            raise
+        app._set_local_bridges(runners)
+
+    return reload_
+
+
 def _load_partial_config():
     """The on-disk config (resolved profile) for local mode's overlay, or None if absent
     or unloadable. Lets local mode preserve the user's grid/profiles/view/theme even with
@@ -1102,15 +1197,166 @@ def _start_local_bridge(socket_path, *, runner_factory=None):
     return config, config.servers[0], runner
 
 
+def _start_local_session_bridges(
+    sessions,
+    *,
+    partial=None,
+    runner_factory=None,
+):
+    """Start one embedded loopback bridge per selected local Herdr session.
+
+    Returns ``(combined_config, runners)``. If any bridge fails, every bridge
+    started by this call is closed before the error escapes.
+    """
+    import dataclasses
+
+    from ..config import ServerConfig
+    from .local_bridge import LocalBridgeRunner
+
+    runners: dict[str, object] = {}
+    local_servers: list[ServerConfig] = []
+    used_ids = {server.id for server in (partial.servers if partial is not None else [])}
+    try:
+        for session in sessions:
+            server_id = session.server_id
+            if server_id in used_ids:
+                base = server_id
+                suffix = 2
+                while f"{base}:{suffix}" in used_ids:
+                    suffix += 1
+                server_id = f"{base}:{suffix}"
+            used_ids.add(server_id)
+            runner = (runner_factory or LocalBridgeRunner)(session.socket_path)
+            try:
+                _host, port, token = runner.start()
+            except Exception:
+                runner.close()
+                raise
+            runners[server_id] = runner
+            local_servers.append(
+                ServerConfig(server_id, f"ws://127.0.0.1:{port}", token)
+            )
+    except Exception:
+        for runner in runners.values():
+            runner.close()
+        raise
+
+    if not local_servers:
+        if partial is None:
+            raise ValueError("no local sessions selected")
+        return partial, runners
+
+    if partial is None:
+        from ..bootstrap import local_config
+
+        port = int(local_servers[0].url.rsplit(":", 1)[1])
+        base = local_config(port, local_servers[0].token)
+    else:
+        base = partial
+    servers = [*local_servers, *(partial.servers if partial is not None else [])]
+    order = [server.id for server in servers]
+    return dataclasses.replace(base, servers=servers, overview_order=order), runners
+
+
+def _explicit_selected_local_sessions(config_service):
+    """Selected, available sessions when the user saved an explicit selection."""
+    from .sessions import (
+        has_explicit_local_session_selection,
+        selected_local_sessions,
+    )
+
+    local_path = getattr(config_service, "_local_path", None)
+    if not has_explicit_local_session_selection(local_path):
+        return []
+    return selected_local_sessions(local_path)
+
+
+def _build_remote_source_with_selected_locals(
+    config,
+    *,
+    config_service,
+    connector_factory=None,
+):
+    """Build a fleet source from remote config plus explicitly selected locals."""
+    sessions = _explicit_selected_local_sessions(config_service)
+    runners = {}
+    combined = config
+    if sessions:
+        combined, runners = _start_local_session_bridges(sessions, partial=config)
+    kwargs = {} if connector_factory is None else {"connector_factory": connector_factory}
+    try:
+        source = build_live_source_for_connect(combined, None, **kwargs)
+    except Exception:
+        for runner in runners.values():
+            runner.close()
+        raise
+    return source, runners
+
+
 def _local_reloader(app):
-    """LOCAL-mode reloader: rebuild the live source against the RUNNING embedded
-    bridge (same port/token — the bridge itself is never restarted or swapped
-    out by a reload), so an editor Apply / on-disk edit actually reaches the
-    deck. The old no-op silently ignored every Apply on the primary
-    ('herdr běží lokálně') onboarding path."""
+    """Reload local-only mode, expanding an explicit multi-session selection."""
+    import dataclasses
+
     from ..bootstrap import local_config
 
     def reload_() -> None:
+        sessions = _explicit_selected_local_sessions(
+            getattr(app, "_config_service", None)
+        )
+        if sessions:
+            existing = dict(getattr(app, "_local_bridges", {}))
+            wanted = {session.server_id for session in sessions}
+            if existing and set(existing) == wanted:
+                from ..config import ServerConfig
+
+                servers = []
+                for server_id, runner in existing.items():
+                    bound = getattr(runner, "bound", None)
+                    if bound is None:
+                        break
+                    _host, port, token = bound
+                    servers.append(
+                        ServerConfig(server_id, f"ws://127.0.0.1:{port}", token)
+                    )
+                else:
+                    partial = _load_partial_config()
+                    if partial is None:
+                        config = local_config(
+                            int(servers[0].url.rsplit(":", 1)[1]),
+                            servers[0].token,
+                        )
+                    else:
+                        config = dataclasses.replace(
+                            partial, servers=[], overview_order=[]
+                        )
+                    config = dataclasses.replace(
+                        config,
+                        servers=servers,
+                        overview_order=[server.id for server in servers],
+                    )
+                    new_source = build_live_source_for_connect(config, config.servers[0])
+                    try:
+                        app.swap_source(new_source)
+                    except Exception:
+                        new_source.close()
+                        raise
+                    return
+
+            partial = _load_partial_config()
+            if partial is not None:
+                partial = dataclasses.replace(partial, servers=[], overview_order=[])
+            config, runners = _start_local_session_bridges(sessions, partial=partial)
+            new_source = build_live_source_for_connect(config, config.servers[0])
+            try:
+                app.swap_source(new_source)
+            except Exception:
+                new_source.close()
+                for runner in runners.values():
+                    runner.close()
+                raise
+            app._set_local_bridges(runners)
+            return
+
         runner = getattr(app, "_local_bridge", None)
         bound = runner.bound if runner is not None else None
         if bound is None:
@@ -1127,6 +1373,81 @@ def _local_reloader(app):
     return reload_
 
 
+def _mock_reloader(app, kind, select_source):
+    """Keep explicit mock/demo mode sticky across unrelated reloads.
+
+    A genuinely new Settings selection may promote mock to local live, while a
+    mock caused by an unavailable saved local session promotes itself when the
+    socket appears. ``HERDECK_MOCK`` always wins.
+    """
+    from .sessions import (
+        discover_local_sessions,
+        has_explicit_local_session_selection,
+    )
+
+    config_service = getattr(app, "_config_service", None)
+    local_path = getattr(config_service, "_local_path", None)
+
+    def fingerprint() -> tuple[bool, tuple[str, ...]]:
+        return (
+            has_explicit_local_session_selection(local_path),
+            tuple(
+                session.name
+                for session in discover_local_sessions(local_path)
+                if session.selected
+            ),
+        )
+
+    last_fingerprint = fingerprint()
+    pending_fingerprint = None
+
+    def reload_() -> None:
+        nonlocal last_fingerprint, pending_fingerprint
+
+        reason = kind[1] if len(kind) > 1 else None
+        current_fingerprint = fingerprint()
+        selection_changed = current_fingerprint != last_fingerprint
+        last_fingerprint = current_fingerprint
+        if selection_changed:
+            explicit, names = current_fingerprint
+            pending_fingerprint = current_fingerprint if explicit and names else None
+        should_try_local = reason != "mock_env" and (
+            reason == "local_unavailable"
+            or selection_changed
+            or pending_fingerprint == current_fingerprint
+        )
+        sessions = (
+            _explicit_selected_local_sessions(config_service)
+            if should_try_local
+            else []
+        )
+        if not sessions:
+            app.swap_source(select_source())
+            return
+
+        import dataclasses
+
+        partial = _load_partial_config()
+        if partial is not None:
+            partial = dataclasses.replace(partial, servers=[], overview_order=[])
+        config, runners = _start_local_session_bridges(sessions, partial=partial)
+        new_source = None
+        try:
+            new_source = build_live_source_for_connect(config, config.servers[0])
+            app.swap_source(new_source)
+        except Exception:
+            if new_source is not None:
+                new_source.close()
+            for runner in runners.values():
+                runner.close()
+            raise
+        app._set_local_bridges(runners)
+        pending_fingerprint = None
+        app._reloader = _reloader_for(app, ("local",), select_source)
+
+    return reload_
+
+
 def _reloader_for(app, kind, select_source):
     """The config-watch reloader for the built source. LOCAL mode rebuilds the
     live source against the running embedded bridge (the bridge lifecycle stays
@@ -1134,7 +1455,9 @@ def _reloader_for(app, kind, select_source):
     disk."""
     if kind[0] == "local":
         return _local_reloader(app)
-    return lambda: app.swap_source(select_source())
+    if kind[0] == "remote":
+        return _remote_reloader(app)
+    return _mock_reloader(app, kind, select_source)
 
 
 def _token_env_for(server_id: str) -> str:
@@ -1204,10 +1527,10 @@ def _probe_sync(url: str, token: str):
     return asyncio.run(probe_server(url, token))
 
 
-def build_live_source_for_connect(config, server):
+def build_live_source_for_connect(config, server=None, **kwargs):
     from .live import build_live_source
 
-    return build_live_source(config, server)
+    return build_live_source(config, server, **kwargs)
 
 
 def connect(app, body) -> dict | None:
@@ -1241,6 +1564,95 @@ def connect(app, body) -> dict | None:
         app._reloader = _reloader_for(app, ("mock",), _select_source)  # mock/remote reloads resume
         return {"ok": True}
 
+    if choice == "sessions":
+        import dataclasses
+
+        from .sessions import discover_local_sessions
+
+        names = body.get("sessions")
+        include_saved = body.get("include_saved") is True
+        if not isinstance(names, list) or not all(
+            isinstance(name, str) and name for name in names
+        ):
+            return None
+        discovered = discover_local_sessions(app._config_service._local_path)
+        by_name = {session.name: session for session in discovered}
+        unknown = [name for name in names if name not in by_name]
+        if unknown:
+            return {"ok": False, "error": f"unknown local session: {unknown[0]}"}
+        selected_sessions = [
+            by_name[name] for name in dict.fromkeys(names) if by_name[name].available
+        ]
+        remote = select_live() if include_saved else None
+        remote_config = remote[0] if remote is not None else None
+        runners = {}
+        try:
+            live_selection = True
+            if selected_sessions:
+                partial = remote_config or _load_partial_config()
+                if partial is not None and remote_config is None:
+                    partial = dataclasses.replace(partial, servers=[], overview_order=[])
+                config, runners = _start_local_session_bridges(
+                    selected_sessions,
+                    partial=partial,
+                )
+            elif remote_config is not None:
+                config = remote_config
+            elif names:
+                live_selection = False
+                new_source = MockSource(_device_local_hardware(app._config_service))
+                prepared = app._prepare_swap(new_source)
+            else:
+                return {
+                    "ok": False,
+                    "error": "select a running local session or include the saved connection",
+                }
+            if live_selection:
+                new_source = build_live_source_for_connect(config, config.servers[0])
+                prepared = app._prepare_swap(new_source, clock=time.monotonic)
+        except Exception:
+            for runner in runners.values():
+                runner.close()
+            return {"ok": False, "error": "could not build the selected connections"}
+
+        prior_choice = read_choice(config_path)
+        try:
+            prior_config, prior_local = _snapshot_config(app._config_service)
+        except OSError:
+            new_source.close()
+            for runner in runners.values():
+                runner.close()
+            return {"ok": False, "error": "could not read config"}
+        app._suppress_reload = True
+        try:
+            app._config_service.set_local_sessions(list(dict.fromkeys(names)))
+            if remote_config is not None:
+                clear_choice(config_path)
+            else:
+                write_choice(config_path, "local")
+        except Exception:
+            _restore_file(app._config_service._config_path, prior_config)
+            _restore_file(app._config_service._local_path, prior_local)
+            _restore_choice(config_path, prior_choice)
+            new_source.close()
+            for runner in runners.values():
+                runner.close()
+            return {"ok": False, "error": "could not save the selected connections"}
+        finally:
+            watcher = getattr(app, "_watcher", None)
+            if watcher is not None:
+                watcher.resync()
+            app._suppress_reload = False
+        app._commit_swap(new_source, prepared)
+        app._set_local_bridges(runners)
+        kind = ("remote",) if remote_config is not None else ("local",)
+        app._reloader = _reloader_for(app, kind, _select_source)
+        return {
+            "ok": True,
+            "connected": live_selection and app._source.connected,
+            "active": list(getattr(app._source, "server_ids", [])),
+        }
+
     if choice == "local":
         from ..bootstrap import resolve_saved_socket_path
         from ..bridge import _SNAPSHOT_UNSUPPORTED
@@ -1252,12 +1664,29 @@ def connect(app, body) -> dict | None:
         runner = None
         prior_choice = read_choice(config_path)  # snapshot the marker for rollback
         try:
+            prior_config, prior_local = _snapshot_config(app._config_service)
+        except OSError:
+            return {"ok": False, "error": "could not read config"}
+        try:
             config, server, runner = _start_local_bridge(socket_path)  # may raise (bridge bind)
             new_source = build_live_source_for_connect(config, server)  # build ...
             prepared = app._prepare_swap(new_source, clock=time.monotonic)  # ... pre-build orch (live clock) BEFORE the marker ...
             write_choice(config_path, "local")  # ... persist (durable)
+            from .sessions import discover_local_sessions
+
+            session_name = next(
+                (
+                    item.name
+                    for item in discover_local_sessions(app._config_service._local_path)
+                    if os.path.abspath(item.socket_path) == os.path.abspath(socket_path)
+                ),
+                "custom",
+            )
+            app._config_service.set_local_sessions([session_name])
         except Exception as exc:
             _restore_choice(config_path, prior_choice)  # undo the marker if it was written
+            _restore_file(app._config_service._config_path, prior_config)
+            _restore_file(app._config_service._local_path, prior_local)
             if new_source is not None:
                 new_source.close()  # don't leak the built source / its connector runner
             if runner is not None:
@@ -1269,7 +1698,8 @@ def connect(app, body) -> dict | None:
             error = str(exc) if str(exc) == _SNAPSHOT_UNSUPPORTED else "could not start local source"
             return {"ok": False, "error": error}
         app._commit_swap(new_source, prepared)  # non-failing: all fallible work done; sets the live clock
-        app._set_local_bridge(runner)  # adopt new bridge (closes old one)
+        server_id = getattr(server, "id", "local")
+        app._set_local_bridges({server_id: runner})  # adopt new bridge (closes old ones)
         app._reloader = _reloader_for(app, ("local",), _select_source)  # no-op: don't swap out the bridge
         return {"ok": True, "connected": app._source.connected}
 
@@ -1343,20 +1773,41 @@ def connect(app, body) -> dict | None:
         # selection, then build the live source with the REAL token baked into the chosen
         # ServerConfig — all BEFORE mutating keychain/config, so any selection / validation
         # / build failure persists NOTHING (no orphaned secret, no serverful-but-dead config).
-        resolved = app._config_service.resolve_selected_server(payload, assume_present=token_env)
-        if resolved is None or resolved[1].id != server_id:
+        config = app._config_service.resolve_config(payload, assume_present=token_env)
+        selected_server = next(
+            (server for server in (config.servers if config is not None else []) if server.id == server_id),
+            None,
+        )
+        if config is None or selected_server is None:
             return {
                 "ok": False,
-                "error": "config does not resolve to this server (check the active profile / overview_order / other servers' tokens) — fix it in Settings",
+                "error": "the active profile does not include this server (check overview_order / profile servers) — fix it in Settings",
             }
-        config, placeholder_server = resolved
-        real_server = dataclasses.replace(placeholder_server, token=token)  # real token, not keychain
+        config = dataclasses.replace(
+            config,
+            servers=[
+                dataclasses.replace(item, token=token) if item.id == server_id else item
+                for item in config.servers
+            ],
+        )
+        local_runners = {}
         try:
-            new_source = build_live_source_for_connect(config, real_server)  # build BEFORE persist
+            new_source, local_runners = _build_remote_source_with_selected_locals(
+                config,
+                config_service=app._config_service,
+            )
         except Exception:
             return {"ok": False, "error": "could not build the remote source"}
         # Persist + swap as one watcher-suppressed transaction (see _commit_remote).
-        return _commit_remote(app, payload, token_env, token, new_source, config_path)
+        return _commit_remote(
+            app,
+            payload,
+            token_env,
+            token,
+            new_source,
+            config_path,
+            local_runners=local_runners,
+        )
 
     if choice == "saved":
         # One-click escape from the demo trap: re-select the on-disk remote (token from
@@ -1371,24 +1822,39 @@ def connect(app, body) -> dict | None:
         config, server = remote
         prior_choice = read_choice(config_path)
         new_source = None
+        local_runners = {}
         try:
-            new_source = build_live_source_for_connect(config, server)  # build (fallible)
+            new_source, local_runners = _build_remote_source_with_selected_locals(
+                config,
+                config_service=app._config_service,
+            )
             prepared = app._prepare_swap(new_source, clock=time.monotonic)  # render (fallible)
             clear_choice(config_path)  # persist: drop the demo/local marker
         except Exception:
             _restore_choice(config_path, prior_choice)  # marker untouched / restored
             if new_source is not None:
                 new_source.close()
+            for runner in local_runners.values():
+                runner.close()
             return {"ok": False, "error": "could not restore saved connection"}
         app._commit_swap(new_source, prepared)  # assignment-only, non-failing
-        app._set_local_bridge(None)  # saved targets remote; drop any local bridge
+        app._set_local_bridges(local_runners)
         app._reloader = _reloader_for(app, ("remote",), _select_source)
         return {"ok": True, "connected": app._source.connected}
 
     return None  # unknown choice -> 400
 
 
-def _commit_remote(app, payload, token_env, token, new_source, config_path) -> dict:
+def _commit_remote(
+    app,
+    payload,
+    token_env,
+    token,
+    new_source,
+    config_path,
+    *,
+    local_runners=None,
+) -> dict:
     """Persist (secret-then-config) and swap to `new_source` as ONE transaction, with the
     config watcher SUPPRESSED so its mtime poll can't reload mid-commit (double-swapping
     to a second source) or swap to the half-written config during a rollback. Any failure
@@ -1400,13 +1866,20 @@ def _commit_remote(app, payload, token_env, token, new_source, config_path) -> d
     from .onboarding import clear_choice
 
     app._suppress_reload = True
+    local_runners = local_runners or {}
+
+    def _close_new() -> None:
+        new_source.close()
+        for runner in local_runners.values():
+            runner.close()
+
     try:
         # Pre-build the orchestrator (the only fallible part of the swap) BEFORE persisting,
         # so the post-persist commit (_commit_swap) is guaranteed non-throwing.
         try:
             prepared = app._prepare_swap(new_source, clock=time.monotonic)  # live clock
         except Exception:
-            new_source.close()
+            _close_new()
             return {"ok": False, "error": "could not build the remote source"}
         # Snapshot the prior keychain value AND the on-disk config BEFORE any mutation, so a
         # read fault can't strand a secret, and a partial write (config ok, local faults) is
@@ -1416,26 +1889,26 @@ def _commit_remote(app, payload, token_env, token, new_source, config_path) -> d
         try:
             prior_secret = secret_store.peek_keychain(token_env)
         except Exception:
-            new_source.close()
+            _close_new()
             return {"ok": False, "error": "could not read the existing token — check the keychain"}
         svc = app._config_service
         try:
             prior_config, prior_local = _snapshot_config(svc)
         except OSError:
-            new_source.close()  # nothing mutated yet
+            _close_new()  # nothing mutated yet
             return {"ok": False, "error": "could not read config"}
         try:
             secret_store.set_secret(token_env, token)
         except Exception:
             _restore_secret(token_env, prior_secret)  # set may have partially overwritten
-            new_source.close()
+            _close_new()
             return {"ok": False, "error": "could not store token"}
 
         def _rollback():
             _restore_file(svc._config_path, prior_config)
             _restore_file(svc._local_path, prior_local)
             _restore_secret(token_env, prior_secret)  # restore prior token, don't destroy it
-            new_source.close()
+            _close_new()
 
         try:
             errors = svc.write(payload)
@@ -1454,7 +1927,7 @@ def _commit_remote(app, payload, token_env, token, new_source, config_path) -> d
             _rollback()
             return {"ok": False, "error": "could not finalize onboarding"}
         app._commit_swap(new_source, prepared)  # non-failing: all fallible work done; sets the live clock
-        app._set_local_bridge(None)  # ... then drop any local bridge
+        app._set_local_bridges(local_runners)
         app._reloader = _reloader_for(app, ("remote",), _select_source)  # config-edit reloads resume
         return {"ok": True, "connected": app._source.connected}  # honest: connector dials async
     finally:
@@ -1496,16 +1969,30 @@ def create_app(
         # create_live_app already builds with clock=time.monotonic, so live elapsed
         # time advances; the embedded bridge runner is tracked for teardown on close.
         _, socket_path = kind
-        config, server, runner = _start_local_bridge(socket_path)
+        sessions = _explicit_selected_local_sessions(svc)
+        runners = {}
+        if sessions:
+            import dataclasses
+
+            partial = _load_partial_config()
+            if partial is not None:
+                partial = dataclasses.replace(partial, servers=[], overview_order=[])
+            config, runners = _start_local_session_bridges(sessions, partial=partial)
+            server = config.servers[0]
+        else:
+            config, server, runner = _start_local_bridge(socket_path)
+            runners = {server.id: runner}
         try:
             app = create_live_app(
                 config, server, host=host, port=port, icon_provider=icon_provider,
                 serve=serve, config_service=svc,
+                include_selected_locals=False,
             )
         except Exception:
-            runner.close()  # don't leak the bridge thread/socket if app construction fails
+            for runner in runners.values():
+                runner.close()
             raise
-        app._set_local_bridge(runner)
+        app._set_local_bridges(runners)
     else:
         app = create_mock_app(
             host=host, port=port, icon_provider=icon_provider, serve=serve, config_service=svc
@@ -1521,8 +2008,23 @@ def create_app(
     # transaction lock and owns baseline adoption, so a poll that fired during
     # a route write/reload transaction cannot replay the reload.
     watch_paths = [p for p in (cfg_path, local_path) if p is not None]
+
+    def selected_socket_paths() -> list[str]:
+        from .sessions import discover_local_sessions
+
+        service_local_path = getattr(svc, "_local_path", local_path)
+        return [
+            session.socket_path
+            for session in discover_local_sessions(service_local_path)
+            if session.selected
+        ]
+
     app._watcher = ConfigWatcher(
-        watch_paths, app._watcher_reload, interval=1.0, adopt_before_fire=False
+        watch_paths,
+        app._watcher_reload,
+        interval=1.0,
+        adopt_before_fire=False,
+        paths_provider=selected_socket_paths,
     )
     app._watcher.start()
     return app

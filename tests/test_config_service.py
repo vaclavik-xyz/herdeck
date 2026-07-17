@@ -99,6 +99,7 @@ def test_read_missing_config_is_empty_for_onboarding(tmp_path, monkeypatch):
     svc = ConfigService(tmp_path / "config.toml", tmp_path / "local.toml")
     payload = svc.read()
     assert payload.pop("revision")  # content hash present even with no files
+    assert isinstance(payload.pop("local_sessions"), list)
     assert payload == {
         "base": {},
         "profiles": {},

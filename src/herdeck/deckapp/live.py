@@ -6,26 +6,24 @@ render + press translation. This module only buffers the connector's callbacks,
 re-renders the deck when they fire, and turns a press into ``Command`` wire
 messages.
 
-Threading: the connector callbacks run on the connector's asyncio loop thread.
+Threading: connector callbacks run on their connector's asyncio loop thread.
 They update this source's small buffer under ``self._lock``, then ask the DeckApp
 to re-render via the ``refresh`` callback (which takes the DeckApp's lock). The
 DeckApp's render/press path runs on HTTP threads, also under the DeckApp's lock.
 Locks are always taken DeckApp-then-source, so there is no inversion: the
 orchestrator is only ever mutated while the DeckApp lock is held.
 
-Scope (phase 1): a single Connector to a single server (``config.servers[0]``),
-mirroring the design spec ("builds a Connector from the resolved ServerConfig").
-Multi-server fan-out is deferred — see ``_single_server_config``.
+One connector is created for every resolved server. Agent identity is already
+scoped by ``AgentKey(server_id, pane_id)``, so local Herdr sessions and remote
+bridges share one orchestrator without losing command-routing identity.
 
-Secret hygiene: the bridge token lives only inside the ``Connector`` (Authorization
-header). It is never stored on the source's public surface — only the non-secret
-``server_id`` is exposed (for ``/health``).
+Secret hygiene: bridge tokens live only inside their ``Connector`` instances
+(Authorization headers). The source exposes only non-secret server ids.
 """
 
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import threading
 
 from ..commands import Command, command_to_msg
@@ -36,19 +34,8 @@ from ..orchestrator import Orchestrator
 from .source import StateSource
 
 
-def _single_server_config(config: Config, server: ServerConfig) -> Config:
-    """Narrow the resolved config to the one server this source connects to.
-
-    Phase 1 runs a single Connector (per the design spec), so the deck shows only
-    that server — narrowing keeps the overview order, tiles and command routing
-    consistent with it instead of leaving phantom, never-populated servers. A
-    multi-server deck (one connector per server) is a later phase.
-    """
-    return dataclasses.replace(config, servers=[server], overview_order=[server.id])
-
-
 class LiveSource(StateSource):
-    """A StateSource fed by a real bridge through ``Connector``.
+    """A StateSource fed by one or more real bridges through ``Connector``.
 
     The connector callbacks buffer the latest fleet state and re-render the deck;
     ``apply_to`` replays the buffer into the render orchestrator via
@@ -62,12 +49,17 @@ class LiveSource(StateSource):
 
     source_name = "live"
 
-    def __init__(self, config: Config, server: ServerConfig):
-        self._config = _single_server_config(config, server)
-        self._server = server
+    def __init__(self, config: Config, server: ServerConfig | None = None):
+        # ``server`` remains accepted for source compatibility with callers that
+        # built a one-server source explicitly. The resolved config is authoritative:
+        # when it carries a fleet, every selected server participates.
+        self._config = config
+        self._servers = {item.id: item for item in config.servers}
+        if not self._servers and server is not None:
+            self._servers = {server.id: server}
         self._lock = threading.Lock()
         self._agents: dict[AgentKey, AgentState] = {}
-        self._connected = False
+        self._connected: dict[str, bool] = {sid: False for sid in self._servers}
         self._req = 0
         self._bg_req = 0
         self._active_read_req: str | None = None
@@ -82,7 +74,7 @@ class LiveSource(StateSource):
         self._orch: Orchestrator | None = None
         self._deck_lock = None
         self._refresh_locked_cb = None
-        self._runner = None
+        self._runners: dict[str, object] = {}
 
     # --- StateSource surface ---
     @property
@@ -98,11 +90,21 @@ class LiveSource(StateSource):
     @property
     def connected(self) -> bool:
         with self._lock:
-            return self._connected
+            return any(self._connected.values())
 
     @property
-    def server_id(self) -> str:
-        return self._server.id  # non-secret id only; the token never leaves Connector
+    def server_id(self) -> str | None:
+        """Backward-compatible primary id for ``/health``."""
+        return next(iter(self._servers), None)
+
+    @property
+    def server_ids(self) -> list[str]:
+        return list(self._servers)
+
+    @property
+    def connections(self) -> dict[str, bool]:
+        with self._lock:
+            return dict(self._connected)
 
     def attach(self, orch: Orchestrator, *, lock=None, refresh_locked=None) -> None:
         """Receive the render orchestrator, its lock, and a lock-free render.
@@ -118,21 +120,27 @@ class LiveSource(StateSource):
         self._deck_lock = lock
         self._refresh_locked_cb = refresh_locked
 
-    def attach_runner(self, runner) -> None:
-        """Receive the connector runner (provides fire-and-forget ``send``)."""
-        self._runner = runner
+    def attach_runner(self, runner, server_id: str | None = None) -> None:
+        """Receive a connector runner (provides fire-and-forget ``send``).
+
+        ``server_id`` is optional for the historical one-server test seam.
+        """
+        sid = server_id or self.server_id
+        if sid is not None:
+            self._runners[sid] = runner
 
     def apply_to(self, orch: Orchestrator) -> None:
         self._orch = orch
         with self._lock:
             states = list(self._agents.values())
-            connected = self._connected
-        orch.apply_snapshot(self._server.id, states)
-        orch.set_connection(self._server.id, connected)
+            connected = dict(self._connected)
+        for sid in self._servers:
+            orch.apply_snapshot(sid, [state for state in states if state.key.server_id == sid])
+            orch.set_connection(sid, connected.get(sid, False))
 
     def press(self, index: int) -> list[Command]:
-        orch, runner = self._orch, self._runner
-        if orch is None or runner is None:
+        orch = self._orch
+        if orch is None:
             return []
         was_drilling = orch.is_drilling()
         cmds = orch.on_press(index)
@@ -153,7 +161,9 @@ class LiveSource(StateSource):
                 if cmd.kind == "switch_profile":
                     local_commands.append(cmd)
                 continue
-            runner.send(msg)
+            runner = self._runners.get(cmd.server_id)
+            if runner is not None:
+                runner.send(msg)
         return local_commands
 
     def _seed_detection_from_preread(self, orch) -> None:
@@ -187,9 +197,9 @@ class LiveSource(StateSource):
         }
 
     def close(self) -> None:
-        runner = self._runner
-        if runner is not None:
+        for runner in list(self._runners.values()):
             runner.close()
+        self._runners.clear()
 
     # --- connector callbacks (run on the connector's loop thread) ---
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
@@ -202,7 +212,12 @@ class LiveSource(StateSource):
                     for key, state in new_by_key.items()
                     if self._terminal_identity_changed(self._agents.get(key), state)
                 }
-                self._agents = dict(new_by_key)
+                self._agents = {
+                    key: state
+                    for key, state in self._agents.items()
+                    if key.server_id != server_id
+                }
+                self._agents.update(new_by_key)
                 for key in recycled:
                     self._preread.pop(key, None)
                     self._preread_req.pop(key, None)
@@ -259,7 +274,7 @@ class LiveSource(StateSource):
     def _on_connection(self, server_id: str, up: bool) -> None:
         def mutate():
             with self._lock:
-                self._connected = up
+                self._connected[server_id] = up
                 if not up:
                     # In-flight background reads died with the connection
                     # (Connector.send is at-most-once), so their req markers
@@ -268,7 +283,10 @@ class LiveSource(StateSource):
                     # instant drill stays dark until each pane re-blocks. The
                     # cached prompt TEXT stays: it is a best-effort hint until
                     # the fresh episode read lands.
-                    self._preread_req.clear()
+                    for key in [
+                        key for key in self._preread_req if key.server_id == server_id
+                    ]:
+                        self._preread_req.pop(key, None)
             # No reconnect-time reads: the connector's resync `list` snapshot
             # always follows and _on_snapshot reconciles against the FRESH
             # fleet — issuing reads from the stale pre-disconnect agents here
@@ -277,15 +295,29 @@ class LiveSource(StateSource):
 
         self._apply(mutate)
 
-    def _on_result(self, req: str, data: dict) -> None:
+    def _on_result(self, *args) -> None:
+        """Handle a connector result.
+
+        Accept both the new ``(server_id, req, data)`` form and the historical
+        one-server ``(req, data)`` test seam.
+        """
+        if len(args) == 3:
+            server_id, req, data = args
+        elif len(args) == 2:
+            req, data = args
+            server_id = self.server_id
+        else:
+            raise TypeError("_on_result expects (server_id, req, data) or (req, data)")
+        if server_id is None:
+            return
         # Mirrors App.handle_result.
         text = data.get("text")
         if text is None:
             # An act/send/start ack: resync this server with a fresh list so a
             # skipped guarded action (pane no longer blocked) can't linger as stale.
-            runner = self._runner
+            runner = self._runners.get(server_id)
             if runner is not None:
-                runner.send(command_to_msg(Command("list", self._server.id), None))
+                runner.send(command_to_msg(Command("list", server_id), None))
             return
         # A read result: cache it for an instant future drill (while the pane is
         # blocked), and surface the prompt now only if it still matches a read we
@@ -294,9 +326,9 @@ class LiveSource(StateSource):
         pane_id = data.get("pane_id")
 
         def mutate():
-            self._cache_preread(pane_id, text, req)
+            self._cache_preread(server_id, pane_id, text, req)
             orch = self._orch
-            if orch is None or req is None or not orch.is_drill_pane(self._server.id, pane_id):
+            if orch is None or req is None or not orch.is_drill_pane(server_id, pane_id):
                 return False
             drilled = orch.drill_key()
             agent = orch.get_agent(drilled)
@@ -350,7 +382,6 @@ class LiveSource(StateSource):
         Runs inside a mutate() (deck lock held); ``self._lock`` guards the cache +
         buffer. Sends fire after releasing ``self._lock`` — ``runner.send`` is
         fire-and-forget and never blocks."""
-        runner = self._runner
         orch = self._orch
         drilled = self._drilled_key()
         reads: list[tuple[str, AgentKey]] = []
@@ -375,9 +406,10 @@ class LiveSource(StateSource):
                     clear_detection = True
         if clear_detection and orch is not None:
             orch.set_detection("")
-        if runner is None:
-            return
         for bg_req, key in reads:
+            runner = self._runners.get(key.server_id)
+            if runner is None:
+                continue
             with self._lock:
                 agent = self._agents.get(key)
             runner.send(
@@ -393,7 +425,13 @@ class LiveSource(StateSource):
                 )
             )
 
-    def _cache_preread(self, pane_id: str | None, text: str, req: str | None) -> None:
+    def _cache_preread(
+        self,
+        server_id: str,
+        pane_id: str | None,
+        text: str,
+        req: str | None,
+    ) -> None:
         """Store a read result as the pane's cached prompt — only while the pane is
         still BLOCKED and only if ``req`` is the read we last issued for the pane's
         CURRENT block episode (``_preread_req[key]``, set by BOTH the background
@@ -403,7 +441,7 @@ class LiveSource(StateSource):
         rejected. Caller holds the deck lock."""
         if pane_id is None or req is None:
             return
-        key = AgentKey(self._server.id, pane_id)
+        key = AgentKey(server_id, pane_id)
         with self._lock:
             state = self._agents.get(key)
             if (
@@ -512,25 +550,27 @@ class ConnectorRunner:
 
 def build_live_source(
     config: Config,
-    server: ServerConfig,
+    server: ServerConfig | None = None,
     *,
     connector_factory=Connector,
     runner_factory=ConnectorRunner,
 ) -> LiveSource:
-    """Wire a LiveSource to a Connector + runner and start the connector.
+    """Wire a LiveSource to one Connector + runner per selected server.
 
     ``connector_factory``/``runner_factory`` are injectable so tests can drive the
     callbacks and capture sends without a real bridge.
     """
     source = LiveSource(config, server)
-    connector = connector_factory(
-        server,
-        on_snapshot=source._on_snapshot,
-        on_event=source._on_event,
-        on_connection=source._on_connection,
-        on_result=source._on_result,
-    )
-    runner = runner_factory(connector)
-    source.attach_runner(runner)
-    runner.start()
+    servers = list(config.servers) or ([server] if server is not None else [])
+    for selected in servers:
+        connector = connector_factory(
+            selected,
+            on_snapshot=source._on_snapshot,
+            on_event=source._on_event,
+            on_connection=source._on_connection,
+            on_result=lambda req, data, sid=selected.id: source._on_result(sid, req, data),
+        )
+        runner = runner_factory(connector)
+        source.attach_runner(runner, selected.id)
+        runner.start()
     return source

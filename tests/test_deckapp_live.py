@@ -130,6 +130,18 @@ def live_config(token=SECRET):
     return config, server
 
 
+def multi_live_config():
+    local = ServerConfig(id="local", url="ws://127.0.0.1:8765", token="local-token")
+    remote = ServerConfig(id="workbox", url="ws://workbox:8765", token="remote-token")
+    config = Config(
+        servers=[local, remote],
+        profiles=dict(DEFAULT_PROFILES),
+        overview_order=["local", "workbox"],
+        grid=(5, 3),
+    )
+    return config, local, remote
+
+
 def agent(sid, pane, status, agent_type="claude", label=None, terminal_id=""):
     return AgentState(
         AgentKey(sid, pane),
@@ -876,6 +888,72 @@ def test_build_live_source_wires_callbacks_and_starts_runner():
 
     src.close()
     assert conn.stopped is True
+
+
+def test_build_live_source_fans_out_and_routes_commands_by_server():
+    FakeConnector.instances.clear()
+    config, local, remote = multi_live_config()
+    runners = {}
+
+    def runner_factory(conn):
+        runner = FakeRunner(conn)
+        runners[conn.server.id] = runner
+        return runner
+
+    src = build_live_source(
+        config,
+        connector_factory=FakeConnector,
+        runner_factory=runner_factory,
+    )
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    try:
+        assert {conn.server.id for conn in FakeConnector.instances} == {"local", "workbox"}
+        assert all(runner.started for runner in runners.values())
+        by_id = {conn.server.id: conn for conn in FakeConnector.instances}
+        by_id["local"].on_connection(local.id, True)
+        by_id["remote" if "remote" in by_id else "workbox"].on_connection(remote.id, True)
+        by_id["local"].on_snapshot(local.id, [agent(local.id, "p0", Status.IDLE)])
+        by_id["workbox"].on_snapshot(remote.id, [agent(remote.id, "p0", Status.IDLE)])
+
+        assert src.summary()["agents"] == 2
+        assert src.connections == {"local": True, "workbox": True}
+
+        target_index = next(
+            index
+            for index, state in enumerate(app._orch._ordered())
+            if state.key.server_id == "workbox"
+        )
+        for runner in runners.values():
+            runner.sent.clear()
+        app.press(target_index)
+        assert runners["workbox"].sent
+        assert runners["local"].sent == []
+        assert runners["workbox"].sent[-1]["pane_id"] == "p0"
+    finally:
+        app.close()
+
+
+def test_one_server_disconnect_keeps_other_server_live_and_offline_scoped():
+    config, local, remote = multi_live_config()
+    src = LiveSource(config)
+    src.attach_runner(FakeRunner(), local.id)
+    src.attach_runner(FakeRunner(), remote.id)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    try:
+        src._on_connection(local.id, True)
+        src._on_connection(remote.id, True)
+        src._on_snapshot(local.id, [agent(local.id, "p0", Status.WORKING)])
+        src._on_snapshot(remote.id, [agent(remote.id, "p0", Status.IDLE)])
+        src._on_connection(remote.id, False)
+
+        assert src.connected is True
+        assert src.connections == {"local": True, "workbox": False}
+        assert src.summary()["agents"] == 2
+        assert app._health()["connected"] is True
+        assert app._health()["connections"] == {"local": True, "workbox": False}
+        assert app._state()["connections"] == {"local": True, "workbox": False}
+    finally:
+        app.close()
 
 
 # --- __main__ entry wiring (mock/live switch) -------------------------------
