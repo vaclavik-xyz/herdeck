@@ -10,8 +10,8 @@ class StateSource(ABC):
 
     The sidecar holds one Orchestrator and one StateSource. On each refresh it
     asks the source to ``apply_to`` the orchestrator, then renders. A press is
-    routed to ``press``. This keeps the mock and (future) live paths swappable
-    behind one interface: ``MockSource`` here, ``LiveSource`` in a later slice.
+    routed to ``press``. This keeps mock and live paths swappable behind one
+    interface; a live source may fan out to several bridges.
     """
 
     #: ``"mock"`` or ``"live"`` — surfaced verbatim in ``/state`` and ``/health``.

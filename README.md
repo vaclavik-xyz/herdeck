@@ -51,6 +51,29 @@ Herdr's native `HERDR_SOCKET_PATH` / `HERDR_SESSION` if the socket lives
 elsewhere. For a remote deck (herdr on another host) see **Server setup**
 below — that path uses an explicit config with `[[servers]]` and a token.
 
+### Multiple Herdr sessions
+
+Herdeck can combine multiple local named sessions and remote bridges in one
+deck. Open **Settings → Servers** (or the connection picker in the floating
+deck), select any discovered local sessions, and optionally keep one or more
+saved remote bridges enabled. Changes reconnect in place; the Herdeck process
+does not need a restart.
+
+Local discovery covers the default `~/.config/herdr/herdr.sock` plus named
+`~/.config/herdr/sessions/<name>/herdr.sock` sockets. The selection is
+device-local and is stored in `local.toml`:
+
+```toml
+[local]
+herdr_sessions = ["default", "review"]
+```
+
+Remote Herdr instances still run one `herdeck-bridge` each and appear as
+separate `[[servers]]` entries. Their WebSockets travel directly over the
+Tailscale network; Tailscale SSH is not part of the data path. Local and remote
+agents are keyed by server/session id, so commands always return to the bridge
+that supplied the pane.
+
 Run `herdeck-doctor` to diagnose setup problems — it checks the herdr socket,
 config/mode, deck availability, and (for remote) token presence, printing a
 pass/fail checklist with hints (it never prints token values).
@@ -149,6 +172,7 @@ active_profile = "mobile"
 [local]
 deck = "web"
 herdr_socket = "~/.config/herdr/herdr.sock"
+herdr_sessions = ["default"]       # select several named local sessions if wanted
 web_bind = "127.0.0.1"
 web_port = 8800
 icons_dir = "~/herdeck-icons"

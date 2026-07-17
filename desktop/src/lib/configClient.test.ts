@@ -48,6 +48,7 @@ import {
   effectiveLanguage,
   isStaleRevisionError,
   updateBaseTelegram,
+  setLocalSessionSelected,
 } from "./configClient";
 
 function rawConfig(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -80,6 +81,7 @@ describe("parseConfig", () => {
       envLocked: false,
       activeProfile: "default",
       runtimeDeck: null,
+      localSessions: [],
       revision: null,
     });
   });
@@ -93,6 +95,30 @@ describe("parseConfig", () => {
   it("parses the effective explicit runtime renderer", () => {
     expect(parseConfig({ runtime_deck: "elgato-plugin" })!.runtimeDeck).toBe("elgato-plugin");
     expect(parseConfig({ runtime_deck: 7 })!.runtimeDeck).toBeNull();
+  });
+
+  it("parses discovered local sessions and drops malformed rows", () => {
+    const c = parseConfig({
+      local_sessions: [
+        {
+          name: "review",
+          server_id: "local:review",
+          socket_path: "/tmp/review.sock",
+          available: true,
+          selected: false,
+        },
+        { name: 7 },
+      ],
+    })!;
+    expect(c.localSessions).toEqual([
+      {
+        name: "review",
+        server_id: "local:review",
+        socket_path: "/tmp/review.sock",
+        available: true,
+        selected: false,
+      },
+    ]);
   });
 
   it("coerces a non-string active_profile back to default", () => {
@@ -281,6 +307,37 @@ describe("server mutations", () => {
     const next = removeServer(p, 0);
     expect(serversOf(next)).toHaveLength(1);
     expect(serversOf(next)[0]).toEqual({ id: "", url: "", token_env: "" });
+  });
+});
+
+describe("local session selection", () => {
+  it("writes selected names to device-local config without touching remote servers", () => {
+    const payload = parseConfig(rawConfig({
+      local_sessions: [
+        {
+          name: "default",
+          server_id: "local",
+          socket_path: "/tmp/default.sock",
+          available: true,
+          selected: true,
+        },
+        {
+          name: "review",
+          server_id: "local:review",
+          socket_path: "/tmp/review.sock",
+          available: true,
+          selected: false,
+        },
+      ],
+    }))!;
+
+    const selected = setLocalSessionSelected(payload, "review", true);
+    expect((selected.local.local as Record<string, unknown>).herdr_sessions).toEqual([
+      "default",
+      "review",
+    ]);
+    expect(selected.localSessions.map((session) => session.selected)).toEqual([true, true]);
+    expect(serversOf(selected)).toEqual(serversOf(payload));
   });
 });
 

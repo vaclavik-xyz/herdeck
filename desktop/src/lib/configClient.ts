@@ -23,6 +23,8 @@ export interface ConfigPayload {
   activeProfile: string;
   /** Effective explicit renderer selection (env > local), or null for auto-detection. */
   runtimeDeck: string | null;
+  /** Device-local Herdr sessions discovered by the sidecar. */
+  localSessions: LocalSessionRecord[];
   /** On-disk content revision the payload was loaded from (staleness guard). */
   revision: string | null;
 }
@@ -59,8 +61,11 @@ export function parseConfig(raw: unknown): ConfigPayload | null {
   const envLocked = v.env_locked === true;
   const activeProfile = typeof v.active_profile === "string" ? v.active_profile : "default";
   const runtimeDeck = typeof v.runtime_deck === "string" ? v.runtime_deck : null;
+  const localSessions = Array.isArray(v.local_sessions)
+    ? v.local_sessions.map(parseLocalSession).filter((item): item is LocalSessionRecord => item != null)
+    : [];
   const revision = typeof v.revision === "string" ? v.revision : null;
-  return { base: obj(v.base), profiles, local: obj(v.local), secrets, envLocked, activeProfile, runtimeDeck, revision };
+  return { base: obj(v.base), profiles, local: obj(v.local), secrets, envLocked, activeProfile, runtimeDeck, localSessions, revision };
 }
 
 /** Extract the `errors` string list from a `{errors: [...]}` reply, dropping
@@ -190,6 +195,32 @@ export interface ServerRecord {
   token_env: string;
 }
 
+export interface LocalSessionRecord {
+  name: string;
+  server_id: string;
+  socket_path: string;
+  available: boolean;
+  selected: boolean;
+}
+
+function parseLocalSession(raw: unknown): LocalSessionRecord | null {
+  const item = obj(raw);
+  if (
+    typeof item.name !== "string"
+    || typeof item.server_id !== "string"
+    || typeof item.socket_path !== "string"
+  ) {
+    return null;
+  }
+  return {
+    name: item.name,
+    server_id: item.server_id,
+    socket_path: item.socket_path,
+    available: item.available === true,
+    selected: item.selected === true,
+  };
+}
+
 function str(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
@@ -228,6 +259,27 @@ export function updateServer(
 ): ConfigPayload {
   const servers = serversOf(payload).map((s, i) => (i === index ? { ...s, [field]: value } : s));
   return withServers(payload, servers);
+}
+
+/** Select or deselect one discovered local Herdr session in local.toml. */
+export function setLocalSessionSelected(
+  payload: ConfigPayload,
+  name: string,
+  selected: boolean,
+): ConfigPayload {
+  const current = payload.localSessions
+    .filter((session) => session.selected)
+    .map((session) => session.name);
+  const names = selected
+    ? [...new Set([...current, name])]
+    : current.filter((item) => item !== name);
+  const next = setAt(payload, "local", "local", "herdr_sessions", names);
+  return {
+    ...next,
+    localSessions: payload.localSessions.map((session) =>
+      session.name === name ? { ...session, selected } : session
+    ),
+  };
 }
 
 /** Editor root: the base config, or the machine-local config (`local.toml`). */

@@ -58,6 +58,33 @@ describe("parseSetupStatus", () => {
     expect(s?.savedRemoteAvailable).toBe(true);
   });
 
+  it("parses local sessions and per-connection health", () => {
+    const s = parseSetupStatus({
+      ...full,
+      mode: "mixed",
+      local_sessions: [
+        {
+          name: "review",
+          server_id: "local:review",
+          socket_path: "/tmp/review.sock",
+          available: true,
+          selected: true,
+        },
+      ],
+      connections: { "local:review": true, workbox: false },
+    });
+    expect(s?.localSessions).toEqual([
+      {
+        name: "review",
+        serverId: "local:review",
+        socketPath: "/tmp/review.sock",
+        available: true,
+        selected: true,
+      },
+    ]);
+    expect(s?.connections).toEqual({ "local:review": true, workbox: false });
+  });
+
   it("defaults savedRemoteAvailable to false when absent or wrong-typed", () => {
     expect(parseSetupStatus({ mode: "mock" })?.savedRemoteAvailable).toBe(false);
     expect(parseSetupStatus({ mode: "mock", saved_remote_available: "yes" })?.savedRemoteAvailable).toBe(false);
@@ -73,6 +100,8 @@ describe("onboardingDecision (exhaustive on reason, defaults to deck)", () => {
     savedRemoteAvailable: false,
     choice: null,
     socketPath: "",
+    localSessions: [],
+    connections: {},
   });
 
   it("first_run -> welcome", () => {
@@ -104,6 +133,8 @@ describe("shouldOnboard (manual re-onboarding override)", () => {
     savedRemoteAvailable: false,
     choice: "demo",
     socketPath: "",
+    localSessions: [],
+    connections: {},
   };
 
   it("forces the welcome card over a deck decision when override is set", () => {
@@ -173,6 +204,21 @@ describe("setupTransport", () => {
     const r = await setupTransport(invoke).connect(req);
     expect(calls).toEqual([{ cmd: "setup_connect", args: { body: req } }]);
     expect(r).toEqual({ ok: true, connected: true, error: null });
+  });
+
+  it("connect() forwards a multi-session selection", async () => {
+    const calls: unknown[] = [];
+    const invoke = async (cmd: string, args?: Record<string, unknown>) => {
+      calls.push({ cmd, args });
+      return { ok: true, connected: false };
+    };
+    const req: ConnectRequest = {
+      choice: "sessions",
+      sessions: ["default", "review"],
+      include_saved: true,
+    };
+    await setupTransport(invoke).connect(req);
+    expect(calls).toEqual([{ cmd: "setup_connect", args: { body: req } }]);
   });
 
   it("connect() surfaces a thrown command (non-200) as a non-ok result", async () => {
