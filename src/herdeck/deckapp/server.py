@@ -1412,7 +1412,6 @@ def _mock_reloader(app, kind, select_source):
         if not sessions:
             app.swap_source(select_source())
             return
-        pending_fingerprint = None
 
         import dataclasses
 
@@ -1431,6 +1430,7 @@ def _mock_reloader(app, kind, select_source):
                 runner.close()
             raise
         app._set_local_bridges(runners)
+        pending_fingerprint = None
         app._reloader = _reloader_for(app, ("local",), select_source)
 
     return reload_

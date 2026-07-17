@@ -234,6 +234,57 @@ def test_mock_reloader_connects_pending_selection_when_socket_appears(
     assert calls == ["MOCK", "LIVE"]
 
 
+def test_mock_reloader_retries_pending_selection_after_build_failure(
+    tmp_path, monkeypatch
+):
+    local = tmp_path / "local.toml"
+    local.write_text('[local]\nherdr_sessions = []\n')
+    selected = []
+    session = types.SimpleNamespace(name="review", selected=True)
+    monkeypatch.setattr(
+        "herdeck.deckapp.sessions.discover_local_sessions",
+        lambda path: list(selected),
+    )
+    monkeypatch.setattr(
+        srv,
+        "_explicit_selected_local_sessions",
+        lambda service: [session],
+    )
+    config = types.SimpleNamespace(servers=[types.SimpleNamespace(id="local:review")])
+    monkeypatch.setattr(
+        srv,
+        "_start_local_session_bridges",
+        lambda sessions, partial=None: (config, {}),
+    )
+    attempts = []
+
+    def build(built_config, server):
+        attempts.append(len(attempts) + 1)
+        if len(attempts) == 1:
+            raise RuntimeError("temporary build failure")
+        return "LIVE"
+
+    monkeypatch.setattr(srv, "build_live_source_for_connect", build)
+    monkeypatch.setattr(srv, "_load_partial_config", lambda: None)
+    calls = []
+    fake_app = types.SimpleNamespace(
+        _config_service=types.SimpleNamespace(_local_path=local),
+        swap_source=lambda source: calls.append(source),
+        _set_local_bridges=lambda runners: None,
+    )
+    reload = srv._reloader_for(fake_app, ("mock", "demo"), lambda: "MOCK")
+    selected.append(session)
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="temporary build failure"):
+        reload()
+    reload()
+
+    assert attempts == [1, 2]
+    assert calls == ["LIVE"]
+
+
 def _stub_runner_factory(socket_path):
     return LocalBridgeRunner(
         socket_path, start_bridge=functools.partial(start_local_bridge, herdr=StubHerdr(panes=[]))
