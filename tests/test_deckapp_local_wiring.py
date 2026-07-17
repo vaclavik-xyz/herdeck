@@ -144,6 +144,96 @@ def test_mock_env_blocks_new_local_selection(tmp_path, monkeypatch):
     assert calls == ["MOCK"]
 
 
+def test_mock_reloader_detects_implicit_to_explicit_same_name(
+    tmp_path, monkeypatch
+):
+    local = tmp_path / "local.toml"
+    explicit = {"value": False}
+    session = types.SimpleNamespace(name="default", selected=True)
+    monkeypatch.setattr(
+        "herdeck.deckapp.sessions.discover_local_sessions",
+        lambda path: [session],
+    )
+    monkeypatch.setattr(
+        "herdeck.deckapp.sessions.has_explicit_local_session_selection",
+        lambda path: explicit["value"],
+    )
+    monkeypatch.setattr(
+        srv,
+        "_explicit_selected_local_sessions",
+        lambda service: [session],
+    )
+    config = types.SimpleNamespace(servers=[types.SimpleNamespace(id="local")])
+    monkeypatch.setattr(
+        srv,
+        "_start_local_session_bridges",
+        lambda sessions, partial=None: (config, {}),
+    )
+    monkeypatch.setattr(
+        srv,
+        "build_live_source_for_connect",
+        lambda built_config, server: "LIVE",
+    )
+    monkeypatch.setattr(srv, "_load_partial_config", lambda: None)
+    calls = []
+    fake_app = types.SimpleNamespace(
+        _config_service=types.SimpleNamespace(_local_path=local),
+        swap_source=lambda source: calls.append(source),
+        _set_local_bridges=lambda runners: None,
+    )
+    reload = srv._reloader_for(fake_app, ("mock", "demo"), lambda: "MOCK")
+    explicit["value"] = True
+
+    reload()
+
+    assert calls == ["LIVE"]
+
+
+def test_mock_reloader_connects_pending_selection_when_socket_appears(
+    tmp_path, monkeypatch
+):
+    local = tmp_path / "local.toml"
+    local.write_text('[local]\nherdr_sessions = []\n')
+    selected = []
+    available = []
+    monkeypatch.setattr(
+        "herdeck.deckapp.sessions.discover_local_sessions",
+        lambda path: list(selected),
+    )
+    monkeypatch.setattr(
+        srv,
+        "_explicit_selected_local_sessions",
+        lambda service: list(available),
+    )
+    config = types.SimpleNamespace(servers=[types.SimpleNamespace(id="local:review")])
+    monkeypatch.setattr(
+        srv,
+        "_start_local_session_bridges",
+        lambda sessions, partial=None: (config, {}),
+    )
+    monkeypatch.setattr(
+        srv,
+        "build_live_source_for_connect",
+        lambda built_config, server: "LIVE",
+    )
+    monkeypatch.setattr(srv, "_load_partial_config", lambda: None)
+    calls = []
+    fake_app = types.SimpleNamespace(
+        _config_service=types.SimpleNamespace(_local_path=local),
+        swap_source=lambda source: calls.append(source),
+        _set_local_bridges=lambda runners: None,
+    )
+    reload = srv._reloader_for(fake_app, ("mock", "demo"), lambda: "MOCK")
+    session = types.SimpleNamespace(name="review", selected=True)
+    selected.append(session)
+
+    reload()
+    available.append(session)
+    reload()
+
+    assert calls == ["MOCK", "LIVE"]
+
+
 def _stub_runner_factory(socket_path):
     return LocalBridgeRunner(
         socket_path, start_bridge=functools.partial(start_local_bridge, herdr=StubHerdr(panes=[]))

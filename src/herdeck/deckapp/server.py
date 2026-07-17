@@ -1368,24 +1368,41 @@ def _mock_reloader(app, kind, select_source):
     mock caused by an unavailable saved local session promotes itself when the
     socket appears. ``HERDECK_MOCK`` always wins.
     """
-    from .sessions import discover_local_sessions
+    from .sessions import (
+        discover_local_sessions,
+        has_explicit_local_session_selection,
+    )
 
     config_service = getattr(app, "_config_service", None)
     local_path = getattr(config_service, "_local_path", None)
 
-    def selection() -> tuple[str, ...]:
-        return tuple(
-            session.name
-            for session in discover_local_sessions(local_path)
-            if session.selected
+    def fingerprint() -> tuple[bool, tuple[str, ...]]:
+        return (
+            has_explicit_local_session_selection(local_path),
+            tuple(
+                session.name
+                for session in discover_local_sessions(local_path)
+                if session.selected
+            ),
         )
 
-    initial_selection = selection()
+    last_fingerprint = fingerprint()
+    pending_fingerprint = None
 
     def reload_() -> None:
+        nonlocal last_fingerprint, pending_fingerprint
+
         reason = kind[1] if len(kind) > 1 else None
+        current_fingerprint = fingerprint()
+        selection_changed = current_fingerprint != last_fingerprint
+        last_fingerprint = current_fingerprint
+        if selection_changed:
+            explicit, names = current_fingerprint
+            pending_fingerprint = current_fingerprint if explicit and names else None
         should_try_local = reason != "mock_env" and (
-            reason == "local_unavailable" or selection() != initial_selection
+            reason == "local_unavailable"
+            or selection_changed
+            or pending_fingerprint == current_fingerprint
         )
         sessions = (
             _explicit_selected_local_sessions(config_service)
@@ -1395,6 +1412,7 @@ def _mock_reloader(app, kind, select_source):
         if not sessions:
             app.swap_source(select_source())
             return
+        pending_fingerprint = None
 
         import dataclasses
 
