@@ -45,6 +45,51 @@ def test_reloader_swaps_in_mock_or_remote_mode():
     assert calls == ["NEWSRC"]
 
 
+def test_mock_reloader_promotes_explicit_settings_selection_to_local(monkeypatch):
+    session = types.SimpleNamespace(
+        name="review",
+        server_id="local:review",
+        socket_path="/review.sock",
+        available=True,
+        selected=True,
+    )
+    config = types.SimpleNamespace(servers=[types.SimpleNamespace(id="local:review")])
+    runner = types.SimpleNamespace(close=lambda: None)
+    calls = []
+    fake_app = types.SimpleNamespace(
+        _config_service=types.SimpleNamespace(_local_path="/local.toml"),
+        swap_source=lambda source: calls.append(("swap", source)),
+        _set_local_bridges=lambda runners: calls.append(("bridges", runners)),
+    )
+    monkeypatch.setattr(
+        "herdeck.deckapp.sessions.has_explicit_local_session_selection",
+        lambda path: True,
+    )
+    monkeypatch.setattr(
+        srv,
+        "_explicit_selected_local_sessions",
+        lambda service: [session],
+    )
+    monkeypatch.setattr(
+        srv,
+        "_start_local_session_bridges",
+        lambda sessions, partial=None: (config, {"local:review": runner}),
+    )
+    monkeypatch.setattr(
+        srv,
+        "build_live_source_for_connect",
+        lambda built_config, server: "LIVE",
+    )
+    monkeypatch.setattr(srv, "_load_partial_config", lambda: None)
+
+    srv._reloader_for(fake_app, ("mock", "demo"), lambda: "MOCK")()
+
+    assert calls == [
+        ("swap", "LIVE"),
+        ("bridges", {"local:review": runner}),
+    ]
+
+
 def _stub_runner_factory(socket_path):
     return LocalBridgeRunner(
         socket_path, start_bridge=functools.partial(start_local_bridge, herdr=StubHerdr(panes=[]))

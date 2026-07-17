@@ -1215,7 +1215,11 @@ def _start_local_session_bridges(
                 server_id = f"{base}:{suffix}"
             used_ids.add(server_id)
             runner = (runner_factory or LocalBridgeRunner)(session.socket_path)
-            _host, port, token = runner.start()
+            try:
+                _host, port, token = runner.start()
+            except Exception:
+                runner.close()
+                raise
             runners[server_id] = runner
             local_servers.append(
                 ServerConfig(server_id, f"ws://127.0.0.1:{port}", token)
@@ -1357,6 +1361,52 @@ def _local_reloader(app):
     return reload_
 
 
+def _mock_reloader(app, kind, select_source):
+    """Keep demo mode sticky unless Settings explicitly selects local sessions.
+
+    A mock caused by an unavailable saved local session also promotes itself to
+    live as soon as the selected socket appears.
+    """
+
+    def reload_() -> None:
+        from .sessions import has_explicit_local_session_selection
+
+        config_service = getattr(app, "_config_service", None)
+        local_path = getattr(config_service, "_local_path", None)
+        should_try_local = has_explicit_local_session_selection(local_path) or (
+            len(kind) > 1 and kind[1] == "local_unavailable"
+        )
+        sessions = (
+            _explicit_selected_local_sessions(config_service)
+            if should_try_local
+            else []
+        )
+        if not sessions:
+            app.swap_source(select_source())
+            return
+
+        import dataclasses
+
+        partial = _load_partial_config()
+        if partial is not None:
+            partial = dataclasses.replace(partial, servers=[], overview_order=[])
+        config, runners = _start_local_session_bridges(sessions, partial=partial)
+        new_source = None
+        try:
+            new_source = build_live_source_for_connect(config, config.servers[0])
+            app.swap_source(new_source)
+        except Exception:
+            if new_source is not None:
+                new_source.close()
+            for runner in runners.values():
+                runner.close()
+            raise
+        app._set_local_bridges(runners)
+        app._reloader = _reloader_for(app, ("local",), select_source)
+
+    return reload_
+
+
 def _reloader_for(app, kind, select_source):
     """The config-watch reloader for the built source. LOCAL mode rebuilds the
     live source against the running embedded bridge (the bridge lifecycle stays
@@ -1366,7 +1416,7 @@ def _reloader_for(app, kind, select_source):
         return _local_reloader(app)
     if kind[0] == "remote":
         return _remote_reloader(app)
-    return lambda: app.swap_source(select_source())
+    return _mock_reloader(app, kind, select_source)
 
 
 def _token_env_for(server_id: str) -> str:
@@ -1917,8 +1967,23 @@ def create_app(
     # transaction lock and owns baseline adoption, so a poll that fired during
     # a route write/reload transaction cannot replay the reload.
     watch_paths = [p for p in (cfg_path, local_path) if p is not None]
+
+    def selected_socket_paths() -> list[str]:
+        from .sessions import discover_local_sessions
+
+        service_local_path = getattr(svc, "_local_path", local_path)
+        return [
+            session.socket_path
+            for session in discover_local_sessions(service_local_path)
+            if session.selected
+        ]
+
     app._watcher = ConfigWatcher(
-        watch_paths, app._watcher_reload, interval=1.0, adopt_before_fire=False
+        watch_paths,
+        app._watcher_reload,
+        interval=1.0,
+        adopt_before_fire=False,
+        paths_provider=selected_socket_paths,
     )
     app._watcher.start()
     return app

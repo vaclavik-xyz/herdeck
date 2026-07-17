@@ -108,3 +108,33 @@ def test_selected_local_sessions_merge_with_remote_fleet():
     finally:
         for runner in runners.values():
             runner.close()
+
+
+def test_failed_session_runner_is_closed():
+    session = LocalSession(
+        "review",
+        "local:review",
+        "/tmp/review.sock",
+        True,
+        True,
+    )
+
+    class _FailingRunner:
+        instance = None
+
+        def __init__(self, socket_path):
+            self.closed = False
+            type(self).instance = self
+
+        def start(self):
+            raise RuntimeError("bind failed")
+
+        def close(self):
+            self.closed = True
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="bind failed"):
+        _start_local_session_bridges([session], runner_factory=_FailingRunner)
+
+    assert _FailingRunner.instance.closed is True
