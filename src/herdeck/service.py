@@ -131,6 +131,12 @@ def install_service(
     (config.home / "Library/Logs").mkdir(parents=True, exist_ok=True)
     plist_path = launch_agents / f"{config.label}.plist"
     existed = plist_path.exists()
+    legacy_domain = None
+    if existed and config.system:
+        for domain in (f"user/{uid}", f"gui/{uid}"):
+            if runner(["launchctl", "print", f"{domain}/{config.label}"]) == 0:
+                legacy_domain = domain
+                break
     if existed:
         runner(["launchctl", "bootout", f"gui/{uid}/{config.label}"])
         runner(["launchctl", "bootout", f"user/{uid}/{config.label}"])
@@ -197,8 +203,14 @@ def install_service(
                     ) from error
             else:
                 runner(["sudo", "/bin/rm", "-f", str(system_path)])
-                if existed:
-                    runner(["launchctl", "bootstrap", f"user/{uid}", str(plist_path)])
+                if legacy_domain is not None:
+                    restore_result = runner(
+                        ["launchctl", "bootstrap", legacy_domain, str(plist_path)]
+                    )
+                    if restore_result != 0:
+                        raise SystemExit(
+                            f"system service migration and rollback failed for {config.label}"
+                        ) from error
             raise
         finally:
             temporary_path.unlink(missing_ok=True)

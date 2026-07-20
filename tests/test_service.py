@@ -144,7 +144,8 @@ def test_install_system_bridge_migrates_user_agent_after_verified_bootstrap(tmp_
     assert not old_plist.exists()
     assert len(installed) == 1
     assert plistlib.loads(installed[0])["UserName"] == "admin"
-    assert calls[:3] == [
+    assert calls[:4] == [
+        ["launchctl", "print", "user/501/dev.herdeck.bridge"],
         ["launchctl", "bootout", "gui/501/dev.herdeck.bridge"],
         ["launchctl", "bootout", "user/501/dev.herdeck.bridge"],
         ["sudo", "launchctl", "bootout", "system/dev.herdeck.bridge"],
@@ -173,7 +174,7 @@ def test_install_system_bridge_migrates_user_agent_after_verified_bootstrap(tmp_
     ]
 
 
-def test_failed_system_bootstrap_restores_existing_user_bridge(tmp_path):
+def test_failed_system_bootstrap_restores_existing_gui_bridge(tmp_path):
     from herdeck.service import install_service
 
     calls = []
@@ -183,6 +184,10 @@ def test_failed_system_bootstrap_restores_existing_user_bridge(tmp_path):
 
     def runner(command):
         calls.append(command)
+        if command == ["launchctl", "print", "user/501/dev.herdeck.bridge"]:
+            return 1
+        if command == ["launchctl", "print", "gui/501/dev.herdeck.bridge"]:
+            return 0
         if command[:4] == ["sudo", "launchctl", "bootstrap", "system"]:
             return 5
         return 0
@@ -193,8 +198,28 @@ def test_failed_system_bootstrap_restores_existing_user_bridge(tmp_path):
     assert old_plist.exists()
     assert calls[-2:] == [
         ["sudo", "/bin/rm", "-f", "/Library/LaunchDaemons/dev.herdeck.bridge.plist"],
-        ["launchctl", "bootstrap", "user/501", str(old_plist)],
+        ["launchctl", "bootstrap", "gui/501", str(old_plist)],
     ]
+
+
+def test_failed_legacy_restore_is_reported_as_rollback_failure(tmp_path):
+    from herdeck.service import install_service
+
+    _write_private_token(tmp_path)
+    old_plist = _write_legacy_bridge(tmp_path)
+    config = _bridge_config(tmp_path, system=True, user_name="admin")
+
+    def runner(command):
+        if command[:4] == ["sudo", "launchctl", "bootstrap", "system"]:
+            return 5
+        if command[:3] == ["launchctl", "bootstrap", "user/501"]:
+            return 9
+        return 0
+
+    with pytest.raises(SystemExit, match="migration and rollback failed"):
+        install_service(config, runner=runner)
+
+    assert old_plist.exists()
 
 
 def test_failed_system_upgrade_restores_previous_daemon(tmp_path):
@@ -213,6 +238,7 @@ def test_failed_system_upgrade_restores_previous_daemon(tmp_path):
         system_dir=system_dir,
         user_name="admin",
     )
+
     def runner(command):
         calls.append(command)
         if command[:2] == ["sudo", "/usr/bin/install"]:
