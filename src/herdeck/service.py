@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import os
 import plistlib
+import pwd
 import secrets
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +31,9 @@ class ServiceConfig:
     public_origin: str = ""
     frame_ancestors: tuple[str, ...] = ()
     allow_query_token: bool = False
+    system: bool = False
+    system_dir: Path = Path("/Library/LaunchDaemons")
+    user_name: str | None = None
 
     @property
     def label(self) -> str:
@@ -80,6 +85,13 @@ def render_launch_agent(config: ServiceConfig) -> bytes:
         "StandardOutPath": str(log_path),
         "StandardErrorPath": str(log_path),
     }
+    if config.system:
+        if config.user_name is None:
+            raise ValueError("system service needs a target user name")
+        payload.pop("LimitLoadToSessionType")
+        payload["UserName"] = config.user_name
+        payload["ProcessType"] = "Background"
+        payload["ThrottleInterval"] = 10
     return plistlib.dumps(payload, sort_keys=True)
 
 
@@ -108,6 +120,8 @@ def install_service(
     token_factory=lambda: secrets.token_urlsafe(32),
 ) -> Path:
     validate_web_bind(config.bind)
+    if config.system and config.kind != "bridge":
+        raise ValueError("system services are supported only for the bridge")
     uid = os.getuid() if config.uid is None else config.uid
     if config.kind == "bridge":
         assert config.token_file is not None
@@ -120,6 +134,79 @@ def install_service(
     if existed:
         runner(["launchctl", "bootout", f"gui/{uid}/{config.label}"])
         runner(["launchctl", "bootout", f"user/{uid}/{config.label}"])
+    if config.system:
+        system_path = config.system_dir / f"{config.label}.plist"
+        previous_path = None
+        if system_path.exists():
+            with tempfile.NamedTemporaryFile(
+                prefix=f"{config.label}.previous.", suffix=".plist", delete=False
+            ) as previous:
+                previous_path = Path(previous.name)
+                previous.write(system_path.read_bytes())
+        runner(["sudo", "launchctl", "bootout", f"system/{config.label}"])
+        with tempfile.NamedTemporaryFile(prefix=f"{config.label}.", suffix=".plist", delete=False) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(render_launch_agent(config))
+        try:
+            install_result = runner(
+                [
+                    "sudo",
+                    "/usr/bin/install",
+                    "-o",
+                    "root",
+                    "-g",
+                    "wheel",
+                    "-m",
+                    "0644",
+                    str(temporary_path),
+                    str(system_path),
+                ]
+            )
+            if install_result != 0:
+                raise SystemExit(f"could not install system service {config.label}")
+            bootstrap_result = runner(
+                ["sudo", "launchctl", "bootstrap", "system", str(system_path)]
+            )
+            if bootstrap_result != 0:
+                raise SystemExit(f"launchctl bootstrap failed for {config.label}")
+            if runner(["launchctl", "print", f"system/{config.label}"]) != 0:
+                raise SystemExit(f"launchctl could not verify system service {config.label}")
+        except SystemExit as error:
+            runner(["sudo", "launchctl", "bootout", f"system/{config.label}"])
+            if previous_path is not None:
+                restore_result = runner(
+                    [
+                        "sudo",
+                        "/usr/bin/install",
+                        "-o",
+                        "root",
+                        "-g",
+                        "wheel",
+                        "-m",
+                        "0644",
+                        str(previous_path),
+                        str(system_path),
+                    ]
+                )
+                restart_result = runner(
+                    ["sudo", "launchctl", "bootstrap", "system", str(system_path)]
+                )
+                if restore_result != 0 or restart_result != 0:
+                    raise SystemExit(
+                        f"system service update and rollback failed for {config.label}"
+                    ) from error
+            else:
+                runner(["sudo", "/bin/rm", "-f", str(system_path)])
+                if existed:
+                    runner(["launchctl", "bootstrap", f"user/{uid}", str(plist_path)])
+            raise
+        finally:
+            temporary_path.unlink(missing_ok=True)
+            if previous_path is not None:
+                previous_path.unlink(missing_ok=True)
+        if existed:
+            plist_path.unlink()
+        return system_path
     plist_path.write_bytes(render_launch_agent(config))
     plist_path.chmod(0o644)
     result = runner(["launchctl", "bootstrap", f"user/{uid}", str(plist_path)])
@@ -129,11 +216,18 @@ def install_service(
 
 
 def service_status(config: ServiceConfig, *, runner=_run) -> int:
+    if config.system:
+        return runner(["launchctl", "print", f"system/{config.label}"])
     uid = os.getuid() if config.uid is None else config.uid
     return runner(["launchctl", "print", f"user/{uid}/{config.label}"])
 
 
 def uninstall_service(config: ServiceConfig, *, runner=_run) -> None:
+    if config.system:
+        runner(["sudo", "launchctl", "bootout", f"system/{config.label}"])
+        system_path = config.system_dir / f"{config.label}.plist"
+        runner(["sudo", "/bin/rm", "-f", str(system_path)])
+        return
     uid = os.getuid() if config.uid is None else config.uid
     runner(["launchctl", "bootout", f"user/{uid}/{config.label}"])
     runner(["launchctl", "bootout", f"gui/{uid}/{config.label}"])
@@ -152,6 +246,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("kind", choices=("web", "bridge"))
         command.add_argument("--home", type=Path, default=Path.home())
         command.add_argument("--uid", type=int, default=os.getuid())
+        command.add_argument("--system", action="store_true")
         if action == "install":
             command.add_argument("--python", default=sys.executable)
             command.add_argument("--bind", default="127.0.0.1")
@@ -171,6 +266,12 @@ def _config_from_args(args) -> ServiceConfig:
     home = args.home.expanduser().resolve()
     kind = args.kind
     default_port = 8800 if kind == "web" else 8788
+    system = getattr(args, "system", False)
+    if system and kind != "bridge":
+        raise SystemExit("--system is supported only for the bridge")
+    user_name = None
+    if system and args.command == "install":
+        user_name = pwd.getpwuid(args.uid).pw_name
     return ServiceConfig(
         kind=kind,
         home=home,
@@ -186,6 +287,8 @@ def _config_from_args(args) -> ServiceConfig:
         public_origin=getattr(args, "public_origin", ""),
         frame_ancestors=tuple(getattr(args, "frame_ancestor", ())),
         allow_query_token=getattr(args, "allow_query_token", False),
+        system=system,
+        user_name=user_name,
     )
 
 

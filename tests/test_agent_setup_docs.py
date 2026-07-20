@@ -29,6 +29,8 @@ def test_agent_runbook_covers_setup_completion_and_safety_contracts():
         "token_env",
         "keyring.set_password",
         "herdeck-service",
+        "--system",
+        "/Library/LaunchDaemons",
         "herdeck-doctor",
         "herdeck.deckapp",
         'CONFIG_PATH="${HERDECK_CONFIG',

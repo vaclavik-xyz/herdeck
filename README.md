@@ -141,8 +141,9 @@ herdr's socket lives at `~/.config/herdr/herdr.sock` (macOS & Linux).
    The Mac routes commands by the **config `id`** of the server it connects to,
    so `HERDECK_SERVER_ID` is only a cosmetic label — the connector re-stamps
    inbound state to the config id (they need not match).
-3. To keep it running: **macOS** → install it as a background agent with
-   `herdeck-service install bridge --bind 100.x.y.z --server-id workbox`;
+3. To keep an always-on remote bridge running across reboots and GUI logouts:
+   **macOS** → install it as a system daemon with
+   `herdeck-service install bridge --system --bind 100.x.y.z --server-id workbox`;
    **Linux** → `deploy/herdeck-bridge.service` (systemd).
 
 For a service installation, prefer a private token file over an environment
@@ -229,17 +230,21 @@ LAN.
 ### Running as a service
 
 `herdeck-web` makes the browser runtime explicit, and `herdeck-service` installs
-macOS background LaunchAgents without placing token values in plist files. The
-agents run in the user domain, so they survive a GUI logout or WindowServer
-restart:
+macOS services without placing token values in plist files. Use a system daemon
+for an always-on remote bridge; web and development services remain background
+LaunchAgents:
 
 ```bash
-herdeck-service install bridge --bind 100.x.y.z --server-id workbox
+herdeck-service install bridge --system --bind 100.x.y.z --server-id workbox
 herdeck-service install web --bind 100.x.y.z --config ~/.config/herdeck/config.toml
-herdeck-service status web
+herdeck-service status bridge --system
 ```
 
-The install command creates the bridge token at
+System installation asks for macOS administrator approval only for the
+root-owned LaunchDaemon operations. The daemon still runs as the invoking user.
+It replaces a legacy user/GUI bridge only after launchd accepts and reports the
+new service; a failed migration restores the previous service. The install
+command creates the bridge token at
 `~/.config/herdeck/bridge-token` with mode `0600` when needed. Web capability
 URLs are disabled by default and are no longer written to normal startup logs.
 `herdeck-web url --allow-query-token` prints one only when the server was also
