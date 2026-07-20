@@ -200,13 +200,26 @@ On macOS, the supported one-instance installer is:
 ```bash
 TAILSCALE_IP="$(tailscale ip -4 | head -n 1)"
 herdeck-service install bridge \
+  --system \
   --bind "$TAILSCALE_IP" \
   --port 8788 \
   --socket "$HOME/.config/herdr/herdr.sock" \
   --server-id workbox \
   --token-file "$HOME/.config/herdeck/bridge-token"
-herdeck-service status bridge
+herdeck-service status bridge --system
 ```
+
+`--system` installs a root-owned plist in `/Library/LaunchDaemons`, while the
+bridge process itself runs as the invoking user. The command requests macOS
+administrator approval only for launchd installation/removal; token values are
+never passed to `sudo`. It removes a legacy user/GUI bridge only after the new
+daemon has bootstrapped and passed `launchctl print`. If migration fails, it
+restores the previous service. The daemon's `KeepAlive` and restart throttle let
+it recover when Tailscale or the Herdr socket becomes available after boot.
+
+Without `--system`, `herdeck-service` retains the background LaunchAgent mode
+for development or login-scoped services. Do not use that mode for an always-on
+remote bridge.
 
 The installer creates the token file when absent and rejects permissive token
 file modes. For Linux, copy
@@ -525,7 +538,7 @@ multi-session aggregation.
 | Remote config is ignored | active profile `servers` | Add the remote ID to the active/inherited profile selection. |
 | Token is reported missing | `token_env`, environment, keychain account | Ensure the keychain account exactly matches `token_env`; remember env wins. |
 | Token is rejected | bridge token file versus client secret | Transfer the current token again without printing it, then restart only the affected connection. |
-| Remote host is unreachable | Tailscale online state, IP, bridge port | Restore Tailscale/bridge service. Do not add a public proxy as a shortcut. |
+| Remote host is unreachable | Tailscale online state, IP, bridge port | Restore Tailscale/bridge service. For an always-on macOS host, verify `herdeck-service status bridge --system`. Do not add a public proxy as a shortcut. |
 | Second macOS bridge replaces the first | launchd label | Use a distinct manually installed plist; `herdeck-service` supports one bridge label. |
 | Two bridge processes cannot start | duplicate port | Assign a unique port and update the matching `[[servers]].url`. |
 | Config parses but one server is absent | duplicate ID or profile filtering | Make IDs unique and inspect active profile inheritance. |
