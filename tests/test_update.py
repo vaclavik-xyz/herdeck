@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import json
+import urllib.request
 
 import pytest
 
 from herdeck import app
-from herdeck.update import UpdateCheckError, Version, check_for_update, main
+from herdeck.update import (
+    UpdateCheckError,
+    Version,
+    _HTTPSRedirectHandler,
+    check_for_update,
+    main,
+)
 
 
 def _release(tag: str = "v0.2.0") -> dict:
@@ -20,6 +27,20 @@ def test_version_comparison_follows_semver_prerelease_order():
     assert Version.parse("0.1.0-alpha.1") < Version.parse("0.1.0-alpha.2")
     assert Version.parse("0.1.0-alpha.2") < Version.parse("0.1.0")
     assert Version.parse("0.1.0") < Version.parse("0.2.0")
+
+
+@pytest.mark.parametrize("value", ["1.0.0-01", "1.0.0-alpha..1", "1.0.0+build..1"])
+def test_version_rejects_invalid_semver_identifiers(value):
+    with pytest.raises(UpdateCheckError, match="invalid release version"):
+        Version.parse(value)
+
+
+def test_redirect_handler_rejects_https_downgrade():
+    handler = _HTTPSRedirectHandler()
+    request = urllib.request.Request("https://releases.example/latest.json")
+
+    with pytest.raises(UpdateCheckError, match="must use HTTPS"):
+        handler.redirect_request(request, None, 302, "Found", {}, "http://evil.example/update")
 
 
 def test_check_for_update_reports_newer_release():

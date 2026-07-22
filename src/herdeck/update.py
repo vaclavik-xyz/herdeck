@@ -15,7 +15,7 @@ from . import __version__
 DEFAULT_RELEASE_ENDPOINT = "https://api.github.com/repos/vaclavik-xyz/herdeck/releases/latest"
 _VERSION_RE = re.compile(
     r"^v?(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
-    r"(?:-(?P<prerelease>[0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
+    r"(?:-(?P<prerelease>[0-9A-Za-z.-]+))?(?:\+(?P<build>[0-9A-Za-z.-]+))?$"
 )
 
 
@@ -35,9 +35,14 @@ class Version:
         match = _VERSION_RE.fullmatch(value.strip())
         if not match:
             raise UpdateCheckError(f"invalid release version: {value!r}")
-        prerelease = tuple((match.group("prerelease") or "").split("."))
-        if prerelease == ("",):
-            prerelease = ()
+        prerelease_text = match.group("prerelease")
+        build_text = match.group("build")
+        prerelease = tuple(prerelease_text.split(".")) if prerelease_text else ()
+        build = tuple(build_text.split(".")) if build_text else ()
+        if any(not item for item in (*prerelease, *build)) or any(
+            item.isdigit() and len(item) > 1 and item.startswith("0") for item in prerelease
+        ):
+            raise UpdateCheckError(f"invalid release version: {value!r}")
         return cls(
             int(match.group("major")),
             int(match.group("minor")),
@@ -82,6 +87,12 @@ def _validate_endpoint(endpoint: str) -> None:
         raise UpdateCheckError("update endpoint must use HTTPS")
 
 
+class _HTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_endpoint(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _fetch_json(endpoint: str, *, timeout: float = 5.0) -> dict:
     _validate_endpoint(endpoint)
     request = urllib.request.Request(
@@ -93,7 +104,9 @@ def _fetch_json(endpoint: str, *, timeout: float = 5.0) -> dict:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        opener = urllib.request.build_opener(_HTTPSRedirectHandler())
+        with opener.open(request, timeout=timeout) as response:
+            _validate_endpoint(response.geturl())
             payload = json.load(response)
     except (OSError, urllib.error.HTTPError, urllib.error.URLError, ValueError) as exc:
         raise UpdateCheckError(f"could not check for updates: {exc}") from exc
