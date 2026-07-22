@@ -1026,6 +1026,185 @@ async def test_socket_herdr_snapshot_returns_snapshot():
     assert snap == {"agents": [], "workspaces": [], "tabs": []}
 
 
+@pytest.mark.parametrize(
+    ("protocol", "expected_calls"),
+    [
+        (
+            16,
+            [
+                ("session.snapshot", {}, True),
+                ("agent.send", {"target": "w1:p1", "text": "continue"}, False),
+                ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
+            ],
+        ),
+        (
+            17,
+            [
+                ("session.snapshot", {}, True),
+                ("agent.prompt", {"target": "w1:p1", "text": "continue"}, False),
+            ],
+        ),
+    ],
+)
+async def test_socket_herdr_send_text_uses_protocol_specific_agent_api(protocol, expected_calls):
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": protocol}}}
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    await h.send_text("w1:p1", "continue")
+
+    assert calls == expected_calls
+
+
+async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        if method == "tab.create":
+            return {
+                "result": {
+                    "tab": {"tab_id": "w1:t2"},
+                    "root_pane": {"pane_id": "w1:p2"},
+                }
+            }
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    await h.start_agent("reviewer", ["codex", "-m", "gpt-5.4"])
+
+    assert calls[:2] == [
+        ("session.snapshot", {}, True),
+        ("tab.create", {"focus": False, "label": "reviewer"}, False),
+    ]
+    method, params, retry = calls[2]
+    assert method == "agent.start"
+    assert retry is False
+    assert params["kind"] == "codex"
+    assert params["pane_id"] == "w1:p2"
+    assert params["args"] == ["-m", "gpt-5.4"]
+    assert params["name"].startswith("codex-")
+
+
+async def test_socket_herdr_start_agent_preserves_custom_command_on_protocol_17():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        if method == "tab.create":
+            return {
+                "result": {
+                    "tab": {"tab_id": "w1:t2"},
+                    "root_pane": {"pane_id": "w1:p2"},
+                }
+            }
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    await h.start_agent("custom", ["agent-wrapper", "--label", "two words"])
+
+    assert calls == [
+        ("session.snapshot", {}, True),
+        ("tab.create", {"focus": False, "label": "custom"}, False),
+        (
+            "pane.send_text",
+            {"pane_id": "w1:p2", "text": "agent-wrapper --label 'two words'"},
+            False,
+        ),
+        ("pane.send_keys", {"pane_id": "w1:p2", "keys": ["enter"]}, False),
+    ]
+
+
+async def test_socket_herdr_start_agent_closes_created_tab_when_launch_fails():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        if method == "tab.create":
+            return {
+                "result": {
+                    "tab": {"tab_id": "w1:t2"},
+                    "root_pane": {"pane_id": "w1:p2"},
+                }
+            }
+        if method == "agent.start":
+            raise RuntimeError("agent failed to start")
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+
+    with pytest.raises(RuntimeError, match="agent failed to start"):
+        await h.start_agent("codex", ["codex"])
+
+    assert calls[-1] == ("tab.close", {"tab_id": "w1:t2"}, False)
+
+
+async def test_socket_herdr_start_agent_closes_malformed_created_tab():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        if method == "tab.create":
+            return {"result": {"tab": {"tab_id": "w1:t2"}}}
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+
+    with pytest.raises(RuntimeError, match="malformed tab or root pane"):
+        await h.start_agent("codex", ["codex"])
+
+    assert calls[-1] == ("tab.close", {"tab_id": "w1:t2"}, False)
+
+
+async def test_socket_herdr_start_agent_keeps_protocol_16_contract():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 16}}}
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    await h.start_agent("claude", ["claude"])
+
+    assert calls == [
+        ("session.snapshot", {}, True),
+        ("agent.start", {"name": "claude", "argv": ["claude"]}, False),
+    ]
+
+
 async def test_socket_herdr_snapshot_rejects_malformed_tokens():
     from herdeck.bridge import SocketHerdr
 

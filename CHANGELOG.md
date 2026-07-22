@@ -22,6 +22,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   labels update instantly. **herdr >= 0.7.2 is now required** — check with
   `herdr status`, upgrade with `herdr update`.
 
+### Fixed
+- Herdr 0.7.5 protocol compatibility for submitted prompts and agent launches,
+  while preserving protocol 16 and custom argv-based start profiles.
+
 ## [0.1.0]
 
 Initial public release.

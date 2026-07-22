@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import json
 import logging
 import os
+import shlex
 import shutil
 import stat
 import time
@@ -35,6 +37,35 @@ _HERDR_SUBSCRIBE_TIMEOUT = 10.0
 _HERDR_LINE_LIMIT = 1024 * 1024 + 1  # 1 MiB payload plus NDJSON newline
 _WIRE_PROTOCOL = 3
 _WIRE_CAPABILITIES = ("work_context", "terminal_preview", "metadata_tokens")
+
+# Herdr protocol 17 made managed agent startup pane-first and restricted it to
+# known agent kinds. Existing Herdeck start profiles remain argv-based, so map
+# canonical executables where possible and preserve arbitrary wrappers through
+# raw pane input below.
+_MANAGED_AGENT_KINDS = {
+    "amp",
+    "agy",
+    "claude",
+    "cline",
+    "codex",
+    "copilot",
+    "cursor",
+    "devin",
+    "droid",
+    "gemini",
+    "grok",
+    "hermes",
+    "kilo",
+    "kimi",
+    "kiro",
+    "maki",
+    "mastracode",
+    "omp",
+    "opencode",
+    "pi",
+    "qodercli",
+}
+_MANAGED_AGENT_EXECUTABLE_ALIASES = {"cursor-agent": "cursor"}
 
 # Module-level indirection so tests can fake the clock without touching the
 # shared stdlib time module (which asyncio's loop may also consult).
@@ -85,6 +116,21 @@ def _reconnect_backoff(
     if connected:
         return base, base
     return current, min(current * 2, maximum)
+
+
+def _managed_agent_kind(argv: list[str]) -> str | None:
+    if not argv or not isinstance(argv[0], str) or not argv[0]:
+        return None
+    executable = os.path.basename(argv[0])
+    kind = _MANAGED_AGENT_EXECUTABLE_ALIASES.get(executable, executable)
+    return kind if kind in _MANAGED_AGENT_KINDS else None
+
+
+def _managed_agent_name(kind: str, pane_id: str) -> str:
+    # Pane IDs are unique among live panes. Their short digest makes the strict
+    # Herdr agent name unique without leaking topology punctuation into it.
+    suffix = hashlib.blake2s(pane_id.encode(), digest_size=4).hexdigest()
+    return f"{kind}-{suffix}"
 
 
 def resolve_herdr_socket_path(*, getenv=os.environ.get, fallback: str | None = None) -> str:
@@ -1033,6 +1079,12 @@ class SocketHerdr:
         result = res["result"]
         return _validate_snapshot(result.get("snapshot"))
 
+    async def _protocol_version(self) -> int:
+        # Query on every user action instead of caching: a Herdr live handoff can
+        # change the server protocol without restarting this bridge process.
+        protocol = (await self.snapshot()).get("protocol")
+        return protocol if type(protocol) is int else 0
+
     async def get_pane(self, pane_id: str) -> dict:
         # herdr has no working `pane.get`; derive the pane from the (supported)
         # pane.list so the act guard can check current status.
@@ -1053,14 +1105,69 @@ class SocketHerdr:
         await self._rpc("agent.focus", {"target": pane_id})
 
     async def send_text(self, pane_id: str, text: str) -> None:
-        # agent.send types the text into the agent's input but does not submit it,
-        # so follow with Enter to actually send the message.
+        if await self._protocol_version() >= 17:
+            # Protocol 17 replaced agent.send with an atomic, bracketed-paste
+            # aware prompt submission.
+            await self._rpc("agent.prompt", {"target": pane_id, "text": text}, retry=False)
+            return
+        # Protocol 16 agent.send types text without submitting it.
         await self._rpc("agent.send", {"target": pane_id, "text": text}, retry=False)
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
 
     async def start_agent(self, name: str, argv: list[str]) -> None:
-        # No workspace_id -> herdr starts the agent in the focused workspace.
-        await self._rpc("agent.start", {"name": name, "argv": argv}, retry=False)
+        if not argv or any(not isinstance(value, str) or not value for value in argv):
+            raise ValueError("agent start argv must contain nonempty strings")
+        if await self._protocol_version() < 17:
+            # Protocol 16 creates the agent topology itself in the focused workspace.
+            await self._rpc("agent.start", {"name": name, "argv": argv}, retry=False)
+            return
+
+        # Protocol 17 separates layout from agent startup. Create a tab in the
+        # focused workspace and use its root shell pane as the launch target.
+        created = await self._rpc("tab.create", {"focus": False, "label": name}, retry=False)
+        result = created.get("result")
+        tab = result.get("tab") if isinstance(result, dict) else None
+        root_pane = result.get("root_pane") if isinstance(result, dict) else None
+        tab_id = tab.get("tab_id") if isinstance(tab, dict) else None
+        pane_id = root_pane.get("pane_id") if isinstance(root_pane, dict) else None
+        if not isinstance(tab_id, str) or not tab_id or not isinstance(pane_id, str) or not pane_id:
+            if isinstance(tab_id, str) and tab_id:
+                with contextlib.suppress(Exception):
+                    await self._rpc("tab.close", {"tab_id": tab_id}, retry=False)
+            raise RuntimeError("herdr RPC tab.create returned malformed tab or root pane")
+
+        try:
+            kind = _managed_agent_kind(argv)
+            if kind is not None:
+                await self._rpc(
+                    "agent.start",
+                    {
+                        "name": _managed_agent_name(kind, pane_id),
+                        "kind": kind,
+                        "pane_id": pane_id,
+                        "args": argv[1:],
+                    },
+                    retry=False,
+                )
+            else:
+                # Keep custom wrappers and future agent executables working even
+                # though Herdr's managed kind enum does not know them yet.
+                await self._rpc(
+                    "pane.send_text",
+                    {"pane_id": pane_id, "text": shlex.join(argv)},
+                    retry=False,
+                )
+                await self._rpc(
+                    "pane.send_keys",
+                    {"pane_id": pane_id, "keys": ["enter"]},
+                    retry=False,
+                )
+        except Exception:
+            # Do not leave an empty/orphaned tab when a managed or raw launch
+            # fails after layout creation. Preserve the original launch error.
+            with contextlib.suppress(Exception):
+                await self._rpc("tab.close", {"tab_id": tab_id}, retry=False)
+            raise
 
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]:
         # herdr scopes worktree.list to ONE repo (focused when unparametrized);
