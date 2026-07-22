@@ -7,6 +7,7 @@
 import os
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))  # repo root (SPECPATH = desktop/)
+CODESIGN_IDENTITY = os.environ.get("APPLE_SIGNING_IDENTITY") or None
 
 a = Analysis(
     [os.path.join(SPECPATH, "scripts", "deckapp-entry.py")],
@@ -49,6 +50,10 @@ exe = EXE(
     exclude_binaries=True,
     name="herdeck-deckapp",
     console=True,
+    # PyInstaller otherwise ad-hoc signs its executable and every collected
+    # Mach-O dependency. Release builds provide Developer ID so the complete
+    # nested sidecar satisfies Apple's notarization requirements.
+    codesign_identity=CODESIGN_IDENTITY,
     # No target_arch -> PyInstaller freezes for the HOST arch: arm64 on the dev
     # Mac, x86_64 on the Linux CI runner. One spec serves both OSes (3e).
 )

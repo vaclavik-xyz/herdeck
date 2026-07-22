@@ -175,6 +175,9 @@ jobs:
           rm certificate.p12
 
       - name: Freeze + smoke the bundled sidecar
+        env:
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Filip Václavík (96CM57BHVD)"
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           python -m venv .venv
           .venv/bin/pip install --upgrade pip
@@ -197,6 +200,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           APPLE_SIGNING_IDENTITY: "Developer ID Application: Filip Václavík (96CM57BHVD)"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:

@@ -25,6 +25,9 @@ def test_tag_workflow_builds_macos_updater_and_publishes_after_all_builds():
     assert "tauri-apps/tauri-action@v0" in workflow
     assert "TAURI_SIGNING_PRIVATE_KEY:" in workflow
     assert "APPLE_SIGNING_IDENTITY:" in workflow
+    assert "APPLE_ID: ${{ secrets.APPLE_ID }}" in workflow
+    assert "APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}" in workflow
+    assert "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}" in workflow
     assert "releaseDraft: true" in workflow
     assert "*.AppImage*" in workflow
     assert "name: herdeck-macos" in workflow
@@ -39,3 +42,21 @@ def test_tag_workflow_builds_macos_updater_and_publishes_after_all_builds():
     assert "dist/herdeck-macos/*" in workflow
     assert 'gh release edit "$GITHUB_REF_NAME"' in workflow
     assert "--draft=false" in workflow
+
+
+def test_macos_release_signs_and_verifies_the_frozen_sidecar():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text()
+    freeze_step = workflow.split(
+        "- name: Freeze + smoke the bundled sidecar", maxsplit=1
+    )[1].split("- uses: dtolnay/rust-toolchain@stable", maxsplit=1)[0]
+    spec = (ROOT / "desktop/herdeck-deckapp.spec").read_text()
+    build_script = (ROOT / "desktop/scripts/build-sidecar.sh").read_text()
+
+    assert "APPLE_SIGNING_IDENTITY:" in freeze_step
+    assert "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}" in freeze_step
+    assert 'os.environ.get("APPLE_SIGNING_IDENTITY")' in spec
+    assert "codesign_identity=CODESIGN_IDENTITY" in spec
+    assert "verify-macos-sidecar-signing.sh" in build_script
+    assert "--force --options runtime --timestamp" in build_script
+    assert 'PYTHON_LINK="$DIST/herdeck-deckapp/_internal/Python"' in build_script
+    assert 'Python.framework" -depth -delete' in build_script

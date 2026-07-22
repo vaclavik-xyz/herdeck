@@ -26,4 +26,22 @@ test -x "$BIN" || { echo "FAIL: $BIN missing or not executable"; exit 1; }
 test -d "$DIST/herdeck-deckapp/_internal/herdeck_assets" \
   || test -d "$DIST/herdeck-deckapp/herdeck_assets" \
   || { echo "FAIL: bundled herdeck_assets missing"; exit 1; }
+
+if [[ "$(uname -s)" == "Darwin" && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+  # Tauri's resource copier dereferences file symlinks. A versioned Python
+  # framework would therefore arrive in the .app with duplicate executables
+  # whose framework-bound signatures are invalid. Keep the runtime path as one
+  # standalone library, discard the redundant framework, then sign that copy.
+  PYTHON_LINK="$DIST/herdeck-deckapp/_internal/Python"
+  if [[ -L "$PYTHON_LINK" ]]; then
+    PYTHON_TARGET="$(readlink "$PYTHON_LINK")"
+    cp "$DIST/herdeck-deckapp/_internal/$PYTHON_TARGET" "$PYTHON_LINK.release"
+    unlink "$PYTHON_LINK"
+    mv "$PYTHON_LINK.release" "$PYTHON_LINK"
+    /usr/bin/find "$DIST/herdeck-deckapp/_internal/Python.framework" -depth -delete
+    /usr/bin/codesign --force --options runtime --timestamp \
+      --sign "$APPLE_SIGNING_IDENTITY" "$PYTHON_LINK"
+  fi
+  bash "$HERE/verify-macos-sidecar-signing.sh" "$DIST/herdeck-deckapp"
+fi
 echo "OK: $BIN"
