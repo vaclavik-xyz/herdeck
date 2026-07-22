@@ -122,6 +122,8 @@ def _managed_agent_kind(argv: list[str]) -> str | None:
     if not argv or not isinstance(argv[0], str) or not argv[0]:
         return None
     executable = os.path.basename(argv[0])
+    if executable != argv[0]:
+        return None
     kind = _MANAGED_AGENT_EXECUTABLE_ALIASES.get(executable, executable)
     return kind if kind in _MANAGED_AGENT_KINDS else None
 
@@ -1114,9 +1116,29 @@ class SocketHerdr:
         await self._rpc("agent.send", {"target": pane_id, "text": text}, retry=False)
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
 
+    async def _close_created_tab(self, tab_id: str) -> None:
+        # Finish rollback even when the caller is already cancelled or receives
+        # another cancellation while tab.close is in flight.
+        cleanup = asyncio.create_task(self._rpc("tab.close", {"tab_id": tab_id}, retry=False))
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                return
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await cleanup
+
     async def start_agent(self, name: str, argv: list[str]) -> None:
-        if not argv or any(not isinstance(value, str) or not value for value in argv):
-            raise ValueError("agent start argv must contain nonempty strings")
+        invalid = (
+            not argv
+            or not isinstance(argv[0], str)
+            or not argv[0]
+            or any(not isinstance(value, str) for value in argv[1:])
+        )
+        if invalid:
+            raise ValueError("agent start requires an executable and string arguments")
         if await self._protocol_version() < 17:
             # Protocol 16 creates the agent topology itself in the focused workspace.
             await self._rpc("agent.start", {"name": name, "argv": argv}, retry=False)
@@ -1132,8 +1154,7 @@ class SocketHerdr:
         pane_id = root_pane.get("pane_id") if isinstance(root_pane, dict) else None
         if not isinstance(tab_id, str) or not tab_id or not isinstance(pane_id, str) or not pane_id:
             if isinstance(tab_id, str) and tab_id:
-                with contextlib.suppress(Exception):
-                    await self._rpc("tab.close", {"tab_id": tab_id}, retry=False)
+                await self._close_created_tab(tab_id)
             raise RuntimeError("herdr RPC tab.create returned malformed tab or root pane")
 
         try:
@@ -1162,11 +1183,10 @@ class SocketHerdr:
                     {"pane_id": pane_id, "keys": ["enter"]},
                     retry=False,
                 )
-        except Exception:
+        except BaseException:
             # Do not leave an empty/orphaned tab when a managed or raw launch
             # fails after layout creation. Preserve the original launch error.
-            with contextlib.suppress(Exception):
-                await self._rpc("tab.close", {"tab_id": tab_id}, retry=False)
+            await self._close_created_tab(tab_id)
             raise
 
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]:

@@ -1133,6 +1133,38 @@ async def test_socket_herdr_start_agent_preserves_custom_command_on_protocol_17(
     ]
 
 
+async def test_socket_herdr_start_agent_preserves_explicit_executable_path():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        if method == "tab.create":
+            return {
+                "result": {
+                    "tab": {"tab_id": "w1:t2"},
+                    "root_pane": {"pane_id": "w1:p2"},
+                }
+            }
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    await h.start_agent("codex", ["/opt/homebrew/bin/codex", "--quiet"])
+
+    assert calls[2:] == [
+        (
+            "pane.send_text",
+            {"pane_id": "w1:p2", "text": "/opt/homebrew/bin/codex --quiet"},
+            False,
+        ),
+        ("pane.send_keys", {"pane_id": "w1:p2", "keys": ["enter"]}, False),
+    ]
+
+
 async def test_socket_herdr_start_agent_closes_created_tab_when_launch_fails():
     from herdeck.bridge import SocketHerdr
 
@@ -1158,6 +1190,40 @@ async def test_socket_herdr_start_agent_closes_created_tab_when_launch_fails():
 
     with pytest.raises(RuntimeError, match="agent failed to start"):
         await h.start_agent("codex", ["codex"])
+
+    assert calls[-1] == ("tab.close", {"tab_id": "w1:t2"}, False)
+
+
+async def test_socket_herdr_start_agent_closes_created_tab_when_cancelled():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+    launch_started = asyncio.Event()
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        if method == "tab.create":
+            return {
+                "result": {
+                    "tab": {"tab_id": "w1:t2"},
+                    "root_pane": {"pane_id": "w1:p2"},
+                }
+            }
+        if method == "agent.start":
+            launch_started.set()
+            await asyncio.Event().wait()
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    task = asyncio.create_task(h.start_agent("codex", ["codex"]))
+    await asyncio.wait_for(launch_started.wait(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
     assert calls[-1] == ("tab.close", {"tab_id": "w1:t2"}, False)
 
@@ -1203,6 +1269,28 @@ async def test_socket_herdr_start_agent_keeps_protocol_16_contract():
         ("session.snapshot", {}, True),
         ("agent.start", {"name": "claude", "argv": ["claude"]}, False),
     ]
+
+
+async def test_socket_herdr_start_agent_keeps_empty_protocol_16_arguments():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 16}}}
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    await h.start_agent("claude", ["claude", ""])
+
+    assert calls[-1] == (
+        "agent.start",
+        {"name": "claude", "argv": ["claude", ""]},
+        False,
+    )
 
 
 async def test_socket_herdr_snapshot_rejects_malformed_tokens():
