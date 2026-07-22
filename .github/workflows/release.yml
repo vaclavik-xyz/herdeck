@@ -132,7 +132,7 @@ jobs:
         with:
           name: herdeck-linux-${{ matrix.arch }}
           path: |
-            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage*
             desktop/src-tauri/target/release/bundle/deb/*.deb
             desktop/src-tauri/target/release/bundle/rpm/*.rpm
           if-no-files-found: error
@@ -208,6 +208,13 @@ jobs:
           prerelease: false
           args: --bundles app,dmg
 
+      - name: Preserve macOS updater archive for the unified manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: herdeck-macos
+          path: desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz*
+          if-no-files-found: error
+
   publish-release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -216,18 +223,34 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
-          pattern: herdeck-linux-*
+          pattern: herdeck-*
           path: dist
-          merge-multiple: true
+
+      - name: Build unified signed updater manifest
+        run: |
+          python scripts/generate-update-manifest.py \
+            --artifacts dist \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --output dist/latest.json
 
       - name: Publish immutable tag release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$GITHUB_REF_NAME" \
-            dist/appimage/* dist/deb/* dist/rpm/* \
+            dist/herdeck-linux-x86_64/appimage/* \
+            dist/herdeck-linux-x86_64/deb/* \
+            dist/herdeck-linux-x86_64/rpm/* \
+            dist/herdeck-linux-arm64/appimage/* \
+            dist/herdeck-linux-arm64/deb/* \
+            dist/herdeck-linux-arm64/rpm/* \
+            dist/herdeck-macos/* \
+            dist/latest.json \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
           gh release edit "$GITHUB_REF_NAME" \

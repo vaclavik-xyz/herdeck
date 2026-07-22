@@ -26,10 +26,16 @@ def test_tag_workflow_builds_macos_updater_and_publishes_after_all_builds():
     assert "TAURI_SIGNING_PRIVATE_KEY:" in workflow
     assert "APPLE_SIGNING_IDENTITY:" in workflow
     assert "releaseDraft: true" in workflow
+    assert "*.AppImage*" in workflow
+    assert "name: herdeck-macos" in workflow
+    assert "scripts/generate-update-manifest.py" in workflow
+    assert "dist/latest.json" in workflow
     assert "publish-release:" in workflow
     assert "needs: [build-linux, build-macos]" in workflow
     assert "if: startsWith(github.ref, 'refs/tags/v')" in workflow
     assert 'gh release upload "$GITHUB_REF_NAME"' in workflow
-    assert "dist/appimage/* dist/deb/* dist/rpm/*" in workflow
+    assert "dist/herdeck-linux-x86_64/appimage/*" in workflow
+    assert "dist/herdeck-linux-arm64/appimage/*" in workflow
+    assert "dist/herdeck-macos/*" in workflow
     assert 'gh release edit "$GITHUB_REF_NAME"' in workflow
     assert "--draft=false" in workflow
