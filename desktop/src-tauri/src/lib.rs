@@ -22,6 +22,7 @@ use std::time::Duration;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_updater::UpdaterExt;
 
 use window_mode::WindowMode;
 
@@ -74,6 +75,49 @@ impl From<&Discovery> for DiscoveryView {
             source: d.source.clone(),
         }
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct UpdateMetadata {
+    version: String,
+    current_version: String,
+}
+
+/// Check only the signed HTTPS updater channel. A missing release or offline
+/// network is an error to the caller, which the automatic UI check suppresses.
+#[tauri::command]
+async fn update_check(app: tauri::AppHandle) -> Result<Option<UpdateMetadata>, String> {
+    let update = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(update.map(|update| UpdateMetadata {
+        version: update.version,
+        current_version: app.package_info().version.to_string(),
+    }))
+}
+
+/// Re-check the signed channel immediately before installation, then let the
+/// updater verify, replace, and restart the complete desktop bundle.
+#[tauri::command]
+async fn update_install(app: tauri::AppHandle) -> Result<bool, String> {
+    let update = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(update) = update else {
+        return Ok(false);
+    };
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    app.request_restart();
+    Ok(true)
 }
 
 /// Frontend pulls the latest sidecar discovery (url + source — no token). Returns
@@ -924,6 +968,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .manage(TrayHandles::default())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -931,6 +976,8 @@ pub fn run() {
         ))
         .invoke_handler(tauri::generate_handler![
             get_discovery,
+            update_check,
+            update_install,
             check_health,
             deck_state,
             deck_tile,
