@@ -20,6 +20,7 @@ def _bridge_config(tmp_path, **overrides):
         "server_id": "workbox",
         "token_file": tmp_path / ".config/herdeck/bridge-token",
         "uid": 501,
+        "system_dir": tmp_path / "Library/LaunchDaemons",
     }
     values.update(overrides)
     return ServiceConfig(**values)
@@ -131,6 +132,7 @@ def test_install_system_bridge_migrates_user_agent_after_verified_bootstrap(tmp_
     _write_private_token(tmp_path)
     old_plist = _write_legacy_bridge(tmp_path)
     config = _bridge_config(tmp_path, system=True, user_name="admin")
+    system_plist = config.system_dir / "dev.herdeck.bridge.plist"
 
     def runner(command):
         calls.append(command)
@@ -140,7 +142,7 @@ def test_install_system_bridge_migrates_user_agent_after_verified_bootstrap(tmp_
 
     plist_path = install_service(config, runner=runner)
 
-    assert plist_path == Path("/Library/LaunchDaemons/dev.herdeck.bridge.plist")
+    assert plist_path == system_plist
     assert not old_plist.exists()
     assert len(installed) == 1
     assert plistlib.loads(installed[0])["UserName"] == "admin"
@@ -161,14 +163,14 @@ def test_install_system_bridge_migrates_user_agent_after_verified_bootstrap(tmp_
             "-m",
             "0644",
             calls[-3][-2],
-            "/Library/LaunchDaemons/dev.herdeck.bridge.plist",
+            str(system_plist),
         ],
         [
             "sudo",
             "launchctl",
             "bootstrap",
             "system",
-            "/Library/LaunchDaemons/dev.herdeck.bridge.plist",
+            str(system_plist),
         ],
         ["launchctl", "print", "system/dev.herdeck.bridge"],
     ]
@@ -181,6 +183,7 @@ def test_failed_system_bootstrap_restores_existing_gui_bridge(tmp_path):
     _write_private_token(tmp_path)
     old_plist = _write_legacy_bridge(tmp_path)
     config = _bridge_config(tmp_path, system=True, user_name="admin")
+    system_plist = config.system_dir / "dev.herdeck.bridge.plist"
 
     def runner(command):
         calls.append(command)
@@ -197,7 +200,7 @@ def test_failed_system_bootstrap_restores_existing_gui_bridge(tmp_path):
 
     assert old_plist.exists()
     assert calls[-2:] == [
-        ["sudo", "/bin/rm", "-f", "/Library/LaunchDaemons/dev.herdeck.bridge.plist"],
+        ["sudo", "/bin/rm", "-f", str(system_plist)],
         ["launchctl", "bootstrap", "gui/501", str(old_plist)],
     ]
 
