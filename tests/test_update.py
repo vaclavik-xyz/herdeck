@@ -5,7 +5,7 @@ import urllib.request
 
 import pytest
 
-from herdeck import app
+from herdeck import __version__, app
 from herdeck.update import (
     UpdateCheckError,
     Version,
@@ -91,4 +91,4 @@ def test_app_dispatches_update_without_starting_runtime(monkeypatch):
 def test_app_prints_version(capsys):
     app.main(["--version"])
 
-    assert capsys.readouterr().out == "herdeck 0.1.0\n"
+    assert capsys.readouterr().out == f"herdeck {__version__}\n"

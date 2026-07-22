@@ -8,6 +8,7 @@ import urllib.request
 import pytest
 from PIL import Image
 
+from herdeck import __version__
 from herdeck.driver.base import PanelView, TileView
 from herdeck.driver.web import WebDeck
 
@@ -566,7 +567,12 @@ def test_web_health_is_minimal_and_readiness_requires_token(monkeypatch):
         base = f"http://{d.host}:{d.port}"
         with urllib.request.urlopen(f"{base}/healthz", timeout=2) as response:
             health = json.loads(response.read())
-        assert health == {"ok": True, "service": "herdeck-web", "version": "0.1.0", "build": "abc123"}
+        assert health == {
+            "ok": True,
+            "service": "herdeck-web",
+            "version": __version__,
+            "build": "abc123",
+        }
         assert d.press_token not in json.dumps(health)
 
         with pytest.raises(urllib.error.HTTPError) as exc:

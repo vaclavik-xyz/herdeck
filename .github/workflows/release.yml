@@ -22,6 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Verify release version
         run: |
           python scripts/set-version.py --check
@@ -42,10 +46,6 @@ jobs:
             build-essential \
             file \
             desktop-file-utils
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
 
       - name: Freeze + smoke the sidecar (Linux ${{ matrix.arch }})
         run: |
