@@ -1,4 +1,7 @@
 name: release
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
   push:
@@ -19,6 +22,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify release version
+        run: |
+          python scripts/set-version.py --check
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
+          fi
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -32,10 +46,6 @@ jobs:
             build-essential \
             file \
             desktop-file-utils
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
 
       - name: Freeze + smoke the sidecar (Linux ${{ matrix.arch }})
         run: |
@@ -72,6 +82,8 @@ jobs:
       - name: Build Tauri bundles
         working-directory: desktop
         env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Ubicloud runners are full VMs (FUSE works), but keep EXTRACT_AND_RUN
           # as a belt-and-suspenders fallback. NO_STRIP avoids a common silent
           # linuxdeploy strip failure. --verbose surfaces linuxdeploy errors.
@@ -120,7 +132,133 @@ jobs:
         with:
           name: herdeck-linux-${{ matrix.arch }}
           path: |
-            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage*
             desktop/src-tauri/target/release/bundle/deb/*.deb
             desktop/src-tauri/target/release/bundle/rpm/*.rpm
           if-no-files-found: error
+
+  build-macos:
+    name: Build macOS arm64 (signed app + updater)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify release version
+        run: |
+          python scripts/set-version.py --check
+          test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security list-keychain -d user -s build.keychain
+          security find-identity -v -p codesigning build.keychain |
+            grep -F "Developer ID Application: Filip Václavík (96CM57BHVD)"
+          rm certificate.p12
+
+      - name: Freeze + smoke the bundled sidecar
+        env:
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Filip Václavík (96CM57BHVD)"
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[packaging]"
+          bash desktop/scripts/build-sidecar.sh
+          bash desktop/scripts/smoke-sidecar.sh
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build, sign, and attach macOS updater artifacts
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Filip Václavík (96CM57BHVD)"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: Herdeck ${{ github.ref_name }}
+          releaseBody: Signed arm64 macOS application and Linux packages.
+          releaseDraft: true
+          prerelease: false
+          args: --bundles app,dmg
+
+      - name: Preserve macOS updater archive for the unified manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: herdeck-macos
+          path: desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: herdeck-*
+          path: dist
+
+      - name: Build unified signed updater manifest
+        run: |
+          python scripts/generate-update-manifest.py \
+            --artifacts dist \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --output dist/latest.json
+
+      - name: Publish immutable tag release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/herdeck-linux-x86_64/appimage/* \
+            dist/herdeck-linux-x86_64/deb/* \
+            dist/herdeck-linux-x86_64/rpm/* \
+            dist/herdeck-linux-arm64/appimage/* \
+            dist/herdeck-linux-arm64/deb/* \
+            dist/herdeck-linux-arm64/rpm/* \
+            dist/herdeck-macos/* \
+            dist/latest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          gh release edit "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false
