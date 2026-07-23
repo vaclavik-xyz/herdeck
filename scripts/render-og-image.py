@@ -21,7 +21,20 @@ def font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(str(candidate), size=size)
 
 
-def compose(source: Path, output: Path, footer: str) -> None:
+def fitted_font(
+    draw: ImageDraw.ImageDraw, text: str, preferred_size: int, max_width: int
+) -> ImageFont.FreeTypeFont:
+    for size in range(preferred_size, 15, -1):
+        candidate = font(size)
+        box = draw.textbbox((0, 0), text, font=candidate)
+        if box[2] - box[0] <= max_width:
+            return candidate
+    raise ValueError(f"Text does not fit the OG copy area: {text}")
+
+
+def compose(
+    source: Path, output: Path, footer: str, headline: str, subhead: str
+) -> None:
     background = Image.open(source).convert("RGB")
     background = ImageOps.fit(background, SIZE, method=Image.Resampling.LANCZOS)
     background = ImageEnhance.Color(background).enhance(0.92)
@@ -52,14 +65,14 @@ def compose(source: Path, output: Path, footer: str) -> None:
     draw.rounded_rectangle((73, 282, 130, 290), radius=4, fill=(0, 229, 232, 255))
     draw.text(
         (72, 324),
-        "Control AI coding agents.",
-        font=font(34),
+        headline,
+        font=fitted_font(draw, headline, preferred_size=34, max_width=520),
         fill=(248, 247, 242, 255),
     )
     draw.text(
         (72, 373),
-        "Approve · Deny · Stop — in one press.",
-        font=font(24),
+        subhead,
+        font=fitted_font(draw, subhead, preferred_size=24, max_width=520),
         fill=(194, 205, 224, 255),
     )
     if footer == "built for herdr":
@@ -86,8 +99,10 @@ def main() -> None:
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--footer", default="HARDWARE  ·  WEB  ·  DESKTOP")
+    parser.add_argument("--headline", default="Control AI coding agents.")
+    parser.add_argument("--subhead", default="Approve · Deny · Stop — in one press.")
     args = parser.parse_args()
-    compose(args.source, args.output, args.footer)
+    compose(args.source, args.output, args.footer, args.headline, args.subhead)
 
 
 if __name__ == "__main__":
