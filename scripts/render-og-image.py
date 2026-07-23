@@ -11,23 +11,14 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 SIZE = (1200, 630)
-FONT_CANDIDATES = (
-    Path(os.environ.get("HERDECK_OG_FONT", "")),
-    Path("/System/Library/Fonts/SFNS.ttf"),
-    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-    Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
-    Path("C:/Windows/Fonts/arial.ttf"),
-)
+BUNDLED_FONT = ROOT / "docs/og-images/fonts/InterVariable.ttf"
 
 
 def font(size: int) -> ImageFont.FreeTypeFont:
-    for candidate in FONT_CANDIDATES:
-        if candidate.is_file():
-            return ImageFont.truetype(str(candidate), size=size)
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:  # Pillow 10.0 does not accept the size argument.
-        return ImageFont.load_default()
+    candidate = Path(os.environ.get("HERDECK_OG_FONT") or BUNDLED_FONT)
+    if not candidate.is_file():
+        raise FileNotFoundError(f"OG font not found: {candidate}")
+    return ImageFont.truetype(str(candidate), size=size)
 
 
 def compose(source: Path, output: Path) -> None:
