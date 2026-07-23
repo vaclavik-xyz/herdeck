@@ -21,7 +21,7 @@ def font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(str(candidate), size=size)
 
 
-def compose(source: Path, output: Path) -> None:
+def compose(source: Path, output: Path, footer: str) -> None:
     background = Image.open(source).convert("RGB")
     background = ImageOps.fit(background, SIZE, method=Image.Resampling.LANCZOS)
     background = ImageEnhance.Color(background).enhance(0.92)
@@ -62,12 +62,20 @@ def compose(source: Path, output: Path) -> None:
         font=font(24),
         fill=(194, 205, 224, 255),
     )
-    draw.text(
-        (73, 532),
-        "HARDWARE  ·  WEB  ·  DESKTOP",
-        font=font(16),
-        fill=(117, 226, 231, 255),
-    )
+    if footer == "built for herdr":
+        footer_font = font(18)
+        footer_box = draw.textbbox((0, 0), footer, font=footer_font)
+        footer_width = footer_box[2] - footer_box[0]
+        draw.rounded_rectangle(
+            (72, 505, 72 + footer_width + 38, 553),
+            radius=24,
+            fill=(7, 18, 44, 230),
+            outline=(0, 229, 232, 210),
+            width=2,
+        )
+        draw.text((91, 518), footer, font=footer_font, fill=(152, 239, 242, 255))
+    else:
+        draw.text((73, 532), footer, font=font(16), fill=(117, 226, 231, 255))
 
     output.parent.mkdir(parents=True, exist_ok=True)
     background.convert("RGB").save(output, format="PNG", optimize=True)
@@ -77,8 +85,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--footer", default="HARDWARE  ·  WEB  ·  DESKTOP")
     args = parser.parse_args()
-    compose(args.source, args.output)
+    compose(args.source, args.output, args.footer)
 
 
 if __name__ == "__main__":
