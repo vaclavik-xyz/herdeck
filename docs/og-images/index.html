@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Herdeck — OG image variants</title>
+    <style>
+      :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #05091c; color: #f8f7f2; }
+      main { width: min(1480px, calc(100% - 40px)); margin: 0 auto; padding: 54px 0 80px; }
+      header { display: flex; justify-content: space-between; gap: 32px; align-items: end; margin-bottom: 34px; }
+      h1 { margin: 0; font-size: clamp(30px, 4vw, 58px); letter-spacing: -.04em; }
+      header p { margin: 0; color: #96a5c2; font-size: 16px; }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+      article { overflow: hidden; border: 1px solid #1d2948; border-radius: 20px; background: #0b1129; box-shadow: 0 22px 60px #0008; }
+      img { display: block; width: 100%; height: auto; aspect-ratio: 1200 / 630; }
+      .meta { display: flex; justify-content: space-between; gap: 16px; padding: 18px 20px 20px; }
+      h2 { margin: 0; font-size: 17px; }
+      code { color: #61e3e8; font-size: 12px; }
+      @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } header { align-items: start; flex-direction: column; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Herdeck OG directions</h1>
+        <p>Six 1200 × 630 production-ready variants</p>
+      </header>
+      <section class="grid">
+        <article><img src="variant-01-command-center.png" alt="Command center OG variant" /><div class="meta"><h2>01 — Command center</h2><code>variant-01-command-center.png</code></div></article>
+        <article><img src="variant-02-agent-network.png" alt="Agent network OG variant" /><div class="meta"><h2>02 — Agent network</h2><code>variant-02-agent-network.png</code></div></article>
+        <article><img src="variant-03-one-press.png" alt="One press OG variant" /><div class="meta"><h2>03 — One press</h2><code>variant-03-one-press.png</code></div></article>
+        <article><img src="variant-04-terminal-flow.png" alt="Terminal flow OG variant" /><div class="meta"><h2>04 — Terminal flow</h2><code>variant-04-terminal-flow.png</code></div></article>
+        <article><img src="variant-05-blueprint.png" alt="Blueprint OG variant" /><div class="meta"><h2>05 — Blueprint</h2><code>variant-05-blueprint.png</code></div></article>
+        <article><img src="variant-06-aurora-grid.png" alt="Aurora grid OG variant" /><div class="meta"><h2>06 — Aurora grid</h2><code>variant-06-aurora-grid.png</code></div></article>
+      </section>
+    </main>
+  </body>
+</html>
