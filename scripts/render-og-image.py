@@ -24,7 +24,10 @@ def font(size: int) -> ImageFont.FreeTypeFont:
     for candidate in FONT_CANDIDATES:
         if candidate.is_file():
             return ImageFont.truetype(str(candidate), size=size)
-    return ImageFont.load_default(size=size)
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow 10.0 does not accept the size argument.
+        return ImageFont.load_default()
 
 
 def compose(source: Path, output: Path) -> None:
