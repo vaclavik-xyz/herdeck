@@ -29,6 +29,7 @@ export interface DeckState {
   tiles: Record<number, number>; // tile index -> image version
   sections: Record<number, string>; // tile index -> config section key (klik-to-jump)
   connections: Record<string, boolean>; // server/session id -> live connection state
+  localConnections: Record<string, string>; // local session name -> collision-safe runtime id
   summary: DeckSummary;
   source: string; // "mock" | "live"
   connected: boolean;
@@ -100,6 +101,15 @@ function parseConnections(raw: unknown): Record<string, boolean> {
   return out;
 }
 
+function parseLocalConnections(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [name, runtimeId] of Object.entries(raw as Record<string, unknown>)) {
+    if (name && typeof runtimeId === "string" && runtimeId) out[name] = runtimeId;
+  }
+  return out;
+}
+
 /** Shape a raw `/state` JSON value into a DeckState, or null when it is not a
  *  usable snapshot (so the caller can treat it as an offline tick). */
 export function parseState(raw: unknown): DeckState | null {
@@ -114,6 +124,7 @@ export function parseState(raw: unknown): DeckState | null {
     tiles: parseTiles(v.tiles),
     sections: parseSections(v.tile_sections),
     connections: parseConnections(v.connections),
+    localConnections: parseLocalConnections(v.local_connections),
     summary: parseSummary(v.summary),
     source: typeof v.source === "string" ? v.source : "unknown",
     connected: v.connected === true,
@@ -276,6 +287,7 @@ export interface DeckViewModel {
   tiles: Record<number, string>; // index -> img src
   sections: Record<number, string>; // index -> config section key (klik-to-jump)
   connections: Record<string, boolean>; // server/session id -> live connection state
+  localConnections: Record<string, string>; // local session name -> collision-safe runtime id
   panel: string | null;
 }
 
@@ -290,6 +302,7 @@ export function initialView(slots = 13): DeckViewModel {
     tiles: {},
     sections: {},
     connections: {},
+    localConnections: {},
     panel: null,
   };
 }
@@ -329,7 +342,8 @@ export async function stepDeck(
     (state.slots === 0 || prev.slots === state.slots) &&
     sameSummary(prev.summary, state.summary) &&
     sameRecords(prev.sections, state.sections) &&
-    sameRecords(prev.connections, state.connections)
+    sameRecords(prev.connections, state.connections) &&
+    sameRecords(prev.localConnections, state.localConnections)
   ) {
     differ.markSynced(state.version);
     return prev;
@@ -380,6 +394,7 @@ export async function stepDeck(
     tiles,
     sections: state.sections,
     connections: state.connections,
+    localConnections: state.localConnections,
     panel,
   };
 }

@@ -889,6 +889,26 @@ export function effectiveProfileServers(payload: ConfigPayload, name: string): s
   return serversOf(payload).map((s) => s.id).filter((id) => id !== "");
 }
 
+/** Remote server ids selected by the currently active profile. The base profile
+ *  uses deck.overview_order when present; named profiles may explicitly set
+ *  `servers`, otherwise they inherit through effectiveProfileServers(). Local
+ *  session ids in overview_order are intentionally left in the returned list so
+ *  callers can intersect it with their own remote/local inventories. */
+export function effectiveActiveServerIds(payload: ConfigPayload): string[] {
+  const allIds = serversOf(payload).map((server) => server.id).filter(Boolean);
+  const active = payload.activeProfile;
+  if (active !== "default") {
+    const own = payload.profiles[active]?.servers;
+    return Array.isArray(own)
+      ? own.map(String)
+      : effectiveProfileServers(payload, active);
+  }
+  const deck = obj(payload.base.deck);
+  return Array.isArray(deck.overview_order)
+    ? deck.overview_order.map(String)
+    : allIds;
+}
+
 /** Every non-blank `token_env` string referenced anywhere in base + profiles
  *  (servers, base/profile telegram, profile overlays). Mirrors the backend's
  *  `_collect_token_envs` so the editor can spot keychain entries gone orphan. */

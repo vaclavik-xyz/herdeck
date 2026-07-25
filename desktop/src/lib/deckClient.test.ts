@@ -23,6 +23,7 @@ function rawState(over: Record<string, unknown> = {}): Record<string, unknown> {
     source: "mock",
     connected: false,
     connections: { "local:review": true, macbench: false },
+    local_connections: { review: "local:review" },
     ...over,
   };
 }
@@ -39,6 +40,7 @@ describe("parseState", () => {
     expect(s.source).toBe("mock");
     expect(s.connected).toBe(false);
     expect(s.connections).toEqual({ "local:review": true, macbench: false });
+    expect(s.localConnections).toEqual({ review: "local:review" });
   });
 
   it("returns null for junk / not-an-object / missing version", () => {
@@ -94,6 +96,7 @@ describe("DeckDiffer — transactional version gate + per-tile diff", () => {
     panel: 0,
     tiles: {},
     connections: {},
+    localConnections: {},
     summary: emptySummary(),
     source: "mock",
     connected: false,
@@ -284,6 +287,7 @@ describe("stepDeck — folds a poll into the render model", () => {
     expect(view.source).toBe("live");
     expect(view.connected).toBe(true);
     expect(view.connections).toEqual({ "local:review": true, macbench: false });
+    expect(view.localConnections).toEqual({ review: "local:review" });
     expect(summaryLabel(view.summary)).toContain("⚠ 1 blocked");
   });
 

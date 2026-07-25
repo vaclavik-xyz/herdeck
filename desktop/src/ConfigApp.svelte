@@ -35,6 +35,7 @@
     orphanedSecrets,
     referencedTokenEnvs,
     errorCountLabel,
+    effectiveActiveServerIds,
     isStaleRevisionError,
     serversOf,
     type ConfigPayload,
@@ -246,8 +247,14 @@
     NAV_GROUPS.flatMap((group) => group.items).find((item) => item.key === active)?.label ?? active,
   );
   const selectedLocalSessions = $derived(payload?.localSessions.filter((session) => session.selected) ?? []);
-  const connectedLocalSessions = $derived(selectedLocalSessions.filter((session) => deckView.connections[session.server_id] === true).length);
-  const remoteServerRecords = $derived(payload ? serversOf(payload) : []);
+  const connectedLocalSessions = $derived(selectedLocalSessions.filter((session) => {
+    const runtimeId = deckView.localConnections[session.name] ?? session.server_id;
+    return deckView.connections[runtimeId] === true;
+  }).length);
+  const activeRemoteServerIds = $derived(new Set(payload ? effectiveActiveServerIds(payload) : []));
+  const remoteServerRecords = $derived(payload
+    ? serversOf(payload).filter((server) => activeRemoteServerIds.has(server.id))
+    : []);
   const remoteServers = $derived(remoteServerRecords.length);
   const connectedRemoteServers = $derived(remoteServerRecords.filter((server) => deckView.connections[server.id] === true).length);
   const runtimeReady = $derived(discovery != null && deckView.online);
@@ -422,7 +429,7 @@
       async () => {
         const transport = preview;
         if (!transport) {
-          deckView = { ...deckView, online: false, connected: false, connections: {} };
+          deckView = { ...deckView, online: false, connected: false, connections: {}, localConnections: {} };
           return;
         }
         try {
@@ -438,9 +445,10 @@
             language: state.language,
             sections: state.sections,
             connections: state.connections,
+            localConnections: state.localConnections,
           };
         } catch {
-          deckView = { ...deckView, online: false, connected: false, connections: {} };
+          deckView = { ...deckView, online: false, connected: false, connections: {}, localConnections: {} };
         }
       },
       () => 1000,
