@@ -9,8 +9,8 @@ from urllib.parse import quote
 
 TARGETS = {
     "darwin-aarch64": ("herdeck-macos", "*.app.tar.gz"),
-    "linux-x86_64": ("herdeck-linux-x86_64/appimage", "*.AppImage.tar.gz"),
-    "linux-aarch64": ("herdeck-linux-arm64/appimage", "*.AppImage.tar.gz"),
+    "linux-x86_64": ("herdeck-linux-x86_64/appimage", "*.AppImage"),
+    "linux-aarch64": ("herdeck-linux-arm64/appimage", "*.AppImage"),
 }
 
 
