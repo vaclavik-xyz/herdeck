@@ -9,3 +9,11 @@ export function appSurface(windowMode: string | null | undefined): AppSurface {
     ? "compact"
     : "desktop";
 }
+
+export function desktopSetupVisible(
+  surface: AppSurface,
+  view: "deck" | "welcome" | "reconnect",
+  hidden: boolean,
+): boolean {
+  return surface === "desktop" && view !== "deck" && !hidden;
+}

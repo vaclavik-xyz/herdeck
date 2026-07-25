@@ -418,6 +418,9 @@ fn config_post_json(
 #[tauri::command]
 fn open_config(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mode = *state.window_mode.lock().unwrap();
+    if mode == WindowMode::Normal {
+        let _ = app.emit_to("main", "open-settings", ());
+    }
     let w = app
         .get_webview_window(window_mode::settings_window_label(mode))
         .ok_or_else(|| "desktop settings window not found".to_string())?;
@@ -908,6 +911,9 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
             let wm_items = &wm_items_cb;
             match event.id.as_ref() {
             "settings" => {
+                if current_mode == WindowMode::Normal {
+                    let _ = app.emit_to("main", "open-settings", ());
+                }
                 if let Some(w) =
                     app.get_webview_window(window_mode::settings_window_label(current_mode))
                 {

@@ -12,6 +12,7 @@
   import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
   import CheckCircle from "phosphor-svelte/lib/CheckCircle";
   import CloudArrowUp from "phosphor-svelte/lib/CloudArrowUp";
+  import GearSix from "phosphor-svelte/lib/GearSix";
   import { connectErrorMessage, hasConnectionInventory, shouldAutoReconnect } from "./onboardingClient";
   import { defineMessages, fmt, locale } from "./i18n.svelte";
 
@@ -21,6 +22,7 @@
     transport,
     onConnected,
     onDismiss = undefined,
+    onOpenSettings = undefined,
     variant = "compact",
   }: {
     view: "welcome" | "reconnect";
@@ -28,6 +30,7 @@
     transport: SetupTransport | null;
     onConnected: () => void;
     onDismiss?: (() => void) | undefined;
+    onOpenSettings?: (() => void) | undefined;
     variant?: "compact" | "desktop";
   } = $props();
 
@@ -52,6 +55,7 @@
       fill_url_token: "Fill in both URL and token.",
       demo: "Explore the demo",
       back_to_deck: "Back to Herdeck",
+      open_settings: "Open settings",
       sessions_h: "Connections",
       sessions_hint: "Choose the local sessions and saved bridge Herdeck should monitor.",
       saved_remote: "Saved remote bridge",
@@ -79,6 +83,7 @@
       fill_url_token: "Vyplň URL i token.",
       demo: "Prozkoumat demo",
       back_to_deck: "Zpět do Herdecku",
+      open_settings: "Otevřít nastavení",
       sessions_h: "Připojení",
       sessions_hint: "Vyber lokální sessions a uložený bridge, které má Herdeck sledovat.",
       saved_remote: "Uložený vzdálený bridge",
@@ -331,6 +336,11 @@
     <button class="link" disabled={busy} onclick={connectDemo}>
       {label(lm.demo, "demo")}
     </button>
+    {#if onOpenSettings}
+      <button class="link dismiss" disabled={busy} onclick={onOpenSettings}>
+        <GearSix size={14} />{lm.open_settings}
+      </button>
+    {/if}
     {#if onDismiss}
       <button class="link dismiss" disabled={busy} onclick={onDismiss}>
         <ArrowLeft size={14} />{lm.back_to_deck}

@@ -8,7 +8,7 @@
   import ConfigApp from "./ConfigApp.svelte";
   import DeckView from "./lib/DeckView.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
-  import { appSurface } from "./lib/appSurface";
+  import { appSurface, desktopSetupVisible } from "./lib/appSurface";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport } from "./lib/deckClient";
   import { fitDecision } from "./lib/windowFit";
@@ -42,6 +42,7 @@
   // Manual "change connection" override: open the welcome card even when the
   // status would show the deck (so a demo/local-pinned user can re-onboard).
   let reonboard = $state(false);
+  let desktopSetupHidden = $state(false);
   let availableUpdate = $state<UpdateInfo | null>(null);
   let updateError = $state("");
   let installingUpdate = $state(false);
@@ -56,6 +57,7 @@
   );
 
   const view = $derived(shouldOnboard(status, reonboard));
+  const showDesktopSetup = $derived(desktopSetupVisible(surface, view, desktopSetupHidden));
 
   async function pullDiscovery(): Promise<void> {
     try {
@@ -108,12 +110,17 @@
   onMount(() => {
     let alive = true;
 
-    void listen<Discovery>("discovery", (event) => {
+    const discoveryListener = listen<Discovery>("discovery", (event) => {
       const d = asDiscovery(event.payload);
       if (d) discovery = d;
     });
-    void listen("reonboard", () => {
+    const reonboardListener = listen("reonboard", () => {
       reonboard = true;
+      desktopSetupHidden = false;
+    });
+    const settingsListener = listen("open-settings", () => {
+      reonboard = false;
+      desktopSetupHidden = true;
     });
 
     void (async () => {
@@ -151,6 +158,9 @@
 
     return () => {
       alive = false;
+      void discoveryListener.then((unlisten) => unlisten());
+      void reonboardListener.then((unlisten) => unlisten());
+      void settingsListener.then((unlisten) => unlisten());
       setupPoll.stop();
       ro?.disconnect();
     };
@@ -195,13 +205,19 @@
 
   function onConnected(): void {
     reonboard = false;
+    desktopSetupHidden = false;
     void (async () => {
       if (setup) status = await setup.status();
     })();
   }
+
+  function openDesktopSettings(): void {
+    reonboard = false;
+    desktopSetupHidden = true;
+  }
 </script>
 
-{#if surface === "desktop" && view === "deck"}
+{#if surface === "desktop"}
   <div class="desktop-app">
     {#if updateError}
       <div class="desktop-banner"><Banner kind="error" message={updateError} /></div>
@@ -216,6 +232,32 @@
       </div>
     {/if}
     <ConfigApp />
+    {#if showDesktopSetup}
+      <div class="desktop-setup-overlay">
+        <header class="desktop-topbar">
+          <div class="desktop-brand" aria-label="Herdeck">
+            <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <strong>Herdeck</strong>
+          </div>
+          <span>{connectionSetupLabel}</span>
+        </header>
+        <div class="desktop-setup-stage">
+          <aside class="setup-intro">
+            <span class="setup-icon" aria-hidden="true"><PlugsConnected size={28} weight="regular" /></span>
+            <h2>{connectionIntroTitle}</h2>
+            <p>{connectionIntroBody}</p>
+          </aside>
+          <Onboarding
+            variant="desktop"
+            {view}
+            {status}
+            transport={setup}
+            {onConnected}
+            onOpenSettings={openDesktopSettings}
+          />
+        </div>
+      </div>
+    {/if}
   </div>
 {:else}
   <main class:borderless class:desktop={surface === "desktop"}>
@@ -246,29 +288,6 @@
           aria-label={changeConnectionTitle}
           onclick={() => (reonboard = true)}><GearSix size={13} /></button
         >
-      </div>
-    {:else if surface === "desktop"}
-      <header class="desktop-topbar">
-        <div class="desktop-brand" aria-label="Herdeck">
-          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-          <strong>Herdeck</strong>
-        </div>
-        <span>{connectionSetupLabel}</span>
-      </header>
-      <div class="desktop-setup-stage">
-        <aside class="setup-intro">
-          <span class="setup-icon" aria-hidden="true"><PlugsConnected size={28} weight="regular" /></span>
-          <h2>{connectionIntroTitle}</h2>
-          <p>{connectionIntroBody}</p>
-        </aside>
-        <Onboarding
-          variant="desktop"
-          {view}
-          {status}
-          transport={setup}
-          {onConnected}
-          onDismiss={reonboard ? () => (reonboard = false) : undefined}
-        />
       </div>
     {:else}
       <Onboarding
@@ -305,7 +324,15 @@
     box-sizing: border-box;
   }
   .desktop-app {
+    position: relative;
     min-height: 100vh;
+    background: #0d1015;
+  }
+  .desktop-setup-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    overflow: auto;
     background: #0d1015;
   }
   .desktop-banner {
