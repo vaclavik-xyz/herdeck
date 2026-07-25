@@ -46,4 +46,5 @@ def test_regular_ci_runs_desktop_rust_regressions():
     assert "desktop-rust:" in workflow
     assert "libwebkit2gtk-4.1-dev" in workflow
     assert "npm ci && npm run build" in workflow
+    assert "mkdir -p desktop/src-tauri/resources/herdeck-deckapp" in workflow
     assert "cargo test --manifest-path desktop/src-tauri/Cargo.toml" in workflow

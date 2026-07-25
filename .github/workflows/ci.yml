@@ -50,5 +50,7 @@ jobs:
       - name: Build embedded desktop frontend
         working-directory: desktop
         run: npm ci && npm run build
+      - name: Stage test-only sidecar resource
+        run: mkdir -p desktop/src-tauri/resources/herdeck-deckapp
       - name: Test desktop Rust shell
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
