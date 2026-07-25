@@ -61,7 +61,7 @@
   }
 </script>
 
-<h2>{lm.title}{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.title}</h2>
 {#if overlay}
   <OverrideField label="approve_always" help={HELP.approve_always} state={scState("approve_always")} inheritedDisplay={hint("approve_always")} onstate={(s) => setScState("approve_always", s)}>
     <BooleanField label="" value={Boolean(scValue("approve_always"))} onchange={(v) => setSc("approve_always", v)} />

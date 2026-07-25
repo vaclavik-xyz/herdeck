@@ -1,5 +1,6 @@
 <script lang="ts">
   import ListField from "./ListField.svelte";
+  import FieldCopy from "./FieldCopy.svelte";
   import { t } from "../i18n.svelte";
   import type { ListFieldState } from "../configClient";
 
@@ -63,7 +64,7 @@
 </script>
 
 <div class="tristate">
-  <span class="label fieldlabel" class:hashelp={!!help} title={help || undefined}>{label}</span>
+  <FieldCopy {label} {help} />
   <div class="body">
     <div class="seg" role="group" aria-label={label}>
       {#each SEGMENTS as s}
@@ -86,13 +87,11 @@
 </div>
 
 <style>
-  .tristate { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr; align-items: start; gap: 8px; margin: 6px 0; }
-  .label { color: #aaa; padding-top: 4px; }
-  .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
-  .body { display: flex; flex-direction: column; gap: 4px; }
-  .seg { display: inline-flex; align-self: flex-start; border: 1px solid #2a2a30; border-radius: 4px; overflow: hidden; }
+  .tristate { display: grid; grid-template-columns: var(--field-label-w, 120px) minmax(0, 1fr); align-items: start; gap: 12px; margin: 6px 0; }
+  .body { display: flex; grid-column: 2; grid-row: 1 / span 2; flex-direction: column; gap: 4px; }
+  .seg { display: inline-flex; align-self: flex-start; border: 1px solid #303b49; border-radius: 7px; overflow: hidden; }
   .seg button { background: #141417; border: 0; border-right: 1px solid #2a2a30; color: #aaa; padding: 4px 10px; cursor: pointer; }
   .seg button:last-child { border-right: 0; }
-  .seg button.on { background: #2a2a30; color: #e8e8ea; }
-  .hint { color: #777; margin: 2px 0; font-style: italic; }
+  .seg button.on { background: #29384f; color: #eef3fa; }
+  .hint { color: #7f8c9d; margin: 2px 0; font-size: 9px; }
 </style>

@@ -25,6 +25,7 @@
   } from "./lib/deckClient";
   import { visibilityGatedLoop } from "./lib/pollGate";
   import { connectionInventory, type ConnectionHealth } from "./lib/connectionStatus";
+  import { filterSettingsNavigation } from "./lib/settingsNavigation";
   import { defineMessages, fmt, langOf, locale, setLang } from "./lib/i18n.svelte";
   import {
     commandTransport as cfgTransport,
@@ -58,9 +59,26 @@
       "sec.profiles": "Profiles",
       "sec.desktop": "Window",
       "group.control": "Control",
+      "group.deck": "Deck",
+      "group.agents": "Agents",
+      "group.policies": "Policies",
       "group.system": "System",
-      "group.behavior": "Behavior",
-      "group.herdeck": "Herdeck",
+      "desc.servers": "Choose which local sessions and remote bridges feed the deck, then verify their live state.",
+      "desc.deck": "Select the deck hardware, grid, simulator, and machine-specific timing.",
+      "desc.view": "Control what agent tiles show and how launchers fit into the deck.",
+      "desc.theme": "Assign stable colors to agent states and individual servers.",
+      "desc.macros": "Create short messages that can be sent to a running agent with one press.",
+      "desc.start_profiles": "Define the commands available when starting a new agent from the deck.",
+      "desc.notifications": "Choose when Herdeck alerts you and where those alerts are delivered.",
+      "desc.safety": "Require deliberate confirmation for destructive or persistent agent actions.",
+      "desc.usage": "Select the account limits shown on the deck and how often they refresh.",
+      "desc.answer_profiles": "Map deck actions to the key sequences expected by each agent tool.",
+      "desc.profiles": "Compose named working contexts from server selections and inherited settings.",
+      "desc.desktop": "Set window behavior and the global shortcut that shows or hides the deck.",
+      search_settings: "Search settings",
+      clear_search: "Clear search",
+      no_search_results: "No settings match this search.",
+      editing_profile: "Editing profile: {name}",
       overview_eyebrow: "System overview",
       overview_title: "Your agents are within reach.",
       overview_ready: "Runtime, sessions, and notifications are responding.",
@@ -75,9 +93,7 @@
       blocked: "Blocked",
       done: "Done",
       connections: "Connections",
-      connections_hint: "Configured sources and their live runtime state. Socket availability is shown separately from a working connection.",
       configured: "configured",
-      available: "available",
       connected: "Connected",
       disconnected: "Disconnected",
       unavailable: "Unavailable",
@@ -99,7 +115,6 @@
       remote_servers: "Remote servers",
       deck_device: "Deck device",
       automatic: "Automatic",
-      workbench_hint: "The live surface stays next to the controls you are changing.",
       settings_eyebrow: "Settings",
       settings_hint: "Changes are validated live and applied to the running deck.",
       profile: "Profile:",
@@ -143,9 +158,26 @@
       "sec.profiles": "Profily",
       "sec.desktop": "Okno",
       "group.control": "Ovládání",
+      "group.deck": "Deck",
+      "group.agents": "Agenti",
+      "group.policies": "Pravidla",
       "group.system": "Systém",
-      "group.behavior": "Chování",
-      "group.herdeck": "Herdeck",
+      "desc.servers": "Vyber lokální sessions a vzdálené bridges pro deck a ověř jejich skutečný stav.",
+      "desc.deck": "Nastav hardware decku, mřížku, simulátor a časování pro tento počítač.",
+      "desc.view": "Urči obsah dlaždic agentů a umístění spouštěčů na decku.",
+      "desc.theme": "Přiřaď stálé barvy stavům agentů a jednotlivým serverům.",
+      "desc.macros": "Vytvoř krátké zprávy, které odešleš běžícímu agentovi jedním stiskem.",
+      "desc.start_profiles": "Definuj příkazy dostupné při spuštění nového agenta z decku.",
+      "desc.notifications": "Vyber, kdy tě Herdeck upozorní a kam oznámení doručí.",
+      "desc.safety": "Vyžádej vědomé potvrzení destruktivních nebo trvalých akcí agenta.",
+      "desc.usage": "Vyber limity účtů zobrazené na decku a interval jejich obnovy.",
+      "desc.answer_profiles": "Namapuj akce decku na klávesy očekávané jednotlivými nástroji agentů.",
+      "desc.profiles": "Sestav pojmenované pracovní kontexty z výběru serverů a zděděných nastavení.",
+      "desc.desktop": "Nastav chování okna a globální zkratku pro zobrazení nebo skrytí decku.",
+      search_settings: "Hledat nastavení",
+      clear_search: "Vymazat hledání",
+      no_search_results: "Žádné nastavení tomuto hledání neodpovídá.",
+      editing_profile: "Upravuješ profil: {name}",
       overview_eyebrow: "Přehled systému",
       overview_title: "Agenty máš na dosah.",
       overview_ready: "Runtime, sessions a notifikace odpovídají.",
@@ -160,9 +192,7 @@
       blocked: "Blokováni",
       done: "Hotovo",
       connections: "Připojení",
-      connections_hint: "Nastavené zdroje a jejich skutečný stav v runtime. Dostupnost socketu je oddělená od funkčního spojení.",
       configured: "nastaveno",
-      available: "dostupné",
       connected: "Připojeno",
       disconnected: "Odpojeno",
       unavailable: "Nedostupné",
@@ -184,7 +214,6 @@
       remote_servers: "Vzdálené servery",
       deck_device: "Zařízení decku",
       automatic: "Automaticky",
-      workbench_hint: "Živý povrch zůstává vedle ovládacích prvků, které měníš.",
       settings_eyebrow: "Nastavení",
       settings_hint: "Změny se průběžně ověřují a po uložení se promítnou do běžícího decku.",
       profile: "Profil:",
@@ -221,22 +250,26 @@
   // key = stable identifier (matches backend tile_sections keys where applicable),
   // label = what the sidebar shows in the CURRENT language.
   const NAV_GROUPS = $derived([
-    { label: lm["group.control"], items: [{ key: "overview", icon: "⌂", label: lm["sec.overview"] }] },
-    { label: lm["group.system"], items: [
+    { label: lm["group.control"], items: [
+      { key: "overview", icon: "⌂", label: lm["sec.overview"] },
       { key: "servers", icon: "⌁", label: lm["sec.servers"] },
-      { key: "deck", icon: "▦", label: lm["sec.deck"] },
     ] },
-    { label: lm["group.behavior"], items: [
+    { label: lm["group.deck"], items: [
+      { key: "deck", icon: "▦", label: lm["sec.deck"] },
       { key: "view", icon: "◫", label: lm["sec.view"] },
       { key: "theme", icon: "◉", label: lm["sec.theme"] },
-      { key: "macros", icon: "↯", label: lm["sec.macros"] },
+    ] },
+    { label: lm["group.agents"], items: [
       { key: "start_profiles", icon: "✦", label: lm["sec.start_profiles"] },
+      { key: "answer_profiles", icon: "↳", label: lm["sec.answer_profiles"] },
+      { key: "macros", icon: "↯", label: lm["sec.macros"] },
+    ] },
+    { label: lm["group.policies"], items: [
       { key: "notifications", icon: "◌", label: lm["sec.notifications"] },
       { key: "safety", icon: "◇", label: lm["sec.safety"] },
       { key: "usage", icon: "◔", label: lm["sec.usage"] },
-      { key: "answer_profiles", icon: "↳", label: lm["sec.answer_profiles"] },
     ] },
-    { label: lm["group.herdeck"], items: [
+    { label: lm["group.system"], items: [
       { key: "profiles", icon: "◎", label: lm["sec.profiles"] },
       { key: "desktop", icon: "⚙", label: lm["sec.desktop"] },
     ] },
@@ -245,6 +278,7 @@
   // klik-to-jump: backend tile section KEY (from deckClient /state.tile_sections) maps
   // 1:1 onto sidebar keys. A preview tile click switches `active` to its section.
   const JUMPABLE = new Set(["view", "start_profiles", "answer_profiles", "profiles"]);
+  const PROFILE_SCOPED = new Set(["deck", "view", "theme", "macros", "start_profiles", "notifications", "safety", "usage", "answer_profiles"]);
   function jumpToSection(key: string): void {
     if (JUMPABLE.has(key)) active = key;
   }
@@ -255,6 +289,8 @@
   // sidecar, not the draft currently being edited in `payload`.
   let appliedPayload = $state<ConfigPayload | null>(null);
   let active = $state(browserSection ?? "overview");
+  let navQuery = $state("");
+  let navSearchInput: HTMLInputElement;
   let deckView = $state<DeckViewModel>(initialView());
   let dirty = $state(false);
   let errors = $state<string[]>([]);
@@ -286,6 +322,24 @@
   const activeLabel = $derived(
     NAV_GROUPS.flatMap((group) => group.items).find((item) => item.key === active)?.label ?? active,
   );
+  const SECTION_DESCRIPTIONS = $derived<Record<string, string>>({
+    servers: lm["desc.servers"],
+    deck: lm["desc.deck"],
+    view: lm["desc.view"],
+    theme: lm["desc.theme"],
+    macros: lm["desc.macros"],
+    start_profiles: lm["desc.start_profiles"],
+    notifications: lm["desc.notifications"],
+    safety: lm["desc.safety"],
+    usage: lm["desc.usage"],
+    answer_profiles: lm["desc.answer_profiles"],
+    profiles: lm["desc.profiles"],
+    desktop: lm["desc.desktop"],
+  });
+  const activeDescription = $derived(SECTION_DESCRIPTIONS[active] ?? lm.settings_hint);
+  const filteredNavGroups = $derived.by(() => {
+    return filterSettingsNavigation(NAV_GROUPS, SECTION_DESCRIPTIONS, navQuery, locale.lang);
+  });
   const selectedLocalSessions = $derived(appliedPayload?.localSessions.filter((session) => session.selected) ?? []);
   const connectedLocalSessions = $derived(selectedLocalSessions.filter((session) => {
     const runtimeId = deckView.localConnections[session.name];
@@ -329,6 +383,7 @@
   // is overlay-aware; Servers (base server list) and Profiles (meta-section) stay base-only
   // by design (not per-section overlays), so no base-only warning is needed anymore.
   const editProfile = $derived(payload && payload.activeProfile !== "default" ? payload.activeProfile : null);
+  const showProfileContext = $derived(editProfile != null && PROFILE_SCOPED.has(active));
 
   async function switchProfile(name: string): Promise<void> {
     if (!payload) return;
@@ -462,6 +517,20 @@
   }
 
   onMount(() => {
+    const onSettingsShortcut = (event: KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        navSearchInput?.focus();
+      } else if (event.key === "Escape" && document.activeElement === navSearchInput) {
+        navQuery = "";
+        navSearchInput.blur();
+      }
+    };
+    document.addEventListener("keydown", onSettingsShortcut);
+    return () => document.removeEventListener("keydown", onSettingsShortcut);
+  });
+
+  onMount(() => {
     if (browserMode) {
       payload = browserPreviewPayload();
       appliedPayload = payload;
@@ -570,7 +639,12 @@
 
   <div class="body">
     <nav class="sidebar">
-      {#each NAV_GROUPS as group}
+      <div class="settings-search" role="search">
+        <span aria-hidden="true">⌕</span>
+        <input bind:this={navSearchInput} bind:value={navQuery} placeholder={lm.search_settings} aria-label={lm.search_settings} />
+        {#if navQuery}<button type="button" onclick={() => (navQuery = "")} aria-label={lm.clear_search}>×</button>{:else}<kbd>⌘K</kbd>{/if}
+      </div>
+      {#each filteredNavGroups as group}
         <div class="nav-group">
           <span class="nav-label">{group.label}</span>
           {#each group.items as item}
@@ -581,6 +655,7 @@
           {/each}
         </div>
       {/each}
+      {#if filteredNavGroups.length === 0}<p class="nav-empty">{lm.no_search_results}</p>{/if}
       <div class="sidebar-version"><strong>Herdeck Desktop</strong><span>v0.1.1</span></div>
     </nav>
 
@@ -603,7 +678,14 @@
         </div>
       {:else}
         <div class="page-heading settings-heading">
-          <div><span class="eyebrow">{lm.settings_eyebrow}</span><h1>{activeLabel}</h1><p>{active === "deck" ? lm.workbench_hint : active === "servers" ? lm.connections_hint : lm.settings_hint}</p></div>
+          <div>
+            <span class="eyebrow">{lm.settings_eyebrow}</span>
+            <div class="title-line">
+              <h1>{activeLabel}</h1>
+              {#if showProfileContext}<span class="scope-badge">{fmt(lm.editing_profile, { name: editProfile ?? "" })}</span>{/if}
+            </div>
+            <p>{activeDescription}</p>
+          </div>
         </div>
         {#if payload == null}
           <article class="card loading-card"><p class="hint">{lm.loading}</p></article>
@@ -775,6 +857,14 @@
   .dirty.bad { color: #f0838b; }
   .body { flex: 1; display: grid; grid-template-columns: 205px minmax(0, 1fr); min-height: 0; }
   .sidebar { display: flex; flex-direction: column; padding: 16px 12px 12px; border-right: 1px solid var(--border); overflow: auto; }
+  .settings-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 34px; margin-bottom: 16px; padding: 0 9px; border: 1px solid #263140; border-radius: 8px; background: #0d1219; color: #69778a; }
+  .settings-search:focus-within { border-color: #587cc8; box-shadow: 0 0 0 2px rgb(94 140 255 / .1); }
+  .settings-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: #dfe6ef; font-size: 10px; }
+  .settings-search input::placeholder { color: #69778a; }
+  .settings-search kbd { padding: 1px 4px; border: 1px solid #303b49; border-radius: 4px; color: #69778a; background: #151b24; font: 8px "SF Mono", ui-monospace, monospace; }
+  .settings-search button { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #8794a5; cursor: pointer; }
+  .settings-search button:hover { background: #202936; color: #e1e7ef; }
+  .nav-empty { margin: 4px 9px; color: var(--muted); font-size: 10px; }
   .nav-group { margin-bottom: 14px; }
   .nav-label { display: block; padding: 0 10px 6px; color: #687588; font-size: 9px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
   .sidebar button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 0 10px; border: 0; border-radius: 9px; background: none; color: #98a5b6; font-size: 11px; text-align: left; cursor: pointer; }
@@ -787,6 +877,8 @@
   .content { min-width: 0; padding: 27px 30px 34px; overflow: auto; }
   .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
   .page-heading h1 { margin: 5px 0 0; font-size: 25px; line-height: 1.15; letter-spacing: -.045em; }
+  .title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+  .scope-badge { margin-top: 5px; padding: 3px 7px; border: 1px solid #3a4657; border-radius: 6px; color: #a9b7c8; background: #141b24; font: 9px "SF Mono", ui-monospace, monospace; }
   .page-heading p, .card-heading p, .card p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
   .eyebrow { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
   .secondary, .icon-button, .savebar button { border: 1px solid #344052; border-radius: 9px; background: #1b2330; color: #dce4ee; cursor: pointer; }
@@ -866,8 +958,12 @@
   .hint { color: var(--muted); }
   .form-card :global(h2) { margin: 0 0 14px; font-size: 17px; letter-spacing: -.025em; }
   .form-card :global(.field), .form-card :global(.override), .form-card :global(.tristate), .form-card :global(.listfield) { margin: 0; padding: 9px 0; }
-  .form-card :global(input), .form-card :global(select) { min-height: 34px; padding: 0 10px; border-color: #313c4b; border-radius: 8px; background: #0e131a; }
+  .form-card :global(input:not([type="checkbox"])), .form-card :global(select) { min-height: 34px; padding: 0 10px; border-color: #313c4b; border-radius: 8px; background: #0e131a; }
   .form-card :global(fieldset) { border-color: #303a48; border-radius: 10px; padding: 12px 14px; }
+  .form-card :global(fieldset > legend) { padding: 0 6px; color: #cdd6e2; font-size: 11px; font-weight: 620; }
+  .form-card :global(button:not(.switch)) { min-height: 31px; border-color: #354153; border-radius: 7px; padding: 0 10px; background: #19212c; color: #d9e1eb; }
+  .form-card :global(button:not(.switch):hover) { background: #222d3b; }
+  .form-card :global(legend button:not(.switch)) { min-height: 22px; padding: 0 5px; border-color: transparent; background: transparent; }
   .savebar { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 14px; border-top: 1px solid var(--border); background: #0c1016; }
   .savebar button { min-height: 34px; margin: 0; padding: 0 14px; font-size: 11px; }
   .savebar button:last-child { border-color: #6e94f4; background: var(--signal); color: white; }
@@ -886,6 +982,8 @@
     .secondary-status, .topbar > .status-pill { display: none; }
     .body { grid-template-columns: 1fr; }
     .sidebar { flex-direction: row; gap: 5px; padding: 8px; border-right: 0; border-bottom: 1px solid var(--border); overflow-x: auto; overflow-y: hidden; }
+    .settings-search { width: 148px; flex: none; margin: 0; }
+    .settings-search kbd { display: none; }
     .nav-group { display: flex; flex: none; gap: 5px; margin: 0; }
     .nav-label, .sidebar-version { display: none; }
     .sidebar button { width: auto; min-width: max-content; justify-content: center; }

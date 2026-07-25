@@ -99,7 +99,7 @@
   }
 </script>
 
-<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.heading}</h2>
 {#if overlay}
   <OverrideField label="management" help={HELP.management} state={scState("management")} inheritedDisplay={hint("management")} onstate={(s) => setScState("management", s)}>
     <SelectField label="" value={String(scValue("management") ?? "")} options={MANAGEMENT} onchange={(v) => setSc("management", v)} />

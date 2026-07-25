@@ -1,19 +1,24 @@
 <script lang="ts">
+  import FieldCopy from "./FieldCopy.svelte";
   let { label, value, onchange, help = "" }:
     { label: string; value: boolean; onchange: (v: boolean) => void; help?: string } = $props();
 </script>
 
 <label class="field">
+  <FieldCopy {label} {help} />
   <input
     type="checkbox"
     checked={value}
     onchange={(e) => onchange((e.target as HTMLInputElement).checked)}
   />
-  <span class="fieldlabel" class:hashelp={!!help} title={help || undefined}>{label}</span>
 </label>
 
 <style>
-  .field { display: flex; align-items: center; gap: 8px; margin: 6px 0; cursor: pointer; }
-  .field span { color: #ccc; }
-  .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
+  .field { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; margin: 6px 0; cursor: pointer; }
+  input { appearance: none; position: relative; grid-column: 2; grid-row: 1 / span 2; width: 36px; height: 21px; margin: 0; border: 1px solid #384352; border-radius: 999px; background: #232a34; cursor: pointer; transition: background 120ms ease, border-color 120ms ease; }
+  input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: #929cab; transition: transform 120ms ease, background 120ms ease; }
+  input:checked { border-color: #4774d0; background: #365fae; }
+  input:checked::after { transform: translateX(15px); background: white; }
+  input:focus-visible { outline: 2px solid #89a9ff; outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { input, input::after { transition: none; } }
 </style>

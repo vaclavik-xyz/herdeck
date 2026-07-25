@@ -223,7 +223,7 @@
   }
 </script>
 
-<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.heading}</h2>
 {#if overlay}
   <OverrideField label="enabled" help={HELP.enabled} state={scState("enabled")} inheritedDisplay={scHint("enabled")} onstate={(s) => setScState("enabled", s)}>
     <BooleanField label="" value={scBool("enabled")} onchange={(v) => setSc("enabled", v)} />

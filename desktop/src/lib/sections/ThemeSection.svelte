@@ -81,7 +81,7 @@
   }
 </script>
 
-<h2>{lm.title}{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.title}</h2>
 <fieldset class="colors">
   <legend>colors</legend>
   {#if overlay}

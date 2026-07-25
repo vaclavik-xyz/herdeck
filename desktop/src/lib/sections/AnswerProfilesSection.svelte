@@ -198,7 +198,7 @@
   function removeOwn(name: string): void { payload = { ...payload, profiles: clearOverridePath(payload.profiles, prof, [SEC, name]) }; onChange(); }
 </script>
 
-<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.heading}</h2>
 {#if overlay}
   <p class="hint">{lm.overlay_hint}</p>
   {#each entryNames() as name (name)}

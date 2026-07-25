@@ -92,7 +92,7 @@
   }
 </script>
 
-<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.heading}</h2>
 {#if overlay}
   <OverrideField label="grid" help={HELP.grid} state={scState("grid")} inheritedDisplay={hint("grid")} onstate={(s) => setScState("grid", s)}>
     <TextField label="" value={String(scValue("grid") ?? "")} oninput={(v) => setSc("grid", v)} />

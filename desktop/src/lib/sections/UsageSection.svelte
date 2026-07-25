@@ -85,7 +85,7 @@
   function setOvProviders(list: string[]): void { setSc("providers", list); }
 </script>
 
-<h2>{lm.title}{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.title}</h2>
 <p class="hint">{lm.intro}</p>
 {#if overlay}
   <OverrideField label="providers" help={HELP.providers} state={scState("providers")} inheritedDisplay={hint("providers")} onstate={(s) => setScState("providers", s)}>

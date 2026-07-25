@@ -56,7 +56,7 @@
   function ovRemove(i: number): void { writeOv(ovMacros().filter((_, j) => j !== i)); }
 </script>
 
-<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
+<h2>{lm.heading}</h2>
 {#if overlay}
   <OverrideField label="macros" help={HELP.macros} state={ovState()} inheritedDisplay={fmt(lm.n_macros, { n: inhMacros().length })} onstate={setOvState}>
     {#each ovMacros() as m, i (i)}

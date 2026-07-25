@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from "../i18n.svelte";
   import type { SecretFlag } from "../configClient";
+  import FieldCopy from "./FieldCopy.svelte";
   let {
     label,
     value,
@@ -39,7 +40,7 @@
 </script>
 
 <label class="field">
-  <span class="fieldlabel" class:hashelp={!!help} title={help || undefined}>{label}</span>
+  <FieldCopy {label} {help} />
   <input value={value} oninput={(e) => oninput((e.target as HTMLInputElement).value)} />
   {#if value}
     {#if flag.set}
@@ -63,10 +64,8 @@
 {/if}
 
 <style>
-  .field { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr auto auto; align-items: center; gap: 8px; margin: 4px 0; }
-  .field span:first-child { color: #aaa; }
-  .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
-  input { background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
+  .field { display: grid; grid-template-columns: var(--field-label-w, 120px) minmax(0, 1fr) auto auto; align-items: center; gap: 8px; margin: 4px 0; }
+  .field > input { grid-column: 2; grid-row: 1 / span 2; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
   .ok { color: #4fa84f; } .missing { color: #e0a030; }
   .setrow { display: flex; gap: 8px; margin: 4px 0 8px calc(var(--field-label-w, 120px) + 8px); }
   button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; cursor: pointer; }
