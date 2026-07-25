@@ -1,0 +1,490 @@
+<!doctype html>
+<!--
+  THROWAWAY PROTOTYPE — delete or absorb after a direction is selected.
+  Question: Which information architecture should Herdeck desktop settings use?
+  Three variants, switchable via ?variant=A|B|C on one static route.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Herdeck Settings — UI Prototype</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --canvas: #0a0c10;
+        --surface: #12161d;
+        --elevated: #1a202a;
+        --border: #2b3442;
+        --text: #f3f6fa;
+        --muted: #8e99a8;
+        --signal: #5e8cff;
+        --green: #4bd394;
+        --amber: #f0b35a;
+        --red: #f06d75;
+        --violet: #a98af5;
+        --cyan: #59c8d6;
+        --radius-s: 8px;
+        --radius-m: 13px;
+        --radius-l: 18px;
+        --shadow: 0 24px 70px rgb(0 0 0 / 0.38);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        background: #05070a;
+        color: var(--text);
+      }
+
+      * { box-sizing: border-box; }
+      html, body { min-width: 320px; min-height: 100%; margin: 0; }
+      body {
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 14% 0%, rgb(63 86 128 / 0.16), transparent 28rem),
+          radial-gradient(circle at 88% 95%, rgb(53 75 111 / 0.12), transparent 31rem),
+          #07090d;
+        overflow-x: hidden;
+      }
+      button, input, select { font: inherit; }
+      button { color: inherit; }
+      button:focus-visible, input:focus-visible, select:focus-visible {
+        outline: 2px solid #89a9ff;
+        outline-offset: 2px;
+      }
+      button, select { cursor: pointer; }
+      .prototype { display: none; min-height: 100vh; padding: 24px 24px 96px; }
+      .prototype.is-active { display: block; }
+      .window {
+        width: min(1400px, calc(100vw - 48px));
+        min-height: calc(100vh - 120px);
+        margin: 0 auto;
+        background: color-mix(in srgb, var(--canvas) 94%, transparent);
+        border: 1px solid rgb(255 255 255 / 0.1);
+        border-radius: 22px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        backdrop-filter: blur(28px);
+      }
+      .mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; }
+      .eyebrow {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+      .logo { display: flex; align-items: center; gap: 11px; font-weight: 720; letter-spacing: -0.02em; }
+      .logo-mark { display: grid; grid-template-columns: repeat(2, 7px); gap: 2px; padding: 6px; border-radius: 8px; background: #202938; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .09); }
+      .logo-mark i { width: 7px; height: 7px; border-radius: 2px; background: #7298ff; }
+      .logo-mark i:nth-child(2) { background: #52d49b; }
+      .logo-mark i:nth-child(3) { background: #f0b35a; }
+      .logo-mark i:nth-child(4) { background: #a98af5; }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+      .dot.green { background: var(--green); box-shadow: 0 0 0 3px rgb(75 211 148 / .12); }
+      .dot.amber { background: var(--amber); box-shadow: 0 0 0 3px rgb(240 179 90 / .11); }
+      .dot.red { background: var(--red); box-shadow: 0 0 0 3px rgb(240 109 117 / .11); }
+      .status-pill { display: inline-flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 11px; border: 1px solid var(--border); border-radius: 999px; background: rgb(255 255 255 / .025); color: #c7d0dc; font-size: 12px; white-space: nowrap; }
+      .avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(145deg, #688dff, #876dd0); color: white; font-size: 11px; font-weight: 750; }
+      .icon-button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--muted); }
+      .icon-button:hover { background: rgb(255 255 255 / .05); color: var(--text); }
+      .primary, .secondary, .quiet, .danger {
+        min-height: 34px; padding: 0 14px; border-radius: 9px; border: 1px solid transparent; font-size: 12px; font-weight: 650;
+      }
+      .primary { background: var(--signal); color: white; box-shadow: inset 0 1px rgb(255 255 255 / .18), 0 6px 18px rgb(56 101 220 / .2); }
+      .primary:hover { background: #719bff; }
+      .secondary { background: #1c2330; border-color: #323c4c; color: #dce3ed; }
+      .secondary:hover { background: #242d3b; }
+      .quiet { background: transparent; border-color: var(--border); color: #b7c0ce; }
+      .quiet:hover { background: rgb(255 255 255 / .04); }
+      .danger { background: rgb(240 109 117 / .1); border-color: rgb(240 109 117 / .24); color: #ff9ca3; }
+      .card { border: 1px solid var(--border); border-radius: var(--radius-m); background: linear-gradient(155deg, rgb(255 255 255 / .033), rgb(255 255 255 / .012)); }
+      .card-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 15px; }
+      .card-title h2, .card-title h3 { margin: 0; font-size: 14px; letter-spacing: -0.01em; }
+      .card-title p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+      .page-panel { display: none; }
+      .page-panel.is-active { display: block; animation: settle .22s ease-out; }
+      @keyframes settle { from { opacity: 0; transform: translateY(4px); } }
+
+      /* Physical-deck signature element */
+      .deck-frame { padding: 13px; border: 1px solid #343b46; border-radius: 18px; background: linear-gradient(145deg, #262b32, #161a20); box-shadow: inset 0 1px rgb(255 255 255 / .1), inset 0 -16px 34px rgb(0 0 0 / .22), 0 18px 34px rgb(0 0 0 / .22); }
+      .deck-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+      .deck-key { position: relative; display: flex; flex-direction: column; justify-content: space-between; aspect-ratio: 1; padding: 9px; border: 1px solid #343b45; border-radius: 11px; background: linear-gradient(150deg, #151922, #0c0f14); box-shadow: inset 0 1px rgb(255 255 255 / .07), 0 4px 8px rgb(0 0 0 / .32); color: #c8d1df; overflow: hidden; }
+      .deck-key::before { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--key, #718096) 30%, transparent), transparent 70%); opacity: .72; }
+      .deck-key > * { position: relative; }
+      .deck-key strong { font-size: 9px; line-height: 1.2; letter-spacing: -0.02em; }
+      .deck-key small { color: #8792a2; font-size: 7px; }
+      .deck-key .key-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--key, #718096); box-shadow: 0 0 9px var(--key, #718096); }
+      .deck-key.blocked { border-color: rgb(240 179 90 / .42); }
+      .deck-key.done { opacity: .72; }
+      .deck-panel { grid-column: span 2; aspect-ratio: auto; min-height: 72px; flex-direction: row; align-items: center; }
+      .deck-panel div { min-width: 0; }
+      .deck-panel strong, .deck-panel small { display: block; }
+      .deck-panel b { margin-left: auto; font-size: 18px; letter-spacing: -.06em; }
+      .signal-rail { display: flex; align-items: center; gap: 8px; margin-top: 11px; padding: 0 4px; color: var(--muted); font-size: 10px; }
+      .signal-rail .spacer { flex: 1; }
+
+      /* Shared settings controls */
+      .setting-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, .8fr); align-items: center; gap: 26px; min-height: 62px; border-top: 1px solid rgb(255 255 255 / .06); }
+      .setting-row:first-child { border-top: 0; }
+      .setting-copy strong { display: block; font-size: 12px; }
+      .setting-copy small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+      .control { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+      .control select, .control input[type="text"] { width: 100%; max-width: 220px; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: #0e1218; color: #dfe5ee; }
+      .segmented { display: inline-flex; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: #0d1117; }
+      .segmented button { min-height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 11px; }
+      .segmented button.is-on { background: #263147; color: #eef3fb; box-shadow: inset 0 0 0 1px rgb(111 151 255 / .23); }
+      .switch { position: relative; width: 38px; height: 22px; padding: 0; border: 1px solid #3a4555; border-radius: 999px; background: #222a35; }
+      .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #929cab; transition: transform .18s ease, background .18s ease; }
+      .switch[aria-pressed="true"] { background: #355ebd; border-color: #5e8cff; }
+      .switch[aria-pressed="true"]::after { transform: translateX(16px); background: white; }
+      .swatches { display: flex; gap: 6px; }
+      .swatch { width: 26px; height: 26px; padding: 0; border: 2px solid transparent; border-radius: 8px; background: var(--swatch); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .16); }
+      .swatch.is-on { border-color: white; outline: 2px solid rgb(94 140 255 / .5); outline-offset: 1px; }
+      .health-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 58px; padding: 0 4px; border-top: 1px solid rgb(255 255 255 / .06); }
+      .health-row:first-child { border-top: 0; }
+      .health-row strong { display: block; font-size: 12px; }
+      .health-row small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+      .agent-row { display: grid; grid-template-columns: 8px minmax(0, 1.5fr) 1fr auto; align-items: center; gap: 12px; min-height: 48px; border-top: 1px solid rgb(255 255 255 / .06); font-size: 11px; }
+      .agent-row:first-child { border-top: 0; }
+      .agent-row .repo { font-weight: 640; }
+      .agent-row .meta { color: var(--muted); }
+      .agent-row .state { color: #bec7d3; }
+      .badge { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; background: rgb(255 255 255 / .045); color: var(--muted); font-size: 9px; font-weight: 680; letter-spacing: .03em; }
+      .badge.warn { background: rgb(240 179 90 / .1); color: #f5c681; }
+      .badge.good { background: rgb(75 211 148 / .1); color: #75e7b1; }
+      .topology { display: grid; grid-template-columns: 1fr 70px 1fr; align-items: center; gap: 8px; min-height: 170px; }
+      .machine { padding: 16px; border: 1px solid var(--border); border-radius: 13px; background: #10141b; }
+      .machine strong { font-size: 12px; }
+      .machine small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
+      .route-line { position: relative; height: 1px; background: linear-gradient(90deg, var(--green), var(--signal)); }
+      .route-line::after { content: "Tailscale"; position: absolute; left: 50%; top: -17px; transform: translateX(-50%); color: var(--muted); font: 8px "SF Mono", monospace; }
+      .notice { display: flex; align-items: center; gap: 11px; padding: 11px 13px; border: 1px solid rgb(240 179 90 / .22); border-radius: 11px; background: rgb(240 179 90 / .07); color: #d9c5a5; font-size: 11px; }
+      .notice .spacer { flex: 1; }
+
+      /* Variant A — Control room */
+      .a-window { display: grid; grid-template-rows: 58px 1fr; }
+      .a-topbar { display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid var(--border); background: rgb(13 16 22 / .72); }
+      .a-topbar .logo { margin-right: 14px; }
+      .a-topbar .top-spacer { flex: 1; }
+      .a-select { height: 30px; padding: 0 28px 0 10px; border: 1px solid var(--border); border-radius: 8px; background: #121720; color: #d8e0eb; font-size: 11px; }
+      .a-layout { display: grid; grid-template-columns: 205px minmax(430px, 1fr) 306px; min-height: 690px; }
+      .a-sidebar { display: flex; flex-direction: column; padding: 17px 12px; border-right: 1px solid var(--border); }
+      .nav-group { margin-bottom: 17px; }
+      .nav-group-label { padding: 0 10px 6px; color: #687486; font-size: 9px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+      .nav-button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: #98a4b4; font-size: 11px; text-align: left; }
+      .nav-button:hover { color: #d9e0e9; background: rgb(255 255 255 / .035); }
+      .nav-button.is-active { color: #eff4fc; background: linear-gradient(90deg, rgb(94 140 255 / .16), rgb(94 140 255 / .055)); box-shadow: inset 2px 0 #719bff; }
+      .nav-icon { width: 17px; color: #738096; text-align: center; }
+      .nav-button.is-active .nav-icon { color: #85a7ff; }
+      .sidebar-foot { margin-top: auto; padding: 12px 9px 2px; border-top: 1px solid rgb(255 255 255 / .06); color: var(--muted); font-size: 9px; line-height: 1.5; }
+      .a-content { padding: 27px 30px 34px; overflow: hidden; }
+      .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 23px; }
+      .page-heading h1 { margin: 5px 0 0; font-size: 25px; letter-spacing: -.045em; }
+      .page-heading p { margin: 7px 0 0; color: var(--muted); font-size: 11px; }
+      .overview-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 14px; }
+      .hero-health { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; min-height: 118px; padding: 20px; overflow: hidden; position: relative; }
+      .hero-health::after { content: ""; position: absolute; width: 240px; height: 240px; right: -78px; top: -102px; border-radius: 50%; border: 36px solid rgb(94 140 255 / .06); box-shadow: 0 0 0 34px rgb(94 140 255 / .025); }
+      .health-orbit { display: grid; place-items: center; width: 58px; height: 58px; border: 1px solid rgb(75 211 148 / .28); border-radius: 50%; background: rgb(75 211 148 / .07); }
+      .health-orbit span { width: 14px; height: 14px; border-radius: 50%; background: var(--green); box-shadow: 0 0 22px rgb(75 211 148 / .68); }
+      .hero-health h2 { margin: 0; font-size: 18px; letter-spacing: -.03em; }
+      .hero-health p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+      .hero-stats { display: flex; gap: 24px; margin-left: auto; z-index: 1; }
+      .hero-stat strong { display: block; font-size: 19px; letter-spacing: -.05em; }
+      .hero-stat small { color: var(--muted); font-size: 9px; }
+      .a-card { padding: 16px 17px; }
+      .a-preview { padding: 19px 17px; border-left: 1px solid var(--border); background: #0b0e13; }
+      .a-preview .sticky { position: sticky; top: 18px; }
+      .a-preview h2 { margin: 4px 0 5px; font-size: 14px; }
+      .a-preview > .sticky > p { margin: 0 0 16px; color: var(--muted); font-size: 10px; }
+      .a-preview .deck-key { padding: 7px; border-radius: 9px; }
+      .a-preview .deck-key strong { font-size: 7px; }
+      .a-preview .deck-panel { min-height: 55px; }
+      .preview-callout { margin-top: 13px; padding: 11px; border: 1px solid rgb(255 255 255 / .06); border-radius: 10px; background: rgb(255 255 255 / .02); }
+      .preview-callout strong { display: block; font-size: 10px; }
+      .preview-callout small { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.4; }
+      .connections-grid { display: grid; gap: 14px; }
+      .settings-card { padding: 7px 17px; }
+
+      /* Variant B — Deck-first command canvas */
+      .b-window { padding: 17px; background: #080a0e; }
+      .b-top { display: flex; align-items: center; gap: 16px; height: 47px; }
+      .b-top .top-spacer { flex: 1; }
+      .command-tabs { display: flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid #252d39; border-radius: 11px; background: #0d1117; }
+      .command-tabs button { min-height: 29px; padding: 0 13px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 10px; }
+      .command-tabs button.is-active { background: #202938; color: white; }
+      .b-stage { display: grid; grid-template-columns: minmax(570px, 1.5fr) minmax(280px, .7fr); gap: 14px; margin-top: 13px; }
+      .b-deck-stage { position: relative; display: flex; flex-direction: column; justify-content: center; min-height: 467px; padding: 44px 9%; border: 1px solid #222a35; border-radius: 18px; background: radial-gradient(circle at 50% 45%, #161d29, #0c1016 68%); overflow: hidden; }
+      .b-deck-stage::before { content: "DECK SURFACE"; position: absolute; top: 18px; left: 21px; color: #536073; font: 700 9px "SF Mono", monospace; letter-spacing: .15em; }
+      .b-deck-stage .deck-frame { transform: perspective(1100px) rotateX(4deg); }
+      .b-deck-stage .deck-key { min-height: 70px; }
+      .b-deck-stage .deck-key strong { font-size: 10px; }
+      .b-context { display: flex; flex-direction: column; min-height: 467px; padding: 18px; }
+      .context-head { padding-bottom: 15px; border-bottom: 1px solid rgb(255 255 255 / .07); }
+      .context-head h1 { margin: 5px 0 7px; font-size: 20px; letter-spacing: -.04em; }
+      .context-head p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+      .context-section { padding: 15px 0; border-bottom: 1px solid rgb(255 255 255 / .06); }
+      .context-section:last-child { border-bottom: 0; }
+      .context-section h3 { margin: 0 0 10px; color: #d9e1eb; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
+      .mini-row { display: flex; align-items: center; gap: 9px; min-height: 35px; color: #b8c2cf; font-size: 10px; }
+      .mini-row .spacer { flex: 1; }
+      .b-bottom { display: grid; grid-template-columns: 1.15fr .85fr; gap: 14px; margin-top: 14px; }
+      .b-bottom .card { min-height: 150px; padding: 16px 18px; }
+      .event-line { display: grid; grid-template-columns: 50px 8px 1fr; gap: 9px; align-items: center; min-height: 31px; color: var(--muted); font-size: 9px; }
+      .event-line .event { color: #c3ccd8; }
+      .b-panel-settings { display: none; }
+      .b-panel-settings.is-active { display: block; }
+
+      /* Variant C — Native inspector */
+      .c-window { display: grid; grid-template-columns: 238px 1fr; min-height: 730px; background: #111319; }
+      .c-sidebar { display: flex; flex-direction: column; padding: 16px 11px; border-right: 1px solid #30333a; background: linear-gradient(180deg, #22252d, #191c23); }
+      .traffic { display: flex; gap: 7px; padding: 2px 4px 18px; }
+      .traffic i { width: 12px; height: 12px; border-radius: 50%; background: #ff6259; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .2); }
+      .traffic i:nth-child(2) { background: #ffbd2e; }
+      .traffic i:nth-child(3) { background: #28c840; }
+      .c-sidebar .logo { padding: 0 8px 16px; }
+      .search { display: flex; align-items: center; gap: 8px; height: 31px; padding: 0 9px; margin: 0 5px 14px; border: 1px solid #3b3f49; border-radius: 8px; background: rgb(0 0 0 / .18); color: #798493; font-size: 10px; }
+      .c-group { margin-bottom: 13px; }
+      .c-group > span { display: block; padding: 0 10px 5px; color: #737c89; font-size: 9px; font-weight: 650; }
+      .c-nav { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 31px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: #bbc2cd; font-size: 11px; text-align: left; }
+      .c-nav.is-active { background: #3d67c4; color: white; }
+      .c-machine-card { margin-top: auto; padding: 10px; border: 1px solid #343945; border-radius: 9px; background: rgb(0 0 0 / .12); }
+      .c-machine-card strong { display: block; font-size: 10px; }
+      .c-machine-card small { display: block; margin-top: 3px; color: #8993a1; font-size: 9px; }
+      .c-main { display: flex; flex-direction: column; min-width: 0; background: #15171d; }
+      .c-toolbar { display: flex; align-items: center; gap: 11px; height: 52px; padding: 0 18px; border-bottom: 1px solid #30333a; background: #1b1e25; }
+      .c-toolbar h1 { margin: 0; font-size: 14px; }
+      .c-toolbar .spacer { flex: 1; }
+      .c-content { flex: 1; padding: 24px 30px 35px; overflow: auto; }
+      .c-title { max-width: 760px; margin: 0 auto 18px; }
+      .c-title h2 { margin: 0; font-size: 20px; letter-spacing: -.025em; }
+      .c-title p { margin: 5px 0 0; color: #8f98a5; font-size: 11px; }
+      .preference-pane { max-width: 760px; margin: 0 auto; border: 1px solid #343842; border-radius: 12px; background: #1b1e25; overflow: hidden; }
+      .preference-pane .setting-row { padding: 0 16px; }
+      .c-overview { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; max-width: 760px; margin: 0 auto; }
+      .c-overview .card { padding: 16px; }
+      .c-overview .wide { grid-column: 1 / -1; }
+      .c-deck-mini { max-width: 760px; margin: 15px auto 0; }
+      .c-deck-mini .deck-frame { padding: 9px; }
+      .c-deck-mini .deck-key { max-height: 68px; }
+      .c-deck-mini .deck-panel { min-height: 55px; }
+
+      /* Prototype-only switcher */
+      .prototype-switcher { position: fixed; z-index: 50; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: center; gap: 5px; padding: 5px; border: 1px solid rgb(255 255 255 / .2); border-radius: 999px; background: rgb(245 247 250 / .95); box-shadow: 0 13px 42px rgb(0 0 0 / .42); color: #11151b; backdrop-filter: blur(20px); }
+      .prototype-switcher button { display: grid; place-items: center; width: 34px; height: 30px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: #303641; font-size: 16px; }
+      .prototype-switcher button:hover { background: #e2e6eb; }
+      .switcher-label { min-width: 208px; padding: 0 13px; text-align: center; }
+      .switcher-label strong { display: block; font-size: 11px; }
+      .switcher-label small { display: block; margin-top: 1px; color: #707987; font-size: 8px; text-transform: uppercase; letter-spacing: .09em; }
+      .prototype-flag { position: fixed; z-index: 40; top: 10px; left: 50%; transform: translateX(-50%); padding: 5px 10px; border: 1px solid rgb(255 255 255 / .1); border-radius: 999px; background: rgb(6 8 11 / .75); color: #778292; font-size: 8px; letter-spacing: .11em; text-transform: uppercase; backdrop-filter: blur(12px); }
+      .toast { position: fixed; z-index: 60; right: 24px; bottom: 24px; padding: 10px 13px; border: 1px solid rgb(75 211 148 / .25); border-radius: 10px; background: #14251e; color: #9ce9c3; font-size: 10px; opacity: 0; transform: translateY(10px); pointer-events: none; transition: .2s ease; }
+      .toast.show { opacity: 1; transform: none; }
+
+      @media (max-width: 1080px) {
+        .prototype { padding-inline: 12px; }
+        .window { width: calc(100vw - 24px); }
+        .a-layout { grid-template-columns: 185px 1fr; }
+        .a-preview { display: none; }
+        .b-stage { grid-template-columns: 1fr; }
+        .b-context { min-height: auto; }
+        .b-bottom { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 720px) {
+        .prototype { padding: 8px 8px 88px; }
+        .window { width: calc(100vw - 16px); border-radius: 15px; }
+        .status-pill, .a-topbar .a-select, .avatar { display: none; }
+        .a-layout { grid-template-columns: 1fr; }
+        .a-sidebar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; border-right: 0; border-bottom: 1px solid var(--border); }
+        .a-sidebar .nav-group { display: contents; }
+        .nav-group-label, .sidebar-foot, .a-sidebar .nav-button:nth-of-type(n+4) { display: none; }
+        .nav-button { justify-content: center; }
+        .overview-grid, .c-overview { grid-template-columns: 1fr; }
+        .hero-health, .c-overview .wide { grid-column: 1; }
+        .hero-stats { display: none; }
+        .a-content { padding: 20px 16px; }
+        .b-deck-stage { min-height: 390px; padding: 48px 16px 24px; }
+        .b-deck-stage .deck-key { min-height: 48px; }
+        .command-tabs button { padding-inline: 8px; }
+        .c-window { grid-template-columns: 1fr; }
+        .c-sidebar { min-height: auto; }
+        .c-sidebar .traffic, .c-sidebar .logo, .c-sidebar .search, .c-machine-card, .c-group > span { display: none; }
+        .c-group { display: flex; margin: 0; }
+        .c-group:nth-of-type(n+3) { display: none; }
+        .c-nav { justify-content: center; }
+        .c-content { padding: 20px 14px; }
+        .setting-row { grid-template-columns: 1fr; gap: 9px; padding-block: 12px !important; }
+        .control { justify-content: flex-start; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="prototype-flag">Throwaway UI prototype · no real mutations</div>
+
+    <!-- VARIANT A -->
+    <main class="prototype variant-a" data-variant="A">
+      <section class="window a-window">
+        <header class="a-topbar">
+          <div class="logo"><span class="logo-mark"><i></i><i></i><i></i><i></i></span>Herdeck</div>
+          <span class="status-pill"><span class="dot green"></span>Runtime healthy</span>
+          <span class="status-pill"><span class="dot amber machine-dot"></span><span class="machine-summary">1 machine needs attention</span></span>
+          <span class="top-spacer"></span>
+          <select class="a-select" aria-label="Active profile"><option>Work profile</option><option>Personal</option><option>Default</option></select>
+          <button class="icon-button" aria-label="Notifications">◌</button>
+          <span class="avatar">FV</span>
+        </header>
+        <div class="a-layout">
+          <aside class="a-sidebar">
+            <div class="nav-group"><div class="nav-group-label">Control</div><button class="nav-button is-active" data-nav="overview"><span class="nav-icon">⌂</span>Overview</button></div>
+            <div class="nav-group"><div class="nav-group-label">System</div><button class="nav-button" data-nav="connections"><span class="nav-icon">⌁</span>Connections</button><button class="nav-button" data-nav="deck"><span class="nav-icon">▦</span>Deck</button></div>
+            <div class="nav-group"><div class="nav-group-label">Behavior</div><button class="nav-button"><span class="nav-icon">✦</span>Agents</button><button class="nav-button"><span class="nav-icon">↯</span>Automation</button></div>
+            <div class="nav-group"><div class="nav-group-label">Herdeck</div><button class="nav-button"><span class="nav-icon">◎</span>Profiles</button><button class="nav-button"><span class="nav-icon">⚙</span>App</button></div>
+            <div class="sidebar-foot"><strong>Herdeck Dev</strong><br /><span class="mono">e36f306 · arm64</span></div>
+          </aside>
+
+          <section class="a-content">
+            <div class="page-panel is-active" data-page="overview">
+              <div class="page-heading"><div><span class="eyebrow">System overview</span><h1>Your agents are within reach.</h1><p>One remote machine needs attention. Everything else is ready.</p></div><button class="secondary" data-nav="connections">Review connection</button></div>
+              <div class="overview-grid">
+                <article class="card hero-health"><div class="health-orbit"><span></span></div><div><h2>Herdeck is ready</h2><p>Runtime, local sessions, and notifications are responding.</p></div><div class="hero-stats"><div class="hero-stat"><strong>3</strong><small>active agents</small></div><div class="hero-stat"><strong>2</strong><small>machines</small></div><div class="hero-stat"><strong>12m</strong><small>until reset</small></div></div></article>
+                <article class="card a-card"><div class="card-title"><div><h2>Machines</h2><p>Where your agent sessions are running</p></div><button class="icon-button" data-nav="connections">→</button></div><div class="health-row"><span class="dot green"></span><div><strong>Personal MBP</strong><small>Local · 2 sessions · connected now</small></div><span class="badge good">Ready</span></div><div class="health-row macbench-row"><span class="dot amber machine-dot"></span><div><strong>MacBench</strong><small class="machine-detail">Remote bridge is not responding</small></div><span class="badge warn machine-badge">Check</span></div><div class="health-row"><span class="dot"></span><div><strong>Stream Deck</strong><small>Not connected on this Mac</small></div><span class="badge">Optional</span></div></article>
+                <article class="card a-card"><div class="card-title"><div><h2>Agent activity</h2><p>Live across your selected sessions</p></div><span class="badge">3 agents</span></div><div class="agent-row"><span class="dot amber"></span><span class="repo">herdeck</span><span class="meta mono">codex · main</span><span class="state">Waiting for you</span></div><div class="agent-row"><span class="dot green"></span><span class="repo">diktato</span><span class="meta mono">claude · issue-49</span><span class="state">Working</span></div><div class="agent-row"><span class="dot" style="background:var(--cyan)"></span><span class="repo">macdoktor-crm</span><span class="meta mono">codex · main</span><span class="state">Done</span></div></article>
+              </div>
+            </div>
+
+            <div class="page-panel" data-page="connections">
+              <div class="page-heading"><div><span class="eyebrow">Connections</span><h1>Machines & sessions</h1><p>Choose where Herdeck looks for running agents.</p></div><button class="primary">Add remote machine</button></div>
+              <div class="connections-grid">
+                <div class="notice macbench-notice"><span class="dot amber machine-dot"></span><strong>MacBench bridge is offline</strong><span class="machine-detail">The machine is reachable over Tailscale, but its Herdr bridge is not responding.</span><span class="spacer"></span><button class="secondary repair-button">Check again</button></div>
+                <article class="card a-card"><div class="card-title"><div><h2>Connection path</h2><p>Credentials stay in Keychain on this Mac</p></div><span class="badge good">Tailscale protected</span></div><div class="topology"><div class="machine"><span class="eyebrow">This Mac</span><strong>Personal MBP</strong><small>Herdeck Desktop · 100.86.178.12</small></div><div class="route-line"></div><div class="machine"><span class="eyebrow">Remote</span><strong>MacBench</strong><small class="machine-detail">Reachable · bridge offline</small></div></div></article>
+                <article class="card settings-card"><div class="setting-row"><div class="setting-copy"><strong>Local sessions</strong><small>Automatically include sessions running on this Mac.</small></div><div class="control"><button class="switch" aria-pressed="true" aria-label="Local sessions enabled"></button></div></div><div class="setting-row"><div class="setting-copy"><strong>MacBench</strong><small>Remote machine over your private Tailscale network.</small></div><div class="control"><span class="badge warn machine-badge">Needs attention</span><button class="secondary repair-button">Diagnose</button></div></div><div class="setting-row"><div class="setting-copy"><strong>Connection order</strong><small>Local sessions appear before remote machines.</small></div><div class="control"><select><option>Local, then remote</option><option>Remote, then local</option></select></div></div></article>
+              </div>
+            </div>
+
+            <div class="page-panel" data-page="deck">
+              <div class="page-heading"><div><span class="eyebrow">Deck</span><h1>Layout & appearance</h1><p>Changes update the preview immediately.</p></div><span class="badge">Work profile</span></div>
+              <article class="card settings-card"><div class="setting-row"><div class="setting-copy"><strong>Management layout</strong><small>How new agents and profiles appear on the deck.</small></div><div class="control"><div class="segmented"><button class="is-on">Launcher</button><button>Bottom row</button></div></div></div><div class="setting-row"><div class="setting-copy"><strong>Working animation</strong><small>A subtle signal while an agent is actively working.</small></div><div class="control"><select><option>Calm pulse</option><option>Comet</option><option>Static</option></select></div></div><div class="setting-row"><div class="setting-copy"><strong>Tile surface</strong><small>Use status colors as a tint, full fill, or accent only.</small></div><div class="control"><div class="segmented"><button>Accent</button><button class="is-on">Tint</button><button>Solid</button></div></div></div><div class="setting-row"><div class="setting-copy"><strong>Interface accent</strong><small>Used for selection and active controls, not agent states.</small></div><div class="control swatches"><button class="swatch is-on" style="--swatch:#5e8cff"></button><button class="swatch" style="--swatch:#59c8d6"></button><button class="swatch" style="--swatch:#a98af5"></button><button class="swatch" style="--swatch:#f0b35a"></button></div></div><div class="setting-row"><div class="setting-copy"><strong>Show profile on status panel</strong><small>Display the active profile beside runtime status.</small></div><div class="control"><button class="switch" aria-pressed="true" aria-label="Show profile enabled"></button></div></div></article>
+            </div>
+          </section>
+
+          <aside class="a-preview"><div class="sticky"><span class="eyebrow">Live preview</span><h2>Work profile</h2><p>Click a tile to open its related settings.</p><div data-deck></div><div class="preview-callout"><strong>⌁ MacBench connection</strong><small class="machine-detail">Bridge offline. Local agents stay available.</small></div></div></aside>
+        </div>
+      </section>
+    </main>
+
+    <!-- VARIANT B -->
+    <main class="prototype variant-b" data-variant="B">
+      <section class="window b-window">
+        <header class="b-top"><div class="logo"><span class="logo-mark"><i></i><i></i><i></i><i></i></span>Herdeck</div><nav class="command-tabs"><button class="is-active" data-nav="overview">Surface</button><button data-nav="connections">Connections</button><button data-nav="deck">Appearance</button></nav><span class="top-spacer"></span><span class="status-pill"><span class="dot green"></span>Live · Work profile</span><button class="secondary">Save changes</button><span class="avatar">FV</span></header>
+        <section class="b-stage">
+          <div class="b-deck-stage"><div data-deck></div></div>
+          <aside class="card b-context">
+            <div class="b-panel-settings is-active" data-page="overview"><div class="context-head"><span class="eyebrow">Selected surface</span><h1>Agent overview</h1><p>The deck is the navigation. Select any key to inspect what it shows and controls.</p></div><div class="context-section"><h3>Runtime</h3><div class="mini-row"><span class="dot green"></span>Herdeck runtime<span class="spacer"></span><span class="badge good">Ready</span></div><div class="mini-row"><span class="dot amber machine-dot"></span>MacBench<span class="spacer"></span><span class="badge warn machine-badge">Offline</span></div></div><div class="context-section"><h3>Selected profile</h3><div class="mini-row">Work profile<span class="spacer"></span><button class="quiet">Change</button></div></div><div class="context-section"><h3>Deck behavior</h3><div class="mini-row">Keyboard shortcuts<span class="spacer"></span><button class="switch" aria-pressed="true"></button></div><div class="mini-row">Status animation<span class="spacer"></span><span class="badge">Calm</span></div></div></div>
+            <div class="b-panel-settings" data-page="connections"><div class="context-head"><span class="eyebrow">Connections</span><h1>Two machines</h1><p>Local and remote sessions merge into one deck without exposing their tokens.</p></div><div class="context-section"><h3>Personal MBP</h3><div class="mini-row"><span class="dot green"></span>Local Herdr<span class="spacer"></span><span class="badge good">2 sessions</span></div></div><div class="context-section"><h3>MacBench</h3><div class="mini-row"><span class="dot amber machine-dot"></span><span class="machine-detail">Bridge not responding</span><span class="spacer"></span></div><button class="secondary repair-button" style="width:100%;margin-top:9px">Check connection</button></div><div class="context-section"><button class="quiet" style="width:100%">Add remote machine</button></div></div>
+            <div class="b-panel-settings" data-page="deck"><div class="context-head"><span class="eyebrow">Appearance</span><h1>Deck surface</h1><p>Adjust the surface while keeping agent state colors consistent.</p></div><div class="context-section"><h3>Tile fill</h3><div class="segmented"><button>Accent</button><button class="is-on">Tint</button><button>Solid</button></div></div><div class="context-section"><h3>Motion</h3><div class="mini-row">Working animation<span class="spacer"></span><span class="badge">Pulse</span></div><div class="mini-row">Reduced motion<span class="spacer"></span><button class="switch" aria-pressed="false"></button></div></div><div class="context-section"><h3>Accent</h3><div class="swatches"><button class="swatch is-on" style="--swatch:#5e8cff"></button><button class="swatch" style="--swatch:#59c8d6"></button><button class="swatch" style="--swatch:#a98af5"></button></div></div></div>
+          </aside>
+        </section>
+        <section class="b-bottom"><article class="card"><div class="card-title"><div><h2>Live activity</h2><p>What changed across your agents</p></div><span class="badge">Now</span></div><div class="event-line"><span class="mono">16:42</span><span class="dot amber"></span><span class="event">herdeck is waiting for your approval</span></div><div class="event-line"><span class="mono">16:40</span><span class="dot green"></span><span class="event">diktato started a test run</span></div><div class="event-line"><span class="mono">16:37</span><span class="dot" style="background:var(--cyan)"></span><span class="event">macdoktor-crm finished</span></div></article><article class="card"><div class="card-title"><div><h2>Connection signal</h2><p>One actionable issue</p></div><span class="dot amber machine-dot"></span></div><div class="notice"><span class="machine-detail">MacBench is reachable, but its bridge is offline.</span><span class="spacer"></span><button class="secondary repair-button">Check</button></div></article></section>
+      </section>
+    </main>
+
+    <!-- VARIANT C -->
+    <main class="prototype variant-c" data-variant="C">
+      <section class="window c-window">
+        <aside class="c-sidebar"><div class="traffic"><i></i><i></i><i></i></div><div class="logo"><span class="logo-mark"><i></i><i></i><i></i><i></i></span>Herdeck</div><div class="search">⌕ Search settings</div><div class="c-group"><span>General</span><button class="c-nav is-active" data-nav="overview">Overview</button><button class="c-nav" data-nav="connections">Connections</button><button class="c-nav" data-nav="deck">Deck</button></div><div class="c-group"><span>Configuration</span><button class="c-nav">Agents</button><button class="c-nav">Automation</button><button class="c-nav">Profiles</button></div><div class="c-group"><span>Application</span><button class="c-nav">Window & shortcuts</button><button class="c-nav">Advanced</button></div><div class="c-machine-card"><strong><span class="dot amber machine-dot" style="display:inline-block;margin-right:6px"></span><span class="machine-summary">MacBench needs attention</span></strong><small class="machine-detail">Bridge is not responding</small></div></aside>
+        <section class="c-main"><header class="c-toolbar"><button class="icon-button">‹</button><button class="icon-button">›</button><h1>Settings</h1><span class="spacer"></span><select class="a-select"><option>Work profile</option><option>Default</option></select><button class="primary">Save</button></header><div class="c-content">
+          <div class="page-panel is-active" data-page="overview"><div class="c-title"><h2>Overview</h2><p>Current state of Herdeck on this Mac.</p></div><div class="c-overview"><article class="card"><div class="card-title"><div><h3>Runtime</h3><p>Local Herdeck service</p></div><span class="badge good">Running</span></div><div class="health-row"><span class="dot green"></span><div><strong>Personal MBP</strong><small>2 active sessions</small></div><button class="quiet">Details</button></div></article><article class="card"><div class="card-title"><div><h3>Remote machines</h3><p>Your Tailscale connections</p></div><span class="badge warn machine-badge">1 issue</span></div><div class="health-row"><span class="dot amber machine-dot"></span><div><strong>MacBench</strong><small class="machine-detail">Bridge offline</small></div><button class="secondary repair-button">Check</button></div></article><article class="card wide"><div class="card-title"><div><h3>Recent agents</h3><p>Across selected sessions</p></div><button class="quiet">Open deck</button></div><div class="agent-row"><span class="dot amber"></span><span class="repo">herdeck</span><span class="meta mono">codex</span><span class="state">Waiting for you</span></div><div class="agent-row"><span class="dot green"></span><span class="repo">diktato</span><span class="meta mono">claude</span><span class="state">Working</span></div></article></div><div class="c-deck-mini" data-deck></div></div>
+          <div class="page-panel" data-page="connections"><div class="c-title"><h2>Connections</h2><p>Choose the local and remote sessions shown on your deck.</p></div><div class="preference-pane"><div class="setting-row"><div class="setting-copy"><strong>Personal MBP</strong><small>Use local Herdr sessions automatically.</small></div><div class="control"><span class="badge good">2 sessions</span><button class="switch" aria-pressed="true"></button></div></div><div class="setting-row"><div class="setting-copy"><strong>MacBench</strong><small class="machine-detail">Reachable over Tailscale · bridge offline</small></div><div class="control"><span class="badge warn machine-badge">Offline</span><button class="secondary repair-button">Check connection</button></div></div><div class="setting-row"><div class="setting-copy"><strong>Saved remote connections</strong><small>Reconnect automatically when a machine comes back online.</small></div><div class="control"><button class="switch" aria-pressed="true"></button></div></div></div></div>
+          <div class="page-panel" data-page="deck"><div class="c-title"><h2>Deck</h2><p>Appearance and behavior of your physical and floating deck.</p></div><div class="preference-pane"><div class="setting-row"><div class="setting-copy"><strong>Management layout</strong><small>How launchers and profiles appear.</small></div><div class="control"><select><option>Launcher menu</option><option>Bottom row</option></select></div></div><div class="setting-row"><div class="setting-copy"><strong>Working animation</strong><small>Motion used for active agents.</small></div><div class="control"><select><option>Calm pulse</option><option>Comet</option><option>None</option></select></div></div><div class="setting-row"><div class="setting-copy"><strong>Show active profile</strong><small>Display the profile on the deck status panel.</small></div><div class="control"><button class="switch" aria-pressed="true"></button></div></div><div class="setting-row"><div class="setting-copy"><strong>Status color intensity</strong><small>How much of each key is filled with its status color.</small></div><div class="control"><div class="segmented"><button>Accent</button><button class="is-on">Tint</button><button>Solid</button></div></div></div></div><div class="c-deck-mini" data-deck></div></div>
+        </div></section>
+      </section>
+    </main>
+
+    <nav class="prototype-switcher" aria-label="Prototype variants"><button id="prev-variant" aria-label="Previous variant">←</button><div class="switcher-label"><strong id="variant-label">A — Control room</strong><small>Use arrows or keyboard ← →</small></div><button id="next-variant" aria-label="Next variant">→</button></nav>
+    <div class="toast" id="toast" role="status">Connection restored in prototype</div>
+
+    <template id="deck-template">
+      <div class="deck-frame"><div class="deck-grid"><button class="deck-key blocked" style="--key:var(--amber)"><span class="key-dot"></span><strong>herdeck</strong><small>Needs approval</small></button><button class="deck-key" style="--key:var(--green)"><span class="key-dot"></span><strong>diktato</strong><small>Working · 2m</small></button><button class="deck-key done" style="--key:var(--cyan)"><span class="key-dot"></span><strong>macdoktor</strong><small>Done</small></button><button class="deck-key" style="--key:var(--violet)"><span class="key-dot"></span><strong>research</strong><small>Waiting · CI</small></button><button class="deck-key" style="--key:#64748b"><span class="key-dot"></span><strong>New agent</strong><small>Choose launcher</small></button><button class="deck-key" style="--key:var(--green)"><span class="key-dot"></span><strong>website</strong><small>Working · 8m</small></button><button class="deck-key" style="--key:#64748b"><span class="key-dot"></span><strong>Empty</strong><small>—</small></button><button class="deck-key" style="--key:#64748b"><span class="key-dot"></span><strong>Empty</strong><small>—</small></button><button class="deck-key deck-panel" style="--key:var(--signal)"><div><strong>WORK</strong><small>3 active · 1 blocked</small></div><b>16:42</b></button></div><div class="signal-rail"><span class="dot green"></span><span>Personal MBP</span><span class="dot amber machine-dot"></span><span>MacBench</span><span class="spacer"></span><span class="mono">live · work</span></div></div>
+    </template>
+
+    <script>
+      const variants = [
+        { key: "A", label: "Control room" },
+        { key: "B", label: "Deck-first canvas" },
+        { key: "C", label: "macOS inspector" },
+      ];
+      let currentPage = "overview";
+      let macBenchOnline = false;
+
+      document.querySelectorAll("[data-deck]").forEach((target) => {
+        target.append(document.getElementById("deck-template").content.cloneNode(true));
+      });
+
+      function currentVariant() {
+        const key = new URLSearchParams(location.search).get("variant")?.toUpperCase();
+        return variants.some((item) => item.key === key) ? key : "A";
+      }
+
+      function renderVariant(key, replace = true) {
+        document.querySelectorAll(".prototype").forEach((node) => {
+          node.classList.toggle("is-active", node.dataset.variant === key);
+        });
+        const item = variants.find((variant) => variant.key === key);
+        document.getElementById("variant-label").textContent = `${item.key} — ${item.label}`;
+        document.title = `Herdeck Prototype ${item.key} — ${item.label}`;
+        const url = new URL(location.href);
+        url.searchParams.set("variant", key);
+        history[replace ? "replaceState" : "pushState"]({}, "", url);
+        renderPage(currentPage);
+      }
+
+      function cycleVariant(direction) {
+        const index = variants.findIndex((item) => item.key === currentVariant());
+        const next = variants[(index + direction + variants.length) % variants.length];
+        renderVariant(next.key, false);
+      }
+
+      function renderPage(page) {
+        currentPage = page;
+        const activePrototype = document.querySelector(".prototype.is-active");
+        if (!activePrototype) return;
+        activePrototype.querySelectorAll("[data-page]").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.page === page));
+        activePrototype.querySelectorAll("[data-nav]").forEach((button) => button.classList.toggle("is-active", button.dataset.nav === page));
+      }
+
+      function setMacBenchOnline(online) {
+        macBenchOnline = online;
+        document.querySelectorAll(".machine-dot").forEach((dot) => { dot.classList.toggle("amber", !online); dot.classList.toggle("green", online); });
+        document.querySelectorAll(".machine-detail").forEach((node) => { node.textContent = online ? "Bridge connected · 1 session" : "Bridge is not responding"; });
+        document.querySelectorAll(".machine-summary").forEach((node) => { node.textContent = online ? "All machines connected" : "1 machine needs attention"; });
+        document.querySelectorAll(".machine-badge").forEach((node) => { node.textContent = online ? "Ready" : "Needs attention"; node.classList.toggle("warn", !online); node.classList.toggle("good", online); });
+        document.querySelectorAll(".macbench-notice").forEach((node) => { node.style.display = online ? "none" : "flex"; });
+      }
+
+      document.addEventListener("click", (event) => {
+        const nav = event.target.closest("[data-nav]");
+        if (nav?.dataset.nav && ["overview", "connections", "deck"].includes(nav.dataset.nav)) renderPage(nav.dataset.nav);
+        const toggle = event.target.closest(".switch");
+        if (toggle) toggle.setAttribute("aria-pressed", String(toggle.getAttribute("aria-pressed") !== "true"));
+        const segment = event.target.closest(".segmented button");
+        if (segment) { segment.parentElement.querySelectorAll("button").forEach((button) => button.classList.remove("is-on")); segment.classList.add("is-on"); }
+        const swatch = event.target.closest(".swatch");
+        if (swatch) { swatch.parentElement.querySelectorAll(".swatch").forEach((button) => button.classList.remove("is-on")); swatch.classList.add("is-on"); }
+        const repair = event.target.closest(".repair-button");
+        if (repair) { repair.textContent = "Checking…"; repair.disabled = true; window.setTimeout(() => { setMacBenchOnline(true); document.querySelectorAll(".repair-button").forEach((button) => { button.textContent = "Connected"; button.disabled = false; }); const toast = document.getElementById("toast"); toast.classList.add("show"); window.setTimeout(() => toast.classList.remove("show"), 1800); }, 650); }
+      });
+
+      document.getElementById("prev-variant").addEventListener("click", () => cycleVariant(-1));
+      document.getElementById("next-variant").addEventListener("click", () => cycleVariant(1));
+      window.addEventListener("popstate", () => renderVariant(currentVariant()));
+      window.addEventListener("keydown", (event) => {
+        const tag = event.target.tagName;
+        if (["INPUT", "TEXTAREA", "SELECT"].includes(tag) || event.target.isContentEditable) return;
+        if (event.key === "ArrowLeft") cycleVariant(-1);
+        if (event.key === "ArrowRight") cycleVariant(1);
+      });
+
+      renderVariant(currentVariant());
+      setMacBenchOnline(macBenchOnline);
+    </script>
+  </body>
+</html>
