@@ -65,6 +65,7 @@
   // Local editor rows (source of truth while editing); re-seeded only when ConfigApp bumps
   // `reloadRev` (load/discard/Apply-reload) — same pattern as StartProfilesSection.
   let rows = $state<AnswerProfileRow[]>(answerProfileRows(payload));
+  let removalRevision = $state(0);
   let seenRev = $state<number | null>(null);
   let rejectedRenameRev = $state(0);
 
@@ -119,7 +120,7 @@
     commit([...rows, { name: "", approve: [], deny: [], stop: [], approve_always: null }]);
   }
   function isBuiltIn(name: string): boolean { return Object.hasOwn(DEFAULT_ANSWER_PROFILES, name); }
-  function remove(i: number): void { commit(rows.filter((_, j) => j !== i)); }
+  function remove(i: number): void { removalRevision += 1; commit(rows.filter((_, j) => j !== i)); }
 
   // --- overlay mode: per-entry override (whole entry dict) ---
   const SEC = "answer_profiles";
@@ -221,7 +222,7 @@
   <p class="hint">{lm.base_hint}</p>
   {#each rows as e, i (i)}
     <fieldset>
-      <legend>{e.name || lm.new_profile}{#if !isBuiltIn(e.name)} <ConfirmRemoveButton title={lm.remove_profile} onconfirm={() => remove(i)} />{/if}</legend>
+      <legend>{e.name || lm.new_profile}{#if !isBuiltIn(e.name)} <ConfirmRemoveButton title={lm.remove_profile} identity={`${e.name}\u0000${JSON.stringify(e)}`} resetKey={removalRevision} onconfirm={() => remove(i)} />{/if}</legend>
       {#if !isBuiltIn(e.name)}
         {#key `${i}:${rejectedRenameRev}`}
           <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />

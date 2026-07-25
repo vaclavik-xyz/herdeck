@@ -22,6 +22,7 @@
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
 
   const servers = $derived(serversOf(payload));
+  let removalRevision = $state(0);
 
   // Current-language tooltips for every field — required for each labelled
   // field (enforced by sections.help.test.ts); texts live in help.ts.
@@ -69,6 +70,7 @@
   }
   function remove(i: number): void {
     payload = removeServer(payload, i);
+    removalRevision += 1;
     onChange();
   }
   function selectLocal(name: string, selected: boolean): void {
@@ -128,7 +130,7 @@
      A stable-id apparatus would add complexity that 9 řez-4 sections would clone. -->
 {#each servers as s, i (i)}
   <fieldset>
-    <legend>{s.id || lm.new_server} <ConfirmRemoveButton title={lm.remove_server} onconfirm={() => remove(i)} /></legend>
+    <legend>{s.id || lm.new_server} <ConfirmRemoveButton title={lm.remove_server} identity={`${s.id}\u0000${s.url}\u0000${s.token_env}`} resetKey={removalRevision} onconfirm={() => remove(i)} /></legend>
     <TextField label="id" help={HELP.id} value={s.id} oninput={(v) => set(i, "id", v)} />
     <TextField label="url" help={HELP.url} value={s.url} oninput={(v) => set(i, "url", v)} />
     <TokenSecretField

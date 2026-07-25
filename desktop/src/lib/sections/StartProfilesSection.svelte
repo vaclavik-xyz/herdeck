@@ -71,6 +71,7 @@
 
   // --- base mode: local rows (re-seed only on reloadRev) + explicit-empty mode ---
   let rows = $state<StartProfileRow[]>(startProfileRows(payload));
+  let removalRevision = $state(0);
   let seenRev = $state<number | null>(null);
   let mode = $state<ListFieldState>(mapSectionState(payload, SEC));
 
@@ -108,6 +109,7 @@
   function add(): void { commit([...rows, { name: "", argv: [] }]); }
   function remove(i: number): void {
     const next = rows.filter((_, j) => j !== i);
+    removalRevision += 1;
     if (next.length === 0) {
       rows = [];
       mode = "empty";
@@ -172,7 +174,7 @@
   {:else if mode === "custom"}
     {#each rows as e, i (i)}
       <fieldset>
-        <legend>{e.name || lm.new_profile} <ConfirmRemoveButton title={lm.remove_launcher} onconfirm={() => remove(i)} /></legend>
+        <legend>{e.name || lm.new_profile} <ConfirmRemoveButton title={lm.remove_launcher} identity={`${e.name}\u0000${e.argv.join("\u0000")}`} resetKey={removalRevision} onconfirm={() => remove(i)} /></legend>
         <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
         {#if e.name.trim() !== ""}
           <ListField label="argv" help={HELP.argv} value={e.argv} onchange={(v) => setArgv(i, v)} />

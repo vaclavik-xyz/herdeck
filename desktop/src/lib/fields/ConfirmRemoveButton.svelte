@@ -2,10 +2,24 @@
   import { onDestroy } from "svelte";
   import { t } from "../i18n.svelte";
 
-  let { title, onconfirm }: { title: string; onconfirm: () => void } = $props();
+  let { title, onconfirm, identity = "", resetKey = 0 }:
+    { title: string; onconfirm: () => void; identity?: string; resetKey?: string | number } = $props();
 
   let armed = $state(false);
   let resetTimer: ReturnType<typeof setTimeout> | undefined;
+  let previousIdentity: string | undefined;
+  let previousResetKey: string | number | undefined;
+  let resetSeen = false;
+
+  $effect(() => {
+    if (resetSeen && (identity !== previousIdentity || resetKey !== previousResetKey)) {
+      if (resetTimer) clearTimeout(resetTimer);
+      armed = false;
+    }
+    previousIdentity = identity;
+    previousResetKey = resetKey;
+    resetSeen = true;
+  });
 
   function press(): void {
     if (armed) {
