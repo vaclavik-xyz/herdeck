@@ -2,12 +2,12 @@
   import FieldCopy from "./FieldCopy.svelte";
   // `help` is the Czech tooltip explaining what the setting does. Every field
   // with a visible label must pass one — enforced by sections.help.test.ts.
-  let { label, value, oninput, help = "" }:
-    { label: string; value: string; oninput: (v: string) => void; help?: string } = $props();
+  let { label, value, oninput, help = "", owner = null }:
+    { label: string; value: string; oninput: (v: string) => void; help?: string; owner?: string | null } = $props();
 </script>
 
 <label class="field" class:unlabelled={!label}>
-  {#if label}<FieldCopy {label} {help} />{/if}
+  {#if label}<FieldCopy {label} {help} {owner} />{/if}
   <input value={value} oninput={(e) => oninput((e.target as HTMLInputElement).value)} />
 </label>
 

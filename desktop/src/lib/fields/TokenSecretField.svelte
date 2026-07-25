@@ -10,6 +10,7 @@
     onset,
     onclear,
     help = "",
+    owner = null,
   }: {
     label: string;
     value: string;
@@ -18,6 +19,7 @@
     onset: (secretValue: string) => void;
     onclear: () => void;
     help?: string;
+    owner?: string | null;
   } = $props();
 
   let entering = $state(false);
@@ -40,7 +42,7 @@
 </script>
 
 <label class="field">
-  <FieldCopy {label} {help} />
+  <FieldCopy {label} {help} {owner} />
   <input value={value} oninput={(e) => oninput((e.target as HTMLInputElement).value)} />
   {#if value}
     {#if flag.set}

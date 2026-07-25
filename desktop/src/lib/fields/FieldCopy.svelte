@@ -4,18 +4,20 @@
 
   import { fieldPresentation } from "../fieldPresentation";
   import { locale } from "../i18n.svelte";
+  import { fieldValidationKey } from "../validationIssues";
   import { FIELD_VALIDATION_CONTEXT, type FieldValidationMessages } from "../validationContext";
 
-  let { label, help = "" }: { label: string; help?: string } = $props();
+  let { label, help = "", owner = null }: { label: string; help?: string; owner?: string | null } = $props();
   const presentation = $derived(fieldPresentation(label, locale.lang));
   const validations = getContext<FieldValidationMessages>(FIELD_VALIDATION_CONTEXT) ?? readable<Record<string, string[]>>({});
-  const messages = $derived(presentation.configKey ? ($validations[presentation.configKey] ?? []) : []);
+  const messages = $derived(presentation.configKey ? ($validations[fieldValidationKey(presentation.configKey, owner)] ?? []) : []);
 </script>
 
 <span
   class="label fieldlabel"
   class:hashelp={!!help}
   data-config-key={presentation.configKey ?? undefined}
+  data-config-owner={owner ?? undefined}
   title={help || undefined}
 >
   <span>{presentation.label}</span>

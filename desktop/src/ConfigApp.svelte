@@ -311,6 +311,7 @@
   function selectSection(key: string): void {
     active = key;
     navQuery = "";
+    validationEditProfile = undefined;
   }
 
   function searchKeydown(event: KeyboardEvent): void {
@@ -331,6 +332,9 @@
   let deckView = $state<DeckViewModel>(initialView());
   let dirty = $state(false);
   let errors = $state<string[]>([]);
+  // undefined follows the runtime profile; null deliberately edits base;
+  // a string opens that profile's overlay without switching the running deck.
+  let validationEditProfile = $state<string | null | undefined>(undefined);
   let showErrors = $state(false); // expanded error list above the savebar
   let busy = $state(false);
   // A structured status banner (replaces the old plain `notice` string). Task 7
@@ -342,17 +346,28 @@
   }
   let reloadRev = $state(0); // bumps on every load(); map sections re-seed local rows on change
 
-  const validationIssues = $derived(classifyValidationErrors(errors, payload?.activeProfile ?? "default"));
+  const editProfile = $derived(validationEditProfile !== undefined
+    ? validationEditProfile
+    : payload && payload.activeProfile !== "default" ? payload.activeProfile : null);
+  const showProfileContext = $derived(
+    PROFILE_SCOPED.has(active) && (validationEditProfile !== undefined || editProfile != null),
+  );
+  const validationIssues = $derived(classifyValidationErrors(errors, payload ?? undefined));
   const validationSections = $derived(new Set(validationIssues.flatMap((entry) => entry.section ? [entry.section] : [])));
-  $effect(() => fieldValidationMessages.set(messagesForSection(validationIssues, active)));
+  $effect(() => fieldValidationMessages.set(messagesForSection(
+    validationIssues,
+    active,
+    PROFILE_SCOPED.has(active) ? editProfile : null,
+  )));
 
   async function focusValidationIssue(entry: ValidationIssue): Promise<void> {
     showErrors = true;
     if (entry.section == null || entry.fieldKey == null) return;
+    validationEditProfile = PROFILE_SCOPED.has(entry.section) ? entry.profileContext : undefined;
     active = entry.section;
     navQuery = "";
     await tick();
-    revealValidationField(contentRoot, entry.fieldKey);
+    revealValidationField(contentRoot, entry.fieldKey, entry.owner);
   }
 
   // The editor speaks the config's EFFECTIVE [view].language (active profile
@@ -428,13 +443,6 @@
     return demo;
   }
 
-  // The profile whose OVERLAY the per-section editors edit. "default" → base mode. As of
-  // řez β2 every _OVERLAY_SECTION (Deck/View/Theme/Safety/Macros/Start/Notifications/Answer)
-  // is overlay-aware; Servers (base server list) and Profiles (meta-section) stay base-only
-  // by design (not per-section overlays), so no base-only warning is needed anymore.
-  const editProfile = $derived(payload && payload.activeProfile !== "default" ? payload.activeProfile : null);
-  const showProfileContext = $derived(editProfile != null && PROFILE_SCOPED.has(active));
-
   async function switchProfile(name: string): Promise<void> {
     if (!payload) return;
     if (name === payload.activeProfile) return; // no-op: same profile
@@ -461,6 +469,7 @@
       appliedPayload = fresh;
       dirty = false;
       errors = [];
+      validationEditProfile = undefined;
       banner = null;
       reloadRev += 1;
     } catch {
@@ -536,7 +545,7 @@
         // A rejected Apply must SHOW what is wrong, not just count it.
         showErrors = true;
         banner = null;
-        const first = classifyValidationErrors(res, payload.activeProfile)[0];
+        const first = classifyValidationErrors(res, payload)[0];
         if (first) await focusValidationIssue(first);
       }
     } catch (e) {
@@ -737,7 +746,7 @@
           <div>
             <div class="title-line">
               <h1>{activeLabel}</h1>
-              {#if showProfileContext}<span class="scope-badge">{fmt(lm.editing_profile, { name: editProfile ?? "" })}</span>{/if}
+              {#if showProfileContext}<span class="scope-badge">{fmt(lm.editing_profile, { name: editProfile ?? lm.default_base })}</span>{/if}
             </div>
             <p>{activeDescription}</p>
           </div>

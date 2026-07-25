@@ -4,7 +4,7 @@
   import { t } from "../i18n.svelte";
   import FieldCopy from "./FieldCopy.svelte";
 
-  let { label, state, inheritedDisplay, onstate, children, help = "" }:
+  let { label, state, inheritedDisplay, onstate, children, help = "", owner = null }:
     {
       label: string;
       state: "inherit" | "override";
@@ -12,6 +12,7 @@
       onstate: (s: "inherit" | "override") => void;
       children: Snippet;
       help?: string;
+      owner?: string | null;
     } = $props();
 
   const SEGMENTS = $derived<{ value: "inherit" | "override"; text: string }[]>([
@@ -25,7 +26,7 @@
 </script>
 
 <div class="override">
-  <FieldCopy {label} {help} />
+  <FieldCopy {label} {help} {owner} />
   <div class="body">
     <div class="seg" role="group" aria-label={label}>
       {#each SEGMENTS as s}

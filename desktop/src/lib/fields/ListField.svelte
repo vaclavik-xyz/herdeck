@@ -2,8 +2,8 @@
   import { t } from "../i18n.svelte";
   import FieldCopy from "./FieldCopy.svelte";
 
-  let { label, value, onchange, help = "" }:
-    { label: string; value: string[]; onchange: (v: string[]) => void; help?: string } = $props();
+  let { label, value, onchange, help = "", owner = null }:
+    { label: string; value: string[]; onchange: (v: string[]) => void; help?: string; owner?: string | null } = $props();
 
   const items = $derived(Array.isArray(value) ? value : []);
 
@@ -19,7 +19,7 @@
 </script>
 
 <div class="listfield" class:unlabelled={!label}>
-  {#if label}<FieldCopy {label} {help} />{/if}
+  {#if label}<FieldCopy {label} {help} {owner} />{/if}
   <div class="rows">
     {#each items as item, i (i)}
       <div class="row">

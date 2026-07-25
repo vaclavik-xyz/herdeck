@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseConfig } from "./configClient";
 import {
   classifyValidationErrors,
   classifyValidationIssue,
+  fieldValidationKey,
   messagesForSection,
   revealValidationField,
 } from "./validationIssues";
@@ -20,11 +22,27 @@ describe("validation issue routing", () => {
   });
 
   it("distinguishes base ordering from a profile server selection", () => {
-    expect(classifyValidationIssue("active: unknown server 'ghost'", "default")).toMatchObject({
-      section: "deck", fieldKey: "overview_order",
+    const inheritedBase = parseConfig({
+      base: { deck: { overview_order: ["ghost"] } },
+      profiles: { work: {} },
+      active_profile: "work",
+    })!;
+    expect(classifyValidationIssue("active: unknown server 'ghost'", inheritedBase)).toMatchObject({
+      section: "deck", fieldKey: "overview_order", owner: null, profileContext: null,
     });
-    expect(classifyValidationIssue("work: unknown server 'ghost'", "work")).toMatchObject({
-      section: "profiles", fieldKey: "servers",
+
+    const inheritedProfile = parseConfig({
+      profiles: { parent: { servers: ["ghost"] }, work: { extends: "parent" } },
+      active_profile: "work",
+    })!;
+    expect(classifyValidationIssue("work: unknown server 'ghost'", inheritedProfile)).toMatchObject({
+      section: "profiles", fieldKey: "servers", owner: "parent", profileContext: null,
+    });
+  });
+
+  it("retains the non-active profile whose overlay needs editing", () => {
+    expect(classifyValidationIssue("night: usage.refresh_secs must be an integer >= 30")).toMatchObject({
+      section: "usage", fieldKey: "refresh_secs", profileContext: "night",
     });
   });
 
@@ -50,6 +68,20 @@ describe("validation issue routing", () => {
     expect(root.querySelector("details")?.open).toBe(true);
     expect(document.activeElement).toBe(root.querySelector("input"));
     expect(field.scrollIntoView).toHaveBeenCalled();
+    root.remove();
+  });
+
+  it("focuses only the matching repeated owner", () => {
+    const root = document.createElement("section");
+    root.innerHTML = ["one", "two"].map((owner) =>
+      `<label class="field"><span data-config-key="token_env" data-config-owner="${owner}"></span><input data-owner="${owner}" /></label>`,
+    ).join("");
+    document.body.appendChild(root);
+    for (const field of root.querySelectorAll<HTMLElement>(".field")) field.scrollIntoView = vi.fn();
+
+    expect(revealValidationField(root, "token_env", "two")).toBe(true);
+    expect((document.activeElement as HTMLElement).dataset.owner).toBe("two");
+    expect(fieldValidationKey("token_env", "two")).not.toBe(fieldValidationKey("token_env", "one"));
     root.remove();
   });
 });

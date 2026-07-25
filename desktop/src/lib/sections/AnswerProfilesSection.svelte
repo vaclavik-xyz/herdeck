@@ -208,7 +208,7 @@
       <legend>{name}{#if !isInherited(name)} <ConfirmRemoveButton title={lm.remove_entry} onconfirm={() => removeOwn(name)} />{/if}</legend>
       <OverrideField label="keys" help={HELP.keys} state={entryState(name)} inheritedDisplay={inhSummary(name)} onstate={(s) => setEntryState(name, s)}>
         {#each LIST_KEYS as k}
-          <ListField label={k} help={HELP[k]} value={entryKeyValue(name, k)} onchange={(v) => setEntryKey(name, k, v)} />
+          <ListField label={k} help={HELP[k]} owner={name} value={entryKeyValue(name, k)} onchange={(v) => setEntryKey(name, k, v)} />
         {/each}
         <TriStateListField label="approve_always" help={HELP.approve_always} state={aaStateOv(name)} list={aaListOv(name)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: aaHint(name) })} resetKey={`${prof}:${reloadRev}:answer_profiles:${name}:approve_always`} onchange={(s, l) => setAAOv(name, s, l)} />
       </OverrideField>
@@ -225,12 +225,12 @@
       <legend>{e.name || lm.new_profile}{#if !isBuiltIn(e.name)} <ConfirmRemoveButton title={lm.remove_profile} identity={`${e.name}\u0000${JSON.stringify(e)}`} resetKey={removalRevision} onconfirm={() => remove(i)} />{/if}</legend>
       {#if !isBuiltIn(e.name)}
         {#key `${i}:${rejectedRenameRev}`}
-          <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
+          <TextField label="name" help={HELP.name} owner={e.name} value={e.name} oninput={(v) => rename(i, v)} />
         {/key}
       {/if}
       {#if e.name.trim() !== ""}
         {#each LIST_KEYS as k}
-          <ListField label={k} help={HELP[k]} value={e[k] ?? []} onchange={(v) => setList(i, k, v)} />
+          <ListField label={k} help={HELP[k]} owner={e.name} value={e[k] ?? []} onchange={(v) => setList(i, k, v)} />
         {/each}
         <TriStateListField label="approve_always" help={HELP.approve_always} state={aaState(e)} list={e.approve_always ?? []} resetKey={`base:${reloadRev}:answer_profiles:${e.name}:approve_always`} onchange={(s, l) => setApproveAlways(i, s, l)} />
       {:else}

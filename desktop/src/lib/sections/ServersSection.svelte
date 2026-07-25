@@ -132,11 +132,12 @@
 {#each servers as s, i (i)}
   <fieldset>
     <legend>{s.id || lm.new_server} <ConfirmRemoveButton title={lm.remove_server} identity={`${s.id}\u0000${s.url}\u0000${s.token_env}`} resetKey={removalRevision} onconfirm={() => remove(i)} /></legend>
-    <TextField label="id" help={HELP.id} value={s.id} oninput={(v) => set(i, "id", v)} />
-    <TextField label="url" help={HELP.url} value={s.url} oninput={(v) => set(i, "url", v)} />
+    <TextField label="id" help={HELP.id} owner={s.id} value={s.id} oninput={(v) => set(i, "id", v)} />
+    <TextField label="url" help={HELP.url} owner={s.id} value={s.url} oninput={(v) => set(i, "url", v)} />
     <TokenSecretField
       label="token_env"
       help={HELP.token}
+      owner={s.id}
       value={s.token_env}
       flag={secretFlag(payload, s.token_env)}
       oninput={(v) => set(i, "token_env", v)}

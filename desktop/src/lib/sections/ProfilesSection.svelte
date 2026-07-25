@@ -123,11 +123,12 @@
     <SelectField
       label="extends"
       help={HELP.extends}
+      owner={name}
       value={profileExtends(payload, name)}
       options={extendsOptions(name)}
       onchange={(v) => setExtends(name, v)}
     />
-    <OverrideField label="servers" help={HELP.servers} state={srvState(name)} inheritedDisplay={lm.inherits_base_servers} onstate={(s) => setSrvState(name, s)}>
+    <OverrideField label="servers" help={HELP.servers} owner={name} state={srvState(name)} inheritedDisplay={lm.inherits_base_servers} onstate={(s) => setSrvState(name, s)}>
       <div class="servers">
         {#if serverOptions(name).length === 0}
           <span class="hint">{lm.no_base_servers}</span>
