@@ -135,7 +135,7 @@
     <TextField label="id" help={HELP.id} value={s.id} oninput={(v) => set(i, "id", v)} />
     <TextField label="url" help={HELP.url} value={s.url} oninput={(v) => set(i, "url", v)} />
     <TokenSecretField
-      label="token"
+      label="token_env"
       help={HELP.token}
       value={s.token_env}
       flag={secretFlag(payload, s.token_env)}

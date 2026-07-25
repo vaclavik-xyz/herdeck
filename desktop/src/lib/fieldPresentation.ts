@@ -2,7 +2,7 @@ import type { Lang } from "./i18n.svelte";
 
 const LABELS: Record<Lang, Record<string, string>> = {
   en: {
-    id: "Server name", url: "Bridge address", token: "Access token",
+    id: "Server name", url: "Bridge address", token_env: "Token reference",
     grid: "Grid size", overview_order: "Server order", deck: "Deck type",
     herdr_socket: "Herdr socket", web_bind: "Simulator address", web_port: "Simulator port",
     icons_dir: "Custom icons folder", brightness: "Display brightness", debounce: "Press debounce",
@@ -24,7 +24,7 @@ const LABELS: Record<Lang, Record<string, string>> = {
     toggle_deck: "Show or hide shortcut",
   },
   cs: {
-    id: "Název serveru", url: "Adresa bridge", token: "Přístupový token",
+    id: "Název serveru", url: "Adresa bridge", token_env: "Reference tokenu",
     grid: "Rozměr mřížky", overview_order: "Pořadí serverů", deck: "Typ decku",
     herdr_socket: "Herdr socket", web_bind: "Adresa simulátoru", web_port: "Port simulátoru",
     icons_dir: "Složka vlastních ikon", brightness: "Jas displeje", debounce: "Ochrana proti dvojstisku",
@@ -51,11 +51,14 @@ const LABELS: Record<Lang, Record<string, string>> = {
 export interface FieldPresentation {
   label: string;
   configKey: string | null;
+  status: string | null;
 }
 
 export function fieldPresentation(rawLabel: string, lang: Lang): FieldPresentation {
-  const match = rawLabel.match(/^([a-z][a-z0-9_]*)\b/);
+  const match = rawLabel.match(/^([a-z][a-z0-9_]*)(?:\s+\(([^)]+)\))?$/);
   const key = match?.[1] ?? "";
   const label = LABELS[lang][key];
-  return label ? { label, configKey: key } : { label: rawLabel, configKey: null };
+  return label
+    ? { label, configKey: key, status: match?.[2] ?? null }
+    : { label: rawLabel, configKey: null, status: null };
 }

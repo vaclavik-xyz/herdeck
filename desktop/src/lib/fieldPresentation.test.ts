@@ -6,17 +6,20 @@ describe("fieldPresentation", () => {
     expect(fieldPresentation("overview_order", "en")).toEqual({
       label: "Server order",
       configKey: "overview_order",
+      status: null,
     });
     expect(fieldPresentation("overview_order", "cs")).toEqual({
       label: "Pořadí serverů",
       configKey: "overview_order",
+      status: null,
     });
   });
 
-  it("recognizes inherited-origin suffixes without exposing them as labels", () => {
-    expect(fieldPresentation("chat_id (base)", "en")).toEqual({
+  it("keeps inherited-origin suffixes as separate status", () => {
+    expect(fieldPresentation("chat_id (inherited)", "en")).toEqual({
       label: "Chat ID",
       configKey: "chat_id",
+      status: "inherited",
     });
   });
 
@@ -24,7 +27,16 @@ describe("fieldPresentation", () => {
     expect(fieldPresentation("Provider IDs", "en")).toEqual({
       label: "Provider IDs",
       configKey: null,
+      status: null,
     });
-    expect(fieldPresentation("", "cs")).toEqual({ label: "", configKey: null });
+    expect(fieldPresentation("", "cs")).toEqual({ label: "", configKey: null, status: null });
+  });
+
+  it("makes token references explicit", () => {
+    expect(fieldPresentation("token_env", "en")).toEqual({
+      label: "Token reference",
+      configKey: "token_env",
+      status: null,
+    });
   });
 });

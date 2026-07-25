@@ -237,7 +237,7 @@
     <legend>Telegram</legend>
     <p class="hint">{lm.tg_hint}</p>
     <TokenSecretField
-      label={`token (${tgOrigin("token_env")})`}
+      label={`token_env (${tgOrigin("token_env")})`}
       help={HELP.token}
       value={tgValue("token_env")}
       flag={secretFlag(payload, tgValue("token_env"))}
@@ -266,7 +266,7 @@
   <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} resetKey={`base:${reloadRev}:notifications:backends`} onchange={(s, l) => setTri("backends", s, l)} />
   <fieldset class="tg">
     <legend>Telegram</legend>
-    <TokenSecretField label="token" help={HELP.token} value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />
+    <TokenSecretField label="token_env" help={HELP.token} value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />
     <TextField label="chat_id" help={HELP.chat_id} value={telegram.chat_id} oninput={(v) => setTelegram("chat_id", v)} />
     <NumberField label="message_thread_id" help={HELP.message_thread_id} int value={telegram.message_thread_id} onchange={(v) => setTelegram("message_thread_id", v)} />
     <BooleanField label="interactive" help={HELP.interactive} value={telegram.interactive} onchange={(v) => setTelegram("interactive", v)} />
