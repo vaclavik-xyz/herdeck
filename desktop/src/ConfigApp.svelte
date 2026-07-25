@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, setContext, tick } from "svelte";
+  import { writable } from "svelte/store";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import ArrowBendDownRight from "phosphor-svelte/lib/ArrowBendDownRight";
@@ -41,6 +42,13 @@
   import { visibilityGatedLoop } from "./lib/pollGate";
   import { connectionInventory, type ConnectionHealth } from "./lib/connectionStatus";
   import { filterSettingsNavigation } from "./lib/settingsNavigation";
+  import { FIELD_VALIDATION_CONTEXT } from "./lib/validationContext";
+  import {
+    classifyValidationErrors,
+    messagesForSection,
+    revealValidationField,
+    type ValidationIssue,
+  } from "./lib/validationIssues";
   import { defineMessages, fmt, langOf, locale, setLang } from "./lib/i18n.svelte";
   import {
     commandTransport as cfgTransport,
@@ -259,6 +267,8 @@
     },
   });
   const lm = $derived(LM[locale.lang]);
+  const fieldValidationMessages = writable<Record<string, string[]>>({});
+  setContext(FIELD_VALIDATION_CONTEXT, fieldValidationMessages);
   const browserMode = typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window);
   const browserSection = browserMode ? new URLSearchParams(window.location.search).get("section") : null;
 
@@ -317,6 +327,7 @@
   let active = $state(browserSection ?? "overview");
   let navQuery = $state("");
   let navSearchInput: HTMLInputElement;
+  let contentRoot: HTMLElement;
   let deckView = $state<DeckViewModel>(initialView());
   let dirty = $state(false);
   let errors = $state<string[]>([]);
@@ -330,6 +341,19 @@
     banner = { kind, message, actionLabel, onAction };
   }
   let reloadRev = $state(0); // bumps on every load(); map sections re-seed local rows on change
+
+  const validationIssues = $derived(classifyValidationErrors(errors, payload?.activeProfile ?? "default"));
+  const validationSections = $derived(new Set(validationIssues.flatMap((entry) => entry.section ? [entry.section] : [])));
+  $effect(() => fieldValidationMessages.set(messagesForSection(validationIssues, active)));
+
+  async function focusValidationIssue(entry: ValidationIssue): Promise<void> {
+    showErrors = true;
+    if (entry.section == null || entry.fieldKey == null) return;
+    active = entry.section;
+    navQuery = "";
+    await tick();
+    revealValidationField(contentRoot, entry.fieldKey);
+  }
 
   // The editor speaks the config's EFFECTIVE [view].language (active profile
   // override → extends chain → base) — including LIVE while the user flips the
@@ -512,6 +536,8 @@
         // A rejected Apply must SHOW what is wrong, not just count it.
         showErrors = true;
         banner = null;
+        const first = classifyValidationErrors(res, payload.activeProfile)[0];
+        if (first) await focusValidationIssue(first);
       }
     } catch (e) {
       errors = [String(e)];
@@ -678,7 +704,7 @@
           <span class="nav-label">{group.label}</span>
           {#each group.items as item}
             {@const Icon = item.icon}
-            <button class:active={item.key === active} onclick={() => selectSection(item.key)}>
+            <button class:active={item.key === active} class:problem={validationSections.has(item.key)} onclick={() => selectSection(item.key)}>
               <span class="nav-icon" aria-hidden="true"><Icon size={14} weight="regular" /></span>
               <span>{item.label}</span>
             </button>
@@ -689,7 +715,7 @@
       <div class="sidebar-version"><strong>Herdeck Desktop</strong><span>v0.1.1</span></div>
     </nav>
 
-    <section class="content">
+    <section class="content" bind:this={contentRoot}>
       {#if active === "overview"}
         <div class="page-heading">
           <div><h1>{lm.overview_title}</h1><p>{runtimeReady ? lm.overview_ready : lm.overview_connecting}</p></div>
@@ -823,7 +849,9 @@
   {#if showErrors && errors.length > 0}
     <div class="errlist" role="alert">
       <ul>
-        {#each errors as err}<li>{err}</li>{/each}
+        {#each validationIssues as entry}
+          <li><button type="button" onclick={() => void focusValidationIssue(entry)}>{entry.message}</button></li>
+        {/each}
       </ul>
     </div>
   {/if}
@@ -907,6 +935,7 @@
   .sidebar button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 31px; padding: 0 9px; border: 0; border-radius: 6px; background: none; color: #9da6b2; font-size: 11px; text-align: left; cursor: pointer; }
   .sidebar button:hover { color: #dfe3e8; background: rgb(255 255 255 / .035); }
   .sidebar button.active { color: #edf0f4; background: var(--signal-soft); }
+  .sidebar button.problem::after { width: 5px; height: 5px; margin-left: auto; border-radius: 50%; background: var(--red); content: ""; }
   .nav-icon { width: 16px; color: #737e8d; text-align: center; }
   .sidebar button.active .nav-icon { color: #95afe8; }
   .sidebar-version { display: flex; flex-direction: column; gap: 3px; margin-top: auto; padding: 12px 10px 2px; border-top: 1px solid rgb(255 255 255 / .06); color: #657286; font: 9px "SF Mono", ui-monospace, monospace; }
@@ -997,6 +1026,7 @@
   .form-card:not(.connections-editor) :global(h2:first-child) { display: none; }
   .form-card :global(.field), .form-card :global(.override), .form-card :global(.tristate), .form-card :global(.listfield) { margin: 0; padding: 9px 0; }
   .form-card :global(input:not([type="checkbox"])), .form-card :global(select) { min-height: 34px; padding: 0 10px; border-color: var(--border-strong); border-radius: var(--radius-control); background: var(--field); }
+  .form-card :global(.field:has(.fielderror) input), .form-card :global(.listfield:has(.fielderror) input), .form-card :global(.override:has(.fielderror) .seg), .form-card :global(.tristate:has(.fielderror) .seg) { border-color: var(--red); box-shadow: 0 0 0 2px rgb(219 114 122 / .1); }
   .form-card :global(fieldset) { border-color: var(--border); border-radius: var(--radius-panel); padding: 13px 15px; background: var(--surface); }
   .form-card :global(fieldset > legend) { padding: 0 6px; color: #cdd6e2; font-size: 11px; font-weight: 620; }
   .form-card :global(button:not(.switch)) { min-height: 31px; border-color: var(--border-strong); border-radius: var(--radius-control); padding: 0 10px; background: var(--surface-raised); color: #d9dee5; }
@@ -1014,6 +1044,8 @@
   .errlist { max-height: 120px; padding: 8px 14px; overflow: auto; border-top: 1px solid #4b2529; background: #191012; color: #f08b91; font-size: 12px; }
   .errlist ul { margin: 0; padding-left: 18px; }
   .errlist li { margin: 2px 0; }
+  .errlist button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .errlist button:hover { text-decoration: underline; }
 
   @media (max-width: 1120px) {
     .overview-stage, .deck-workbench, .connection-inventories { grid-template-columns: 1fr; }
