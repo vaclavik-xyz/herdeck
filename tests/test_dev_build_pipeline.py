@@ -21,7 +21,11 @@ def test_dev_build_has_an_isolated_unsigned_macos_artifact():
     assert "HERDECK_SELFTEST=imports" in workflow
     assert "actions/upload-artifact@v4" in workflow
     assert "retention-days: 14" in workflow
-    assert "APPLE_SIGNING_IDENTITY" not in workflow
+    assert "APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}" in workflow
+    assert "APPLE_SIGNING_IDENTITY:" in workflow
+    assert "codesign --verify --deep --strict" in workflow
+    assert "APPLE_ID: ${{ secrets.APPLE_ID }}" not in workflow
+    assert "APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}" not in workflow
     assert "notarytool" not in workflow
     assert "gh release" not in workflow
 
@@ -38,6 +42,7 @@ def test_readme_explains_how_dev_builds_differ_from_releases():
     assert "herdeck-dev-macos-arm64" in readme
     assert "~/.config/herdeck-dev" in readme
     assert "does not use the stable updater" in readme
+    assert "Developer ID signed but not notarized" in readme
 
 
 def test_regular_ci_runs_desktop_rust_regressions():

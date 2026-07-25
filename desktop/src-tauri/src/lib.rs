@@ -965,7 +965,12 @@ fn start_sidecar(
     stop: Arc<AtomicBool>,
     config_path: &Path,
 ) {
-    let resource_dir = app.path().resource_dir().ok();
+    let primary_resource_dir = app.path().resource_dir().ok();
+    let executable = env::current_exe().ok();
+    let resource_dir = sidecar::resolve_resource_dir(
+        primary_resource_dir.as_deref(),
+        executable.as_deref(),
+    );
     match resolve_plan(resource_dir) {
         SidecarPlan::External(d) => {
             let view = DiscoveryView::from(&d);
@@ -974,6 +979,7 @@ fn start_sidecar(
             let _ = app.handle().emit("discovery", view); // token-free
         }
         SidecarPlan::Spawn(mut spec) => {
+            eprintln!("herdeck sidecar: spawning {}", spec.program);
             spec.envs.push((
                 "HERDECK_CONFIG".to_string(),
                 config_path.to_string_lossy().into_owned(),
