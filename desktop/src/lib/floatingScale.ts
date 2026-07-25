@@ -91,3 +91,16 @@ export function anchoredFloatingPosition(
     y: Math.round(Math.min(maxY, Math.max(monitor.y, anchoredY))),
   };
 }
+
+export function floatingViewport(
+  contentHeight: number,
+  scale: number,
+  maximumHeight: number,
+): { height: number; scrollable: boolean } {
+  const desiredHeight = Math.round(contentHeight * scale);
+  const availableHeight = Math.max(1, Math.floor(maximumHeight));
+  return {
+    height: Math.min(desiredHeight, availableHeight),
+    scrollable: desiredHeight > availableHeight,
+  };
+}

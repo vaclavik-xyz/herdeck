@@ -3,6 +3,7 @@ import {
   changeFloatingScale,
   anchoredFloatingPosition,
   floatingScaleCommandForKey,
+  floatingViewport,
   readFloatingScale,
   writeFloatingScale,
 } from "./floatingScale";
@@ -74,5 +75,16 @@ describe("floating scale", () => {
       { width: 2200, height: 1400 },
       monitor,
     )).toEqual({ x: 0, y: 0 });
+  });
+
+  it("enables scrolling only when scaled content exceeds the work area", () => {
+    expect(floatingViewport(291, 0.8, 1000)).toEqual({
+      height: 233,
+      scrollable: false,
+    });
+    expect(floatingViewport(1400, 1, 1000)).toEqual({
+      height: 1000,
+      scrollable: true,
+    });
   });
 });

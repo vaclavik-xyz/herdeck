@@ -15,6 +15,7 @@
     anchoredFloatingPosition,
     changeFloatingScale,
     floatingScaleCommandForKey,
+    floatingViewport,
     readFloatingScale,
     writeFloatingScale,
     type FloatingScaleCommand,
@@ -54,6 +55,7 @@
   let availableUpdate = $state<UpdateInfo | null>(null);
   let updateError = $state("");
   let installingUpdate = $state(false);
+  let floatingScrollable = $state(false);
   let floatingScale = $state((() => {
     if (!borderless || typeof localStorage === "undefined") return 1;
     try {
@@ -139,18 +141,19 @@
         PhysicalPosition,
       } = await import("@tauri-apps/api/window");
       const window = getCurrentWindow();
-      const [position, previousSize, monitor, scaleFactor] = await Promise.all([
+      const [position, previousSize, monitor] = await Promise.all([
         window.outerPosition(),
         window.outerSize(),
         currentMonitor(),
-        window.scaleFactor(),
       ]);
       const width = Math.round(BORDERLESS_BASE_WIDTH * floatingScale);
       const monitorHeight = monitor
-        ? Math.max(160, Math.floor(monitor.size.height / scaleFactor - 32))
+        ? Math.max(160, monitor.workArea.size.height / monitor.scaleFactor - 32)
         : Number.POSITIVE_INFINITY;
+      const viewport = floatingViewport(scrollHeight, floatingScale, monitorHeight);
+      floatingScrollable = viewport.scrollable;
       const d = fitDecision(
-        Math.min(scrollHeight * floatingScale, monitorHeight),
+        viewport.height,
         lastRequestedHeight,
         width,
       );
@@ -163,7 +166,7 @@
           position,
           previousSize,
           nextSize,
-          { ...monitor.position, ...monitor.size },
+          { ...monitor.workArea.position, ...monitor.workArea.size },
         );
         if (nextPosition.x !== position.x || nextPosition.y !== position.y) {
           await window.setPosition(new PhysicalPosition(nextPosition.x, nextPosition.y));
@@ -378,6 +381,7 @@
   <main
     class:borderless
     class:desktop={surface === "desktop"}
+    class:scrollable={floatingScrollable}
     style:--floating-scale={String(floatingScale)}
   >
     <div class="shell" bind:this={shell}>
@@ -556,10 +560,13 @@
   }
   main.borderless {
     height: 100vh;
+    overflow: hidden;
+  }
+  main.borderless.scrollable {
     overflow: auto;
     scrollbar-width: none;
   }
-  main.borderless::-webkit-scrollbar {
+  main.borderless.scrollable::-webkit-scrollbar {
     display: none;
   }
   /* The drag strip is the primary way to move the borderless window: keep the
