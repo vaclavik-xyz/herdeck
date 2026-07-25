@@ -66,6 +66,8 @@
     type ConfigPayload,
   } from "./lib/configClient";
 
+  let { interactive = true }: { interactive?: boolean } = $props();
+
   const LM = defineMessages({
     en: {
       "sec.overview": "Overview",
@@ -579,6 +581,7 @@
 
   onMount(() => {
     const onSettingsShortcut = (event: KeyboardEvent): void => {
+      if (!interactive) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         navSearchInput?.focus();

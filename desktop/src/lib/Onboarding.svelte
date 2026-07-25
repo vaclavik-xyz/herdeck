@@ -23,6 +23,7 @@
     onConnected,
     onDismiss = undefined,
     onOpenSettings = undefined,
+    manual = false,
     variant = "compact",
   }: {
     view: "welcome" | "reconnect";
@@ -31,6 +32,7 @@
     onConnected: () => void;
     onDismiss?: (() => void) | undefined;
     onOpenSettings?: (() => void) | undefined;
+    manual?: boolean;
     variant?: "compact" | "desktop";
   } = $props();
 
@@ -144,7 +146,7 @@
         localAvailable,
         busy,
         tried: autoReconnectTried,
-        manual: onDismiss != null,
+        manual: manual || onDismiss != null,
       })
     ) {
       autoReconnectTried = true;

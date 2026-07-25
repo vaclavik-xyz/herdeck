@@ -36,6 +36,7 @@
   const BORDERLESS_WIDTH = 360;
 
   let shell = $state<HTMLElement | undefined>(undefined);
+  let desktopSetupOverlay = $state<HTMLElement | undefined>(undefined);
 
   let discovery = $state<Discovery | null>(null);
   let status = $state<SetupStatus | null>(null);
@@ -58,6 +59,21 @@
 
   const view = $derived(shouldOnboard(status, reonboard));
   const showDesktopSetup = $derived(desktopSetupVisible(surface, view, desktopSetupHidden));
+
+  // Opening Settings during first-run intentionally hides the setup layer. Once
+  // a connection succeeds, clear that one-shot override so a later disconnect
+  // can surface setup again.
+  $effect(() => {
+    if (view === "deck" && desktopSetupHidden) desktopSetupHidden = false;
+  });
+
+  // Keep keyboard focus inside the modal surface. ConfigApp stays mounted so
+  // unsaved settings survive a reconnect, but must not remain interactive.
+  $effect(() => {
+    if (!showDesktopSetup) return;
+    const frame = requestAnimationFrame(() => desktopSetupOverlay?.focus());
+    return () => cancelAnimationFrame(frame);
+  });
 
   async function pullDiscovery(): Promise<void> {
     try {
@@ -231,9 +247,15 @@
         />
       </div>
     {/if}
-    <ConfigApp />
+    <div class="desktop-control-room" inert={showDesktopSetup} aria-hidden={showDesktopSetup}>
+      <ConfigApp interactive={!showDesktopSetup} />
+    </div>
     {#if showDesktopSetup}
-      <div class="desktop-setup-overlay">
+      <div
+        class="desktop-setup-overlay"
+        bind:this={desktopSetupOverlay}
+        tabindex="-1"
+      >
         <header class="desktop-topbar">
           <div class="desktop-brand" aria-label="Herdeck">
             <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
@@ -254,6 +276,7 @@
             transport={setup}
             {onConnected}
             onOpenSettings={openDesktopSettings}
+            manual={reonboard}
           />
         </div>
       </div>
@@ -297,6 +320,7 @@
         transport={setup}
         {onConnected}
         onDismiss={reonboard ? () => (reonboard = false) : undefined}
+        manual={reonboard}
       />
     {/if}
     </div>
@@ -334,6 +358,9 @@
     z-index: 10;
     overflow: auto;
     background: #0d1015;
+  }
+  .desktop-setup-overlay:focus {
+    outline: none;
   }
   .desktop-banner {
     position: fixed;
