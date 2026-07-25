@@ -5,6 +5,7 @@ import {
   shouldOnboard,
   type SetupStatus,
   connectErrorMessage,
+  hasConnectionInventory,
   shouldAutoReconnect,
 } from "./onboardingClient";
 
@@ -146,6 +147,30 @@ describe("shouldOnboard (manual re-onboarding override)", () => {
     const recon = { ...demo, reason: "local_unavailable" };
     expect(shouldOnboard(recon, true)).toBe("reconnect");
     expect(shouldOnboard(recon, false)).toBe("reconnect");
+  });
+});
+
+describe("hasConnectionInventory", () => {
+  it("uses one picker when local sessions or a saved bridge exist", () => {
+    expect(hasConnectionInventory({
+      ...parseSetupStatus(full)!,
+      localSessions: [{
+        name: "default",
+        serverId: "local",
+        socketPath: "/tmp/herdr.sock",
+        available: true,
+        selected: false,
+      }],
+    })).toBe(true);
+    expect(hasConnectionInventory({
+      ...parseSetupStatus(full)!,
+      savedRemoteAvailable: true,
+    })).toBe(true);
+  });
+
+  it("keeps quick connect for an empty first-run state", () => {
+    expect(hasConnectionInventory(parseSetupStatus(full))).toBe(false);
+    expect(hasConnectionInventory(null)).toBe(false);
   });
 });
 

@@ -413,12 +413,14 @@ fn config_post_json(
     }
 }
 
-/// Show + focus the (hidden-at-startup) config editor window.
+/// Show + focus the desktop editor. Normal mode already renders it in `main`;
+/// compact overlay modes use the dedicated full-size config window.
 #[tauri::command]
-fn open_config(app: tauri::AppHandle) -> Result<(), String> {
+fn open_config(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mode = *state.window_mode.lock().unwrap();
     let w = app
-        .get_webview_window("config")
-        .ok_or_else(|| "config window not found".to_string())?;
+        .get_webview_window(window_mode::settings_window_label(mode))
+        .ok_or_else(|| "desktop settings window not found".to_string())?;
     w.show().map_err(|e| e.to_string())?;
     w.set_focus().map_err(|e| e.to_string())?;
     Ok(())
@@ -906,7 +908,9 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
             let wm_items = &wm_items_cb;
             match event.id.as_ref() {
             "settings" => {
-                if let Some(w) = app.get_webview_window("config") {
+                if let Some(w) =
+                    app.get_webview_window(window_mode::settings_window_label(current_mode))
+                {
                     let _ = w.show();
                     let _ = w.set_focus();
                 }
@@ -1089,7 +1093,8 @@ pub fn run() {
                     .transparent(false)
                     .always_on_top(false)
                     .resizable(true)
-                    .inner_size(380.0, 340.0)
+                    .inner_size(1180.0, 780.0)
+                    .min_inner_size(680.0, 540.0)
                     .skip_taskbar(false),
                 WindowMode::Floating => builder
                     .decorations(false)
@@ -1135,7 +1140,7 @@ pub fn run() {
             // then fail with "config window not found". Intercept close -> hide.
             if let Some(cfg_win) = app.get_webview_window("config") {
                 if build_channel::is_dev() {
-                    let _ = cfg_win.set_title(&format!("{display_name} — Config"));
+                    let _ = cfg_win.set_title(&format!("{display_name} - Settings"));
                 }
                 let w = cfg_win.clone();
                 cfg_win.on_window_event(move |event| {

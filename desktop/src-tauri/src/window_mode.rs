@@ -61,6 +61,16 @@ pub fn switch_needs_restart(from: WindowMode, to: WindowMode) -> bool {
     !(from.is_borderless() && to.is_borderless())
 }
 
+/// Normal mode already hosts the complete desktop control room in `main`.
+/// Compact overlay modes keep settings in their dedicated full-size window.
+pub fn settings_window_label(mode: WindowMode) -> &'static str {
+    if mode == WindowMode::Normal {
+        "main"
+    } else {
+        "config"
+    }
+}
+
 /// Resolve the `config.toml` path with the SAME existence-check order as the
 /// sidecar's `bootstrap._discover_config_path`, so Rust and the sidecar read the
 /// same file: `HERDECK_CONFIG` (if set & non-empty, absolutized) → existing
@@ -162,6 +172,13 @@ mod tests {
         assert!(!switch_needs_restart(WindowMode::Normal, WindowMode::Normal));
         assert!(!switch_needs_restart(WindowMode::Floating, WindowMode::Floating));
         assert!(!switch_needs_restart(WindowMode::AlwaysOnTop, WindowMode::AlwaysOnTop));
+    }
+
+    #[test]
+    fn settings_reuses_the_normal_desktop_window() {
+        assert_eq!(settings_window_label(WindowMode::Normal), "main");
+        assert_eq!(settings_window_label(WindowMode::Floating), "config");
+        assert_eq!(settings_window_label(WindowMode::AlwaysOnTop), "config");
     }
 
     fn scratch(name: &str) -> PathBuf {

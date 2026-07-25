@@ -1,7 +1,8 @@
 # herdeck desktop
 
-Tauri 2 (Rust) + Svelte + Vite desktop app for herdeck: a floating,
-always-on-top window that renders the live deck and a full settings UI.
+Tauri 2 (Rust) + Svelte + Vite desktop app for herdeck. Normal mode opens the
+full desktop control room; Floating and Always on top keep the compact live-deck
+overlay available beside other work.
 
 The Rust shell owns the window + tray and either **attaches** to a Herdeck
 runtime that is already listening (via its discovery JSON) or **spawns and
@@ -12,11 +13,14 @@ access `token` and proxies `/state`, `/tile`, and `/press` through Rust commands
 so the token never crosses into JS (the runtime is a different origin and sends
 no CORS headers).
 
-The Svelte frontend has two surfaces:
+The Svelte frontend has two complementary surfaces:
 
-- **DeckView** — polls `/state`, renders the `/tile` PNGs, and turns clicks into
-  `/press`, mirroring the hardware deck.
-- **Onboarding + config editor** — a first-run onboarding flow and a sectioned
+- **Desktop control room** - the normal window combines runtime status, a
+  contained live-deck preview, connections, and the full settings editor.
+- **Compact DeckView** - Floating and Always on top poll `/state`, render the
+  `/tile` PNGs, and turn clicks into `/press`, mirroring the hardware deck.
+- **Onboarding** - a first-run and change-connection flow inside the active
+  surface, followed by a sectioned
   settings editor (servers, theme, view, macros, notifications, safety,
   profiles) that reads and writes the herdeck config through the sidecar.
 
@@ -28,7 +32,8 @@ desktop/
   index.html
   src/
     main.ts                  # Svelte 5 mount
-    App.svelte               # attaches/spawns sidecar; mounts Onboarding or DeckView
+    App.svelte               # routes normal control room vs compact deck and onboarding
+    ConfigApp.svelte         # desktop overview and settings workspace
     lib/
       sidecar.ts             # framework-free discovery + /health helpers
       deckClient.ts          # /state + /tile + /press transport
@@ -66,7 +71,7 @@ python3 -m venv .venv
 
 # then, from desktop/
 npm install
-npm run tauri dev                   # opens the floating window (real GUI)
+npm run tauri dev                   # opens the normal desktop control room
 ```
 
 `npm run tauri dev` is the exact manual command to smoke-test the GUI window. It

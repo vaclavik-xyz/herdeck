@@ -15,7 +15,7 @@
     "windows": [
       {
         "label": "config",
-        "title": "Herdeck — Settings",
+        "title": "Herdeck Settings",
         "width": 1180,
         "height": 780,
         "minWidth": 680,

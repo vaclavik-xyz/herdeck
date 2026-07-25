@@ -3,9 +3,12 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import GearSix from "phosphor-svelte/lib/GearSix";
+  import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
   import Banner from "./lib/Banner.svelte";
+  import ConfigApp from "./ConfigApp.svelte";
   import DeckView from "./lib/DeckView.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
+  import { appSurface } from "./lib/appSurface";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport } from "./lib/deckClient";
   import { fitDecision } from "./lib/windowFit";
@@ -26,6 +29,7 @@
       ? document.documentElement.dataset.windowMode
       : undefined) ?? "normal";
   const borderless = windowMode !== "normal";
+  const surface = appSurface(windowMode);
 
   // Borderless width matches the Rust builder inner_size width; the window is
   // non-resizable, so width is constant and only the height is fit to content.
@@ -171,6 +175,17 @@
         ? "Nainstalovat a restartovat"
         : "Install and restart",
   );
+  const connectionSetupLabel = $derived(
+    locale.lang === "cs" ? "Nastavení připojení" : "Connection setup",
+  );
+  const connectionIntroTitle = $derived(
+    locale.lang === "cs" ? "Vyber, kde agenti běží" : "Choose where agents run",
+  );
+  const connectionIntroBody = $derived(
+    locale.lang === "cs"
+      ? "Připoj lokální herdr sessions, uložený vzdálený bridge, nebo obojí. Později to můžeš změnit v Připojeních."
+      : "Connect local herdr sessions, a saved remote bridge, or both. You can change this later in Connections.",
+  );
 
   // The tray menu is native (Rust) — retitle its items whenever the language
   // the deck reports changes (DeckView feeds `locale` from /state).
@@ -186,8 +201,25 @@
   }
 </script>
 
-<main class:borderless>
-  <div class="shell" bind:this={shell}>
+{#if surface === "desktop" && view === "deck"}
+  <div class="desktop-app">
+    {#if updateError}
+      <div class="desktop-banner"><Banner kind="error" message={updateError} /></div>
+    {:else if availableUpdate}
+      <div class="desktop-banner">
+        <Banner
+          kind="warning"
+          message={updateMessage}
+          actionLabel={updateAction}
+          onAction={installUpdate}
+        />
+      </div>
+    {/if}
+    <ConfigApp />
+  </div>
+{:else}
+  <main class:borderless class:desktop={surface === "desktop"}>
+    <div class="shell" bind:this={shell}>
     {#if borderless}
       <div class="drag" data-tauri-drag-region>
         <span class="grabber" data-tauri-drag-region></span>
@@ -215,8 +247,32 @@
           onclick={() => (reonboard = true)}><GearSix size={13} /></button
         >
       </div>
+    {:else if surface === "desktop"}
+      <header class="desktop-topbar">
+        <div class="desktop-brand" aria-label="Herdeck">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <strong>Herdeck</strong>
+        </div>
+        <span>{connectionSetupLabel}</span>
+      </header>
+      <div class="desktop-setup-stage">
+        <aside class="setup-intro">
+          <span class="setup-icon" aria-hidden="true"><PlugsConnected size={28} weight="regular" /></span>
+          <h2>{connectionIntroTitle}</h2>
+          <p>{connectionIntroBody}</p>
+        </aside>
+        <Onboarding
+          variant="desktop"
+          {view}
+          {status}
+          transport={setup}
+          {onConnected}
+          onDismiss={reonboard ? () => (reonboard = false) : undefined}
+        />
+      </div>
     {:else}
       <Onboarding
+        variant="compact"
         {view}
         {status}
         transport={setup}
@@ -224,8 +280,9 @@
         onDismiss={reonboard ? () => (reonboard = false) : undefined}
       />
     {/if}
-  </div>
-</main>
+    </div>
+  </main>
+{/if}
 
 <style>
   /* Opaque by default (normal + plain browser); borderless makes the window
@@ -247,8 +304,97 @@
     width: 100vw;
     box-sizing: border-box;
   }
+  .desktop-app {
+    min-height: 100vh;
+    background: #0d1015;
+  }
+  .desktop-banner {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    z-index: 20;
+    width: min(560px, calc(100vw - 32px));
+    transform: translateX(-50%);
+  }
   .shell {
     background: #0d1015;
+  }
+  main.desktop {
+    min-height: 100vh;
+    background: #0d1015;
+  }
+  main.desktop .shell {
+    min-height: 100vh;
+  }
+  .desktop-topbar {
+    height: 54px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 22px;
+    border-bottom: 1px solid #252b34;
+    color: #87919f;
+    font: 11px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  }
+  .desktop-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #e8ebef;
+    font-size: 13px;
+  }
+  .brand-mark {
+    display: grid;
+    grid-template-columns: repeat(2, 4px);
+    gap: 2px;
+  }
+  .brand-mark i {
+    width: 4px;
+    height: 4px;
+    border-radius: 1px;
+    background: #6f91d9;
+  }
+  .desktop-setup-stage {
+    display: grid;
+    grid-template-columns: minmax(230px, 0.72fr) minmax(440px, 1.28fr);
+    width: min(920px, calc(100vw - 64px));
+    min-height: 470px;
+    margin: 56px auto;
+    overflow: hidden;
+    border: 1px solid #2a313b;
+    border-radius: 14px;
+    background: #11151b;
+    box-shadow: 0 24px 70px rgb(4 8 13 / .3);
+  }
+  .setup-intro {
+    padding: 38px 32px;
+    border-right: 1px solid #2a313b;
+    background: #151a21;
+    color: #e8ebef;
+    font: 13px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  }
+  .setup-icon {
+    display: grid;
+    width: 48px;
+    height: 48px;
+    margin-bottom: 62px;
+    place-items: center;
+    border: 1px solid #364151;
+    border-radius: 12px;
+    background: #1b222c;
+    color: #86a4e4;
+  }
+  .setup-intro h2 {
+    margin: 0 0 10px;
+    max-width: 12ch;
+    font-size: 25px;
+    line-height: 1.08;
+    letter-spacing: -.035em;
+  }
+  .setup-intro p {
+    margin: 0;
+    max-width: 31ch;
+    color: #929ca9;
   }
   /* Rounded opaque card flush to the (transparent) window edge so the drop shadow
      traces the card silhouette. */
@@ -301,5 +447,20 @@
   }
   .reonboard:hover {
     opacity: 1;
+  }
+  @media (max-width: 760px) {
+    .desktop-setup-stage {
+      grid-template-columns: 1fr;
+      width: min(560px, calc(100vw - 28px));
+      margin: 24px auto;
+    }
+    .setup-intro {
+      padding: 22px 24px;
+      border-right: 0;
+      border-bottom: 1px solid #2a313b;
+    }
+    .setup-icon {
+      margin-bottom: 24px;
+    }
   }
 </style>

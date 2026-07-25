@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.1",
   "type": "module",
-  "description": "herdeck desktop app — floating Tauri shell for the herdeck deck (phase 1)",
+  "description": "Herdeck desktop control room and compact deck overlay",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

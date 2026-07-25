@@ -32,6 +32,15 @@ export interface SetupLocalSession {
   selected: boolean;
 }
 
+/**
+ * A discovered session or saved bridge is edited through one connection
+ * picker. Rendering quick-connect buttons next to that picker creates two
+ * controls with the same outcome and lets their selected state disagree.
+ */
+export function hasConnectionInventory(status: SetupStatus | null): boolean {
+  return (status?.localSessions.length ?? 0) > 0 || status?.savedRemoteAvailable === true;
+}
+
 /** Narrow a raw `setup_status` result into a SetupStatus, or null when it is not
  *  a usable status object (treated by the caller as "not ready" -> show the deck). */
 export function parseSetupStatus(raw: unknown): SetupStatus | null {
