@@ -38,3 +38,12 @@ def test_readme_explains_how_dev_builds_differ_from_releases():
     assert "herdeck-dev-macos-arm64" in readme
     assert "~/.config/herdeck-dev" in readme
     assert "does not use the stable updater" in readme
+
+
+def test_regular_ci_runs_desktop_rust_regressions():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+
+    assert "desktop-rust:" in workflow
+    assert "libwebkit2gtk-4.1-dev" in workflow
+    assert "npm ci && npm run build" in workflow
+    assert "cargo test --manifest-path desktop/src-tauri/Cargo.toml" in workflow
