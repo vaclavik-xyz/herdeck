@@ -20,8 +20,10 @@
   import {
     commandTransport as deckTransport,
     initialView,
+    parseState,
     type DeckViewModel,
   } from "./lib/deckClient";
+  import { visibilityGatedLoop } from "./lib/pollGate";
   import { defineMessages, fmt, langOf, locale, setLang } from "./lib/i18n.svelte";
   import {
     commandTransport as cfgTransport,
@@ -175,6 +177,8 @@
     },
   });
   const lm = $derived(LM[locale.lang]);
+  const browserMode = typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window);
+  const browserSection = browserMode ? new URLSearchParams(window.location.search).get("section") : null;
 
   // key = stable identifier (matches backend tile_sections keys where applicable),
   // label = what the sidebar shows in the CURRENT language.
@@ -209,7 +213,7 @@
 
   let discovery = $state<Discovery | null>(null);
   let payload = $state<ConfigPayload | null>(null);
-  let active = $state("overview");
+  let active = $state(browserSection ?? "overview");
   let deckView = $state<DeckViewModel>(initialView());
   let dirty = $state(false);
   let errors = $state<string[]>([]);
@@ -237,13 +241,36 @@
 
   const optionLabel = (name: string): string => (name === "default" ? lm.default_base : name);
   const activeValue = $derived(payload?.activeProfile ?? "default");
-  const switcherDisabled = $derived(payload == null || payload.envLocked || dirty);
+  const switcherDisabled = $derived(browserMode || payload == null || payload.envLocked || dirty);
   const activeLabel = $derived(
     NAV_GROUPS.flatMap((group) => group.items).find((item) => item.key === active)?.label ?? active,
   );
-  const availableLocalSessions = $derived(payload?.localSessions.filter((session) => session.available).length ?? 0);
-  const remoteServers = $derived(payload ? serversOf(payload).length : 0);
+  const selectedLocalSessions = $derived(payload?.localSessions.filter((session) => session.selected) ?? []);
+  const connectedLocalSessions = $derived(selectedLocalSessions.filter((session) => deckView.connections[session.server_id] === true).length);
+  const remoteServerRecords = $derived(payload ? serversOf(payload) : []);
+  const remoteServers = $derived(remoteServerRecords.length);
+  const connectedRemoteServers = $derived(remoteServerRecords.filter((server) => deckView.connections[server.id] === true).length);
   const runtimeReady = $derived(discovery != null && deckView.online);
+
+  function browserPreviewPayload(): ConfigPayload {
+    const demo = parseConfig({
+      base: {
+        servers: [{ id: "macbench", url: "ws://macbench:8788", token_env: "HERDECK_TOKEN_MACBENCH" }],
+        deck: { grid: "5x3", overview_order: ["local:personal", "macbench"] },
+        view: { management: "launcher_menu", tile_fields: ["repo", "status"] },
+        theme: { colors: {} },
+        desktop: { window_mode: "normal" },
+      },
+      profiles: {},
+      local: { local: { deck: "auto" }, hardware: { brightness: 80 } },
+      local_sessions: [{ name: "Personal MBP", server_id: "local:personal", socket_path: "/tmp/herdr.sock", available: true, selected: true }],
+      active_profile: "default",
+      runtime_deck: "auto",
+      secrets: {},
+    });
+    if (!demo) throw new Error("browser preview fixture is invalid");
+    return demo;
+  }
 
   // The profile whose OVERLAY the per-section editors edit. "default" → base mode. As of
   // řez β2 every _OVERLAY_SECTION (Deck/View/Theme/Safety/Macros/Start/Notifications/Answer)
@@ -381,8 +408,43 @@
   }
 
   onMount(() => {
+    if (browserMode) {
+      payload = browserPreviewPayload();
+      reloadRev += 1;
+      return () => {
+        if (validateTimer) clearTimeout(validateTimer);
+      };
+    }
+
     let alive = true;
     let unlisten: (() => void) | null = null;
+    const statusPoll = visibilityGatedLoop(
+      async () => {
+        const transport = preview;
+        if (!transport) {
+          deckView = { ...deckView, online: false, connected: false, connections: {} };
+          return;
+        }
+        try {
+          const state = parseState(await transport.fetchState());
+          if (!state) throw new Error("invalid deck state");
+          deckView = {
+            ...deckView,
+            online: true,
+            slots: state.slots || deckView.slots,
+            source: state.source,
+            connected: state.connected,
+            summary: state.summary,
+            language: state.language,
+            sections: state.sections,
+            connections: state.connections,
+          };
+        } catch {
+          deckView = { ...deckView, online: false, connected: false, connections: {} };
+        }
+      },
+      () => 1000,
+    );
     void listen<Discovery>("discovery", (ev) => {
       const d = asDiscovery(ev.payload);
       if (d) discovery = d;
@@ -411,6 +473,7 @@
     })();
     return () => {
       alive = false;
+      statusPoll.stop();
       unlisten?.();
       if (validateTimer) clearTimeout(validateTimer);
       document.removeEventListener("visibilitychange", onVisible);
@@ -425,7 +488,7 @@
       <strong>Herdeck</strong>
     </div>
     <span class="status-pill"><span class:ready={runtimeReady} class="status-dot"></span>{lm.runtime} · {runtimeReady ? lm.ready : lm.connecting}</span>
-    <span class="status-pill secondary-status"><span class:ready={deckView.connected} class="status-dot"></span>{remoteServers} {lm.remote_servers.toLowerCase()}</span>
+    <span class="status-pill secondary-status"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span>{connectedRemoteServers}/{remoteServers} {lm.remote_servers.toLowerCase()}</span>
     <span class="top-spacer"></span>
     <label class="profile-picker">
       <span>{lm.profile}</span>
@@ -479,7 +542,7 @@
           <div class="overview-stack">
             <article class="card runtime-card"><div class="health-orbit"><span class:ready={runtimeReady}></span></div><div><span class="eyebrow">{lm.runtime}</span><h2>{runtimeReady ? lm.ready : lm.connecting}</h2><p>{runtimeReady ? lm.overview_ready : lm.overview_connecting}</p></div></article>
             <article class="card stat-card"><div class="card-heading"><div><h2>{lm.agents}</h2><p>{deckView.summary.agents} {lm.agents.toLowerCase()}</p></div><span class:warning={!deckView.online || deckView.summary.blocked > 0} class="badge">{deckView.online ? lm.ready : lm.connecting}</span></div><div class="stats"><div><strong>{deckView.summary.working}</strong><span>{lm.working}</span></div><div><strong>{deckView.summary.blocked}</strong><span>{lm.blocked}</span></div><div><strong>{deckView.summary.done}</strong><span>{lm.done}</span></div></div></article>
-            <article class="card connection-card"><div class="card-heading"><div><h2>{lm.connections}</h2><p>{availableLocalSessions + remoteServers} {lm.configured}</p></div><button class="icon-button" onclick={() => (active = "servers")} aria-label={lm.connections}>→</button></div><div class="connection-row"><span class:ready={availableLocalSessions > 0} class="status-dot"></span><div><strong>{lm.local_sessions}</strong><small>{availableLocalSessions} {lm.available}</small></div><span class="badge">{availableLocalSessions}</span></div><div class="connection-row"><span class:ready={deckView.connected} class="status-dot"></span><div><strong>{lm.remote_servers}</strong><small>{deckView.connected ? lm.ready : lm.connecting}</small></div><span class="badge">{remoteServers}</span></div><div class="connection-row"><span class:ready={deckView.online} class="status-dot"></span><div><strong>{lm.deck_device}</strong><small>{payload?.runtimeDeck ?? lm.automatic}</small></div></div></article>
+            <article class="card connection-card"><div class="card-heading"><div><h2>{lm.connections}</h2><p>{selectedLocalSessions.length + remoteServers} {lm.configured}</p></div><button class="icon-button" onclick={() => (active = "servers")} aria-label={lm.connections}>→</button></div><div class="connection-row"><span class:ready={selectedLocalSessions.length > 0 && connectedLocalSessions === selectedLocalSessions.length} class="status-dot"></span><div><strong>{lm.local_sessions}</strong><small>{connectedLocalSessions}/{selectedLocalSessions.length} {lm.ready.toLowerCase()}</small></div><span class="badge">{selectedLocalSessions.length}</span></div><div class="connection-row"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span><div><strong>{lm.remote_servers}</strong><small>{connectedRemoteServers}/{remoteServers} {lm.ready.toLowerCase()}</small></div><span class="badge">{remoteServers}</span></div><div class="connection-row"><span class:ready={deckView.online} class="status-dot"></span><div><strong>{lm.deck_device}</strong><small>{payload?.runtimeDeck ?? lm.automatic}</small></div></div></article>
           </div>
         </div>
       {:else}
@@ -536,7 +599,7 @@
   {/if}
 
   <footer class="savebar">
-    <button onclick={discard} disabled={!dirty || busy} title={lm.discard_title}>{lm.discard}</button>
+    <button onclick={discard} disabled={browserMode || !dirty || busy} title={lm.discard_title}>{lm.discard}</button>
     {#if banner}<Banner kind={banner.kind} message={banner.message} actionLabel={banner.actionLabel} onAction={banner.onAction} />{/if}
     <span class="spacer"></span>
     {#if errors.length > 0}
@@ -544,7 +607,7 @@
         ⚠ {errorCountLabel(errors.length, locale.lang)} {showErrors ? "▾" : "▸"}
       </button>
     {/if}
-    <button onclick={apply} disabled={!dirty || busy} title={lm.apply_title}>{lm.apply}</button>
+    <button onclick={apply} disabled={browserMode || !dirty || busy} title={lm.apply_title}>{lm.apply}</button>
   </footer>
 </main>
 

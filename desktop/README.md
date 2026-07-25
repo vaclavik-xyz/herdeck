@@ -75,7 +75,8 @@ needs a desktop session (a real display); it will not render in a headless pane.
 For fast Settings-only UI work without a Tauri window, run `npm run dev` and
 open `http://<tailscale-ip>:1420/?window=config`. The query override is used
 only when the Tauri window API is unavailable; packaged app window routing is
-unchanged.
+unchanged. Add `&section=deck` (or another sidebar key) to open a specific
+settings panel with a non-writing browser fixture.
 
 ### Dev override (no venv / external sidecar)
 
