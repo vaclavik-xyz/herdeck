@@ -30,6 +30,7 @@
       inherited_hint: "inherited: {value}",
       hw_legend: "Hardware (this machine, local.toml)",
       hw_hint: "Applies only to this computer; never carried into profiles or the base config (not even in overlay mode).",
+      advanced: "Advanced device and runtime settings",
     },
     cs: {
       heading: "Deck",
@@ -38,6 +39,7 @@
       inherited_hint: "zděděno: {value}",
       hw_legend: "Hardware (tento stroj, local.toml)",
       hw_hint: "Platí jen pro tento počítač; nikdy se nepřenáší do profilů ani base configu (ani v overlay módu).",
+      advanced: "Pokročilé nastavení zařízení a runtime",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -107,19 +109,28 @@
   <legend>{lm.hw_legend}</legend>
   <p class="hint">{lm.hw_hint}</p>
   <TextField label="deck" help={HELP.deck} value={hwDeck} oninput={(v) => setLocalStr("local", "deck", v)} />
-  <TextField label="herdr_socket" help={HELP.herdr_socket} value={hwSocket} oninput={(v) => setLocalStr("local", "herdr_socket", v)} />
-  <TextField label="web_bind" help={HELP.web_bind} value={hwBind} oninput={(v) => setLocalStr("local", "web_bind", v)} />
-  <NumberField label="web_port" help={HELP.web_port} value={hwPort} int min={0} max={65535} onchange={(v) => setLocalNum("local", "web_port", v)} />
-  <TextField label="icons_dir" help={HELP.icons_dir} value={hwIcons} oninput={(v) => setLocalStr("local", "icons_dir", v)} />
   <NumberField label="brightness" help={HELP.brightness} value={brightness} int min={0} max={100} onchange={(v) => setLocalNum("hardware", "brightness", v)} />
-  <NumberField label="debounce" help={HELP.debounce} value={debounce} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
-  <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step="any" min={Number.MIN_VALUE} max={86400} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
-  <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
+  <details class="advanced-settings">
+    <summary>{lm.advanced}</summary>
+    <div class="advanced-fields">
+      <TextField label="herdr_socket" help={HELP.herdr_socket} value={hwSocket} oninput={(v) => setLocalStr("local", "herdr_socket", v)} />
+      <TextField label="web_bind" help={HELP.web_bind} value={hwBind} oninput={(v) => setLocalStr("local", "web_bind", v)} />
+      <NumberField label="web_port" help={HELP.web_port} value={hwPort} int min={0} max={65535} onchange={(v) => setLocalNum("local", "web_port", v)} />
+      <TextField label="icons_dir" help={HELP.icons_dir} value={hwIcons} oninput={(v) => setLocalStr("local", "icons_dir", v)} />
+      <NumberField label="debounce" help={HELP.debounce} value={debounce} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
+      <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step="any" min={Number.MIN_VALUE} max={86400} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
+      <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
+    </div>
+  </details>
 </fieldset>
 
 <style>
   h2 { margin: 0 0 8px; }
-  .hw { border: 1px solid #2a2a30; border-radius: 6px; margin: 12px 0; padding: 8px 12px; }
+  .hw { border: 1px solid #2a2a30; border-radius: 6px; margin: 12px 0; padding: 10px 12px; }
   .hw legend { color: #ccc; }
   .hint { color: #888; margin: 0 0 8px; }
+  .advanced-settings { margin: 8px 0 0; border-top: 1px solid #252a31; padding-top: 8px; }
+  .advanced-settings summary { color: #929ba8; cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
+  .advanced-settings[open] summary { color: #c5ccd5; margin-bottom: 8px; }
+  .advanced-fields { display: contents; }
 </style>

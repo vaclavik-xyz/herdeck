@@ -18,7 +18,7 @@ describe("ViewSection", () => {
       const fields = Array.from(target.querySelectorAll(".tristate"));
       for (const name of ["tile_primary", "tile_secondary"]) {
         const field = fields.find(
-          (item) => item.querySelector(".label")?.textContent?.trim() === name,
+          (item) => item.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === name,
         );
         expect(field?.querySelector(".hint")?.textContent).not.toMatch(/repo|branch/);
       }
@@ -41,7 +41,7 @@ describe("ViewSection", () => {
       const fields = Array.from(target.querySelectorAll(".tristate"));
       for (const name of ["tile_primary", "tile_secondary"]) {
         const field = fields.find(
-          (item) => item.querySelector(".label")?.textContent?.trim() === name,
+          (item) => item.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === name,
         );
         expect(field?.querySelector(".hint")?.textContent).not.toMatch(/repo|branch/);
       }
@@ -64,10 +64,10 @@ describe("ViewSection", () => {
     try {
       const fields = Array.from(target.querySelectorAll(".tristate"));
       const primary = fields.find(
-        (item) => item.querySelector(".label")?.textContent?.trim() === "tile_primary",
+        (item) => item.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === "tile_primary",
       );
       const secondary = fields.find(
-        (item) => item.querySelector(".label")?.textContent?.trim() === "tile_secondary",
+        (item) => item.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === "tile_secondary",
       );
       expect(primary?.querySelector(".hint")?.textContent).toContain("repo");
       expect(secondary?.querySelector(".hint")?.textContent).toContain("tab");
@@ -87,7 +87,7 @@ describe("ViewSection", () => {
     });
     try {
       const secondary = Array.from(target.querySelectorAll(".tristate")).find(
-        (item) => item.querySelector(".label")?.textContent?.trim() === "tile_secondary",
+        (item) => item.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === "tile_secondary",
       );
       expect(secondary?.querySelector(".hint")?.textContent).toContain("tab · branch");
     } finally {

@@ -6,9 +6,7 @@ import NotificationsSection from "./NotificationsSection.svelte";
 import NotificationsSectionHarness from "./NotificationsSectionHarness.svelte";
 
 function inputFor(target: HTMLElement, label: string): HTMLInputElement {
-  const fieldLabel = Array.from(target.querySelectorAll(".fieldlabel")).find(
-    (node) => node.textContent?.trim() === label,
-  );
+  const fieldLabel = target.querySelector<HTMLElement>(`[data-config-key="${label}"]`);
   const input = fieldLabel?.parentElement?.querySelector("input");
   if (!(input instanceof HTMLInputElement)) throw new Error(`missing input for ${label}`);
   return input;
@@ -16,7 +14,7 @@ function inputFor(target: HTMLElement, label: string): HTMLInputElement {
 
 function overrideFor(target: HTMLElement, label: string): HTMLElement {
   const field = Array.from(target.querySelectorAll(".override")).find(
-    (node) => node.querySelector(":scope > .label")?.textContent?.trim() === label,
+    (node) => node.querySelector<HTMLElement>(":scope > [data-config-key]")?.dataset.configKey === label,
   );
   if (!(field instanceof HTMLElement)) throw new Error(`missing override for ${label}`);
   return field;

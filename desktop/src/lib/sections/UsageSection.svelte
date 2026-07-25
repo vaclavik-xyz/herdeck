@@ -31,6 +31,7 @@
       active_only: "Active subscriptions only",
       advanced: "Advanced provider order",
       provider_ids: "Provider ids",
+      technical_paths: "Tool locations",
       enabled: "Enabled",
       none: "(none)",
     },
@@ -40,6 +41,7 @@
       active_only: "Jen aktivní předplatná",
       advanced: "Pokročilé pořadí providerů",
       provider_ids: "ID poskytovatelů",
+      technical_paths: "Umístění nástrojů",
       enabled: "Zapnuto",
       none: "(nic)",
     },
@@ -101,15 +103,18 @@
   <OverrideField label="refresh_secs" help={HELP.refresh_secs} state={scState("refresh_secs")} inheritedDisplay={hint("refresh_secs")} onstate={(s) => setScState("refresh_secs", s)}>
     <NumberField label="" int min={30} value={Number(scValue("refresh_secs"))} onchange={(v) => setScOrInherit("refresh_secs", v)} />
   </OverrideField>
-  <OverrideField label="codex_path" help={HELP.codex_path} state={scState("codex_path")} inheritedDisplay={hint("codex_path")} onstate={(s) => setScState("codex_path", s)}>
-    <TextField label="" value={String(scValue("codex_path") ?? "")} oninput={(v) => setScOrInherit("codex_path", v.trim() === "" ? "" : v)} />
-  </OverrideField>
-  <OverrideField label="claude_cache_path" help={HELP.claude_cache_path} state={scState("claude_cache_path")} inheritedDisplay={hint("claude_cache_path")} onstate={(s) => setScState("claude_cache_path", s)}>
-    <TextField label="" value={String(scValue("claude_cache_path") ?? "")} oninput={(v) => setScOrInherit("claude_cache_path", v.trim() === "" ? "" : v)} />
-  </OverrideField>
-  <OverrideField label="codexbar_path" help={HELP.codexbar_path} state={scState("codexbar_path")} inheritedDisplay={hint("codexbar_path")} onstate={(s) => setScState("codexbar_path", s)}>
-    <TextField label="" value={String(scValue("codexbar_path") ?? "")} oninput={(v) => setSc("codexbar_path", v)} />
-  </OverrideField>
+  <details class="advanced-settings">
+    <summary>{lm.technical_paths}</summary>
+    <OverrideField label="codex_path" help={HELP.codex_path} state={scState("codex_path")} inheritedDisplay={hint("codex_path")} onstate={(s) => setScState("codex_path", s)}>
+      <TextField label="" value={String(scValue("codex_path") ?? "")} oninput={(v) => setScOrInherit("codex_path", v.trim() === "" ? "" : v)} />
+    </OverrideField>
+    <OverrideField label="claude_cache_path" help={HELP.claude_cache_path} state={scState("claude_cache_path")} inheritedDisplay={hint("claude_cache_path")} onstate={(s) => setScState("claude_cache_path", s)}>
+      <TextField label="" value={String(scValue("claude_cache_path") ?? "")} oninput={(v) => setScOrInherit("claude_cache_path", v.trim() === "" ? "" : v)} />
+    </OverrideField>
+    <OverrideField label="codexbar_path" help={HELP.codexbar_path} state={scState("codexbar_path")} inheritedDisplay={hint("codexbar_path")} onstate={(s) => setScState("codexbar_path", s)}>
+      <TextField label="" value={String(scValue("codexbar_path") ?? "")} oninput={(v) => setSc("codexbar_path", v)} />
+    </OverrideField>
+  </details>
 {:else}
   <ProviderPicker providers={providers} help={HELP.providers} onchange={setBaseProviders} />
   <details class="advanced">
@@ -118,9 +123,12 @@
   </details>
   <BooleanField label={lm.active_only} help={HELP.paid_only} value={paidOnly} onchange={(v) => set("paid_only", v)} />
   <NumberField label="refresh_secs" help={HELP.refresh_secs} int min={30} value={refreshSecs} onchange={(v) => setOrRemove("refresh_secs", v)} />
-  <TextField label="codex_path" help={HELP.codex_path} value={codexPath} oninput={(v) => setOrRemove("codex_path", v.trim() === "" ? "" : v)} />
-  <TextField label="claude_cache_path" help={HELP.claude_cache_path} value={claudeCachePath} oninput={(v) => setOrRemove("claude_cache_path", v.trim() === "" ? "" : v)} />
-  <TextField label="codexbar_path" help={HELP.codexbar_path} value={codexbarPath} oninput={(v) => set("codexbar_path", v)} />
+  <details class="advanced-settings">
+    <summary>{lm.technical_paths}</summary>
+    <TextField label="codex_path" help={HELP.codex_path} value={codexPath} oninput={(v) => setOrRemove("codex_path", v.trim() === "" ? "" : v)} />
+    <TextField label="claude_cache_path" help={HELP.claude_cache_path} value={claudeCachePath} oninput={(v) => setOrRemove("claude_cache_path", v.trim() === "" ? "" : v)} />
+    <TextField label="codexbar_path" help={HELP.codexbar_path} value={codexbarPath} oninput={(v) => set("codexbar_path", v)} />
+  </details>
 {/if}
 
 <style>
@@ -129,4 +137,7 @@
   .advanced { margin: 2px 0 8px; color: #858892; font-size: 11px; }
   .advanced summary { cursor: pointer; user-select: none; }
   .advanced[open] summary { margin-bottom: 5px; color: #aeb2bd; }
+  .advanced-settings { margin: 8px 0; border-top: 1px solid #252a31; padding-top: 8px; }
+  .advanced-settings summary { color: #929ba8; cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
+  .advanced-settings[open] summary { color: #c5ccd5; margin-bottom: 8px; }
 </style>
