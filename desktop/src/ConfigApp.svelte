@@ -248,8 +248,8 @@
   );
   const selectedLocalSessions = $derived(payload?.localSessions.filter((session) => session.selected) ?? []);
   const connectedLocalSessions = $derived(selectedLocalSessions.filter((session) => {
-    const runtimeId = deckView.localConnections[session.name] ?? session.server_id;
-    return deckView.connections[runtimeId] === true;
+    const runtimeId = deckView.localConnections[session.name];
+    return runtimeId !== undefined && deckView.connections[runtimeId] === true;
   }).length);
   const activeRemoteServerIds = $derived(new Set(payload ? effectiveActiveServerIds(payload) : []));
   const remoteServerRecords = $derived(payload
