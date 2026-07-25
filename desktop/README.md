@@ -3,12 +3,14 @@
 Tauri 2 (Rust) + Svelte + Vite desktop app for herdeck: a floating,
 always-on-top window that renders the live deck and a full settings UI.
 
-The Rust shell owns the window + tray and either **attaches** to a herdeck
+The Rust shell owns the window + tray and either **attaches** to a Herdeck
 runtime that is already listening (via its discovery JSON) or **spawns and
-supervises** a Python sidecar (`python -m herdeck.deckapp`). It reads the
-sidecar's loopback `url` + access `token` and proxies `/state`, `/tile`, and
-`/press` through Rust commands, so the token never crosses into JS (the sidecar
-is a different origin and sends no CORS headers).
+supervises** one. Development uses `python -m herdeck.deckapp`; production
+bundles `herdeck.runtime`, including the Ulanzi D200 and HID stack. Both expose
+the same loopback discovery contract. The shell reads the runtime's `url` +
+access `token` and proxies `/state`, `/tile`, and `/press` through Rust commands,
+so the token never crosses into JS (the runtime is a different origin and sends
+no CORS headers).
 
 The Svelte frontend has two surfaces:
 
@@ -93,3 +95,25 @@ cd src-tauri && cargo build && cargo test
 `npm run tauri build` / `npm run tauri dev` run `npm run build` automatically
 (via `beforeBuildCommand` / `beforeDevCommand`); a *bare* `cargo build` needs
 `build/` to already exist.
+
+### Production bundle
+
+The distributable app needs a frozen Python runtime with the D200 dependencies:
+
+```sh
+# from the repo root
+python3 -m venv .venv
+.venv/bin/pip install -e '.[packaging,deck]'
+cd desktop
+npm ci
+bash scripts/build-app.sh
+```
+
+The production binary starts the converged runtime, so the desktop window and
+physical D200 share one Herdr connection and one render state. Closing the
+window hides it while the app and D200 continue in the menu bar. The native
+**Start at login** item enables Tauri's macOS LaunchAgent.
+
+Official tag builds import the Developer ID certificate, sign every nested
+Mach-O in the PyInstaller runtime, notarize the `.app`/DMG, create signed updater
+artifacts, and publish them only after the macOS and Linux jobs all pass.

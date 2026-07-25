@@ -135,7 +135,7 @@ pub fn resolve_frozen_sidecar(resource_dir: &Path) -> Option<CommandSpec> {
             program: bin.to_string_lossy().into_owned(),
             args: vec![],
             cwd: None,
-            envs: vec![],
+            envs: vec![("HERDECK_RUNTIME_MANAGED".to_string(), "1".to_string())],
         })
     } else {
         None
@@ -388,7 +388,10 @@ mod tests {
         assert_eq!(spec.program, bin.to_string_lossy());
         assert!(spec.args.is_empty());
         assert!(spec.cwd.is_none());
-        assert!(spec.envs.is_empty());
+        assert_eq!(
+            spec.envs,
+            vec![("HERDECK_RUNTIME_MANAGED".to_string(), "1".to_string())]
+        );
     }
 
     #[test]

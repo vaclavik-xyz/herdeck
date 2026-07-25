@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import __version__
+
 log = logging.getLogger(__name__)
 
 _CLI_TIMEOUT_S = 120.0
@@ -369,7 +371,7 @@ class CodexAppServerSource:
                     "clientInfo": {
                         "name": "herdeck",
                         "title": "Herdeck",
-                        "version": "0.1.0",
+                        "version": __version__,
                     }
                 },
             }

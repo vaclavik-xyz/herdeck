@@ -35,6 +35,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "category": "Utility",
     "resources": {
@@ -51,6 +52,14 @@
       "deb": {
         "depends": ["libayatana-appindicator3-1"]
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgwRkM0RkE5QTdGNzExQ0UKUldUT0VmZW5xVS84Z0VuV0hYb3d2UzB1U3ZpSDVXVnlDQkQ0U05KNW83Z2tQY1UzeHpUN2RIRVQK",
+      "endpoints": [
+        "https://github.com/vaclavik-xyz/herdeck/releases/latest/download/latest.json"
+      ]
     }
   }
 }

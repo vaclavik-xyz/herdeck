@@ -12,6 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - run: python scripts/set-version.py --check
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
       - run: python -m pytest -v --cov=herdeck --cov-report=term-missing

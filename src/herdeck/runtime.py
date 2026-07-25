@@ -20,6 +20,30 @@ from .deckapp.discovery import clear_runtime_file, runtime_file_path, write_runt
 from .deckapp.server import create_app
 from .deckapp.sinks import ReconnectingD200Sink
 
+SELFTEST_IMPORTS = (
+    "herdeck.deckapp.onboarding",
+    "herdeck.deckapp.local_bridge",
+    "herdeck.bridge",
+    "herdeck.runtime",
+    "herdeck.driver.d200",
+    "strmdck",
+    "strmdck.devices.ulanzi_d200",
+    "hid",
+)
+
+
+def _run_import_selftest() -> int:
+    import importlib
+
+    for module in SELFTEST_IMPORTS:
+        importlib.import_module(module)
+    return 0
+
+
+def _should_write_discovery() -> bool:
+    """Only standalone runtimes own the shared runtime.json discovery file."""
+    return os.environ.get("HERDECK_RUNTIME_MANAGED") != "1"
+
 
 def _default_driver_factory(config):
     """Build (and open) a D200Driver from config.hardware. Raises if no device."""
@@ -76,10 +100,17 @@ def build_runtime(
 
 
 def main() -> int:
+    if os.environ.get("HERDECK_SELFTEST") == "imports":
+        return _run_import_selftest()
     if os.environ.get("HERDECK_DEBUG"):
         logging.basicConfig(level=logging.DEBUG)
     port = int(os.environ.get("HERDECK_DECKAPP_PORT", "0"))
-    app, sink, info, path = build_runtime(host="127.0.0.1", port=port)
+    write_discovery = _should_write_discovery()
+    app, sink, info, path = build_runtime(
+        host="127.0.0.1",
+        port=port,
+        write_discovery=write_discovery,
+    )
     print(json.dumps(info), flush=True)  # stdout discovery fallback (parity with the sidecar)
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -87,7 +118,8 @@ def main() -> int:
     try:
         stop.wait()
     finally:
-        clear_runtime_file(path)
+        if write_discovery:
+            clear_runtime_file(path)
         if sink is not None:
             sink.close()
         app.close()

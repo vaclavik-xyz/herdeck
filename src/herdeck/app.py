@@ -1482,9 +1482,20 @@ async def _amain_elgato(mode, file_config, socket_path, token) -> None:
         await aclose()
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     import os
     import sys
+
+    argv = sys.argv[1:] if argv is None else argv
+    if argv == ["--version"]:
+        from . import __version__
+
+        print(f"herdeck {__version__}")
+        return
+    if argv[:1] == ["update"]:
+        from .update import main as update_main
+
+        raise SystemExit(update_main(argv[1:]))
 
     if os.environ.get("HERDECK_DEBUG"):
         logging.basicConfig(

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import Banner from "./lib/Banner.svelte";
   import DeckView from "./lib/DeckView.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
@@ -14,6 +15,7 @@
   } from "./lib/onboardingClient";
   import { locale } from "./lib/i18n.svelte";
   import { visibilityGatedLoop } from "./lib/pollGate";
+  import { updateTransport, type UpdateInfo } from "./lib/updateClient";
 
   // Window mode is injected on <html data-window-mode> by Rust BEFORE first paint
   // (initialization_script), so the borderless CSS applies with no FOUC. Falls
@@ -35,6 +37,11 @@
   // Manual "change connection" override: open the welcome card even when the
   // status would show the deck (so a demo/local-pinned user can re-onboard).
   let reonboard = $state(false);
+  let availableUpdate = $state<UpdateInfo | null>(null);
+  let updateError = $state("");
+  let installingUpdate = $state(false);
+
+  const updater = updateTransport((cmd, args) => invoke(cmd, args));
 
   const transport = $derived(
     discovery ? commandTransport((cmd, args) => invoke(cmd, args)) : null,
@@ -51,6 +58,29 @@
       if (d) discovery = d;
     } catch {
       // Not in a Tauri WebView (plain browser): leave null, DeckView goes offline.
+    }
+  }
+
+  async function checkForUpdate(): Promise<void> {
+    try {
+      availableUpdate = await updater.check();
+    } catch {
+      // Automatic checks are best-effort: offline startup and an empty release
+      // channel must never interfere with the deck.
+    }
+  }
+
+  async function installUpdate(): Promise<void> {
+    if (installingUpdate) return;
+    installingUpdate = true;
+    updateError = "";
+    try {
+      const installed = await updater.install();
+      if (!installed) availableUpdate = null;
+    } catch (error) {
+      updateError = error instanceof Error ? error.message : String(error);
+    } finally {
+      installingUpdate = false;
     }
   }
 
@@ -87,6 +117,7 @@
         if (!discovery) await new Promise((r) => setTimeout(r, 400));
       }
     })();
+    void checkForUpdate();
 
     // Visibility-gated: the setup poll parks while the window is hidden (the
     // deck lives in the tray) and refreshes immediately on show.
@@ -123,6 +154,22 @@
   const changeConnectionTitle = $derived(
     locale.lang === "cs" ? "Změnit připojení" : "Change connection",
   );
+  const updateMessage = $derived(
+    availableUpdate
+      ? locale.lang === "cs"
+        ? `Je dostupný Herdeck ${availableUpdate.version}.`
+        : `Herdeck ${availableUpdate.version} is available.`
+      : "",
+  );
+  const updateAction = $derived(
+    installingUpdate
+      ? locale.lang === "cs"
+        ? "Instaluji…"
+        : "Installing…"
+      : locale.lang === "cs"
+        ? "Nainstalovat a restartovat"
+        : "Install and restart",
+  );
 
   // The tray menu is native (Rust) — retitle its items whenever the language
   // the deck reports changes (DeckView feeds `locale` from /state).
@@ -144,6 +191,16 @@
       <div class="drag" data-tauri-drag-region>
         <span class="grabber" data-tauri-drag-region></span>
       </div>
+    {/if}
+    {#if updateError}
+      <Banner kind="error" message={updateError} />
+    {:else if availableUpdate}
+      <Banner
+        kind="warning"
+        message={updateMessage}
+        actionLabel={updateAction}
+        onAction={installUpdate}
+      />
     {/if}
     {#if view === "deck"}
       <DeckView {transport} />
