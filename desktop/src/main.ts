@@ -9,7 +9,11 @@ try {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   label = getCurrentWindow().label;
 } catch {
-  /* not in a Tauri WebView */
+  // Plain-browser design/dev mode: opt into the settings surface without a
+  // Tauri window label. Production WebViews never take this branch.
+  if (new URLSearchParams(window.location.search).get("window") === "config") {
+    label = "config";
+  }
 }
 
 const Root = label === "config" ? ConfigApp : App;

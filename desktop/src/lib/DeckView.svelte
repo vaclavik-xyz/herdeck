@@ -19,12 +19,14 @@
     transport,
     pollMs = 300,
     onJump = undefined,
+    onView = undefined,
   }: {
     // Live transport (built from the sidecar url + token via sidecar.ts). Null
     // until the shell reports both; the deck then renders its offline state.
     transport: DeckTransport | null;
     pollMs?: number;
     onJump?: (section: string) => void;
+    onView?: (view: DeckViewModel) => void;
   } = $props();
 
   let view = $state<DeckViewModel>(initialView());
@@ -35,9 +37,11 @@
   async function step(): Promise<void> {
     if (!transport) {
       view = { ...view, online: false };
+      onView?.(view);
       return;
     }
     view = await stepDeck(transport, differ, view);
+    onView?.(view);
     // The deck's [view].language leads; the window follows so tiles and chrome
     // always speak the same language.
     setLang(view.language);

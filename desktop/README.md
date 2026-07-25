@@ -72,6 +72,11 @@ npm run tauri dev                   # opens the floating window (real GUI)
 `npm run tauri dev` is the exact manual command to smoke-test the GUI window. It
 needs a desktop session (a real display); it will not render in a headless pane.
 
+For fast Settings-only UI work without a Tauri window, run `npm run dev` and
+open `http://<tailscale-ip>:1420/?window=config`. The query override is used
+only when the Tauri window API is unavailable; packaged app window routing is
+unchanged.
+
 ### Dev override (no venv / external sidecar)
 
 To point the shell at a sidecar you started yourself (skips spawning):

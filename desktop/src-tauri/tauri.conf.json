@@ -15,11 +15,11 @@
     "windows": [
       {
         "label": "config",
-        "title": "herdeck — Config",
-        "width": 900,
-        "height": 680,
-        "minWidth": 640,
-        "minHeight": 480,
+        "title": "Herdeck — Settings",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 680,
+        "minHeight": 540,
         "resizable": true,
         "decorations": true,
         "alwaysOnTop": false,
