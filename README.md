@@ -82,18 +82,23 @@ agents or synthetic demo agents:
 ```bash
 .venv/bin/pip install -e ".[dev]"
 
-HERDECK_DECK=web .venv/bin/herdeck              # live local Herdr
-HERDECK_MOCK=1 HERDECK_DECK=web .venv/bin/herdeck # standalone demo
+HERDECK_SHOW_URL_TOKEN=1 \
+  .venv/bin/herdeck-web run --allow-query-token # live local Herdr
+
+HERDECK_MOCK=1 HERDECK_SHOW_URL_TOKEN=1 \
+  .venv/bin/herdeck-web run --allow-query-token # standalone demo
 ```
 
-The command prints the loopback URL. Set `HERDECK_WEB_BIND` to your Tailscale
-IP only when you intentionally need access from another device; never bind the
-dashboard to a public or untrusted interface.
+The command prints a complete loopback URL. Its query token is a credential;
+this opt-in is intended only for the local quick start. Set `HERDECK_WEB_BIND`
+to your Tailscale IP only when you intentionally need access from another
+device, and never bind the dashboard to a public or untrusted interface.
 
 ### Native desktop app
 
-The desktop app currently has to be built from source. It needs Node.js 20+,
-Rust, and the platform's Tauri build prerequisites in addition to Python:
+The desktop app currently has to be built from source. It needs Node.js
+`^20.19.0 || >=22.12.0`, Rust, and the platform's Tauri build prerequisites in
+addition to Python:
 
 ```bash
 .venv/bin/pip install -e ".[packaging]"
@@ -175,12 +180,13 @@ rolls its plist back if launchd rejects the update.
 git clone https://github.com/vaclavik-xyz/herdeck.git && cd herdeck
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
-HERDECK_MOCK=1 HERDECK_DECK=web .venv/bin/herdeck
+HERDECK_MOCK=1 HERDECK_SHOW_URL_TOKEN=1 \
+  .venv/bin/herdeck-web run --allow-query-token
 ```
 
 This renders the deck in your browser with lively synthetic agents using the
-exact device code — no Stream Deck and no herdr required. Open the loopback URL
-printed by the command.
+exact device code — no Stream Deck and no herdr required. Open the complete
+loopback URL printed by the command and treat its query token as a credential.
 
 ## Multiple Herdr sessions
 
