@@ -5,7 +5,7 @@ should the next Herdeck desktop settings use?
 
 It contains three structurally different variants on one route:
 
-- `?variant=A` — control room
+- `?variant=A` — control room with an interactive live deck and layout workbench
 - `?variant=B` — deck-first canvas
 - `?variant=C` — macOS inspector
 
