@@ -453,6 +453,24 @@ fn parse_host_port(url: &str) -> (String, u16) {
     }
 }
 
+fn resolve_automatic_plan<F>(
+    channel: &str,
+    resource_dir: Option<&Path>,
+    repo_root: &Path,
+    runtime_discovery: Option<Discovery>,
+    healthy: F,
+) -> SidecarPlan
+where
+    F: Fn(&Discovery) -> bool,
+{
+    if build_channel::shared_runtime_attach_enabled_for(channel) {
+        if let Some(discovery) = sidecar::decide_runtime_attach(runtime_discovery, healthy) {
+            return SidecarPlan::External(discovery);
+        }
+    }
+    SidecarPlan::Spawn(sidecar::choose_spawn(resource_dir, repo_root))
+}
+
 /// Decide how to obtain the sidecar. If `HERDECK_DECKAPP_URL` +
 /// `HERDECK_DECKAPP_TOKEN` are set, trust that externally-started sidecar (handy
 /// for manual `tauri dev` smoke without a `.venv`); otherwise spawn the dev venv.
@@ -479,19 +497,50 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
     // runtime's Orchestrator + bridge + clock (D200 and window in lockstep) instead
     // of spawning its own sidecar. External == "we don't own it": quitting the
     // window never kills the launchd runtime. A missing/stale file falls through.
-    if build_channel::shared_runtime_attach_enabled() {
-        if let Some(d) = sidecar::decide_runtime_attach(
-            sidecar::read_runtime_discovery(&sidecar::runtime_file_path()),
-            probe_runtime_health,
-        ) {
-            return SidecarPlan::External(d);
+    let channel = build_channel::current();
+    let runtime_discovery = build_channel::shared_runtime_attach_enabled()
+        .then(|| sidecar::read_runtime_discovery(&sidecar::runtime_file_path()))
+        .flatten();
+    resolve_automatic_plan(
+        channel,
+        resource_dir.as_deref(),
+        &repo_root_from_manifest(),
+        runtime_discovery,
+        probe_runtime_health,
+    )
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    fn stable_runtime() -> Discovery {
+        Discovery {
+            url: "http://127.0.0.1:8800".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 8800,
+            token: "stable-token".to_string(),
+            source: "live".to_string(),
         }
     }
 
-    SidecarPlan::Spawn(sidecar::choose_spawn(
-        resource_dir.as_deref(),
-        &repo_root_from_manifest(),
-    ))
+    #[test]
+    fn dev_plan_spawns_instead_of_attaching_a_healthy_stable_runtime() {
+        let plan = resolve_automatic_plan(
+            build_channel::DEV_CHANNEL,
+            None,
+            Path::new("/repo"),
+            Some(stable_runtime()),
+            |_| true,
+        );
+
+        match plan {
+            SidecarPlan::Spawn(spec) => {
+                assert!(spec.program.ends_with("/.venv/bin/python"));
+            }
+            SidecarPlan::External(_) => panic!("dev build attached the stable runtime"),
+        }
+    }
 }
 
 /// Position the floating window near the top-right of the PRIMARY monitor. The

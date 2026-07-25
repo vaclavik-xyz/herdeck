@@ -29,11 +29,6 @@ def test_dev_build_has_an_isolated_unsigned_macos_artifact():
     assert config["identifier"] == "xyz.vaclavik.herdeck.desktop.dev"
     assert config["bundle"]["createUpdaterArtifacts"] is False
 
-    shell = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
-    channel = (ROOT / "desktop/src-tauri/src/build_channel.rs").read_text()
-    assert "build_channel::shared_runtime_attach_enabled()" in shell
-    assert "dev_channel_never_attaches_the_stable_runtime" in channel
-
 
 def test_readme_explains_how_dev_builds_differ_from_releases():
     readme = (ROOT / "README.md").read_text()

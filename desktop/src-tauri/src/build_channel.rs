@@ -26,7 +26,7 @@ pub fn shared_runtime_attach_enabled() -> bool {
     shared_runtime_attach_enabled_for(current())
 }
 
-fn shared_runtime_attach_enabled_for(channel: &str) -> bool {
+pub(crate) fn shared_runtime_attach_enabled_for(channel: &str) -> bool {
     channel != DEV_CHANNEL
 }
 
