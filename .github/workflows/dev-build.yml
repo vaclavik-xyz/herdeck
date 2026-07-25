@@ -1,0 +1,94 @@
+name: dev-build
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: dev-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos:
+    name: Build macOS arm64 dev app
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install macOS build dependencies
+        run: brew install cairo
+
+      - name: Freeze and smoke the bundled runtime
+        run: |
+          CAIRO_LIB="$(brew --prefix cairo)/lib"
+          export DYLD_FALLBACK_LIBRARY_PATH="$CAIRO_LIB${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[packaging,deck]"
+          .venv/bin/python -c "import cairosvg"
+          bash desktop/scripts/build-sidecar.sh
+          bash desktop/scripts/smoke-sidecar.sh
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: macos-arm64-dev-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: macos-arm64-dev-cargo-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build isolated dev app
+        working-directory: desktop
+        env:
+          HERDECK_BUILD_CHANNEL: dev
+          HERDECK_BUILD_SHA: ${{ github.sha }}
+        run: |
+          rm -rf src-tauri/target/release/bundle
+          npm run tauri -- build \
+            --bundles app \
+            --config src-tauri/tauri.dev.conf.json
+
+      - name: Verify and archive dev app
+        run: |
+          set -euo pipefail
+          app="desktop/src-tauri/target/release/bundle/macos/Herdeck Dev.app"
+          sidecar="$app/Contents/Resources/herdeck-deckapp/herdeck-deckapp"
+          test -d "$app"
+          test "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = \
+            "xyz.vaclavik.herdeck.desktop.dev"
+          file "$app/Contents/MacOS/herdeck-desktop" | grep -q 'arm64'
+          file "$sidecar" | grep -q 'arm64'
+          HERDECK_SELFTEST=imports "$sidecar"
+          short_sha="${GITHUB_SHA::7}"
+          mkdir -p dist
+          tar -czf "dist/herdeck-dev-macos-arm64-${short_sha}.tar.gz" \
+            -C "$(dirname "$app")" "$(basename "$app")"
+          printf 'commit=%s\nchannel=dev\nbundle_id=%s\n' \
+            "$GITHUB_SHA" "xyz.vaclavik.herdeck.desktop.dev" \
+            > "dist/herdeck-dev-macos-arm64-${short_sha}.txt"
+
+      - name: Upload dev build
+        uses: actions/upload-artifact@v4
+        with:
+          name: herdeck-dev-macos-arm64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

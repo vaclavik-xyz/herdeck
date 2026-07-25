@@ -7,6 +7,7 @@
 //! the frontend can reach the sidecar over loopback. The sidecar is restarted on
 //! crash and killed on quit.
 
+pub mod build_channel;
 pub mod hotkey;
 pub mod http;
 pub mod sidecar;
@@ -87,6 +88,9 @@ struct UpdateMetadata {
 /// network is an error to the caller, which the automatic UI check suppresses.
 #[tauri::command]
 async fn update_check(app: tauri::AppHandle) -> Result<Option<UpdateMetadata>, String> {
+    if !build_channel::updates_enabled() {
+        return Ok(None);
+    }
     let update = app
         .updater()
         .map_err(|e| e.to_string())?
@@ -103,6 +107,9 @@ async fn update_check(app: tauri::AppHandle) -> Result<Option<UpdateMetadata>, S
 /// updater verify, replace, and restart the complete desktop bundle.
 #[tauri::command]
 async fn update_install(app: tauri::AppHandle) -> Result<bool, String> {
+    if !build_channel::updates_enabled() {
+        return Ok(false);
+    }
     let update = app
         .updater()
         .map_err(|e| e.to_string())?
@@ -446,6 +453,24 @@ fn parse_host_port(url: &str) -> (String, u16) {
     }
 }
 
+fn resolve_automatic_plan<F>(
+    channel: &str,
+    resource_dir: Option<&Path>,
+    repo_root: &Path,
+    runtime_discovery: Option<Discovery>,
+    healthy: F,
+) -> SidecarPlan
+where
+    F: Fn(&Discovery) -> bool,
+{
+    if build_channel::shared_runtime_attach_enabled_for(channel) {
+        if let Some(discovery) = sidecar::decide_runtime_attach(runtime_discovery, healthy) {
+            return SidecarPlan::External(discovery);
+        }
+    }
+    SidecarPlan::Spawn(sidecar::choose_spawn(resource_dir, repo_root))
+}
+
 /// Decide how to obtain the sidecar. If `HERDECK_DECKAPP_URL` +
 /// `HERDECK_DECKAPP_TOKEN` are set, trust that externally-started sidecar (handy
 /// for manual `tauri dev` smoke without a `.venv`); otherwise spawn the dev venv.
@@ -472,17 +497,50 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
     // runtime's Orchestrator + bridge + clock (D200 and window in lockstep) instead
     // of spawning its own sidecar. External == "we don't own it": quitting the
     // window never kills the launchd runtime. A missing/stale file falls through.
-    if let Some(d) = sidecar::decide_runtime_attach(
-        sidecar::read_runtime_discovery(&sidecar::runtime_file_path()),
-        probe_runtime_health,
-    ) {
-        return SidecarPlan::External(d);
-    }
-
-    SidecarPlan::Spawn(sidecar::choose_spawn(
+    let channel = build_channel::current();
+    let runtime_discovery = build_channel::shared_runtime_attach_enabled()
+        .then(|| sidecar::read_runtime_discovery(&sidecar::runtime_file_path()))
+        .flatten();
+    resolve_automatic_plan(
+        channel,
         resource_dir.as_deref(),
         &repo_root_from_manifest(),
-    ))
+        runtime_discovery,
+        probe_runtime_health,
+    )
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    fn stable_runtime() -> Discovery {
+        Discovery {
+            url: "http://127.0.0.1:8800".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 8800,
+            token: "stable-token".to_string(),
+            source: "live".to_string(),
+        }
+    }
+
+    #[test]
+    fn dev_plan_spawns_instead_of_attaching_a_healthy_stable_runtime() {
+        let plan = resolve_automatic_plan(
+            build_channel::DEV_CHANNEL,
+            None,
+            Path::new("/repo"),
+            Some(stable_runtime()),
+            |_| true,
+        );
+
+        match plan {
+            SidecarPlan::Spawn(spec) => {
+                assert!(spec.program.ends_with("/.venv/bin/python"));
+            }
+            SidecarPlan::External(_) => panic!("dev build attached the stable runtime"),
+        }
+    }
 }
 
 /// Position the floating window near the top-right of the PRIMARY monitor. The
@@ -841,7 +899,7 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     }
 
     let mut builder = TrayIconBuilder::with_id("herdeck-tray")
-        .tooltip("herdeck")
+        .tooltip(build_channel::display_name())
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
@@ -920,6 +978,10 @@ fn start_sidecar(
                 "HERDECK_CONFIG".to_string(),
                 config_path.to_string_lossy().into_owned(),
             ));
+            if let Some(service) = build_channel::keyring_service_override() {
+                spec.envs
+                    .push(("HERDECK_KEYRING_SERVICE".to_string(), service.to_string()));
+            }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 supervise(SupervisorConfig::new(spec), child, stop, move |d| {
@@ -946,9 +1008,13 @@ pub fn run() {
     // creation-time props in Tauri 2).
     let home = PathBuf::from(env::var("HOME").unwrap_or_default());
     let repo_root = repo_root_from_manifest();
-    let env_override = env::var("HERDECK_CONFIG").ok();
-    let config_path =
-        window_mode::resolve_config_path(env_override.as_deref(), &home, &repo_root);
+    let explicit_config = env::var("HERDECK_CONFIG").ok();
+    let config_override = build_channel::config_override(explicit_config.as_deref(), &home);
+    let config_path = window_mode::resolve_config_path(
+        config_override.as_ref().and_then(|path| path.to_str()),
+        &home,
+        &repo_root,
+    );
     let mode = window_mode::read_window_mode(&config_path);
 
     // Clones for the setup closure and the supervisor.
@@ -1006,8 +1072,9 @@ pub fn run() {
                 "document.documentElement.dataset.windowMode='{}'",
                 mode.as_str()
             );
+            let display_name = build_channel::display_name();
             let builder = WebviewWindowBuilder::new(&app_handle, "main", WebviewUrl::default())
-                .title("herdeck")
+                .title(&display_name)
                 .shadow(true)
                 .initialization_script(init);
             let builder = match mode {
@@ -1061,6 +1128,9 @@ pub fn run() {
             // were allowed to close, Tauri would DESTROY it and open_config would
             // then fail with "config window not found". Intercept close -> hide.
             if let Some(cfg_win) = app.get_webview_window("config") {
+                if build_channel::is_dev() {
+                    let _ = cfg_win.set_title(&format!("{display_name} — Config"));
+                }
                 let w = cfg_win.clone();
                 cfg_win.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1069,7 +1139,13 @@ pub fn run() {
                     }
                 });
             }
-            start_sidecar(app, setup_discovery, setup_child, setup_stop, &setup_config_path);
+            start_sidecar(
+                app,
+                setup_discovery,
+                setup_child,
+                setup_stop,
+                &setup_config_path,
+            );
             Ok(())
         })
         .build(tauri::generate_context!())

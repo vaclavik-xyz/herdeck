@@ -117,3 +117,10 @@ window hides it while the app and D200 continue in the menu bar. The native
 Official tag builds import the Developer ID certificate, sign every nested
 Mach-O in the PyInstaller runtime, notarize the `.app`/DMG, create signed updater
 artifacts, and publish them only after the macOS and Linux jobs all pass.
+
+### Disposable macOS dev artifact
+
+Run the repository's `dev-build` GitHub Actions workflow against the branch you
+want to test. It produces an unsigned `Herdeck Dev.app` for Apple Silicon with a
+separate bundle ID, config directory, Keychain namespace, and disabled updater.
+The artifact expires after 14 days and its title includes the source commit.

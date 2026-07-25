@@ -11,6 +11,11 @@ import os
 SERVICE = "herdeck"
 
 
+def _service() -> str:
+    """Keyring namespace, isolated for disposable desktop build channels."""
+    return os.environ.get("HERDECK_KEYRING_SERVICE") or SERVICE
+
+
 def _keyring():
     """Return the keyring module, or raise if it is unavailable.
 
@@ -29,7 +34,7 @@ def get_secret(name: str) -> str | None:
     if env:
         return env
     try:
-        return _keyring().get_password(SERVICE, name)
+        return _keyring().get_password(_service(), name)
     except Exception:
         return None
 
@@ -39,7 +44,7 @@ def secret_source(name: str) -> str | None:
     if os.environ.get(name):
         return "env"
     try:
-        if _keyring().get_password(SERVICE, name) is not None:
+        if _keyring().get_password(_service(), name) is not None:
             return "keychain"
     except Exception:
         return None
@@ -52,13 +57,13 @@ def has_secret(name: str) -> bool:
 
 def set_secret(name: str, value: str) -> None:
     """Store `value` in the OS keychain under `name`. Raises if no backend."""
-    _keyring().set_password(SERVICE, name, value)
+    _keyring().set_password(_service(), name, value)
 
 
 def clear_secret(name: str) -> None:
     """Remove the keychain entry for `name`. No-op if it is absent."""
     try:
-        _keyring().delete_password(SERVICE, name)
+        _keyring().delete_password(_service(), name)
     except Exception:
         pass
 
@@ -68,4 +73,4 @@ def peek_keychain(name: str) -> str | None:
     which is env-first), or None if ABSENT. Unlike the other readers this does NOT swallow
     backend errors — it RAISES — so a caller can distinguish 'missing' (None) from
     'unreadable' (exception) and never erase a token it failed to snapshot."""
-    return _keyring().get_password(SERVICE, name)
+    return _keyring().get_password(_service(), name)

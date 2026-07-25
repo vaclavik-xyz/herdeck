@@ -50,6 +50,18 @@ def test_set_and_clear_secret(monkeypatch):
     assert secrets.secret_source("TOK") is None
 
 
+def test_dev_build_can_isolate_its_keyring_namespace(monkeypatch):
+    fake = FakeKeyring()
+    monkeypatch.setattr(secrets, "_keyring", lambda: fake)
+    monkeypatch.setenv("HERDECK_KEYRING_SERVICE", "herdeck-dev")
+    monkeypatch.delenv("TOK", raising=False)
+
+    secrets.set_secret("TOK", "dev-value")
+
+    assert fake.store == {("herdeck-dev", "TOK"): "dev-value"}
+    assert secrets.get_secret("TOK") == "dev-value"
+
+
 def test_missing_keyring_backend_degrades_to_env_only(monkeypatch):
     def boom():
         raise RuntimeError("no backend")
