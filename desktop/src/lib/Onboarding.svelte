@@ -40,7 +40,7 @@
       connect_local: "Connect locally",
       connect: "Connect",
       remote_toggle: "Remote herdr…",
-      no_local: "herdr was not found locally — start it, or connect remotely below.",
+      no_local: "herdr was not found locally. Start it, or connect remotely below.",
       url: "URL",
       token: "Token",
       id_optional: "ID (optional)",
@@ -67,7 +67,7 @@
       connect_local: "Připojit lokálně",
       connect: "Připojit",
       remote_toggle: "Vzdálený herdr…",
-      no_local: "herdr nebyl lokálně nalezen — spusť ho, nebo se připoj vzdáleně níže.",
+      no_local: "herdr nebyl lokálně nalezen. Spusť ho, nebo se připoj vzdáleně níže.",
       url: "URL",
       token: "Token",
       id_optional: "ID (volitelné)",
@@ -329,27 +329,29 @@
   .onboarding {
     box-sizing: border-box;
     padding: 24px 18px;
-    background: #0b0b0d;
-    color: #e7ecf3;
-    font: 13px/1.4 system-ui, -apple-system, sans-serif;
+    background: #0d1015;
+    color: #e8ebef;
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
   h1 {
     margin: 0;
-    font-size: 17px;
+    font-size: 18px;
+    font-weight: 680;
+    letter-spacing: -.025em;
   }
   .lead {
     margin: 0;
-    color: #8b97a4;
+    color: #939ca9;
   }
   .lead.ok {
-    color: #3fb950;
+    color: #55c68d;
   }
   .hint {
     margin: 0;
-    color: #6b7785;
+    color: #788290;
     font-size: 12px;
   }
   .actions,
@@ -364,17 +366,18 @@
     flex-direction: column;
     gap: 8px;
     padding: 10px;
+    border: 1px solid #2b323d;
     border-radius: 10px;
-    background: #17171b;
+    background: #151a21;
   }
   .sessions {
     padding: 10px;
-    border: 1px solid #263142;
+    border: 1px solid #2b323d;
     border-radius: 10px;
-    background: #11151b;
+    background: #151a21;
   }
-  .sessions h2 { margin: 0; font-size: 13px; color: #dce7f5; }
-  .sessions > p { margin: 3px 0 9px; color: #78879a; font-size: 11px; }
+  .sessions h2 { margin: 0; font-size: 13px; color: #dce1e8; }
+  .sessions > p { margin: 3px 0 9px; color: #939ca9; font-size: 11px; }
   .session-list { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 9px; }
   .session-list label {
     display: grid;
@@ -383,41 +386,42 @@
     gap: 6px;
     min-width: 115px;
     padding: 7px 8px;
-    border: 1px solid #2a3546;
-    border-radius: 8px;
-    background: #171d26;
+    border: 1px solid #303844;
+    border-radius: 7px;
+    background: #10141a;
     cursor: pointer;
   }
-  .session-list label:has(input:checked) { border-color: #3979bd; }
+  .session-list label:has(input:checked) { border-color: #6382c1; background: rgb(111 145 217 / .14); }
   .session-list label.unavailable { opacity: .58; }
-  .session-list input { margin: 0; accent-color: #58a6ff; }
+  .session-list input { margin: 0; accent-color: #6f91d9; }
   .session-list .dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; }
-  .session-list .dot.online { background: #3fb950; box-shadow: 0 0 0 2px #1f4d2b; }
+  .session-list .dot.online { background: #55c68d; }
   .session-list span:last-child { display: flex; flex-direction: column; min-width: 0; }
   .session-list strong { font: 600 11px/1.2 ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; }
-  .session-list small { color: #78879a; font-size: 9px; }
+  .session-list small { color: #939ca9; font-size: 9px; }
   .remote label {
     display: flex;
     flex-direction: column;
     gap: 3px;
     font-size: 11px;
-    color: #8b97a4;
+    color: #939ca9;
   }
   .remote input {
     padding: 6px 8px;
-    border-radius: 6px;
-    border: 1px solid #2a2a2e;
-    background: #0b0b0d;
-    color: #e7ecf3;
+    border-radius: 7px;
+    border: 1px solid #3b4553;
+    background: #10141a;
+    color: #e8ebef;
     font: inherit;
   }
   button.primary {
     padding: 7px 14px;
-    border: none;
+    border: 1px solid #819dd8;
     border-radius: 7px;
-    background: #2563eb;
-    color: #fff;
+    background: #6f91d9;
+    color: #0d1524;
     font: inherit;
+    font-weight: 680;
     cursor: pointer;
   }
   button.primary:disabled {
@@ -426,10 +430,10 @@
   }
   button.ghost {
     padding: 6px 13px;
-    border: 1px solid #2a3f66;
+    border: 1px solid #3b4553;
     border-radius: 7px;
     background: none;
-    color: #9db8e8;
+    color: #cbd3df;
     font: inherit;
     cursor: pointer;
   }
@@ -440,17 +444,17 @@
   button.link {
     border: none;
     background: none;
-    color: #5af;
+    color: #8eabe7;
     cursor: pointer;
     font: inherit;
     padding: 4px 0;
   }
   button.link.dismiss {
     margin-left: auto;
-    color: #8b97a4;
+    color: #939ca9;
   }
   .error {
     margin: 0;
-    color: #f0883e;
+    color: #db727a;
   }
 </style>

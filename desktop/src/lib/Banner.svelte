@@ -18,10 +18,10 @@
 {/if}
 
 <style>
-  .banner { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px; }
+  .banner { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border: 1px solid currentColor; border-radius: var(--radius-control, 7px); }
   .banner .msg { flex: 1; }
-  .warning { background: #2a2410; color: #e0a030; }
-  .error { background: #2a1414; color: #e05050; }
-  .success { background: #14241a; color: #4caf78; }
-  .banner button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  .warning { background: #211b12; color: #d9a45d; }
+  .error { background: #231517; color: #db727a; }
+  .success { background: #132018; color: #55c68d; }
+  .banner button { background: transparent; border: 1px solid currentColor; color: inherit; border-radius: 5px; padding: 2px 8px; cursor: pointer; }
 </style>

@@ -28,7 +28,7 @@
       none: "(none)",
       inherit: "Inherit",
       inherited_hint: "inherited: {value}",
-      hw_legend: "Hardware (this machine — local.toml)",
+      hw_legend: "Hardware (this machine, local.toml)",
       hw_hint: "Applies only to this computer; never carried into profiles or the base config (not even in overlay mode).",
     },
     cs: {
@@ -36,7 +36,7 @@
       none: "(nic)",
       inherit: "Zdědit",
       inherited_hint: "zděděno: {value}",
-      hw_legend: "Hardware (tento stroj — local.toml)",
+      hw_legend: "Hardware (tento stroj, local.toml)",
       hw_hint: "Platí jen pro tento počítač; nikdy se nepřenáší do profilů ani base configu (ani v overlay módu).",
     },
   });

@@ -65,39 +65,39 @@
     gap: 9px;
     min-height: 46px;
     padding: 5px 9px;
-    border: 1px solid #25272e;
-    border-radius: 8px;
-    background: #111217;
+    border: 1px solid var(--border, #2b323d);
+    border-radius: var(--radius-control, 7px);
+    background: var(--field, #10141a);
     transition: border-color 120ms ease, background 120ms ease;
   }
-  .provider.enabled { border-color: #353944; background: #15171d; }
+  .provider.enabled { border-color: var(--border-strong, #3b4553); background: var(--surface, #151a21); }
   .mark {
     display: grid;
     place-items: center;
     width: 26px;
     height: 26px;
-    border-radius: 7px;
-    color: #fff;
+    border-radius: 6px;
+    color: #f0f2f5;
     font-size: 12px;
     font-weight: 750;
     letter-spacing: -0.02em;
   }
-  .mark.claude { background: #b85f42; }
-  .mark.codex { background: #147d69; }
+  .mark.claude { background: #995b48; }
+  .mark.codex { background: #276f65; }
   .identity { display: flex; flex-direction: column; min-width: 0; }
-  .name { color: #eeeef2; font-size: 13px; font-weight: 650; }
+  .name { color: var(--text, #e8ebef); font-size: 12px; font-weight: 650; }
   .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
-  .source { color: #797c87; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .state { color: #696c75; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
-  .enabled .state { color: #aeb2bd; }
+  .source { color: var(--muted, #939ca9); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .state { color: var(--muted-low, #6f7885); font-size: 10px; }
+  .enabled .state { color: #b2bac5; }
   .switch {
     position: relative;
     width: 34px;
     height: 20px;
     padding: 0;
-    border: 1px solid #383b44;
+    border: 1px solid var(--border-strong, #3b4553);
     border-radius: 999px;
-    background: #24262d;
+    background: #272d36;
     cursor: pointer;
   }
   .switch span {
@@ -110,9 +110,9 @@
     background: #8b8e97;
     transition: transform 120ms ease, background 120ms ease;
   }
-  .switch.on { border-color: #287e70; background: #1b554c; }
-  .switch.on span { transform: translateX(14px); background: #e7fff9; }
-  .switch:focus-visible { outline: 2px solid #6bd8c2; outline-offset: 2px; }
+  .switch.on { border-color: #7897d5; background: #5879bd; }
+  .switch.on span { transform: translateX(14px); background: #f2f4f7; }
+  .switch:focus-visible { outline: 2px solid #8eabe7; outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) {
     .provider, .switch span { transition: none; }
   }

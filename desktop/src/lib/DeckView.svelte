@@ -173,24 +173,24 @@
     gap: 8px;
     box-sizing: border-box;
     padding: 10px;
-    background: #0b0b0d;
+    background: #0f1217;
     font: 12px/1.3 system-ui, -apple-system, sans-serif;
-    color: #e7ecf3;
+    color: #e4e8ed;
   }
   .grid {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 6px;
     padding: 10px;
-    border-radius: 14px;
-    background: #2a2a2e;
+    border-radius: 11px;
+    background: #252a31;
   }
   .cell,
   .panel {
     border: none;
     padding: 0;
     border-radius: 8px;
-    background: #111;
+    background: #11151a;
     cursor: pointer;
     overflow: hidden;
   }
@@ -204,8 +204,8 @@
   }
   .cell.active,
   .panel.active {
-    outline: 3px solid #5af;
-    outline-offset: -3px;
+    outline: 2px solid #7f9ddd;
+    outline-offset: -2px;
   }
   .cell img,
   .panel img {

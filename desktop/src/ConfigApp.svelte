@@ -2,6 +2,21 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import ArrowBendDownRight from "phosphor-svelte/lib/ArrowBendDownRight";
+  import ArrowRight from "phosphor-svelte/lib/ArrowRight";
+  import BellSimple from "phosphor-svelte/lib/BellSimple";
+  import Command from "phosphor-svelte/lib/Command";
+  import Gauge from "phosphor-svelte/lib/Gauge";
+  import GridFour from "phosphor-svelte/lib/GridFour";
+  import HouseSimple from "phosphor-svelte/lib/HouseSimple";
+  import Layout from "phosphor-svelte/lib/Layout";
+  import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
+  import Palette from "phosphor-svelte/lib/Palette";
+  import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
+  import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
+  import SlidersHorizontal from "phosphor-svelte/lib/SlidersHorizontal";
+  import StackSimple from "phosphor-svelte/lib/StackSimple";
+  import TerminalWindow from "phosphor-svelte/lib/TerminalWindow";
   import DeckView from "./lib/DeckView.svelte";
   import ServersSection from "./lib/sections/ServersSection.svelte";
   import DeckSection from "./lib/sections/DeckSection.svelte";
@@ -80,7 +95,7 @@
       no_search_results: "No settings match this search.",
       editing_profile: "Editing profile: {name}",
       overview_eyebrow: "System overview",
-      overview_title: "Your agents are within reach.",
+      overview_title: "System status",
       overview_ready: "Runtime, sessions, and notifications are responding.",
       overview_connecting: "Waiting for the local Herdeck runtime.",
       live_deck: "Live deck",
@@ -133,9 +148,9 @@
       switch_failed_locked: "profile '{name}' cannot be activated (locked or unknown)",
       switch_failed: "profile switch failed: {e}",
       bad_config_reply: "unexpected config reply from the sidecar",
-      sidecar_not_up: "sidecar not up yet — retrying…",
+      sidecar_not_up: "sidecar not up yet. Retrying…",
       refresh_failed: "config refresh from the sidecar failed (unsaved changes kept)",
-      stale_on_disk: "the config changed on disk — load the new version (unsaved changes will be lost)",
+      stale_on_disk: "the config changed on disk. Load the new version (unsaved changes will be lost)",
       reload: "load",
       orphans: "{n} orphaned keychain keys ({list})",
       cleanup: "clean up",
@@ -179,7 +194,7 @@
       no_search_results: "Žádné nastavení tomuto hledání neodpovídá.",
       editing_profile: "Upravuješ profil: {name}",
       overview_eyebrow: "Přehled systému",
-      overview_title: "Agenty máš na dosah.",
+      overview_title: "Stav systému",
       overview_ready: "Runtime, sessions a notifikace odpovídají.",
       overview_connecting: "Čekám na lokální Herdeck runtime.",
       live_deck: "Živý deck",
@@ -232,9 +247,9 @@
       switch_failed_locked: "profil '{name}' nelze aktivovat (zamčen nebo neznámý)",
       switch_failed: "přepnutí profilu selhalo: {e}",
       bad_config_reply: "neočekávaná odpověď configu ze sidecaru",
-      sidecar_not_up: "sidecar zatím neběží — zkouším znovu…",
+      sidecar_not_up: "sidecar zatím neběží. Zkouším znovu…",
       refresh_failed: "obnovení configu ze sidecaru selhalo (neuložené změny zůstávají)",
-      stale_on_disk: "config se mezitím změnil na disku — načti novou verzi (neuložené změny se ztratí)",
+      stale_on_disk: "config se mezitím změnil na disku. Načti novou verzi (neuložené změny se ztratí)",
       reload: "načíst",
       orphans: "{n} osiřelých keychain klíčů ({list})",
       cleanup: "uklidit",
@@ -251,27 +266,27 @@
   // label = what the sidebar shows in the CURRENT language.
   const NAV_GROUPS = $derived([
     { label: lm["group.control"], items: [
-      { key: "overview", icon: "⌂", label: lm["sec.overview"] },
-      { key: "servers", icon: "⌁", label: lm["sec.servers"] },
+      { key: "overview", icon: HouseSimple, label: lm["sec.overview"] },
+      { key: "servers", icon: PlugsConnected, label: lm["sec.servers"] },
     ] },
     { label: lm["group.deck"], items: [
-      { key: "deck", icon: "▦", label: lm["sec.deck"] },
-      { key: "view", icon: "◫", label: lm["sec.view"] },
-      { key: "theme", icon: "◉", label: lm["sec.theme"] },
+      { key: "deck", icon: GridFour, label: lm["sec.deck"] },
+      { key: "view", icon: Layout, label: lm["sec.view"] },
+      { key: "theme", icon: Palette, label: lm["sec.theme"] },
     ] },
     { label: lm["group.agents"], items: [
-      { key: "start_profiles", icon: "✦", label: lm["sec.start_profiles"] },
-      { key: "answer_profiles", icon: "↳", label: lm["sec.answer_profiles"] },
-      { key: "macros", icon: "↯", label: lm["sec.macros"] },
+      { key: "start_profiles", icon: TerminalWindow, label: lm["sec.start_profiles"] },
+      { key: "answer_profiles", icon: ArrowBendDownRight, label: lm["sec.answer_profiles"] },
+      { key: "macros", icon: Command, label: lm["sec.macros"] },
     ] },
     { label: lm["group.policies"], items: [
-      { key: "notifications", icon: "◌", label: lm["sec.notifications"] },
-      { key: "safety", icon: "◇", label: lm["sec.safety"] },
-      { key: "usage", icon: "◔", label: lm["sec.usage"] },
+      { key: "notifications", icon: BellSimple, label: lm["sec.notifications"] },
+      { key: "safety", icon: ShieldCheck, label: lm["sec.safety"] },
+      { key: "usage", icon: Gauge, label: lm["sec.usage"] },
     ] },
     { label: lm["group.system"], items: [
-      { key: "profiles", icon: "◎", label: lm["sec.profiles"] },
-      { key: "desktop", icon: "⚙", label: lm["sec.desktop"] },
+      { key: "profiles", icon: StackSimple, label: lm["sec.profiles"] },
+      { key: "desktop", icon: SlidersHorizontal, label: lm["sec.desktop"] },
     ] },
   ]);
 
@@ -654,7 +669,7 @@
   <div class="body">
     <nav class="sidebar">
       <div class="settings-search" role="search">
-        <span aria-hidden="true">⌕</span>
+        <MagnifyingGlass size={12} aria-hidden="true" />
         <input bind:this={navSearchInput} bind:value={navQuery} onkeydown={searchKeydown} placeholder={lm.search_settings} aria-label={lm.search_settings} />
         {#if navQuery}<button type="button" onclick={() => (navQuery = "")} aria-label={lm.clear_search}>×</button>{:else}<kbd>⌘K</kbd>{/if}
       </div>
@@ -662,8 +677,9 @@
         <div class="nav-group">
           <span class="nav-label">{group.label}</span>
           {#each group.items as item}
+            {@const Icon = item.icon}
             <button class:active={item.key === active} onclick={() => selectSection(item.key)}>
-              <span class="nav-icon" aria-hidden="true">{item.icon}</span>
+              <span class="nav-icon" aria-hidden="true"><Icon size={14} weight="regular" /></span>
               <span>{item.label}</span>
             </button>
           {/each}
@@ -676,7 +692,7 @@
     <section class="content">
       {#if active === "overview"}
         <div class="page-heading">
-          <div><span class="eyebrow">{lm.overview_eyebrow}</span><h1>{lm.overview_title}</h1><p>{runtimeReady ? lm.overview_ready : lm.overview_connecting}</p></div>
+          <div><h1>{lm.overview_title}</h1><p>{runtimeReady ? lm.overview_ready : lm.overview_connecting}</p></div>
           <button class="secondary" onclick={() => (active = "servers")}>{lm.connections}</button>
         </div>
         <div class="overview-stage">
@@ -685,15 +701,14 @@
             <div class="deck-surface"><DeckView transport={preview} onJump={jumpToSection} onView={(view) => (deckView = view)} /></div>
           </article>
           <div class="overview-stack">
-            <article class="card runtime-card"><div class="health-orbit"><span class:ready={runtimeReady}></span></div><div><span class="eyebrow">{lm.runtime}</span><h2>{runtimeReady ? lm.ready : lm.connecting}</h2><p>{runtimeReady ? lm.overview_ready : lm.overview_connecting}</p></div></article>
+            <article class="card runtime-card"><div class="health-orbit"><span class:ready={runtimeReady}></span></div><div><span class="runtime-label">{lm.runtime}</span><h2>{runtimeReady ? lm.ready : lm.connecting}</h2><p>{runtimeReady ? lm.overview_ready : lm.overview_connecting}</p></div></article>
             <article class="card stat-card"><div class="card-heading"><div><h2>{lm.agents}</h2><p>{deckView.summary.agents} {lm.agents.toLowerCase()}</p></div><span class:warning={!deckView.online || deckView.summary.blocked > 0} class="badge">{deckView.online ? lm.ready : lm.connecting}</span></div><div class="stats"><div><strong>{deckView.summary.working}</strong><span>{lm.working}</span></div><div><strong>{deckView.summary.blocked}</strong><span>{lm.blocked}</span></div><div><strong>{deckView.summary.done}</strong><span>{lm.done}</span></div></div></article>
-            <article class="card connection-card"><div class="card-heading"><div><h2>{lm.connections}</h2><p>{selectedLocalSessions.length + remoteServers} {lm.configured}</p></div><button class="icon-button" onclick={() => (active = "servers")} aria-label={lm.connections}>→</button></div><div class="connection-row"><span class:ready={selectedLocalSessions.length > 0 && connectedLocalSessions === selectedLocalSessions.length} class="status-dot"></span><div><strong>{lm.local_sessions}</strong><small>{connectedLocalSessions}/{selectedLocalSessions.length} {lm.ready.toLowerCase()}</small></div><span class="badge">{selectedLocalSessions.length}</span></div><div class="connection-row"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span><div><strong>{lm.remote_servers}</strong><small>{connectedRemoteServers}/{remoteServers} {lm.ready.toLowerCase()}</small></div><span class="badge">{remoteServers}</span></div><div class="connection-row"><span class:ready={deckView.online} class="status-dot"></span><div><strong>{lm.deck_device}</strong><small>{payload?.runtimeDeck ?? lm.automatic}</small></div></div></article>
+            <article class="card connection-card"><div class="card-heading"><div><h2>{lm.connections}</h2><p>{selectedLocalSessions.length + remoteServers} {lm.configured}</p></div><button class="icon-button" onclick={() => (active = "servers")} aria-label={lm.connections}><ArrowRight size={14} /></button></div><div class="connection-row"><span class:ready={selectedLocalSessions.length > 0 && connectedLocalSessions === selectedLocalSessions.length} class="status-dot"></span><div><strong>{lm.local_sessions}</strong><small>{connectedLocalSessions}/{selectedLocalSessions.length} {lm.ready.toLowerCase()}</small></div><span class="badge">{selectedLocalSessions.length}</span></div><div class="connection-row"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span><div><strong>{lm.remote_servers}</strong><small>{connectedRemoteServers}/{remoteServers} {lm.ready.toLowerCase()}</small></div><span class="badge">{remoteServers}</span></div><div class="connection-row"><span class:ready={deckView.online} class="status-dot"></span><div><strong>{lm.deck_device}</strong><small>{payload?.runtimeDeck ?? lm.automatic}</small></div></div></article>
           </div>
         </div>
       {:else}
         <div class="page-heading settings-heading">
           <div>
-            <span class="eyebrow">{lm.settings_eyebrow}</span>
             <div class="title-line">
               <h1>{activeLabel}</h1>
               {#if showProfileContext}<span class="scope-badge">{fmt(lm.editing_profile, { name: editProfile ?? "" })}</span>{/if}
@@ -829,101 +844,109 @@
 <style>
   :global(html, body) {
     margin: 0;
-    background: #090c11;
-    color: #f2f5f9;
-    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    background: #0d1015;
+    color: #e8ebef;
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
     color-scheme: dark;
-    accent-color: #5e8cff;
+    accent-color: #6f91d9;
   }
   :global(*) { box-sizing: border-box; }
   :global(button), :global(select), :global(input) { font: inherit; }
-  :global(button:focus-visible), :global(select:focus-visible), :global(input:focus-visible) { outline: 2px solid #89a9ff; outline-offset: 2px; }
+  :global(button:focus-visible), :global(select:focus-visible), :global(input:focus-visible) { outline: 2px solid #8eabe7; outline-offset: 2px; }
   main {
-    --canvas: #090c11;
-    --surface: #11161e;
-    --elevated: #171e28;
-    --border: #293341;
-    --muted: #8d99a9;
-    --signal: #5e8cff;
-    --green: #4bd394;
-    --amber: #f0b35a;
+    --canvas: #0d1015;
+    --sidebar: #11151b;
+    --surface: #151a21;
+    --surface-raised: #1a2029;
+    --field: #10141a;
+    --border: #2b323d;
+    --border-strong: #3b4553;
+    --text: #e8ebef;
+    --muted: #939ca9;
+    --muted-low: #6f7885;
+    --signal: #6f91d9;
+    --signal-soft: rgb(111 145 217 / .14);
+    --green: #55c68d;
+    --amber: #d9a45d;
+    --red: #db727a;
+    --radius-panel: 10px;
+    --radius-control: 7px;
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    height: 100dvh;
     min-width: 0;
-    background: radial-gradient(circle at 78% -18%, rgb(75 108 180 / 0.12), transparent 34rem), var(--canvas);
+    background: var(--canvas);
   }
-  .topbar { display: flex; align-items: center; gap: 12px; min-height: 58px; padding: 0 18px; border-bottom: 1px solid var(--border); background: rgb(12 16 22 / .88); }
-  .brand { display: flex; align-items: center; gap: 10px; margin-right: 12px; letter-spacing: -.02em; }
-  .brand strong { font-size: 14px; }
-  .brand-mark { display: grid; grid-template-columns: repeat(2, 6px); gap: 2px; padding: 6px; border-radius: 8px; background: #202938; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .09); }
-  .brand-mark i { width: 6px; height: 6px; border-radius: 2px; background: #7298ff; }
-  .brand-mark i:nth-child(2) { background: var(--green); }
-  .brand-mark i:nth-child(3) { background: var(--amber); }
-  .brand-mark i:nth-child(4) { background: #a98af5; }
-  .status-pill { display: inline-flex; align-items: center; gap: 8px; min-height: 29px; padding: 0 10px; border: 1px solid var(--border); border-radius: 999px; color: #c5cfdb; background: rgb(255 255 255 / .025); font-size: 11px; white-space: nowrap; }
-  .status-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 3px rgb(240 179 90 / .1); }
-  .status-dot.ready { background: var(--green); box-shadow: 0 0 0 3px rgb(75 211 148 / .11); }
+  .topbar { display: flex; align-items: center; gap: 15px; min-height: 52px; padding: 0 16px; border-bottom: 1px solid var(--border); background: #10141a; }
+  .brand { display: flex; align-items: center; gap: 9px; margin-right: 7px; letter-spacing: -.015em; }
+  .brand strong { font-size: 13px; font-weight: 660; }
+  .brand-mark { display: grid; grid-template-columns: repeat(2, 5px); gap: 2px; padding: 5px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-raised); }
+  .brand-mark i { width: 5px; height: 5px; border-radius: 1.5px; background: #849dd3; }
+  .brand-mark i:nth-child(2), .brand-mark i:nth-child(3) { background: #6f83ad; }
+  .brand-mark i:nth-child(4) { background: #a8b6d4; }
+  .status-pill { display: inline-flex; align-items: center; gap: 7px; color: #aeb6c1; font: 10px "SF Mono", ui-monospace, monospace; white-space: nowrap; }
+  .status-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--amber); }
+  .status-dot.ready { background: var(--green); }
   .top-spacer, .spacer { flex: 1; }
   .profile-picker { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
-  .topbar select { min-width: 138px; height: 32px; padding: 0 28px 0 10px; border: 1px solid var(--border); border-radius: 8px; background: #121822; color: #e4eaf2; }
-  .dirty { color: #f0bd72; font-size: 11px; white-space: nowrap; }
-  .dirty.bad { color: #f0838b; }
-  .body { flex: 1; display: grid; grid-template-columns: 205px minmax(0, 1fr); min-height: 0; }
-  .sidebar { display: flex; flex-direction: column; padding: 16px 12px 12px; border-right: 1px solid var(--border); overflow: auto; }
-  .settings-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 34px; margin-bottom: 16px; padding: 0 9px; border: 1px solid #263140; border-radius: 8px; background: #0d1219; color: #69778a; }
-  .settings-search:focus-within { border-color: #587cc8; box-shadow: 0 0 0 2px rgb(94 140 255 / .1); }
-  .settings-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: #dfe6ef; font-size: 10px; }
-  .settings-search input::placeholder { color: #69778a; }
-  .settings-search kbd { padding: 1px 4px; border: 1px solid #303b49; border-radius: 4px; color: #69778a; background: #151b24; font: 8px "SF Mono", ui-monospace, monospace; }
+  .topbar select { min-width: 138px; height: 30px; padding: 0 28px 0 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--field); color: var(--text); }
+  .dirty { color: #e3b56f; font-size: 11px; white-space: nowrap; }
+  .dirty.bad { color: #e98990; }
+  .body { flex: 1; display: grid; grid-template-columns: 216px minmax(0, 1fr); min-height: 0; }
+  .sidebar { display: flex; flex-direction: column; padding: 13px 10px 10px; border-right: 1px solid var(--border); background: var(--sidebar); overflow: auto; }
+  .settings-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 32px; margin-bottom: 14px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--field); color: var(--muted-low); }
+  .settings-search:focus-within { border-color: #607fbf; box-shadow: 0 0 0 2px rgb(111 145 217 / .12); }
+  .settings-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 10px; }
+  .settings-search input::placeholder { color: var(--muted-low); }
+  .settings-search kbd { padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted-low); background: var(--surface); font: 8px "SF Mono", ui-monospace, monospace; }
   .settings-search button { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #8794a5; cursor: pointer; }
-  .settings-search button:hover { background: #202936; color: #e1e7ef; }
+  .settings-search button:hover { background: var(--surface-raised); color: var(--text); }
   .nav-empty { margin: 4px 9px; color: var(--muted); font-size: 10px; }
-  .nav-group { margin-bottom: 14px; }
-  .nav-label { display: block; padding: 0 10px 6px; color: #687588; font-size: 9px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
-  .sidebar button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 0 10px; border: 0; border-radius: 9px; background: none; color: #98a5b6; font-size: 11px; text-align: left; cursor: pointer; }
-  .sidebar button:hover { color: #e5ebf3; background: rgb(255 255 255 / .035); }
-  .sidebar button.active { color: #f3f6fb; background: linear-gradient(90deg, rgb(94 140 255 / .16), rgb(94 140 255 / .05)); box-shadow: inset 2px 0 #719bff; }
-  .nav-icon { width: 17px; color: #748196; text-align: center; }
-  .sidebar button.active .nav-icon { color: #8aa9ff; }
+  .nav-group { margin-bottom: 12px; }
+  .nav-label { display: block; padding: 0 9px 5px; color: #717b89; font-size: 9px; font-weight: 650; letter-spacing: .04em; }
+  .sidebar button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 31px; padding: 0 9px; border: 0; border-radius: 6px; background: none; color: #9da6b2; font-size: 11px; text-align: left; cursor: pointer; }
+  .sidebar button:hover { color: #dfe3e8; background: rgb(255 255 255 / .035); }
+  .sidebar button.active { color: #edf0f4; background: var(--signal-soft); }
+  .nav-icon { width: 16px; color: #737e8d; text-align: center; }
+  .sidebar button.active .nav-icon { color: #95afe8; }
   .sidebar-version { display: flex; flex-direction: column; gap: 3px; margin-top: auto; padding: 12px 10px 2px; border-top: 1px solid rgb(255 255 255 / .06); color: #657286; font: 9px "SF Mono", ui-monospace, monospace; }
   .sidebar-version strong { color: #8995a5; font-family: inherit; }
-  .content { min-width: 0; padding: 27px 30px 34px; overflow: auto; }
-  .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
-  .page-heading h1 { margin: 5px 0 0; font-size: 25px; line-height: 1.15; letter-spacing: -.045em; }
+  .content { min-width: 0; padding: 26px 30px 36px; overflow: auto; }
+  .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+  .page-heading h1 { margin: 0; font-size: 23px; font-weight: 680; line-height: 1.2; letter-spacing: -.035em; }
   .title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-  .scope-badge { margin-top: 5px; padding: 3px 7px; border: 1px solid #3a4657; border-radius: 6px; color: #a9b7c8; background: #141b24; font: 9px "SF Mono", ui-monospace, monospace; }
+  .scope-badge { margin-top: 4px; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: 5px; color: #abb4c0; background: var(--surface); font: 9px "SF Mono", ui-monospace, monospace; }
   .page-heading p, .card-heading p, .card p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
-  .eyebrow { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
-  .secondary, .icon-button, .savebar button { border: 1px solid #344052; border-radius: 9px; background: #1b2330; color: #dce4ee; cursor: pointer; }
-  .secondary { min-height: 34px; padding: 0 13px; font-size: 11px; font-weight: 650; }
-  .secondary:hover, .savebar button:hover:not(:disabled) { background: #252f3e; }
+  .eyebrow, .runtime-label { color: var(--muted); font-size: 9px; font-weight: 650; letter-spacing: .04em; }
+  .secondary, .icon-button, .savebar button { border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-raised); color: #dce1e8; cursor: pointer; }
+  .secondary { min-height: 32px; padding: 0 12px; font-size: 11px; font-weight: 630; }
+  .secondary:hover, .savebar button:hover:not(:disabled) { background: #222a34; }
+  .secondary:active, .icon-button:active, .savebar button:active:not(:disabled) { transform: translateY(1px); }
   .icon-button { width: 31px; height: 31px; padding: 0; }
-  .card { border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(155deg, rgb(255 255 255 / .032), rgb(255 255 255 / .012)); }
+  .card { border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
   .card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
   .card-heading h2, .runtime-card h2 { margin: 0; font-size: 14px; letter-spacing: -.015em; }
-  .overview-stage { display: grid; grid-template-columns: minmax(520px, 1.45fr) minmax(270px, .7fr); gap: 14px; align-items: start; }
-  .live-deck-card { padding: 18px; background: radial-gradient(circle at 50% 12%, rgb(94 140 255 / .09), transparent 48%), linear-gradient(155deg, rgb(255 255 255 / .035), rgb(255 255 255 / .012)); }
+  .overview-stage { display: grid; grid-template-columns: minmax(520px, 1.5fr) minmax(270px, .7fr); gap: 18px; align-items: start; }
+  .live-deck-card { padding: 17px; }
   .live-deck-card .card-heading, .deck-workbench-preview .card-heading { margin-bottom: 16px; }
-  .deck-surface { padding: 10px; border: 1px solid #343e4b; border-radius: 17px; background: linear-gradient(145deg, #262d36, #151a21); box-shadow: inset 0 1px rgb(255 255 255 / .08), inset 0 -18px 36px rgb(0 0 0 / .18); }
+  .deck-surface { padding: 9px; border: 1px solid #353c46; border-radius: 13px; background: #242a32; box-shadow: inset 0 1px rgb(255 255 255 / .055); }
   .deck-surface :global(.deck) { padding: 0; background: transparent; }
   .deck-surface :global(.grid) { gap: 8px; padding: 4px; background: transparent; }
-  .deck-surface :global(.cell), .deck-surface :global(.panel) { border: 1px solid #35404d; border-radius: 10px; box-shadow: 0 5px 10px rgb(0 0 0 / .28); }
+  .deck-surface :global(.cell), .deck-surface :global(.panel) { border: 1px solid #39414c; border-radius: 8px; box-shadow: 0 2px 5px rgb(0 0 0 / .3); }
   .deck-surface :global(footer.summary) { padding: 8px 4px 1px; color: #9ca8b7; }
-  .overview-stack { display: grid; gap: 14px; }
-  .runtime-card { position: relative; display: flex; align-items: center; gap: 15px; min-height: 112px; padding: 18px; overflow: hidden; }
-  .runtime-card::after { content: ""; position: absolute; width: 190px; height: 190px; right: -74px; top: -90px; border: 32px solid rgb(94 140 255 / .06); border-radius: 50%; }
-  .health-orbit { display: grid; place-items: center; width: 52px; height: 52px; flex: none; border: 1px solid rgb(240 179 90 / .3); border-radius: 50%; background: rgb(240 179 90 / .07); }
-  .health-orbit span { width: 13px; height: 13px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 20px rgb(240 179 90 / .55); }
-  .health-orbit span.ready { background: var(--green); box-shadow: 0 0 20px rgb(75 211 148 / .65); }
+  .overview-stack { display: grid; gap: 10px; }
+  .runtime-card { display: flex; align-items: center; gap: 13px; min-height: 96px; padding: 15px 16px; }
+  .health-orbit { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--field); }
+  .health-orbit span { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+  .health-orbit span.ready { background: var(--green); }
   .stat-card, .connection-card { padding: 16px 17px; }
-  .badge { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; background: rgb(75 211 148 / .09); color: #79e4b5; font-size: 9px; font-weight: 680; white-space: nowrap; }
-  .badge.warning { background: rgb(240 179 90 / .1); color: #f4c77f; }
+  .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px; border: 1px solid rgb(85 198 141 / .22); border-radius: 5px; background: transparent; color: #76d7a5; font: 600 9px "SF Mono", ui-monospace, monospace; white-space: nowrap; }
+  .badge.warning { border-color: rgb(217 164 93 / .25); background: transparent; color: #e2b674; }
   .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding-top: 14px; margin-top: 14px; border-top: 1px solid rgb(255 255 255 / .07); }
   .stats strong, .stats span { display: block; }
-  .stats strong { font-size: 20px; letter-spacing: -.05em; }
+  .stats strong { font: 650 19px "SF Mono", ui-monospace, monospace; letter-spacing: -.04em; }
   .stats span { color: var(--muted); font-size: 9px; }
-  .connection-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; min-height: 54px; border-top: 1px solid rgb(255 255 255 / .06); }
+  .connection-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; min-height: 51px; border-top: 1px solid var(--border); }
   .connection-row:first-of-type { margin-top: 11px; }
   .connection-row strong, .connection-row small { display: block; }
   .connection-row strong { font-size: 11px; }
@@ -943,7 +966,7 @@
   .connection-summary dd { margin: 0; font: 600 12px "SF Mono", ui-monospace, monospace; color: #f1c177; }
   .connection-summary dd.connected { color: var(--green); }
   .connection-inventories { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-  .diagnostic-card { overflow: hidden; background: rgb(17 22 30 / .78); }
+  .diagnostic-card { overflow: hidden; background: var(--surface); }
   .diagnostic-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 17px; border-bottom: 1px solid var(--border); }
   .diagnostic-card h2 { margin: 0; font-size: 13px; }
   .diagnostic-card header p { max-width: 420px; }
@@ -951,9 +974,9 @@
   .diagnostic-list { padding: 0 17px; }
   .diagnostic-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; min-height: 72px; padding: 11px 0; border-bottom: 1px solid rgb(255 255 255 / .06); }
   .diagnostic-row:last-child { border-bottom: 0; }
-  .connection-light { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 3px rgb(240 179 90 / .1); }
-  .connection-light.connected { background: var(--green); box-shadow: 0 0 0 3px rgb(75 211 148 / .11); }
-  .connection-light.unavailable { background: #e2777f; box-shadow: 0 0 0 3px rgb(226 119 127 / .1); }
+  .connection-light { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+  .connection-light.connected { background: var(--green); }
+  .connection-light.unavailable { background: var(--red); }
   .connection-light.inactive { background: #596474; box-shadow: none; }
   .connection-identity { min-width: 0; }
   .connection-identity strong, .connection-identity small { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -967,23 +990,25 @@
   .state-label.inactive { color: #778395; }
   .empty-diagnostic { min-height: 70px; padding: 18px 0; }
   .connections-editor { margin-top: 2px; }
-  .form-card { --field-label-w: 180px; padding: 20px 22px; overflow: hidden; }
+  .form-card { --field-label-w: 180px; padding: 0; border: 0; border-radius: 0; background: transparent; overflow: hidden; }
   .loading-card { padding: 22px; }
   .hint { color: var(--muted); }
   .form-card :global(h2) { margin: 0 0 14px; font-size: 17px; letter-spacing: -.025em; }
+  .form-card:not(.connections-editor) :global(h2:first-child) { display: none; }
   .form-card :global(.field), .form-card :global(.override), .form-card :global(.tristate), .form-card :global(.listfield) { margin: 0; padding: 9px 0; }
-  .form-card :global(input:not([type="checkbox"])), .form-card :global(select) { min-height: 34px; padding: 0 10px; border-color: #313c4b; border-radius: 8px; background: #0e131a; }
-  .form-card :global(fieldset) { border-color: #303a48; border-radius: 10px; padding: 12px 14px; }
+  .form-card :global(input:not([type="checkbox"])), .form-card :global(select) { min-height: 34px; padding: 0 10px; border-color: var(--border-strong); border-radius: var(--radius-control); background: var(--field); }
+  .form-card :global(fieldset) { border-color: var(--border); border-radius: var(--radius-panel); padding: 13px 15px; background: var(--surface); }
   .form-card :global(fieldset > legend) { padding: 0 6px; color: #cdd6e2; font-size: 11px; font-weight: 620; }
-  .form-card :global(button:not(.switch)) { min-height: 31px; border-color: #354153; border-radius: 7px; padding: 0 10px; background: #19212c; color: #d9e1eb; }
-  .form-card :global(button:not(.switch):hover) { background: #222d3b; }
+  .form-card :global(button:not(.switch)) { min-height: 31px; border-color: var(--border-strong); border-radius: var(--radius-control); padding: 0 10px; background: var(--surface-raised); color: #d9dee5; }
+  .form-card :global(button:not(.switch):hover) { background: #222a34; }
   .form-card :global(button:disabled) { opacity: .42; cursor: default; }
   .form-card :global(button:disabled:hover) { background: #19212c; }
   .form-card :global(legend button:not(.switch)) { min-height: 22px; padding: 0 5px; border-color: transparent; background: transparent; }
-  .savebar { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 14px; border-top: 1px solid var(--border); background: #0c1016; }
-  .savebar button { min-height: 34px; margin: 0; padding: 0 14px; font-size: 11px; }
+  .deck-workbench .form-card { --field-label-w: 155px; }
+  .savebar { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 7px 14px; border-top: 1px solid var(--border); background: #10141a; }
+  .savebar button { min-height: 32px; margin: 0; padding: 0 13px; font-size: 11px; }
   .savebar button kbd { margin-left: 8px; color: rgb(255 255 255 / .72); font: 8px "SF Mono", ui-monospace, monospace; }
-  .savebar button:last-child { border-color: #6e94f4; background: var(--signal); color: white; }
+  .savebar button:last-child { border-color: #819dd8; background: var(--signal); color: #0d1524; font-weight: 680; }
   .savebar button:disabled { opacity: .42; cursor: default; }
   .errcount { color: #f0838b !important; background: transparent !important; border-color: transparent !important; }
   .errlist { max-height: 120px; padding: 8px 14px; overflow: auto; border-top: 1px solid #4b2529; background: #191012; color: #f08b91; font-size: 12px; }

@@ -260,10 +260,10 @@ describe("connectErrorMessage", () => {
   it("includes the socket path in the local-socket message when known", () => {
     const en = connectErrorMessage("herdr socket not found at /tmp/h.sock", "/tmp/h.sock");
     expect(en).toContain("/tmp/h.sock");
-    expect(en).toContain("start herdr");
+    expect(en).toContain("Start herdr");
     const cs = connectErrorMessage("herdr socket not found at /tmp/h.sock", "/tmp/h.sock", "cs");
     expect(cs).toContain("/tmp/h.sock");
-    expect(cs).toContain("spusť herdr");
+    expect(cs).toContain("Spusť herdr");
   });
 
   it("passes unknown errors through verbatim and defaults when empty", () => {

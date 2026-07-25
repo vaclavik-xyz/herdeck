@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import GearSix from "phosphor-svelte/lib/GearSix";
   import Banner from "./lib/Banner.svelte";
   import DeckView from "./lib/DeckView.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
@@ -211,7 +212,7 @@
           class="reonboard"
           title={changeConnectionTitle}
           aria-label={changeConnectionTitle}
-          onclick={() => (reonboard = true)}>⚙</button
+          onclick={() => (reonboard = true)}><GearSix size={13} /></button
         >
       </div>
     {:else}
@@ -231,7 +232,7 @@
      transparent so the rounded .shell is the only painted surface. */
   :global(html, body) {
     margin: 0;
-    background: #0b0b0d;
+    background: #0d1015;
     color-scheme: dark; /* dark native widgets + scrollbars (WebKit) */
   }
   :global(html[data-window-mode="floating"]),
@@ -247,12 +248,13 @@
     box-sizing: border-box;
   }
   .shell {
-    background: #0b0b0d;
+    background: #0d1015;
   }
   /* Rounded opaque card flush to the (transparent) window edge so the drop shadow
      traces the card silhouette. */
   main.borderless .shell {
-    border-radius: 12px;
+    border: 1px solid #303844;
+    border-radius: 10px;
     overflow: hidden;
   }
   /* The drag strip is the ONLY way to move the borderless window — give it a
@@ -272,11 +274,11 @@
     width: 36px;
     height: 4px;
     border-radius: 2px;
-    background: #2a2a2e;
+    background: #39414c;
     transition: background 0.15s;
   }
   .drag:hover .grabber {
-    background: #4a4a52;
+    background: #687384;
   }
   .tools {
     display: flex;
@@ -288,9 +290,10 @@
     height: 22px;
     padding: 0;
     border: none;
+    border: 1px solid #303844;
     border-radius: 6px;
-    background: #17171b;
-    color: #8b97a4;
+    background: #171c23;
+    color: #98a2af;
     font-size: 12px;
     line-height: 22px;
     cursor: pointer;

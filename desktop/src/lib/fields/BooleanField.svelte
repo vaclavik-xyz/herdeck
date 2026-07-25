@@ -15,10 +15,10 @@
 
 <style>
   .field { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; margin: 6px 0; cursor: pointer; }
-  input { appearance: none; position: relative; grid-column: 2; grid-row: 1 / span 2; width: 36px; height: 21px; margin: 0; border: 1px solid #384352; border-radius: 999px; background: #232a34; cursor: pointer; transition: background 120ms ease, border-color 120ms ease; }
-  input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: #929cab; transition: transform 120ms ease, background 120ms ease; }
-  input:checked { border-color: #4774d0; background: #365fae; }
-  input:checked::after { transform: translateX(15px); background: white; }
-  input:focus-visible { outline: 2px solid #89a9ff; outline-offset: 2px; }
+  input { appearance: none; position: relative; grid-column: 2; grid-row: 1 / span 2; width: 36px; height: 21px; margin: 0; border: 1px solid var(--border-strong, #3b4553); border-radius: 999px; background: #272d36; cursor: pointer; transition: background 120ms ease, border-color 120ms ease; }
+  input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: #a1a9b4; transition: transform 120ms ease, background 120ms ease; }
+  input:checked { border-color: #7897d5; background: #5879bd; }
+  input:checked::after { transform: translateX(15px); background: #f2f4f7; }
+  input:focus-visible { outline: 2px solid #8eabe7; outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { input, input::after { transition: none; } }
 </style>

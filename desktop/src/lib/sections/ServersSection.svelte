@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
   import { invoke } from "@tauri-apps/api/core";
   import TextField from "../fields/TextField.svelte";
   import TokenSecretField from "../fields/TokenSecretField.svelte";
@@ -102,7 +103,7 @@
       <h3 id="local-sessions-heading">{lm.local_heading}</h3>
       <p>{lm.local_hint}</p>
     </div>
-    <span class="socket-mark" aria-hidden="true">⌁</span>
+    <span class="socket-mark" aria-hidden="true"><PlugsConnected size={22} /></span>
   </div>
   <div class="session-rail">
     {#each payload.localSessions as session (session.name)}
@@ -148,16 +149,16 @@
 
 <style>
   .local-sessions {
-    border: 1px solid #263142;
-    border-radius: 10px;
-    background: #11151b;
-    padding: 12px;
+    border: 1px solid var(--border, #2b323d);
+    border-radius: var(--radius-panel, 10px);
+    background: var(--surface, #151a21);
+    padding: 13px 15px;
     margin-bottom: 16px;
   }
   .section-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-  .section-head h3, .remote-heading { margin: 0; color: #dce7f5; font-size: 14px; }
-  .section-head p { margin: 3px 0 0; color: #78879a; font-size: 11px; max-width: 430px; }
-  .socket-mark { color: #58a6ff; font: 24px/1 ui-monospace, monospace; }
+  .section-head h3, .remote-heading { margin: 0; color: #dce1e8; font-size: 14px; }
+  .section-head p { margin: 3px 0 0; color: var(--muted, #939ca9); font-size: 11px; max-width: 430px; }
+  .socket-mark { color: #8ba7df; font: 22px/1 ui-monospace, monospace; }
   .session-rail { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .session-rail label {
     min-width: 120px;
@@ -165,20 +166,20 @@
     grid-template-columns: auto 8px 1fr;
     gap: 7px;
     align-items: center;
-    border: 1px solid #2a3546;
-    border-radius: 8px;
+    border: 1px solid var(--border, #2b323d);
+    border-radius: var(--radius-control, 7px);
     padding: 8px 10px;
-    background: #171d26;
+    background: var(--field, #10141a);
     cursor: pointer;
   }
-  .session-rail label:has(input:checked) { border-color: #3979bd; box-shadow: inset 0 0 0 1px #244d78; }
+  .session-rail label:has(input:checked) { border-color: #6382c1; background: var(--signal-soft, rgb(111 145 217 / .14)); }
   .session-rail label.unavailable { opacity: .62; }
-  .session-rail input { margin: 0; accent-color: #58a6ff; }
-  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; box-shadow: 0 0 0 2px #252c36; }
-  .status-dot.online { background: #3fb950; box-shadow: 0 0 0 2px #1f4d2b; }
+  .session-rail input { margin: 0; accent-color: #6f91d9; }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; }
+  .status-dot.online { background: var(--green, #55c68d); }
   .session-copy { display: flex; flex-direction: column; min-width: 0; }
-  .session-copy strong { color: #dce7f5; font: 600 12px/1.2 ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; }
-  .session-copy small { color: #78879a; font-size: 10px; }
+  .session-copy strong { color: #dce1e8; font: 600 12px/1.2 ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; }
+  .session-copy small { color: var(--muted, #939ca9); font-size: 10px; }
   .remote-heading { margin: 0 0 8px; }
   fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
   legend { color: #ccc; }

@@ -48,9 +48,9 @@
 <style>
   .override { display: grid; grid-template-columns: var(--field-label-w, 120px) minmax(0, 1fr); align-items: start; gap: 12px; margin: 6px 0; }
   .body { display: flex; grid-column: 2; grid-row: 1 / span 2; flex-direction: column; gap: 4px; }
-  .seg { display: inline-flex; align-self: flex-start; border: 1px solid #303b49; border-radius: 7px; overflow: hidden; }
-  .seg button { background: #141417; border: 0; border-right: 1px solid #2a2a30; color: #aaa; padding: 4px 10px; cursor: pointer; }
+  .seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--border-strong, #3b4553); border-radius: var(--radius-control, 7px); overflow: hidden; }
+  .seg button { background: var(--field, #10141a); border: 0; border-right: 1px solid var(--border, #2b323d); color: #a4acb7; padding: 4px 10px; cursor: pointer; }
   .seg button:last-child { border-right: 0; }
-  .seg button.on { background: #29384f; color: #eef3fa; }
-  .hint { color: #7f8c9d; margin: 2px 0; font-size: 9px; }
+  .seg button.on { background: var(--signal-soft, rgb(111 145 217 / .14)); color: #edf0f4; }
+  .hint { color: var(--muted, #939ca9); margin: 2px 0; font-size: 9px; }
 </style>

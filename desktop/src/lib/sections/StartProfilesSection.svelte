@@ -42,7 +42,7 @@
       name_first_hint: "Enter a profile name to edit argv.",
       add_profile: "+ add profile",
       default_hint: 'Default launchers (DEFAULT_START_PROFILES). Switch to "Custom" to edit.',
-      err_duplicate: "duplicate start profile name — it won't save until you rename it",
+      err_duplicate: "duplicate start profile name. Rename it before saving",
       err_exists: "entry '{name}' already exists",
     },
     cs: {
@@ -63,7 +63,7 @@
       name_first_hint: "Zadej jméno profilu pro úpravu argv.",
       add_profile: "+ přidat profil",
       default_hint: 'Výchozí launchery (DEFAULT_START_PROFILES). Přepni na „Vlastní" pro úpravu.',
-      err_duplicate: "duplicitní jméno start profilu — neuloží se, dokud nepřejmenuješ",
+      err_duplicate: "duplicitní jméno start profilu. Před uložením ho přejmenuj",
       err_exists: "položka '{name}' už existuje",
     },
   });
