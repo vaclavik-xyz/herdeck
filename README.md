@@ -26,8 +26,9 @@ browser dashboard, or a native desktop window.
 
 Herdeck `0.1.1` ships a signed and notarized installer for Apple Silicon macOS,
 plus AppImage, deb, and rpm packages for x86_64 and arm64 Linux. Installed
-desktop builds update themselves through signed GitHub Release artifacts. Intel
-macOS, Homebrew, and a signed Elgato plugin are not available yet.
+macOS and Linux AppImage builds update themselves through signed GitHub Release
+artifacts. Intel macOS, Homebrew, and a signed Elgato plugin are not available
+yet.
 
 What works today:
 
@@ -93,9 +94,10 @@ chmod +x ./herdeck_0.1.1_amd64.AppImage
 ```
 
 The commands above use the current x86_64 filenames; use the corresponding arm64
-filename from the table on an arm64 machine. The Linux desktop package includes
-the same updater, but Ulanzi D200 hardware control is currently verified only on
-macOS.
+filename from the table on an arm64 machine. AppImage builds include the signed
+in-app updater. Update `.deb` and `.rpm` installations by downloading the newer
+package and running the same `apt install` or `dnf install` command again. Ulanzi
+D200 hardware control is currently verified only on macOS.
 
 ### Source installation requirements
 
