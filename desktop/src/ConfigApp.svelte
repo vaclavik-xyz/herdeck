@@ -251,6 +251,9 @@
 
   let discovery = $state<Discovery | null>(null);
   let payload = $state<ConfigPayload | null>(null);
+  // Runtime diagnostics must describe the last config accepted by the
+  // sidecar, not the draft currently being edited in `payload`.
+  let appliedPayload = $state<ConfigPayload | null>(null);
   let active = $state(browserSection ?? "overview");
   let deckView = $state<DeckViewModel>(initialView());
   let dirty = $state(false);
@@ -283,19 +286,19 @@
   const activeLabel = $derived(
     NAV_GROUPS.flatMap((group) => group.items).find((item) => item.key === active)?.label ?? active,
   );
-  const selectedLocalSessions = $derived(payload?.localSessions.filter((session) => session.selected) ?? []);
+  const selectedLocalSessions = $derived(appliedPayload?.localSessions.filter((session) => session.selected) ?? []);
   const connectedLocalSessions = $derived(selectedLocalSessions.filter((session) => {
     const runtimeId = deckView.localConnections[session.name];
     return runtimeId !== undefined && deckView.connections[runtimeId] === true;
   }).length);
-  const activeRemoteServerIds = $derived(new Set(payload ? effectiveActiveServerIds(payload) : []));
-  const remoteServerRecords = $derived(payload
-    ? serversOf(payload).filter((server) => activeRemoteServerIds.has(server.id))
+  const activeRemoteServerIds = $derived(new Set(appliedPayload ? effectiveActiveServerIds(appliedPayload) : []));
+  const remoteServerRecords = $derived(appliedPayload
+    ? serversOf(appliedPayload).filter((server) => activeRemoteServerIds.has(server.id))
     : []);
   const remoteServers = $derived(remoteServerRecords.length);
   const connectedRemoteServers = $derived(remoteServerRecords.filter((server) => deckView.connections[server.id] === true).length);
   const runtimeReady = $derived(discovery != null && deckView.online);
-  const connectionRows = $derived(payload ? connectionInventory(payload, deckView) : { local: [], remote: [] });
+  const connectionRows = $derived(appliedPayload ? connectionInventory(appliedPayload, deckView) : { local: [], remote: [] });
 
   function connectionLabel(health: ConnectionHealth): string {
     return lm[health];
@@ -350,6 +353,7 @@
         return;
       }
       payload = fresh;
+      appliedPayload = fresh;
       dirty = false;
       errors = [];
       banner = null;
@@ -407,6 +411,7 @@
         // payload.secrets only carries still-referenced token_envs, so a renamed/deleted old
         // key would vanish and post-load detection would miss it.
         const orphans = orphanedSecrets(payload);
+        appliedPayload = JSON.parse(JSON.stringify(payload)) as ConfigPayload;
         dirty = false;
         await load(); // re-read saved state (preview refreshes itself via its own poll)
         // A changed [hotkeys] accelerator only takes effect once Rust re-registers it.
@@ -459,6 +464,7 @@
   onMount(() => {
     if (browserMode) {
       payload = browserPreviewPayload();
+      appliedPayload = payload;
       reloadRev += 1;
       return () => {
         if (validateTimer) clearTimeout(validateTimer);
