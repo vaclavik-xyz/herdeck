@@ -109,7 +109,7 @@ jobs:
           shopt -s nullglob
           fail=0
           for kind in "appimage/*.AppImage" "deb/*.deb" "rpm/*.rpm"; do
-            files=( $kind )
+            mapfile -t files < <(compgen -G "$kind" || true)
             if [ ${#files[@]} -eq 0 ]; then
               echo "FAIL: no file matched $kind"; fail=1
             else
