@@ -2,7 +2,6 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import GearSix from "phosphor-svelte/lib/GearSix";
   import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
   import Banner from "./lib/Banner.svelte";
   import ConfigApp from "./ConfigApp.svelte";
@@ -33,7 +32,7 @@
 
   // Borderless width matches the Rust builder inner_size width; the window is
   // non-resizable, so width is constant and only the height is fit to content.
-  const BORDERLESS_WIDTH = 360;
+  const BORDERLESS_WIDTH = 328;
 
   let shell = $state<HTMLElement | undefined>(undefined);
   let desktopSetupOverlay = $state<HTMLElement | undefined>(undefined);
@@ -126,6 +125,16 @@
     }
   }
 
+  async function startWindowDrag(event: PointerEvent): Promise<void> {
+    if (event.button !== 0) return;
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().startDragging();
+    } catch {
+      // Plain browser previews do not expose native window dragging.
+    }
+  }
+
   onMount(() => {
     let alive = true;
 
@@ -185,9 +194,6 @@
     };
   });
 
-  const changeConnectionTitle = $derived(
-    locale.lang === "cs" ? "Změnit připojení" : "Change connection",
-  );
   const updateMessage = $derived(
     availableUpdate
       ? locale.lang === "cs"
@@ -289,7 +295,12 @@
   <main class:borderless class:desktop={surface === "desktop"}>
     <div class="shell" bind:this={shell}>
     {#if borderless}
-      <div class="drag" data-tauri-drag-region>
+      <div
+        class="drag"
+        role="presentation"
+        data-tauri-drag-region
+        onpointerdown={startWindowDrag}
+      >
         <span class="grabber" data-tauri-drag-region></span>
       </div>
     {/if}
@@ -304,17 +315,7 @@
       />
     {/if}
     {#if view === "deck"}
-      <DeckView {transport} />
-      <!-- Re-onboarding affordance, in document flow so content-fit measures it
-           and overflow:hidden never clips it. -->
-      <div class="tools">
-        <button
-          class="reonboard"
-          title={changeConnectionTitle}
-          aria-label={changeConnectionTitle}
-          onclick={() => (reonboard = true)}><GearSix size={13} /></button
-        >
-      </div>
+      <DeckView {transport} compact />
     {:else}
       <Onboarding
         variant="compact"
@@ -456,54 +457,40 @@
   /* Rounded opaque card flush to the (transparent) window edge so the drop shadow
      traces the card silhouette. */
   main.borderless .shell {
-    border-radius: 10px;
-    box-shadow: inset 0 0 0 1px #303844;
+    border-radius: 14px;
+    background: #0b0e12;
+    box-shadow:
+      inset 0 0 0 1px rgb(118 134 153 / .28),
+      0 18px 48px rgb(0 0 0 / .34);
     overflow: hidden;
   }
-  /* The drag strip is the ONLY way to move the borderless window — give it a
-     visible grabber pill instead of an 18px invisible blind target. */
+  /* The drag strip is the primary way to move the borderless window: keep the
+     target generous and the grabber visible without adding desktop chrome. */
   .drag {
-    height: 18px;
+    height: 24px;
     width: 100%;
+    padding: 0;
+    border: 0;
     display: flex;
     align-items: center;
     justify-content: center;
+    background: #0b0e12;
     cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
   }
   .drag:active {
     cursor: grabbing;
   }
   .grabber {
-    width: 36px;
-    height: 4px;
+    width: 32px;
+    height: 3px;
     border-radius: 2px;
-    background: #39414c;
+    background: #46515f;
     transition: background 0.15s;
   }
   .drag:hover .grabber {
-    background: #687384;
-  }
-  .tools {
-    display: flex;
-    justify-content: flex-end;
-    padding: 2px 6px 6px;
-  }
-  .reonboard {
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: none;
-    border: 1px solid #303844;
-    border-radius: 6px;
-    background: #171c23;
-    color: #98a2af;
-    font-size: 12px;
-    line-height: 22px;
-    cursor: pointer;
-    opacity: 0.55;
-  }
-  .reonboard:hover {
-    opacity: 1;
+    background: #7a8796;
   }
   @media (max-width: 760px) {
     .desktop-setup-stage {

@@ -20,6 +20,7 @@
     pollMs = 300,
     onJump = undefined,
     onView = undefined,
+    compact = false,
   }: {
     // Live transport (built from the sidecar url + token via sidecar.ts). Null
     // until the shell reports both; the deck then renders its offline state.
@@ -27,6 +28,7 @@
     pollMs?: number;
     onJump?: (section: string) => void;
     onView?: (view: DeckViewModel) => void;
+    compact?: boolean;
   } = $props();
 
   let view = $state<DeckViewModel>(initialView());
@@ -132,7 +134,7 @@
   );
 </script>
 
-<section class="deck" class:offline={!view.online}>
+<section class="deck" class:offline={!view.online} class:compact>
   <div class="grid">
     {#each cells as i (i)}
       <button
@@ -250,5 +252,25 @@
     color: #8b97a4;
     font-size: 11px;
     white-space: nowrap;
+  }
+  .deck.compact {
+    gap: 0;
+    padding: 8px;
+    background: #0b0e12;
+  }
+  .deck.compact .grid {
+    gap: 4px;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .deck.compact .cell,
+  .deck.compact .panel {
+    border-radius: 7px;
+    background: #11161c;
+    box-shadow: 0 0 0 1px rgb(119 136 157 / .12);
+  }
+  .deck.compact footer.summary {
+    display: none;
   }
 </style>

@@ -519,6 +519,21 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
 mod plan_tests {
     use super::*;
 
+    #[test]
+    fn main_window_capability_allows_native_dragging() {
+        let capability: serde_json::Value = serde_json::from_str(include_str!(
+            "../capabilities/default.json"
+        ))
+        .expect("default capability must be valid JSON");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("default capability must declare permissions");
+
+        assert!(permissions.iter().any(|permission| {
+            permission.as_str() == Some("core:window:allow-start-dragging")
+        }));
+    }
+
     fn stable_runtime() -> Discovery {
         Discovery {
             url: "http://127.0.0.1:8800".to_string(),
@@ -1107,14 +1122,14 @@ pub fn run() {
                     .transparent(true)
                     .always_on_top(false)
                     .resizable(false)
-                    .inner_size(360.0, 320.0)
+                    .inner_size(328.0, 300.0)
                     .skip_taskbar(true),
                 WindowMode::AlwaysOnTop => builder
                     .decorations(false)
                     .transparent(true)
                     .always_on_top(true)
                     .resizable(false)
-                    .inner_size(360.0, 320.0)
+                    .inner_size(328.0, 300.0)
                     .skip_taskbar(true),
             };
             let main_window = builder.build()?;
