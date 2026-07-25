@@ -47,12 +47,16 @@ def test_tag_workflow_builds_macos_updater_and_publishes_after_all_builds():
 
 def test_macos_release_signs_and_verifies_the_frozen_sidecar():
     workflow = (ROOT / ".github/workflows/release.yml").read_text()
+    macos_job = workflow.split("build-macos:", maxsplit=1)[1].split(
+        "publish-release:", maxsplit=1
+    )[0]
     freeze_step = workflow.split(
         "- name: Freeze + smoke the bundled sidecar", maxsplit=1
     )[1].split("- uses: dtolnay/rust-toolchain@stable", maxsplit=1)[0]
     spec = (ROOT / "desktop/herdeck-deckapp.spec").read_text()
     build_script = (ROOT / "desktop/scripts/build-sidecar.sh").read_text()
 
+    assert "brew install cairo" in macos_job
     assert "APPLE_SIGNING_IDENTITY:" in freeze_step
     assert "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}" in freeze_step
     assert 'os.environ.get("APPLE_SIGNING_IDENTITY")' in spec

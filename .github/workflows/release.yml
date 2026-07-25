@@ -150,6 +150,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install macOS build dependencies
+        run: brew install cairo
+
       - name: Verify release version
         run: |
           python scripts/set-version.py --check
