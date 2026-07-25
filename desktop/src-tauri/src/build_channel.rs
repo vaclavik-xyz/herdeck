@@ -22,6 +22,14 @@ fn updates_enabled_for(channel: &str) -> bool {
     channel != DEV_CHANNEL
 }
 
+pub fn shared_runtime_attach_enabled() -> bool {
+    shared_runtime_attach_enabled_for(current())
+}
+
+fn shared_runtime_attach_enabled_for(channel: &str) -> bool {
+    channel != DEV_CHANNEL
+}
+
 pub fn config_override(explicit: Option<&str>, home: &Path) -> Option<PathBuf> {
     config_override_for(current(), explicit, home)
 }
@@ -92,5 +100,11 @@ mod tests {
     fn dev_channel_never_uses_the_stable_updater() {
         assert!(!updates_enabled_for(DEV_CHANNEL));
         assert!(updates_enabled_for("stable"));
+    }
+
+    #[test]
+    fn dev_channel_never_attaches_the_stable_runtime() {
+        assert!(!shared_runtime_attach_enabled_for(DEV_CHANNEL));
+        assert!(shared_runtime_attach_enabled_for("stable"));
     }
 }

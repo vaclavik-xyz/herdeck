@@ -479,11 +479,13 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
     // runtime's Orchestrator + bridge + clock (D200 and window in lockstep) instead
     // of spawning its own sidecar. External == "we don't own it": quitting the
     // window never kills the launchd runtime. A missing/stale file falls through.
-    if let Some(d) = sidecar::decide_runtime_attach(
-        sidecar::read_runtime_discovery(&sidecar::runtime_file_path()),
-        probe_runtime_health,
-    ) {
-        return SidecarPlan::External(d);
+    if build_channel::shared_runtime_attach_enabled() {
+        if let Some(d) = sidecar::decide_runtime_attach(
+            sidecar::read_runtime_discovery(&sidecar::runtime_file_path()),
+            probe_runtime_health,
+        ) {
+            return SidecarPlan::External(d);
+        }
     }
 
     SidecarPlan::Spawn(sidecar::choose_spawn(
