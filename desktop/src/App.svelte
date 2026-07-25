@@ -64,14 +64,17 @@
   // a connection succeeds, clear that one-shot override so a later disconnect
   // can surface setup again.
   $effect(() => {
-    if (view === "deck" && desktopSetupHidden) desktopSetupHidden = false;
+    if (status != null && view === "deck" && desktopSetupHidden) desktopSetupHidden = false;
   });
 
   // Keep keyboard focus inside the modal surface. ConfigApp stays mounted so
   // unsaved settings survive a reconnect, but must not remain interactive.
   $effect(() => {
     if (!showDesktopSetup) return;
-    const frame = requestAnimationFrame(() => desktopSetupOverlay?.focus());
+    const frame = requestAnimationFrame(() => {
+      const overlay = desktopSetupOverlay;
+      if (overlay && !overlay.contains(document.activeElement)) overlay.focus();
+    });
     return () => cancelAnimationFrame(frame);
   });
 
