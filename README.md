@@ -21,7 +21,7 @@ browser dashboard, or a native desktop window.
 
 ## Current status
 
-Herdeck `0.1.0` ships a signed and notarized installer for Apple Silicon macOS,
+Herdeck `0.1.1` ships a signed and notarized installer for Apple Silicon macOS,
 plus AppImage, deb, and rpm packages for x86_64 and arm64 Linux. The macOS app
 updates itself through signed GitHub Release artifacts. Intel macOS, Homebrew,
 and a signed Elgato plugin are not available yet.

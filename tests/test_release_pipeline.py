@@ -60,6 +60,12 @@ def test_macos_release_signs_and_verifies_the_frozen_sidecar():
     assert 'CAIRO_LIB="$(brew --prefix cairo)/lib"' in freeze_step
     assert 'export DYLD_FALLBACK_LIBRARY_PATH="$CAIRO_LIB' in freeze_step
     assert '.venv/bin/python -c "import cairosvg"' in freeze_step
+    assert "xcrun notarytool submit" in macos_job
+    assert "xcrun stapler staple" in macos_job
+    assert "xcrun stapler validate" in macos_job
+    assert "spctl -a -t open --context context:primary-signature" in macos_job
+    assert 'gh release upload "$GITHUB_REF_NAME" "$dmg"' in macos_job
+    assert "--clobber" in macos_job
     assert "APPLE_SIGNING_IDENTITY:" in freeze_step
     assert "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}" in freeze_step
     assert 'os.environ.get("APPLE_SIGNING_IDENTITY")' in spec

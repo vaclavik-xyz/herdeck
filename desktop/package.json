@@ -1,7 +1,7 @@
 {
   "name": "herdeck-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "herdeck desktop app — floating Tauri shell for the herdeck deck (phase 1)",
   "scripts": {
