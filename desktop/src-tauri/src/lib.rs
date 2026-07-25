@@ -520,7 +520,7 @@ mod plan_tests {
     use super::*;
 
     #[test]
-    fn main_window_capability_allows_native_dragging() {
+    fn main_window_capability_allows_compact_window_control() {
         let capability: serde_json::Value = serde_json::from_str(include_str!(
             "../capabilities/default.json"
         ))
@@ -531,6 +531,9 @@ mod plan_tests {
 
         assert!(permissions.iter().any(|permission| {
             permission.as_str() == Some("core:window:allow-start-dragging")
+        }));
+        assert!(permissions.iter().any(|permission| {
+            permission.as_str() == Some("core:window:allow-set-position")
         }));
     }
 

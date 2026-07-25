@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
@@ -11,6 +11,14 @@
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport } from "./lib/deckClient";
   import { fitDecision } from "./lib/windowFit";
+  import {
+    anchoredFloatingPosition,
+    changeFloatingScale,
+    floatingScaleCommandForKey,
+    readFloatingScale,
+    writeFloatingScale,
+    type FloatingScaleCommand,
+  } from "./lib/floatingScale";
   import {
     setupTransport,
     shouldOnboard,
@@ -30,9 +38,9 @@
   const borderless = windowMode !== "normal";
   const surface = appSurface(windowMode);
 
-  // Borderless width matches the Rust builder inner_size width; the window is
-  // non-resizable, so width is constant and only the height is fit to content.
-  const BORDERLESS_WIDTH = 328;
+  // The 100% borderless width matches the Rust builder. Keyboard zoom scales
+  // both this base width and the content-fit height together.
+  const BORDERLESS_BASE_WIDTH = 328;
 
   let shell = $state<HTMLElement | undefined>(undefined);
   let desktopSetupOverlay = $state<HTMLElement | undefined>(undefined);
@@ -46,6 +54,14 @@
   let availableUpdate = $state<UpdateInfo | null>(null);
   let updateError = $state("");
   let installingUpdate = $state(false);
+  let floatingScale = $state((() => {
+    if (!borderless || typeof localStorage === "undefined") return 1;
+    try {
+      return readFloatingScale(localStorage);
+    } catch {
+      return 1;
+    }
+  })());
 
   const updater = updateTransport((cmd, args) => invoke(cmd, args));
 
@@ -114,15 +130,57 @@
   // not in a Tauri WebView.
   let lastRequestedHeight: number | null = null;
   async function fitWindow(scrollHeight: number): Promise<void> {
-    const d = fitDecision(scrollHeight, lastRequestedHeight, BORDERLESS_WIDTH);
+    const width = Math.round(BORDERLESS_BASE_WIDTH * floatingScale);
+    const d = fitDecision(
+      scrollHeight * floatingScale,
+      lastRequestedHeight,
+      width,
+    );
     if (!d.apply) return;
     lastRequestedHeight = d.height;
     try {
-      const { getCurrentWindow, LogicalSize } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().setSize(new LogicalSize(d.width, d.height));
+      const {
+        currentMonitor,
+        getCurrentWindow,
+        LogicalSize,
+        PhysicalPosition,
+      } = await import("@tauri-apps/api/window");
+      const window = getCurrentWindow();
+      const [position, previousSize, monitor] = await Promise.all([
+        window.outerPosition(),
+        window.outerSize(),
+        currentMonitor(),
+      ]);
+      await window.setSize(new LogicalSize(d.width, d.height));
+      if (monitor) {
+        const nextSize = await window.outerSize();
+        const nextPosition = anchoredFloatingPosition(
+          position,
+          previousSize,
+          nextSize,
+          { ...monitor.position, ...monitor.size },
+        );
+        if (nextPosition.x !== position.x || nextPosition.y !== position.y) {
+          await window.setPosition(new PhysicalPosition(nextPosition.x, nextPosition.y));
+        }
+      }
     } catch {
       /* not in a Tauri WebView */
     }
+  }
+
+  async function applyFloatingScale(command: FloatingScaleCommand): Promise<void> {
+    const next = changeFloatingScale(floatingScale, command);
+    if (next === floatingScale) return;
+    floatingScale = next;
+    try {
+      writeFloatingScale(localStorage, next);
+    } catch {
+      // Resizing still works when WebView storage is unavailable.
+    }
+    lastRequestedHeight = null;
+    await tick();
+    if (shell) await fitWindow(shell.scrollHeight);
   }
 
   async function startWindowDrag(event: PointerEvent): Promise<void> {
@@ -150,6 +208,19 @@
       reonboard = false;
       desktopSetupHidden = true;
     });
+    const onFloatingScaleKey = (event: KeyboardEvent): void => {
+      if (!borderless || view !== "deck") return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement
+        && target.matches("input, textarea, select, [contenteditable='true']")
+      ) return;
+      const command = floatingScaleCommandForKey(event);
+      if (!command) return;
+      event.preventDefault();
+      void applyFloatingScale(command);
+    };
+    window.addEventListener("keydown", onFloatingScaleKey);
 
     void (async () => {
       while (alive && !discovery) {
@@ -189,6 +260,7 @@
       void discoveryListener.then((unlisten) => unlisten());
       void reonboardListener.then((unlisten) => unlisten());
       void settingsListener.then((unlisten) => unlisten());
+      window.removeEventListener("keydown", onFloatingScaleKey);
       setupPoll.stop();
       ro?.disconnect();
     };
@@ -292,7 +364,11 @@
     {/if}
   </div>
 {:else}
-  <main class:borderless class:desktop={surface === "desktop"}>
+  <main
+    class:borderless
+    class:desktop={surface === "desktop"}
+    style:--floating-scale={String(floatingScale)}
+  >
     <div class="shell" bind:this={shell}>
     {#if borderless}
       <div
@@ -457,11 +533,18 @@
   /* Rounded opaque card flush to the (transparent) window edge so the drop shadow
      traces the card silhouette. */
   main.borderless .shell {
+    width: 328px;
     border-radius: 14px;
     background: #0b0e12;
     box-shadow:
       inset 0 0 0 1px rgb(118 134 153 / .28),
       0 18px 48px rgb(0 0 0 / .34);
+    transform: scale(var(--floating-scale));
+    transform-origin: top left;
+    overflow: hidden;
+  }
+  main.borderless {
+    height: 100vh;
     overflow: hidden;
   }
   /* The drag strip is the primary way to move the borderless window: keep the
