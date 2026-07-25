@@ -156,7 +156,7 @@
     </button>
   </div>
 
-  <footer class="summary">
+  <footer class="summary" aria-live="polite">
     <span
       class="dot"
       class:on={view.online && (view.source !== "live" || view.connected)}
@@ -271,6 +271,14 @@
     box-shadow: 0 0 0 1px rgb(119 136 157 / .12);
   }
   .deck.compact footer.summary {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 </style>
