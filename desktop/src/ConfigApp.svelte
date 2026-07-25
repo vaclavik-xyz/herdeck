@@ -24,6 +24,7 @@
     type DeckViewModel,
   } from "./lib/deckClient";
   import { visibilityGatedLoop } from "./lib/pollGate";
+  import { connectionInventory, type ConnectionHealth } from "./lib/connectionStatus";
   import { defineMessages, fmt, langOf, locale, setLang } from "./lib/i18n.svelte";
   import {
     commandTransport as cfgTransport,
@@ -44,7 +45,7 @@
   const LM = defineMessages({
     en: {
       "sec.overview": "Overview",
-      "sec.servers": "Servers",
+      "sec.servers": "Connections",
       "sec.deck": "Deck",
       "sec.view": "View",
       "sec.theme": "Colors",
@@ -74,8 +75,26 @@
       blocked: "Blocked",
       done: "Done",
       connections: "Connections",
+      connections_hint: "Configured sources and their live runtime state. Socket availability is shown separately from a working connection.",
       configured: "configured",
       available: "available",
+      connected: "Connected",
+      disconnected: "Disconnected",
+      unavailable: "Unavailable",
+      inactive: "Not selected",
+      connection_status: "Connection status",
+      live_now: "live now",
+      local_inventory: "Local sessions",
+      local_inventory_hint: "Sessions discovered on this Mac. Selected sessions are connected automatically.",
+      remote_inventory: "Remote bridges",
+      remote_inventory_hint: "Servers selected by the active profile are connected automatically.",
+      active_profile: "Active profile",
+      inactive_profile: "Not used by this profile",
+      runtime_identity: "runtime",
+      socket_identity: "socket",
+      no_local_sessions: "No Herdr sessions were discovered on this Mac.",
+      no_remote_servers: "No remote bridges are configured.",
+      new_server: "New bridge",
       local_sessions: "Local sessions",
       remote_servers: "Remote servers",
       deck_device: "Deck device",
@@ -111,7 +130,7 @@
     },
     cs: {
       "sec.overview": "Přehled",
-      "sec.servers": "Servery",
+      "sec.servers": "Připojení",
       "sec.deck": "Deck",
       "sec.view": "Zobrazení",
       "sec.theme": "Barvy",
@@ -141,8 +160,26 @@
       blocked: "Blokováni",
       done: "Hotovo",
       connections: "Připojení",
+      connections_hint: "Nastavené zdroje a jejich skutečný stav v runtime. Dostupnost socketu je oddělená od funkčního spojení.",
       configured: "nastaveno",
       available: "dostupné",
+      connected: "Připojeno",
+      disconnected: "Odpojeno",
+      unavailable: "Nedostupné",
+      inactive: "Nevybráno",
+      connection_status: "Stav připojení",
+      live_now: "právě připojeno",
+      local_inventory: "Lokální sessions",
+      local_inventory_hint: "Sessions nalezené na tomto Macu. Vybrané sessions se připojují automaticky.",
+      remote_inventory: "Vzdálené bridges",
+      remote_inventory_hint: "Servery vybrané aktivním profilem se připojují automaticky.",
+      active_profile: "Aktivní profil",
+      inactive_profile: "Tento profil nepoužívá",
+      runtime_identity: "runtime",
+      socket_identity: "socket",
+      no_local_sessions: "Na tomto Macu nebyla nalezena žádná Herdr session.",
+      no_remote_servers: "Není nastavený žádný vzdálený bridge.",
+      new_server: "Nový bridge",
       local_sessions: "Lokální sessions",
       remote_servers: "Vzdálené servery",
       deck_device: "Zařízení decku",
@@ -258,6 +295,11 @@
   const remoteServers = $derived(remoteServerRecords.length);
   const connectedRemoteServers = $derived(remoteServerRecords.filter((server) => deckView.connections[server.id] === true).length);
   const runtimeReady = $derived(discovery != null && deckView.online);
+  const connectionRows = $derived(payload ? connectionInventory(payload, deckView) : { local: [], remote: [] });
+
+  function connectionLabel(health: ConnectionHealth): string {
+    return lm[health];
+  }
 
   function browserPreviewPayload(): ConfigPayload {
     const demo = parseConfig({
@@ -555,10 +597,76 @@
         </div>
       {:else}
         <div class="page-heading settings-heading">
-          <div><span class="eyebrow">{lm.settings_eyebrow}</span><h1>{activeLabel}</h1><p>{active === "deck" ? lm.workbench_hint : lm.settings_hint}</p></div>
+          <div><span class="eyebrow">{lm.settings_eyebrow}</span><h1>{activeLabel}</h1><p>{active === "deck" ? lm.workbench_hint : active === "servers" ? lm.connections_hint : lm.settings_hint}</p></div>
         </div>
         {#if payload == null}
           <article class="card loading-card"><p class="hint">{lm.loading}</p></article>
+        {:else if active === "servers"}
+          <div class="connections-workbench">
+            <section class="connection-summary" aria-labelledby="connection-summary-heading">
+              <div>
+                <span class="eyebrow" id="connection-summary-heading">{lm.connection_status}</span>
+                <strong>{connectedLocalSessions + connectedRemoteServers}/{selectedLocalSessions.length + remoteServers}</strong>
+                <small>{lm.live_now}</small>
+              </div>
+              <dl>
+                <div><dt>{lm.runtime}</dt><dd class:connected={runtimeReady}>{runtimeReady ? lm.ready : lm.connecting}</dd></div>
+                <div><dt>{lm.local_sessions}</dt><dd>{connectedLocalSessions}/{selectedLocalSessions.length}</dd></div>
+                <div><dt>{lm.remote_servers}</dt><dd>{connectedRemoteServers}/{remoteServers}</dd></div>
+              </dl>
+            </section>
+
+            <div class="connection-inventories">
+              <article class="card diagnostic-card">
+                <header>
+                  <div><h2>{lm.local_inventory}</h2><p>{lm.local_inventory_hint}</p></div>
+                  <span>{connectionRows.local.length}</span>
+                </header>
+                <div class="diagnostic-list">
+                  {#each connectionRows.local as row (row.name)}
+                    <div class="diagnostic-row">
+                      <span class:connected={row.health === "connected"} class:unavailable={row.health === "unavailable"} class:inactive={row.health === "inactive"} class="connection-light" aria-hidden="true"></span>
+                      <div class="connection-identity">
+                        <strong>{row.name}</strong>
+                        <small><span>{lm.socket_identity}</span>{row.socketPath}</small>
+                        {#if row.runtimeId}<small><span>{lm.runtime_identity}</span>{row.runtimeId}</small>{/if}
+                      </div>
+                      <span class:connected={row.health === "connected"} class:unavailable={row.health === "unavailable"} class:inactive={row.health === "inactive"} class="state-label">{connectionLabel(row.health)}</span>
+                    </div>
+                  {:else}
+                    <p class="empty-diagnostic">{lm.no_local_sessions}</p>
+                  {/each}
+                </div>
+              </article>
+
+              <article class="card diagnostic-card">
+                <header>
+                  <div><h2>{lm.remote_inventory}</h2><p>{lm.remote_inventory_hint}</p></div>
+                  <span>{connectionRows.remote.length}</span>
+                </header>
+                <div class="diagnostic-list">
+                  {#each connectionRows.remote as row, index (`${row.id}:${index}`)}
+                    <div class="diagnostic-row">
+                      <span class:connected={row.health === "connected"} class:inactive={row.health === "inactive"} class="connection-light" aria-hidden="true"></span>
+                      <div class="connection-identity">
+                        <strong>{row.id || lm.new_server}</strong>
+                        <small>{row.url}</small>
+                        <small class="profile-use">{row.active ? lm.active_profile : lm.inactive_profile}</small>
+                      </div>
+                      <span class:connected={row.health === "connected"} class:inactive={row.health === "inactive"} class="state-label">{connectionLabel(row.health)}</span>
+                    </div>
+                  {:else}
+                    <p class="empty-diagnostic">{lm.no_remote_servers}</p>
+                  {/each}
+                </div>
+              </article>
+            </div>
+
+            <article class="card form-card connections-editor">
+              {#if (payload.base.servers == null || (payload.base.servers as unknown[]).length === 0)}<p class="hint">{lm.no_servers}</p>{/if}
+              <ServersSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
+            </article>
+          </div>
         {:else if active === "deck"}
           <div class="deck-workbench">
             <article class="card deck-workbench-preview"><div class="card-heading"><div><h2>{lm.live_deck}</h2><p>{lm.live_deck_hint}</p></div><span class="badge">{optionLabel(activeValue)}</span></div><div class="deck-surface"><DeckView transport={preview} onJump={jumpToSection} onView={(view) => (deckView = view)} /></div></article>
@@ -566,10 +674,7 @@
           </div>
         {:else}
           <article class="card form-card">
-            {#if active === "servers"}
-              {#if (payload.base.servers == null || (payload.base.servers as unknown[]).length === 0)}<p class="hint">{lm.no_servers}</p>{/if}
-              <ServersSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
-            {:else if active === "view"}
+            {#if active === "view"}
               <ViewSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
             {:else if active === "theme"}
               <ThemeSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
@@ -713,6 +818,43 @@
   .connection-row small { margin-top: 2px; color: var(--muted); font-size: 9px; }
   .deck-workbench { display: grid; grid-template-columns: minmax(480px, 1.15fr) minmax(380px, .85fr); gap: 14px; align-items: start; }
   .deck-workbench-preview { padding: 18px; }
+  .connections-workbench { display: grid; gap: 14px; }
+  .connection-summary { display: grid; grid-template-columns: minmax(170px, .42fr) 1fr; border-block: 1px solid var(--border); }
+  .connection-summary > div { display: grid; grid-template-columns: auto 1fr; align-content: center; column-gap: 12px; min-height: 88px; padding: 14px 18px; border-right: 1px solid var(--border); }
+  .connection-summary > div .eyebrow { grid-column: 1 / -1; }
+  .connection-summary > div strong { font: 650 27px/1 "SF Mono", ui-monospace, monospace; letter-spacing: -.06em; }
+  .connection-summary > div small { align-self: end; padding-bottom: 2px; color: var(--muted); font-size: 10px; }
+  .connection-summary dl { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; }
+  .connection-summary dl div { display: flex; flex-direction: column; justify-content: center; gap: 5px; min-width: 0; padding: 14px 18px; border-right: 1px solid var(--border); }
+  .connection-summary dl div:last-child { border-right: 0; }
+  .connection-summary dt { color: var(--muted); font-size: 9px; }
+  .connection-summary dd { margin: 0; font: 600 12px "SF Mono", ui-monospace, monospace; color: #f1c177; }
+  .connection-summary dd.connected { color: var(--green); }
+  .connection-inventories { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .diagnostic-card { overflow: hidden; background: rgb(17 22 30 / .78); }
+  .diagnostic-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 17px; border-bottom: 1px solid var(--border); }
+  .diagnostic-card h2 { margin: 0; font-size: 13px; }
+  .diagnostic-card header p { max-width: 420px; }
+  .diagnostic-card > header > span { min-width: 24px; padding: 3px 6px; border: 1px solid #364252; border-radius: 6px; color: #aeb9c7; font: 600 10px "SF Mono", ui-monospace, monospace; text-align: center; }
+  .diagnostic-list { padding: 0 17px; }
+  .diagnostic-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; min-height: 72px; padding: 11px 0; border-bottom: 1px solid rgb(255 255 255 / .06); }
+  .diagnostic-row:last-child { border-bottom: 0; }
+  .connection-light { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 3px rgb(240 179 90 / .1); }
+  .connection-light.connected { background: var(--green); box-shadow: 0 0 0 3px rgb(75 211 148 / .11); }
+  .connection-light.unavailable { background: #e2777f; box-shadow: 0 0 0 3px rgb(226 119 127 / .1); }
+  .connection-light.inactive { background: #596474; box-shadow: none; }
+  .connection-identity { min-width: 0; }
+  .connection-identity strong, .connection-identity small { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .connection-identity strong { font: 600 11px "SF Mono", ui-monospace, monospace; }
+  .connection-identity small { margin-top: 3px; color: var(--muted); font: 9px "SF Mono", ui-monospace, monospace; }
+  .connection-identity small span { margin-right: 7px; color: #69778a; }
+  .connection-identity .profile-use { color: #7f8da0; font-family: inherit; }
+  .state-label { align-self: start; padding-top: 3px; color: #f1c177; font-size: 9px; white-space: nowrap; }
+  .state-label.connected { color: #79e4b5; }
+  .state-label.unavailable { color: #ec9299; }
+  .state-label.inactive { color: #778395; }
+  .empty-diagnostic { min-height: 70px; padding: 18px 0; }
+  .connections-editor { margin-top: 2px; }
   .form-card { --field-label-w: 180px; padding: 20px 22px; overflow: hidden; }
   .loading-card { padding: 22px; }
   .hint { color: var(--muted); }
@@ -730,7 +872,7 @@
   .errlist li { margin: 2px 0; }
 
   @media (max-width: 1120px) {
-    .overview-stage, .deck-workbench { grid-template-columns: 1fr; }
+    .overview-stage, .deck-workbench, .connection-inventories { grid-template-columns: 1fr; }
     .overview-stack { grid-template-columns: repeat(2, 1fr); }
     .connection-card { grid-column: 1 / -1; }
   }
@@ -744,6 +886,9 @@
     .content { padding: 20px 16px 28px; }
     .overview-stack { grid-template-columns: 1fr; }
     .connection-card { grid-column: auto; }
+    .connection-summary { grid-template-columns: 1fr; }
+    .connection-summary > div { border-right: 0; border-bottom: 1px solid var(--border); }
+    .connection-summary dl div { padding-inline: 12px; }
     .form-card { --field-label-w: 145px; padding: 17px; }
   }
   @media (prefers-reduced-motion: reduce) {
