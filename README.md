@@ -6,6 +6,9 @@
 
 ![Control your agents from your deck.](docs/og-images/variant-08-top-down-press.png)
 
+[**Download Herdeck for Apple Silicon macOS**](https://github.com/vaclavik-xyz/herdeck/releases/latest)
+· [Linux packages](https://github.com/vaclavik-xyz/herdeck/releases/latest)
+
 Turn an Ulanzi Stream Controller D200 (or an Elgato Stream Deck) into a control
 panel for AI coding agents running under
 [herdr](https://github.com/ogulcancelik/herdr). See blocked agents at a glance
@@ -22,9 +25,9 @@ browser dashboard, or a native desktop window.
 ## Current status
 
 Herdeck `0.1.1` ships a signed and notarized installer for Apple Silicon macOS,
-plus AppImage, deb, and rpm packages for x86_64 and arm64 Linux. The macOS app
-updates itself through signed GitHub Release artifacts. Intel macOS, Homebrew,
-and a signed Elgato plugin are not available yet.
+plus AppImage, deb, and rpm packages for x86_64 and arm64 Linux. Installed
+desktop builds update themselves through signed GitHub Release artifacts. Intel
+macOS, Homebrew, and a signed Elgato plugin are not available yet.
 
 What works today:
 
@@ -41,13 +44,18 @@ What works today:
 
 ## Install
 
+Official desktop packages contain the complete Herdeck runtime. Users do not
+need Python, Node.js, Rust, or a source checkout. Herdr is a separate application
+and must already be running locally or on a reachable remote machine.
+
 ### macOS installer (recommended)
 
-1. Download the current `.dmg` from
+1. Download `herdeck_<version>_aarch64.dmg` from
    **[GitHub Releases](https://github.com/vaclavik-xyz/herdeck/releases/latest)**.
 2. Open the DMG and drag **herdeck** to `/Applications`.
-3. Quit Ulanzi Studio, connect the D200, and open Herdeck.
-4. Choose a local Herdr session in onboarding. No Herdeck config or token is
+3. Eject the DMG, quit Ulanzi Studio, connect the D200, and open Herdeck from
+   `/Applications`.
+4. Choose a Herdr session in onboarding. No Herdeck config or token is
    needed when Herdr runs under the same macOS user.
 
 The app is Developer ID signed and Apple notarized. It contains the complete
@@ -55,9 +63,39 @@ D200 runtime, stays active in the menu bar when its window is closed, and
 reopens the deck automatically after sleep or USB reconnect. Enable
 **Herdeck menu → Start at login** to bring the runtime back after a reboot.
 
-When a new signed release is available, the desktop window offers
-**Install and restart**. The update replaces the application and bundled D200
-runtime together.
+When a new signed release is available, the desktop window offers **Install and
+restart**. The update replaces the application and bundled runtime together.
+
+### Linux packages
+
+Download the package for your distribution and CPU architecture from
+**[GitHub Releases](https://github.com/vaclavik-xyz/herdeck/releases/latest)**:
+
+| Format | x86_64 | arm64 |
+| --- | --- | --- |
+| AppImage | `herdeck_<version>_amd64.AppImage` | `herdeck_<version>_aarch64.AppImage` |
+| Debian / Ubuntu | `herdeck_<version>_amd64.deb` | `herdeck_<version>_arm64.deb` |
+| Fedora / RHEL | `herdeck-<version>-1.x86_64.rpm` | `herdeck-<version>-1.aarch64.rpm` |
+
+Install a native package with the distribution package manager:
+
+```bash
+sudo apt install ./herdeck_0.1.1_amd64.deb
+# or
+sudo dnf install ./herdeck-0.1.1-1.x86_64.rpm
+```
+
+The portable AppImage needs no installation:
+
+```bash
+chmod +x ./herdeck_0.1.1_amd64.AppImage
+./herdeck_0.1.1_amd64.AppImage
+```
+
+The commands above use the current x86_64 filenames; use the corresponding arm64
+filename from the table on an arm64 machine. The Linux desktop package includes
+the same updater, but Ulanzi D200 hardware control is currently verified only on
+macOS.
 
 ### Source installation requirements
 
