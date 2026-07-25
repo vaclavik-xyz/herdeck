@@ -97,8 +97,8 @@ device, and never bind the dashboard to a public or untrusted interface.
 ### Native desktop app
 
 The desktop app currently has to be built from source. It needs Node.js
-`^20.19.0 || >=22.12.0`, Rust, and the platform's Tauri build prerequisites in
-addition to Python:
+`^20.19.0 || ^22.13.0 || >=24.0.0`, Rust, and the platform's Tauri build
+prerequisites in addition to Python:
 
 ```bash
 .venv/bin/pip install -e ".[packaging]"
