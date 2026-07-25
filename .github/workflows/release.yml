@@ -220,6 +220,30 @@ jobs:
           prerelease: false
           args: --bundles app,dmg
 
+      - name: Notarize, staple, and replace the macOS DMG
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(desktop/src-tauri/target/release/bundle/dmg/*.dmg)
+          test "${#dmgs[@]}" -eq 1
+          dmg="${dmgs[0]}"
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl -a -t open --context context:primary-signature -vv "$dmg"
+          gh release upload "$GITHUB_REF_NAME" "$dmg" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
       - name: Preserve macOS updater archive for the unified manifest
         uses: actions/upload-artifact@v4
         with:

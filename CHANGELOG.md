@@ -26,6 +26,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Herdr 0.7.5 protocol compatibility for submitted prompts and agent launches,
   while preserving protocol 16 and custom argv-based start profiles.
 
+## [0.1.1]
+
+- Notarize and staple the signed macOS DMG itself so Gatekeeper can verify the
+  installer before mounting it, including while offline.
+- Publish Tauri v2 Linux updater manifests against the signed AppImage files.
+
 ## [0.1.0]
 
 Initial public release.
@@ -45,5 +51,6 @@ Initial public release.
   configurable tiles, themes, profiles, macros, and notifications
   (macOS + Telegram).
 
-[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/vaclavik-xyz/herdeck/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vaclavik-xyz/herdeck/releases/tag/v0.1.0
