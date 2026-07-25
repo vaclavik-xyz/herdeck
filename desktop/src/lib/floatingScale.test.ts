@@ -68,5 +68,11 @@ describe("floating scale", () => {
       { width: 394, height: 349 },
       monitor,
     )).toEqual({ x: 500, y: 400 });
+    expect(anchoredFloatingPosition(
+      { x: 500, y: 400 },
+      { width: 328, height: 291 },
+      { width: 2200, height: 1400 },
+      monitor,
+    )).toEqual({ x: 0, y: 0 });
   });
 });

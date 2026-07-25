@@ -129,15 +129,8 @@
   // redundant calls via fitDecision's anti-feedback guard. No-op (try/catch) when
   // not in a Tauri WebView.
   let lastRequestedHeight: number | null = null;
+  let fitQueue = Promise.resolve();
   async function fitWindow(scrollHeight: number): Promise<void> {
-    const width = Math.round(BORDERLESS_BASE_WIDTH * floatingScale);
-    const d = fitDecision(
-      scrollHeight * floatingScale,
-      lastRequestedHeight,
-      width,
-    );
-    if (!d.apply) return;
-    lastRequestedHeight = d.height;
     try {
       const {
         currentMonitor,
@@ -146,11 +139,23 @@
         PhysicalPosition,
       } = await import("@tauri-apps/api/window");
       const window = getCurrentWindow();
-      const [position, previousSize, monitor] = await Promise.all([
+      const [position, previousSize, monitor, scaleFactor] = await Promise.all([
         window.outerPosition(),
         window.outerSize(),
         currentMonitor(),
+        window.scaleFactor(),
       ]);
+      const width = Math.round(BORDERLESS_BASE_WIDTH * floatingScale);
+      const monitorHeight = monitor
+        ? Math.max(160, Math.floor(monitor.size.height / scaleFactor - 32))
+        : Number.POSITIVE_INFINITY;
+      const d = fitDecision(
+        Math.min(scrollHeight * floatingScale, monitorHeight),
+        lastRequestedHeight,
+        width,
+      );
+      if (!d.apply) return;
+      lastRequestedHeight = d.height;
       await window.setSize(new LogicalSize(d.width, d.height));
       if (monitor) {
         const nextSize = await window.outerSize();
@@ -169,6 +174,12 @@
     }
   }
 
+  function scheduleFitWindow(scrollHeight: number): Promise<void> {
+    const scheduled = fitQueue.then(() => fitWindow(scrollHeight));
+    fitQueue = scheduled.catch(() => {});
+    return scheduled;
+  }
+
   async function applyFloatingScale(command: FloatingScaleCommand): Promise<void> {
     const next = changeFloatingScale(floatingScale, command);
     if (next === floatingScale) return;
@@ -180,7 +191,7 @@
     }
     lastRequestedHeight = null;
     await tick();
-    if (shell) await fitWindow(shell.scrollHeight);
+    if (shell) await scheduleFitWindow(shell.scrollHeight);
   }
 
   async function startWindowDrag(event: PointerEvent): Promise<void> {
@@ -209,7 +220,7 @@
       desktopSetupHidden = true;
     });
     const onFloatingScaleKey = (event: KeyboardEvent): void => {
-      if (!borderless || view !== "deck") return;
+      if (!borderless) return;
       const target = event.target;
       if (
         target instanceof HTMLElement
@@ -249,7 +260,7 @@
         scheduled = true;
         requestAnimationFrame(() => {
           scheduled = false;
-          if (shell) void fitWindow(shell.scrollHeight);
+          if (shell) void scheduleFitWindow(shell.scrollHeight);
         });
       });
       ro.observe(shell);
@@ -545,7 +556,11 @@
   }
   main.borderless {
     height: 100vh;
-    overflow: hidden;
+    overflow: auto;
+    scrollbar-width: none;
+  }
+  main.borderless::-webkit-scrollbar {
+    display: none;
   }
   /* The drag strip is the primary way to move the borderless window: keep the
      target generous and the grabber visible without adding desktop chrome. */

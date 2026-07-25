@@ -83,9 +83,11 @@ export function anchoredFloatingPosition(
   const anchoredY = Math.abs(bottomGap) <= edgeThreshold
     ? bottom - nextSize.height - bottomGap
     : position.y;
+  const maxX = Math.max(monitor.x, right - nextSize.width);
+  const maxY = Math.max(monitor.y, bottom - nextSize.height);
 
   return {
-    x: Math.round(Math.min(right - nextSize.width, Math.max(monitor.x, anchoredX))),
-    y: Math.round(Math.min(bottom - nextSize.height, Math.max(monitor.y, anchoredY))),
+    x: Math.round(Math.min(maxX, Math.max(monitor.x, anchoredX))),
+    y: Math.round(Math.min(maxY, Math.max(monitor.y, anchoredY))),
   };
 }
