@@ -81,8 +81,17 @@ def test_frozen_runtime_selftest_covers_dynamic_d200_imports():
         "herdeck.runtime",
         "herdeck.driver.d200",
         "strmdck",
+        "strmdck.devices.ulanzi_d200",
         "hid",
     )
+
+
+def test_managed_runtime_does_not_own_shared_discovery(monkeypatch):
+    monkeypatch.delenv("HERDECK_RUNTIME_MANAGED", raising=False)
+    assert runtime._should_write_discovery() is True
+
+    monkeypatch.setenv("HERDECK_RUNTIME_MANAGED", "1")
+    assert runtime._should_write_discovery() is False
 
 
 def test_build_runtime_attaches_d200_sink_when_device_present(monkeypatch, tmp_path):
