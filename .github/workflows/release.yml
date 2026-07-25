@@ -51,7 +51,7 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -e ".[packaging]"
+          .venv/bin/pip install -e ".[packaging,deck]"
           bash desktop/scripts/build-sidecar.sh
           bash desktop/scripts/smoke-sidecar.sh
 
@@ -181,7 +181,7 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -e ".[packaging]"
+          .venv/bin/pip install -e ".[packaging,deck]"
           bash desktop/scripts/build-sidecar.sh
           bash desktop/scripts/smoke-sidecar.sh
 

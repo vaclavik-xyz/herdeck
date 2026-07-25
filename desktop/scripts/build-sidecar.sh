@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Freeze the herdeck.deckapp sidecar into a host-arch onedir bundle for the Tauri app.
-# Prereq: a Python env with the `packaging` extra:  pip install -e '.[packaging]'
+# Freeze the converged D200 runtime into a host-arch onedir bundle for the Tauri app.
+# Prereq: packaging + D200 extras:  pip install -e '.[packaging,deck]'
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # desktop/scripts
@@ -15,7 +15,7 @@ ASSETS="$ROOT/src/herdeck/assets"
 echo "==> 1/3 pre-rasterize SVG glyphs -> PNG (into the bundled assets dir)"
 "$PY" -c "from herdeck.frozen import prerasterize_assets; print(prerasterize_assets('$ASSETS', '$ASSETS'))"
 
-echo "==> 2/3 freeze deckapp sidecar (PyInstaller onedir)"
+echo "==> 2/3 freeze converged D200 runtime (PyInstaller onedir)"
 "$PY" -m PyInstaller "$DESKTOP/herdeck-deckapp.spec" --noconfirm \
   --distpath "$DIST" --workpath "$WORK"
 

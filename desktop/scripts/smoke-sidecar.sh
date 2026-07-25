@@ -48,18 +48,17 @@ for svg_path in svgs:
 print(f"OK: {len(svgs)} bundled SVG(s) have decodable 196x196 baked PNGs")
 PY
 
-# --- Frozen local-bridge import reachability ---------------------------------------
-# The local onboarding path pulls herdeck.bridge/bootstrap + the new deckapp modules.
-# A full local connect needs a herdr socket (unit-tested via StubHerdr), but assert
-# here that the FROZEN binary can import the whole local path (no missing hiddenimport).
+# --- Frozen D200 runtime import reachability ---------------------------------------
+# A full hardware connect needs a real USB deck and Herdr socket, but assert here
+# that the FROZEN binary can import both the local bridge and dynamic HID stack.
 # Self-contained temp file (defined + cleaned up here) so it is safe under `set -u`,
 # regardless of where it sits relative to the other mktemp lines.
 IMPORT_ERR="$(mktemp)"
 if ! HERDECK_SELFTEST=imports "$BIN" >/dev/null 2>"$IMPORT_ERR"; then
-  echo "FAIL: frozen local-bridge imports unreachable"; cat "$IMPORT_ERR"; rm -f "$IMPORT_ERR"; exit 1
+  echo "FAIL: frozen D200 runtime imports unreachable"; cat "$IMPORT_ERR"; rm -f "$IMPORT_ERR"; exit 1
 fi
 rm -f "$IMPORT_ERR"
-echo "OK: frozen local-bridge imports reachable"
+echo "OK: frozen D200 runtime imports reachable"
 
 # Force the deterministic mock source (no on-disk config / keychain needed).
 export HERDECK_MOCK=1
@@ -77,12 +76,12 @@ for _ in $(seq 1 300); do
 done
 DISCOVERY="$(head -n1 "$LINE_FILE")"
 [ -n "$DISCOVERY" ] || { echo "FAIL: no discovery line"; echo "--- sidecar stderr: ---"; cat "$STDERR_FILE"; exit 1; }
-echo "discovery: $DISCOVERY"
 
 # Parse host/port/token without jq (python3 is always present on macOS).
-read -r HOST PORT TOKEN <<EOF
-$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d['host'], d['port'], d['token'])" "$DISCOVERY")
+read -r HOST PORT TOKEN SOURCE <<EOF
+$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d['host'], d['port'], d['token'], d['source'])" "$DISCOVERY")
 EOF
+echo "discovery: host=$HOST port=$PORT source=$SOURCE token=<redacted>"
 
 check() {  # check <name> <expected-status> <path-with-token>
   local name="$1" want="$2" path="$3"

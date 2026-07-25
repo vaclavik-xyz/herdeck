@@ -20,6 +20,24 @@ from .deckapp.discovery import clear_runtime_file, runtime_file_path, write_runt
 from .deckapp.server import create_app
 from .deckapp.sinks import ReconnectingD200Sink
 
+SELFTEST_IMPORTS = (
+    "herdeck.deckapp.onboarding",
+    "herdeck.deckapp.local_bridge",
+    "herdeck.bridge",
+    "herdeck.runtime",
+    "herdeck.driver.d200",
+    "strmdck",
+    "hid",
+)
+
+
+def _run_import_selftest() -> int:
+    import importlib
+
+    for module in SELFTEST_IMPORTS:
+        importlib.import_module(module)
+    return 0
+
 
 def _default_driver_factory(config):
     """Build (and open) a D200Driver from config.hardware. Raises if no device."""
@@ -76,6 +94,8 @@ def build_runtime(
 
 
 def main() -> int:
+    if os.environ.get("HERDECK_SELFTEST") == "imports":
+        return _run_import_selftest()
     if os.environ.get("HERDECK_DEBUG"):
         logging.basicConfig(level=logging.DEBUG)
     port = int(os.environ.get("HERDECK_DECKAPP_PORT", "0"))

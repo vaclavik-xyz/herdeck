@@ -1,5 +1,6 @@
 import base64
 import json
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -60,3 +61,28 @@ def test_macos_release_signs_and_verifies_the_frozen_sidecar():
     assert "--force --options runtime --timestamp" in build_script
     assert 'PYTHON_LINK="$DIST/herdeck-deckapp/_internal/Python"' in build_script
     assert 'Python.framework" -depth -delete' in build_script
+
+
+def test_desktop_bundle_contains_the_converged_d200_runtime():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text()
+    spec = (ROOT / "desktop/herdeck-deckapp.spec").read_text()
+    entry = (ROOT / "desktop/scripts/runtime-entry.py").read_text()
+    smoke = (ROOT / "desktop/scripts/smoke-sidecar.sh").read_text()
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+
+    assert '.venv/bin/pip install -e ".[packaging,deck]"' in workflow
+    assert "runtime-entry.py" in spec
+    assert "from herdeck.runtime import main" in entry
+    assert '"herdeck.driver.d200"' in spec
+    assert '"strmdck"' in spec
+    assert '"hid"' in spec
+    excludes = spec.split("excludes=", maxsplit=1)[1].split("noarchive=", maxsplit=1)[0]
+    assert '"strmdck"' not in excludes
+    assert '"hid"' not in excludes
+    assert "frozen D200 runtime imports reachable" in smoke
+    assert 'token=<redacted>' in smoke
+    assert 'echo "discovery: $DISCOVERY"' not in smoke
+
+    deck_dependencies = pyproject["project"]["optional-dependencies"]["deck"]
+    assert "strmdck" in deck_dependencies
+    assert "hidapi" in deck_dependencies
