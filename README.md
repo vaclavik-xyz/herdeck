@@ -21,15 +21,17 @@ browser dashboard, or a native desktop window.
 
 ## Current status
 
-Herdeck is source-distributed pre-release software (`0.1.0`). There is no
-published GitHub Release, signed installer, Homebrew formula, or automatic
-updater yet. Install it from this repository using one of the paths below.
+Herdeck `0.1.0` ships a signed and notarized installer for Apple Silicon macOS,
+plus AppImage, deb, and rpm packages for x86_64 and arm64 Linux. The macOS app
+updates itself through signed GitHub Release artifacts. Intel macOS, Homebrew,
+and a signed Elgato plugin are not available yet.
 
 What works today:
 
 - Ulanzi D200 control on macOS, including reconnect after sleep/wake.
 - Native Tauri desktop window with onboarding, settings, profiles, and Czech or
-  English UI.
+  English UI. Its bundled runtime drives the D200 without a separate Python
+  installation.
 - Browser dashboard and hardware-free demo mode.
 - Local, remote, and mixed Herdr sessions; remote bridges run over Tailscale.
 - `herdeck-ctl` automation, live terminal preview, notifications, usage limits,
@@ -39,7 +41,25 @@ What works today:
 
 ## Install
 
-### Requirements
+### macOS installer (recommended)
+
+1. Download the current `.dmg` from
+   **[GitHub Releases](https://github.com/vaclavik-xyz/herdeck/releases/latest)**.
+2. Open the DMG and drag **herdeck** to `/Applications`.
+3. Quit Ulanzi Studio, connect the D200, and open Herdeck.
+4. Choose a local Herdr session in onboarding. No Herdeck config or token is
+   needed when Herdr runs under the same macOS user.
+
+The app is Developer ID signed and Apple notarized. It contains the complete
+D200 runtime, stays active in the menu bar when its window is closed, and
+reopens the deck automatically after sleep or USB reconnect. Enable
+**Herdeck menu → Start at login** to bring the runtime back after a reboot.
+
+When a new signed release is available, the desktop window offers
+**Install and restart**. The update replaces the application and bundled D200
+runtime together.
+
+### Source installation requirements
 
 - Python 3.12 or 3.13.
 - [herdr](https://github.com/ogulcancelik/herdr) 0.7.2 or newer for live agents.
@@ -58,7 +78,7 @@ python3 -m venv .venv
 
 Then choose the front-end you want.
 
-### Ulanzi D200 (macOS)
+### Ulanzi D200 from source (macOS)
 
 Install the D200 dependencies, check the local Herdr connection, and start
 Herdeck:
@@ -96,12 +116,12 @@ device, and never bind the dashboard to a public or untrusted interface.
 
 ### Native desktop app
 
-The desktop app currently has to be built from source. It needs Node.js
+To build the desktop app yourself, install Node.js
 `^20.19.0 || ^22.13.0 || >=24.0.0`, Rust, and the platform's Tauri build
 prerequisites in addition to Python:
 
 ```bash
-.venv/bin/pip install -e ".[packaging]"
+.venv/bin/pip install -e ".[packaging,deck]"
 cd desktop
 npm ci
 bash scripts/build-app.sh
@@ -109,8 +129,8 @@ bash scripts/build-app.sh
 
 On macOS, the application bundle is produced under
 `desktop/src-tauri/target/release/bundle/macos/`. Open it directly or copy it to
-`/Applications`. This build is local and unsigned; no automatic update channel
-is enabled on `main` yet.
+`/Applications`. A local build is unsigned unless you provide the release
+signing environment; official GitHub Release builds are signed and notarized.
 
 For development, use `npm run tauri dev` instead. See
 [`desktop/README.md`](desktop/README.md) for the frontend, Rust, and sidecar test
@@ -160,12 +180,12 @@ TOML files or command-line arguments.
 
 ### Update a source installation
 
-Until signed releases and the updater land, update the checkout and refresh its
-environment explicitly:
+The automatic updater belongs to the installed desktop app. For a source
+checkout, update the repository and refresh its environment explicitly:
 
 ```bash
 git pull --ff-only
-.venv/bin/pip install -e ".[deck]" # use .[dev] or .[packaging] for your install
+.venv/bin/pip install -e ".[deck]" # use .[dev] or .[packaging,deck] as needed
 .venv/bin/herdeck-doctor
 ```
 
@@ -659,7 +679,6 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   and are ignored by the orchestrator.
 
 ## Known follow-ups
-- Publish signed, notarized, versioned releases and enable the desktop updater.
 - Confirm exact approve/deny key sequences per agent against live prompts
   (config-only changes).
 - Drill-in shows the read prompt text on a spare tile; richer prompt display is

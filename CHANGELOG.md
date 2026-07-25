@@ -30,6 +30,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Initial public release.
 
+- Signed and notarized Apple Silicon macOS DMG with a bundled Ulanzi D200
+  runtime, Start at login support, and signed in-app updates.
+- Linux desktop packages for x86_64 and arm64 (AppImage, deb, and rpm).
 - Control panel for AI coding agents running under
   [herdr](https://github.com/ogulcancelik/herdr).
 - Front-ends: Ulanzi D200 hardware deck, Elgato Stream Deck plugin, browser
