@@ -38,6 +38,25 @@ describe("validation issue routing", () => {
     expect(classifyValidationIssue("work: unknown server 'ghost'", inheritedProfile)).toMatchObject({
       section: "profiles", fieldKey: "servers", owner: "parent", profileContext: null,
     });
+
+    const directDeckOverride = parseConfig({
+      profiles: { work: { deck: { overview_order: ["ghost"] } } },
+      active_profile: "work",
+    })!;
+    expect(classifyValidationIssue("work: unknown server 'ghost'", directDeckOverride)).toMatchObject({
+      section: "deck", fieldKey: "overview_order", owner: null, profileContext: "work",
+    });
+
+    const inheritedDeckOverride = parseConfig({
+      profiles: {
+        parent: { deck: { overview_order: ["ghost"] } },
+        work: { extends: "parent" },
+      },
+      active_profile: "work",
+    })!;
+    expect(classifyValidationIssue("work: unknown server 'ghost'", inheritedDeckOverride)).toMatchObject({
+      section: "deck", fieldKey: "overview_order", owner: null, profileContext: "parent",
+    });
   });
 
   it("retains the non-active profile whose overlay needs editing", () => {

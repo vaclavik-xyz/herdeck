@@ -155,9 +155,10 @@ export function classifyValidationIssue(message: string, payload?: RoutingPayloa
   const unknownServer = body.match(/^unknown server '([^']+)'/);
   if (unknownServer) {
     const owner = serverSelectionOwner(unknownServer[1], profileContext, payload);
+    const deckOwner = settingProfileOwner(profileContext, ["deck", "overview_order"], payload);
     return owner
       ? issue(message, "profiles", "servers", null, owner)
-      : issue(message, "deck", "overview_order", null);
+      : issue(message, "deck", "overview_order", deckOwner);
   }
 
   if (/^unknown profile |^profile inheritance cycle/.test(body)) {
