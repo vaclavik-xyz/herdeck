@@ -4,11 +4,13 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
 
+![Control your agents from your deck.](docs/og-images/variant-08-top-down-press.png)
+
 Turn an Ulanzi Stream Controller D200 (or an Elgato Stream Deck) into a control
 panel for AI coding agents running under
 [herdr](https://github.com/ogulcancelik/herdr). See blocked agents at a glance
-and Approve / Deny / Stop with one press — on the hardware deck, a browser
-simulator, or a native desktop window.
+and Approve / Deny / Stop / Continue with one press — on the hardware deck, a
+browser dashboard, or a native desktop window.
 
 > **What is herdr?** herdr runs your AI coding agents (Claude, Codex, Cursor,
 > Gemini, …) in managed terminal panes and exposes their live state over a local
@@ -17,41 +19,170 @@ simulator, or a native desktop window.
 > You install and run herdr separately; or use the mock path below to try
 > herdeck standalone.
 
+## Current status
+
+Herdeck is source-distributed pre-release software (`0.1.0`). There is no
+published GitHub Release, signed installer, Homebrew formula, or automatic
+updater yet. Install it from this repository using one of the paths below.
+
+What works today:
+
+- Ulanzi D200 control on macOS, including reconnect after sleep/wake.
+- Native Tauri desktop window with onboarding, settings, profiles, and Czech or
+  English UI.
+- Browser dashboard and hardware-free demo mode.
+- Local, remote, and mixed Herdr sessions; remote bridges run over Tailscale.
+- `herdeck-ctl` automation, live terminal preview, notifications, usage limits,
+  macros, and configurable safety profiles.
+- Elgato Stream Deck plugin with a bundled backend; its current package is a
+  local arm64 macOS build and is not signed or notarized.
+
+## Install
+
+### Requirements
+
+- Python 3.12 or 3.13.
+- [herdr](https://github.com/ogulcancelik/herdr) 0.7.2 or newer for live agents.
+- Tailscale only when the Herdr host and the deck host are different machines.
+- For hardware: an Ulanzi D200 or an Elgato Stream Deck. Quit the vendor's app
+  before using the D200 because it holds the USB device.
+
+Start with a checkout and an isolated Python environment:
+
+```bash
+git clone https://github.com/vaclavik-xyz/herdeck.git
+cd herdeck
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+```
+
+Then choose the front-end you want.
+
+### Ulanzi D200 (macOS)
+
+Install the D200 dependencies, check the local Herdr connection, and start
+Herdeck:
+
+```bash
+brew install cairo # needed once on a fresh Mac
+.venv/bin/pip install -e ".[deck]"
+.venv/bin/herdeck-doctor
+.venv/bin/herdeck
+```
+
+If Herdr is running under the same macOS user at its default socket, no Herdeck
+config or token is needed. The first run discovers it automatically. If no D200
+is attached, `herdeck` falls back to the browser dashboard.
+
+### Browser dashboard or demo
+
+Install the development/rendering dependencies and choose either live local
+agents or synthetic demo agents:
+
+```bash
+.venv/bin/pip install -e ".[dev]"
+
+HERDECK_DECK=web .venv/bin/herdeck              # live local Herdr
+HERDECK_MOCK=1 HERDECK_DECK=web .venv/bin/herdeck # standalone demo
+```
+
+The command prints the loopback URL. Set `HERDECK_WEB_BIND` to your Tailscale
+IP only when you intentionally need access from another device; never bind the
+dashboard to a public or untrusted interface.
+
+### Native desktop app
+
+The desktop app currently has to be built from source. It needs Node.js 20+,
+Rust, and the platform's Tauri build prerequisites in addition to Python:
+
+```bash
+.venv/bin/pip install -e ".[packaging]"
+cd desktop
+npm ci
+bash scripts/build-app.sh
+```
+
+On macOS, the application bundle is produced under
+`desktop/src-tauri/target/release/bundle/macos/`. Open it directly or copy it to
+`/Applications`. This build is local and unsigned; no automatic update channel
+is enabled on `main` yet.
+
+For development, use `npm run tauri dev` instead. See
+[`desktop/README.md`](desktop/README.md) for the frontend, Rust, and sidecar test
+commands.
+
+### Elgato Stream Deck plugin (arm64 macOS)
+
+The plugin package contains its own frozen Herdeck backend, so the destination
+Mac does not need Python. Building the current unsigned package requires Node.js
+and Cairo:
+
+```bash
+brew install cairo
+.venv/bin/pip install -e ".[packaging]"
+cd streamdeck
+npm ci
+npm run package
+open xyz.vaclavik.herdeck.streamDeckPlugin
+```
+
+The final command hands the package to the Stream Deck app. Gatekeeper may warn
+because the current plugin package is not signed or notarized.
+
+### Remote Herdr host
+
+When Herdr runs on another machine, install Herdeck there from the same checkout
+and run a persistent bridge bound only to its Tailscale address. On macOS:
+
+```bash
+.venv/bin/pip install -e .
+TAILSCALE_IP="$(tailscale ip -4 | head -n 1)"
+.venv/bin/herdeck-service install bridge \
+  --system \
+  --bind "$TAILSCALE_IP" \
+  --port 8788 \
+  --socket "$HOME/.config/herdr/herdr.sock" \
+  --server-id workbox \
+  --token-file "$HOME/.config/herdeck/bridge-token"
+.venv/bin/herdeck-service status bridge --system
+```
+
+Then connect the deck Mac through the desktop onboarding flow. For unattended
+or agent-managed setup, multiple sessions, Linux systemd, secure token transfer,
+verification, and rollback, follow the
+**[agent setup runbook](docs/agent-setup.md)**. Do not copy token values into
+TOML files or command-line arguments.
+
+### Update a source installation
+
+Until signed releases and the updater land, update the checkout and refresh its
+environment explicitly:
+
+```bash
+git pull --ff-only
+.venv/bin/pip install -e ".[deck]" # use .[dev] or .[packaging] for your install
+.venv/bin/herdeck-doctor
+```
+
+An installed bridge keeps using the Python environment recorded in its service.
+Run the same `herdeck-service install bridge ...` command again when its launchd
+definition or startup options change; the installer replaces the service and
+rolls its plist back if launchd rejects the update.
+
 ## Try it in 30 seconds (no hardware, no herdr)
 
 ```bash
 git clone https://github.com/vaclavik-xyz/herdeck.git && cd herdeck
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-HERDECK_MOCK=1 HERDECK_DECK=web herdeck   # synthetic agents — no deck, bridge, config, or token
-# open http://127.0.0.1:8800
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+HERDECK_MOCK=1 HERDECK_DECK=web .venv/bin/herdeck
 ```
 
 This renders the deck in your browser with lively synthetic agents using the
-exact device code — no Stream Deck and no herdr required.
+exact device code — no Stream Deck and no herdr required. Open the loopback URL
+printed by the command.
 
-## Quick start (local, real agents)
-
-If herdr runs on the same machine as your deck, no config or token is needed:
-
-1. `git clone https://github.com/vaclavik-xyz/herdeck.git && cd herdeck`
-2. `pip install -e ".[deck]"` (Mac, real D200), `pip install -e ".[elgato]"`
-   (Elgato Stream Deck), or `pip install -e ".[dev]"` (web simulator only).
-3. Make sure herdr is running (socket at `~/.config/herdr/herdr.sock`).
-4. Run it:
-   ```bash
-   herdeck                  # drives an attached Stream Deck
-   HERDECK_DECK=web herdeck # browser simulator at http://127.0.0.1:8800
-   ```
-
-herdeck auto-detects the local herdr socket and starts an embedded loopback
-bridge for you. If no Stream Deck is attached it falls back to the web
-simulator and prints its URL. Set `HERDR_SOCKET` (Herdeck compatibility) or
-Herdr's native `HERDR_SOCKET_PATH` / `HERDR_SESSION` if the socket lives
-elsewhere. For a remote deck (herdr on another host) see **Server setup**
-below — that path uses an explicit config with `[[servers]]` and a token.
-
-### Multiple Herdr sessions
+## Multiple Herdr sessions
 
 Herdeck can combine multiple local named sessions and remote bridges in one
 deck. Open **Settings → Servers** (or the connection picker in the floating
@@ -120,52 +251,17 @@ Actions that clear a block (`approve`/`deny`/`stop`) wait until the agent leaves
 agents → herdr (Unix socket) → herdeck-bridge → WebSocket/Tailscale → Mac app → D200
 ```
 
-## Server setup (where herdr runs)
-herdr's socket lives at `~/.config/herdr/herdr.sock` (macOS & Linux).
+## Remote bridge details
 
-1. Copy this repo to the server and create a venv (Python ≥ 3.12):
-   `python3 -m venv ~/herdeck/.venv && ~/herdeck/.venv/bin/pip install websockets`
-2. Run the bridge bound to the host's **Tailscale IP** with a bearer token:
-   ```bash
-   mkdir -p ~/.config/herdeck
-   umask 077
-   test -s ~/.config/herdeck/bridge-token ||
-     openssl rand -hex 32 > ~/.config/herdeck/bridge-token
-   chmod 600 ~/.config/herdeck/bridge-token
-   HERDR_SOCKET=~/.config/herdr/herdr.sock \
-   HERDECK_BIND=100.x.y.z HERDECK_PORT=8788 \
-   HERDECK_SERVER_ID=workbox \
-   HERDECK_TOKEN_FILE=~/.config/herdeck/bridge-token \
-   PYTHONPATH=~/herdeck/src ~/herdeck/.venv/bin/python -m herdeck.bridge
-   ```
-   The Mac routes commands by the **config `id`** of the server it connects to,
-   so `HERDECK_SERVER_ID` is only a cosmetic label — the connector re-stamps
-   inbound state to the config id (they need not match).
-3. To keep an always-on remote bridge running across reboots and GUI logouts:
-   **macOS** → install it as a system daemon with
-   `herdeck-service install bridge --system --bind 100.x.y.z --server-id workbox`;
-   **Linux** → `deploy/herdeck-bridge.service` (systemd).
+Herdr's default socket is `~/.config/herdr/herdr.sock` on macOS and Linux. The
+supported macOS system-service installer is shown under **Remote Herdr host**
+above; Linux uses [`deploy/herdeck-bridge.service`](deploy/herdeck-bridge.service).
 
-For a service installation, prefer a private token file over an environment
-value:
-
-```bash
-mkdir -p ~/.config/herdeck
-openssl rand -hex 32 > ~/.config/herdeck/bridge-token
-chmod 600 ~/.config/herdeck/bridge-token
-HERDECK_TOKEN_FILE=~/.config/herdeck/bridge-token \
-  HERDECK_BIND=100.x.y.z python -m herdeck.bridge
-```
-
-## Mac setup (where the deck is)
-1. `pip install -e ".[deck]"` (pulls `strmdck` + `pillow`).
-2. Copy `config.example.toml` to `~/.config/herdeck/config.toml`, set the
-   server URL to `ws://<server-tailscale-ip>:8788` and export the token env
-   named by the server's `token_env` (the shipped example uses
-   `export HERDECK_WORKBOX_TOKEN=<token>`).
-3. Close the official Ulanzi app (it holds the USB device).
-4. Run: `HERDECK_CONFIG=~/.config/herdeck/config.toml python -m herdeck.app`
-   (or load `deploy/com.herdeck.app.plist` to autostart at login).
+Each remote Herdr instance runs one authenticated `herdeck-bridge` and appears
+as one `[[servers]]` entry. The config `id` is the authoritative routing ID on
+the deck; `HERDECK_SERVER_ID` is only the bridge's self-reported label. Keep
+ports, config IDs, token environment names, and token files unique when several
+bridges share a host.
 
 ## Profiles and customization
 
@@ -327,21 +423,21 @@ prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).
 herdeck also ships a native **desktop app** (Tauri + Svelte): a floating,
 always-on-top window that renders the same deck as the hardware, plus a
 first-run onboarding flow and a full settings / config editor. It attaches to a
-running herdeck runtime or spawns its own sidecar. Build and run it from
+running herdeck runtime or spawns its own sidecar. For development, run it from
 `desktop/`:
 
 ```bash
-# from the repo root — dev mode spawns .venv/bin/python -m herdeck.deckapp as
-# the sidecar, so create that venv first (same as Quick start):
-python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
+# from the repo root
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
 
 cd desktop
-npm install
+npm ci
 npm run tauri dev   # opens the floating window (needs a real desktop session)
 ```
 
-See [`desktop/README.md`](desktop/README.md) for architecture and build/test
-details.
+See **Native desktop app** under Install for a local application bundle and
+[`desktop/README.md`](desktop/README.md) for architecture and test details.
 
 ## The deck (Ulanzi D200)
 The D200 has **13 buttons** (a 5×3 grid minus the small status window). The
@@ -451,19 +547,22 @@ your venv — PyInstaller 6 + the build-time SVG rasterizer cairosvg + the froze
 runtime deps), and the Node deps (`cd streamdeck && npm install`). cairosvg needs
 libcairo present at build time (e.g. `brew install cairo`); it is **not** bundled.
 
-**Build:**
+**Build from the repository root:**
 
 ```bash
-pip install -e .[packaging]      # once, into the venv the build uses
-cd streamdeck && npm run package # pre-rasterize → freeze → npm build → zip
+.venv/bin/pip install -e ".[packaging]"
+cd streamdeck
+npm ci
+npm run package # pre-rasterize → freeze → npm build → zip
 ```
 
-`scripts/build-plugin.sh` runs four steps: pre-rasterize `src/herdeck/assets/*.svg`
-→ PNG (so the frozen runtime is Pillow-only, never cairosvg); freeze the backend
-with PyInstaller (onedir) into `…sdPlugin/backend/herdeck-backend/herdeck-backend`;
-`npm run build` the TS shell; then package the `.sdPlugin` into a `.streamDeckPlugin`
-with Elgato's `DistributionTool` if it is on `PATH`, else a plain `zip` (the format
-is a zip of the bundle dir). All build outputs are gitignored.
+`streamdeck/scripts/build-plugin.sh` runs four steps: pre-rasterize
+`src/herdeck/assets/*.svg` → PNG (so the frozen runtime is Pillow-only, never
+cairosvg); freeze the backend with PyInstaller (onedir) into
+`…sdPlugin/backend/herdeck-backend/herdeck-backend`; `npm run build` the TS
+shell; then package the `.sdPlugin` into a `.streamDeckPlugin` with Elgato's
+`DistributionTool` if it is on `PATH`, else a plain `zip` (the format is a zip
+of the bundle dir). All build outputs are gitignored.
 
 **Install:** double-click the `.streamDeckPlugin` (or drag it onto the Stream Deck
 app). The bundled backend is discovered automatically — no Python required.
@@ -554,6 +653,7 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   and are ignored by the orchestrator.
 
 ## Known follow-ups
+- Publish signed, notarized, versioned releases and enable the desktop updater.
 - Confirm exact approve/deny key sequences per agent against live prompts
   (config-only changes).
 - Drill-in shows the read prompt text on a spare tile; richer prompt display is
