@@ -234,6 +234,25 @@ Run the same `herdeck-service install bridge ...` command again when its launchd
 definition or startup options change; the installer replaces the service and
 rolls its plist back if launchd rejects the update.
 
+### macOS dev build
+
+Maintainers can create a disposable Apple Silicon build from any branch with
+the **dev-build** workflow under GitHub Actions. Download its
+`herdeck-dev-macos-arm64` artifact, extract the included archive, and move
+`Herdeck Dev.app` to `~/Applications` or `/Applications`.
+
+The dev app has its own bundle ID, stores configuration under
+`~/.config/herdeck-dev`, uses a separate `herdeck-dev` Keychain namespace, and
+does not use the stable updater. Its window title contains the source commit so
+test feedback can identify the exact build. It can sit next to the stable app,
+but quit the stable Herdeck before testing D200 hardware because only one
+process can own the USB device.
+
+Dev artifacts are unsigned, expire after 14 days, and are intended only for
+trusted internal testing. When downloading through a browser, macOS may require
+**Control-click → Open** on first launch. Public releases remain Developer ID
+signed and Apple notarized.
+
 ## Try it in 30 seconds (no hardware, no herdr)
 
 ```bash

@@ -7,6 +7,7 @@
 //! the frontend can reach the sidecar over loopback. The sidecar is restarted on
 //! crash and killed on quit.
 
+pub mod build_channel;
 pub mod hotkey;
 pub mod http;
 pub mod sidecar;
@@ -87,6 +88,9 @@ struct UpdateMetadata {
 /// network is an error to the caller, which the automatic UI check suppresses.
 #[tauri::command]
 async fn update_check(app: tauri::AppHandle) -> Result<Option<UpdateMetadata>, String> {
+    if !build_channel::updates_enabled() {
+        return Ok(None);
+    }
     let update = app
         .updater()
         .map_err(|e| e.to_string())?
@@ -103,6 +107,9 @@ async fn update_check(app: tauri::AppHandle) -> Result<Option<UpdateMetadata>, S
 /// updater verify, replace, and restart the complete desktop bundle.
 #[tauri::command]
 async fn update_install(app: tauri::AppHandle) -> Result<bool, String> {
+    if !build_channel::updates_enabled() {
+        return Ok(false);
+    }
     let update = app
         .updater()
         .map_err(|e| e.to_string())?
@@ -841,7 +848,7 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     }
 
     let mut builder = TrayIconBuilder::with_id("herdeck-tray")
-        .tooltip("herdeck")
+        .tooltip(build_channel::display_name())
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
@@ -920,6 +927,10 @@ fn start_sidecar(
                 "HERDECK_CONFIG".to_string(),
                 config_path.to_string_lossy().into_owned(),
             ));
+            if let Some(service) = build_channel::keyring_service_override() {
+                spec.envs
+                    .push(("HERDECK_KEYRING_SERVICE".to_string(), service.to_string()));
+            }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 supervise(SupervisorConfig::new(spec), child, stop, move |d| {
@@ -946,9 +957,13 @@ pub fn run() {
     // creation-time props in Tauri 2).
     let home = PathBuf::from(env::var("HOME").unwrap_or_default());
     let repo_root = repo_root_from_manifest();
-    let env_override = env::var("HERDECK_CONFIG").ok();
-    let config_path =
-        window_mode::resolve_config_path(env_override.as_deref(), &home, &repo_root);
+    let explicit_config = env::var("HERDECK_CONFIG").ok();
+    let config_override = build_channel::config_override(explicit_config.as_deref(), &home);
+    let config_path = window_mode::resolve_config_path(
+        config_override.as_ref().and_then(|path| path.to_str()),
+        &home,
+        &repo_root,
+    );
     let mode = window_mode::read_window_mode(&config_path);
 
     // Clones for the setup closure and the supervisor.
@@ -1006,8 +1021,9 @@ pub fn run() {
                 "document.documentElement.dataset.windowMode='{}'",
                 mode.as_str()
             );
+            let display_name = build_channel::display_name();
             let builder = WebviewWindowBuilder::new(&app_handle, "main", WebviewUrl::default())
-                .title("herdeck")
+                .title(&display_name)
                 .shadow(true)
                 .initialization_script(init);
             let builder = match mode {
@@ -1061,6 +1077,9 @@ pub fn run() {
             // were allowed to close, Tauri would DESTROY it and open_config would
             // then fail with "config window not found". Intercept close -> hide.
             if let Some(cfg_win) = app.get_webview_window("config") {
+                if build_channel::is_dev() {
+                    let _ = cfg_win.set_title(&format!("{display_name} — Config"));
+                }
                 let w = cfg_win.clone();
                 cfg_win.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1069,7 +1088,13 @@ pub fn run() {
                     }
                 });
             }
-            start_sidecar(app, setup_discovery, setup_child, setup_stop, &setup_config_path);
+            start_sidecar(
+                app,
+                setup_discovery,
+                setup_child,
+                setup_stop,
+                &setup_config_path,
+            );
             Ok(())
         })
         .build(tauri::generate_context!())

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Herdeck Dev",
+  "identifier": "xyz.vaclavik.herdeck.desktop.dev",
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
+}
