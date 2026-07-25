@@ -3,6 +3,7 @@ import {
   changeFloatingScale,
   anchoredFloatingPosition,
   floatingScaleCommandForKey,
+  floatingFrameSize,
   floatingViewport,
   readFloatingScale,
   writeFloatingScale,
@@ -85,6 +86,13 @@ describe("floating scale", () => {
     expect(floatingViewport(1400, 1, 1000)).toEqual({
       height: 1000,
       scrollable: true,
+    });
+  });
+
+  it("sizes the scroll frame to the transformed card instead of its base box", () => {
+    expect(floatingFrameSize(1400, 0.8)).toEqual({
+      width: 262,
+      height: 1120,
     });
   });
 });

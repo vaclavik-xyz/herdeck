@@ -14,6 +14,8 @@
   import {
     anchoredFloatingPosition,
     changeFloatingScale,
+    FLOATING_BASE_WIDTH,
+    floatingFrameSize,
     floatingScaleCommandForKey,
     floatingViewport,
     readFloatingScale,
@@ -39,10 +41,6 @@
   const borderless = windowMode !== "normal";
   const surface = appSurface(windowMode);
 
-  // The 100% borderless width matches the Rust builder. Keyboard zoom scales
-  // both this base width and the content-fit height together.
-  const BORDERLESS_BASE_WIDTH = 328;
-
   let shell = $state<HTMLElement | undefined>(undefined);
   let desktopSetupOverlay = $state<HTMLElement | undefined>(undefined);
 
@@ -56,6 +54,7 @@
   let updateError = $state("");
   let installingUpdate = $state(false);
   let floatingScrollable = $state(false);
+  let floatingContentHeight = $state(300);
   let floatingScale = $state((() => {
     if (!borderless || typeof localStorage === "undefined") return 1;
     try {
@@ -64,6 +63,9 @@
       return 1;
     }
   })());
+  const floatingFrame = $derived(
+    floatingFrameSize(floatingContentHeight, floatingScale),
+  );
 
   const updater = updateTransport((cmd, args) => invoke(cmd, args));
 
@@ -146,7 +148,7 @@
         window.outerSize(),
         currentMonitor(),
       ]);
-      const width = Math.round(BORDERLESS_BASE_WIDTH * floatingScale);
+      const width = Math.round(FLOATING_BASE_WIDTH * floatingScale);
       const monitorHeight = monitor
         ? Math.max(160, monitor.workArea.size.height / monitor.scaleFactor - 32)
         : Number.POSITIVE_INFINITY;
@@ -178,6 +180,7 @@
   }
 
   function scheduleFitWindow(scrollHeight: number): Promise<void> {
+    floatingContentHeight = scrollHeight;
     const scheduled = fitQueue.then(() => fitWindow(scrollHeight));
     fitQueue = scheduled.catch(() => {});
     return scheduled;
@@ -383,8 +386,11 @@
     class:desktop={surface === "desktop"}
     class:scrollable={floatingScrollable}
     style:--floating-scale={String(floatingScale)}
+    style:--floating-frame-width={`${floatingFrame.width}px`}
+    style:--floating-frame-height={`${floatingFrame.height}px`}
   >
-    <div class="shell" bind:this={shell}>
+    <div class="scale-frame">
+      <div class="shell" bind:this={shell}>
     {#if borderless}
       <div
         class="drag"
@@ -418,6 +424,7 @@
         manual={reonboard}
       />
     {/if}
+      </div>
     </div>
   </main>
 {/if}
@@ -549,6 +556,8 @@
      traces the card silhouette. */
   main.borderless .shell {
     width: 328px;
+    position: absolute;
+    inset: 0 auto auto 0;
     border-radius: 14px;
     background: #0b0e12;
     box-shadow:
@@ -557,6 +566,11 @@
     transform: scale(var(--floating-scale));
     transform-origin: top left;
     overflow: hidden;
+  }
+  main.borderless .scale-frame {
+    position: relative;
+    width: var(--floating-frame-width);
+    height: var(--floating-frame-height);
   }
   main.borderless {
     height: 100vh;

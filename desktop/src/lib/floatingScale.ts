@@ -1,4 +1,5 @@
 export const FLOATING_SCALE_STORAGE_KEY = "herdeck.floatingScale";
+export const FLOATING_BASE_WIDTH = 328;
 export const MIN_FLOATING_SCALE = 0.8;
 export const MAX_FLOATING_SCALE = 1.4;
 
@@ -102,5 +103,16 @@ export function floatingViewport(
   return {
     height: Math.min(desiredHeight, availableHeight),
     scrollable: desiredHeight > availableHeight,
+  };
+}
+
+export function floatingFrameSize(
+  contentHeight: number,
+  scale: number,
+  baseWidth = FLOATING_BASE_WIDTH,
+): Size {
+  return {
+    width: Math.round(baseWidth * scale),
+    height: Math.round(contentHeight * scale),
   };
 }
