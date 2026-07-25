@@ -248,10 +248,10 @@ test feedback can identify the exact build. It can sit next to the stable app,
 but quit the stable Herdeck before testing D200 hardware because only one
 process can own the USB device.
 
-Dev artifacts are unsigned, expire after 14 days, and are intended only for
-trusted internal testing. When downloading through a browser, macOS may require
-**Control-click → Open** on first launch. Public releases remain Developer ID
-signed and Apple notarized.
+Dev artifacts are Developer ID signed but not notarized, expire after 14 days,
+and are intended only for trusted internal testing. macOS therefore requires
+**Control-click → Open** on first launch. Public releases remain both Developer
+ID signed and Apple notarized.
 
 ## Try it in 30 seconds (no hardware, no herdr)
 

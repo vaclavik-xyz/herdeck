@@ -142,6 +142,35 @@ pub fn resolve_frozen_sidecar(resource_dir: &Path) -> Option<CommandSpec> {
     }
 }
 
+/// Resolve the directory that actually contains the frozen runtime. Tauri's
+/// runtime resolver is the primary source. Packaged macOS apps also have a
+/// deterministic `<app>/Contents/MacOS/<binary>` → `../Resources` relationship,
+/// which keeps direct executable launches and copied dev artifacts independent
+/// from the build machine's `.venv` when the primary path is unavailable or
+/// points somewhere that does not contain the staged sidecar.
+pub fn resolve_resource_dir(
+    primary: Option<&Path>,
+    executable: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(path) = primary {
+        if resolve_frozen_sidecar(path).is_some() {
+            return Some(path.to_path_buf());
+        }
+    }
+
+    let bundled = executable
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(|contents| contents.join("Resources"));
+    if let Some(path) = bundled {
+        if resolve_frozen_sidecar(&path).is_some() {
+            return Some(path);
+        }
+    }
+
+    primary.map(Path::to_path_buf)
+}
+
 /// Pick the sidecar to spawn: the bundled frozen binary when present (production),
 /// otherwise the dev `.venv` interpreter. `resource_dir` is `None` when Tauri
 /// could not resolve one (then we always use the dev path).
@@ -307,7 +336,8 @@ pub fn supervise<F>(
                         on_discovery(discovery);
                         wait_for_child(&shared_child, &stop);
                     }
-                    Err(_e) => {
+                    Err(e) => {
+                        eprintln!("herdeck sidecar discovery failed: {e}");
                         // Discovery failed: reclaim + reap the child we registered
                         // (unless the quit path already took it).
                         if let Some(mut c) = shared_child.lock().unwrap().take() {
@@ -316,7 +346,8 @@ pub fn supervise<F>(
                     }
                 }
             }
-            Err(_e) => {
+            Err(e) => {
+                eprintln!("herdeck sidecar spawn failed: {e}");
                 // Spawn failed (e.g. no .venv yet) — fall through to back off.
             }
         }
@@ -415,6 +446,21 @@ mod tests {
         // No resource dir at all -> dev venv.
         let none = choose_spawn(None, Path::new("/repo"));
         assert!(none.program.ends_with("/.venv/bin/python"));
+    }
+
+    #[test]
+    fn resource_dir_falls_back_from_macos_executable_to_bundled_runtime() {
+        let app = scratch("macos-resource-fallback").join("Herdeck Dev.app");
+        let resources = app.join("Contents").join("Resources");
+        let executable = app
+            .join("Contents")
+            .join("MacOS")
+            .join("herdeck-desktop");
+        stage_frozen(&resources);
+
+        let resolved = resolve_resource_dir(Some(Path::new("/wrong/resources")), Some(&executable));
+
+        assert_eq!(resolved, Some(resources));
     }
 
     #[test]
