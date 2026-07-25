@@ -18,12 +18,10 @@ def test_generates_one_manifest_for_macos_and_both_linux_architectures(tmp_path)
     artifacts = tmp_path / "artifacts"
     _signed(artifacts / "herdeck-macos/herdeck.app.tar.gz")
     _signed(
-        artifacts
-        / "herdeck-linux-x86_64/appimage/herdeck_0.1.0_amd64.AppImage.tar.gz"
+        artifacts / "herdeck-linux-x86_64/appimage/herdeck_0.1.0_amd64.AppImage"
     )
     _signed(
-        artifacts
-        / "herdeck-linux-arm64/appimage/herdeck_0.1.0_arm64.AppImage.tar.gz"
+        artifacts / "herdeck-linux-arm64/appimage/herdeck_0.1.0_arm64.AppImage"
     )
     version = tmp_path / "VERSION"
     version.write_text("0.1.0\n")
@@ -63,6 +61,8 @@ def test_generates_one_manifest_for_macos_and_both_linux_architectures(tmp_path)
     assert manifest["platforms"]["linux-aarch64"]["signature"].startswith(
         "signature-for-"
     )
+    assert manifest["platforms"]["linux-x86_64"]["url"].endswith(".AppImage")
+    assert manifest["platforms"]["linux-aarch64"]["url"].endswith(".AppImage")
 
 
 def test_rejects_a_tag_that_does_not_match_version(tmp_path):
