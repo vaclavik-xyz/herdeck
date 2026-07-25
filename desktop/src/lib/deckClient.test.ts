@@ -66,7 +66,7 @@ describe("summaryLabel", () => {
   });
 
   it("omits zero buckets and uses singular agent", () => {
-    expect(summaryLabel({ agents: 1, blocked: 0, working: 0, idle: 1, done: 0 })).toBe(
+    expect(summaryLabel({ agents: 1, blocked: 0, working: 0, idle: 1, done: 0, waiting: 0 })).toBe(
       "1 agent · 1 idle",
     );
   });
@@ -95,11 +95,13 @@ describe("DeckDiffer — transactional version gate + per-tile diff", () => {
     hasPanel: true,
     panel: 0,
     tiles: {},
+    sections: {},
     connections: {},
     localConnections: {},
     summary: emptySummary(),
     source: "mock",
     connected: false,
+    language: "en",
     ...over,
   });
 

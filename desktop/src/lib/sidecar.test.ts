@@ -14,7 +14,7 @@ describe("asDiscovery", () => {
     expect(d?.port).toBe(51234);
     expect(d?.source).toBe("mock");
     // the token must never reach JS in this slice
-    expect((d as Record<string, unknown>).token).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(d, "token")).toBe(false);
   });
 
   it("returns null for null / not-ready-yet", () => {

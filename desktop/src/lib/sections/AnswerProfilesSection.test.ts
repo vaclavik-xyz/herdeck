@@ -64,7 +64,7 @@ describe("AnswerProfilesSection", () => {
         payload,
         reloadRev: 0,
         onChange: () => {},
-        onError: (message) => errors.push(message),
+        onError: (message: string) => errors.push(message),
       },
     });
     try {
