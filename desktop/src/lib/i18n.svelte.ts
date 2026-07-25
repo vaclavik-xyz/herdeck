@@ -57,6 +57,7 @@ const MESSAGES = defineMessages({
     "widget.cancel": "Cancel",
     "widget.token_value": "token value",
     "widget.remove_row": "Remove row",
+    "widget.confirm_remove": "Remove?",
   },
   cs: {
     "widget.add": "+ přidat",
@@ -74,6 +75,7 @@ const MESSAGES = defineMessages({
     "widget.cancel": "Zrušit",
     "widget.token_value": "hodnota tokenu",
     "widget.remove_row": "Odebrat řádek",
+    "widget.confirm_remove": "Odebrat?",
   },
 });
 

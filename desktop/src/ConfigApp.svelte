@@ -283,6 +283,17 @@
     if (JUMPABLE.has(key)) active = key;
   }
 
+  function selectSection(key: string): void {
+    active = key;
+    navQuery = "";
+  }
+
+  function searchKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Enter") return;
+    const first = filteredNavGroups[0]?.items[0];
+    if (first) selectSection(first.key);
+  }
+
   let discovery = $state<Discovery | null>(null);
   let payload = $state<ConfigPayload | null>(null);
   // Runtime diagnostics must describe the last config accepted by the
@@ -521,6 +532,9 @@
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         navSearchInput?.focus();
+      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (!browserMode && payload && dirty && !busy) void apply();
       } else if (event.key === "Escape" && document.activeElement === navSearchInput) {
         navQuery = "";
         navSearchInput.blur();
@@ -641,14 +655,14 @@
     <nav class="sidebar">
       <div class="settings-search" role="search">
         <span aria-hidden="true">⌕</span>
-        <input bind:this={navSearchInput} bind:value={navQuery} placeholder={lm.search_settings} aria-label={lm.search_settings} />
+        <input bind:this={navSearchInput} bind:value={navQuery} onkeydown={searchKeydown} placeholder={lm.search_settings} aria-label={lm.search_settings} />
         {#if navQuery}<button type="button" onclick={() => (navQuery = "")} aria-label={lm.clear_search}>×</button>{:else}<kbd>⌘K</kbd>{/if}
       </div>
       {#each filteredNavGroups as group}
         <div class="nav-group">
           <span class="nav-label">{group.label}</span>
           {#each group.items as item}
-            <button class:active={item.key === active} onclick={() => (active = item.key)}>
+            <button class:active={item.key === active} onclick={() => selectSection(item.key)}>
               <span class="nav-icon" aria-hidden="true">{item.icon}</span>
               <span>{item.label}</span>
             </button>
@@ -808,7 +822,7 @@
         ⚠ {errorCountLabel(errors.length, locale.lang)} {showErrors ? "▾" : "▸"}
       </button>
     {/if}
-    <button onclick={apply} disabled={browserMode || !dirty || busy} title={lm.apply_title}>{lm.apply}</button>
+    <button onclick={apply} disabled={browserMode || !dirty || busy} title={`${lm.apply_title} (⌘S)`}>{lm.apply}<kbd>⌘S</kbd></button>
   </footer>
 </main>
 
@@ -963,9 +977,12 @@
   .form-card :global(fieldset > legend) { padding: 0 6px; color: #cdd6e2; font-size: 11px; font-weight: 620; }
   .form-card :global(button:not(.switch)) { min-height: 31px; border-color: #354153; border-radius: 7px; padding: 0 10px; background: #19212c; color: #d9e1eb; }
   .form-card :global(button:not(.switch):hover) { background: #222d3b; }
+  .form-card :global(button:disabled) { opacity: .42; cursor: default; }
+  .form-card :global(button:disabled:hover) { background: #19212c; }
   .form-card :global(legend button:not(.switch)) { min-height: 22px; padding: 0 5px; border-color: transparent; background: transparent; }
   .savebar { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 14px; border-top: 1px solid var(--border); background: #0c1016; }
   .savebar button { min-height: 34px; margin: 0; padding: 0 14px; font-size: 11px; }
+  .savebar button kbd { margin-left: 8px; color: rgb(255 255 255 / .72); font: 8px "SF Mono", ui-monospace, monospace; }
   .savebar button:last-child { border-color: #6e94f4; background: var(--signal); color: white; }
   .savebar button:disabled { opacity: .42; cursor: default; }
   .errcount { color: #f0838b !important; background: transparent !important; border-color: transparent !important; }

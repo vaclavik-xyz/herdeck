@@ -1,6 +1,7 @@
 <script lang="ts">
   import TextField from "../fields/TextField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import ConfirmRemoveButton from "../fields/ConfirmRemoveButton.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import {
     macrosOf, addMacro, removeMacro, updateMacro, macroRecords, inheritedMacros,
@@ -24,6 +25,7 @@
       new_macro: "(new macro)",
       remove_macro: "Remove macro",
       add_macro: "+ add macro",
+      empty: "No macros yet. Add one to send a prepared message from the deck.",
       n_macros: "{n} macros",
     },
     cs: {
@@ -31,6 +33,7 @@
       new_macro: "(nové makro)",
       remove_macro: "Odebrat makro",
       add_macro: "+ přidat makro",
+      empty: "Zatím žádné makro. Přidej připravenou zprávu, kterou odešleš z decku.",
       n_macros: "{n} maker",
     },
   });
@@ -61,11 +64,12 @@
   <OverrideField label="macros" help={HELP.macros} state={ovState()} inheritedDisplay={fmt(lm.n_macros, { n: inhMacros().length })} onstate={setOvState}>
     {#each ovMacros() as m, i (i)}
       <fieldset>
-        <legend>{m.label || lm.new_macro} <button type="button" title={lm.remove_macro} onclick={() => ovRemove(i)}>×</button></legend>
+        <legend>{m.label || lm.new_macro} <ConfirmRemoveButton title={lm.remove_macro} onconfirm={() => ovRemove(i)} /></legend>
         <TextField label="label" help={HELP.label} value={m.label} oninput={(v) => ovSet(i, "label", v)} />
         <TextField label="text" help={HELP.text} value={m.text} oninput={(v) => ovSet(i, "text", v)} />
       </fieldset>
     {/each}
+    {#if ovMacros().length === 0}<p class="hint">{lm.empty}</p>{/if}
     <button type="button" onclick={ovAdd}>{lm.add_macro}</button>
   </OverrideField>
 {:else}
@@ -73,17 +77,19 @@
        rationale as ServersSection — a stable-id apparatus would add needless complexity. -->
   {#each macros as m, i (i)}
     <fieldset>
-      <legend>{m.label || lm.new_macro} <button type="button" title={lm.remove_macro} onclick={() => remove(i)}>×</button></legend>
+      <legend>{m.label || lm.new_macro} <ConfirmRemoveButton title={lm.remove_macro} onconfirm={() => remove(i)} /></legend>
       <TextField label="label" help={HELP.label} value={m.label} oninput={(v) => set(i, "label", v)} />
       <TextField label="text" help={HELP.text} value={m.text} oninput={(v) => set(i, "text", v)} />
     </fieldset>
   {/each}
+  {#if macros.length === 0}<p class="hint">{lm.empty}</p>{/if}
   <button type="button" onclick={add}>{lm.add_macro}</button>
 {/if}
 
 <style>
   h2 { margin: 0 0 8px; }
   fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; } legend button { color: #e05050; background: none; border: 0; cursor: pointer; }
+  legend { color: #ccc; }
   button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+  .hint { color: #888; margin: 8px 0; }
 </style>

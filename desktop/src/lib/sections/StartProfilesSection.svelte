@@ -2,6 +2,7 @@
   import TextField from "../fields/TextField.svelte";
   import ListField from "../fields/ListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import ConfirmRemoveButton from "../fields/ConfirmRemoveButton.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import {
     DEFAULT_START_PROFILES, startProfileRows, serializeNamedRows, applyMapSection,
@@ -149,7 +150,7 @@
   <p class="hint">{lm.overlay_hint}</p>
   {#each entryNames() as name (name)}
     <fieldset>
-      <legend>{name}{#if !isInherited(name)} <button type="button" title={lm.remove_entry} onclick={() => removeOwn(name)}>×</button>{/if}</legend>
+      <legend>{name}{#if !isInherited(name)} <ConfirmRemoveButton title={lm.remove_entry} onconfirm={() => removeOwn(name)} />{/if}</legend>
       <OverrideField label="argv" help={HELP.argv} state={entryState(name)} inheritedDisplay={inhArgv(name).join(" · ") || lm.empty_value} onstate={(s) => setEntryState(name, s)}>
         <ListField label="" value={ovArgv(name)} onchange={(v) => setEntryArgv(name, v)} />
       </OverrideField>
@@ -157,7 +158,7 @@
   {/each}
   <div class="create">
     <input placeholder={lm.entry_name_placeholder} bind:value={newName} />
-    <button type="button" onclick={addEntry}>{lm.add_profile_only}</button>
+    <button type="button" disabled={!newName.trim()} onclick={addEntry}>{lm.add_profile_only}</button>
   </div>
 {:else}
   <p class="hint">{lm.base_hint}</p>
@@ -171,7 +172,7 @@
   {:else if mode === "custom"}
     {#each rows as e, i (i)}
       <fieldset>
-        <legend>{e.name || lm.new_profile} <button type="button" title={lm.remove_launcher} onclick={() => remove(i)}>×</button></legend>
+        <legend>{e.name || lm.new_profile} <ConfirmRemoveButton title={lm.remove_launcher} onconfirm={() => remove(i)} /></legend>
         <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
         {#if e.name.trim() !== ""}
           <ListField label="argv" help={HELP.argv} value={e.argv} onchange={(v) => setArgv(i, v)} />
@@ -195,6 +196,6 @@
   .create { display: flex; gap: 6px; margin: 8px 0; }
   .create input { flex: 1; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
   fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; } legend button { color: #e05050; background: none; border: 0; cursor: pointer; }
+  legend { color: #ccc; }
   button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
 </style>

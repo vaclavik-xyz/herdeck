@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import TextField from "../fields/TextField.svelte";
   import TokenSecretField from "../fields/TokenSecretField.svelte";
+  import ConfirmRemoveButton from "../fields/ConfirmRemoveButton.svelte";
   import {
     commandTransport as cfgTransport,
     serversOf,
@@ -127,7 +128,7 @@
      A stable-id apparatus would add complexity that 9 řez-4 sections would clone. -->
 {#each servers as s, i (i)}
   <fieldset>
-    <legend>{s.id || lm.new_server} <button type="button" title={lm.remove_server} onclick={() => remove(i)}>×</button></legend>
+    <legend>{s.id || lm.new_server} <ConfirmRemoveButton title={lm.remove_server} onconfirm={() => remove(i)} /></legend>
     <TextField label="id" help={HELP.id} value={s.id} oninput={(v) => set(i, "id", v)} />
     <TextField label="url" help={HELP.url} value={s.url} oninput={(v) => set(i, "url", v)} />
     <TokenSecretField
@@ -178,7 +179,7 @@
   .session-copy small { color: #78879a; font-size: 10px; }
   .remote-heading { margin: 0 0 8px; }
   fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; } legend button { color: #e05050; background: none; border: 0; cursor: pointer; }
+  legend { color: #ccc; }
   button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
   h2 { margin: 0 0 8px; }
 </style>

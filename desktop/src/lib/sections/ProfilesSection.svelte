@@ -1,6 +1,7 @@
 <script lang="ts">
   import SelectField from "../fields/SelectField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import ConfirmRemoveButton from "../fields/ConfirmRemoveButton.svelte";
   import { defineMessages, fieldHelp, locale } from "../i18n.svelte";
   import {
     profileNames, createProfile, deleteProfile,
@@ -113,12 +114,12 @@
 
 <div class="create">
   <input placeholder={lm.new_profile_name} bind:value={newName} />
-  <button type="button" onclick={create}>{lm.create_profile}</button>
+  <button type="button" disabled={!newName.trim()} onclick={create}>{lm.create_profile}</button>
 </div>
 
 {#each names as name (name)}
   <fieldset>
-    <legend>{name} <button type="button" title={lm.remove_profile} onclick={() => remove(name)}>×</button></legend>
+    <legend>{name} <ConfirmRemoveButton title={lm.remove_profile} onconfirm={() => remove(name)} /></legend>
     <SelectField
       label="extends"
       help={HELP.extends}
@@ -159,7 +160,7 @@
   .create { display: flex; gap: 6px; margin: 8px 0; }
   .create input { flex: 1; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
   fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; } legend button { color: #e05050; background: none; border: 0; cursor: pointer; }
+  legend { color: #ccc; }
   .servers { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 2px 0; }
   .chk { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; color: #ccc; }
   .unknown { color: #e05050; font-size: 11px; }
