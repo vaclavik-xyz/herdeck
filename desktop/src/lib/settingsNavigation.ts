@@ -1,21 +1,21 @@
-export interface SettingsNavItem {
+export interface SettingsNavItem<TIcon = string> {
   key: string;
-  icon: string;
+  icon: TIcon;
   label: string;
 }
 
-export interface SettingsNavGroup {
+export interface SettingsNavGroup<TIcon = string> {
   label: string;
-  items: SettingsNavItem[];
+  items: SettingsNavItem<TIcon>[];
 }
 
 /** Filter section navigation by both its visible title and user-facing purpose. */
-export function filterSettingsNavigation(
-  groups: SettingsNavGroup[],
+export function filterSettingsNavigation<TIcon>(
+  groups: SettingsNavGroup<TIcon>[],
   descriptions: Record<string, string>,
   query: string,
   language: string,
-): SettingsNavGroup[] {
+): SettingsNavGroup<TIcon>[] {
   const needle = query.trim().toLocaleLowerCase(language);
   if (!needle) return groups;
   return groups

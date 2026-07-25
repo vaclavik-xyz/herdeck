@@ -253,8 +253,8 @@
   /* Rounded opaque card flush to the (transparent) window edge so the drop shadow
      traces the card silhouette. */
   main.borderless .shell {
-    border: 1px solid #303844;
     border-radius: 10px;
+    box-shadow: inset 0 0 0 1px #303844;
     overflow: hidden;
   }
   /* The drag strip is the ONLY way to move the borderless window — give it a
