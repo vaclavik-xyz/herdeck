@@ -19,6 +19,7 @@
   import StackSimple from "phosphor-svelte/lib/StackSimple";
   import TerminalWindow from "phosphor-svelte/lib/TerminalWindow";
   import DeckView from "./lib/DeckView.svelte";
+  import StatusRibbon from "./lib/StatusRibbon.svelte";
   import ServersSection from "./lib/sections/ServersSection.svelte";
   import DeckSection from "./lib/sections/DeckSection.svelte";
   import ViewSection from "./lib/sections/ViewSection.svelte";
@@ -117,6 +118,7 @@
       working: "Working",
       blocked: "Blocked",
       done: "Done",
+      waiting: "Waiting",
       connections: "Connections",
       configured: "configured",
       connected: "Connected",
@@ -216,6 +218,7 @@
       working: "Pracují",
       blocked: "Blokováni",
       done: "Hotovo",
+      waiting: "Čeká",
       connections: "Připojení",
       configured: "nastaveno",
       connected: "Připojeno",
@@ -733,14 +736,21 @@
           <div><h1>{lm.overview_title}</h1><p>{runtimeReady ? lm.overview_ready : lm.overview_connecting}</p></div>
           <button class="secondary" onclick={() => (active = "servers")}>{lm.connections}</button>
         </div>
+        <StatusRibbon
+          ready={runtimeReady}
+          summary={deckView.summary}
+          labels={{
+            runtime: lm.runtime, ready: lm.ready, connecting: lm.connecting,
+            agents: lm.agents, working: lm.working, blocked: lm.blocked,
+            waiting: lm.waiting, done: lm.done,
+          }}
+        />
         <div class="overview-stage">
           <article class="card live-deck-card">
             <div class="card-heading"><div><h2>{lm.live_deck}</h2><p>{lm.live_deck_hint}</p></div><button class="secondary" onclick={() => (active = "deck")}>{lm["sec.deck"]}</button></div>
             <div class="deck-surface"><DeckView transport={preview} onJump={jumpToSection} onView={(view) => (deckView = view)} /></div>
           </article>
           <div class="overview-stack">
-            <article class="card runtime-card"><div class="health-orbit"><span class:ready={runtimeReady}></span></div><div><span class="runtime-label">{lm.runtime}</span><h2>{runtimeReady ? lm.ready : lm.connecting}</h2><p>{runtimeReady ? lm.overview_ready : lm.overview_connecting}</p></div></article>
-            <article class="card stat-card"><div class="card-heading"><div><h2>{lm.agents}</h2><p>{deckView.summary.agents} {lm.agents.toLowerCase()}</p></div><span class:warning={!deckView.online || deckView.summary.blocked > 0} class="badge">{deckView.online ? lm.ready : lm.connecting}</span></div><div class="stats"><div><strong>{deckView.summary.working}</strong><span>{lm.working}</span></div><div><strong>{deckView.summary.blocked}</strong><span>{lm.blocked}</span></div><div><strong>{deckView.summary.done}</strong><span>{lm.done}</span></div></div></article>
             <article class="card connection-card"><div class="card-heading"><div><h2>{lm.connections}</h2><p>{selectedLocalSessions.length + remoteServers} {lm.configured}</p></div><button class="icon-button" onclick={() => (active = "servers")} aria-label={lm.connections}><ArrowRight size={14} /></button></div><div class="connection-row"><span class:ready={selectedLocalSessions.length > 0 && connectedLocalSessions === selectedLocalSessions.length} class="status-dot"></span><div><strong>{lm.local_sessions}</strong><small>{connectedLocalSessions}/{selectedLocalSessions.length} {lm.ready.toLowerCase()}</small></div><span class="badge">{selectedLocalSessions.length}</span></div><div class="connection-row"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span><div><strong>{lm.remote_servers}</strong><small>{connectedRemoteServers}/{remoteServers} {lm.ready.toLowerCase()}</small></div><span class="badge">{remoteServers}</span></div><div class="connection-row"><span class:ready={deckView.online} class="status-dot"></span><div><strong>{lm.deck_device}</strong><small>{payload?.runtimeDeck ?? lm.automatic}</small></div></div></article>
           </div>
         </div>
@@ -945,7 +955,7 @@
   .card { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); }
   .card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
   .card-heading h2, .runtime-card h2 { margin: 0; font-size: 14px; letter-spacing: -.015em; }
-  .overview-stage { display: grid; grid-template-columns: minmax(520px, 1.5fr) minmax(270px, .7fr); gap: 18px; align-items: start; }
+  .overview-stage { display: grid; grid-template-columns: minmax(520px, 1.5fr) minmax(270px, .7fr); gap: var(--s5); align-items: start; margin-top: var(--s5); }
   .live-deck-card { padding: 17px; }
   .live-deck-card .card-heading, .deck-workbench-preview .card-heading { margin-bottom: 16px; }
   .deck-surface { padding: 9px; border: 1px solid #353c46; border-radius: 13px; background: #242a32; box-shadow: inset 0 1px rgb(255 255 255 / .055); }
@@ -954,17 +964,8 @@
   .deck-surface :global(.cell), .deck-surface :global(.panel) { border: 1px solid #39414c; border-radius: 8px; box-shadow: 0 2px 5px rgb(0 0 0 / .3); }
   .deck-surface :global(footer.summary) { padding: 8px 4px 1px; color: #9ca8b7; }
   .overview-stack { display: grid; gap: 10px; }
-  .runtime-card { display: flex; align-items: center; gap: 13px; min-height: 96px; padding: 15px 16px; }
-  .health-orbit { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--field); }
-  .health-orbit span { width: 8px; height: 8px; border-radius: 50%; background: var(--st-blocked); }
-  .health-orbit span.ready { background: var(--st-working); }
-  .stat-card, .connection-card { padding: 16px 17px; }
   .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px; border: 1px solid rgb(85 198 141 / .22); border-radius: 5px; background: transparent; color: #76d7a5; font: 600 9px "SF Mono", ui-monospace, monospace; white-space: nowrap; }
   .badge.warning { border-color: rgb(217 164 93 / .25); background: transparent; color: #e2b674; }
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding-top: 14px; margin-top: 14px; border-top: 1px solid rgb(255 255 255 / .07); }
-  .stats strong, .stats span { display: block; }
-  .stats strong { font: 650 19px "SF Mono", ui-monospace, monospace; letter-spacing: -.04em; }
-  .stats span { color: var(--text-dim); font-size: 9px; }
   .connection-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; min-height: 51px; border-top: 1px solid var(--line); }
   .connection-row:first-of-type { margin-top: 11px; }
   .connection-row strong, .connection-row small { display: block; }
