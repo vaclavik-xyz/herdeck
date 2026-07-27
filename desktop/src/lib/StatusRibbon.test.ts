@@ -87,6 +87,9 @@ describe("StatusRibbon", () => {
     } finally { cleanup(); }
   });
 
+  // The CSS rule that keeps the resting dot off the ready tone lives in
+  // theme.test.ts — jsdom applies no scoped styles, so it cannot be asserted
+  // from a mounted component here.
   it("reports the runtime as connecting when it is not ready", () => {
     const { target, cleanup } = render({
       ready: false,

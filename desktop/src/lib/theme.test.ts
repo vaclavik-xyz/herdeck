@@ -154,7 +154,7 @@ describe("status ribbon rules", () => {
     const resting = RIBBON.match(/\.runtime \.dot(?:\s*,[^{]*)?\s*\{([^}]*)\}/)?.[1] ?? "";
     expect(resting, ".runtime .dot must set its own background").toMatch(/background:\s*var\(--st-[a-z]+\)/);
     expect(resting, ".runtime .dot must not inherit the ready tone").not.toContain("var(--cell)");
-    expect(RIBBON).toMatch(/\.runtime\.ready \.dot \{[^}]*background:\s*var\(--cell\)/);
+    expect(RIBBON).toMatch(/\.runtime\.ready\s+\.dot(?:\s*,[^{]*)?\s*\{[^}]*background:\s*var\(--cell\)/);
   });
 });
 
