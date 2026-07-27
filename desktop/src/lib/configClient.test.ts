@@ -1081,6 +1081,24 @@ describe("effectiveStatusColors", () => {
     expect(effectiveStatusColors(payload).working).toBe("violet");
   });
 
+  it("takes a colour from the extends chain over base", () => {
+    const payload = payloadWith(
+      { theme: { colors: { done: "lime" } } },
+      { dark: { theme: { colors: { done: "teal" } } }, night: { extends: "dark" } },
+      "night",
+    );
+    expect(effectiveStatusColors(payload).done).toBe("teal");
+  });
+
+  it("falls back to base when the active profile is not in the config", () => {
+    const payload = payloadWith(
+      { theme: { colors: { working: "lime" } } },
+      { night: { theme: { colors: { working: "violet" } } } },
+      "ghost",
+    );
+    expect(effectiveStatusColors(payload).working).toBe("lime");
+  });
+
   it("inherits the base colour for statuses the active profile does not override", () => {
     const payload = payloadWith(
       { theme: { colors: { working: "lime", blocked: "orange" } } },

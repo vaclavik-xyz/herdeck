@@ -61,15 +61,45 @@ describe("StatusRibbon", () => {
     } finally { cleanup(); }
   });
 
+  it("degrades an out-of-palette colour name to dim, like the backend does", () => {
+    // The backend resolves an unknown name via COLORS.get(name, dim); a
+    // hand-edited TOML must not leave the window rendering nothing.
+    const { target, cleanup } = render({
+      ready: true,
+      summary: SUMMARY,
+      labels: LABELS,
+      colors: { working: "chartreuse" },
+    });
+    try {
+      const working = target.querySelector<HTMLElement>('[data-status="working"]');
+      expect(working?.getAttribute("style")).toContain("var(--st-dim)");
+    } finally { cleanup(); }
+  });
+
+  it("does not accept an Object prototype key as a palette name", () => {
+    const { target, cleanup } = render({
+      ready: true,
+      summary: SUMMARY,
+      labels: LABELS,
+      colors: { working: "constructor" },
+    });
+    try {
+      const working = target.querySelector<HTMLElement>('[data-status="working"]');
+      expect(working?.getAttribute("style")).toContain("var(--st-dim)");
+    } finally { cleanup(); }
+  });
+
   it("never paints the runtime dot with the ready tone while connecting", () => {
     // jsdom does not apply Svelte's scoped styles, so getComputedStyle would
     // pass against any rule. Assert the rule itself, the way theme.test.ts
     // asserts theme.css: the row carries --cell for the ready case, so the
     // resting dot must set its own background rather than inherit it.
-    // this suite runs under jsdom, where import.meta.url is not a file URL —
-    // resolve from the vitest root (desktop/) instead
+    // theme.test.ts can use fileURLToPath(import.meta.url) because it opts into
+    // the node environment; this suite mounts components, so it runs under
+    // jsdom where import.meta.url is not a file URL. Resolve from the vitest
+    // root (desktop/) instead.
     const source = readFileSync(resolve("src/lib/StatusRibbon.svelte"), "utf8");
-    const resting = source.match(/\.runtime \.dot \{([^}]*)\}/)?.[1] ?? "";
+    const resting = source.match(/\.runtime \.dot(?:[^{]*)\{([^}]*)\}/)?.[1] ?? "";
     expect(resting, ".runtime .dot must set its own background").toMatch(/background:\s*var\(--st-[a-z]+\)/);
     expect(resting, ".runtime .dot must not inherit the ready tone").not.toContain("var(--cell)");
     expect(source).toMatch(/\.runtime\.ready \.dot \{[^}]*background:\s*var\(--cell\)/);

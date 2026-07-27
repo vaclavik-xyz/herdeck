@@ -24,7 +24,7 @@
   // window must degrade the same way instead of rendering nothing.
   const paletteName = (status: string): string => {
     const name = colors[status] || DEFAULT_STATUS_COLORS[status];
-    return name && name in PALETTE ? name : "dim";
+    return name && Object.hasOwn(PALETTE, name) ? name : "dim";
   };
 
   const cells = $derived([
