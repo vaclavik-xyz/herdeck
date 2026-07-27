@@ -20,8 +20,8 @@
 <style>
   .banner { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border: 1px solid currentColor; border-radius: var(--radius-control, 7px); }
   .banner .msg { flex: 1; }
-  .warning { background: #211b12; color: #d9a45d; }
-  .error { background: #231517; color: #db727a; }
-  .success { background: #132018; color: #55c68d; }
+  .warning { background: color-mix(in srgb, var(--st-blocked) 14%, var(--canvas)); color: var(--st-blocked); }
+  .error { background: color-mix(in srgb, var(--st-offline) 14%, var(--canvas)); color: var(--st-offline); }
+  .success { background: color-mix(in srgb, var(--st-working) 14%, var(--canvas)); color: var(--st-working); }
   .banner button { background: transparent; border: 1px solid currentColor; color: inherit; border-radius: 5px; padding: 2px 8px; cursor: pointer; }
 </style>
