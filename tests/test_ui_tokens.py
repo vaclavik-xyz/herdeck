@@ -132,10 +132,16 @@ def test_xterm_theme_is_derived_from_the_tokens() -> None:
 def test_ansi_red_does_not_follow_the_offline_status_alias(monkeypatch) -> None:
     """SGR 31 from the previewed terminal is red whatever "offline" points at.
     Repointing the alias must move the banner tone and leave the terminal."""
-    before = xterm_theme()["red"]
+    ansi_before = xterm_theme()["red"]
+    tones_before = derived_tones()
     monkeypatch.setitem(STATUS_ALIASES, "offline", "orange")
-    assert derived_tones()["--st-offline-text"] != before, "the banner tone must follow"
-    assert xterm_theme()["red"] == before, "ANSI red must not follow the status alias"
+    tones_after = derived_tones()
+    # both status tones move — captured from their OWN pre-change values, not
+    # from ANSI red's (the two constants coincide today, which must not be
+    # what makes this pass)
+    assert tones_after["--st-offline-text"] != tones_before["--st-offline-text"]
+    assert tones_after["--tint-offline"] != tones_before["--tint-offline"]
+    assert xterm_theme()["red"] == ansi_before, "ANSI red must not follow the status alias"
 
 
 def test_status_aliases_match_the_desktop_theme(theme: dict[str, str]) -> None:
