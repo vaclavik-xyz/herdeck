@@ -3,7 +3,7 @@
 // PALETTE mirrors src/herdeck/driver/base.py COLORS; theme.css must mirror
 // PALETTE literally, so a backend palette change cannot silently leave the
 // window disagreeing with the hardware it drives.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { PALETTE } from "./statusColors";
@@ -126,6 +126,34 @@ const CONVERTED = [
   "App.svelte",
   "lib/Onboarding.svelte",
 ];
+
+// Walk src/ once and return every .svelte path relative to src/ — the same
+// shape CONVERTED uses.
+function svelteFiles(prefix = ""): string[] {
+  const dir = fileURLToPath(new URL(`../${prefix}`, import.meta.url));
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory()
+      ? svelteFiles(`${prefix}${entry.name}/`)
+      : entry.name.endsWith(".svelte")
+        ? [`${prefix}${entry.name}`]
+        : [],
+  );
+}
+
+describe("token discipline coverage", () => {
+  it("covers every component under src/", () => {
+    // Harness components exist only to mount a widget inside a test — they
+    // carry no presentation of their own.
+    const HARNESSES = [
+      "lib/fields/ConfirmRemoveListHarness.svelte",
+      "lib/fields/TriStateListFieldHarness.svelte",
+      "lib/sections/NotificationsSectionHarness.svelte",
+    ];
+    const uncovered = svelteFiles()
+      .filter((f) => !CONVERTED.includes(f) && !HARNESSES.includes(f));
+    expect(uncovered, "add these to CONVERTED and convert them to tokens").toEqual([]);
+  });
+});
 
 describe("token discipline", () => {
   it.each(CONVERTED)("%s carries no colour literals", (rel) => {
