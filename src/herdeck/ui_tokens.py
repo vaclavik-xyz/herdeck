@@ -157,6 +157,8 @@ def xterm_theme() -> dict[str, str]:
         "brightBlack": SHARED_TOKENS["--text-faint"],
         "blue": SHARED_TOKENS["--accent"],
         "brightBlue": SHARED_TOKENS["--accent-strong"],
-        # the readable error red — the resolved value of --st-offline-text
-        "red": derived_tones()["--st-offline-text"],
+        # ANSI red is red whatever "offline" points at: this paints SGR 31 from
+        # the previewed terminal, not a herdeck status, so it must NOT follow
+        # STATUS_ALIASES. Same lightening as the error copy, for readability.
+        "red": _mix(COLORS["red"], (255, 255, 255), OFFLINE_TEXT_MIX_RATIO),
     }

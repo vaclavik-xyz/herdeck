@@ -18,6 +18,7 @@ from herdeck.ui_tokens import (
     OFFLINE_TEXT_MIX_RATIO,
     SHARED_TOKENS,
     STATUS_ALIASES,
+    _triple,
     css_variables,
     derived_tones,
     xterm_theme,
@@ -87,12 +88,7 @@ def test_derived_tones_resolve_to_their_known_values() -> None:
     assert tones["--overlay-shadow"] == "rgb(10 12 16 / .8)"
     # and the anchor is the LIGHTER mix: error copy must out-contrast the raw
     # status red it derives from
-    assert _triple_sum(tones["--st-offline-text"]) > sum(COLORS["red"])
-
-
-def _triple_sum(hex_value: str) -> int:
-    h = hex_value.lstrip("#")
-    return sum(int(h[i : i + 2], 16) for i in (0, 2, 4))
+    assert sum(_triple(tones["--st-offline-text"])) > sum(COLORS[STATUS_ALIASES["offline"]])
 
 
 def test_every_token_the_simulator_references_is_emitted() -> None:
@@ -129,7 +125,8 @@ def test_xterm_theme_is_derived_from_the_tokens() -> None:
     assert theme_colors["brightBlack"] == SHARED_TOKENS["--text-faint"]
     assert theme_colors["blue"] == SHARED_TOKENS["--accent"]
     # the readable error red is the resolved value of --st-offline-text
-    assert theme_colors["red"] == "#e68e8e"  # the resolved --st-offline-text
+    # ANSI red follows the palette's red, NOT the offline alias
+    assert theme_colors["red"] == "#e68e8e"
     assert all(v.startswith("#") for v in theme_colors.values()), "xterm needs literals"
 
 
