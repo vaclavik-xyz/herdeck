@@ -65,6 +65,12 @@ const CONVERTED = [
   "lib/fields/SelectField.svelte",
   "lib/fields/NumberField.svelte",
   "lib/fields/BooleanField.svelte",
+  "lib/fields/ListField.svelte",
+  "lib/fields/OverrideField.svelte",
+  "lib/fields/TriStateListField.svelte",
+  "lib/fields/TokenSecretField.svelte",
+  "lib/fields/ProviderPicker.svelte",
+  "lib/fields/ConfirmRemoveButton.svelte",
 ];
 
 describe("token discipline", () => {

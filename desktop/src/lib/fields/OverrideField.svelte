@@ -47,11 +47,49 @@
 </div>
 
 <style>
-  .override { display: grid; grid-template-columns: var(--field-label-w, 120px) minmax(0, 1fr); align-items: start; gap: 12px; margin: 6px 0; }
-  .body { display: flex; grid-column: 2; grid-row: 1 / span 2; flex-direction: column; gap: 4px; }
-  .seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--border-strong, #3b4553); border-radius: var(--radius-control, 7px); overflow: hidden; }
-  .seg button { background: var(--field, #10141a); border: 0; border-right: 1px solid var(--border, #2b323d); color: #a4acb7; padding: 4px 10px; cursor: pointer; }
+  .override {
+    display: grid;
+    grid-template-columns: var(--field-label-w) minmax(0, 1fr);
+    align-items: start;
+    gap: var(--s1) var(--s6);
+    padding: var(--s3) 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .body {
+    display: flex;
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    flex-direction: column;
+    gap: var(--s2);
+    min-width: 0;
+  }
+  .seg {
+    display: inline-flex;
+    align-self: flex-start;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    overflow: hidden;
+  }
+  .seg button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 0;
+    border-right: 1px solid var(--line);
+    background: var(--field);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
   .seg button:last-child { border-right: 0; }
-  .seg button.on { background: var(--signal-soft, rgb(111 145 217 / .14)); color: #edf0f4; }
-  .hint { color: var(--muted, #939ca9); margin: 2px 0; font-size: 9px; }
+  .seg button:hover { color: var(--text); background: var(--panel-raised); }
+  .seg button.on {
+    background: var(--accent-soft);
+    color: var(--text);
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+  }
+  .hint { margin: 0; color: var(--text-dim); font: var(--t-help); }
+  @media (max-width: 760px) {
+    .override { grid-template-columns: minmax(0, 1fr); }
+    .body { grid-column: 1; grid-row: auto; }
+  }
 </style>

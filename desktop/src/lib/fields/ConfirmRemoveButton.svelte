@@ -47,6 +47,6 @@
 >{armed ? t("widget.confirm_remove") : "×"}</button>
 
 <style>
-  button { color: #e8878e !important; }
-  button.armed { border-color: #8d3e45 !important; background: #351b1f !important; color: #ffb1b6 !important; }
+  button { color: var(--st-offline) !important; }
+  button.armed { border-color: var(--st-offline) !important; background: var(--panel-raised) !important; color: var(--text) !important; }
 </style>
