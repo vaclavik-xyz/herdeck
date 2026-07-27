@@ -123,6 +123,8 @@ const CONVERTED = [
   "lib/DeckView.svelte",
   "lib/Banner.svelte",
   "ConfigApp.svelte",
+  "App.svelte",
+  "lib/Onboarding.svelte",
 ];
 
 describe("token discipline", () => {

@@ -355,8 +355,8 @@
   .onboarding {
     box-sizing: border-box;
     padding: 24px 20px;
-    background: #0d1015;
-    color: #e8ebef;
+    background: var(--canvas);
+    color: var(--text);
     font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
     display: flex;
     flex-direction: column;
@@ -365,7 +365,7 @@
   .onboarding.desktop {
     min-width: 0;
     padding: 38px 36px 30px;
-    background: #11151b;
+    background: var(--sidebar);
   }
   h1 {
     margin: 0;
@@ -375,17 +375,17 @@
   }
   .lead {
     margin: 0;
-    color: #939ca9;
+    color: var(--text-dim);
   }
   .lead.ok {
     display: flex;
     align-items: center;
     gap: 7px;
-    color: #55c68d;
+    color: var(--st-working);
   }
   .hint {
     margin: 0;
-    color: #788290;
+    color: var(--text-faint);
     font-size: 12px;
   }
   .actions,
@@ -409,8 +409,8 @@
     min-width: 24px;
     padding: 2px 7px;
     border-radius: 999px;
-    background: #242c37;
-    color: #aeb8c5;
+    background: var(--key);
+    color: var(--text-dim);
     font: 600 10px/1.5 ui-monospace, SFMono-Regular, monospace;
     text-align: center;
   }
@@ -419,21 +419,21 @@
     flex-direction: column;
     gap: 10px;
     padding: 14px;
-    border: 1px solid #2b323d;
+    border: 1px solid var(--line);
     border-radius: 10px;
-    background: #151a21;
+    background: var(--panel);
   }
   .sessions {
     padding-top: 4px;
   }
-  .sessions h2 { margin: 0; font-size: 13px; color: #dce1e8; }
-  .sessions p { margin: 3px 0 0; color: #939ca9; font-size: 11px; }
+  .sessions h2 { margin: 0; font-size: 13px; color: var(--text); }
+  .sessions p { margin: 3px 0 0; color: var(--text-dim); font-size: 11px; }
   .session-list {
     overflow: hidden;
     margin-bottom: 12px;
-    border: 1px solid #2d3540;
+    border: 1px solid var(--line-strong);
     border-radius: 10px;
-    background: #0f1319;
+    background: var(--field);
   }
   .session-list label {
     display: grid;
@@ -442,20 +442,20 @@
     gap: 9px;
     min-height: 52px;
     padding: 8px 11px;
-    border-bottom: 1px solid #252c35;
+    border-bottom: 1px solid var(--line);
     cursor: pointer;
     transition: background .14s ease;
   }
   .session-list label:last-child { border-bottom: 0; }
-  .session-list label:hover { background: #151b23; }
-  .session-list label:has(input:checked) { background: rgb(111 145 217 / .12); }
+  .session-list label:hover { background: var(--panel-raised); }
+  .session-list label:has(input:checked) { background: var(--accent-soft); }
   .session-list label.unavailable { opacity: .62; }
-  .session-list input { margin: 0; accent-color: #6f91d9; }
-  .session-list .dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; }
-  .session-list .dot.online { background: #55c68d; }
+  .session-list input { margin: 0; accent-color: var(--accent); }
+  .session-list .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--st-unknown); }
+  .session-list .dot.online { background: var(--st-working); }
   .session-list span:last-child { display: flex; flex-direction: column; min-width: 0; }
   .session-list strong { font: 600 11px/1.25 ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; }
-  .session-list small { margin-top: 2px; color: #87919f; font-size: 9px; }
+  .session-list small { margin-top: 2px; color: var(--text-dim); font-size: 9px; }
   .session-actions {
     display: flex;
     align-items: center;
@@ -466,23 +466,23 @@
     flex-direction: column;
     gap: 3px;
     font-size: 11px;
-    color: #939ca9;
+    color: var(--text-dim);
   }
   .remote input {
     padding: 6px 8px;
     border-radius: 7px;
-    border: 1px solid #3b4553;
-    background: #10141a;
-    color: #e8ebef;
+    border: 1px solid var(--line-strong);
+    background: var(--field);
+    color: var(--text);
     font: inherit;
   }
   button.primary {
     min-height: 32px;
     padding: 7px 14px;
-    border: 1px solid #819dd8;
+    border: 1px solid var(--accent-strong);
     border-radius: 7px;
-    background: #6f91d9;
-    color: #0d1524;
+    background: var(--accent);
+    color: var(--canvas);
     font: inherit;
     font-weight: 680;
     cursor: pointer;
@@ -494,10 +494,10 @@
   button.ghost {
     min-height: 32px;
     padding: 6px 13px;
-    border: 1px solid #3b4553;
+    border: 1px solid var(--line-strong);
     border-radius: 7px;
     background: none;
-    color: #cbd3df;
+    color: var(--text);
     font: inherit;
     cursor: pointer;
   }
@@ -513,14 +513,14 @@
   button.link {
     border: none;
     background: none;
-    color: #8eabe7;
+    color: var(--accent-strong);
     cursor: pointer;
     font: inherit;
     padding: 4px 0;
   }
   button.link.dismiss {
     margin-left: auto;
-    color: #939ca9;
+    color: var(--text-dim);
   }
   button.link.dismiss {
     display: inline-flex;
@@ -529,11 +529,11 @@
   }
   .error {
     margin: 0;
-    color: #db727a;
+    color: var(--st-offline);
   }
   button:focus-visible,
   input:focus-visible {
-    outline: 2px solid #86a4e4;
+    outline: 2px solid var(--accent-strong);
     outline-offset: 2px;
   }
   button:active:not(:disabled) {

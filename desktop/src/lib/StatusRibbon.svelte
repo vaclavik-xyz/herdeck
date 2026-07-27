@@ -87,8 +87,18 @@
     text-transform: uppercase;
     letter-spacing: .06em;
   }
+  /* Narrow: the ribbon must stay a ribbon, not a tower — the live deck below it
+     is the reason anyone opens this page. Four status cells keep one row. */
   @media (max-width: 900px) {
+    .ribbon { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .runtime, .agents { grid-column: span 2; border-bottom: 1px solid var(--line); }
+    .runtime, .agents, .cell { min-height: 68px; padding: var(--s3) var(--s4); }
+    .agents { border-right: 0; }
+    .cell:nth-child(6) { border-right: 0; }
+  }
+  @media (max-width: 560px) {
     .ribbon { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .runtime { grid-column: 1 / -1; border-bottom: 1px solid var(--line); }
+    .cell:nth-child(odd) { border-right: 0; }
+    .cell:nth-child(3), .cell:nth-child(4) { border-bottom: 1px solid var(--line); }
   }
 </style>

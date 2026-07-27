@@ -434,7 +434,7 @@
      transparent so the rounded .shell is the only painted surface. */
   :global(html, body) {
     margin: 0;
-    background: #0d1015;
+    background: var(--canvas);
     color-scheme: dark; /* dark native widgets + scrollbars (WebKit) */
   }
   :global(html[data-window-mode="floating"]),
@@ -452,14 +452,14 @@
   .desktop-app {
     position: relative;
     min-height: 100vh;
-    background: #0d1015;
+    background: var(--canvas);
   }
   .desktop-setup-overlay {
     position: fixed;
     inset: 0;
     z-index: 10;
     overflow: auto;
-    background: #0d1015;
+    background: var(--canvas);
   }
   .desktop-setup-overlay:focus {
     outline: none;
@@ -473,11 +473,11 @@
     transform: translateX(-50%);
   }
   .shell {
-    background: #0d1015;
+    background: var(--canvas);
   }
   main.desktop {
     min-height: 100vh;
-    background: #0d1015;
+    background: var(--canvas);
   }
   main.desktop .shell {
     min-height: 100vh;
@@ -488,15 +488,15 @@
     align-items: center;
     justify-content: space-between;
     padding: 0 22px;
-    border-bottom: 1px solid #252b34;
-    color: #87919f;
+    border-bottom: 1px solid var(--line);
+    color: var(--text-dim);
     font: 11px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   }
   .desktop-brand {
     display: flex;
     align-items: center;
     gap: 10px;
-    color: #e8ebef;
+    color: var(--text);
     font-size: 13px;
   }
   .brand-mark {
@@ -508,7 +508,7 @@
     width: 4px;
     height: 4px;
     border-radius: 1px;
-    background: #6f91d9;
+    background: var(--accent);
   }
   .desktop-setup-stage {
     display: grid;
@@ -517,16 +517,16 @@
     min-height: 470px;
     margin: 56px auto;
     overflow: hidden;
-    border: 1px solid #2a313b;
+    border: 1px solid var(--line);
     border-radius: 14px;
-    background: #11151b;
-    box-shadow: 0 24px 70px rgb(4 8 13 / .3);
+    background: var(--sidebar);
+    box-shadow: 0 24px 70px color-mix(in srgb, var(--canvas) 70%, transparent);
   }
   .setup-intro {
     padding: 38px 32px;
-    border-right: 1px solid #2a313b;
-    background: #151a21;
-    color: #e8ebef;
+    border-right: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
     font: 13px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   }
   .setup-icon {
@@ -535,10 +535,10 @@
     height: 48px;
     margin-bottom: 62px;
     place-items: center;
-    border: 1px solid #364151;
+    border: 1px solid var(--line-strong);
     border-radius: 12px;
-    background: #1b222c;
-    color: #86a4e4;
+    background: var(--panel-raised);
+    color: var(--accent-strong);
   }
   .setup-intro h2 {
     margin: 0 0 10px;
@@ -550,7 +550,7 @@
   .setup-intro p {
     margin: 0;
     max-width: 31ch;
-    color: #929ca9;
+    color: var(--text-dim);
   }
   /* Rounded opaque card flush to the (transparent) window edge so the drop shadow
      traces the card silhouette. */
@@ -559,10 +559,10 @@
     position: absolute;
     inset: 0 auto auto 0;
     border-radius: 14px;
-    background: #0b0e12;
+    background: var(--canvas);
     box-shadow:
-      inset 0 0 0 1px rgb(118 134 153 / .28),
-      0 18px 48px rgb(0 0 0 / .34);
+      inset 0 0 0 1px color-mix(in srgb, var(--text-faint) 60%, transparent),
+      0 18px 48px color-mix(in srgb, var(--canvas) 80%, transparent);
     transform: scale(var(--floating-scale));
     transform-origin: top left;
     overflow: hidden;
@@ -593,7 +593,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #0b0e12;
+    background: var(--canvas);
     cursor: grab;
     user-select: none;
     -webkit-user-select: none;
@@ -605,11 +605,11 @@
     width: 32px;
     height: 3px;
     border-radius: 2px;
-    background: #46515f;
+    background: var(--line-strong);
     transition: background 0.15s;
   }
   .drag:hover .grabber {
-    background: #7a8796;
+    background: var(--text-dim);
   }
   @media (max-width: 760px) {
     .desktop-setup-stage {
@@ -620,7 +620,7 @@
     .setup-intro {
       padding: 22px 24px;
       border-right: 0;
-      border-bottom: 1px solid #2a313b;
+      border-bottom: 1px solid var(--line);
     }
     .setup-icon {
       margin-bottom: 24px;
