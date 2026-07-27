@@ -19,6 +19,9 @@ function render(props: Record<string, unknown>) {
   return { target, cleanup: () => { unmount(instance); target.remove(); } };
 }
 
+// Scope note: jsdom applies no scoped Svelte styles, so every CSS-level
+// invariant of this component (e.g. the resting runtime dot never inheriting
+// the ready tone) is asserted from source in theme.test.ts, not here.
 describe("StatusRibbon", () => {
   it("shows one cell per agent status with its count", () => {
     const { target, cleanup } = render({ ready: true, summary: SUMMARY, labels: LABELS });
@@ -87,9 +90,6 @@ describe("StatusRibbon", () => {
     } finally { cleanup(); }
   });
 
-  // The CSS rule that keeps the resting dot off the ready tone lives in
-  // theme.test.ts — jsdom applies no scoped styles, so it cannot be asserted
-  // from a mounted component here.
   it("reports the runtime as connecting when it is not ready", () => {
     const { target, cleanup } = render({
       ready: false,

@@ -151,7 +151,7 @@ describe("status ribbon rules", () => {
   it("never lets the resting runtime dot inherit the ready tone", () => {
     // --cell carries the READY colour on the row, so the resting dot has to set
     // its own background or a connecting runtime would render as ready.
-    const resting = RIBBON.match(/\.runtime \.dot(?:\s*,[^{]*)?\s*\{([^}]*)\}/)?.[1] ?? "";
+    const resting = RIBBON.match(/\.runtime\s+\.dot(?:\s*,[^{]*)?\s*\{([^}]*)\}/)?.[1] ?? "";
     expect(resting, ".runtime .dot must set its own background").toMatch(/background:\s*var\(--st-[a-z]+\)/);
     expect(resting, ".runtime .dot must not inherit the ready tone").not.toContain("var(--cell)");
     expect(RIBBON).toMatch(/\.runtime\.ready\s+\.dot(?:\s*,[^{]*)?\s*\{[^}]*background:\s*var\(--cell\)/);
