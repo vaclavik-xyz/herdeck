@@ -1069,22 +1069,20 @@ _PAGE = """<!doctype html><meta charset=utf-8>
  #panel:active{filter:brightness(1.3)}
  #panel img{width:100%;height:100%;display:block}
  #deck.stale{filter:grayscale(1) opacity(.5);transition:filter .2s}
- /* flat fallbacks first: where color-mix() is unsupported both declarations
-    would be invalid at computed-value time and the banner would render
-    black-on-dark. This page is served to arbitrary phone browsers. */
+ /* No color-mix() on this page: it is served to arbitrary phone browsers, and a
+    declaration containing var() is validated only AFTER substitution — an
+    unsupported mix makes the property unset instead of falling back, which
+    would leave the error banner invisible. ui_tokens emits resolved literals. */
  #note{position:fixed;left:50%;top:10px;transform:translateX(-50%);max-width:90vw;
-   background:var(--field);background:color-mix(in srgb, var(--st-offline) 14%, var(--canvas));
-   color:var(--st-offline);color:var(--st-offline-text);
+   background:var(--tint-offline);color:var(--st-offline-text);
    padding:6px 12px;border-radius:var(--r-control);
    font:13px var(--font-ui);display:none;z-index:9}
  [hidden]{display:none!important}
- #tover{position:fixed;inset:0;z-index:20;
-   background:var(--canvas);
-   background:color-mix(in srgb, var(--canvas) 94%, transparent);
+ #tover{position:fixed;inset:0;z-index:20;background:var(--overlay);
    display:flex;align-items:center;justify-content:center;padding:3vh 3vw;color:var(--text)}
  #tshell{width:min(1200px,94vw);height:min(860px,92vh);min-height:280px;
    background:var(--canvas);border:1px solid var(--line-strong);border-radius:var(--r-panel);
-   overflow:hidden;box-shadow:0 18px 60px color-mix(in srgb, var(--canvas) 80%, transparent);
+   overflow:hidden;box-shadow:0 18px 60px var(--overlay-shadow);
    display:flex;flex-direction:column}
  #tbar{height:52px;flex:0 0 52px;display:flex;align-items:center;gap:12px;
    padding:0 8px 0 14px;background:var(--panel-raised);border-bottom:1px solid var(--line-strong);

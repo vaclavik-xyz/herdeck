@@ -16,6 +16,8 @@ truth for what green means on a key.
 
 from __future__ import annotations
 
+import math
+
 from .driver.base import COLORS
 
 # Surfaces, text, accent, type, radius and motion — values are byte-identical
@@ -57,14 +59,33 @@ STATUS_ALIASES: dict[str, str] = {
 }
 
 
-# theme.css derives the readable error copy from the status colour the same way.
-OFFLINE_TEXT = "color-mix(in srgb, var(--st-offline) 55%, white)"
+# theme.css writes the readable error copy as this mix; the desktop runs in a
+# bundled WKWebView where color-mix() is guaranteed. THIS module serves arbitrary
+# phone and tablet browsers over Tailscale, so it emits the RESOLVED literal
+# instead: a declaration containing var() is only validated after substitution,
+# and an unsupported color-mix() then makes the property unset rather than
+# falling back to an earlier declaration — an invisible error banner.
+OFFLINE_TEXT_MIX_RATIO = 0.55
+CANVAS_RGB = (10, 12, 16)  # --canvas, as a triple for alpha compositing
 
 
 def _rgb(value: tuple[int, int, int]) -> str:
     """Render a backend COLORS triple the way theme.css writes it."""
     r, g, b = value
     return f"rgb({r},{g},{b})"
+
+
+def _hex(triple: tuple[float, float, float]) -> str:
+    return "#" + "".join(f"{int(math.floor(c + 0.5)):02x}" for c in triple)
+
+
+def _mix(a: tuple[int, int, int], b: tuple[int, int, int], ratio: float) -> str:
+    """`color-mix(in srgb, a <ratio>%, b)` resolved to a literal.
+
+    CSS rounds half away from zero; :func:`_hex` does the same, so the emitted
+    literal matches what a browser would compute.
+    """
+    return _hex(tuple(ca * ratio + cb * (1 - ratio) for ca, cb in zip(a, b, strict=True)))
 
 
 def css_variables(selector: str = ":root") -> str:
@@ -81,17 +102,26 @@ def css_variables(selector: str = ":root") -> str:
         lines.append(f"--st-{name}:{_rgb(triple)};")
     for alias, palette_name in STATUS_ALIASES.items():
         lines.append(f"--st-{alias}:var(--st-{palette_name});")
-    # The palette is tuned for LED keys; on dark UI text it falls under WCAG AA,
-    # so error COPY uses a lightened derivative (fills and dots keep the raw
-    # colour). Same derivation as theme.css.
-    lines.append(f"--st-offline-text:{OFFLINE_TEXT};")
+    # Derived tones, emitted RESOLVED (see the note above OFFLINE_TEXT_MIX_RATIO):
+    # the palette is tuned for LED keys and falls under WCAG AA as dark-UI text,
+    # so error copy uses a lightened derivative while fills and dots keep the raw
+    # colour.
+    for name, value in derived_tones().items():
+        lines.append(f"{name}:{value};")
     lines.append("}")
     return "".join(lines)
 
 
-def _mix_with_white(triple: tuple[int, int, int], ratio: float) -> str:
-    """The literal that `color-mix(in srgb, <rgb> <ratio>%, white)` resolves to."""
-    return "#" + "".join(f"{round(c * ratio + 255 * (1 - ratio)):02x}" for c in triple)
+def derived_tones() -> dict[str, str]:
+    """Tones theme.css expresses with `color-mix()`, resolved to literals."""
+    white = (255, 255, 255)
+    return {
+        "--st-offline-text": _mix(COLORS["red"], white, OFFLINE_TEXT_MIX_RATIO),
+        # the error banner's wash, and the terminal overlay's backdrop
+        "--tint-offline": _mix(COLORS["red"], CANVAS_RGB, 0.14),
+        "--overlay": "rgb({} {} {} / .94)".format(*CANVAS_RGB),
+        "--overlay-shadow": "rgb({} {} {} / .8)".format(*CANVAS_RGB),
+    }
 
 
 def xterm_theme() -> dict[str, str]:
@@ -113,5 +143,5 @@ def xterm_theme() -> dict[str, str]:
         "blue": SHARED_TOKENS["--accent"],
         "brightBlue": SHARED_TOKENS["--accent-strong"],
         # the readable error red — the resolved value of --st-offline-text
-        "red": _mix_with_white(COLORS["red"], 0.55),
+        "red": derived_tones()["--st-offline-text"],
     }

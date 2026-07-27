@@ -15,9 +15,12 @@ import pytest
 
 from herdeck.driver.base import COLORS
 from herdeck.ui_tokens import (
+    OFFLINE_TEXT_MIX_RATIO,
     SHARED_TOKENS,
     STATUS_ALIASES,
+    _mix,
     css_variables,
+    derived_tones,
     xterm_theme,
 )
 
@@ -55,11 +58,25 @@ def test_shared_tokens_match_the_desktop_theme(theme: dict[str, str]) -> None:
         assert _norm(theme[name]) == _norm(value), f"{name} drifted from theme.css"
 
 
-def test_derived_error_text_matches_the_desktop_theme(theme: dict[str, str]) -> None:
-    """The one token derived rather than listed still has to agree — the
-    simulator's error banner and the window's error copy are the same red."""
-    emitted = _tokens(css_variables())
-    assert _norm(emitted["--st-offline-text"]) == _norm(theme["--st-offline-text"])
+def test_derived_error_text_resolves_to_the_desktop_theme_value() -> None:
+    """theme.css writes this tone as a `color-mix()`; the Python surfaces emit
+    the RESOLVED literal (they are served to browsers that may lack color-mix).
+    The two forms must still name the same colour, so resolve theme.css's
+    expression and compare — this also catches a ratio change on either side.
+    """
+    theme_css = THEME_CSS.read_text(encoding="utf-8")
+    match = re.search(
+        r"--st-offline-text:\s*color-mix\(in srgb, var\((--st-[a-z]+)\) (\d+)%, (\w+)\)",
+        theme_css,
+    )
+    assert match, "theme.css no longer derives --st-offline-text from a color-mix"
+    alias, percent, second = match.group(1), int(match.group(2)), match.group(3)
+    assert alias == "--st-offline", "the derivation changed its base colour"
+    assert second == "white", "the derivation changed what it mixes with"
+    assert percent / 100 == OFFLINE_TEXT_MIX_RATIO, "the mix ratio drifted from ui_tokens"
+    assert derived_tones()["--st-offline-text"] == _mix(
+        COLORS["red"], (255, 255, 255), percent / 100
+    )
 
 
 def test_every_token_the_simulator_references_is_emitted() -> None:
@@ -69,9 +86,12 @@ def test_every_token_the_simulator_references_is_emitted() -> None:
     from herdeck.driver import web
 
     emitted = set(_tokens(css_variables()))
-    # layout variables the page defines on #deck itself, not theme tokens
-    page_local = {"--cols", "--gap", "--pad", "--cell", "--host-surface"}
-    referenced = set(re.findall(r"var\((--[a-z0-9-]+)", web._PAGE))
+    # layout variables the page declares on #deck itself, not theme tokens
+    page_local = {"--cols", "--gap", "--pad", "--cell"}
+    # scan the MODULE, not just _PAGE: the 403 page is a second inline surface
+    # that also injects css_variables()
+    source = Path(web.__file__).read_text(encoding="utf-8")
+    referenced = set(re.findall(r"var\((--[a-z0-9-]+)", source))
     missing = referenced - emitted - page_local
     assert not missing, f"the simulator references tokens nobody emits: {sorted(missing)}"
 
@@ -93,7 +113,7 @@ def test_xterm_theme_is_derived_from_the_tokens() -> None:
     assert theme_colors["brightBlack"] == SHARED_TOKENS["--text-faint"]
     assert theme_colors["blue"] == SHARED_TOKENS["--accent"]
     # the readable error red is the resolved value of --st-offline-text
-    assert theme_colors["red"] == "#e68e8e"
+    assert theme_colors["red"] == derived_tones()["--st-offline-text"]
     assert all(v.startswith("#") for v in theme_colors.values()), "xterm needs literals"
 
 

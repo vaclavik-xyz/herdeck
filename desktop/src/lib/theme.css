@@ -1,6 +1,16 @@
-/* The single source of visual constants for every desktop surface (control
-   room, onboarding, floating deck). Colour literals live HERE and in
-   statusColors.ts — nowhere else (enforced by theme.test.ts).
+/* The CANONICAL source of visual constants for herdeck's UI.
+
+   Inside desktop/, colour literals live HERE and in statusColors.ts — nowhere
+   else (enforced by theme.test.ts).
+
+   Two surfaces outside desktop/ cannot import this file and mirror it instead;
+   tests/test_ui_tokens.py fails if either drifts:
+     - src/herdeck/ui_tokens.py — the web simulator, served from Python. It
+       emits color-mix() derivations RESOLVED, because it reaches arbitrary
+       phone browsers.
+     - streamdeck/…/ui/herdeck.html — the Elgato property inspector, a static
+       file with no build step. Its surface deliberately keeps the Stream Deck
+       app's own grey.
 
    Status tokens mirror PALETTE in statusColors.ts, which mirrors the backend
    tile palette in src/herdeck/driver/base.py COLORS: green means "working" on
