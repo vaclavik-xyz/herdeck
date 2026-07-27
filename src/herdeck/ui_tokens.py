@@ -66,6 +66,11 @@ STATUS_ALIASES: dict[str, str] = {
 # and an unsupported color-mix() then makes the property unset rather than
 # falling back to an earlier declaration — an invisible error banner.
 OFFLINE_TEXT_MIX_RATIO = 0.55
+# The terminal preview lightens ANSI red for the same readability reason, but it
+# is NOT the same knob: retuning the banner tone must not recolour SGR 31. The
+# shared starting value is a coincidence, not a dependency.
+ANSI_RED_LIGHTEN = 0.55
+WHITE = (255, 255, 255)
 
 
 def _rgb(value: tuple[int, int, int]) -> str:
@@ -125,13 +130,12 @@ def derived_tones() -> dict[str, str]:
     three are simulator-only tones that the page previously wrote inline as
     `color-mix()` and that have no counterpart in theme.css.
     """
-    white = (255, 255, 255)
     canvas = _triple(SHARED_TOKENS["--canvas"])
     # follow the alias, not a hardcoded palette entry: repointing
     # STATUS_ALIASES["offline"] must move the banner with the dots.
     offline = COLORS[STATUS_ALIASES["offline"]]
     return {
-        "--st-offline-text": _mix(offline, white, OFFLINE_TEXT_MIX_RATIO),
+        "--st-offline-text": _mix(offline, WHITE, OFFLINE_TEXT_MIX_RATIO),
         # the error banner's wash, and the terminal overlay's backdrop
         "--tint-offline": _mix(offline, canvas, 0.14),
         "--overlay": "rgb({} {} {} / .94)".format(*canvas),
@@ -160,5 +164,5 @@ def xterm_theme() -> dict[str, str]:
         # ANSI red is red whatever "offline" points at: this paints SGR 31 from
         # the previewed terminal, not a herdeck status, so it must NOT follow
         # STATUS_ALIASES. Same lightening as the error copy, for readability.
-        "red": _mix(COLORS["red"], (255, 255, 255), OFFLINE_TEXT_MIX_RATIO),
+        "red": _mix(COLORS["red"], WHITE, ANSI_RED_LIGHTEN),
     }

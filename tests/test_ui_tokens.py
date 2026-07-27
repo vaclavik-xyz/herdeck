@@ -124,10 +124,18 @@ def test_xterm_theme_is_derived_from_the_tokens() -> None:
     assert theme_colors["foreground"] == SHARED_TOKENS["--text"]
     assert theme_colors["brightBlack"] == SHARED_TOKENS["--text-faint"]
     assert theme_colors["blue"] == SHARED_TOKENS["--accent"]
-    # the readable error red is the resolved value of --st-offline-text
     # ANSI red follows the palette's red, NOT the offline alias
     assert theme_colors["red"] == "#e68e8e"
     assert all(v.startswith("#") for v in theme_colors.values()), "xterm needs literals"
+
+
+def test_ansi_red_does_not_follow_the_offline_status_alias(monkeypatch) -> None:
+    """SGR 31 from the previewed terminal is red whatever "offline" points at.
+    Repointing the alias must move the banner tone and leave the terminal."""
+    before = xterm_theme()["red"]
+    monkeypatch.setitem(STATUS_ALIASES, "offline", "orange")
+    assert derived_tones()["--st-offline-text"] != before, "the banner tone must follow"
+    assert xterm_theme()["red"] == before, "ANSI red must not follow the status alias"
 
 
 def test_status_aliases_match_the_desktop_theme(theme: dict[str, str]) -> None:
