@@ -119,6 +119,8 @@ const CONVERTED = [
   "lib/sections/UsageSection.svelte",
   "lib/sections/ProfilesSection.svelte",
   "lib/sections/DesktopSection.svelte",
+  "lib/StatusRibbon.svelte",
+  "lib/DeckView.svelte",
 ];
 
 describe("token discipline", () => {
