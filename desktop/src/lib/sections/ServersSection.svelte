@@ -31,7 +31,6 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Servers",
       local_heading: "Local sessions",
       local_hint: "Available Herdr sockets on this Mac. Changes apply without restarting herdeck.",
       available: "available",
@@ -45,7 +44,6 @@
       clear_token_failed: "clearing token '{name}' failed (HTTP {code})",
     },
     cs: {
-      heading: "Servery",
       local_heading: "Lokální sessions",
       local_hint: "Dostupné Herdr sockety na tomto Macu. Změny se projeví bez restartu herdecku.",
       available: "dostupná",
@@ -96,7 +94,6 @@
   }
 </script>
 
-<h2>{lm.heading}</h2>
 <section class="local-sessions" aria-labelledby="local-sessions-heading">
   <div class="section-head">
     <div>
@@ -150,40 +147,49 @@
 
 <style>
   .local-sessions {
-    border: 1px solid var(--border, #2b323d);
-    border-radius: var(--radius-panel, 10px);
-    background: var(--surface, #151a21);
-    padding: 13px 15px;
-    margin-bottom: 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-panel);
+    background: var(--panel);
+    padding: var(--s4) var(--s5);
+    margin-bottom: var(--s4);
   }
-  .section-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-  .section-head h3, .remote-heading { margin: 0; color: #dce1e8; font-size: 14px; }
-  .section-head p { margin: 3px 0 0; color: var(--muted, #939ca9); font-size: 11px; max-width: 430px; }
-  .socket-mark { color: #8ba7df; font: 22px/1 ui-monospace, monospace; }
-  .session-rail { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .section-head { display: flex; justify-content: space-between; gap: var(--s3); align-items: flex-start; }
+  .section-head h3, .remote-heading { margin: 0; color: var(--text); font: var(--t-h2); letter-spacing: -.01em; }
+  .section-head p { margin: var(--s1) 0 0; color: var(--text-dim); font: var(--t-help); max-width: 60ch; }
+  .socket-mark { color: var(--accent-strong); font: 22px/1 var(--font-mono); }
+  .session-rail { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
   .session-rail label {
     min-width: 120px;
     display: grid;
     grid-template-columns: auto 8px 1fr;
-    gap: 7px;
+    gap: var(--s2);
     align-items: center;
-    border: 1px solid var(--border, #2b323d);
-    border-radius: var(--radius-control, 7px);
-    padding: 8px 10px;
-    background: var(--field, #10141a);
+    border: 1px solid var(--line);
+    border-radius: var(--r-control);
+    padding: var(--s2) var(--s3);
+    background: var(--field);
     cursor: pointer;
   }
-  .session-rail label:has(input:checked) { border-color: #6382c1; background: var(--signal-soft, rgb(111 145 217 / .14)); }
+  .session-rail label:has(input:checked) { border-color: var(--accent-strong); background: var(--accent-soft); }
   .session-rail label.unavailable { opacity: .62; }
-  .session-rail input { margin: 0; accent-color: #6f91d9; }
-  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; }
-  .status-dot.online { background: var(--green, #55c68d); }
+  .session-rail input { margin: 0; accent-color: var(--accent); }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+  .status-dot.online { background: var(--st-working); }
   .session-copy { display: flex; flex-direction: column; min-width: 0; }
-  .session-copy strong { color: #dce1e8; font: 600 12px/1.2 ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; }
-  .session-copy small { color: var(--muted, #939ca9); font-size: 10px; }
-  .remote-heading { margin: 0 0 8px; }
-  fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; }
-  button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
-  h2 { margin: 0 0 8px; }
+  .session-copy strong { color: var(--text); font: 600 12px/1.2 var(--font-mono); overflow: hidden; text-overflow: ellipsis; }
+  .session-copy small { color: var(--text-dim); font-size: 10px; }
+  .remote-heading { margin: 0 0 var(--s2); }
+  fieldset { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); padding: var(--s4) var(--s5); margin: var(--s2) 0; }
+  legend { color: var(--text); }
+  button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+  button:hover { color: var(--text); background: var(--panel-raised); }
 </style>

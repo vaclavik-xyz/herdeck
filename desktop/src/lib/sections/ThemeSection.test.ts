@@ -15,7 +15,10 @@ describe("ThemeSection", () => {
       props: { payload: parseConfig({})!, onChange: () => {}, onError: () => {} },
     });
     try {
-      const groups = Array.from(target.querySelectorAll<HTMLElement>(".colors [role=\"radiogroup\"]"));
+      // FieldGroup replaced the old `.colors` fieldset (Task 6); ColorSwatchField
+      // is the only radiogroup this section renders, so scoping to the mount
+      // root still selects exactly the status swatches.
+      const groups = Array.from(target.querySelectorAll<HTMLElement>('[role="radiogroup"]'));
       const values = groups.map((group) =>
         group.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.dataset.color,
       );

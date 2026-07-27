@@ -107,6 +107,10 @@ const CONVERTED = [
   "lib/fields/ConfirmRemoveButton.svelte",
   "lib/fields/ColorSwatchField.svelte",
   "lib/sections/FieldGroup.svelte",
+  "lib/sections/DeckSection.svelte",
+  "lib/sections/ViewSection.svelte",
+  "lib/sections/ThemeSection.svelte",
+  "lib/sections/ServersSection.svelte",
 ];
 
 describe("token discipline", () => {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FieldGroup from "./FieldGroup.svelte";
   import TextField from "../fields/TextField.svelte";
   import NumberField from "../fields/NumberField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
@@ -24,7 +25,6 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Deck",
       none: "(none)",
       inherit: "Inherit",
       inherited_hint: "inherited: {value}",
@@ -33,7 +33,6 @@
       advanced: "Advanced device and runtime settings",
     },
     cs: {
-      heading: "Deck",
       none: "(nic)",
       inherit: "Zdědit",
       inherited_hint: "zděděno: {value}",
@@ -94,7 +93,6 @@
   }
 </script>
 
-<h2>{lm.heading}</h2>
 {#if overlay}
   <OverrideField label="grid" help={HELP.grid} state={scState("grid")} inheritedDisplay={hint("grid")} onstate={(s) => setScState("grid", s)}>
     <TextField label="" value={String(scValue("grid") ?? "")} oninput={(v) => setSc("grid", v)} />
@@ -105,9 +103,7 @@
   <TriStateListField label="overview_order" help={HELP.overview_order} state={overviewState} list={overviewOrder} defaultHint={serverHint} resetKey={`base:${reloadRev}:deck:overview_order`} onchange={setBaseOverview} />
 {/if}
 
-<fieldset class="hw">
-  <legend>{lm.hw_legend}</legend>
-  <p class="hint">{lm.hw_hint}</p>
+<FieldGroup title={lm.hw_legend} description={lm.hw_hint}>
   <TextField label="deck" help={HELP.deck} value={hwDeck} oninput={(v) => setLocalStr("local", "deck", v)} />
   <NumberField label="brightness" help={HELP.brightness} value={brightness} int min={0} max={100} onchange={(v) => setLocalNum("hardware", "brightness", v)} />
   <details class="advanced-settings">
@@ -122,15 +118,11 @@
       <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
     </div>
   </details>
-</fieldset>
+</FieldGroup>
 
 <style>
-  h2 { margin: 0 0 8px; }
-  .hw { border: 1px solid #2a2a30; border-radius: 6px; margin: 12px 0; padding: 10px 12px; }
-  .hw legend { color: #ccc; }
-  .hint { color: #888; margin: 0 0 8px; }
-  .advanced-settings { margin: 8px 0 0; border-top: 1px solid #252a31; padding-top: 8px; }
-  .advanced-settings summary { color: #929ba8; cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
-  .advanced-settings[open] summary { color: #c5ccd5; margin-bottom: 8px; }
+  .advanced-settings { margin: var(--s2) 0 0; border-top: 1px solid var(--line); padding-top: var(--s2); }
+  .advanced-settings summary { color: var(--text-dim); cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
+  .advanced-settings[open] summary { color: var(--text); margin-bottom: var(--s2); }
   .advanced-fields { display: contents; }
 </style>

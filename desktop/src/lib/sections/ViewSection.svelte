@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FieldGroup from "./FieldGroup.svelte";
   import TextField from "../fields/TextField.svelte";
   import SelectField from "../fields/SelectField.svelte";
   import BooleanField from "../fields/BooleanField.svelte";
@@ -36,7 +37,6 @@
 
   const LM = defineMessages({
     en: {
-      heading: "View",
       none: "(none)",
       inherit: "Inherit",
       inherited_hint: "inherited: {value}",
@@ -46,13 +46,12 @@
       advanced: "Advanced panel settings",
     },
     cs: {
-      heading: "Zobrazení",
       none: "(nic)",
       inherit: "Zdědit",
       inherited_hint: "zděděno: {value}",
       layout: "Rozložení decku",
-      appearance: "Vzhled dlaždic",
-      content: "Obsah dlaždic",
+      appearance: "Vzhled dlaždice",
+      content: "Obsah dlaždice",
       advanced: "Pokročilé nastavení panelu",
     },
   });
@@ -107,9 +106,8 @@
   }
 </script>
 
-<h2>{lm.heading}</h2>
 {#if overlay}
-  <fieldset><legend>{lm.layout}</legend>
+  <FieldGroup title={lm.layout}>
     <OverrideField label="management" help={HELP.management} state={scState("management")} inheritedDisplay={hint("management")} onstate={(s) => setScState("management", s)}>
       <SelectField label="" value={String(scValue("management") ?? "")} options={MANAGEMENT} onchange={(v) => setSc("management", v)} />
     </OverrideField>
@@ -124,45 +122,42 @@
         <BooleanField label="" value={Boolean(scValue("show_profile_on_panel"))} onchange={(v) => setSc("show_profile_on_panel", v)} />
       </OverrideField>
     </details>
-  </fieldset>
-  <fieldset><legend>{lm.appearance}</legend>
+  </FieldGroup>
+  <FieldGroup title={lm.appearance}>
     <OverrideField label="working_animation" help={HELP.working_animation} state={scState("working_animation")} inheritedDisplay={hint("working_animation")} onstate={(s) => setScState("working_animation", s)}>
       <SelectField label="" value={String(scValue("working_animation") ?? "spin")} options={WORKING_ANIMATIONS} onchange={(v) => setSc("working_animation", v)} />
     </OverrideField>
     <OverrideField label="tile_fill" help={HELP.tile_fill} state={scState("tile_fill")} inheritedDisplay={hint("tile_fill")} onstate={(s) => setScState("tile_fill", s)}>
       <SelectField label="" value={String(scValue("tile_fill") ?? "none")} options={TILE_FILLS} onchange={(v) => setSc("tile_fill", v)} />
     </OverrideField>
-  </fieldset>
-  <fieldset><legend>{lm.content}</legend>
+  </FieldGroup>
+  <FieldGroup title={lm.content}>
     {#each LIST_KEYS as key}
       <TriStateListField label={key} help={HELP[key]} state={overrideState(payload, prof, SEC, key)} list={ovListValue(key)} customSeed={effectiveList(key)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: hint(key) })} resetKey={`${prof}:${reloadRev}:view:${key}`} onchange={(s, l) => setOvList(key, s, l)} />
     {/each}
-  </fieldset>
+  </FieldGroup>
 {:else}
-  <fieldset><legend>{lm.layout}</legend>
+  <FieldGroup title={lm.layout}>
     <SelectField label="management" help={HELP.management} value={management} options={MANAGEMENT} onchange={(v) => set("management", v)} />
     <SelectField label="language" help={HELP.language} value={uiLanguage} options={UI_LANGUAGES} onchange={(v) => set("language", v)} />
     <details class="advanced-settings"><summary>{lm.advanced}</summary>
       <TextField label="agent_slots" help={HELP.agent_slots} value={agentSlots} oninput={(v) => set("agent_slots", v)} />
       <BooleanField label="show_profile_on_panel" help={HELP.show_profile_on_panel} value={showProfile} onchange={(v) => set("show_profile_on_panel", v)} />
     </details>
-  </fieldset>
-  <fieldset><legend>{lm.appearance}</legend>
+  </FieldGroup>
+  <FieldGroup title={lm.appearance}>
     <SelectField label="working_animation" help={HELP.working_animation} value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
     <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
-  </fieldset>
-  <fieldset><legend>{lm.content}</legend>
+  </FieldGroup>
+  <FieldGroup title={lm.content}>
     {#each LIST_KEYS as key}
       <TriStateListField label={key} help={HELP[key]} state={listFieldState(payload, "base", SEC, key)} list={(getAt(payload, "base", SEC, key) as string[]) ?? baseDefaultList(key)} customSeed={baseDefaultList(key)} defaultHint={baseDefaultList(key).join(" · ")} resetKey={`base:${reloadRev}:view:${key}`} onchange={(s, l) => setBaseTri(key, s, l)} />
     {/each}
-  </fieldset>
+  </FieldGroup>
 {/if}
 
 <style>
-  h2 { margin: 0 0 8px; }
-  fieldset { border: 0; border-top: 1px solid #252a31; margin: 10px 0 0; padding: 10px 0 0; }
-  legend { color: #929ba8; font-size: 9px; font-weight: 650; letter-spacing: .08em; padding: 0 7px 0 0; text-transform: uppercase; }
-  .advanced-settings { margin: 8px 0 0; border-top: 1px solid #252a31; padding-top: 8px; }
-  .advanced-settings summary { color: #929ba8; cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
-  .advanced-settings[open] summary { color: #c5ccd5; margin-bottom: 8px; }
+  .advanced-settings { margin: var(--s2) 0 0; border-top: 1px solid var(--line); padding-top: var(--s2); }
+  .advanced-settings summary { color: var(--text-dim); cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
+  .advanced-settings[open] summary { color: var(--text); margin-bottom: var(--s2); }
 </style>
