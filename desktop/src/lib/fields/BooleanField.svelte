@@ -14,11 +14,40 @@
 </label>
 
 <style>
-  .field { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; margin: 6px 0; cursor: pointer; }
-  input { appearance: none; position: relative; grid-column: 2; grid-row: 1 / span 2; width: 36px; height: 21px; margin: 0; border: 1px solid var(--border-strong, #3b4553); border-radius: 999px; background: #272d36; cursor: pointer; transition: background 120ms ease, border-color 120ms ease; }
-  input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: #a1a9b4; transition: transform 120ms ease, background 120ms ease; }
-  input:checked { border-color: #7897d5; background: #5879bd; }
-  input:checked::after { transform: translateX(15px); background: #f2f4f7; }
-  input:focus-visible { outline: 2px solid #8eabe7; outline-offset: 2px; }
-  @media (prefers-reduced-motion: reduce) { input, input::after { transition: none; } }
+  .field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--s1) var(--s6);
+    padding: var(--s3) 0;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+  }
+  input {
+    appearance: none;
+    position: relative;
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    width: 36px;
+    height: 21px;
+    margin: 0;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: var(--key);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  }
+  input::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: transform var(--dur) var(--ease), background var(--dur) var(--ease);
+  }
+  input:checked { border-color: var(--accent); background: var(--accent-soft); }
+  input:checked::after { transform: translateX(15px); background: var(--accent-strong); }
 </style>

@@ -55,3 +55,25 @@ describe("theme tokens", () => {
     }
   });
 });
+
+// The refactor's ratchet: every file listed here has been converted to tokens
+// and must stay free of colour literals. Paths are relative to src/. The list
+// grows task by task; the final task asserts it covers every .svelte file.
+const CONVERTED = [
+  "lib/fields/FieldCopy.svelte",
+  "lib/fields/TextField.svelte",
+  "lib/fields/SelectField.svelte",
+  "lib/fields/NumberField.svelte",
+  "lib/fields/BooleanField.svelte",
+];
+
+describe("token discipline", () => {
+  it.each(CONVERTED)("%s carries no colour literals", (rel) => {
+    const src = readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8");
+    const literals = [
+      ...src.matchAll(/#[0-9a-fA-F]{3,8}\b/g),
+      ...src.matchAll(/\brgba?\(/g),
+    ].map((m) => m[0]);
+    expect(literals, `use var(--token) instead of ${literals.join(", ")}`).toEqual([]);
+  });
+});

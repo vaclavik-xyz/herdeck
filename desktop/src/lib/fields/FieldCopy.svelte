@@ -28,10 +28,43 @@
 {#if messages.length > 0}<small class="fielderror" role="alert">{messages[0]}</small>{/if}
 
 <style>
-  .fieldlabel { display: flex; grid-column: 1; grid-row: 1; align-self: end; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 5px; color: #d8dde4; font-size: 11px; font-weight: 620; overflow-wrap: anywhere; }
-  .fieldlabel code { color: var(--muted-low, #6f7885); font: 8px "SF Mono", ui-monospace, monospace; font-weight: 500; }
-  .fieldlabel .status { border: 1px solid #343b45; border-radius: 999px; color: #9ba5b2; font-size: 8px; font-weight: 570; line-height: 1; padding: 2px 5px; }
+  .fieldlabel {
+    display: flex;
+    grid-column: 1;
+    grid-row: 1;
+    align-self: start;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--s1) var(--s2);
+    color: var(--text);
+    font: var(--t-label);
+    overflow-wrap: anywhere;
+  }
+  .fieldlabel code {
+    color: var(--text-faint);
+    font: var(--t-mono);
+  }
+  .fieldlabel .status {
+    padding: 2px 6px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    color: var(--text-dim);
+    font: var(--t-eyebrow);
+  }
   .fieldlabel.hashelp { cursor: help; }
-  .fieldhelp { grid-column: 1; grid-row: 2; align-self: start; max-width: 36rem; color: var(--muted, #939ca9); font-size: 9px; line-height: 1.45; }
-  .fielderror { grid-column: 1 / -1; grid-row: 3; color: var(--red, #db727a); font-size: 9px; line-height: 1.4; }
+  .fieldhelp {
+    grid-column: 1;
+    grid-row: 2;
+    align-self: start;
+    max-width: 34ch;
+    color: var(--text-dim);
+    font: var(--t-help);
+  }
+  .fielderror {
+    grid-column: 2;
+    grid-row: 3;
+    color: var(--st-offline);
+    font: var(--t-help);
+  }
 </style>
