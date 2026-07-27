@@ -907,7 +907,7 @@
   .dirty { color: #e3b56f; font-size: 11px; white-space: nowrap; }
   .dirty.bad { color: #e98990; }
   .body { flex: 1; display: grid; grid-template-columns: 216px minmax(0, 1fr); min-height: 0; }
-  .sidebar { display: flex; flex-direction: column; padding: 13px 10px 10px; border-right: 1px solid var(--line); background: #11151b; overflow: auto; }
+  .sidebar { display: flex; flex-direction: column; padding: 13px 10px 10px; border-right: 1px solid var(--line); background: var(--sidebar); overflow: auto; }
   .settings-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 32px; margin-bottom: 14px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--field); color: var(--text-faint); }
   .settings-search:focus-within { border-color: #607fbf; box-shadow: 0 0 0 2px rgb(111 145 217 / .12); }
   .settings-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 10px; }

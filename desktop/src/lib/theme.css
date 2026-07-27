@@ -12,6 +12,7 @@
   --canvas: #0a0c10;
   --panel: #12161c;
   --panel-raised: #171c24;
+  --sidebar: #11151b; /* single consumer: ConfigApp.svelte .sidebar */
   --key: #1e242d;
   --field: #0e1218;
   --line: #232a34;
