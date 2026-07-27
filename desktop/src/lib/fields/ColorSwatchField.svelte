@@ -11,35 +11,87 @@
     { label: string; value: string; onchange: (v: string) => void; allowEmpty?: boolean; help?: string } = $props();
 
   const known = $derived(value === "" || PALETTE_NAMES.includes(value));
+
+  // Radiogroup member order: "(default)" first when offered, then every
+  // palette name. It genuinely is one of the N+1 mutually-exclusive choices
+  // (empty vs. any palette name), so it's role="radio" like the rest and
+  // shares the same arrow-key sequence and roving tabindex.
+  const items = $derived(allowEmpty ? ["", ...PALETTE_NAMES] : PALETTE_NAMES);
+  // Standard ARIA radiogroup roving tabindex: the checked item is the sole tab
+  // stop. If the stored value isn't in the list (unknown/legacy value), nothing
+  // is checked — fall back to the first item so the group stays reachable by tab.
+  const selectedIndex = $derived(items.indexOf(value));
+  const tabbableIndex = $derived(selectedIndex >= 0 ? selectedIndex : 0);
+
+  let groupEl: HTMLElement | undefined;
+
+  function focusAt(i: number): void {
+    groupEl?.querySelectorAll<HTMLButtonElement>(".swatch")[i]?.focus();
+  }
+
+  // Arrow-key move both selects (fires onchange, matching this widget's
+  // no-confirm-step selection model) and shifts focus to the new item.
+  function select(i: number): void {
+    onchange(items[i]);
+    focusAt(i);
+  }
+
+  function onKeydown(e: KeyboardEvent, i: number): void {
+    const n = items.length;
+    switch (e.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        e.preventDefault();
+        select((i + 1) % n);
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        e.preventDefault();
+        select((i - 1 + n) % n);
+        break;
+      case "Home":
+        e.preventDefault();
+        select(0);
+        break;
+      case "End":
+        e.preventDefault();
+        select(n - 1);
+        break;
+    }
+  }
 </script>
 
 <div class="field" class:unlabelled={!label}>
   {#if label}<FieldCopy {label} {help} />{/if}
-  <div class="swatches" role="radiogroup" aria-label={label}>
-    {#if allowEmpty}
-      <!-- Not a palette entry, so not part of the radiogroup's radio count:
-           "(default)" clears the override rather than selecting a colour. -->
-      <button
-        type="button"
-        class="swatch empty"
-        data-color=""
-        aria-pressed={value === ""}
-        title={t("widget.default_empty")}
-        onclick={() => onchange("")}
-      >{t("widget.default_empty")}</button>
-    {/if}
-    {#each PALETTE_NAMES as name (name)}
-      <button
-        type="button"
-        role="radio"
-        class="swatch"
-        data-color={name}
-        aria-checked={value === name}
-        aria-label={name}
-        title={name}
-        style={`--swatch:${PALETTE[name]}`}
-        onclick={() => onchange(name)}
-      ></button>
+  <div class="swatches" role="radiogroup" aria-label={label} bind:this={groupEl}>
+    {#each items as name, i (name)}
+      {#if name === ""}
+        <button
+          type="button"
+          role="radio"
+          class="swatch empty"
+          data-color=""
+          aria-checked={value === ""}
+          tabindex={tabbableIndex === i ? 0 : -1}
+          title={t("widget.default_empty")}
+          onclick={() => onchange("")}
+          onkeydown={(e) => onKeydown(e, i)}
+        >{t("widget.default_empty")}</button>
+      {:else}
+        <button
+          type="button"
+          role="radio"
+          class="swatch"
+          data-color={name}
+          aria-checked={value === name}
+          aria-label={name}
+          tabindex={tabbableIndex === i ? 0 : -1}
+          title={name}
+          style={`--swatch:${PALETTE[name]}`}
+          onclick={() => onchange(name)}
+          onkeydown={(e) => onKeydown(e, i)}
+        ></button>
+      {/if}
     {/each}
     {#if !known}<span class="unknown">{value}</span>{/if}
   </div>
@@ -75,8 +127,7 @@
     transition: box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
   }
   .swatch:hover { transform: translateY(-1px); }
-  .swatch[aria-checked="true"],
-  .swatch[aria-pressed="true"] {
+  .swatch[aria-checked="true"] {
     box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--accent-strong);
   }
   .swatch.empty {
