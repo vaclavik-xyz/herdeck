@@ -115,6 +115,10 @@ const CONVERTED = [
   "lib/sections/StartProfilesSection.svelte",
   "lib/sections/AnswerProfilesSection.svelte",
   "lib/sections/NotificationsSection.svelte",
+  "lib/sections/SafetySection.svelte",
+  "lib/sections/UsageSection.svelte",
+  "lib/sections/ProfilesSection.svelte",
+  "lib/sections/DesktopSection.svelte",
 ];
 
 describe("token discipline", () => {

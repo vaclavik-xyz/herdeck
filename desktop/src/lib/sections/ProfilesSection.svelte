@@ -21,7 +21,6 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Profiles",
       intro: "Named profiles extend the base config. Choose the active profile from the toolbar and override only the settings it needs.",
       new_profile_name: "new profile name",
       create_profile: "+ create profile",
@@ -34,7 +33,6 @@
       no_profiles: "No profiles yet. Create the first one above.",
     },
     cs: {
-      heading: "Profily",
       intro: "Pojmenované profily překrývají bázi. Aktivní profil se vybírá nahoře; per-sekce overrides jsou řez 4b-ii.",
       new_profile_name: "jméno nového profilu",
       create_profile: "+ vytvořit profil",
@@ -109,7 +107,6 @@
   }
 </script>
 
-<h2>{lm.heading}</h2>
 <p class="hint">{lm.intro}</p>
 
 <div class="create">
@@ -156,14 +153,37 @@
 {/if}
 
 <style>
-  h2 { margin: 0 0 8px; }
-  .hint { color: #888; margin: 0 0 8px; }
-  .create { display: flex; gap: 6px; margin: 8px 0; }
-  .create input { flex: 1; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
-  fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; }
-  .servers { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 2px 0; }
-  .chk { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; color: #ccc; }
-  .unknown { color: #e05050; font-size: 11px; }
-  button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+  .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
+  .create { display: flex; gap: var(--s2); margin: var(--s3) 0; }
+  .create input {
+    flex: 1;
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text);
+  }
+  fieldset {
+    margin: var(--s2) 0;
+    padding: var(--s4) var(--s5);
+    border: 1px solid var(--line);
+    border-radius: var(--r-panel);
+    background: var(--panel);
+  }
+  legend { color: var(--text); font: var(--t-label); }
+  .servers { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: var(--s1) 0; }
+  .chk { display: inline-flex; align-items: center; gap: var(--s1); margin-right: var(--s4); color: var(--text); }
+  .unknown { color: var(--st-offline); font: var(--t-help); }
+  button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+  button:hover { color: var(--text); background: var(--panel-raised); }
 </style>

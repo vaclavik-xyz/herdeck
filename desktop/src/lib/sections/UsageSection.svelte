@@ -26,7 +26,6 @@
 
   const LM = defineMessages({
     en: {
-      title: "Usage limits",
       intro: "Choose which subscriptions belong on the deck. Native account data confirms paid plans; CodexBar remains a compatibility fallback.",
       active_only: "Active subscriptions only",
       advanced: "Advanced provider order",
@@ -36,7 +35,6 @@
       none: "(none)",
     },
     cs: {
-      title: "Limity využití",
       intro: "Vyberte předplatná pro deck. Placený tarif potvrzují nativní data účtu; CodexBar zůstává jen jako záloha.",
       active_only: "Jen aktivní předplatná",
       advanced: "Pokročilé pořadí providerů",
@@ -87,7 +85,6 @@
   function setOvProviders(list: string[]): void { setSc("providers", list); }
 </script>
 
-<h2>{lm.title}</h2>
 <p class="hint">{lm.intro}</p>
 {#if overlay}
   <OverrideField label="providers" help={HELP.providers} state={scState("providers")} inheritedDisplay={hint("providers")} onstate={(s) => setScState("providers", s)}>
@@ -132,12 +129,11 @@
 {/if}
 
 <style>
-  h2 { margin: 0 0 8px; }
-  .hint { color: #8a8a92; font-size: 12px; margin: 0 0 10px; }
-  .advanced { margin: 2px 0 8px; color: #858892; font-size: 11px; }
+  .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
+  .advanced { margin: var(--s1) 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
   .advanced summary { cursor: pointer; user-select: none; }
-  .advanced[open] summary { margin-bottom: 5px; color: #aeb2bd; }
-  .advanced-settings { margin: 8px 0; border-top: 1px solid #252a31; padding-top: 8px; }
-  .advanced-settings summary { color: #929ba8; cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
-  .advanced-settings[open] summary { color: #c5ccd5; margin-bottom: 8px; }
+  .advanced[open] summary { margin-bottom: var(--s2); color: var(--text); }
+  .advanced-settings { margin: var(--s3) 0; padding-top: var(--s3); border-top: 1px solid var(--line); }
+  .advanced-settings summary { color: var(--text-dim); font: var(--t-eyebrow); cursor: pointer; user-select: none; }
+  .advanced-settings[open] summary { margin-bottom: var(--s3); color: var(--text); }
 </style>

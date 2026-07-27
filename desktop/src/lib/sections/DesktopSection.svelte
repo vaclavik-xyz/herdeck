@@ -22,7 +22,6 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Window",
       mode_intro: "Floating deck window mode:",
       mode_normal: "a regular framed window",
       mode_floating: "frameless",
@@ -32,7 +31,6 @@
       hotkey_rest: "; an empty field disables the hotkey. Takes effect after saving with Apply.",
     },
     cs: {
-      heading: "Okno",
       mode_intro: "Režim plovoucího okna decku:",
       mode_normal: "běžné okno s rámečkem",
       mode_floating: "bez rámečku",
@@ -56,7 +54,6 @@
   }
 </script>
 
-<h2>{lm.heading}</h2>
 <p class="hint">
   {lm.mode_intro}
   <code>normal</code> = {lm.mode_normal},
@@ -72,7 +69,6 @@
 <TextField label="toggle_deck" help={HELP.toggle_deck} value={hotkey} oninput={setHotkey} />
 
 <style>
-  h2 { margin: 0 0 8px; }
-  .hint { color: #888; margin: 0 0 12px; }
-  code { color: #aaa; }
+  .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
+  code { color: var(--text-dim); font: var(--t-mono); }
 </style>
