@@ -106,6 +106,7 @@ const CONVERTED = [
   "lib/fields/ProviderPicker.svelte",
   "lib/fields/ConfirmRemoveButton.svelte",
   "lib/fields/ColorSwatchField.svelte",
+  "lib/sections/FieldGroup.svelte",
 ];
 
 describe("token discipline", () => {
