@@ -66,7 +66,6 @@ STATUS_ALIASES: dict[str, str] = {
 # and an unsupported color-mix() then makes the property unset rather than
 # falling back to an earlier declaration — an invisible error banner.
 OFFLINE_TEXT_MIX_RATIO = 0.55
-CANVAS_RGB = (10, 12, 16)  # --canvas, as a triple for alpha compositing
 
 
 def _rgb(value: tuple[int, int, int]) -> str:
@@ -112,15 +111,31 @@ def css_variables(selector: str = ":root") -> str:
     return "".join(lines)
 
 
+def _triple(hex_value: str) -> tuple[int, int, int]:
+    """A `#rrggbb` token value as an rgb triple."""
+    h = hex_value.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
 def derived_tones() -> dict[str, str]:
-    """Tones theme.css expresses with `color-mix()`, resolved to literals."""
+    """Tones the served page needs as literals.
+
+    ``--st-offline-text`` mirrors the same-named token in theme.css (written
+    there as a `color-mix()`, checked by tests/test_ui_tokens.py). The other
+    three are simulator-only tones that the page previously wrote inline as
+    `color-mix()` and that have no counterpart in theme.css.
+    """
     white = (255, 255, 255)
+    canvas = _triple(SHARED_TOKENS["--canvas"])
+    # follow the alias, not a hardcoded palette entry: repointing
+    # STATUS_ALIASES["offline"] must move the banner with the dots.
+    offline = COLORS[STATUS_ALIASES["offline"]]
     return {
-        "--st-offline-text": _mix(COLORS["red"], white, OFFLINE_TEXT_MIX_RATIO),
+        "--st-offline-text": _mix(offline, white, OFFLINE_TEXT_MIX_RATIO),
         # the error banner's wash, and the terminal overlay's backdrop
-        "--tint-offline": _mix(COLORS["red"], CANVAS_RGB, 0.14),
-        "--overlay": "rgb({} {} {} / .94)".format(*CANVAS_RGB),
-        "--overlay-shadow": "rgb({} {} {} / .8)".format(*CANVAS_RGB),
+        "--tint-offline": _mix(offline, canvas, 0.14),
+        "--overlay": "rgb({} {} {} / .94)".format(*canvas),
+        "--overlay-shadow": "rgb({} {} {} / .8)".format(*canvas),
     }
 
 

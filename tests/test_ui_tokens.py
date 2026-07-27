@@ -18,7 +18,6 @@ from herdeck.ui_tokens import (
     OFFLINE_TEXT_MIX_RATIO,
     SHARED_TOKENS,
     STATUS_ALIASES,
-    _mix,
     css_variables,
     derived_tones,
     xterm_theme,
@@ -74,9 +73,26 @@ def test_derived_error_text_resolves_to_the_desktop_theme_value() -> None:
     assert alias == "--st-offline", "the derivation changed its base colour"
     assert second == "white", "the derivation changed what it mixes with"
     assert percent / 100 == OFFLINE_TEXT_MIX_RATIO, "the mix ratio drifted from ui_tokens"
-    assert derived_tones()["--st-offline-text"] == _mix(
-        COLORS["red"], (255, 255, 255), percent / 100
-    )
+
+
+def test_derived_tones_resolve_to_their_known_values() -> None:
+    """Hard-coded anchors, deliberately not recomputed with the same helper the
+    implementation uses: a self-referential assertion would pass even if the
+    mixing arithmetic were inverted (which would render the error copy as an
+    unreadable dark red)."""
+    tones = derived_tones()
+    assert tones["--st-offline-text"] == "#e68e8e"
+    assert tones["--tint-offline"] == "#261115"
+    assert tones["--overlay"] == "rgb(10 12 16 / .94)"
+    assert tones["--overlay-shadow"] == "rgb(10 12 16 / .8)"
+    # and the anchor is the LIGHTER mix: error copy must out-contrast the raw
+    # status red it derives from
+    assert _triple_sum(tones["--st-offline-text"]) > sum(COLORS["red"])
+
+
+def _triple_sum(hex_value: str) -> int:
+    h = hex_value.lstrip("#")
+    return sum(int(h[i : i + 2], 16) for i in (0, 2, 4))
 
 
 def test_every_token_the_simulator_references_is_emitted() -> None:
@@ -113,7 +129,7 @@ def test_xterm_theme_is_derived_from_the_tokens() -> None:
     assert theme_colors["brightBlack"] == SHARED_TOKENS["--text-faint"]
     assert theme_colors["blue"] == SHARED_TOKENS["--accent"]
     # the readable error red is the resolved value of --st-offline-text
-    assert theme_colors["red"] == derived_tones()["--st-offline-text"]
+    assert theme_colors["red"] == "#e68e8e"  # the resolved --st-offline-text
     assert all(v.startswith("#") for v in theme_colors.values()), "xterm needs literals"
 
 
