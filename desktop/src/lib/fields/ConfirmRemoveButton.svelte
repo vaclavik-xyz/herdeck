@@ -48,5 +48,9 @@
 
 <style>
   button { color: var(--st-offline) !important; }
-  button.armed { border-color: var(--st-offline) !important; background: var(--panel-raised) !important; color: var(--text) !important; }
+  button.armed {
+    border-color: var(--st-offline) !important;
+    background: color-mix(in srgb, var(--st-offline) 18%, var(--panel-raised)) !important;
+    color: var(--text) !important;
+  }
 </style>
