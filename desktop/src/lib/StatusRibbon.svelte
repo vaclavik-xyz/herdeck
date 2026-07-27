@@ -2,7 +2,7 @@
   // Overview's single authoritative state line: runtime health plus the agent
   // counts, each in the SAME colour the physical key uses for that status.
   import type { DeckSummary } from "./deckClient";
-  import { DEFAULT_STATUS_COLORS } from "./statusColors";
+  import { DEFAULT_STATUS_COLORS, PALETTE } from "./statusColors";
 
   let { ready, summary, labels, colors = {} }: {
     ready: boolean;
@@ -19,8 +19,13 @@
 
   // `idle` stays out: it is the resting state, not news. The four shown here
   // are what a glance at the deck is actually looking for.
-  const paletteName = (status: string): string =>
-    colors[status] || DEFAULT_STATUS_COLORS[status] || "grey";
+  // A hand-edited TOML can carry a name outside the palette. The backend
+  // resolves those to the dim empty-tile grey (COLORS.get(name, dim)); the
+  // window must degrade the same way instead of rendering nothing.
+  const paletteName = (status: string): string => {
+    const name = colors[status] || DEFAULT_STATUS_COLORS[status];
+    return name && name in PALETTE ? name : "dim";
+  };
 
   const cells = $derived([
     { status: "working", count: summary.working, label: labels.working },

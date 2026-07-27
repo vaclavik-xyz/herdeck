@@ -4,6 +4,7 @@
 // sidecar access token is NEVER here — the Rust shell injects it inside the
 // token-free config_* commands (see src-tauri/src/lib.rs).
 import defaults from "./configDefaults.json";
+import { DEFAULT_STATUS_COLORS } from "./statusColors";
 
 /** A redacted secret flag: presence + where it resolves, never a value. */
 export interface SecretFlag {
@@ -604,6 +605,24 @@ export function effectiveLanguage(payload: ConfigPayload): "en" | "cs" {
         inheritedFor(payload, prof, "view", "language"))
       : readPath(payload.base, ["view", "language"]).value;
   return v === "cs" ? "cs" : "en";
+}
+
+/** The EFFECTIVE tile colour for every agent status under the active profile:
+ *  the profile's own `theme.colors.<status>` override, else the inherited
+ *  (extends-chain + base) value, else the backend default — mirroring the
+ *  backend's profile merge, so the window and the deck agree on every status. */
+export function effectiveStatusColors(payload: ConfigPayload): Record<string, string> {
+  const prof = payload.activeProfile;
+  const overlay = prof !== "default" && payload.profiles[prof] != null;
+  const out: Record<string, string> = { ...DEFAULT_STATUS_COLORS };
+  for (const status of Object.keys(DEFAULT_STATUS_COLORS)) {
+    const path = ["theme", "colors", status];
+    const v = overlay
+      ? (overrideValuePath(payload, prof, path) ?? inheritedForPath(payload, prof, path))
+      : readPath(payload.base, path).value;
+    if (typeof v === "string" && v !== "") out[status] = v;
+  }
+  return out;
 }
 
 /** Override state of `section.key` in `profile`'s overlay: absent → "default" (= inherit),

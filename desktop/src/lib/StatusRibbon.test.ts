@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import StatusRibbon from "./StatusRibbon.svelte";
@@ -60,21 +62,17 @@ describe("StatusRibbon", () => {
   });
 
   it("never paints the runtime dot with the ready tone while connecting", () => {
-    const { target, cleanup } = render({
-      ready: false,
-      summary: { agents: 0, blocked: 0, working: 0, idle: 0, done: 0, waiting: 0 },
-      labels: LABELS,
-      colors: { working: "pink" },
-    });
-    try {
-      const runtime = target.querySelector<HTMLElement>(".runtime");
-      expect(runtime?.classList.contains("ready")).toBe(false);
-      // the row still carries the ready tone as a custom property; the dot must
-      // not inherit it while the runtime is only connecting
-      const dot = runtime?.querySelector(".dot");
-      expect(dot).not.toBeNull();
-      expect(getComputedStyle(dot as Element).background).not.toContain("pink");
-    } finally { cleanup(); }
+    // jsdom does not apply Svelte's scoped styles, so getComputedStyle would
+    // pass against any rule. Assert the rule itself, the way theme.test.ts
+    // asserts theme.css: the row carries --cell for the ready case, so the
+    // resting dot must set its own background rather than inherit it.
+    // this suite runs under jsdom, where import.meta.url is not a file URL —
+    // resolve from the vitest root (desktop/) instead
+    const source = readFileSync(resolve("src/lib/StatusRibbon.svelte"), "utf8");
+    const resting = source.match(/\.runtime \.dot \{([^}]*)\}/)?.[1] ?? "";
+    expect(resting, ".runtime .dot must set its own background").toMatch(/background:\s*var\(--st-[a-z]+\)/);
+    expect(resting, ".runtime .dot must not inherit the ready tone").not.toContain("var(--cell)");
+    expect(source).toMatch(/\.runtime\.ready \.dot \{[^}]*background:\s*var\(--cell\)/);
   });
 
   it("reports the runtime as connecting when it is not ready", () => {

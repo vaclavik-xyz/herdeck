@@ -55,6 +55,7 @@
   import {
     commandTransport as cfgTransport,
     effectiveLanguage,
+    effectiveStatusColors,
     parseConfig,
     parseValidate,
     parseActiveChanged,
@@ -424,12 +425,12 @@
   const connectedRemoteServers = $derived(remoteServerRecords.filter((server) => deckView.connections[server.id] === true).length);
   const runtimeReady = $derived(discovery != null && deckView.online);
   const connectionRows = $derived(appliedPayload ? connectionInventory(appliedPayload, deckView) : { local: [], remote: [] });
-  // The ribbon must agree with the tiles: read the ACTIVE config's status
-  // colours (a user can remap them in Colors) over the backend defaults.
-  const statusColors = $derived.by(() => {
-    const theme = (appliedPayload?.base as { theme?: { colors?: Record<string, string> } } | undefined)?.theme;
-    return { ...DEFAULT_STATUS_COLORS, ...(theme?.colors ?? {}) };
-  });
+  // The ribbon must agree with the tiles: resolve the status colours the same
+  // way the backend merges them (profile overlay -> extends chain -> base ->
+  // defaults), so a profile that remaps a status moves the ribbon too.
+  const statusColors = $derived(
+    appliedPayload ? effectiveStatusColors(appliedPayload) : DEFAULT_STATUS_COLORS,
+  );
 
   function connectionLabel(health: ConnectionHealth): string {
     return lm[health];
@@ -1028,7 +1029,6 @@
   .savebar button { min-height: 32px; margin: 0; padding: 0 13px; font-size: 11px; }
   .savebar button kbd { margin-left: 8px; color: var(--text); font: 8px "SF Mono", ui-monospace, monospace; }
   .savebar button:last-child { border-color: var(--accent-strong); background: var(--accent); color: var(--canvas); font-weight: 680; }
-  .savebar button:disabled { opacity: .42; cursor: default; }
   .errcount { color: var(--st-offline-text) !important; background: transparent !important; border-color: transparent !important; }
   .errlist { max-height: 120px; padding: 8px 14px; overflow: auto; border-top: 1px solid color-mix(in srgb, var(--st-offline) 40%, var(--line)); background: color-mix(in srgb, var(--st-offline) 12%, var(--canvas)); color: var(--st-offline-text); font: var(--t-body); }
   .errlist ul { margin: 0; padding-left: 18px; }

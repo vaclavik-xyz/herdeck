@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { DEFAULT_STATUS_COLORS } from "./statusColors";
 import {
   parseConfig,
+  effectiveStatusColors,
   parseValidate,
   commandTransport,
   toWriteBody,
@@ -1042,5 +1044,51 @@ describe("revision staleness guard", () => {
   it("classifies the stale error", () => {
     expect(isStaleRevisionError("stale_revision: config changed on disk")).toBe(true);
     expect(isStaleRevisionError("grid must be WxH")).toBe(false);
+  });
+});
+
+describe("effectiveStatusColors", () => {
+  function payloadWith(base: unknown, profiles: unknown, active: string): ConfigPayload {
+    const p = parseConfig({
+      base,
+      profiles,
+      local: {},
+      secrets: {},
+      active_profile: active,
+    });
+    if (p == null) throw new Error("fixture failed to parse");
+    return p;
+  }
+
+  it("falls back to the backend defaults when nothing overrides a status", () => {
+    const payload = payloadWith({}, {}, "default");
+    expect(effectiveStatusColors(payload)).toEqual(DEFAULT_STATUS_COLORS);
+  });
+
+  it("takes the base config's colours over the defaults", () => {
+    const payload = payloadWith({ theme: { colors: { working: "lime" } } }, {}, "default");
+    const colors = effectiveStatusColors(payload);
+    expect(colors.working).toBe("lime");
+    expect(colors.done).toBe(DEFAULT_STATUS_COLORS.done);
+  });
+
+  it("lets the ACTIVE profile's overlay win over base — the deck repaints, so must the window", () => {
+    const payload = payloadWith(
+      { theme: { colors: { working: "lime" } } },
+      { night: { theme: { colors: { working: "violet" } } } },
+      "night",
+    );
+    expect(effectiveStatusColors(payload).working).toBe("violet");
+  });
+
+  it("inherits the base colour for statuses the active profile does not override", () => {
+    const payload = payloadWith(
+      { theme: { colors: { working: "lime", blocked: "orange" } } },
+      { night: { theme: { colors: { working: "violet" } } } },
+      "night",
+    );
+    const colors = effectiveStatusColors(payload);
+    expect(colors.working).toBe("violet");
+    expect(colors.blocked).toBe("orange");
   });
 });
