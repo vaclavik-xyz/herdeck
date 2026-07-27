@@ -1,0 +1,105 @@
+/* The single source of visual constants for every desktop surface (control
+   room, onboarding, floating deck). Colour literals live HERE and in
+   statusColors.ts — nowhere else (enforced by theme.test.ts).
+
+   Status tokens mirror PALETTE in statusColors.ts, which mirrors the backend
+   tile palette in src/herdeck/driver/base.py COLORS: green means "working" on
+   a physical key and in this window, always. */
+:root {
+  color-scheme: dark;
+
+  /* surfaces: black bezel → graphite key face */
+  --canvas: #0a0c10;
+  --panel: #12161c;
+  --panel-raised: #171c24;
+  --key: #1e242d;
+  --field: #0e1218;
+  --line: #232a34;
+  --line-strong: #303945;
+
+  --text: #e9edf2;
+  --text-dim: #98a2af;
+  --text-faint: #6b7583;
+
+  /* interactive chrome only — never reports agent state */
+  --accent: #5b93f5;
+  --accent-strong: #7aa9ff;
+  --accent-soft: rgb(91 147 245 / .14);
+  --accent-ring: rgb(91 147 245 / .38);
+
+  /* deck palette (mirrors statusColors.ts PALETTE) */
+  --st-green: rgb(40,180,70);
+  --st-blue: rgb(50,120,220);
+  --st-amber: rgb(230,170,20);
+  --st-cyan: rgb(45,200,215);
+  --st-dim: rgb(70,70,70);
+  --st-red: rgb(210,50,50);
+  --st-grey: rgb(120,120,120);
+  --st-teal: rgb(24,150,145);
+  --st-violet: rgb(135,100,235);
+  --st-orange: rgb(220,115,35);
+  --st-pink: rgb(215,80,135);
+  --st-lime: rgb(125,175,45);
+
+  /* semantic aliases — what the chrome actually references */
+  --st-working: var(--st-green);
+  --st-idle: var(--st-blue);
+  --st-blocked: var(--st-amber);
+  --st-done: var(--st-cyan);
+  --st-waiting: var(--st-violet);
+  --st-offline: var(--st-red);
+  --st-unknown: var(--st-grey);
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, monospace;
+  --t-display: 700 22px/1.15 var(--font-ui);
+  --t-h2: 640 15px/1.3 var(--font-ui);
+  --t-body: 13px/1.5 var(--font-ui);
+  --t-label: 600 12px/1.35 var(--font-ui);
+  --t-help: 11.5px/1.5 var(--font-ui);
+  --t-eyebrow: 650 10.5px/1.2 var(--font-ui);
+  --t-mono: 11px/1.4 var(--font-mono);
+
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
+
+  --r-control: 7px;
+  --r-panel: 12px;
+  --r-stage: 16px;
+
+  --dur: 120ms;
+  --ease: cubic-bezier(.2, .6, .3, 1);
+
+  /* layout: forms get a measure, the overview may run wide */
+  --measure-form: 880px;
+  --measure-wide: 1280px;
+  --field-label-w: 240px;
+  --control-sm: 140px;  /* number */
+  --control-md: 320px;  /* select */
+  --control-lg: 480px;  /* text */
+  --control-xl: 560px;  /* path / url */
+}
+
+html, body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--text);
+  font: var(--t-body);
+  accent-color: var(--accent);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+button, select, input, textarea { font: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+  }
+}
