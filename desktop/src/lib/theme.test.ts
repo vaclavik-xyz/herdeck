@@ -140,6 +140,24 @@ function svelteFiles(prefix = ""): string[] {
   );
 }
 
+describe("status ribbon rules", () => {
+  // A source-level assertion, like the theme-token checks above: jsdom does not
+  // apply Svelte's scoped styles, so a rendering test cannot see this rule.
+  const RIBBON = readFileSync(
+    fileURLToPath(new URL("./StatusRibbon.svelte", import.meta.url)),
+    "utf8",
+  );
+
+  it("never lets the resting runtime dot inherit the ready tone", () => {
+    // --cell carries the READY colour on the row, so the resting dot has to set
+    // its own background or a connecting runtime would render as ready.
+    const resting = RIBBON.match(/\.runtime \.dot(?:\s*,[^{]*)?\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(resting, ".runtime .dot must set its own background").toMatch(/background:\s*var\(--st-[a-z]+\)/);
+    expect(resting, ".runtime .dot must not inherit the ready tone").not.toContain("var(--cell)");
+    expect(RIBBON).toMatch(/\.runtime\.ready \.dot \{[^}]*background:\s*var\(--cell\)/);
+  });
+});
+
 describe("token discipline coverage", () => {
   it("covers every component under src/", () => {
     // Harness components exist only to mount a widget inside a test — they

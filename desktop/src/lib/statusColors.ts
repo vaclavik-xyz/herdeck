@@ -4,14 +4,17 @@ export const DEFAULT_STATUS_COLORS: Record<string, string> = { ...defaults.theme
 export const DEFAULT_SERVER_ACCENTS: string[] = [...defaults.theme.server_accents];
 
 // The USER-ASSIGNABLE subset of the backend named tile palette
-// (src/herdeck/driver/base.py COLORS) — keep in sync. The backend's 13th entry,
-// "empty" (32,32,36), is deliberately absent: it paints vacant slots, not agent
-// state, and offering it in the picker would let a status render as an empty
-// key. A config that names it still resolves on the backend; the window
-// degrades it to dim like any other name outside this subset. Status colours resolve STRICTLY through this palette on the
-// backend (COLORS.get(name, dim)): a typo silently renders as the empty-tile
-// grey, so the editor offers these as a picker with swatches instead of free
-// text.
+// (src/herdeck/driver/base.py COLORS) — keep in sync.
+//
+// Status colours resolve STRICTLY through this palette on the backend
+// (COLORS.get(name, dim)): a typo silently renders as the empty-tile grey, so
+// the editor offers these as a picker with swatches instead of free text.
+//
+// The backend's 13th entry, "empty" (32,32,36), is deliberately absent here: it
+// paints vacant slots, not agent state, and offering it in the picker would let
+// a status render as an empty key. A config naming it still resolves on the
+// backend; the window degrades it to dim, as it does for any name outside this
+// subset.
 export const PALETTE: Record<string, string> = {
   green: "rgb(40,180,70)",
   blue: "rgb(50,120,220)",

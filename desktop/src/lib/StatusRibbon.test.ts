@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import StatusRibbon from "./StatusRibbon.svelte";
@@ -87,22 +85,6 @@ describe("StatusRibbon", () => {
       const working = target.querySelector<HTMLElement>('[data-status="working"]');
       expect(working?.getAttribute("style")).toContain("var(--st-dim)");
     } finally { cleanup(); }
-  });
-
-  it("never paints the runtime dot with the ready tone while connecting", () => {
-    // jsdom does not apply Svelte's scoped styles, so getComputedStyle would
-    // pass against any rule. Assert the rule itself, the way theme.test.ts
-    // asserts theme.css: the row carries --cell for the ready case, so the
-    // resting dot must set its own background rather than inherit it.
-    // theme.test.ts can use fileURLToPath(import.meta.url) because it opts into
-    // the node environment; this suite mounts components, so it runs under
-    // jsdom where import.meta.url is not a file URL. Resolve from the vitest
-    // root (desktop/) instead.
-    const source = readFileSync(resolve("src/lib/StatusRibbon.svelte"), "utf8");
-    const resting = source.match(/\.runtime \.dot(?:\s*,[^{]*)?\s*\{([^}]*)\}/)?.[1] ?? "";
-    expect(resting, ".runtime .dot must set its own background").toMatch(/background:\s*var\(--st-[a-z]+\)/);
-    expect(resting, ".runtime .dot must not inherit the ready tone").not.toContain("var(--cell)");
-    expect(source).toMatch(/\.runtime\.ready \.dot \{[^}]*background:\s*var\(--cell\)/);
   });
 
   it("reports the runtime as connecting when it is not ready", () => {
