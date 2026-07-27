@@ -99,7 +99,7 @@ describe("StatusRibbon", () => {
     // jsdom where import.meta.url is not a file URL. Resolve from the vitest
     // root (desktop/) instead.
     const source = readFileSync(resolve("src/lib/StatusRibbon.svelte"), "utf8");
-    const resting = source.match(/\.runtime \.dot(?:[^{]*)\{([^}]*)\}/)?.[1] ?? "";
+    const resting = source.match(/\.runtime \.dot(?:\s*,[^{]*)?\s*\{([^}]*)\}/)?.[1] ?? "";
     expect(resting, ".runtime .dot must set its own background").toMatch(/background:\s*var\(--st-[a-z]+\)/);
     expect(resting, ".runtime .dot must not inherit the ready tone").not.toContain("var(--cell)");
     expect(source).toMatch(/\.runtime\.ready \.dot \{[^}]*background:\s*var\(--cell\)/);

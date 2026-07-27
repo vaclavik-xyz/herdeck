@@ -959,7 +959,7 @@
   .page-heading p, .card-heading p, .card p { margin: 5px 0 0; color: var(--text-dim); font-size: 11px; }
   .eyebrow, .runtime-label { color: var(--text-dim); font-size: 9px; font-weight: 650; letter-spacing: .04em; }
   .secondary, .icon-button, .savebar button { border: 1px solid var(--line-strong); border-radius: var(--r-control); background: var(--panel-raised); color: var(--text); cursor: pointer; }
-  .secondary:disabled, .icon-button:disabled, .savebar button:disabled { cursor: default; }
+  .savebar button:disabled { cursor: default; }
   .secondary { min-height: 32px; padding: 0 12px; font-size: 11px; font-weight: 630; }
   .secondary:hover, .savebar button:hover:not(:disabled) { background: var(--key); }
   .secondary:active, .icon-button:active, .savebar button:active:not(:disabled) { transform: translateY(1px); }
