@@ -82,8 +82,8 @@
     font-weight: 750;
     letter-spacing: -0.02em;
   }
-  .mark.claude { background: var(--st-orange); }
-  .mark.codex { background: var(--st-teal); }
+  .mark.claude { background: var(--brand-claude); }
+  .mark.codex { background: var(--brand-codex); }
   .identity { display: flex; flex-direction: column; min-width: 0; }
   .name { color: var(--text); font-size: 12px; font-weight: 650; }
   .fieldlabel.hashelp { text-decoration: underline dotted var(--text-faint); text-underline-offset: 3px; cursor: help; }

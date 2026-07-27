@@ -18,6 +18,21 @@ function tokens(css: string): Record<string, string> {
   return out;
 }
 
+// Normalizes a #rrggbb or rgb()/rgba() colour to a comparable "r,g,b" triple,
+// so a token written in a different notation from its PALETTE counterpart
+// still gets caught (e.g. a hex brand colour that happens to equal a PALETTE
+// rgb() value).
+function toRgbTriple(value: string): string | null {
+  const hex = value.trim().match(/^#([0-9a-fA-F]{6})$/);
+  if (hex) {
+    const n = hex[1];
+    return [n.slice(0, 2), n.slice(2, 4), n.slice(4, 6)].map((h) => parseInt(h, 16)).join(",");
+  }
+  const rgb = value.trim().match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/);
+  if (rgb) return [rgb[1], rgb[2], rgb[3]].map(Number).join(",");
+  return null;
+}
+
 describe("theme tokens", () => {
   const T = tokens(THEME);
 
@@ -52,6 +67,25 @@ describe("theme tokens", () => {
       "--control-sm", "--control-md", "--control-lg", "--control-xl",
     ]) {
       expect(T[name], `missing ${name}`).toBeDefined();
+    }
+  });
+
+  it("keeps brand and form-affordance accents visually distinct from every status palette value", () => {
+    // A user can assign any PALETTE colour to a live status (ThemeSection), so
+    // a --brand-*/--form-* accent must never render identically to one — that
+    // would make a hardcoded brand mark or keychain affordance indistinguishable
+    // from a user-assigned agent status.
+    const paletteTriples = new Set(
+      Object.values(PALETTE)
+        .map((v) => toRgbTriple(v))
+        .filter((v): v is string => v !== null),
+    );
+    const guarded = Object.keys(T).filter((name) => name.startsWith("--brand-") || name.startsWith("--form-"));
+    expect(guarded.length, "expected at least one --brand-*/--form-* token to guard").toBeGreaterThan(0);
+    for (const name of guarded) {
+      const triple = toRgbTriple(T[name]);
+      expect(triple, `${name} value "${T[name]}" is not a parseable hex/rgb colour`).not.toBeNull();
+      expect(paletteTriples.has(triple as string), `${name} (${T[name]}) collides with a PALETTE value`).toBe(false);
     }
   });
 });

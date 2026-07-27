@@ -50,6 +50,16 @@
   --st-offline: var(--st-red);
   --st-unknown: var(--st-grey);
 
+  /* provider brand marks + form-affordance accents — deliberately NOT
+     PALETTE swatches: a user can assign any PALETTE colour to a live status
+     (ThemeSection), so reusing one here would let a status render
+     identically to a hardcoded brand mark or keychain affordance. Values
+     must never equal a PALETTE entry (enforced by theme.test.ts). */
+  --brand-claude: #995b48;
+  --brand-codex: #276f65;
+  --form-ok: #4fa84f;
+  --form-missing: #e0a030;
+
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --font-mono: "SF Mono", ui-monospace, SFMono-Regular, monospace;
   --t-display: 700 22px/1.15 var(--font-ui);

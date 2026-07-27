@@ -68,7 +68,7 @@
 <style>
   .field { display: grid; grid-template-columns: var(--field-label-w, 120px) minmax(0, 1fr) auto auto; align-items: center; gap: 8px; margin: 4px 0; }
   .field > input { grid-column: 2; grid-row: 1 / span 2; background: var(--field); border: 1px solid var(--line); color: inherit; padding: 4px 6px; border-radius: var(--r-control); }
-  .ok { color: var(--st-green); } .missing { color: var(--st-amber); }
+  .ok { color: var(--form-ok); } .missing { color: var(--form-missing); }
   .setrow { display: flex; gap: 8px; margin: 4px 0 8px calc(var(--field-label-w, 120px) + 8px); }
   button { background: var(--panel-raised); border: 1px solid var(--line); color: inherit; border-radius: var(--r-control); cursor: pointer; }
 </style>
