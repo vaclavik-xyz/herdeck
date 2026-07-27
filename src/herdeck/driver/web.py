@@ -21,6 +21,7 @@ from importlib.resources import files
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from ..i18n import tr
+from ..ui_tokens import css_variables
 from .base import DeckDriver, PanelView, TileView
 
 # Panel press maps to this button index (the orchestrator pages on PANEL_INDICES).
@@ -525,8 +526,9 @@ class WebDeck(DeckDriver):
             )
         forbidden_page = (
             b"<!doctype html><meta charset=utf-8><title>herdeck simulator</title>"
-            b'<body style="background:#0b0b0d;color:#e7ecf3;'
-            b'font:14px/1.5 system-ui;padding:2em;max-width:32em">'
+            + f"<style>{css_variables()}</style>".encode()
+            + b'<body style="background:var(--canvas);color:var(--text);'
+            b'font:14px/1.5 var(--font-ui);padding:2em;max-width:32em">'
             b"<h2>Browser session required</h2>"
             + b"<p>"
             + tr(
@@ -788,7 +790,8 @@ class WebDeck(DeckDriver):
                         )
                         return
                     page = (
-                        _PAGE.replace("__BASE_PATH__", deck._base_path)
+                        _PAGE.replace("__TOKENS__", css_variables())
+                        .replace("__BASE_PATH__", deck._base_path)
                         .replace("__BASE_PATH_JSON__", json.dumps(deck._base_path))
                         .replace(
                             "__L_JSON__",
@@ -1039,8 +1042,8 @@ _PAGE = """<!doctype html><meta charset=utf-8>
 <link rel="stylesheet" href="__BASE_PATH__/assets/xterm.css">
 <script src="__BASE_PATH__/assets/xterm.js"></script>
 <script src="__BASE_PATH__/assets/addon-fit.js"></script>
-<style>
- body{background:#0b0b0d;margin:0;font-family:-apple-system,sans-serif;
+<style>__TOKENS__
+ body{background:var(--canvas);margin:0;font-family:var(--font-ui);
    display:flex;align-items:center;justify-content:center;min-height:100vh}
  /* cell size lives in --cell so JS can set the COLUMN COUNT from /state.cols
     (repeat() does not accept var() for its count) — the layout follows the
@@ -1050,51 +1053,54 @@ _PAGE = """<!doctype html><meta charset=utf-8>
     configured grid fits a narrow viewport instead of overflowing sideways. */
  #deck{--cols:5;--gap:10px;--pad:18px;
    --cell:min(calc((96vw - 2*var(--pad) - (var(--cols) - 1)*var(--gap))/var(--cols)),150px);
-   background:#2a2a2e;padding:var(--pad);border-radius:18px;
+   background:var(--key);padding:var(--pad);border-radius:var(--r-stage);
    display:grid;grid-template-columns:repeat(5,var(--cell));gap:var(--gap)}
- .cell{width:var(--cell);height:var(--cell);border-radius:8px;background:#111;cursor:pointer;
+ .cell{width:var(--cell);height:var(--cell);border-radius:var(--r-control);background:var(--canvas);cursor:pointer;
    overflow:hidden;border:none;padding:0;
    touch-action:manipulation;-webkit-tap-highlight-color:transparent;
    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
  .cell:active{transform:scale(.95);filter:brightness(1.3)} /* instant, local press feedback */
- .cell.active{outline:3px solid #5af}
+ .cell.active{outline:3px solid var(--accent-strong)}
  .cell img{width:100%;height:100%;display:block}
- #panel{grid-column:4 / 6;width:calc(var(--cell)*2 + var(--gap));height:var(--cell);border-radius:8px;
-   overflow:hidden;cursor:pointer;background:#111;
+ #panel{grid-column:4 / 6;width:calc(var(--cell)*2 + var(--gap));height:var(--cell);border-radius:var(--r-control);
+   overflow:hidden;cursor:pointer;background:var(--canvas);
    touch-action:manipulation;-webkit-tap-highlight-color:transparent}
  #panel:active{filter:brightness(1.3)}
  #panel img{width:100%;height:100%;display:block}
  #deck.stale{filter:grayscale(1) opacity(.5);transition:filter .2s}
  #note{position:fixed;left:50%;top:10px;transform:translateX(-50%);max-width:90vw;
-   background:#3a1d1d;color:#f0a0a0;padding:6px 12px;border-radius:8px;
-   font:13px system-ui;display:none;z-index:9}
+   background:color-mix(in srgb, var(--st-offline) 14%, var(--canvas));
+   color:var(--st-offline-text);padding:6px 12px;border-radius:var(--r-control);
+   font:13px var(--font-ui);display:none;z-index:9}
  [hidden]{display:none!important}
- #tover{position:fixed;inset:0;z-index:20;background:rgba(4,6,10,.94);
-   display:flex;align-items:center;justify-content:center;padding:3vh 3vw;color:#e7ecf3}
+ #tover{position:fixed;inset:0;z-index:20;
+   background:color-mix(in srgb, var(--canvas) 94%, transparent);
+   display:flex;align-items:center;justify-content:center;padding:3vh 3vw;color:var(--text)}
  #tshell{width:min(1200px,94vw);height:min(860px,92vh);min-height:280px;
-   background:#0b0b0d;border:1px solid #343944;border-radius:12px;overflow:hidden;
-   box-shadow:0 18px 60px rgba(0,0,0,.5);display:flex;flex-direction:column}
+   background:var(--canvas);border:1px solid var(--line-strong);border-radius:var(--r-panel);
+   overflow:hidden;box-shadow:0 18px 60px color-mix(in srgb, var(--canvas) 80%, transparent);
+   display:flex;flex-direction:column}
  #tbar{height:52px;flex:0 0 52px;display:flex;align-items:center;gap:12px;
-   padding:0 8px 0 14px;background:#202126;border-bottom:1px solid #343944;
-   font:13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
- #tlive{display:flex;align-items:center;gap:7px;color:#8fc4ff;font-size:11px;
+   padding:0 8px 0 14px;background:var(--panel-raised);border-bottom:1px solid var(--line-strong);
+   font:13px/1 var(--font-ui)}
+ #tlive{display:flex;align-items:center;gap:7px;color:var(--accent-strong);font-size:11px;
    font-weight:700;letter-spacing:.12em;white-space:nowrap}
- #tlive::before{content:"";width:7px;height:7px;border-radius:50%;background:#5af;
-   box-shadow:0 0 0 3px rgba(85,170,255,.12)}
- #tlive.state-ended{color:#9aa7b8}
- #tlive.state-ended::before{background:#566171;box-shadow:none}
+ #tlive::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent-strong);
+   box-shadow:0 0 0 3px var(--accent-soft)}
+ #tlive.state-ended{color:var(--text-dim)}
+ #tlive.state-ended::before{background:var(--st-unknown);box-shadow:none}
  #ttitle{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-   color:#e7ecf3;font-weight:600}
- #treadonly{color:#9aa7b8;font-size:10px;font-weight:700;letter-spacing:.13em;
+   color:var(--text);font-weight:600}
+ #treadonly{color:var(--text-dim);font-size:10px;font-weight:700;letter-spacing:.13em;
    white-space:nowrap}
  #tclose{width:44px;height:44px;flex:0 0 44px;border:1px solid transparent;
-   border-radius:8px;background:transparent;color:#c9d1dc;cursor:pointer;
+   border-radius:var(--r-control);background:transparent;color:var(--text-dim);cursor:pointer;
    font:26px/1 system-ui;display:grid;place-items:center}
- #tclose:hover{background:#2a2a2e;color:#fff}
- #tclose:focus-visible{outline:3px solid #5af;outline-offset:-3px}
- #tmsg{min-height:28px;box-sizing:border-box;padding:7px 14px 5px;background:#111318;
-   color:#9aa7b8;font:12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
- #tterm{flex:1;min-height:0;padding:8px 10px 10px;background:#0b0b0d}
+ #tclose:hover{background:var(--key);color:var(--text)}
+ #tclose:focus-visible{outline:3px solid var(--accent-strong);outline-offset:-3px}
+ #tmsg{min-height:28px;box-sizing:border-box;padding:7px 14px 5px;background:var(--field);
+   color:var(--text-dim);font:12px/1.3 var(--font-ui)}
+ #tterm{flex:1;min-height:0;padding:8px 10px 10px;background:var(--canvas)}
  #tterm .xterm{height:100%}
  @media (max-width:560px){
    #tover{padding:0}
@@ -1252,10 +1258,13 @@ function openPreview(index,tileVersion,opener,preserveFocus=false){
     disableStdin:true,screenReaderMode:true,cursorBlink:false,scrollback:1000,
     fontSize:13,lineHeight:1.15,
     fontFamily:'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
+    /* xterm's theme takes literal colours (it paints to a canvas and cannot
+       read CSS custom properties), so these mirror the tokens by hand:
+       canvas / text / text-dim / accent / accent-strong / st-offline-text. */
     theme:{
-      background:'#0b0b0d',foreground:'#e7ecf3',cursor:'#9aa7b8',
-      selectionBackground:'#334c66',black:'#0b0b0d',brightBlack:'#566171',
-      blue:'#5af',brightBlue:'#8fc4ff',red:'#f0a0a0'
+      background:'#0a0c10',foreground:'#e9edf2',cursor:'#98a2af',
+      selectionBackground:'#25405f',black:'#0a0c10',brightBlack:'#6b7583',
+      blue:'#5b93f5',brightBlue:'#7aa9ff',red:'#e59292'
     }
   });
   current.fit=new FitAddon.FitAddon();
