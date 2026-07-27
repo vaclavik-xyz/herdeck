@@ -22,7 +22,6 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Answer profiles",
       overlay_hint:
         "Per-entry overlay: override an inherited answer profile or add a profile-only one. Inherited entries cannot be removed in an overlay.",
       remove_entry: "Remove profile entry",
@@ -41,7 +40,6 @@
       err_builtin_name: "'{name}' is a built-in answer profile and cannot replace a custom profile",
     },
     cs: {
-      heading: "Profily odpovědí",
       overlay_hint:
         "Per-entry overlay: přepiš zděděný answer profil nebo přidej profilový. Zděděné položky nelze v overlay smazat.",
       remove_entry: "Odebrat profilovou položku",
@@ -200,7 +198,6 @@
   function removeOwn(name: string): void { payload = { ...payload, profiles: clearOverridePath(payload.profiles, prof, [SEC, name]) }; onChange(); }
 </script>
 
-<h2>{lm.heading}</h2>
 {#if overlay}
   <p class="hint">{lm.overlay_hint}</p>
   {#each entryNames() as name (name)}
@@ -242,11 +239,34 @@
 {/if}
 
 <style>
-  h2 { margin: 0 0 8px; }
-  .hint { color: #888; margin: 0 0 8px; }
-  .create { display: flex; gap: 6px; margin: 8px 0; }
-  .create input { flex: 1; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
-  fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; }
-  button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+  fieldset {
+    margin: var(--s2) 0;
+    padding: var(--s4) var(--s5);
+    border: 1px solid var(--line);
+    border-radius: var(--r-panel);
+    background: var(--panel);
+  }
+  legend { color: var(--text); font: var(--t-label); }
+  button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+  button:hover { color: var(--text); background: var(--panel-raised); }
+  .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
+  .create { display: flex; gap: var(--s2); margin: var(--s3) 0; }
+  .create input {
+    flex: 1;
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text);
+  }
 </style>

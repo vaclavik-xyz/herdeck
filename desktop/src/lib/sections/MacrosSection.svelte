@@ -21,7 +21,6 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Macros",
       new_macro: "(new macro)",
       remove_macro: "Remove macro",
       add_macro: "+ add macro",
@@ -29,7 +28,6 @@
       n_macros: "{n} macros",
     },
     cs: {
-      heading: "Makra",
       new_macro: "(nové makro)",
       remove_macro: "Odebrat makro",
       add_macro: "+ přidat makro",
@@ -60,7 +58,6 @@
   function ovRemove(i: number): void { removalRevision += 1; writeOv(ovMacros().filter((_, j) => j !== i)); }
 </script>
 
-<h2>{lm.heading}</h2>
 {#if overlay}
   <OverrideField label="macros" help={HELP.macros} state={ovState()} inheritedDisplay={fmt(lm.n_macros, { n: inhMacros().length })} onstate={setOvState}>
     {#each ovMacros() as m, i (i)}
@@ -88,9 +85,24 @@
 {/if}
 
 <style>
-  h2 { margin: 0 0 8px; }
-  fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; }
-  button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
-  .hint { color: #888; margin: 8px 0; }
+  fieldset {
+    margin: var(--s2) 0;
+    padding: var(--s4) var(--s5);
+    border: 1px solid var(--line);
+    border-radius: var(--r-panel);
+    background: var(--panel);
+  }
+  legend { color: var(--text); font: var(--t-label); }
+  button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+  button:hover { color: var(--text); background: var(--panel-raised); }
+  .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
 </style>
