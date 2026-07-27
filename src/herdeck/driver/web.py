@@ -21,7 +21,7 @@ from importlib.resources import files
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from ..i18n import tr
-from ..ui_tokens import css_variables
+from ..ui_tokens import css_variables, xterm_theme
 from .base import DeckDriver, PanelView, TileView
 
 # Panel press maps to this button index (the orchestrator pages on PANEL_INDICES).
@@ -791,6 +791,7 @@ class WebDeck(DeckDriver):
                         return
                     page = (
                         _PAGE.replace("__TOKENS__", css_variables())
+                        .replace("__XTERM_THEME__", json.dumps(xterm_theme()))
                         .replace("__BASE_PATH__", deck._base_path)
                         .replace("__BASE_PATH_JSON__", json.dumps(deck._base_path))
                         .replace(
@@ -1068,12 +1069,17 @@ _PAGE = """<!doctype html><meta charset=utf-8>
  #panel:active{filter:brightness(1.3)}
  #panel img{width:100%;height:100%;display:block}
  #deck.stale{filter:grayscale(1) opacity(.5);transition:filter .2s}
+ /* flat fallbacks first: where color-mix() is unsupported both declarations
+    would be invalid at computed-value time and the banner would render
+    black-on-dark. This page is served to arbitrary phone browsers. */
  #note{position:fixed;left:50%;top:10px;transform:translateX(-50%);max-width:90vw;
-   background:color-mix(in srgb, var(--st-offline) 14%, var(--canvas));
-   color:var(--st-offline-text);padding:6px 12px;border-radius:var(--r-control);
+   background:var(--field);background:color-mix(in srgb, var(--st-offline) 14%, var(--canvas));
+   color:var(--st-offline);color:var(--st-offline-text);
+   padding:6px 12px;border-radius:var(--r-control);
    font:13px var(--font-ui);display:none;z-index:9}
  [hidden]{display:none!important}
  #tover{position:fixed;inset:0;z-index:20;
+   background:var(--canvas);
    background:color-mix(in srgb, var(--canvas) 94%, transparent);
    display:flex;align-items:center;justify-content:center;padding:3vh 3vw;color:var(--text)}
  #tshell{width:min(1200px,94vw);height:min(860px,92vh);min-height:280px;
@@ -1258,14 +1264,9 @@ function openPreview(index,tileVersion,opener,preserveFocus=false){
     disableStdin:true,screenReaderMode:true,cursorBlink:false,scrollback:1000,
     fontSize:13,lineHeight:1.15,
     fontFamily:'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
-    /* xterm's theme takes literal colours (it paints to a canvas and cannot
-       read CSS custom properties), so these mirror the tokens by hand:
-       canvas / text / text-dim / accent / accent-strong / st-offline-text. */
-    theme:{
-      background:'#0a0c10',foreground:'#e9edf2',cursor:'#98a2af',
-      selectionBackground:'#25405f',black:'#0a0c10',brightBlack:'#6b7583',
-      blue:'#5b93f5',brightBlue:'#7aa9ff',red:'#e59292'
-    }
+    /* xterm paints to a canvas and cannot read CSS custom properties, so the
+       theme is emitted from herdeck.ui_tokens.xterm_theme() — no hand-copy. */
+    theme:__XTERM_THEME__
   });
   current.fit=new FitAddon.FitAddon();
   current.terminal.loadAddon(current.fit);

@@ -14,9 +14,21 @@ from pathlib import Path
 import pytest
 
 from herdeck.driver.base import COLORS
-from herdeck.ui_tokens import SHARED_TOKENS, STATUS_ALIASES, css_variables
+from herdeck.ui_tokens import (
+    SHARED_TOKENS,
+    STATUS_ALIASES,
+    css_variables,
+    xterm_theme,
+)
 
 THEME_CSS = Path(__file__).resolve().parents[1] / "desktop" / "src" / "lib" / "theme.css"
+ELGATO_PI = (
+    Path(__file__).resolve().parents[1]
+    / "streamdeck"
+    / "xyz.vaclavik.herdeck.sdPlugin"
+    / "ui"
+    / "herdeck.html"
+)
 
 
 def _tokens(css: str) -> dict[str, str]:
@@ -43,6 +55,48 @@ def test_shared_tokens_match_the_desktop_theme(theme: dict[str, str]) -> None:
         assert _norm(theme[name]) == _norm(value), f"{name} drifted from theme.css"
 
 
+def test_derived_error_text_matches_the_desktop_theme(theme: dict[str, str]) -> None:
+    """The one token derived rather than listed still has to agree — the
+    simulator's error banner and the window's error copy are the same red."""
+    emitted = _tokens(css_variables())
+    assert _norm(emitted["--st-offline-text"]) == _norm(theme["--st-offline-text"])
+
+
+def test_every_token_the_simulator_references_is_emitted() -> None:
+    """The mirror ⊆ theme direction is not enough: dropping a token from
+    SHARED_TOKENS to satisfy that test would leave `var(--key)` in the page
+    resolving to nothing. Assert the consumer side too."""
+    from herdeck.driver import web
+
+    emitted = set(_tokens(css_variables()))
+    # layout variables the page defines on #deck itself, not theme tokens
+    page_local = {"--cols", "--gap", "--pad", "--cell", "--host-surface"}
+    referenced = set(re.findall(r"var\((--[a-z0-9-]+)", web._PAGE))
+    missing = referenced - emitted - page_local
+    assert not missing, f"the simulator references tokens nobody emits: {sorted(missing)}"
+
+
+def test_every_token_the_plugin_panel_references_is_declared() -> None:
+    if not ELGATO_PI.exists():  # pragma: no cover - only in a source checkout
+        pytest.skip("streamdeck plugin not present in this checkout")
+    html = ELGATO_PI.read_text(encoding="utf-8")
+    declared = set(_tokens(html))
+    referenced = set(re.findall(r"var\((--[a-z0-9-]+)", html))
+    missing = referenced - declared
+    assert not missing, f"the panel references undeclared tokens: {sorted(missing)}"
+
+
+def test_xterm_theme_is_derived_from_the_tokens() -> None:
+    theme_colors = xterm_theme()
+    assert theme_colors["background"] == SHARED_TOKENS["--canvas"]
+    assert theme_colors["foreground"] == SHARED_TOKENS["--text"]
+    assert theme_colors["brightBlack"] == SHARED_TOKENS["--text-faint"]
+    assert theme_colors["blue"] == SHARED_TOKENS["--accent"]
+    # the readable error red is the resolved value of --st-offline-text
+    assert theme_colors["red"] == "#e68e8e"
+    assert all(v.startswith("#") for v in theme_colors.values()), "xterm needs literals"
+
+
 def test_status_aliases_match_the_desktop_theme(theme: dict[str, str]) -> None:
     for alias, palette_name in STATUS_ALIASES.items():
         assert theme.get(f"--st-{alias}") == f"var(--st-{palette_name})"
@@ -56,15 +110,6 @@ def test_emitted_palette_matches_the_backend(theme: dict[str, str]) -> None:
         # assignable agent status) — every other entry must agree.
         if name != "empty":
             assert _norm(theme[f"--st-{name}"]) == f"rgb({r},{g},{b})"
-
-
-ELGATO_PI = (
-    Path(__file__).resolve().parents[1]
-    / "streamdeck"
-    / "xyz.vaclavik.herdeck.sdPlugin"
-    / "ui"
-    / "herdeck.html"
-)
 
 
 def test_elgato_property_inspector_tokens_match_the_desktop_theme(

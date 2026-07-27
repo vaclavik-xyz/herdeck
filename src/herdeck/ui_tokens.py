@@ -57,6 +57,10 @@ STATUS_ALIASES: dict[str, str] = {
 }
 
 
+# theme.css derives the readable error copy from the status colour the same way.
+OFFLINE_TEXT = "color-mix(in srgb, var(--st-offline) 55%, white)"
+
+
 def _rgb(value: tuple[int, int, int]) -> str:
     """Render a backend COLORS triple the way theme.css writes it."""
     r, g, b = value
@@ -80,6 +84,34 @@ def css_variables(selector: str = ":root") -> str:
     # The palette is tuned for LED keys; on dark UI text it falls under WCAG AA,
     # so error COPY uses a lightened derivative (fills and dots keep the raw
     # colour). Same derivation as theme.css.
-    lines.append("--st-offline-text:color-mix(in srgb, var(--st-offline) 55%, white);")
+    lines.append(f"--st-offline-text:{OFFLINE_TEXT};")
     lines.append("}")
     return "".join(lines)
+
+
+def _mix_with_white(triple: tuple[int, int, int], ratio: float) -> str:
+    """The literal that `color-mix(in srgb, <rgb> <ratio>%, white)` resolves to."""
+    return "#" + "".join(f"{round(c * ratio + 255 * (1 - ratio)):02x}" for c in triple)
+
+
+def xterm_theme() -> dict[str, str]:
+    """Terminal colours for the simulator's xterm.js preview.
+
+    xterm paints to a canvas and cannot read CSS custom properties, so it needs
+    literals. Deriving them here keeps the terminal in step with the tokens
+    instead of leaving a hand-copied palette to drift.
+    """
+    canvas = SHARED_TOKENS["--canvas"]
+    return {
+        "background": canvas,
+        "foreground": SHARED_TOKENS["--text"],
+        "cursor": SHARED_TOKENS["--text-dim"],
+        # bespoke: a selection wash has no token of its own.
+        "selectionBackground": "#25405f",
+        "black": canvas,
+        "brightBlack": SHARED_TOKENS["--text-faint"],
+        "blue": SHARED_TOKENS["--accent"],
+        "brightBlue": SHARED_TOKENS["--accent-strong"],
+        # the readable error red — the resolved value of --st-offline-text
+        "red": _mix_with_white(COLORS["red"], 0.55),
+    }
