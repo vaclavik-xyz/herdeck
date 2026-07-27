@@ -2,10 +2,15 @@
   // Overview's single authoritative state line: runtime health plus the agent
   // counts, each in the SAME colour the physical key uses for that status.
   import type { DeckSummary } from "./deckClient";
+  import { DEFAULT_STATUS_COLORS } from "./statusColors";
 
-  let { ready, summary, labels }: {
+  let { ready, summary, labels, colors = {} }: {
     ready: boolean;
     summary: DeckSummary;
+    // status -> palette NAME from [theme].colors, so a remapped status keeps
+    // the window and the physical key in agreement. Falls back to the backend
+    // defaults for anything the config does not override.
+    colors?: Record<string, string>;
     labels: {
       runtime: string; ready: string; connecting: string; agents: string;
       working: string; blocked: string; waiting: string; done: string;
@@ -14,16 +19,21 @@
 
   // `idle` stays out: it is the resting state, not news. The four shown here
   // are what a glance at the deck is actually looking for.
+  const paletteName = (status: string): string =>
+    colors[status] || DEFAULT_STATUS_COLORS[status] || "grey";
+
   const cells = $derived([
     { status: "working", count: summary.working, label: labels.working },
     { status: "blocked", count: summary.blocked, label: labels.blocked },
     { status: "waiting", count: summary.waiting, label: labels.waiting },
     { status: "done", count: summary.done, label: labels.done },
-  ]);
+  ].map((cell) => ({ ...cell, tone: paletteName(cell.status) })));
+
+  const runtimeTone = $derived(paletteName("working"));
 </script>
 
 <div class="ribbon">
-  <div class="runtime" class:ready>
+  <div class="runtime" class:ready style={`--cell:var(--st-${runtimeTone})`}>
     <span class="dot" aria-hidden="true"></span>
     <span class="eyebrow">{labels.runtime}</span>
     <strong>{ready ? labels.ready : labels.connecting}</strong>
@@ -33,7 +43,7 @@
     <strong>{summary.agents}</strong>
   </div>
   {#each cells as cell (cell.status)}
-    <div class="cell" data-status={cell.status} style={`--cell:var(--st-${cell.status})`}>
+    <div class="cell" data-status={cell.status} style={`--cell:var(--st-${cell.tone})`}>
       <span class="dot" aria-hidden="true"></span>
       <strong>{cell.count}</strong>
       <span class="eyebrow">{cell.label}</span>
@@ -73,8 +83,10 @@
     border-radius: 50%;
     background: var(--cell, var(--st-blocked));
   }
-  .runtime .dot { grid-row: 1 / span 2; width: 10px; height: 10px; }
-  .runtime.ready .dot { background: var(--st-working); }
+  /* Not-ready must never borrow the ready tone: --cell is set on the row for
+     the ready case, so the waiting state overrides it explicitly. */
+  .runtime .dot { grid-row: 1 / span 2; width: 10px; height: 10px; background: var(--st-blocked); }
+  .runtime.ready .dot { background: var(--cell); }
   strong {
     font: 650 22px/1 var(--font-mono);
     font-variant-numeric: tabular-nums;
@@ -98,7 +110,7 @@
   }
   @media (max-width: 560px) {
     .ribbon { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .cell:nth-child(odd) { border-right: 0; }
+    .cell:nth-child(even) { border-right: 0; }
     .cell:nth-child(3), .cell:nth-child(4) { border-bottom: 1px solid var(--line); }
   }
 </style>

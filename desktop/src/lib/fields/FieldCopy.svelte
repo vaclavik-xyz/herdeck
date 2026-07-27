@@ -64,7 +64,7 @@
   .fielderror {
     grid-column: 2;
     grid-row: 3;
-    color: var(--st-offline);
+    color: var(--st-offline-text);
     font: var(--t-help);
   }
 </style>

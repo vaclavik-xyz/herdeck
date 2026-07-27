@@ -41,6 +41,7 @@
     type DeckViewModel,
   } from "./lib/deckClient";
   import { visibilityGatedLoop } from "./lib/pollGate";
+  import { DEFAULT_STATUS_COLORS } from "./lib/statusColors";
   import { connectionInventory, type ConnectionHealth } from "./lib/connectionStatus";
   import { filterSettingsNavigation } from "./lib/settingsNavigation";
   import { FIELD_VALIDATION_CONTEXT } from "./lib/validationContext";
@@ -423,6 +424,12 @@
   const connectedRemoteServers = $derived(remoteServerRecords.filter((server) => deckView.connections[server.id] === true).length);
   const runtimeReady = $derived(discovery != null && deckView.online);
   const connectionRows = $derived(appliedPayload ? connectionInventory(appliedPayload, deckView) : { local: [], remote: [] });
+  // The ribbon must agree with the tiles: read the ACTIVE config's status
+  // colours (a user can remap them in Colors) over the backend defaults.
+  const statusColors = $derived.by(() => {
+    const theme = (appliedPayload?.base as { theme?: { colors?: Record<string, string> } } | undefined)?.theme;
+    return { ...DEFAULT_STATUS_COLORS, ...(theme?.colors ?? {}) };
+  });
 
   function connectionLabel(health: ConnectionHealth): string {
     return lm[health];
@@ -736,15 +743,18 @@
           <div><h1>{lm.overview_title}</h1><p>{runtimeReady ? lm.overview_ready : lm.overview_connecting}</p></div>
           <button class="secondary" onclick={() => (active = "servers")}>{lm.connections}</button>
         </div>
+        <div class="ribbon-slot">
         <StatusRibbon
           ready={runtimeReady}
           summary={deckView.summary}
+          colors={statusColors}
           labels={{
             runtime: lm.runtime, ready: lm.ready, connecting: lm.connecting,
             agents: lm.agents, working: lm.working, blocked: lm.blocked,
             waiting: lm.waiting, done: lm.done,
           }}
         />
+        </div>
         <div class="overview-stage">
           <article class="card live-deck-card">
             <div class="card-heading"><div><h2>{lm.live_deck}</h2><p>{lm.live_deck_hint}</p></div><button class="secondary" onclick={() => (active = "deck")}>{lm["sec.deck"]}</button></div>
@@ -915,7 +925,7 @@
   .profile-picker { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 11px; }
   .topbar select { min-width: 138px; height: 30px; padding: 0 28px 0 9px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--field); color: var(--text); }
   .dirty { color: var(--st-blocked); font-size: 11px; white-space: nowrap; }
-  .dirty.bad { color: var(--st-offline); }
+  .dirty.bad { color: var(--st-offline-text); }
   .body { flex: 1; display: grid; grid-template-columns: 216px minmax(0, 1fr); min-height: 0; }
   .sidebar { display: flex; flex-direction: column; padding: 13px 10px 10px; border-right: 1px solid var(--line); background: var(--sidebar); overflow: auto; }
   .settings-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 32px; margin-bottom: 14px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--field); color: var(--text-faint); }
@@ -938,7 +948,7 @@
   .sidebar-version strong { color: var(--text-dim); font-family: inherit; }
   .content { min-width: 0; padding: var(--s6) var(--s8) var(--s10); overflow: auto; }
   .content > * { max-width: var(--measure-form); }
-  .content > .overview-stage, .content > .deck-workbench, .content > .connections-workbench {
+  .content > .ribbon-slot, .content > .overview-stage, .content > .deck-workbench, .content > .connections-workbench {
     max-width: var(--measure-wide);
   }
   .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
@@ -966,6 +976,7 @@
   .overview-stack { display: grid; gap: 10px; }
   .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--st-working) 30%, transparent); border-radius: var(--r-control); background: transparent; color: var(--st-working); font: 600 9px "SF Mono", ui-monospace, monospace; white-space: nowrap; }
   .badge.warning { border-color: color-mix(in srgb, var(--st-blocked) 30%, transparent); background: transparent; color: var(--st-blocked); }
+  .connection-card { padding: var(--s4) var(--s5); }
   .connection-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; min-height: 51px; border-top: 1px solid var(--line); }
   .connection-row:first-of-type { margin-top: 11px; }
   .connection-row strong, .connection-row small { display: block; }
@@ -1006,7 +1017,7 @@
   .connection-identity .profile-use { color: var(--text-dim); font-family: inherit; }
   .state-label { align-self: start; padding-top: 3px; color: var(--st-blocked); font: var(--t-help); white-space: nowrap; }
   .state-label.connected { color: var(--st-working); }
-  .state-label.unavailable { color: var(--st-offline); }
+  .state-label.unavailable { color: var(--st-offline-text); }
   .state-label.inactive { color: var(--st-unknown); }
   .empty-diagnostic { min-height: 70px; padding: 18px 0; }
   .connections-editor { margin-top: 2px; }
@@ -1018,8 +1029,8 @@
   .savebar button kbd { margin-left: 8px; color: var(--text); font: 8px "SF Mono", ui-monospace, monospace; }
   .savebar button:last-child { border-color: var(--accent-strong); background: var(--accent); color: var(--canvas); font-weight: 680; }
   .savebar button:disabled { opacity: .42; cursor: default; }
-  .errcount { color: var(--st-offline) !important; background: transparent !important; border-color: transparent !important; }
-  .errlist { max-height: 120px; padding: 8px 14px; overflow: auto; border-top: 1px solid color-mix(in srgb, var(--st-offline) 40%, var(--line)); background: color-mix(in srgb, var(--st-offline) 12%, var(--canvas)); color: var(--st-offline); font-size: 12px; }
+  .errcount { color: var(--st-offline-text) !important; background: transparent !important; border-color: transparent !important; }
+  .errlist { max-height: 120px; padding: 8px 14px; overflow: auto; border-top: 1px solid color-mix(in srgb, var(--st-offline) 40%, var(--line)); background: color-mix(in srgb, var(--st-offline) 12%, var(--canvas)); color: var(--st-offline-text); font: var(--t-body); }
   .errlist ul { margin: 0; padding-left: 18px; }
   .errlist li { margin: 2px 0; }
   .errlist button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }

@@ -529,7 +529,7 @@
   }
   .error {
     margin: 0;
-    color: var(--st-offline);
+    color: var(--st-offline-text);
   }
   button:focus-visible,
   input:focus-visible {

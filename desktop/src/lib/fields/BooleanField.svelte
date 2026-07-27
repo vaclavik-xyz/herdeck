@@ -4,8 +4,8 @@
     { label: string; value: boolean; onchange: (v: boolean) => void; help?: string } = $props();
 </script>
 
-<label class="field">
-  <FieldCopy {label} {help} />
+<label class="field" class:unlabelled={!label}>
+  {#if label}<FieldCopy {label} {help} />{/if}
   <input
     type="checkbox"
     checked={value}
@@ -23,6 +23,7 @@
     border-bottom: 1px solid var(--line);
     cursor: pointer;
   }
+  .field.unlabelled { padding: 0; border-bottom: 0; }
   input {
     appearance: none;
     position: relative;
@@ -48,6 +49,6 @@
     background: var(--text-dim);
     transition: transform var(--dur) var(--ease), background var(--dur) var(--ease);
   }
-  input:checked { border-color: var(--accent); background: var(--accent-soft); }
-  input:checked::after { transform: translateX(15px); background: var(--accent-strong); }
+  input:checked { border-color: var(--accent-strong); background: var(--accent); }
+  input:checked::after { transform: translateX(15px); background: var(--text); }
 </style>

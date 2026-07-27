@@ -51,6 +51,11 @@
   --st-offline: var(--st-red);
   --st-unknown: var(--st-grey);
 
+  /* The palette is tuned for LED keys. On dark UI text it lands at ~3.7:1,
+     under WCAG AA, so error COPY uses a lightened derivative — fills, dots and
+     rings keep the raw status colour. */
+  --st-offline-text: color-mix(in srgb, var(--st-offline) 55%, white);
+
   /* provider brand marks + form-affordance accents — deliberately NOT
      PALETTE swatches: a user can assign any PALETTE colour to a live status
      (ThemeSection), so reusing one here would let a status render
@@ -105,6 +110,22 @@ button, select, input, textarea { font: inherit; }
 :focus-visible {
   outline: 2px solid var(--accent-strong);
   outline-offset: 2px;
+}
+
+/* An invalid field must show on the control itself, not only in the message
+   below it — this replaces the rules that lived in ConfigApp's override block. */
+.field:has(.fielderror) input,
+.field:has(.fielderror) select,
+.listfield:has(.fielderror) input,
+.override:has(.fielderror) .seg,
+.tristate:has(.fielderror) .seg {
+  border-color: var(--st-offline);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--st-offline) 18%, transparent);
+}
+
+button:disabled {
+  opacity: .42;
+  cursor: default;
 }
 
 @media (prefers-reduced-motion: reduce) {
