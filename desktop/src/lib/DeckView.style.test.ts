@@ -80,10 +80,16 @@ function compounds(selector: string): string[] {
   return (
     rawCompounds(selector)
       .map((compound) => compound.replace(/:(?:not|has)\([^)]*\)/g, ""))
-      // A compound that was ENTIRELY a pseudo (`.deck :has(.panel) .cell`) is
-      // now an empty string rather than gone, and an empty compound satisfies
-      // `scopedUnder`'s `every` vacuously. Dropping it restores what stripping
-      // before the split used to do.
+      // A compound that was ENTIRELY a pseudo (`.deck :has(.panel) .cell`)
+      // leaves an empty string behind once stripped. Dropping it keeps
+      // `scopedUnder` scanning the same compounds it scanned when the strip
+      // happened before the split. (It is not a correctness hazard for today's
+      // callers — an empty compound has no classes, so `every` over a non-empty
+      // list fails; it would only pass vacuously for a caller that asked for no
+      // classes at all, and none does.) `lastCompound` deliberately does NOT go
+      // through this filter: dropping an empty LAST compound would hand the
+      // rule's target to its parent, so a descendant-targeting rule would read
+      // as targeting the ancestor — fail-open, where returning "" is fail-closed.
       .filter(Boolean)
   );
 }
@@ -93,9 +99,13 @@ function classesOf(compound: string): Set<string> {
 }
 
 /** A selector's last compound: ".panel img" -> "img". The element a rule
- *  TARGETS, as opposed to the ancestors that scope it. */
+ *  TARGETS, as opposed to the ancestors that scope it. Strips its own pseudos
+ *  rather than reusing `compounds`, whose empty-compound filter would make a
+ *  pseudo-only target (`.deck .grid :has(.panel)`) report `.grid` — attributing
+ *  a descendant-targeting rule to its ancestor. Returning "" instead drops the
+ *  rule from `reaches`, which is the fail-closed direction for a guard. */
 function lastCompound(selector: string): string {
-  return compounds(selector).pop() ?? "";
+  return (rawCompounds(selector).pop() ?? "").replace(/:(?:not|has)\([^)]*\)/g, "");
 }
 
 /** The classes of a selector's LAST compound: ".deck .cell.active" -> {cell,
@@ -265,7 +275,17 @@ describe("compact offline pill styling", () => {
 // it, and the panel hangs below the tiles beside it. Only an out-of-flow image
 // hands the row height back to the tiles, and jsdom cannot see any of this.
 describe("status panel row geometry", () => {
-  const rules = topLevelRules(STYLE);
+  // At-rule bodies too, unlike everywhere else in this file: the compact deck IS
+  // the small-window surface, so `@media (max-width: …) { .panel img { position:
+  // static } }` is exactly how someone would plausibly undo this. Media
+  // conditions cannot be evaluated here, so such a rule is treated as applying
+  // and ordered last — fail-closed for a guard asserting a required value.
+  const rules = [
+    ...topLevelRules(STYLE),
+    ...[...STYLE.matchAll(AT_RULE)].flatMap((at) =>
+      at[0].startsWith("@media") ? topLevelRules(at[0].slice(at[0].indexOf("{") + 1, -1)) : [],
+    ),
+  ];
 
   // Filtering SELECTORS cannot answer this guard's question. Three separate
   // mutations proved it: scoping the declarations under `.deck.compact`,
@@ -300,7 +320,11 @@ describe("status panel row geometry", () => {
     }
     const bare = compound.replace(/:(?:not|has)\([^)]*\)/g, "");
     const named = bare.match(/^[a-zA-Z][a-zA-Z0-9-]*/)?.[0];
-    if (named && named !== tag) return false;
+    // No `tag` means the caller does not constrain it, NOT that a tag makes the
+    // compound fail. Rejecting on an unconstrained tag hid `button.panel` — the
+    // panel IS a button — so an override written that way was invisible while
+    // both containing-block assertions stayed green.
+    if (tag !== undefined && named !== undefined && named !== tag) return false;
     for (const c of classesOf(bare)) if (!classes.has(c)) return false;
     for (const c of negated) if (classes.has(c)) return false;
     return true;
@@ -348,7 +372,7 @@ describe("status panel row geometry", () => {
   const onImage = (prop: string, chain: string[]) =>
     effective(prop, new Set([...chain, "panel"]), new Set(), "img");
   const onPanel = (prop: string, chain: string[]) =>
-    effective(prop, new Set(chain), new Set(["panel"]));
+    effective(prop, new Set(chain), new Set(["panel"]), "button");
 
   it.each(SURFACES)(
     "takes the panel image out of flow on %s, so it cannot size the row",
