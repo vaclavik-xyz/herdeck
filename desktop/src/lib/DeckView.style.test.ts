@@ -33,11 +33,28 @@ function topLevelRules(css: string): { selectors: string[]; body: string }[] {
     }));
 }
 
-function atRuleBody(css: string, prelude: string): string | null {
-  const start = css.indexOf(prelude);
-  if (start < 0) return null;
-  const match = css.slice(start).match(/\{((?:[^{}]|\{[^{}]*\})*)\}/);
+function atRuleBody(css: string, prelude: RegExp): string | null {
+  const at = css.match(prelude);
+  if (at?.index == null) return null;
+  const match = css.slice(at.index).match(/\{((?:[^{}]|\{[^{}]*\})*)\}/);
   return match ? match[1] : null;
+}
+
+/** The classes of a selector's LAST compound: ".deck .cell.active" -> {cell,
+ *  active}. Comparing class sets rather than selector text keeps a scoping
+ *  prefix, a reordered compound or `:is()` from reading as a deleted rule. */
+function trailingClasses(selector: string): Set<string> {
+  const last = selector.trim().split(/[\s>+~]+/).pop() ?? "";
+  return new Set([...last.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]));
+}
+
+/** Does any selector in the list reach an element with all of `classes` (and
+ *  none of `without`)? */
+function reaches(selectors: string[], classes: string[], without: string[] = []): boolean {
+  return selectors.some((selector) => {
+    const have = trailingClasses(selector);
+    return classes.every((c) => have.has(c)) && without.every((c) => !have.has(c));
+  });
 }
 
 /** The colour a rule paints the ring with, from `outline` or `outline-color`. */
@@ -51,24 +68,27 @@ function ringColour(body: string): string | undefined {
 // The panel is a press target in its own right (`press(view.slots)`), so every
 // rule that carries the flash must reach it too. Asserted per target rather than
 // per selector LIST, so splitting the shared rule stays legal.
-const TARGETS = [".cell.active", ".panel.active"];
+const TARGETS: [string, string[]][] = [
+  [".cell.active", ["cell", "active"]],
+  [".panel.active", ["panel", "active"]],
+];
 
 describe("press flash styling", () => {
   const rules = topLevelRules(STYLE);
-  const declaring = (selector: string, pattern: RegExp) =>
-    rules.filter((r) => r.selectors.includes(selector) && pattern.test(r.body));
+  const declaring = (classes: string[], pattern: RegExp, without: string[] = []) =>
+    rules.filter((r) => reaches(r.selectors, classes, without) && pattern.test(r.body));
 
-  it.each(TARGETS)("%s flashes on a press", (target) => {
+  it.each(TARGETS)("%s flashes on a press", (label, classes) => {
     expect(
-      declaring(target, /animation:\s*press-a/).length,
-      `nothing gives ${target} the press animation`,
+      declaring(classes, /animation:\s*press-a/).length,
+      `nothing gives ${label} the press animation`,
     ).toBeGreaterThan(0);
   });
 
-  it.each(TARGETS)("%s restarts its flash on a repeat press", (target) => {
+  it.each(TARGETS)("%s restarts its flash on a repeat press", (label, classes) => {
     expect(
-      declaring(`${target}.alt`, /animation-name:\s*press-b/).length,
-      `nothing swaps the animation name for ${target}.alt, so a re-press looks dropped`,
+      declaring([...classes, "alt"], /animation-name:\s*press-b/).length,
+      `nothing swaps the animation name for ${label}.alt, so a re-press looks dropped`,
     ).toBeGreaterThan(0);
   });
 
@@ -83,24 +103,31 @@ describe("press flash styling", () => {
   // motion, so the parity needs a difference that is not an animation at all —
   // and one that actually LOOKS different from the ring a plain press shows.
   describe("under reduced motion", () => {
-    const reduced = atRuleBody(STYLE, "@media (prefers-reduced-motion: reduce)");
+    const reduced = atRuleBody(
+      STYLE,
+      /@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)/,
+    );
 
     it("has a rule at all", () => {
       expect(reduced, "no reduced-motion rule for the press parity").not.toBeNull();
     });
 
-    it.each(TARGETS)("%s still shows a repeat press", (target) => {
+    it.each(TARGETS)("%s still shows a repeat press", (label, classes) => {
       const parity = topLevelRules(reduced ?? "")
-        .find((r) => r.selectors.includes(`${target}.alt`));
-      expect(parity, `reduced motion leaves ${target}.alt with no visual difference`).toBeDefined();
+        .find((r) => reaches(r.selectors, [...classes, "alt"]));
+      expect(parity, `reduced motion leaves ${label}.alt with no visual difference`).toBeDefined();
 
-      const plain = ringColour(
-        rules.find((r) => r.selectors.includes(target))?.body ?? "",
-      );
+      // Last wins: with the ring split across rules the cascade takes the later
+      // declaration, so the test must compare what the device would actually show.
+      const plain = rules
+        .filter((r) => reaches(r.selectors, classes, ["alt"]))
+        .map((r) => ringColour(r.body))
+        .filter((c): c is string => c != null)
+        .at(-1);
       const alternate = ringColour(parity!.body);
-      expect(plain, `${target} paints no ring colour to differ from`).toBeTruthy();
-      expect(alternate, `${target}.alt paints no ring colour`).toBeTruthy();
-      expect(alternate, `both presses paint ${target} the same, so they look identical`)
+      expect(plain, `${label} paints no ring colour to differ from`).toBeTruthy();
+      expect(alternate, `${label}.alt paints no ring colour`).toBeTruthy();
+      expect(alternate, `both presses paint ${label} the same, so they look identical`)
         .not.toBe(plain);
     });
   });
