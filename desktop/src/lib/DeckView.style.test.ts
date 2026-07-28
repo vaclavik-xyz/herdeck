@@ -435,7 +435,7 @@ describe("status panel row geometry", () => {
   });
 });
 
-// The geometry guard below is only as good as this model, and the model has
+// The geometry guard above is only as good as this model, and the model has
 // four rules that no stylesheet in this repo exercises today — the sheet
 // contains no `!important` at all. Without these, dropping the importance
 // branch would turn it back into plain last-wins with every other test green,
