@@ -286,10 +286,12 @@
   .cell {
     aspect-ratio: 1 / 1;
   }
-  /* Panel pins to the last two cells of the bottom row and stretches to the
-     row height the square tiles set — same placement as the web simulator. */
+  /* Panel pins to the last two cells of the bottom row — same placement as the
+     web simulator. `position: relative` is load-bearing: it makes this the
+     containing block for the out-of-flow image below. */
   .panel {
     grid-column: 4 / 6;
+    position: relative;
   }
   .cell.active,
   .panel.active {
@@ -320,6 +322,18 @@
     display: block;
     width: 100%;
     height: 100%;
+  }
+  /* The row height must come from the square tiles, never from the panel. The
+     panel spans two columns PLUS the gap between them, so its 2:1 artwork
+     (392x196, against 196x196 tiles) wants gap/2 more height than a tile. Left
+     in flow, `height: 100%` degenerates to auto in an auto-height grid row, so
+     the image sized itself, dragged the row with it, and the panel hung a few
+     pixels below the tiles beside it. Out of flow it cannot; `contain`
+     letterboxes into the extra gap width instead of stretching the art. */
+  .panel img {
+    position: absolute;
+    inset: 0;
+    object-fit: contain;
   }
   .deck.offline .grid {
     opacity: 0.45;

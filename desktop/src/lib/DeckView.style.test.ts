@@ -82,6 +82,19 @@ function scopedUnder(selector: string, classes: string[]): boolean {
     });
 }
 
+/** A selector's last compound: ".panel img" -> "img". Pairs with `scopedUnder`
+ *  to name a bare tag inside a classed ancestor, which `trailingClasses` cannot
+ *  distinguish because such a compound carries no classes at all. */
+function lastCompound(selector: string): string {
+  return (
+    selector
+      .replace(/:(?:not|has)\([^)]*\)/g, "")
+      .trim()
+      .split(/[\s>+~]+/)
+      .pop() ?? ""
+  );
+}
+
 /** Does any selector in the list reach an element with all of `classes` (and
  *  none of `without`)? */
 function reaches(selectors: string[], classes: string[], without: string[] = []): boolean {
@@ -219,6 +232,49 @@ describe("compact offline pill styling", () => {
     expect(
       declares(container, /pointer-events:\s*none/),
       "the compact overlay swallows presses the deck would still have accepted",
+    ).toBe(true);
+  });
+});
+
+// The row height must come from the square tiles, never from the panel. The
+// panel spans `grid-column: 4 / 6` — two columns PLUS the gap between them — so
+// its 2:1 artwork (392x196, against 196x196 tiles) wants (2C + gap) / 2 of
+// height, i.e. gap/2 MORE than the tiles. In an auto-height grid row the img's
+// `height: 100%` degenerates to auto, so it sizes itself, drags the row with
+// it, and the panel hangs below the tiles beside it. Only an out-of-flow image
+// hands the row height back to the tiles, and jsdom cannot see any of this.
+describe("status panel row geometry", () => {
+  const rules = topLevelRules(STYLE);
+  const panelImg = rules.filter((r) =>
+    r.selectors.some((s) => scopedUnder(s, ["panel"]) && lastCompound(s) === "img"),
+  );
+  const panelBox = rules.filter((r) => reaches(r.selectors, ["panel"], ["active"]));
+  const declares = (scope: typeof rules, pattern: RegExp) => scope.some((r) => pattern.test(r.body));
+
+  it("takes the panel image out of flow so it cannot size the row", () => {
+    expect(panelImg.length, "no rule reaches the panel's image").toBeGreaterThan(0);
+    expect(
+      declares(panelImg, /position:\s*absolute/),
+      "the panel image is in flow, so its 2:1 ratio sets the row height and the panel overhangs the tiles",
+    ).toBe(true);
+  });
+
+  // Without this the image escapes to the nearest positioned ancestor — the
+  // deck card — and lands somewhere else entirely.
+  it("makes the panel itself the containing block", () => {
+    expect(
+      declares(panelBox, /position:\s*relative/),
+      "the panel is not positioned, so its absolute image is placed against the wrong box",
+    ).toBe(true);
+  });
+
+  // The panel box is gap-width wider than two tiles. Filling it would stretch
+  // the 2:1 art horizontally — the same distortion that forced the D200's
+  // native small-window fix.
+  it("letterboxes rather than stretches the artwork", () => {
+    expect(
+      declares(panelImg, /object-fit:\s*contain/),
+      "the panel image is stretched across the extra gap width instead of being letterboxed",
     ).toBe(true);
   });
 });
