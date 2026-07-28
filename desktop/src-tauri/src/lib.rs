@@ -613,7 +613,7 @@ mod plan_tests {
     // WAYLAND_DISPLAY stays exported, but GDK — and so tao — really is on X11 and
     // reports a usable pointer. Believing the socket there would discard it.
     #[test]
-    fn a_forced_backend_narrows_the_session_variables() {
+    fn a_forced_backend_outranks_the_session_variables() {
         // The workaround this exists for: x11 forced in a Wayland session.
         assert!(!is_wayland_session(
             Some("wayland"),
@@ -622,18 +622,24 @@ mod plan_tests {
         ));
         assert!(is_wayland_session(Some("wayland"), None, Some("wayland")));
         assert!(!is_wayland_session(None, None, Some(" x11 ")));
-        // A sole entry has nothing to fall through to, so it decides alone —
-        // wl_display_connect(NULL) finds wayland-0 with WAYLAND_DISPLAY unset,
-        // and believing the session variables there would trust a (0, 0).
-        assert!(is_wayland_session(None, None, Some("wayland")));
-        assert!(is_wayland_session(Some("x11"), None, Some("wayland")));
     }
 
-    // A list permits backends, it does not name the one that connected — so it
-    // filters the session signals instead of replacing them. Reading entry zero
-    // as the answer got both orders wrong, in opposite directions.
+    // A list that forbids x11 leaves nothing to fall through to, so it decides
+    // alone — wl_display_connect(NULL) finds wayland-0 with WAYLAND_DISPLAY
+    // unset, and believing the session variables there would trust a (0, 0).
+    // The rule is which backends are named, not how many entries there are.
     #[test]
-    fn a_backend_list_filters_rather_than_decides() {
+    fn a_list_that_forbids_x11_settles_it() {
+        assert!(is_wayland_session(None, None, Some("wayland")));
+        assert!(is_wayland_session(Some("x11"), None, Some("wayland")));
+        assert!(is_wayland_session(Some("x11"), None, Some("wayland,broadway")));
+    }
+
+    // A list naming BOTH permits backends without naming the one that connected,
+    // so there it filters the session signals instead of replacing them. Reading
+    // entry zero as the answer got both orders wrong, in opposite directions.
+    #[test]
+    fn a_backend_list_naming_both_filters_rather_than_decides() {
         // Belt-and-braces value in an X11 session: wayland is permitted but the
         // session is not offering it, so the real pointer must survive.
         assert!(!is_wayland_session(Some("x11"), None, Some("wayland,x11")));
@@ -653,6 +659,9 @@ mod plan_tests {
         assert!(is_wayland_session(Some("wayland"), None, Some("")));
         assert!(is_wayland_session(None, Some("wayland-0"), Some("  ")));
         assert!(is_wayland_session(Some("wayland"), None, Some("gdk")));
+        // And the other direction: an unusable value must not manufacture one.
+        assert!(!is_wayland_session(Some("x11"), None, Some("gdk")));
+        assert!(!is_wayland_session(None, None, Some("")));
     }
 
     #[test]
@@ -852,26 +861,27 @@ fn cursor_in_lookup_space(cursor: (f64, f64), scale: f64) -> (f64, f64) {
 /// enough: the session type is what the seat advertises, and the socket is what
 /// GTK connects to when the session type lies or is unset.
 ///
-/// `GDK_BACKEND` narrows both. Forcing x11 is the standard WebKitGTK workaround
-/// and it leaves `WAYLAND_DISPLAY` exported in a session where tao then reports
-/// a perfectly real pointer — throwing that away would lose the preference on
-/// exactly the desks most likely to run it.
+/// `GDK_BACKEND` outranks both. Forcing x11 is the standard WebKitGTK
+/// workaround and it leaves `WAYLAND_DISPLAY` exported in a session where tao
+/// then reports a perfectly real pointer — throwing that away would lose the
+/// preference on exactly the desks most likely to run it.
 ///
 /// The variable is a comma-separated preference ORDER, and which entry actually
-/// connected is not knowable from the environment. A list naming BOTH backends
-/// is therefore read as a filter rather than an answer — Wayland is possible
-/// only if the list permits it and real only if the session says so — which
-/// makes `wayland,x11` in an X11 session X11, and `x11,wayland` in a Wayland
-/// session with no Xwayland still Wayland, erring in the one case that cannot be
-/// settled here toward distrusting the pointer rather than believing a `(0, 0)`.
+/// connected is not knowable from the environment. What IS knowable is which
+/// backends the list permits, so the rule keys off that, not off how many
+/// entries there are:
 ///
-/// A list naming just ONE backend is not a preference order at all: there is
-/// nothing to fall through to, so it decides on its own. That matters for
-/// `GDK_BACKEND=wayland` with `WAYLAND_DISPLAY` unexported (a service-launched
-/// or sanitised environment), where `wl_display_connect(NULL)` still finds
-/// `wayland-0` and the session variables alone would read it as X11.
-///
-/// A list naming no backend we know is no filter at all and is ignored.
+/// - names both: a filter, not an answer — Wayland is possible only if the list
+///   permits it and real only if the session says so. `wayland,x11` in an X11
+///   session is X11; `x11,wayland` in a Wayland session with no Xwayland stays
+///   Wayland, erring in the one case that cannot be settled here toward
+///   distrusting the pointer rather than believing a `(0, 0)`.
+/// - names wayland and no x11: nothing to fall through to, so it decides alone.
+///   That matters for `GDK_BACKEND=wayland` with `WAYLAND_DISPLAY` unexported (a
+///   service-launched or sanitised environment), where `wl_display_connect(NULL)`
+///   still finds `wayland-0` while the session variables alone read it as X11.
+/// - names x11 and no wayland: cannot be Wayland.
+/// - names neither: no filter at all, and ignored.
 fn is_wayland_session(
     session_type: Option<&str>,
     wayland_display: Option<&str>,
