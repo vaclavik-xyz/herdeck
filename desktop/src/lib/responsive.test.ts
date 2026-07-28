@@ -34,8 +34,19 @@ describe("responsive field layout", () => {
     expect(labelled.length).toBeGreaterThan(4);
   });
 
+  // Asserting the media query merely EXISTS would pass on a block that only
+  // tweaks a font size; assert the track itself is redeclared without the
+  // fixed label column, which is the defect.
   it.each(labelled)("%s collapses its label track on a phone", (file) => {
-    expect(styleBlock(read(`./fields/${file}`))).toContain(MOBILE_BREAKPOINT);
+    const css = styleBlock(read(`./fields/${file}`));
+    expect(css).toContain(MOBILE_BREAKPOINT);
+    const mobile = css.slice(css.indexOf(MOBILE_BREAKPOINT));
+    const redeclared = [...mobile.matchAll(/grid-template-columns:\s*([^;]+);/g)].map((m) => m[1]);
+    expect(redeclared.length, "the mobile block never redeclares the grid").toBeGreaterThan(0);
+    for (const value of redeclared) {
+      expect(value, "the phone layout still carries the fixed label track")
+        .not.toContain("var(--field-label-w");
+    }
   });
 
   // FieldCopy pins its parts to explicit grid coordinates that assume the
@@ -54,7 +65,9 @@ describe("ConfirmRemoveButton owns its appearance", () => {
   // it: anything it does not declare itself falls back to the UA's light-grey
   // chrome button, on a dark panel.
   const css = styleBlock(read("./fields/ConfirmRemoveButton.svelte"));
-  const base = css.match(/(?:^|\n)\s*button\s*\{([^}]*)\}/)?.[1] ?? "";
+  // Every BARE `button {…}` rule, not just the first: the surface may be split
+  // or reordered, and taking only match [0] would silently retarget.
+  const base = [...css.matchAll(/(?:^|\n)\s*button\s*\{([^}]*)\}/g)].map((m) => m[1]).join("\n");
 
   it("declares its own surface rather than inheriting one", () => {
     expect(base).toMatch(/background:/);

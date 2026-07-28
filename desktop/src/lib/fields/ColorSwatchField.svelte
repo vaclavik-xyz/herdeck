@@ -146,8 +146,8 @@
   @media (max-width: 760px) {
     .field { grid-template-columns: minmax(0, 1fr); }
     .swatches { grid-column: 1; grid-row: auto; }
-    /* a 26px square is a mouse target, not a thumb target */
+    /* a 26px square is a mouse target, not a thumb target. The "(default)"
+       chip keeps its own auto width from the base rule and only grows taller. */
     .swatch { width: 32px; height: 32px; }
-    .swatch.empty { width: auto; }
   }
 </style>
