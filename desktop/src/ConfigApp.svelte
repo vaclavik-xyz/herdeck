@@ -543,6 +543,10 @@
         await load(); // re-read saved state (preview refreshes itself via its own poll)
         // A changed [hotkeys] accelerator only takes effect once Rust re-registers it.
         void invoke("reload_hotkey").catch(() => {});
+        // Same reasoning for [desktop].deck_always_on_top: it is applied live via
+        // set_always_on_top, not a creation-time window property, so nothing
+        // restarts it — but nothing re-applies it either without this call.
+        void invoke("reload_deck_always_on_top").catch(() => {});
         if (orphans.length > 0) {
           setBanner(
             "warning",

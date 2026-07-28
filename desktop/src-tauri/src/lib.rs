@@ -438,6 +438,23 @@ fn repo_root_from_manifest() -> PathBuf {
         .unwrap_or_else(|| manifest.to_path_buf())
 }
 
+/// Resolve `config.toml`'s path exactly as `run()` does at startup: the
+/// dev-channel/`HERDECK_CONFIG` override, then the sidecar's own
+/// existence-check order. Callable again later (see `reload_deck_always_on_top`)
+/// so a live re-read can never disagree with what the config editor's own
+/// `/config` write just persisted.
+fn default_config_path() -> PathBuf {
+    let home = PathBuf::from(env::var("HOME").unwrap_or_default());
+    let repo_root = repo_root_from_manifest();
+    let explicit_config = env::var("HERDECK_CONFIG").ok();
+    let config_override = build_channel::config_override(explicit_config.as_deref(), &home);
+    deck_prefs::resolve_config_path(
+        config_override.as_ref().and_then(|path| path.to_str()),
+        &home,
+        &repo_root,
+    )
+}
+
 /// Best-effort `http://host:port/...` split (informational fields for the
 /// external-override path; the WebView only needs url+token).
 fn parse_host_port(url: &str) -> (String, u16) {
@@ -1492,6 +1509,33 @@ async fn reload_hotkey(
     .await
 }
 
+/// Re-read `[desktop].deck_always_on_top` from config.toml and apply it live:
+/// the deck window's actual always-on-top state, the cached `AppState` value,
+/// and the tray checkbox all move together — the same three the tray's own
+/// `deck_aot` menu handler keeps in sync. The editor calls this after a
+/// successful config write, exactly like `reload_hotkey` for the accelerator.
+///
+/// Reads straight from disk instead of taking the new value as an argument,
+/// so it can never disagree with what Apply just persisted: Apply writes
+/// through the sidecar's `/config` route, not through this process's own file
+/// handle, so this process has no other way to learn the confirmed value.
+#[tauri::command]
+fn reload_deck_always_on_top(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    tray: tauri::State<'_, TrayHandles>,
+) {
+    let config_text = std::fs::read_to_string(default_config_path()).unwrap_or_default();
+    let target = deck_prefs::resolve_deck_always_on_top(&config_text);
+    if let Some(w) = app.get_webview_window(DECK_WINDOW) {
+        let _ = w.set_always_on_top(target);
+    }
+    *state.deck_always_on_top.lock().unwrap() = target;
+    if let Some(items) = tray.0.lock().unwrap().as_ref() {
+        let _ = items.deck_aot.set_checked(target);
+    }
+}
+
 /// English/Czech texts for every tray item, keyed by the item order in
 /// `TrayMenuItems::retitle`. The tray is native — the WebView retitles it via
 /// the `tray_set_language` command when the deck's `[view].language` changes.
@@ -1767,15 +1811,7 @@ pub fn run() {
     // `deck_always_on_top` for the flag, `window-state.json` for the visibility.
     // That is the design doc's migration table, and it decides exactly one
     // launch: whichever source writes first makes the legacy key inert.
-    let home = PathBuf::from(env::var("HOME").unwrap_or_default());
-    let repo_root = repo_root_from_manifest();
-    let explicit_config = env::var("HERDECK_CONFIG").ok();
-    let config_override = build_channel::config_override(explicit_config.as_deref(), &home);
-    let config_path = deck_prefs::resolve_config_path(
-        config_override.as_ref().and_then(|path| path.to_str()),
-        &home,
-        &repo_root,
-    );
+    let config_path = default_config_path();
     let config_text = std::fs::read_to_string(&config_path).unwrap_or_default();
     let deck_always_on_top = deck_prefs::resolve_deck_always_on_top(&config_text);
     let startup = window_state::startup_state(
@@ -1825,6 +1861,7 @@ pub fn run() {
             setup_status,
             setup_connect,
             reload_hotkey,
+            reload_deck_always_on_top,
             show_deck,
             hide_deck,
             show_app,
