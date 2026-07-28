@@ -910,6 +910,34 @@ mod plan_tests {
         assert_eq!(deck_label_refresh(APP_WINDOW, true), None);
         assert_eq!(deck_label_refresh("some-future-window", false), None);
     }
+
+    // A config that cannot be READ is not a config that says false: applying
+    // false there would unfloat the deck, uncheck the tray box and rewrite the
+    // cached flag while config.toml still said true.
+    #[test]
+    fn an_unreadable_config_leaves_the_live_always_on_top_alone() {
+        let dir = std::env::temp_dir().join("herdeck-aot-target");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(deck_always_on_top_target(&dir.join("absent.toml")), None);
+        // A directory is readable-but-not-a-file: still no value to apply.
+        assert_eq!(deck_always_on_top_target(&dir), None);
+
+        let empty = dir.join("empty.toml");
+        std::fs::write(&empty, "").unwrap();
+        assert_eq!(deck_always_on_top_target(&empty), Some(false));
+
+        let on = dir.join("on.toml");
+        std::fs::write(&on, "[desktop]\ndeck_always_on_top = true\n").unwrap();
+        assert_eq!(deck_always_on_top_target(&on), Some(true));
+
+        // And it resolves, not just parses: the legacy migration fallback
+        // applies to a live reload exactly as it does at startup.
+        let legacy = dir.join("legacy.toml");
+        std::fs::write(&legacy, "[desktop]\nwindow_mode = \"always_on_top\"\n").unwrap();
+        assert_eq!(deck_always_on_top_target(&legacy), Some(true));
+    }
 }
 
 /// Gap, in logical points, between the floating deck and the edges of its screen.
@@ -1547,6 +1575,16 @@ async fn reload_hotkey(
     .await
 }
 
+/// The always-on-top value a live re-read should apply, or `None` when the
+/// config could not be READ at all — which is not the same answer as a config
+/// that says `false`. Reading `""` on failure would resolve to `false` and hand
+/// that to the window, `AppState` and the tray checkbox while `config.toml`
+/// still said `true`, so the two outcomes stay apart here.
+fn deck_always_on_top_target(config_path: &Path) -> Option<bool> {
+    let config_text = std::fs::read_to_string(config_path).ok()?;
+    Some(deck_prefs::resolve_deck_always_on_top(&config_text))
+}
+
 /// Re-read `[desktop].deck_always_on_top` from config.toml and apply it live:
 /// the deck window's actual always-on-top state, the cached `AppState` value,
 /// and the tray checkbox all move together — the same three the tray's own
@@ -1556,15 +1594,18 @@ async fn reload_hotkey(
 /// Reads straight from disk instead of taking the new value as an argument,
 /// so it can never disagree with what Apply just persisted: Apply writes
 /// through the sidecar's `/config` route, not through this process's own file
-/// handle, so this process has no other way to learn the confirmed value.
+/// handle, so this process has no other way to learn the confirmed value. A
+/// read that fails outright changes NOTHING (see `deck_always_on_top_target`).
 #[tauri::command]
 fn reload_deck_always_on_top(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     tray: tauri::State<'_, TrayHandles>,
 ) {
-    let config_text = std::fs::read_to_string(default_config_path()).unwrap_or_default();
-    let target = deck_prefs::resolve_deck_always_on_top(&config_text);
+    let Some(target) = deck_always_on_top_target(&default_config_path()) else {
+        eprintln!("deck always-on-top: config unreadable, leaving the live value alone");
+        return;
+    };
     if let Some(w) = app.get_webview_window(DECK_WINDOW) {
         let _ = w.set_always_on_top(target);
     }
