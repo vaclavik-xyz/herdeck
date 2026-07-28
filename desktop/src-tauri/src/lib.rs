@@ -622,9 +622,11 @@ mod plan_tests {
         ));
         assert!(is_wayland_session(Some("wayland"), None, Some("wayland")));
         assert!(!is_wayland_session(None, None, Some(" x11 ")));
-        // Forcing wayland where the session offers none cannot make one appear;
-        // GTK would fail to open a display long before placement runs.
-        assert!(!is_wayland_session(Some("x11"), None, Some("wayland")));
+        // A sole entry has nothing to fall through to, so it decides alone —
+        // wl_display_connect(NULL) finds wayland-0 with WAYLAND_DISPLAY unset,
+        // and believing the session variables there would trust a (0, 0).
+        assert!(is_wayland_session(None, None, Some("wayland")));
+        assert!(is_wayland_session(Some("x11"), None, Some("wayland")));
     }
 
     // A list permits backends, it does not name the one that connected — so it
@@ -856,34 +858,46 @@ fn cursor_in_lookup_space(cursor: (f64, f64), scale: f64) -> (f64, f64) {
 /// exactly the desks most likely to run it.
 ///
 /// The variable is a comma-separated preference ORDER, and which entry actually
-/// connected is not knowable from the environment, so it is read as a filter
-/// rather than as an answer: Wayland is possible only if the list permits it,
-/// and real only if the session says so. `wayland,x11` in an X11 session is
-/// therefore X11, and `x11,wayland` in a Wayland session with no Xwayland stays
-/// Wayland — erring, in the one case that cannot be resolved here, toward
-/// distrusting the pointer rather than believing a `(0, 0)`. A list naming no
-/// backend we know is not a filter at all and is ignored.
+/// connected is not knowable from the environment. A list naming BOTH backends
+/// is therefore read as a filter rather than an answer — Wayland is possible
+/// only if the list permits it and real only if the session says so — which
+/// makes `wayland,x11` in an X11 session X11, and `x11,wayland` in a Wayland
+/// session with no Xwayland still Wayland, erring in the one case that cannot be
+/// settled here toward distrusting the pointer rather than believing a `(0, 0)`.
+///
+/// A list naming just ONE backend is not a preference order at all: there is
+/// nothing to fall through to, so it decides on its own. That matters for
+/// `GDK_BACKEND=wayland` with `WAYLAND_DISPLAY` unexported (a service-launched
+/// or sanitised environment), where `wl_display_connect(NULL)` still finds
+/// `wayland-0` and the session variables alone would read it as X11.
+///
+/// A list naming no backend we know is no filter at all and is ignored.
 fn is_wayland_session(
     session_type: Option<&str>,
     wayland_display: Option<&str>,
     gdk_backend: Option<&str>,
 ) -> bool {
-    let names = |list: &str| -> (bool, bool) {
+    struct Named {
+        wayland: bool,
+        x11: bool,
+    }
+    let named = gdk_backend.map(|list| {
         list.split(',')
             .map(str::trim)
-            .fold((false, false), |(known, wayland), entry| {
-                let is_wayland = entry.eq_ignore_ascii_case("wayland");
-                let is_known = is_wayland || entry.eq_ignore_ascii_case("x11");
-                (known || is_known, wayland || is_wayland)
+            .fold(Named { wayland: false, x11: false }, |acc, entry| Named {
+                wayland: acc.wayland || entry.eq_ignore_ascii_case("wayland"),
+                x11: acc.x11 || entry.eq_ignore_ascii_case("x11"),
             })
-    };
-    let permits_wayland = match gdk_backend.map(names) {
-        Some((true, wayland)) => wayland,
-        _ => true, // unset, blank, or naming nothing we recognise
-    };
-    permits_wayland
-        && (session_type.map_or(false, |s| s.eq_ignore_ascii_case("wayland"))
-            || wayland_display.map_or(false, |d| !d.is_empty()))
+    });
+    let session_is_wayland = session_type.map_or(false, |s| s.eq_ignore_ascii_case("wayland"))
+        || wayland_display.map_or(false, |d| !d.is_empty());
+    match named {
+        Some(Named { wayland: true, x11: false }) => true,
+        Some(Named { wayland: false, x11: true }) => false,
+        Some(Named { wayland: true, x11: true }) => session_is_wayland,
+        // Unset, blank, or naming nothing we recognise.
+        _ => session_is_wayland,
+    }
 }
 
 /// Which space a placement is computed in, and what the margin means there.
@@ -894,10 +908,14 @@ fn is_wayland_session(
 /// so it scales with the screen instead. macOS and Linux compute in logical
 /// points, where the margin already means what it says.
 ///
-/// Window SIZES are not DPI-invariant on any platform: `outer_size()` is the
-/// size at the window's CURRENT monitor, and the OS rescales the window when it
-/// lands on one with a different factor. So `window_div` re-expresses the size
-/// in the target monitor's pixels on both paths — an identity whenever the two
+/// `window_div` puts `outer_size()` into whichever space that path measures in,
+/// and the two are not the same job. The logical path divides by the window's
+/// own factor to reach points, where a size is DPI-invariant and nothing further
+/// is needed. The physical path has no such space, so it divides by the ratio of
+/// the two factors to re-express the size in the TARGET monitor's pixels —
+/// `outer_size()` is the size at the window's CURRENT monitor and the OS
+/// rescales the window on arrival, so anchoring to the right edge with the old
+/// width misses by half a deck moving 1x to 2x. An identity whenever the two
 /// factors agree, which is every uniformly-scaled desk.
 struct Placement {
     screen_div: f64,
