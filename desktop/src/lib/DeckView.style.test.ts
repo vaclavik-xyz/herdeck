@@ -48,23 +48,40 @@ function atRuleBody(css: string, prelude: RegExp): string | null {
   return match ? match[1] : null;
 }
 
+/** A selector's compounds, in order: ".deck .cell.active" -> [".deck",
+ *  ".cell.active"]. The single place that knows the compound grammar, so a fix
+ *  to it lands once.
+ *
+ *  Functional pseudos are stripped BEFORE the split: `:not(.alt, .fade)`
+ *  contains a space, so a descendant split would otherwise cut the compound
+ *  mid-argument. Their argument states a CONDITION — classes this compound must
+ *  lack (`:not(.alt)`) or that some other element must have (`:has(.alt)`) —
+ *  never classes this element itself carries. Collecting them would read
+ *  `:not(.alt)` as REQUIRING alt, which both rejects a legal base rule and
+ *  accepts it as the parity rule it is the exact opposite of. */
+function compounds(selector: string): string[] {
+  return selector
+    .replace(/:(?:not|has)\([^)]*\)/g, "")
+    .trim()
+    .split(/[\s>+~]+/);
+}
+
+function classesOf(compound: string): Set<string> {
+  return new Set([...compound.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]));
+}
+
+/** A selector's last compound: ".panel img" -> "img". Pairs with `scopedUnder`
+ *  to name a bare tag inside a classed ancestor, which `trailingClasses` cannot
+ *  distinguish because such a compound carries no classes at all. */
+function lastCompound(selector: string): string {
+  return compounds(selector).pop() ?? "";
+}
+
 /** The classes of a selector's LAST compound: ".deck .cell.active" -> {cell,
  *  active}. Comparing class sets rather than selector text keeps a scoping
  *  prefix, a reordered compound or `:is()` from reading as a deleted rule. */
 function trailingClasses(selector: string): Set<string> {
-  // Strip BEFORE splitting on combinators: `:not(.alt, .fade)` contains a space,
-  // so a descendant split would otherwise cut the compound mid-argument.
-  // A functional pseudo's argument states a CONDITION — classes this compound
-  // must lack (`:not(.alt)`) or that some other element must have (`:has(.alt)`)
-  // — never classes this element itself carries. Collecting them would read
-  // `:not(.alt)` as requiring alt, which both rejects a legal base rule and
-  // accepts it as the parity rule it is the exact opposite of.
-  const last = selector
-    .replace(/:(?:not|has)\([^)]*\)/g, "")
-    .trim()
-    .split(/[\s>+~]+/)
-    .pop() ?? "";
-  return new Set([...last.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]));
+  return classesOf(lastCompound(selector));
 }
 
 /** Is the rule scoped UNDER an element carrying all of `classes`? Unlike
@@ -72,27 +89,10 @@ function trailingClasses(selector: string): Set<string> {
  *  `.deck-offline.mini strong` styles the mini overlay even though it targets a
  *  bare `strong`, which carries no classes to match on. */
 function scopedUnder(selector: string, classes: string[]): boolean {
-  return selector
-    .replace(/:(?:not|has)\([^)]*\)/g, "")
-    .trim()
-    .split(/[\s>+~]+/)
-    .some((compound) => {
-      const have = new Set([...compound.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]));
-      return classes.every((c) => have.has(c));
-    });
-}
-
-/** A selector's last compound: ".panel img" -> "img". Pairs with `scopedUnder`
- *  to name a bare tag inside a classed ancestor, which `trailingClasses` cannot
- *  distinguish because such a compound carries no classes at all. */
-function lastCompound(selector: string): string {
-  return (
-    selector
-      .replace(/:(?:not|has)\([^)]*\)/g, "")
-      .trim()
-      .split(/[\s>+~]+/)
-      .pop() ?? ""
-  );
+  return compounds(selector).some((compound) => {
+    const have = classesOf(compound);
+    return classes.every((c) => have.has(c));
+  });
 }
 
 /** Does any selector in the list reach an element with all of `classes` (and
@@ -245,10 +245,21 @@ describe("compact offline pill styling", () => {
 // hands the row height back to the tiles, and jsdom cannot see any of this.
 describe("status panel row geometry", () => {
   const rules = topLevelRules(STYLE);
+  // `unconditional` is load-bearing, for the same reason `without: ["alt"]` is
+  // above: a class-set match is a SUPERSET match, so `.deck.compact .panel img`
+  // satisfies `scopedUnder(…, ["panel"])`. Without the exclusion, moving all
+  // three declarations under `.deck.compact` would leave every test here green
+  // while the desktop card — the surface the overhang was measured on —
+  // regressed to exactly the bug this guard exists for.
+  const unconditional = (s: string) => !scopedUnder(s, ["compact"]);
   const panelImg = rules.filter((r) =>
-    r.selectors.some((s) => scopedUnder(s, ["panel"]) && lastCompound(s) === "img"),
+    r.selectors.some(
+      (s) => unconditional(s) && scopedUnder(s, ["panel"]) && /^img\b/.test(lastCompound(s)),
+    ),
   );
-  const panelBox = rules.filter((r) => reaches(r.selectors, ["panel"], ["active"]));
+  const panelBox = rules.filter((r) =>
+    r.selectors.some((s) => unconditional(s) && reaches([s], ["panel"], ["active"])),
+  );
   const declares = (scope: typeof rules, pattern: RegExp) => scope.some((r) => pattern.test(r.body));
 
   it("takes the panel image out of flow so it cannot size the row", () => {
@@ -259,12 +270,30 @@ describe("status panel row geometry", () => {
     ).toBe(true);
   });
 
-  // Without this the image escapes to the nearest positioned ancestor — the
-  // deck card — and lands somewhere else entirely.
+  // Without this the image escapes to the nearest positioned ancestor — `.stage`,
+  // which spans the whole grid plus its padding — and lands somewhere else
+  // entirely. Someone debugging a stray full-grid image should look there, not
+  // at `.deck`.
   it("makes the panel itself the containing block", () => {
     expect(
       declares(panelBox, /position:\s*relative/),
-      "the panel is not positioned, so its absolute image is placed against the wrong box",
+      "the panel is not positioned, so its absolute image is placed against .stage instead",
+    ).toBe(true);
+  });
+
+  // The fix hands the row height to the panel's NEIGHBOURS, so it assumes the
+  // panel always has some. That holds only while the grid is five columns wide:
+  // the sidecar reports `slots = cols * rows - 2`, so the last row keeps a
+  // 3-tile remainder for the panel to sit beside. Widen the grid and the cells
+  // fill whole rows, the panel auto-places alone in a fresh one with no in-flow
+  // content, and that row collapses to zero — the panel would vanish rather
+  // than merely sit wrong. Pinned here so a configurable geometry has to come
+  // back and give the panel a height of its own.
+  it("keeps the five-column assumption the out-of-flow image depends on", () => {
+    const grid = rules.filter((r) => reaches(r.selectors, ["grid"]));
+    expect(
+      grid.some((r) => /grid-template-columns:\s*repeat\(\s*5\s*,/.test(r.body)),
+      "the grid is no longer five columns, so the panel may now be alone in a row that collapses to zero height",
     ).toBe(true);
   });
 
