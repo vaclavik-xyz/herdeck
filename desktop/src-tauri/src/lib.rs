@@ -537,6 +537,77 @@ mod plan_tests {
         }));
     }
 
+    // Placement geometry. The deck is pinned to the top-right of the monitor's
+    // USABLE area — the screen rect would put it under the macOS menu bar.
+    #[test]
+    fn floating_deck_sits_inside_the_work_area_not_the_screen() {
+        // A 1920x1080 display whose top 37px belong to the menu bar.
+        let (x, y) = floating_origin((0, 37), (1920, 1043), (328, 300), 16);
+        assert_eq!((x, y), (1576, 53));
+    }
+
+    // The whole point of following the pointer: a monitor left of the primary one
+    // has a NEGATIVE origin, and placement must be relative to it.
+    #[test]
+    fn floating_deck_places_relative_to_its_own_monitor_origin() {
+        let (x, y) = floating_origin((-1920, 240), (1920, 1080), (328, 300), 16);
+        assert_eq!((x, y), (-344, 256));
+    }
+
+    // A deck zoomed past a small external display must still land ON it: an
+    // off-screen borderless window has no titlebar to drag it back with.
+    #[test]
+    fn floating_deck_never_starts_off_the_screen_it_is_placed_on() {
+        let (x, y) = floating_origin((100, 50), (300, 200), (328, 300), 16);
+        assert_eq!((x, y), (100, 50));
+    }
+
+    // Monitor choice. `pick_monitor` is generic, so a &str stands in for a Monitor.
+    #[test]
+    fn monitor_choice_prefers_the_pointers_screen() {
+        let picked = pick_monitor(
+            Some((-800.0, 400.0)),
+            |_, _| Some("cursor"),
+            || panic!("consulted the window's monitor despite a located pointer"),
+            || panic!("fell back to primary despite a located pointer"),
+        );
+        assert_eq!(picked, Some("cursor"));
+    }
+
+    #[test]
+    fn monitor_choice_falls_back_when_the_pointer_is_on_no_display() {
+        let picked = pick_monitor(
+            Some((99_999.0, 99_999.0)),
+            |_, _| None,
+            || Some("current"),
+            || panic!("skipped the window's own monitor"),
+        );
+        assert_eq!(picked, Some("current"));
+    }
+
+    #[test]
+    fn monitor_choice_skips_the_point_lookup_without_a_pointer() {
+        let picked = pick_monitor(
+            None,
+            |_, _| panic!("looked up a monitor for a pointer that was never located"),
+            || Some("current"),
+            || panic!("skipped the window's own monitor"),
+        );
+        assert_eq!(picked, Some("current"));
+    }
+
+    #[test]
+    fn monitor_choice_ends_at_primary() {
+        assert_eq!(
+            pick_monitor(None, |_, _| None, || None, || Some("primary")),
+            Some("primary"),
+        );
+        assert_eq!(
+            pick_monitor::<&str>(None, |_, _| None, || None, || None),
+            None,
+        );
+    }
+
     fn stable_runtime() -> Discovery {
         Discovery {
             url: "http://127.0.0.1:8800".to_string(),
@@ -566,15 +637,68 @@ mod plan_tests {
     }
 }
 
-/// Position the floating window near the top-right of the PRIMARY monitor. The
-/// builder owns `always_on_top` (per mode); this only places the window.
+/// Gap between the floating deck and the edges of the screen it sits on.
+const FLOATING_MARGIN: i32 = 16;
+
+/// Top-right corner of a monitor's USABLE area, one margin in. Both axes are
+/// clamped to the area's origin so a deck larger than the screen (zoomed up, or
+/// a small external display) still starts on-screen instead of off past the
+/// edge, where it could not be dragged back.
+fn floating_origin(
+    area_pos: (i32, i32),
+    area_size: (u32, u32),
+    win_size: (u32, u32),
+    margin: i32,
+) -> (i32, i32) {
+    let (ax, ay) = area_pos;
+    let x = (ax + area_size.0 as i32 - win_size.0 as i32 - margin).max(ax);
+    let y = (ay + margin).min(ay + area_size.1 as i32 - win_size.1 as i32).max(ay);
+    (x, y)
+}
+
+/// Which monitor the deck belongs on, preferring the one under the pointer.
+/// Placement used to hard-code the PRIMARY monitor, so on a multi-display desk
+/// the deck opened on a screen the user was not looking at and read as "the
+/// window never appeared". The pointer is the cheapest proxy for attention; the
+/// window's own monitor and the primary one cover a pointer that cannot be
+/// located — a failed query, or a cursor parked outside every display.
+///
+/// Pure over its lookups: the ORDER is the fix, and this way it is testable
+/// without a display attached.
+fn pick_monitor<M>(
+    cursor: Option<(f64, f64)>,
+    at_point: impl Fn(f64, f64) -> Option<M>,
+    current: impl Fn() -> Option<M>,
+    primary: impl Fn() -> Option<M>,
+) -> Option<M> {
+    cursor
+        .and_then(|(x, y)| at_point(x, y))
+        .or_else(current)
+        .or_else(primary)
+}
+
+fn active_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
+    pick_monitor(
+        window.cursor_position().ok().map(|p| (p.x, p.y)),
+        |x, y| window.monitor_from_point(x, y).ok().flatten(),
+        || window.current_monitor().ok().flatten(),
+        || window.primary_monitor().ok().flatten(),
+    )
+}
+
+/// Position the floating window near the top-right of the monitor the user is on.
+/// The builder owns `always_on_top` (per mode); this only places the window.
+/// Placement uses the WORK area, not the full screen, so the deck never opens
+/// under the macOS menu bar or behind the dock.
 fn place_floating(window: &tauri::WebviewWindow) {
-    if let (Ok(Some(monitor)), Ok(win_size)) = (window.primary_monitor(), window.outer_size()) {
-        let screen = monitor.size();
-        let origin = monitor.position();
-        let margin = 16i32;
-        let x = (origin.x + screen.width as i32 - win_size.width as i32 - margin).max(origin.x);
-        let y = origin.y + margin;
+    if let (Some(monitor), Ok(win_size)) = (active_monitor(window), window.outer_size()) {
+        let area = monitor.work_area();
+        let (x, y) = floating_origin(
+            (area.position.x, area.position.y),
+            (area.size.width, area.size.height),
+            (win_size.width, win_size.height),
+            FLOATING_MARGIN,
+        );
         let _ = window.set_position(PhysicalPosition { x, y });
     }
 }
