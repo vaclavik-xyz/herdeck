@@ -21,6 +21,28 @@ function styleBlock(source: string): string {
   return match ? match[1].replace(/\/\*[\s\S]*?\*\//g, "") : "";
 }
 
+const MEDIA_BLOCK = /@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g;
+
+/** Rules OUTSIDE any @media — what a desktop viewport actually gets. */
+function unconditional(css: string): string {
+  return css.replace(MEDIA_BLOCK, "");
+}
+
+/** The body of the phone media block, or "" when there is none. */
+function phoneBlock(css: string): string {
+  for (const block of css.match(MEDIA_BLOCK) ?? []) {
+    if (block.startsWith(MOBILE_BREAKPOINT)) return block;
+  }
+  return "";
+}
+
+/** [selector, body] for each rule in a stylesheet fragment (one level deep). */
+function rules(css: string): [string, string][] {
+  return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .map(([, selector, body]) => [selector.trim(), body] as [string, string])
+    .filter(([selector]) => !selector.startsWith("@"));
+}
+
 describe("responsive field layout", () => {
   const fields = readdirSync(FIELDS_DIR).filter((f) => f.endsWith(".svelte"));
 
@@ -35,16 +57,28 @@ describe("responsive field layout", () => {
   });
 
   // Asserting the media query merely EXISTS would pass on a block that only
-  // tweaks a font size; assert the track itself is redeclared without the
-  // fixed label column, which is the defect.
+  // tweaks a font size, and asserting that SOME rule in it redeclares the grid
+  // would pass on a nested one (.rows, .setrow) while the root field kept its
+  // fixed track. Anchor to the root: the selector that declares the track.
+  const TRACK = /grid-template-columns:\s*([^;}]+)/;
+
   it.each(labelled)("%s collapses its label track on a phone", (file) => {
     const css = styleBlock(read(`./fields/${file}`));
-    expect(css).toContain(MOBILE_BREAKPOINT);
-    const mobile = css.slice(css.indexOf(MOBILE_BREAKPOINT));
-    const redeclared = [...mobile.matchAll(/grid-template-columns:\s*([^;]+);/g)].map((m) => m[1]);
-    expect(redeclared.length, "the mobile block never redeclares the grid").toBeGreaterThan(0);
-    for (const value of redeclared) {
-      expect(value, "the phone layout still carries the fixed label track")
+    const root = rules(unconditional(css)).find(
+      ([, body]) => body.includes("var(--field-label-w") && TRACK.test(body),
+    );
+    expect(root, "no rule declares the fixed label track — update this guard").toBeDefined();
+
+    const [selector] = root!;
+    const collapsed = rules(phoneBlock(css))
+      .filter(([sel]) => sel === selector)
+      .map(([, body]) => body.match(TRACK)?.[1])
+      .filter((v): v is string => v != null);
+
+    expect(collapsed.length, `${selector} never redeclares its grid on a phone`)
+      .toBeGreaterThan(0);
+    for (const value of collapsed) {
+      expect(value, `${selector} still carries the fixed label track on a phone`)
         .not.toContain("var(--field-label-w");
     }
   });
@@ -52,10 +86,14 @@ describe("responsive field layout", () => {
   // FieldCopy pins its parts to explicit grid coordinates that assume the
   // desktop two-column form; the error line must not keep column 2 once its
   // consumers collapse, or it silently creates an implicit second track.
-  it("moves the validation message out of column 2 on a phone", () => {
-    const css = styleBlock(read("./fields/FieldCopy.svelte"));
-    const mobile = css.slice(css.indexOf(MOBILE_BREAKPOINT));
-    expect(mobile).toMatch(/\.fielderror\s*\{[^}]*grid-column:\s*1/);
+  it("gives the validation message a whole row of its own on a phone", () => {
+    const body = rules(phoneBlock(styleBlock(read("./fields/FieldCopy.svelte"))))
+      .find(([sel]) => sel === ".fielderror")?.[1];
+    expect(body, "FieldCopy no longer repositions its message on a phone").toBeDefined();
+    // 1 / -1, not 1: TokenSecretField's phone grid keeps a second column, and a
+    // message occupying only column 1 lets the key badge sit beside it while
+    // its own button drops to the next row.
+    expect(body).toMatch(/grid-column:\s*1\s*\/\s*-1/);
   });
 });
 
@@ -65,9 +103,13 @@ describe("ConfirmRemoveButton owns its appearance", () => {
   // it: anything it does not declare itself falls back to the UA's light-grey
   // chrome button, on a dark panel.
   const css = styleBlock(read("./fields/ConfirmRemoveButton.svelte"));
-  // Every BARE `button {…}` rule, not just the first: the surface may be split
-  // or reordered, and taking only match [0] would silently retarget.
-  const base = [...css.matchAll(/(?:^|\n)\s*button\s*\{([^}]*)\}/g)].map((m) => m[1]).join("\n");
+  // Every BARE `button {…}` rule, not just the first (the surface may be split
+  // or reordered), but only OUTSIDE a media query: a surface declared solely in
+  // the phone block would leave the desktop button as UA chrome.
+  const base = rules(unconditional(css))
+    .filter(([selector]) => selector === "button")
+    .map(([, body]) => body)
+    .join("\n");
 
   it("declares its own surface rather than inheriting one", () => {
     expect(base).toMatch(/background:/);

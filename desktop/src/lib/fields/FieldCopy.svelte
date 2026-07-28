@@ -72,6 +72,6 @@
      not 3: the control is auto-placed and would otherwise be pushed past the
      message, which then reads above its own field — the reverse of desktop. */
   @media (max-width: 760px) {
-    .fielderror { grid-column: 1; grid-row: 4; }
+    .fielderror { grid-column: 1 / -1; grid-row: 4; }
   }
 </style>
