@@ -71,15 +71,20 @@ describe("the media stripper", () => {
     expect(out).not.toContain("blue");
   });
 
-  // One case per alternative in CONDITIONAL_AT_RULE: dropping any of them from
-  // the pattern must fail something, or the guard silently shrinks.
+  // One case per alternative in CONDITIONAL_AT_RULE, each asserting WHICH
+  // at-rule leaked: a fixture containing two of them would otherwise keep
+  // throwing after its own alternative was deleted from the pattern.
   it.each([
-    ["a media block nested deeper than it can parse",
-      "@media (max-width: 760px) { @supports (display: grid) { .field { color: blue; } } }"],
-    ["a top-level @supports", "@supports (display: grid) { .field { color: blue; } }"],
-    ["a top-level @container", "@container (min-width: 400px) { .field { color: blue; } }"],
-  ])("refuses to guess at %s", (_name, css) => {
-    expect(() => unconditional(css)).toThrow(/survived stripping/);
+    // MEDIA_BLOCK cannot parse a media block wrapping another braced at-rule,
+    // and @media is the only conditional here — so this pins `media` itself.
+    ["@media", "a media block it cannot parse",
+      "@media (max-width: 760px) { @keyframes spin { from { opacity: 0 } } }"],
+    ["@supports", "a top-level @supports",
+      "@supports (display: grid) { .field { color: blue; } }"],
+    ["@container", "a top-level @container",
+      "@container (min-width: 400px) { .field { color: blue; } }"],
+  ])("refuses to guess at %s in %s", (at, _name, css) => {
+    expect(() => unconditional(css)).toThrow(new RegExp(`^${at} survived stripping`));
   });
 
   // The guard keys on at-rules that can HIDE a rule from a desktop viewport.
