@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::UpdaterExt;
 
 use window_mode::WindowMode;
@@ -541,25 +541,49 @@ mod plan_tests {
     // USABLE area — the screen rect would put it under the macOS menu bar.
     #[test]
     fn floating_deck_sits_inside_the_work_area_not_the_screen() {
-        // A 1920x1080 display whose top 37px belong to the menu bar.
-        let (x, y) = floating_origin((0, 37), (1920, 1043), (328, 300), 16);
-        assert_eq!((x, y), (1576, 53));
+        // A 1920x1080 display whose top 37 points belong to the menu bar.
+        let (x, y) = floating_origin((0.0, 37.0), (1920.0, 1043.0), (328.0, 300.0), 16.0);
+        assert_eq!((x, y), (1576.0, 53.0));
     }
 
     // The whole point of following the pointer: a monitor left of the primary one
     // has a NEGATIVE origin, and placement must be relative to it.
     #[test]
     fn floating_deck_places_relative_to_its_own_monitor_origin() {
-        let (x, y) = floating_origin((-1920, 240), (1920, 1080), (328, 300), 16);
-        assert_eq!((x, y), (-344, 256));
+        let (x, y) = floating_origin((-1920.0, 240.0), (1920.0, 1080.0), (328.0, 300.0), 16.0);
+        assert_eq!((x, y), (-344.0, 256.0));
     }
 
     // A deck zoomed past a small external display must still land ON it: an
     // off-screen borderless window has no titlebar to drag it back with.
     #[test]
     fn floating_deck_never_starts_off_the_screen_it_is_placed_on() {
-        let (x, y) = floating_origin((100, 50), (300, 200), (328, 300), 16);
-        assert_eq!((x, y), (100, 50));
+        let (x, y) = floating_origin((100.0, 50.0), (300.0, 200.0), (328.0, 300.0), 16.0);
+        assert_eq!((x, y), (100.0, 50.0));
+    }
+
+    // A Retina built-in beside a 1x external is the setup that breaks if the
+    // cursor reading is handed to the lookup untouched: tao scales the logical
+    // point by the PRIMARY monitor's factor, but the lookup wants logical.
+    #[test]
+    fn pointer_lookup_undoes_the_primary_monitors_scaling() {
+        // Pointer at logical (1000, 400) on a 2x primary reads back as (2000, 800).
+        assert_eq!(cursor_in_lookup_space((2000.0, 800.0), 2.0), (1000.0, 400.0));
+    }
+
+    #[test]
+    fn pointer_lookup_leaves_an_unscaled_reading_alone() {
+        assert_eq!(cursor_in_lookup_space((3000.0, 120.0), 1.0), (3000.0, 120.0));
+    }
+
+    // A monitor tao could not inspect reports 0; dividing by it would hand the
+    // lookup an infinity, and `usable_scale` guards every other divisor too.
+    #[test]
+    fn a_nonsense_scale_factor_never_produces_an_infinity() {
+        let (x, y) = cursor_in_lookup_space((640.0, 480.0), 0.0);
+        assert_eq!((x, y), (640.0, 480.0));
+        assert_eq!(usable_scale(-2.0), 1.0);
+        assert_eq!(usable_scale(2.0), 2.0);
     }
 
     // Monitor choice. `pick_monitor` is generic, so a &str stands in for a Monitor.
@@ -637,23 +661,50 @@ mod plan_tests {
     }
 }
 
-/// Gap between the floating deck and the edges of the screen it sits on.
-const FLOATING_MARGIN: i32 = 16;
+/// Gap, in logical points, between the floating deck and the edges of its screen.
+const FLOATING_MARGIN: f64 = 16.0;
 
 /// Top-right corner of a monitor's USABLE area, one margin in. Both axes are
 /// clamped to the area's origin so a deck larger than the screen (zoomed up, or
 /// a small external display) still starts on-screen instead of off past the
-/// edge, where it could not be dragged back.
+/// edge, where it could not be dragged back. Unit-agnostic: correct for whatever
+/// consistent space the caller measures the area and the window in.
 fn floating_origin(
-    area_pos: (i32, i32),
-    area_size: (u32, u32),
-    win_size: (u32, u32),
-    margin: i32,
-) -> (i32, i32) {
+    area_pos: (f64, f64),
+    area_size: (f64, f64),
+    win_size: (f64, f64),
+    margin: f64,
+) -> (f64, f64) {
     let (ax, ay) = area_pos;
-    let x = (ax + area_size.0 as i32 - win_size.0 as i32 - margin).max(ax);
-    let y = (ay + margin).min(ay + area_size.1 as i32 - win_size.1 as i32).max(ay);
+    let x = (ax + area_size.0 - win_size.0 - margin).max(ax);
+    let y = (ay + margin).min(ay + area_size.1 - win_size.1).max(ay);
     (x, y)
+}
+
+/// A scale factor as reported by a monitor or window, guarded for use as a
+/// divisor — a zero or negative factor (a monitor tao could not inspect) would
+/// otherwise turn a coordinate into an infinity and throw the window off-screen.
+fn usable_scale(factor: f64) -> f64 {
+    if factor > 0.0 {
+        factor
+    } else {
+        1.0
+    }
+}
+
+/// Put tao's cursor reading into the space its point lookup hit-tests.
+///
+/// macOS is the odd one out. `cursor_position()` there takes the logical
+/// `NSEvent.mouseLocation` and multiplies it by the PRIMARY monitor's scale
+/// factor, while `monitor_from_point` hit-tests raw `CGDisplayBounds`, which are
+/// logical. Left uncorrected on a Retina primary, a pointer on the built-in
+/// display resolves to a monitor to its right, or — further out — to no monitor
+/// at all, so the whole pointer preference silently never fires. Windows
+/// (physical against `MonitorFromPoint`) and X11 (GDK points against
+/// `monitor_at_point`) already agree with themselves, hence a scale of 1.
+fn cursor_in_lookup_space(cursor: (f64, f64), scale: f64) -> (f64, f64) {
+    let scale = usable_scale(scale);
+    (cursor.0 / scale, cursor.1 / scale)
 }
 
 /// Which monitor the deck belongs on, preferring the one under the pointer.
@@ -678,8 +729,22 @@ fn pick_monitor<M>(
 }
 
 fn active_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
+    // See cursor_in_lookup_space: only macOS reads the cursor in a different
+    // space from the one it hit-tests.
+    let scale = if cfg!(target_os = "macos") {
+        window
+            .primary_monitor()
+            .ok()
+            .flatten()
+            .map_or(1.0, |m| m.scale_factor())
+    } else {
+        1.0
+    };
     pick_monitor(
-        window.cursor_position().ok().map(|p| (p.x, p.y)),
+        window
+            .cursor_position()
+            .ok()
+            .map(|p| cursor_in_lookup_space((p.x, p.y), scale)),
         |x, y| window.monitor_from_point(x, y).ok().flatten(),
         || window.current_monitor().ok().flatten(),
         || window.primary_monitor().ok().flatten(),
@@ -690,16 +755,26 @@ fn active_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
 /// The builder owns `always_on_top` (per mode); this only places the window.
 /// Placement uses the WORK area, not the full screen, so the deck never opens
 /// under the macOS menu bar or behind the dock.
+///
+/// Everything is computed in LOGICAL points, the one space all three inputs
+/// agree on. `work_area()` and `outer_size()` are both "physical", but each is
+/// scaled by a DIFFERENT factor — the monitor's and the window's — and those
+/// part company the moment the deck moves between a Retina screen and an
+/// external one. tao then converts a physical `set_position` argument with the
+/// WINDOW's factor, so a physical target derived from the MONITOR's rect lands
+/// wrong as well. Handing it a logical position removes both mismatches.
 fn place_floating(window: &tauri::WebviewWindow) {
     if let (Some(monitor), Ok(win_size)) = (active_monitor(window), window.outer_size()) {
+        let screen = usable_scale(monitor.scale_factor());
+        let win = usable_scale(window.scale_factor().unwrap_or(screen));
         let area = monitor.work_area();
         let (x, y) = floating_origin(
-            (area.position.x, area.position.y),
-            (area.size.width, area.size.height),
-            (win_size.width, win_size.height),
+            (area.position.x as f64 / screen, area.position.y as f64 / screen),
+            (area.size.width as f64 / screen, area.size.height as f64 / screen),
+            (win_size.width as f64 / win, win_size.height as f64 / win),
             FLOATING_MARGIN,
         );
-        let _ = window.set_position(PhysicalPosition { x, y });
+        let _ = window.set_position(LogicalPosition { x, y });
     }
 }
 
