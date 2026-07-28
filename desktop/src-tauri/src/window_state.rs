@@ -58,8 +58,15 @@ pub fn load(dir: &Path) -> Option<WindowState> {
     Some(WindowState {
         app_visible: v.get("app_visible")?.as_bool()?,
         deck_visible: v.get("deck_visible")?.as_bool()?,
+        // `try_from` rejects out-of-range coordinates instead of wrapping them
+        // into a plausible-looking (but wrong) position.
+        // `try_from` rejects out-of-range coordinates instead of wrapping them
+        // into a plausible-looking (but wrong) position.
         deck_position: v.get("deck_position").and_then(|p| {
-            Some((p.get(0)?.as_i64()? as i32, p.get(1)?.as_i64()? as i32))
+            Some((
+                i32::try_from(p.get(0)?.as_i64()?).ok()?,
+                i32::try_from(p.get(1)?.as_i64()?).ok()?,
+            ))
         }),
     })
 }
@@ -81,6 +88,16 @@ pub fn store(dir: &Path, s: &WindowState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        // Dependency-free temp dir keyed by the (unique) test name — matches the
+        // sidecar.rs / window_mode.rs idiom, purged first so leftovers from a
+        // previous run can't leak into an assertion.
+        let p = std::env::temp_dir().join(format!("herdeck-ws-{name}"));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
 
     // The migration table in the design doc, one row per test.
     #[test]
@@ -126,20 +143,62 @@ mod tests {
 
     #[test]
     fn state_survives_a_round_trip_through_disk() {
-        let dir = std::env::temp_dir().join(format!("herdeck-ws-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch("round-trip");
         let s = WindowState { app_visible: false, deck_visible: true, deck_position: Some((-344, 256)) };
         store(&dir, &s);
         assert_eq!(load(&dir), Some(s));
-        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // Every state written before the deck is first dragged looks like this —
+    // the key-absent path must round-trip, not just the key-present one.
+    #[test]
+    fn no_deck_position_round_trips_as_none() {
+        let dir = scratch("no-position");
+        let s = WindowState { app_visible: true, deck_visible: false, deck_position: None };
+        store(&dir, &s);
+        assert_eq!(load(&dir), Some(s));
     }
 
     #[test]
     fn unreadable_or_corrupt_state_is_no_state() {
-        let dir = std::env::temp_dir().join(format!("herdeck-ws-bad-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch("bad");
         std::fs::write(dir.join("window-state.json"), "{ not json").unwrap();
         assert_eq!(load(&dir), None);
-        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // The doc comment on `load` promises "missing, unreadable or corrupt" is
+    // all "no state" — this is the missing-file leg, the one every launch
+    // right after an upgrade actually takes.
+    #[test]
+    fn missing_state_is_no_state() {
+        let dir = scratch("missing");
+        assert_eq!(load(&dir), None);
+    }
+
+    #[test]
+    fn malformed_deck_position_degrades_to_none_but_keeps_the_bools() {
+        let dir = scratch("malformed-position");
+        std::fs::write(
+            dir.join("window-state.json"),
+            r#"{"app_visible":true,"deck_visible":false,"deck_position":[1]}"#,
+        )
+        .unwrap();
+        let s = load(&dir).unwrap();
+        assert_eq!((s.app_visible, s.deck_visible), (true, false));
+        assert_eq!(s.deck_position, None);
+    }
+
+    // A coordinate outside i32's range must be rejected, not silently wrapped
+    // into a plausible-looking position on the wrong side of the screen.
+    #[test]
+    fn out_of_range_deck_position_is_rejected_not_wrapped() {
+        let dir = scratch("oob-position");
+        std::fs::write(
+            dir.join("window-state.json"),
+            r#"{"app_visible":true,"deck_visible":false,"deck_position":[4294967296,0]}"#,
+        )
+        .unwrap();
+        let s = load(&dir).unwrap();
+        assert_eq!(s.deck_position, None);
     }
 }
