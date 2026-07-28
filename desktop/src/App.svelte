@@ -10,6 +10,11 @@
   import { appSurface, desktopSetupVisible, windowRole } from "./lib/appSurface";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport } from "./lib/deckClient";
+  import {
+    DECK_ZOOM_EVENT,
+    floatingScaleCommandFromEvent,
+    shouldBypassDeckContextMenu,
+  } from "./lib/deckContextMenu";
   import { fitDecision } from "./lib/windowFit";
   import {
     anchoredFloatingPosition,
@@ -250,6 +255,29 @@
     };
     window.addEventListener("keydown", onFloatingScaleKey);
 
+    // Borderless-only: claim the deck's right-click for the native menu Rust
+    // pops via `show_deck_context_menu` (see lib.rs's `build_deck_context_menu`).
+    // Shift+right-click deliberately falls through to the WebView's own
+    // context menu instead, so "Inspect Element" stays reachable in dev
+    // builds once the plain right-click is claimed by the custom menu.
+    const onDeckContextMenu = (event: MouseEvent): void => {
+      if (!borderless || shouldBypassDeckContextMenu(event)) return;
+      event.preventDefault();
+      void invoke("show_deck_context_menu").catch(() => {
+        // Not in a Tauri WebView (plain browser preview): nothing to pop.
+      });
+    };
+    window.addEventListener("contextmenu", onDeckContextMenu);
+
+    // Rust emits this to the DECK window only (`app.emit_to(DECK_WINDOW, ...)`
+    // from the context menu's zoom items in lib.rs) — same emit_to pattern as
+    // `reonboardListener`/`settingsListener` above: registered in both
+    // windows, but Tauri only ever delivers it to the deck's own IPC channel.
+    const zoomListener = listen(DECK_ZOOM_EVENT, (event) => {
+      const command = floatingScaleCommandFromEvent(event.payload);
+      if (command) void applyFloatingScale(command);
+    });
+
     void (async () => {
       while (alive && !discovery) {
         await pullDiscovery();
@@ -288,7 +316,9 @@
       void discoveryListener.then((unlisten) => unlisten());
       void reonboardListener.then((unlisten) => unlisten());
       void settingsListener.then((unlisten) => unlisten());
+      void zoomListener.then((unlisten) => unlisten());
       window.removeEventListener("keydown", onFloatingScaleKey);
+      window.removeEventListener("contextmenu", onDeckContextMenu);
       setupPoll.stop();
       ro?.disconnect();
     };
