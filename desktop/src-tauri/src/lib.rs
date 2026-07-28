@@ -1727,10 +1727,7 @@ impl TrayMenuItems {
 /// whenever the deck-reported language changes; unknown values fall back to en.
 #[tauri::command]
 fn tray_set_language(app: tauri::AppHandle, lang: String, handles: tauri::State<'_, TrayHandles>) {
-    let deck_visible = app
-        .get_webview_window(DECK_WINDOW)
-        .and_then(|w| w.is_visible().ok())
-        .unwrap_or(false);
+    let deck_visible = deck_is_visible(&app);
     if let Some(items) = handles.0.lock().unwrap().as_ref() {
         items.retitle(&lang, deck_visible);
     }

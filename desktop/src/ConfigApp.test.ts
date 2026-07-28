@@ -204,4 +204,36 @@ describe("ConfigApp top bar deck-toggle control", () => {
       cleanup();
     }
   });
+
+  // The commit claims the labels are byte-identical to the tray's
+  // `toggle_deck_label` in BOTH languages (see toggle_deck_label_reflects_-
+  // visibility_in_both_languages in lib.rs) — this is the half of that claim
+  // an English-only assertion can't catch.
+  it("flips to the Czech labels, translated, on the same event-driven flip", async () => {
+    // The editor's effective language follows the loaded config's
+    // [view].language (see the `setLang(langOf(effectiveLanguage(payload)))`
+    // effect), which overrides any language set before mount — so the
+    // config, not `setLang`, has to say "cs" for it to stick.
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "config_read" ? { ...rawConfig(), base: { ...rawConfig().base, view: { language: "cs" } } } : mockInvoke(cmd),
+    );
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await vi.waitFor(() => {
+        expect(registeredListener("deck-visibility-changed"), "no deck-visibility-changed listener registered")
+          .toBeTruthy();
+      });
+      const button = target.querySelector<HTMLButtonElement>("[data-action='toggle-deck']");
+      await vi.waitFor(() => expect(button!.title).toBe("Zobrazit deck"));
+      expect(button!.textContent).toContain("Zobrazit deck");
+
+      registeredListener("deck-visibility-changed")!({ payload: true });
+      flushSync();
+
+      expect(button!.title).toBe("Skrýt deck");
+      expect(button!.textContent).toContain("Skrýt deck");
+    } finally {
+      cleanup();
+    }
+  });
 });

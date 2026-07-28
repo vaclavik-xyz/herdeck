@@ -675,19 +675,20 @@
     // Tells the toggle button below apart from a click: the tray item, the
     // hotkey, and the deck's own ⌘W all change the SAME window, and all three
     // reach `deckVisible` through this one event instead of three commands.
+    // The mount-time snapshot is chained onto the listener's OWN registration
+    // (not fired in parallel with it) — the deck may already be open (tray,
+    // hotkey, a previous session) by the time this window mounts, and reading
+    // the snapshot before the listener is live could drop an event that lands
+    // in between.
     void listen<boolean>("deck-visibility-changed", (ev) => {
       deckVisible = ev.payload;
     }).then((fn) => {
       unlistenDeckVisibility = fn;
-    }).catch(() => {
-      /* plain-browser design preview has no Tauri event bridge */
-    });
-    // The deck may already be open (tray, hotkey, a previous session) by the
-    // time this window mounts — one read to catch up, then the event above.
-    void invoke("deck_visible").then((v) => {
+      return invoke("deck_visible");
+    }).then((v) => {
       deckVisible = v === true;
     }).catch(() => {
-      /* plain-browser design preview has no Tauri command bridge */
+      /* plain-browser design preview has no Tauri bridge */
     });
     // The config window is hidden on close, not destroyed — a payload can be
     // days old when it reappears. Refresh a CLEAN editor on visibility.
