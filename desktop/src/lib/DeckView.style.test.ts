@@ -245,58 +245,126 @@ describe("compact offline pill styling", () => {
 // hands the row height back to the tiles, and jsdom cannot see any of this.
 describe("status panel row geometry", () => {
   const rules = topLevelRules(STYLE);
-  // `unconditional` is load-bearing, for the same reason `without: ["alt"]` is
-  // above: a class-set match is a SUPERSET match, so `.deck.compact .panel img`
-  // satisfies `scopedUnder(…, ["panel"])`. Without the exclusion, moving all
-  // three declarations under `.deck.compact` would leave every test here green
-  // while the desktop card — the surface the overhang was measured on —
-  // regressed to exactly the bug this guard exists for.
+
+  // Filtering SELECTORS cannot answer this guard's question. Three separate
+  // mutations proved it: scoping the declarations under `.deck.compact`,
+  // scoping them away with `.deck:not(.compact)`, and — the one that defeats
+  // any selector filter — leaving the base rule intact and overriding it with a
+  // later, more specific `.deck.compact .panel img { position: static }`. What
+  // the guard actually means is "each surface ENDS UP WITH these declarations",
+  // so it computes the effective value per surface and subsumes all three.
   //
-  // It reads the RAW selector text rather than asking `scopedUnder`, and that is
-  // deliberate: `compounds()` strips `:not(…)` by design, so the mirror mutation
-  // `.deck:not(.compact) .panel img` would read as unconditional and pass while
-  // the compact deck — same `.panel`, same 2:1 image — lost the fix. Both decks
-  // need these declarations, so the guard rejects any mention of compact,
-  // positive or negated.
-  const unconditional = (s: string) => !/\bcompact\b/.test(s);
-  const panelImg = rules.filter((r) =>
-    r.selectors.some(
-      (s) => unconditional(s) && scopedUnder(s, ["panel"]) && /^img\b/.test(lastCompound(s)),
-    ),
-  );
-  const panelBox = rules.filter((r) =>
-    r.selectors.some((s) => unconditional(s) && reaches([s], ["panel"], ["active"])),
-  );
-  const declares = (scope: typeof rules, pattern: RegExp) => scope.some((r) => pattern.test(r.body));
+  // Last-match-wins stands in for the cascade. In this sheet compact overrides
+  // are written after the base rules they override, so source order and
+  // specificity agree; a compact rule placed BEFORE its base would fool this,
+  // and that is the one shape it does not model.
+  // The panel's ancestor chain. The image's chain is this plus `panel` itself,
+  // since the image sits INSIDE the panel — the distinction the first draft of
+  // this matcher got wrong, which made every `.panel img` rule invisible and
+  // read the panel's own `position` as the image's.
+  const CHAIN = ["deck", "stage", "grid"];
+  const SURFACES: [string, string[]][] = [
+    ["the desktop card", CHAIN],
+    ["the compact deck", [...CHAIN, "compact"]],
+  ];
 
-  it("takes the panel image out of flow so it cannot size the row", () => {
-    expect(panelImg.length, "no rule reaches the panel's image").toBeGreaterThan(0);
-    expect(
-      declares(panelImg, /position:\s*absolute/),
-      "the panel image is in flow, so its 2:1 ratio sets the row height and the panel overhangs the tiles",
-    ).toBe(true);
-  });
+  /** Compounds with `:not()` arguments KEPT, so the matcher can honour them —
+   *  the opposite of `compounds()`, which strips them because its callers ask
+   *  what a rule targets rather than whether it applies. */
+  function rawCompounds(selector: string): string[] {
+    const groups: string[] = [];
+    const masked = selector.replace(/\([^()]*\)/g, (g) => `\u0000${groups.push(g) - 1}\u0000`);
+    return masked
+      .trim()
+      .split(/[\s>+~]+/)
+      .map((part) => part.replace(/\u0000(\d+)\u0000/g, (_, i) => groups[Number(i)]));
+  }
 
-  // Without this the image escapes to the nearest positioned ancestor — `.stage`,
-  // which spans the whole grid plus its padding — and lands somewhere else
-  // entirely. Someone debugging a stray full-grid image should look there, not
-  // at `.deck`.
-  it("makes the panel itself the containing block", () => {
+  /** Does one compound match an element carrying `classes` (and tag `tag`)?
+   *  Required classes must be present, `:not()` classes must be absent, and a
+   *  leading tag must be the element's. */
+  function compoundMatches(compound: string, classes: Set<string>, tag?: string): boolean {
+    const negated = new Set<string>();
+    for (const not of compound.matchAll(/:not\(([^)]*)\)/g)) {
+      for (const c of not[1].matchAll(/\.([A-Za-z0-9_-]+)/g)) negated.add(c[1]);
+    }
+    const bare = compound.replace(/:(?:not|has)\([^)]*\)/g, "");
+    const named = bare.match(/^[a-zA-Z][a-zA-Z0-9-]*/)?.[0];
+    if (named && named !== tag) return false;
+    for (const c of classesOf(bare)) if (!classes.has(c)) return false;
+    for (const c of negated) if (classes.has(c)) return false;
+    return true;
+  }
+
+  /** Does `selector` reach the target element on a surface whose ancestor chain
+   *  carries `surface`? The chain is treated as one class bag, which is exact
+   *  here: every ancestor class in play sits on `.deck`, `.stage` or `.grid`. */
+  function applies(
+    selector: string,
+    surface: Set<string>,
+    target: Set<string>,
+    tag?: string,
+  ): boolean {
+    const parts = rawCompounds(selector);
+    const last = parts.pop();
+    if (!last || !compoundMatches(last, target, tag)) return false;
+    return parts.every((part) => compoundMatches(part, surface));
+  }
+
+  /** The value the surface actually gets for `prop`, or undefined if nothing
+   *  declares it there. */
+  function effective(
+    prop: string,
+    surface: Set<string>,
+    target: Set<string>,
+    tag?: string,
+  ): string | undefined {
+    const pattern = new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`);
+    let value: string | undefined;
+    for (const rule of rules) {
+      if (!rule.selectors.some((s) => applies(s, surface, target, tag))) continue;
+      const hit = rule.body.match(pattern);
+      if (hit) value = hit[1].trim();
+    }
+    return value;
+  }
+
+  // The image carries no classes of its own, so its target class set is empty
+  // and only the tag names it.
+  const onImage = (prop: string, chain: string[]) =>
+    effective(prop, new Set([...chain, "panel"]), new Set(), "img");
+  const onPanel = (prop: string, chain: string[]) =>
+    effective(prop, new Set(chain), new Set(["panel"]));
+
+  it.each(SURFACES)(
+    "takes the panel image out of flow on %s, so it cannot size the row",
+    (_name, chain) => {
+      expect(
+        onImage("position", chain),
+        "the panel image is in flow, so its 2:1 ratio sets the row height and the panel overhangs the tiles",
+      ).toBe("absolute");
+    },
+  );
+
+  // Without this the image escapes to the nearest positioned ancestor —
+  // `.stage`, which spans the whole grid plus its padding — and lands somewhere
+  // else entirely. Someone debugging a stray full-grid image should look there,
+  // not at `.deck`.
+  it.each(SURFACES)("makes the panel itself the containing block on %s", (_name, chain) => {
     expect(
-      declares(panelBox, /position:\s*relative/),
+      onPanel("position", chain),
       "the panel is not positioned, so its absolute image is placed against .stage instead",
-    ).toBe(true);
+    ).toBe("relative");
   });
-
 
   // The panel box is gap-width wider than two tiles. Filling it would stretch
   // the 2:1 art horizontally — the same distortion that forced the D200's
   // native small-window fix.
-  it("letterboxes rather than stretches the artwork", () => {
+  it.each(SURFACES)("letterboxes rather than stretches the artwork on %s", (_name, chain) => {
     expect(
-      declares(panelImg, /object-fit:\s*contain/),
+      onImage("object-fit", chain),
       "the panel image is stretched across the extra gap width instead of being letterboxed",
-    ).toBe(true);
+    ).toBe("contain");
   });
 });
 
