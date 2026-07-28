@@ -1218,26 +1218,28 @@ fn set_role_visible(state: &mut WindowState, label: &str, visible: bool) {
     }
 }
 
-/// Mutate the live window state and mirror it to disk. Best-effort throughout:
+/// The ONE place `window-state.json` is written from, so its two callers cannot
+/// drift apart. Snapshots under the lock and writes outside it. Best-effort:
 /// losing the file costs the next launch its remembered layout and nothing else.
+fn store_window_state(state: &AppState) {
+    let snapshot = *state.window_state.lock().unwrap();
+    window_state::store(&window_state::state_dir(), &snapshot);
+}
+
+/// Mutate the live window state and mirror it to disk.
 fn update_window_state(app: &tauri::AppHandle, f: impl FnOnce(&mut WindowState)) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
-    let snapshot = {
-        let mut live = state.window_state.lock().unwrap();
-        f(&mut live);
-        *live
-    };
-    window_state::store(&window_state::state_dir(), &snapshot);
+    f(&mut state.window_state.lock().unwrap());
+    store_window_state(&state);
 }
 
 /// Write the live state out as it stands — the exit path, and the flush that
 /// pairs with `remember_deck_position`.
 fn persist_window_state(app: &tauri::AppHandle) {
     if let Some(state) = app.try_state::<AppState>() {
-        let snapshot = *state.window_state.lock().unwrap();
-        window_state::store(&window_state::state_dir(), &snapshot);
+        store_window_state(&state);
     }
 }
 
