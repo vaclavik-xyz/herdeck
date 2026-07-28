@@ -379,10 +379,10 @@ def test_read_roundtrips_desktop_section(tmp_path, monkeypatch):
     monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
     text = (
         '[[servers]]\nid="local"\nurl="ws://x"\ntoken_env="TOK"\n'
-        '[desktop]\nwindow_mode = "floating"\n'
+        '[desktop]\ndeck_always_on_top = true\n'
     )
     svc = _svc(tmp_path, text=text)
-    assert svc.read()["base"]["desktop"] == {"window_mode": "floating"}
+    assert svc.read()["base"]["desktop"] == {"deck_always_on_top": True}
 
 
 def test_write_roundtrips_desktop_section(tmp_path, monkeypatch):
@@ -390,10 +390,10 @@ def test_write_roundtrips_desktop_section(tmp_path, monkeypatch):
     monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
     svc = _svc(tmp_path)
     data = svc.read()
-    data["base"]["desktop"] = {"window_mode": "always_on_top"}
+    data["base"]["desktop"] = {"deck_always_on_top": True}
     assert svc.write(data) == []  # no structural errors
     assert _tomllib.loads((tmp_path / "config.toml").read_text())["desktop"] == {
-        "window_mode": "always_on_top"
+        "deck_always_on_top": True
     }
 
 
@@ -421,8 +421,8 @@ def test_write_rejects_a_stale_revision(tmp_path, monkeypatch):
 
 
 def test_write_without_revision_stays_compatible(tmp_path, monkeypatch):
-    """Rust's read-modify-write (persist_window_mode) sends no revision and
-    must keep working."""
+    """Rust's read-modify-write (persist_deck_always_on_top) sends no revision
+    and must keep working."""
     monkeypatch.setenv("TOK", "x")
     cfg = tmp_path / "config.toml"
     cfg.write_text('[[servers]]\nid="a"\nurl="ws://x"\ntoken_env="TOK"\n')

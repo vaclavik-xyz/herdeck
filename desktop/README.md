@@ -1,8 +1,10 @@
 # herdeck desktop
 
-Tauri 2 (Rust) + Svelte + Vite desktop app for herdeck. Normal mode opens the
-full desktop control room; Floating and Always on top keep the compact live-deck
-overlay available beside other work.
+Tauri 2 (Rust) + Svelte + Vite desktop app for herdeck. Two fixed-role windows:
+the **app** window is the full desktop control room, and the **deck** window is
+a compact, borderless live-deck overlay you can keep open beside other work.
+Either can be shown or hidden independently; `[desktop].deck_always_on_top`
+keeps the deck above other windows.
 
 The Rust shell owns the window + tray and either **attaches** to a Herdeck
 runtime that is already listening (via its discovery JSON) or **spawns and
@@ -13,12 +15,12 @@ access `token` and proxies `/state`, `/tile`, and `/press` through Rust commands
 so the token never crosses into JS (the runtime is a different origin and sends
 no CORS headers).
 
-The Svelte frontend has two complementary surfaces:
+The Svelte frontend has two complementary surfaces, one per window role:
 
-- **Desktop control room** - the normal window combines runtime status, a
-  contained live-deck preview, connections, and the full settings editor.
-- **Compact DeckView** - Floating and Always on top poll `/state`, render the
-  `/tile` PNGs, and turn clicks into `/press`, mirroring the hardware deck.
+- **Desktop control room** (`config` window) - runtime status, a contained
+  live-deck preview, connections, and the full settings editor.
+- **Compact DeckView** (`main` window, the deck) - polls `/state`, renders the
+  `/tile` PNGs, and turns clicks into `/press`, mirroring the hardware deck.
 - **Onboarding** - a first-run and change-connection flow inside the active
   surface, followed by a sectioned
   settings editor (servers, theme, view, macros, notifications, safety,
@@ -53,7 +55,8 @@ desktop/
       lib.rs                 # window + tray + sidecar supervisor + command wiring
       sidecar.rs             # spawn/parse/supervise logic (+ unit tests)
       http.rs                # loopback HTTP proxy with token injection (+ tests)
-      deck_prefs.rs          # deck window prefs (mode + deck_always_on_top + config path)
+      deck_prefs.rs          # deck_always_on_top + config path prefs
+      window_state.rs        # ~/.cache/herdeck/window-state.json read/write (+ tests)
       hotkey.rs              # global hotkey
     tests/                   # integration tests
 ```
