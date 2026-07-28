@@ -44,7 +44,11 @@ function atRuleBody(css: string, prelude: RegExp): string | null {
  *  active}. Comparing class sets rather than selector text keeps a scoping
  *  prefix, a reordered compound or `:is()` from reading as a deleted rule. */
 function trailingClasses(selector: string): Set<string> {
-  const last = selector.trim().split(/[\s>+~]+/).pop() ?? "";
+  const last = (selector.trim().split(/[\s>+~]+/).pop() ?? "")
+    // `:not(.alt)` EXCLUDES alt; collecting it would read as requiring it, which
+    // would both reject a legal `.cell.active:not(.alt)` base rule and accept it
+    // as the parity rule it is the opposite of.
+    .replace(/:(?:not|has)\([^)]*\)/g, "");
   return new Set([...last.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]));
 }
 
@@ -78,9 +82,12 @@ describe("press flash styling", () => {
   const declaring = (classes: string[], pattern: RegExp, without: string[] = []) =>
     rules.filter((r) => reaches(r.selectors, classes, without) && pattern.test(r.body));
 
+  // `without: ["alt"]` is load-bearing: a class-set match is a SUPERSET match,
+  // so without it a sheet whose only press-a rule is the `.alt` one would pass
+  // while the first press — parity false, no `.alt` — flashed nothing at all.
   it.each(TARGETS)("%s flashes on a press", (label, classes) => {
     expect(
-      declaring(classes, /animation:\s*press-a/).length,
+      declaring(classes, /animation:\s*press-a/, ["alt"]).length,
       `nothing gives ${label} the press animation`,
     ).toBeGreaterThan(0);
   });
