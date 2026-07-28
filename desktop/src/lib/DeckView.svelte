@@ -279,6 +279,16 @@
   }
   @keyframes press-a { from { outline-color: var(--text); } }
   @keyframes press-b { from { outline-color: var(--text); } }
+  /* theme.css flattens every animation to .01ms under reduced motion, which
+     would leave those users with the very "did that press land?" ambiguity this
+     parity exists to remove. Give them a STATIC difference instead: consecutive
+     presses alternate the ring colour, which no animation rule can flatten. */
+  @media (prefers-reduced-motion: reduce) {
+    .cell.active.alt,
+    .panel.active.alt {
+      outline-color: var(--text);
+    }
+  }
   .cell img,
   .panel img {
     display: block;

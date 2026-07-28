@@ -121,4 +121,33 @@ describe("DeckView press feedback", () => {
       ).toBe(!first);
     } finally { cleanup(); }
   });
+
+  // A press can still be in flight when the window mode switches or the app
+  // quits. Without the guard the resolving press installs a 450ms timer that
+  // teardown has already run past, and writes state on a dead component.
+  it("installs no timer when the press resolves after teardown", async () => {
+    let land: (() => void) | undefined;
+    const transport: DeckTransport = {
+      fetchState: async () => ({ version: 1, slots: 13, tiles: {}, source: "mock", connected: true }),
+      tileImage: async () => null,
+      panelImage: async () => null,
+      press: () => new Promise((resolve) => {
+        land = () => resolve({ ok: true, status: 200, forbidden: false });
+      }),
+    };
+    const { target, cleanup } = render({ transport, compact: true });
+    target.querySelectorAll<HTMLButtonElement>(".cell")[0].click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(land, "the press never reached the transport").toBeDefined();
+
+    cleanup();
+    const afterTeardown = vi.getTimerCount();
+    land!();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(
+      vi.getTimerCount(),
+      "a press that landed after teardown installed an uncancellable timer",
+    ).toBe(afterTeardown);
+  });
 });
