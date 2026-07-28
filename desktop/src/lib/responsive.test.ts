@@ -37,8 +37,9 @@ function unconditional(css: string): string {
   const leftover = out.match(CONDITIONAL_AT_RULE);
   if (leftover) {
     throw new Error(
-      `${leftover[0]} survived stripping — MEDIA_BLOCK handles one level of `
-      + "nesting only, and rules inside this block would be read as unconditional",
+      `${leftover[0]} survived stripping — rules inside it would be read as `
+      + "unconditional. This stripper handles @media nested one level deep and "
+      + "nothing else; teach it the construct rather than trusting the result",
     );
   }
   return out;
@@ -74,6 +75,18 @@ describe("the media stripper", () => {
     expect(() =>
       unconditional("@media (max-width: 760px) { @supports (display: grid) { .field { color: blue; } } }"),
     ).toThrow(/survived stripping/);
+  });
+
+  // The guard keys on at-rules that can HIDE a rule from a desktop viewport.
+  // Without this case, widening it back to a bare "@" check — which trips on a
+  // spinner or a retina asset — would leave the whole suite green.
+  it("ignores at-rules and stray @ that hide nothing", () => {
+    expect(() =>
+      unconditional(
+        '.icon { background: url("icon@2x.png"); content: "@"; }\n'
+        + "@keyframes spin { from { opacity: 0 } to { opacity: 1 } }",
+      ),
+    ).not.toThrow();
   });
 });
 
