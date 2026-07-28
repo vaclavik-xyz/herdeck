@@ -77,8 +77,14 @@ function rawCompounds(selector: string): string[] {
  *  rule and accepts it as the parity rule it is the exact opposite of. Callers
  *  that must HONOUR the condition use `rawCompounds` instead. */
 function compounds(selector: string): string[] {
-  return rawCompounds(selector).map((compound) =>
-    compound.replace(/:(?:not|has)\([^)]*\)/g, ""),
+  return (
+    rawCompounds(selector)
+      .map((compound) => compound.replace(/:(?:not|has)\([^)]*\)/g, ""))
+      // A compound that was ENTIRELY a pseudo (`.deck :has(.panel) .cell`) is
+      // now an empty string rather than gone, and an empty compound satisfies
+      // `scopedUnder`'s `every` vacuously. Dropping it restores what stripping
+      // before the split used to do.
+      .filter(Boolean)
   );
 }
 
@@ -323,12 +329,16 @@ describe("status panel row geometry", () => {
     target: Set<string>,
     tag?: string,
   ): string | undefined {
-    const pattern = new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`);
+    // Global, and the LAST hit wins inside a rule as well as across them: a
+    // block that declares the property twice (`position: absolute; …;
+    // position: static;`) paints the second value, and a non-global match would
+    // have read the first and called the guard satisfied.
+    const pattern = new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`, "g");
     let value: string | undefined;
     for (const rule of rules) {
       if (!rule.selectors.some((s) => applies(s, surface, target, tag))) continue;
-      const hit = rule.body.match(pattern);
-      if (hit) value = hit[1].trim();
+      const hits = [...rule.body.matchAll(pattern)];
+      if (hits.length) value = hits[hits.length - 1][1].trim();
     }
     return value;
   }
