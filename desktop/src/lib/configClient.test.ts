@@ -952,23 +952,47 @@ describe("toggle-deck hotkey helpers", () => {
 });
 
 describe("deck always-on-top", () => {
-  it("defaults to false when the key is absent or the wrong type", () => {
+  const desktop = (over: Record<string, unknown>) =>
+    parseConfig({ base: { desktop: over }, profiles: {}, local: {}, secrets: {} })!;
+
+  it("defaults to false when the key is absent and there is no legacy mode", () => {
     expect(deckAlwaysOnTop(emptyPayload())).toBe(false);
-    const emptyDesktop = parseConfig({ base: { desktop: {} }, profiles: {}, local: {}, secrets: {} })!;
-    expect(deckAlwaysOnTop(emptyDesktop)).toBe(false);
-    const wrongType = parseConfig({
-      base: { desktop: { deck_always_on_top: "yes" } },
-      profiles: {},
-      local: {},
-      secrets: {},
-    })!;
-    expect(deckAlwaysOnTop(wrongType)).toBe(false);
+    expect(deckAlwaysOnTop(desktop({}))).toBe(false);
   });
 
   it("round-trips through the payload", () => {
     const next = setDeckAlwaysOnTop(emptyPayload(), true);
     expect(deckAlwaysOnTop(next)).toBe(true);
     expect(deckAlwaysOnTop(setDeckAlwaysOnTop(next, false))).toBe(false);
+  });
+
+  // The migration fallback, mirroring `deck_prefs::resolve_deck_always_on_top`
+  // row for row. Without it the checkbox reads the OPPOSITE of the deck the
+  // migrating user is looking at, and cannot be corrected from this screen.
+  it("falls back to a legacy always_on_top window_mode when the key is absent", () => {
+    expect(deckAlwaysOnTop(desktop({ window_mode: "always_on_top" }))).toBe(true);
+  });
+
+  it("leaves the flag off for the legacy modes that never floated", () => {
+    expect(deckAlwaysOnTop(desktop({ window_mode: "floating" }))).toBe(false);
+    expect(deckAlwaysOnTop(desktop({ window_mode: "normal" }))).toBe(false);
+    expect(deckAlwaysOnTop(desktop({ window_mode: "sideways" }))).toBe(false);
+  });
+
+  it("lets an explicit stored value outrank the legacy mode both ways", () => {
+    expect(
+      deckAlwaysOnTop(desktop({ window_mode: "always_on_top", deck_always_on_top: false })),
+    ).toBe(false);
+    expect(deckAlwaysOnTop(desktop({ window_mode: "normal", deck_always_on_top: true }))).toBe(true);
+  });
+
+  // A wrong-typed key is treated as ABSENT, exactly like the Rust resolver's
+  // `as_bool()` — so it defers to the legacy mode rather than reading as false.
+  it("treats a wrong-typed key as absent, like the Rust resolver", () => {
+    expect(deckAlwaysOnTop(desktop({ deck_always_on_top: "yes" }))).toBe(false);
+    expect(
+      deckAlwaysOnTop(desktop({ deck_always_on_top: "yes", window_mode: "always_on_top" })),
+    ).toBe(true);
   });
 });
 

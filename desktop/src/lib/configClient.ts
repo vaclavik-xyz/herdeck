@@ -982,10 +982,17 @@ export function setToggleDeckHotkey(payload: ConfigPayload, value: string): Conf
 
 /** Whether the floating deck window stays above other windows. Applied live by
  *  `deck_prefs::resolve_deck_always_on_top` on the Rust side — no restart needed.
- *  An absent or non-boolean stored value reads as false. */
+ *
+ *  Mirrors that resolver, including its migration fallback: a stored boolean wins
+ *  in either direction, and anything else — absent, or the wrong type — defers to
+ *  the legacy `window_mode`, the one setting the migration can turn on. Without
+ *  the fallback this checkbox would render unchecked for a migrating
+ *  `always_on_top` user whose deck is in fact floating, and unchecking an
+ *  already-unchecked box writes nothing, so the legacy key would win forever. */
 export function deckAlwaysOnTop(payload: ConfigPayload): boolean {
   const v = getAt(payload, "base", "desktop", "deck_always_on_top");
-  return typeof v === "boolean" && v;
+  if (typeof v === "boolean") return v;
+  return getAt(payload, "base", "desktop", "window_mode") === "always_on_top";
 }
 
 /** NEW payload with base.desktop.deck_always_on_top set. */

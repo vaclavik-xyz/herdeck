@@ -58,12 +58,17 @@ pub fn parse_deck_always_on_top(toml_str: &str) -> Option<bool> {
 
 /// Whether the deck floats above other windows — the value the app acts on.
 ///
-/// The key wins whenever it is present, in EITHER direction: a user who wrote
+/// A key holding a BOOLEAN wins in either direction: a user who wrote
 /// `deck_always_on_top = false` must not have a `window_mode` left behind in the
 /// same file turn it back on, and upgrading deliberately does not rewrite that
-/// file. Only an ABSENT key defers to the legacy mode, which is row 3 of the
-/// design doc's migration table — the one launch after an upgrade where a user
-/// who had a floating deck would otherwise silently lose it.
+/// file. Anything else — an absent key, or one holding some other type, which
+/// `parse_deck_always_on_top` cannot tell apart and which the editor cannot
+/// produce — defers to the legacy mode. That is row 3 of the design doc's
+/// migration table: the one launch after an upgrade where a user who had a
+/// floating deck would otherwise silently lose it.
+///
+/// `configClient.ts`'s `deckAlwaysOnTop` resolves the same value for the editor
+/// checkbox and must agree on both halves, wrong-typed key included.
 ///
 /// Applied live via `set_always_on_top`; unlike the `window_mode` it replaces,
 /// it never needs a restart, because it is not a creation-time window property.
@@ -229,6 +234,20 @@ mod tests {
         // And with no legacy key in the file at all.
         assert!(resolve_deck_always_on_top(
             "[desktop]\ndeck_always_on_top = true\n"
+        ));
+    }
+
+    // A key that is present but not a boolean is treated as ABSENT, so it defers
+    // to the legacy mode instead of reading as false. Only hand-editing produces
+    // it, and `configClient.ts`'s `deckAlwaysOnTop` answers the same way for the
+    // editor checkbox — the two resolvers must not disagree anywhere.
+    #[test]
+    fn a_wrong_typed_key_defers_to_the_legacy_mode() {
+        assert!(resolve_deck_always_on_top(
+            "[desktop]\nwindow_mode = \"always_on_top\"\ndeck_always_on_top = \"yes\"\n"
+        ));
+        assert!(!resolve_deck_always_on_top(
+            "[desktop]\nwindow_mode = \"normal\"\ndeck_always_on_top = \"yes\"\n"
         ));
     }
 
