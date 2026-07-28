@@ -57,10 +57,6 @@ function atRuleBody(css: string, prelude: RegExp): string | null {
   return match ? match[1] : null;
 }
 
-/** A selector's compounds with their functional pseudos INTACT: ".deck:not(.compact)
- *  .panel img" -> [".deck:not(.compact)", ".panel", "img"]. The single splitter;
- *  `compounds` is this plus a strip. Masking first is what lets the split be a
- *  plain combinator regex, since `:not(.alt, .fade)` contains a space. */
 /** Drop functional pseudos from a compound. The single strip, so teaching it
  *  about `:is()`/`:where()` — still unhandled, so `.deck:is(.compact)` reads as
  *  a plain `.deck` — is one edit rather than three that could disagree. */
@@ -68,6 +64,10 @@ function stripPseudos(compound: string): string {
   return compound.replace(/:(?:not|has)\([^)]*\)/g, "");
 }
 
+/** A selector's compounds with their functional pseudos INTACT: ".deck:not(.compact)
+ *  .panel img" -> [".deck:not(.compact)", ".panel", "img"]. The single splitter;
+ *  `compounds` is this plus a strip. Masking first is what lets the split be a
+ *  plain combinator regex, since `:not(.alt, .fade)` contains a space. */
 function rawCompounds(selector: string): string[] {
   const { masked, unmask } = maskGroups(selector);
   return masked
@@ -290,6 +290,9 @@ describe("compact offline pill styling", () => {
 // silently widening every guard that depends on it.
 // ---------------------------------------------------------------------------
 
+/** Does one compound match an element carrying `classes` (and tag `tag`)?
+ *  Required classes must be present, `:not()` classes must be absent, and a
+ *  leading tag must be the element's. */
 function compoundMatches(compound: string, classes: Set<string>, tag?: string): boolean {
   const negated = new Set<string>();
   for (const not of compound.matchAll(/:not\(([^)]*)\)/g)) {
@@ -307,6 +310,9 @@ function compoundMatches(compound: string, classes: Set<string>, tag?: string): 
   return true;
 }
 
+/** Does `selector` reach the target element on a surface whose ancestor chain
+ *  carries `surface`? The chain is treated as one class bag, which is exact
+ *  here: every ancestor class in play sits on `.deck`, `.stage` or `.grid`. */
 function applies(
   selector: string,
   surface: Set<string>,
@@ -319,6 +325,8 @@ function applies(
   return parts.every((part) => compoundMatches(part, surface));
 }
 
+/** The value the surface actually gets for `prop`, or undefined if nothing
+ *  declares it there. */
 function effective(
   rules: { selectors: string[]; body: string }[],
   prop: string,
@@ -388,14 +396,6 @@ describe("status panel row geometry", () => {
     ["the compact deck", [...CHAIN, "compact"]],
   ];
 
-  /** Does one compound match an element carrying `classes` (and tag `tag`)?
-   *  Required classes must be present, `:not()` classes must be absent, and a
-   *  leading tag must be the element's. */
-  /** Does `selector` reach the target element on a surface whose ancestor chain
-   *  carries `surface`? The chain is treated as one class bag, which is exact
-   *  here: every ancestor class in play sits on `.deck`, `.stage` or `.grid`. */
-  /** The value the surface actually gets for `prop`, or undefined if nothing
-   *  declares it there. */
   // The image carries no classes of its own, so its target class set is empty
   // and only the tag names it.
   const onImage = (prop: string, chain: string[]) =>
