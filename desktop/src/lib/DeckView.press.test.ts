@@ -136,18 +136,26 @@ describe("DeckView press feedback", () => {
       }),
     };
     const { target, cleanup } = render({ transport, compact: true });
-    target.querySelectorAll<HTMLButtonElement>(".cell")[0].click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(land, "the press never reached the transport").toBeDefined();
+    let torn = false;
+    try {
+      target.querySelectorAll<HTMLButtonElement>(".cell")[0].click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(land, "the press never reached the transport").toBeDefined();
 
-    cleanup();
-    const afterTeardown = vi.getTimerCount();
-    land!();
-    await vi.advanceTimersByTimeAsync(0);
+      cleanup();
+      torn = true;
+      const afterTeardown = vi.getTimerCount();
+      land!();
+      await vi.advanceTimersByTimeAsync(0);
 
-    expect(
-      vi.getTimerCount(),
-      "a press that landed after teardown installed an uncancellable timer",
-    ).toBe(afterTeardown);
+      expect(
+        vi.getTimerCount(),
+        "a press that landed after teardown installed an uncancellable timer",
+      ).toBe(afterTeardown);
+    } finally {
+      // An early assertion failure must not leave the poll loop rescheduling
+      // under this file's fake timers, turning one failure into file-wide noise.
+      if (!torn) cleanup();
+    }
   });
 });
