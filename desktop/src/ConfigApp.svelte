@@ -957,7 +957,7 @@
   .title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
   .scope-badge { margin-top: 4px; padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text-dim); background: var(--panel); font: 9px var(--font-mono); }
   .page-heading p, .card-heading p, .card p { margin: 5px 0 0; color: var(--text-dim); font-size: 11px; }
-  .eyebrow, .runtime-label { color: var(--text-dim); font-size: 9px; font-weight: 650; letter-spacing: .04em; }
+  .eyebrow { color: var(--text-dim); font-size: 9px; font-weight: 650; letter-spacing: .04em; }
   .secondary, .icon-button, .savebar button { border: 1px solid var(--line-strong); border-radius: var(--r-control); background: var(--panel-raised); color: var(--text); cursor: pointer; }
   .savebar button:disabled { cursor: default; }
   .secondary { min-height: 32px; padding: 0 12px; font-size: 11px; font-weight: 630; }
@@ -966,7 +966,7 @@
   .icon-button { width: 31px; height: 31px; padding: 0; }
   .card { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); }
   .card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-  .card-heading h2, .runtime-card h2 { margin: 0; font-size: 14px; letter-spacing: -.015em; }
+  .card-heading h2 { margin: 0; font-size: 14px; letter-spacing: -.015em; }
   .overview-stage { display: grid; grid-template-columns: minmax(520px, 1.5fr) minmax(270px, .7fr); gap: var(--s5); align-items: start; margin-top: var(--s5); }
   .live-deck-card { padding: 17px; }
   .live-deck-card .card-heading, .deck-workbench-preview .card-heading { margin-bottom: 16px; }

@@ -1107,6 +1107,10 @@ pub fn run() {
                 mode.as_str()
             );
             let display_name = build_channel::display_name();
+            // The borderless card carries no CSS drop shadow (it fills the window
+            // exactly, so one would only pool in the corner notches). macOS
+            // derives a transparent window's shadow from the drawn content's
+            // alpha, i.e. from the rounded card itself — so let it.
             let builder = WebviewWindowBuilder::new(&app_handle, "main", WebviewUrl::default())
                 .title(&display_name)
                 .shadow(true)

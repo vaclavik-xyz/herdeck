@@ -60,11 +60,33 @@
       return;
     }
     if (!r.ok) return;
-    active = i;
+    flashActive(i);
     // The sidecar re-renders synchronously inside the POST handler, so the
     // updated frame already exists — show it now instead of waiting out the
     // 300ms poll (up to half a second of dead time on the primary interaction).
     loop?.kick();
+  }
+
+  // The outline is press FEEDBACK, not a selection: it says "that press landed".
+  // It used to be set and never cleared, so the last-pressed cell kept a blue
+  // ring forever — and because it is keyed by slot index, the ring stayed put
+  // while the agent under it changed, marking an unrelated tile.
+  const ACTIVE_MS = 450;
+  let activeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function flashActive(i: number): void {
+    active = i;
+    if (activeTimer) clearTimeout(activeTimer);
+    activeTimer = setTimeout(() => {
+      activeTimer = undefined;
+      active = null;
+    }, ACTIVE_MS);
+  }
+
+  function clearActive(): void {
+    if (activeTimer) clearTimeout(activeTimer);
+    activeTimer = undefined;
+    active = null;
   }
 
   // Config-window preview passes onJump → "jump mode": a tile click switches the editor
@@ -98,7 +120,7 @@
         lastTransport = transport;
         differ = new DeckDiffer();
         view = initialView(view.slots);
-        active = null;
+        clearActive();
       });
     }
   });
@@ -114,6 +136,7 @@
     return () => {
       loop?.stop();
       loop = null;
+      clearActive();
       window.removeEventListener("keydown", onKey);
     };
   });
