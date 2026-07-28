@@ -53,7 +53,7 @@ desktop/
       lib.rs                 # window + tray + sidecar supervisor + command wiring
       sidecar.rs             # spawn/parse/supervise logic (+ unit tests)
       http.rs                # loopback HTTP proxy with token injection (+ tests)
-      window_mode.rs         # window mode (normal/floating/always-on-top)
+      deck_prefs.rs          # deck window prefs (mode + deck_always_on_top + config path)
       hotkey.rs              # global hotkey
     tests/                   # integration tests
 ```

@@ -8,10 +8,10 @@
 //! crash and killed on quit.
 
 pub mod build_channel;
+pub mod deck_prefs;
 pub mod hotkey;
 pub mod http;
 pub mod sidecar;
-pub mod deck_prefs;
 pub mod window_state;
 
 use std::env;

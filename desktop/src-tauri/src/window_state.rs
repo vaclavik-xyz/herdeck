@@ -89,7 +89,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         // Dependency-free temp dir keyed by the (unique) test name — matches the
-        // sidecar.rs / window_mode.rs idiom, purged first so leftovers from a
+        // sidecar.rs / deck_prefs.rs idiom, purged first so leftovers from a
         // previous run can't leak into an assertion.
         let p = std::env::temp_dir().join(format!("herdeck-ws-{name}"));
         let _ = std::fs::remove_dir_all(&p);

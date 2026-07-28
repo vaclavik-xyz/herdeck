@@ -1,8 +1,10 @@
-//! Window-mode config logic for the floating deck window (`main`).
+//! Deck window preference config logic (`[desktop]` in `config.toml`).
 //!
 //! Framework-free (no Tauri types) so it is unit-testable without a GUI. The
-//! mode is read from `config.toml` at startup — BEFORE the window is built —
+//! legacy `WindowMode` is read at startup — BEFORE the window is built —
 //! because `transparent`/`decorations` are creation-time properties in Tauri 2.
+//! `deck_always_on_top`, its replacement, is NOT creation-time: it is applied
+//! live via `set_always_on_top` and can be read at any point.
 
 use std::path::{Path, PathBuf};
 
@@ -291,5 +293,11 @@ mod tests {
         assert_eq!(parse_legacy_window_mode(toml).as_deref(), Some("always_on_top"));
         assert!(!parse_deck_always_on_top(toml));
         assert_eq!(parse_legacy_window_mode("[desktop]\n"), None);
+    }
+
+    #[test]
+    fn parse_legacy_window_mode_degrades_on_bad_input() {
+        assert_eq!(parse_legacy_window_mode("[desktop]\nwindow_mode = 3\n"), None); // wrong type
+        assert_eq!(parse_legacy_window_mode("this is not toml ["), None); // unparseable
     }
 }
