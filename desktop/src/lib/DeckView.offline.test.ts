@@ -56,8 +56,9 @@ describe("DeckView offline state", () => {
   });
 
   // The compact deck is the floating window, and its footer — the only other
-  // surface that says "offline" — is sr-only there (see DeckView.style.test.ts,
-  // which owns the CSS half of this). Suppressing the overlay in compact mode
+  // surface that says "offline" — is sr-only there (asserted from source in
+  // DeckView.style.test.ts, since jsdom applies no scoped styles to observe it
+  // here). Suppressing the overlay in compact mode
   // left an unreachable runtime looking exactly like a deck with nothing on it:
   // blank keys and no reason why.
   it("explains itself in compact mode too, where the footer is sr-only", () => {
