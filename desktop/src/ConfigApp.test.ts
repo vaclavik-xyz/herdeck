@@ -175,6 +175,41 @@ describe("ConfigApp top bar deck-toggle control", () => {
     }
   });
 
+  // Tauri gives no ordering guarantee between a command reply and an event on
+  // the same channel: the mount-time `deck_visible` snapshot can resolve
+  // AFTER a real-time "deck-visibility-changed" already landed. A stale
+  // snapshot winning that race would silently revert a true toggle.
+  it("keeps a real-time event's value over a mount-time snapshot that resolves later", async () => {
+    let resolveSnapshot: (v: boolean) => void = () => {};
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "deck_visible") return new Promise<boolean>((resolve) => { resolveSnapshot = resolve; });
+      return mockInvoke(cmd);
+    });
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await vi.waitFor(() => {
+        expect(invokeMock, "the snapshot was never requested").toHaveBeenCalledWith("deck_visible");
+      });
+      const button = target.querySelector<HTMLButtonElement>("[data-action='toggle-deck']");
+
+      // The event lands WHILE the snapshot request is still in flight.
+      registeredListener("deck-visibility-changed")!({ payload: true });
+      flushSync();
+      expect(button!.title).toBe("Hide deck");
+
+      // The snapshot now resolves late, carrying the stale pre-event value.
+      // A macrotask tick (not just a microtask or two) flushes every hop of
+      // the mocked invoke's own `async` wrapping plus the component's chain.
+      resolveSnapshot(false);
+      await new Promise((r) => setTimeout(r, 0));
+      flushSync();
+
+      expect(button!.title, "a stale snapshot overwrote a real-time event").toBe("Hide deck");
+    } finally {
+      cleanup();
+    }
+  });
+
   // The one that matters: the tray, the hotkey, or ⌘W can change the deck's
   // visibility WITHOUT this window's button ever being clicked. The button
   // must still tell the truth — via the event, not a click.

@@ -679,14 +679,18 @@
     // (not fired in parallel with it) — the deck may already be open (tray,
     // hotkey, a previous session) by the time this window mounts, and reading
     // the snapshot before the listener is live could drop an event that lands
-    // in between.
+    // in between. Tauri gives no ordering guarantee between a command reply
+    // and an event on the same channel, so `sawEvent` also lets a real-time
+    // event that resolves BEFORE the snapshot win over the (now stale) one.
+    let sawDeckVisibilityEvent = false;
     void listen<boolean>("deck-visibility-changed", (ev) => {
+      sawDeckVisibilityEvent = true;
       deckVisible = ev.payload;
     }).then((fn) => {
       unlistenDeckVisibility = fn;
       return invoke("deck_visible");
     }).then((v) => {
-      deckVisible = v === true;
+      if (!sawDeckVisibilityEvent) deckVisible = v === true;
     }).catch(() => {
       /* plain-browser design preview has no Tauri bridge */
     });

@@ -1429,7 +1429,7 @@ fn show_app(app: tauri::AppHandle) {
 }
 
 /// The deck's actual on-screen visibility, read straight from the window
-/// rather than `WindowState` — both callers need "is it visible right now",
+/// rather than `WindowState` — every caller needs "is it visible right now",
 /// not "was it last recorded so".
 fn deck_is_visible(app: &tauri::AppHandle) -> bool {
     app.get_webview_window(DECK_WINDOW)
