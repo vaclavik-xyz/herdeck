@@ -613,17 +613,44 @@ mod plan_tests {
     // WAYLAND_DISPLAY stays exported, but GDK — and so tao — really is on X11 and
     // reports a usable pointer. Believing the socket there would discard it.
     #[test]
-    fn a_forced_backend_outranks_the_session_variables() {
+    fn a_forced_backend_narrows_the_session_variables() {
+        // The workaround this exists for: x11 forced in a Wayland session.
         assert!(!is_wayland_session(
             Some("wayland"),
             Some("wayland-0"),
             Some("x11")
         ));
-        assert!(is_wayland_session(Some("x11"), None, Some("wayland")));
-        // A list is a preference order; GDK takes the first that connects.
-        assert!(!is_wayland_session(None, Some("wayland-0"), Some("x11,wayland")));
-        // Exported-but-empty is not a choice, so the session signals stand.
+        assert!(is_wayland_session(Some("wayland"), None, Some("wayland")));
+        assert!(!is_wayland_session(None, None, Some(" x11 ")));
+        // Forcing wayland where the session offers none cannot make one appear;
+        // GTK would fail to open a display long before placement runs.
+        assert!(!is_wayland_session(Some("x11"), None, Some("wayland")));
+    }
+
+    // A list permits backends, it does not name the one that connected — so it
+    // filters the session signals instead of replacing them. Reading entry zero
+    // as the answer got both orders wrong, in opposite directions.
+    #[test]
+    fn a_backend_list_filters_rather_than_decides() {
+        // Belt-and-braces value in an X11 session: wayland is permitted but the
+        // session is not offering it, so the real pointer must survive.
+        assert!(!is_wayland_session(Some("x11"), None, Some("wayland,x11")));
+        // Wayland session with no Xwayland: x11 is preferred but unreachable, so
+        // GDK falls through to wayland and the (0, 0) reading must not be believed.
+        assert!(is_wayland_session(
+            Some("wayland"),
+            Some("wayland-0"),
+            Some("x11,wayland")
+        ));
+    }
+
+    #[test]
+    fn an_unusable_backend_value_leaves_the_session_signals_standing() {
+        // Exported-but-empty, whitespace, and a name we do not recognise are all
+        // "no filter" — not a definitive "this is not Wayland".
         assert!(is_wayland_session(Some("wayland"), None, Some("")));
+        assert!(is_wayland_session(None, Some("wayland-0"), Some("  ")));
+        assert!(is_wayland_session(Some("wayland"), None, Some("gdk")));
     }
 
     #[test]
@@ -661,12 +688,23 @@ mod plan_tests {
     }
 
     #[test]
-    fn physical_placement_divides_by_nothing_and_scales_the_margin() {
-        let p = placement_units(true, 2.0, 1.0);
-        // Windows measures in one global physical space, so nothing is divided —
-        // but a fixed 16 would then be 8 points on a 200% display.
+    fn physical_placement_leaves_the_screen_rect_and_scales_the_margin() {
+        // Windows measures coordinates in one global physical space, so the
+        // screen rect is untouched — but a fixed 16 would be 8 points at 200%.
+        let p = placement_units(true, 2.0, 2.0);
         assert_eq!((p.screen_div, p.window_div, p.margin), (1.0, 1.0, 32.0));
         assert_eq!(placement_units(true, 0.0, 0.0).margin, 16.0);
+    }
+
+    // Sizes are not DPI-invariant anywhere: a window measured on a 1x display
+    // occupies twice the pixels once the OS rescales it onto a 2x one, and
+    // anchoring to the right edge with the old width misses by half a deck.
+    #[test]
+    fn a_window_is_measured_in_the_pixels_of_the_monitor_it_moves_to() {
+        assert_eq!(placement_units(true, 2.0, 1.0).window_div, 0.5);
+        assert_eq!(placement_units(true, 1.0, 2.0).window_div, 2.0);
+        assert_eq!(placement_units(true, 2.0, 2.0).window_div, 1.0);
+        assert_eq!(placement_units(true, 0.0, 0.0).window_div, 1.0);
     }
 
     #[test]
@@ -812,31 +850,55 @@ fn cursor_in_lookup_space(cursor: (f64, f64), scale: f64) -> (f64, f64) {
 /// enough: the session type is what the seat advertises, and the socket is what
 /// GTK connects to when the session type lies or is unset.
 ///
-/// `GDK_BACKEND` overrides both, mirroring GDK's own precedence. Forcing x11 is
-/// the standard WebKitGTK workaround, and it leaves `WAYLAND_DISPLAY` exported
-/// in a session where tao then reports a perfectly real pointer — throwing that
-/// away would lose the preference on exactly the desks most likely to run it.
+/// `GDK_BACKEND` narrows both. Forcing x11 is the standard WebKitGTK workaround
+/// and it leaves `WAYLAND_DISPLAY` exported in a session where tao then reports
+/// a perfectly real pointer — throwing that away would lose the preference on
+/// exactly the desks most likely to run it.
+///
+/// The variable is a comma-separated preference ORDER, and which entry actually
+/// connected is not knowable from the environment, so it is read as a filter
+/// rather than as an answer: Wayland is possible only if the list permits it,
+/// and real only if the session says so. `wayland,x11` in an X11 session is
+/// therefore X11, and `x11,wayland` in a Wayland session with no Xwayland stays
+/// Wayland — erring, in the one case that cannot be resolved here, toward
+/// distrusting the pointer rather than believing a `(0, 0)`. A list naming no
+/// backend we know is not a filter at all and is ignored.
 fn is_wayland_session(
     session_type: Option<&str>,
     wayland_display: Option<&str>,
     gdk_backend: Option<&str>,
 ) -> bool {
-    if let Some(backend) = gdk_backend.filter(|b| !b.is_empty()) {
-        // A comma-separated list is a preference order; the first entry wins.
-        let first = backend.split(',').next().unwrap_or("").trim();
-        return first.eq_ignore_ascii_case("wayland");
-    }
-    session_type.map_or(false, |s| s.eq_ignore_ascii_case("wayland"))
-        || wayland_display.map_or(false, |d| !d.is_empty())
+    let names = |list: &str| -> (bool, bool) {
+        list.split(',')
+            .map(str::trim)
+            .fold((false, false), |(known, wayland), entry| {
+                let is_wayland = entry.eq_ignore_ascii_case("wayland");
+                let is_known = is_wayland || entry.eq_ignore_ascii_case("x11");
+                (known || is_known, wayland || is_wayland)
+            })
+    };
+    let permits_wayland = match gdk_backend.map(names) {
+        Some((true, wayland)) => wayland,
+        _ => true, // unset, blank, or naming nothing we recognise
+    };
+    permits_wayland
+        && (session_type.map_or(false, |s| s.eq_ignore_ascii_case("wayland"))
+            || wayland_display.map_or(false, |d| !d.is_empty()))
 }
 
 /// Which space a placement is computed in, and what the margin means there.
 ///
 /// Windows keeps monitor rects and window positions in one global PHYSICAL
-/// space, so nothing is divided — but the margin is then consumed in physical
-/// pixels, where a fixed 16 would shrink to 8 points on a 200% display, so it
-/// scales with the screen instead. macOS and Linux compute in logical points,
-/// where the margin already means what it says.
+/// space, so the screen rect is not divided — but the margin is then consumed in
+/// physical pixels, where a fixed 16 would shrink to 8 points on a 200% display,
+/// so it scales with the screen instead. macOS and Linux compute in logical
+/// points, where the margin already means what it says.
+///
+/// Window SIZES are not DPI-invariant on any platform: `outer_size()` is the
+/// size at the window's CURRENT monitor, and the OS rescales the window when it
+/// lands on one with a different factor. So `window_div` re-expresses the size
+/// in the target monitor's pixels on both paths — an identity whenever the two
+/// factors agree, which is every uniformly-scaled desk.
 struct Placement {
     screen_div: f64,
     window_div: f64,
@@ -847,7 +909,7 @@ fn placement_units(is_windows: bool, monitor_scale: f64, window_scale: f64) -> P
     if is_windows {
         Placement {
             screen_div: 1.0,
-            window_div: 1.0,
+            window_div: usable_scale(window_scale) / usable_scale(monitor_scale),
             margin: FLOATING_MARGIN * usable_scale(monitor_scale),
         }
     } else {
