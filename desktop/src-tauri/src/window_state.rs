@@ -60,8 +60,6 @@ pub fn load(dir: &Path) -> Option<WindowState> {
         deck_visible: v.get("deck_visible")?.as_bool()?,
         // `try_from` rejects out-of-range coordinates instead of wrapping them
         // into a plausible-looking (but wrong) position.
-        // `try_from` rejects out-of-range coordinates instead of wrapping them
-        // into a plausible-looking (but wrong) position.
         deck_position: v.get("deck_position").and_then(|p| {
             Some((
                 i32::try_from(p.get(0)?.as_i64()?).ok()?,
@@ -161,9 +159,15 @@ mod tests {
 
     #[test]
     fn unreadable_or_corrupt_state_is_no_state() {
-        let dir = scratch("bad");
-        std::fs::write(dir.join("window-state.json"), "{ not json").unwrap();
-        assert_eq!(load(&dir), None);
+        let corrupt = scratch("corrupt");
+        std::fs::write(corrupt.join("window-state.json"), "{ not json").unwrap();
+        assert_eq!(load(&corrupt), None);
+
+        // A directory where a file is expected makes `read_to_string` fail —
+        // the "unreadable" half of the name.
+        let unreadable = scratch("unreadable");
+        std::fs::create_dir_all(unreadable.join("window-state.json")).unwrap();
+        assert_eq!(load(&unreadable), None);
     }
 
     // The doc comment on `load` promises "missing, unreadable or corrupt" is
@@ -189,16 +193,27 @@ mod tests {
     }
 
     // A coordinate outside i32's range must be rejected, not silently wrapped
-    // into a plausible-looking position on the wrong side of the screen.
+    // into a plausible-looking position on the wrong side of the screen. Covers
+    // both components and both directions of overflow — each is a separate
+    // `try_from` call site that a refactor could revert to `as i32` alone.
     #[test]
     fn out_of_range_deck_position_is_rejected_not_wrapped() {
-        let dir = scratch("oob-position");
-        std::fs::write(
-            dir.join("window-state.json"),
-            r#"{"app_visible":true,"deck_visible":false,"deck_position":[4294967296,0]}"#,
-        )
-        .unwrap();
-        let s = load(&dir).unwrap();
-        assert_eq!(s.deck_position, None);
+        for (i, shape) in [
+            r#"[4294967296,0]"#,
+            r#"[0,4294967296]"#,
+            r#"[-4294967296,0]"#,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let dir = scratch(&format!("oob-position-{i}"));
+            std::fs::write(
+                dir.join("window-state.json"),
+                format!(r#"{{"app_visible":true,"deck_visible":false,"deck_position":{shape}}}"#),
+            )
+            .unwrap();
+            let s = load(&dir).unwrap();
+            assert_eq!(s.deck_position, None, "shape {shape}");
+        }
     }
 }
