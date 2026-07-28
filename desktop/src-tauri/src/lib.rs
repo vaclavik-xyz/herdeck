@@ -898,6 +898,18 @@ mod plan_tests {
         assert_eq!(toggle_deck_label("cs", false), "Zobrazit deck");
         assert_eq!(toggle_deck_label("cs", true), "Skrýt deck");
     }
+
+    // The label follows the DECK's visibility and nothing else. Showing the app
+    // window (from the tray, or from re-onboarding) must leave "Show deck"
+    // alone; syncing on every window would make the item name the wrong gesture
+    // just as surely as never syncing it does.
+    #[test]
+    fn only_the_deck_window_refreshes_the_deck_tray_label() {
+        assert_eq!(deck_label_refresh(DECK_WINDOW, true), Some(true));
+        assert_eq!(deck_label_refresh(DECK_WINDOW, false), Some(false));
+        assert_eq!(deck_label_refresh(APP_WINDOW, true), None);
+        assert_eq!(deck_label_refresh("some-future-window", false), None);
+    }
 }
 
 /// Gap, in logical points, between the floating deck and the edges of its screen.
@@ -1309,15 +1321,44 @@ fn remember_deck_position(app: &tauri::AppHandle, position: (i32, i32)) {
     }
 }
 
+/// Whether a visibility change should retitle the tray's `toggle_deck` item, and
+/// to what: `Some(visible)` for the deck, `None` for any other window. The app
+/// window opening must not turn "Show deck" into "Hide deck".
+///
+/// Split out of `show_role_window`/`hide_role_window` because it is the only part
+/// of the sync a unit test can reach — the rest needs a live tray menu.
+fn deck_label_refresh(label: &str, visible: bool) -> Option<bool> {
+    (label == DECK_WINDOW).then_some(visible)
+}
+
+/// Retitle the tray's `toggle_deck` item for the deck's new visibility, so the
+/// item always names what it will do next.
+///
+/// Takes both locks it needs one at a time and holds neither across the other:
+/// its callers have already released `AppState.window_state` by the time they
+/// get here (`update_window_state` drops its guard when it returns), and nothing
+/// reached from `TrayHandles` takes a window-state lock.
+fn sync_deck_tray_label(app: &tauri::AppHandle, deck_visible: bool) {
+    if let Some(handles) = app.try_state::<TrayHandles>() {
+        if let Some(items) = handles.0.lock().unwrap().as_ref() {
+            items.sync_toggle_deck_label(deck_visible);
+        }
+    }
+}
+
 /// Show a role window and record that it is open. Every entry point — tray,
 /// hotkey, frontend command — goes through here, so the remembered layout can
-/// never drift from what is actually on screen.
+/// never drift from what is actually on screen, and neither can the tray's own
+/// show/hide-deck label.
 fn show_role_window(app: &tauri::AppHandle, label: &str) {
     if let Some(w) = app.get_webview_window(label) {
         let _ = w.show();
         let _ = w.set_focus();
     }
     update_window_state(app, |s| set_role_visible(s, label, true));
+    if let Some(deck_visible) = deck_label_refresh(label, true) {
+        sync_deck_tray_label(app, deck_visible);
+    }
 }
 
 /// Hide a role window and record that it is closed (see `show_role_window`).
@@ -1326,6 +1367,9 @@ fn hide_role_window(app: &tauri::AppHandle, label: &str) {
         let _ = w.hide();
     }
     update_window_state(app, |s| set_role_visible(s, label, false));
+    if let Some(deck_visible) = deck_label_refresh(label, false) {
+        sync_deck_tray_label(app, deck_visible);
+    }
 }
 
 /// Open the deck overlay. The tray and the app window's pop-out control both
@@ -1348,10 +1392,9 @@ fn show_app(app: tauri::AppHandle) {
 }
 
 /// Show/hide the deck overlay — shared by the tray's `toggle_deck` item and
-/// the deck-toggle hotkey, so both flip the SAME window the SAME way. Also
-/// syncs the tray item's own text: the hotkey never goes through the menu
-/// event handler, so without this a hotkey press would leave "Show deck"
-/// on screen after the deck was actually shown.
+/// the deck-toggle hotkey, so both flip the SAME window the SAME way. The tray
+/// item's own text follows from `show_role_window`/`hide_role_window`, which
+/// every deck-visibility path goes through.
 fn toggle_deck_window(app: &tauri::AppHandle) {
     let visible = app
         .get_webview_window(DECK_WINDOW)
@@ -1361,11 +1404,6 @@ fn toggle_deck_window(app: &tauri::AppHandle) {
         hide_role_window(app, DECK_WINDOW);
     } else {
         show_role_window(app, DECK_WINDOW);
-    }
-    if let Some(handles) = app.try_state::<TrayHandles>() {
-        if let Some(items) = handles.0.lock().unwrap().as_ref() {
-            items.sync_toggle_deck_label(!visible);
-        }
     }
 }
 
@@ -1594,8 +1632,8 @@ struct TrayMenuItems {
     quit: MenuItem<tauri::Wry>,
     /// The language `retitle` was last called with. Needed so a
     /// visibility-only refresh of `toggle_deck` (`sync_toggle_deck_label`,
-    /// run after the tray item or the hotkey flips the deck) can pick the
-    /// right string without its caller having to track the language too.
+    /// run from every path that shows or hides the deck) can pick the right
+    /// string without its caller having to track the language too.
     lang: Mutex<String>,
 }
 
