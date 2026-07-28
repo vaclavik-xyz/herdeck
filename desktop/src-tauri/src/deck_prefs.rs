@@ -1,77 +1,12 @@
 //! Deck window preference config logic (`[desktop]` in `config.toml`).
 //!
-//! Framework-free (no Tauri types) so it is unit-testable without a GUI. The
-//! legacy `WindowMode` is read at startup — BEFORE the window is built —
-//! because `transparent`/`decorations` are creation-time properties in Tauri 2.
-//! `deck_always_on_top`, its replacement, is NOT creation-time: it is applied
-//! live via `set_always_on_top` and can be read at any point.
+//! Framework-free (no Tauri types) so it is unit-testable without a GUI. Neither
+//! key here is a creation-time window property: the two windows have fixed
+//! chrome, and `deck_always_on_top` is applied live via `set_always_on_top`, so
+//! nothing in this module can require a restart. The legacy `window_mode` it
+//! replaced is read once per launch as a migration fallback and never written.
 
 use std::path::{Path, PathBuf};
-
-/// The three deck window modes. `Normal` is the default everywhere.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowMode {
-    Normal,
-    Floating,
-    AlwaysOnTop,
-}
-
-impl WindowMode {
-    /// The canonical config string (matches the frontend `WINDOW_MODES`).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            WindowMode::Normal => "normal",
-            WindowMode::Floating => "floating",
-            WindowMode::AlwaysOnTop => "always_on_top",
-        }
-    }
-
-    /// Borderless modes are transparent + undecorated (rounded CSS card + drag
-    /// handle). Normal is the native OS-decorated window.
-    pub fn is_borderless(self) -> bool {
-        matches!(self, WindowMode::Floating | WindowMode::AlwaysOnTop)
-    }
-}
-
-/// Parse `desktop.window_mode` from a config.toml string. Defaults to `Normal`
-/// for a missing key, a wrong type, an unknown value, or an unparseable file —
-/// never panics.
-pub fn parse_window_mode(toml_str: &str) -> WindowMode {
-    let value: toml::Value = match toml_str.parse() {
-        Ok(v) => v,
-        Err(_) => return WindowMode::Normal,
-    };
-    let mode = value
-        .get("desktop")
-        .and_then(|d| d.get("window_mode"))
-        .and_then(|m| m.as_str());
-    match mode {
-        Some("floating") => WindowMode::Floating,
-        Some("always_on_top") => WindowMode::AlwaysOnTop,
-        _ => WindowMode::Normal,
-    }
-}
-
-/// Whether switching `from`→`to` needs an app restart. Only a switch BETWEEN the
-/// two borderless modes (floating↔always_on_top) can be applied live (toggle
-/// `always_on_top`); any change involving `normal` flips `transparent`, which is
-/// a creation-time prop → restart.
-pub fn switch_needs_restart(from: WindowMode, to: WindowMode) -> bool {
-    if from == to {
-        return false;
-    }
-    !(from.is_borderless() && to.is_borderless())
-}
-
-/// Normal mode already hosts the complete desktop control room in `main`.
-/// Compact overlay modes keep settings in their dedicated full-size window.
-pub fn settings_window_label(mode: WindowMode) -> &'static str {
-    if mode == WindowMode::Normal {
-        "main"
-    } else {
-        "config"
-    }
-}
 
 /// Resolve the `config.toml` path with the SAME existence-check order as the
 /// sidecar's `bootstrap._discover_config_path`, so Rust and the sidecar read the
@@ -108,15 +43,6 @@ fn make_absolute(p: &str) -> PathBuf {
     }
 }
 
-/// Read the window mode from `path`. A missing/unreadable file → `Normal` (first
-/// run). Delegates value parsing to `parse_window_mode`.
-pub fn read_window_mode(path: &Path) -> WindowMode {
-    match std::fs::read_to_string(path) {
-        Ok(s) => parse_window_mode(&s),
-        Err(_) => WindowMode::Normal,
-    }
-}
-
 /// `[desktop].deck_always_on_top`. Defaults to false for a missing key, a wrong
 /// type, or an unparseable file — never panics. Applied live via
 /// `set_always_on_top`; unlike the `window_mode` it replaces, it never needs a
@@ -143,68 +69,6 @@ pub fn parse_legacy_window_mode(toml_str: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_known_modes() {
-        assert_eq!(
-            parse_window_mode("[desktop]\nwindow_mode = \"floating\"\n"),
-            WindowMode::Floating
-        );
-        assert_eq!(
-            parse_window_mode("[desktop]\nwindow_mode = \"always_on_top\"\n"),
-            WindowMode::AlwaysOnTop
-        );
-        assert_eq!(
-            parse_window_mode("[desktop]\nwindow_mode = \"normal\"\n"),
-            WindowMode::Normal
-        );
-    }
-
-    #[test]
-    fn defaults_to_normal_on_anything_unexpected() {
-        assert_eq!(parse_window_mode(""), WindowMode::Normal); // empty
-        assert_eq!(parse_window_mode("[other]\nx = 1\n"), WindowMode::Normal); // no [desktop]
-        assert_eq!(
-            parse_window_mode("[desktop]\nwindow_mode = \"bogus\"\n"),
-            WindowMode::Normal
-        ); // unknown value
-        assert_eq!(
-            parse_window_mode("[desktop]\nwindow_mode = 5\n"),
-            WindowMode::Normal
-        ); // wrong type
-        assert_eq!(parse_window_mode("this is { not valid toml"), WindowMode::Normal); // unparseable
-    }
-
-    #[test]
-    fn as_str_round_trips_through_parse() {
-        for m in [WindowMode::Normal, WindowMode::Floating, WindowMode::AlwaysOnTop] {
-            let toml = format!("[desktop]\nwindow_mode = \"{}\"\n", m.as_str());
-            assert_eq!(parse_window_mode(&toml), m);
-        }
-    }
-
-    #[test]
-    fn restart_needed_only_when_normal_involved() {
-        assert!(!switch_needs_restart(WindowMode::Floating, WindowMode::AlwaysOnTop));
-        assert!(!switch_needs_restart(WindowMode::AlwaysOnTop, WindowMode::Floating));
-        assert!(switch_needs_restart(WindowMode::Normal, WindowMode::Floating));
-        assert!(switch_needs_restart(WindowMode::Floating, WindowMode::Normal));
-        assert!(switch_needs_restart(WindowMode::Normal, WindowMode::AlwaysOnTop));
-    }
-
-    #[test]
-    fn same_mode_never_restarts() {
-        assert!(!switch_needs_restart(WindowMode::Normal, WindowMode::Normal));
-        assert!(!switch_needs_restart(WindowMode::Floating, WindowMode::Floating));
-        assert!(!switch_needs_restart(WindowMode::AlwaysOnTop, WindowMode::AlwaysOnTop));
-    }
-
-    #[test]
-    fn settings_reuses_the_normal_desktop_window() {
-        assert_eq!(settings_window_label(WindowMode::Normal), "main");
-        assert_eq!(settings_window_label(WindowMode::Floating), "config");
-        assert_eq!(settings_window_label(WindowMode::AlwaysOnTop), "config");
-    }
 
     fn scratch(name: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("herdeck-wm-{name}"));
@@ -256,19 +120,6 @@ mod tests {
         let got = resolve_config_path(None, &home, &repo);
         assert_eq!(got, home.join(".config").join("herdeck").join("config.toml"));
         assert!(!got.exists());
-    }
-
-    #[test]
-    fn read_missing_file_is_normal() {
-        let p = scratch("read-missing").join("nope.toml");
-        assert_eq!(read_window_mode(&p), WindowMode::Normal);
-    }
-
-    #[test]
-    fn read_reads_existing_file() {
-        let p = scratch("read-file").join("config.toml");
-        std::fs::write(&p, "[desktop]\nwindow_mode = \"floating\"\n").unwrap();
-        assert_eq!(read_window_mode(&p), WindowMode::Floating);
     }
 
     #[test]

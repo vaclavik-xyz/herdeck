@@ -1,7 +1,9 @@
 //! herdeck desktop shell (phase 1, slice 3).
 //!
-//! A floating, always-on-top window that hosts the DeckView WebView, plus a tray
-//! icon (show/hide/quit). On startup it spawns and supervises the Python sidecar
+//! Two windows with fixed roles — the borderless `main` deck overlay and the
+//! decorated `config` settings window — plus a tray icon (show/hide/quit).
+//! Neither ever changes shape, so nothing here needs a restart. On startup it
+//! spawns and supervises the Python sidecar
 //! (`python -m herdeck.deckapp`), reads its first stdout line (the discovery JSON
 //! `{url, host, port, token, source}`), and hands the url+token to the WebView so
 //! the frontend can reach the sidecar over loopback. The sidecar is restarted on
@@ -28,19 +30,24 @@ use tauri::{
 };
 use tauri_plugin_updater::UpdaterExt;
 
-use deck_prefs::WindowMode;
-
 use sidecar::{supervise, CommandSpec, Discovery, SupervisorConfig};
+use window_state::WindowState;
+
+/// The two fixed window roles. The labels are historical — `main` is the
+/// borderless deck overlay, `config` the decorated settings window — and are
+/// kept deliberately: `capabilities/default.json` scopes permissions to exactly
+/// these two strings, and renaming would buy nothing a user can see.
+const DECK_WINDOW: &str = "main";
+const APP_WINDOW: &str = "config";
 
 /// Managed state read by the `get_discovery` command and by the supervisor
 /// callback. The live child handle and stop flag are held as separate `Arc`s
 /// owned by the supervisor + exit-handler closures (not routed through here).
 struct AppState {
     discovery: Arc<Mutex<Option<Discovery>>>,
-    /// The live window mode. Set at startup from config; updated in-process on a
-    /// live floating↔always_on_top switch (a restart-mode switch replaces the
-    /// whole process, which re-reads config).
-    window_mode: Arc<Mutex<WindowMode>>,
+    /// Which windows are open and where the deck sits. Mirrored to disk on every
+    /// show/hide and on exit, so the next launch reopens the same layout.
+    window_state: Arc<Mutex<WindowState>>,
 }
 
 /// Default timeout for the Rust-side sidecar proxy calls.
@@ -140,14 +147,6 @@ fn get_discovery(state: tauri::State<'_, AppState>) -> Option<DiscoveryView> {
         .unwrap()
         .as_ref()
         .map(DiscoveryView::from)
-}
-
-/// The window mode the deck was built with (updated live on a borderless switch).
-/// The frontend ALSO reads `<html data-window-mode>` (set pre-paint by Rust); this
-/// command is the programmatic path for logic that needs it after mount.
-#[tauri::command]
-fn get_window_mode(state: tauri::State<'_, AppState>) -> String {
-    state.window_mode.lock().unwrap().as_str().to_string()
 }
 
 /// The current discovery, or an error until the supervised sidecar has reported
@@ -414,22 +413,6 @@ fn config_post_json(
     } else {
         Err(format!("sidecar returned HTTP {code} for {path}"))
     }
-}
-
-/// Show + focus the desktop editor. Normal mode already renders it in `main`;
-/// compact overlay modes use the dedicated full-size config window.
-#[tauri::command]
-fn open_config(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mode = *state.window_mode.lock().unwrap();
-    if mode == WindowMode::Normal {
-        let _ = app.emit_to("main", "open-settings", ());
-    }
-    let w = app
-        .get_webview_window(deck_prefs::settings_window_label(mode))
-        .ok_or_else(|| "desktop settings window not found".to_string())?;
-    w.show().map_err(|e| e.to_string())?;
-    w.set_focus().map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 /// How the sidecar is obtained: either an externally-managed one (dev override
@@ -729,6 +712,57 @@ mod plan_tests {
             placement_position(true, 100.6, -20.4),
             tauri::Position::Physical(p) if p.x == 101 && p.y == -20
         ));
+    }
+
+    // The labels read backwards — `main` is the DECK — so the mapping from a
+    // label to the flag it owns is worth pinning down rather than eyeballing.
+    #[test]
+    fn visibility_is_recorded_against_the_role_the_label_names() {
+        let mut s = window_state::WindowState::default();
+        assert_eq!((s.app_visible, s.deck_visible), (true, false));
+        set_role_visible(&mut s, DECK_WINDOW, true);
+        assert_eq!((s.app_visible, s.deck_visible), (true, true));
+        set_role_visible(&mut s, APP_WINDOW, false);
+        assert_eq!((s.app_visible, s.deck_visible), (false, true));
+    }
+
+    // The role is read by the frontend before first paint; a typo here is a
+    // window that silently renders the other surface.
+    #[test]
+    fn the_role_script_sets_the_attribute_the_frontend_reads() {
+        assert_eq!(
+            window_role_script("deck"),
+            "document.documentElement.dataset.windowRole='deck'"
+        );
+    }
+
+    // The single-coordinate half of the same space decision, and unreachable
+    // from a test on this host for the same reason — so it too takes the
+    // platform as an argument and both shapes are asserted everywhere.
+    #[test]
+    fn a_coordinate_is_divided_off_windows_and_left_alone_on_it() {
+        assert_eq!(placement_divisor(false, 2.0), 2.0);
+        assert_eq!(placement_divisor(true, 2.0), 1.0);
+        // A monitor tao could not inspect must not become a divide by zero.
+        assert_eq!(placement_divisor(false, 0.0), 1.0);
+        assert_eq!(placement_divisor(false, -1.0), 1.0);
+    }
+
+    // A deck the user dragged somewhere deliberate comes back there — but only
+    // if "there" still exists. The numbers are a real two-display desk: a Retina
+    // built-in and an external one up and to the left of it.
+    #[test]
+    fn a_remembered_position_off_every_monitor_is_rejected() {
+        let monitors = [((0, 0), (2514u32, 1410u32)), ((-1343, -1050), (1680, 1050))];
+        assert!(position_is_on_any(&monitors, (2170, 46)));
+        assert!(position_is_on_any(&monitors, (-1000, -900)));
+        // The unplugged display: remembered, but nothing is there any more.
+        assert!(!position_is_on_any(&monitors, (4000, 300)));
+        // Off in Y alone is off as well — the same two displays restacked
+        // vertically leave every X in range and no Y anywhere near it.
+        assert!(!position_is_on_any(&monitors, (2170, 5000)));
+        // Exactly on the far edge is off: a window placed there is invisible.
+        assert!(!position_is_on_any(&monitors, (2514, 0)));
     }
 
     // Monitor choice. `pick_monitor` is generic, so a &str stands in for a Monitor.
@@ -1039,8 +1073,77 @@ fn active_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
     )
 }
 
+/// Is a remembered deck origin still on a connected screen? Checked before
+/// restoring it, so a deck last seen on an unplugged monitor comes back where
+/// the user is rather than nowhere. Unit-agnostic like `floating_origin`: the
+/// caller measures the areas and the position in one space (see
+/// `placement_space_position`) and this only compares them.
+fn position_is_on_any(areas: &[((i32, i32), (u32, u32))], pos: (i32, i32)) -> bool {
+    areas.iter().any(|((ax, ay), (w, h))| {
+        pos.0 >= *ax && pos.0 < ax + *w as i32 && pos.1 >= *ay && pos.1 < ay + *h as i32
+    })
+}
+
+/// What divides a tao "physical" reading to reach the space placements are
+/// measured in — the same choice `Placement` makes, for a single coordinate.
+///
+/// Off Windows that space is logical points (see `place_floating`), and tao got
+/// to "physical" by scaling a logical value UP, so the same factor divides it
+/// back down. `scale` is therefore whichever factor produced the reading: a
+/// monitor rect is scaled by the MONITOR's, a window origin by the WINDOW's, and
+/// on a mixed-DPI desk those are not the same number. Windows keeps both in one
+/// global physical space and needs no conversion at all.
+fn placement_divisor(is_windows: bool, scale: f64) -> f64 {
+    if is_windows {
+        1.0
+    } else {
+        usable_scale(scale)
+    }
+}
+
+/// Every connected monitor's work area, in the space placements are measured in.
+/// Dividing per monitor is the point: on a desk mixing a 2x built-in with a 1x
+/// external the two PHYSICAL work rects overlap, so a containment test run in
+/// that space answers for the wrong screen.
+fn monitor_work_areas(window: &tauri::WebviewWindow) -> Vec<((i32, i32), (u32, u32))> {
+    window
+        .available_monitors()
+        .into_iter()
+        .flatten()
+        .map(|monitor| {
+            let div = placement_divisor(cfg!(windows), monitor.scale_factor());
+            let area = monitor.work_area();
+            (
+                (
+                    (area.position.x as f64 / div).round() as i32,
+                    (area.position.y as f64 / div).round() as i32,
+                ),
+                (
+                    (area.size.width as f64 / div).round() as u32,
+                    (area.size.height as f64 / div).round() as u32,
+                ),
+            )
+        })
+        .collect()
+}
+
+/// A window origin as tao reports it (`Moved`, `outer_position()`), put into the
+/// space placements are measured in. This is the space the remembered deck
+/// position is STORED in, so that restoring it is exactly `placement_position`'s
+/// job — the same conversion `place_floating` already trusts, run backwards.
+fn placement_space_position(
+    window: &tauri::WebviewWindow,
+    pos: PhysicalPosition<i32>,
+) -> (i32, i32) {
+    let div = placement_divisor(cfg!(windows), window.scale_factor().unwrap_or(1.0));
+    (
+        (pos.x as f64 / div).round() as i32,
+        (pos.y as f64 / div).round() as i32,
+    )
+}
+
 /// Position the floating window near the top-right of the monitor the user is on.
-/// The builder owns `always_on_top` (per mode); this only places the window.
+/// `deck_always_on_top` is applied separately; this only places the window.
 /// Placement uses the WORK area, not the full screen, so the deck never opens
 /// under the macOS menu bar or behind the dock.
 ///
@@ -1075,15 +1178,115 @@ fn place_floating(window: &tauri::WebviewWindow) {
     }
 }
 
-/// Show/hide the floating `main` window — the deck-toggle hotkey action.
-fn toggle_main_window(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        if w.is_visible().unwrap_or(false) {
-            let _ = w.hide();
-        } else {
-            let _ = w.show();
-            let _ = w.set_focus();
+/// Stamp a window's role on `<html>` before its first paint. The frontend picks
+/// its surface from that attribute, so injecting it any later would show the
+/// deck a frame of the opaque settings styling first (FOUC).
+fn window_role_script(role: &str) -> String {
+    format!("document.documentElement.dataset.windowRole='{role}'")
+}
+
+/// Put the deck back where the user last dragged it, or near the top-right of
+/// the monitor the pointer is on. A remembered origin is honoured only while it
+/// still lands on a connected screen: a borderless window dropped onto an
+/// unplugged display has no titlebar to drag it back with.
+fn place_deck(window: &tauri::WebviewWindow, remembered: Option<(i32, i32)>) {
+    if let Some((x, y)) = remembered {
+        if position_is_on_any(&monitor_work_areas(window), (x, y)) {
+            let _ = window.set_position(placement_position(cfg!(windows), x as f64, y as f64));
+            return;
         }
+    }
+    place_floating(window);
+}
+
+/// Which visibility flag a window label owns. Split out because the labels are
+/// historical and read backwards: `main` is the deck, `config` is the app.
+fn set_role_visible(state: &mut WindowState, label: &str, visible: bool) {
+    if label == DECK_WINDOW {
+        state.deck_visible = visible;
+    } else {
+        state.app_visible = visible;
+    }
+}
+
+/// Mutate the live window state and mirror it to disk. Best-effort throughout:
+/// losing the file costs the next launch its remembered layout and nothing else.
+fn update_window_state(app: &tauri::AppHandle, f: impl FnOnce(&mut WindowState)) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let snapshot = {
+        let mut live = state.window_state.lock().unwrap();
+        f(&mut live);
+        *live
+    };
+    window_state::store(&window_state::state_dir(), &snapshot);
+}
+
+/// Write the live state out as it stands — the exit path, and the flush that
+/// pairs with `remember_deck_position`.
+fn persist_window_state(app: &tauri::AppHandle) {
+    update_window_state(app, |_| {});
+}
+
+/// Record the deck's new origin WITHOUT touching the disk: one drag emits
+/// hundreds of `Moved` events. Hiding or closing the deck writes, and so does
+/// exit, which between them cover every way a position can be the last thing
+/// that changed.
+fn remember_deck_position(app: &tauri::AppHandle, position: (i32, i32)) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.window_state.lock().unwrap().deck_position = Some(position);
+    }
+}
+
+/// Show a role window and record that it is open. Every entry point — tray,
+/// hotkey, frontend command — goes through here, so the remembered layout can
+/// never drift from what is actually on screen.
+fn show_role_window(app: &tauri::AppHandle, label: &str) {
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    update_window_state(app, |s| set_role_visible(s, label, true));
+}
+
+/// Hide a role window and record that it is closed (see `show_role_window`).
+fn hide_role_window(app: &tauri::AppHandle, label: &str) {
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.hide();
+    }
+    update_window_state(app, |s| set_role_visible(s, label, false));
+}
+
+/// Open the deck overlay. The tray and the app window's pop-out control both
+/// land here; the frontend reaches it through the command of the same name.
+#[tauri::command]
+fn show_deck(app: tauri::AppHandle) {
+    show_role_window(&app, DECK_WINDOW);
+}
+
+/// Close the deck overlay back to the tray.
+#[tauri::command]
+fn hide_deck(app: tauri::AppHandle) {
+    hide_role_window(&app, DECK_WINDOW);
+}
+
+/// Open the settings window — the app surface, and where onboarding lives.
+#[tauri::command]
+fn show_app(app: tauri::AppHandle) {
+    show_role_window(&app, APP_WINDOW);
+}
+
+/// Show/hide the deck overlay — the deck-toggle hotkey action.
+fn toggle_main_window(app: &tauri::AppHandle) {
+    let visible = app
+        .get_webview_window(DECK_WINDOW)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    if visible {
+        hide_role_window(app, DECK_WINDOW);
+    } else {
+        show_role_window(app, DECK_WINDOW);
     }
 }
 
@@ -1156,28 +1359,15 @@ async fn reload_hotkey(
     .await
 }
 
-/// The three window-mode tray checkboxes. There is no native radio group, so we
-/// hold all three handles and drive the checkmarks ourselves (like `autostart_cb`).
-#[derive(Clone)]
-struct WmItems {
-    normal: CheckMenuItem<tauri::Wry>,
-    floating: CheckMenuItem<tauri::Wry>,
-    aot: CheckMenuItem<tauri::Wry>,
-}
-
 /// English/Czech texts for every tray item, keyed by the item order in
 /// `TrayHandles::retitle`. The tray is native — the WebView retitles it via the
 /// `tray_set_language` command when the deck's `[view].language` changes.
-fn tray_labels(lang: &str) -> [&'static str; 10] {
+fn tray_labels(lang: &str) -> [&'static str; 6] {
     match lang {
         "cs" => [
             "Nastavení…",
             "Zobrazit",
             "Skrýt",
-            "Normální",
-            "Plovoucí",
-            "Vždy navrchu",
-            "Režim okna",
             "Spouštět po přihlášení",
             "Změnit připojení…",
             "Ukončit",
@@ -1186,10 +1376,6 @@ fn tray_labels(lang: &str) -> [&'static str; 10] {
             "Settings…",
             "Show",
             "Hide",
-            "Normal",
-            "Floating",
-            "Always on top",
-            "Window mode",
             "Start at login",
             "Change connection…",
             "Quit",
@@ -1206,8 +1392,6 @@ struct TrayMenuItems {
     settings: MenuItem<tauri::Wry>,
     show: MenuItem<tauri::Wry>,
     hide: MenuItem<tauri::Wry>,
-    wm: WmItems,
-    wm_submenu: tauri::menu::Submenu<tauri::Wry>,
     autostart: CheckMenuItem<tauri::Wry>,
     reconnect: MenuItem<tauri::Wry>,
     quit: MenuItem<tauri::Wry>,
@@ -1219,13 +1403,9 @@ impl TrayMenuItems {
         let _ = self.settings.set_text(l[0]);
         let _ = self.show.set_text(l[1]);
         let _ = self.hide.set_text(l[2]);
-        let _ = self.wm.normal.set_text(l[3]);
-        let _ = self.wm.floating.set_text(l[4]);
-        let _ = self.wm.aot.set_text(l[5]);
-        let _ = self.wm_submenu.set_text(l[6]);
-        let _ = self.autostart.set_text(l[7]);
-        let _ = self.reconnect.set_text(l[8]);
-        let _ = self.quit.set_text(l[9]);
+        let _ = self.autostart.set_text(l[3]);
+        let _ = self.reconnect.set_text(l[4]);
+        let _ = self.quit.set_text(l[5]);
     }
 }
 
@@ -1238,114 +1418,10 @@ fn tray_set_language(lang: String, handles: tauri::State<'_, TrayHandles>) {
     }
 }
 
-/// Check exactly the item for `mode`, uncheck the other two.
-fn set_wm_checks(items: &WmItems, mode: WindowMode) {
-    let _ = items.normal.set_checked(mode == WindowMode::Normal);
-    let _ = items.floating.set_checked(mode == WindowMode::Floating);
-    let _ = items.aot.set_checked(mode == WindowMode::AlwaysOnTop);
-}
-
-/// Persist `window_mode = target` to base config via the sidecar. Read-modify-write
-/// over the existing `/config` routes (token injected Rust-side, like the editor).
-/// Returns `Ok(())` ONLY on a confirmed write: the `/config` contract returns
-/// validation failures as HTTP 200 with a non-empty `errors`, writing NOTHING, so
-/// success requires HTTP 200 AND `errors == []`. The POST blocks on `_setup_lock`,
-/// so it uses the longer `SETUP_CONNECT_TIMEOUT`; a timeout there is a genuine wedge.
-fn persist_window_mode(state: &AppState, target: WindowMode) -> Result<(), String> {
-    let d = state
-        .discovery
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| "sidecar not ready".to_string())?;
-    let body = http::http_get(
-        &d.host,
-        d.port,
-        &format!("/config?token={}", d.token),
-        SIDECAR_TIMEOUT,
-    )?;
-    let mut cfg: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("invalid /config JSON: {e}"))?;
-    {
-        let base = cfg
-            .get_mut("base")
-            .and_then(|b| b.as_object_mut())
-            .ok_or_else(|| "config response missing base table".to_string())?;
-        let desktop = base
-            .entry("desktop")
-            .or_insert_with(|| serde_json::json!({}));
-        let desktop_obj = desktop
-            .as_object_mut()
-            .ok_or_else(|| "config desktop is not a table".to_string())?;
-        desktop_obj.insert(
-            "window_mode".to_string(),
-            serde_json::Value::String(target.as_str().to_string()),
-        );
-    }
-    // POST only {base, profiles, local} — the redacted `secrets` field from the GET
-    // is display-only and never written back (secret values are one-way).
-    let payload = serde_json::json!({
-        "base": cfg.get("base").cloned().unwrap_or_else(|| serde_json::json!({})),
-        "profiles": cfg.get("profiles").cloned().unwrap_or_else(|| serde_json::json!({})),
-        "local": cfg.get("local").cloned().unwrap_or_else(|| serde_json::json!({})),
-    });
-    let (code, resp) = http::http_post_json(
-        &d.host,
-        d.port,
-        "/config",
-        (HDR_TOKEN, &d.token),
-        &payload.to_string(),
-        SETUP_CONNECT_TIMEOUT,
-    )?;
-    if code != 200 {
-        return Err(format!("POST /config returned HTTP {code}"));
-    }
-    let parsed: serde_json::Value =
-        serde_json::from_str(&resp).map_err(|e| format!("invalid /config response JSON: {e}"))?;
-    match parsed.get("errors").and_then(|e| e.as_array()) {
-        Some(arr) if arr.is_empty() => Ok(()),
-        Some(_) => Err("config rejected (validation errors)".to_string()),
-        None => Err("config response missing 'errors' field".to_string()),
-    }
-}
-
-/// Tray handler for a window-mode choice: persist FIRST, apply only on success.
-/// floating↔always_on_top applies live (toggle always_on_top); any change to/from
-/// normal restarts (transparent is creation-time). On persist failure: revert the
-/// checkmarks, log, do nothing else.
-fn select_window_mode(app: &tauri::AppHandle, target: WindowMode, items: &WmItems) {
-    let state = match app.try_state::<AppState>() {
-        Some(s) => s,
-        None => return,
-    };
-    let current = *state.window_mode.lock().unwrap();
-    if target == current {
-        set_wm_checks(items, current); // re-assert, no-op
-        return;
-    }
-    if let Err(e) = persist_window_mode(&state, target) {
-        eprintln!("window mode: persist failed, not applying: {e}");
-        set_wm_checks(items, current); // revert to the real persisted mode
-        return;
-    }
-    if deck_prefs::switch_needs_restart(current, target) {
-        // NOT app.restart(): a tray menu event runs on the MAIN THREAD, where
-        // Tauri's restart() skips RunEvent::ExitRequested/Exit and would ORPHAN
-        // the sidecar child (its kill lives in that handler). request_restart()
-        // routes through the event loop so the exit handler runs before restart.
-        app.request_restart();
-        return;
-    }
-    // Reached only for a live borderless↔borderless switch.
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_always_on_top(target == WindowMode::AlwaysOnTop);
-    }
-    *state.window_mode.lock().unwrap() = target;
-    set_wm_checks(items, target);
-}
-
-/// Build the tray icon with a show/hide/quit menu.
-fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
+/// Build the tray icon with a show/hide/quit menu. Nothing here depends on
+/// configuration any more: "Settings…" always opens the app window and
+/// "Show"/"Hide" always act on the deck, because the roles no longer swap.
+fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     use tauri_plugin_autostart::ManagerExt;
     // Built with the English (default-language) labels; tray_set_language
     // retitles everything the moment the WebView learns the configured language.
@@ -1353,64 +1429,26 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, "settings", l[0], true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", l[1], true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", l[2], true, None::<&str>)?;
-    let wm_normal = CheckMenuItem::with_id(
-        app,
-        "wm_normal",
-        l[3],
-        true,
-        current_mode == WindowMode::Normal,
-        None::<&str>,
-    )?;
-    let wm_floating = CheckMenuItem::with_id(
-        app,
-        "wm_floating",
-        l[4],
-        true,
-        current_mode == WindowMode::Floating,
-        None::<&str>,
-    )?;
-    let wm_aot = CheckMenuItem::with_id(
-        app,
-        "wm_aot",
-        l[5],
-        true,
-        current_mode == WindowMode::AlwaysOnTop,
-        None::<&str>,
-    )?;
-    let wm_submenu = tauri::menu::Submenu::with_items(
-        app,
-        l[6],
-        true,
-        &[&wm_normal, &wm_floating, &wm_aot],
-    )?;
-    let wm_items = WmItems {
-        normal: wm_normal,
-        floating: wm_floating,
-        aot: wm_aot,
-    };
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
-        l[7],
+        l[3],
         true,
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
-    let reconnect = MenuItem::with_id(app, "reconnect", l[8], true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", l[9], true, None::<&str>)?;
+    let reconnect = MenuItem::with_id(app, "reconnect", l[4], true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", l[5], true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&settings, &show, &hide, &wm_submenu, &reconnect, &autostart, &quit],
+        &[&settings, &show, &hide, &reconnect, &autostart, &quit],
     )?;
     let autostart_cb = autostart.clone();
-    let wm_items_cb = wm_items.clone();
     if let Some(handles) = app.try_state::<TrayHandles>() {
         *handles.0.lock().unwrap() = Some(TrayMenuItems {
             settings: settings.clone(),
             show: show.clone(),
             hide: hide.clone(),
-            wm: wm_items.clone(),
-            wm_submenu: wm_submenu.clone(),
             autostart: autostart.clone(),
             reconnect: reconnect.clone(),
             quit: quit.clone(),
@@ -1421,37 +1459,20 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
         .tooltip(build_channel::display_name())
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(move |app, event| {
-            let wm_items = &wm_items_cb;
-            match event.id.as_ref() {
+        .on_menu_event(move |app, event| match event.id.as_ref() {
             "settings" => {
-                if current_mode == WindowMode::Normal {
-                    let _ = app.emit_to("main", "open-settings", ());
-                }
-                if let Some(w) =
-                    app.get_webview_window(deck_prefs::settings_window_label(current_mode))
-                {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+                // Mirrors what the pre-roles `normal` mode did: opening settings
+                // dismisses a re-onboarding card the user never went through with.
+                let _ = app.emit_to(APP_WINDOW, "open-settings", ());
+                show_role_window(app, APP_WINDOW);
             }
-            "show" => {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
-            }
-            "hide" => {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.hide();
-                }
-            }
+            "show" => show_role_window(app, DECK_WINDOW),
+            "hide" => hide_role_window(app, DECK_WINDOW),
             "reconnect" => {
-                let _ = app.emit_to("main", "reonboard", ());
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+                // Onboarding lives on the app surface, so the re-onboard event
+                // and the window that has to be looking at it are the same one.
+                let _ = app.emit_to(APP_WINDOW, "reonboard", ());
+                show_role_window(app, APP_WINDOW);
             }
             "autostart" => {
                 let mgr = app.autolaunch();
@@ -1462,12 +1483,8 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
                 }
                 let _ = autostart_cb.set_checked(mgr.is_enabled().unwrap_or(false));
             }
-            "wm_normal" => select_window_mode(app, WindowMode::Normal, wm_items),
-            "wm_floating" => select_window_mode(app, WindowMode::Floating, wm_items),
-            "wm_aot" => select_window_mode(app, WindowMode::AlwaysOnTop, wm_items),
             "quit" => app.exit(0),
             _ => {}
-        }
         });
 
     // Reuse the embedded app icon for the tray (skip gracefully if absent).
@@ -1480,7 +1497,7 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
 
 /// Start the sidecar supervisor (or record the external discovery). `config_path`
 /// is exported as `HERDECK_CONFIG` so the spawned sidecar reads the SAME config
-/// file Rust resolved the window mode from (mooting the sidecar's CWD-relative
+/// file Rust resolved the deck preferences from (mooting the sidecar's CWD-relative
 /// branch — important for the frozen `.app`, where CWD is nondeterministic).
 fn start_sidecar(
     app: &tauri::App,
@@ -1533,9 +1550,10 @@ pub fn run() {
     let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let stop = Arc::new(AtomicBool::new(false));
 
-    // Resolve config.toml with the sidecar's existence-check order, then read the
-    // window mode BEFORE the window is built (transparent/decorations are
-    // creation-time props in Tauri 2).
+    // Resolve config.toml with the sidecar's existence-check order and read it
+    // ONCE, for two unrelated answers: the live deck preference, and — only if
+    // no window-state file exists yet, i.e. on the first launch after the
+    // upgrade — the legacy window_mode the fixed roles replaced.
     let home = PathBuf::from(env::var("HOME").unwrap_or_default());
     let repo_root = repo_root_from_manifest();
     let explicit_config = env::var("HERDECK_CONFIG").ok();
@@ -1545,7 +1563,12 @@ pub fn run() {
         &home,
         &repo_root,
     );
-    let mode = deck_prefs::read_window_mode(&config_path);
+    let config_text = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let deck_always_on_top = deck_prefs::parse_deck_always_on_top(&config_text);
+    let startup = window_state::startup_state(
+        window_state::load(&window_state::state_dir()),
+        deck_prefs::parse_legacy_window_mode(&config_text).as_deref(),
+    );
 
     // Clones for the setup closure and the supervisor.
     let setup_discovery = discovery.clone();
@@ -1558,7 +1581,7 @@ pub fn run() {
 
     let state = AppState {
         discovery,
-        window_mode: Arc::new(Mutex::new(mode)),
+        window_state: Arc::new(Mutex::new(startup)),
     };
 
     tauri::Builder::default()
@@ -1587,93 +1610,119 @@ pub fn run() {
             config_secret_clear,
             setup_status,
             setup_connect,
-            open_config,
             reload_hotkey,
-            get_window_mode,
+            show_deck,
+            hide_deck,
+            show_app,
             tray_set_language
         ])
         .setup(move |app| {
-            // `main` is no longer in tauri.conf.json — build it here so its
-            // transparent/decorations match the mode. The init script sets
-            // `<html data-window-mode>` BEFORE first paint so the borderless CSS
-            // applies with no flash of opaque-normal styling (FOUC).
+            // NEITHER window is declared in tauri.conf.json: both are built here
+            // so both get an initialization script, which stamps the window's
+            // role on `<html>` before its first paint. The frontend routes its
+            // surface off that attribute, so injecting it any later would show a
+            // flash of the wrong styling (FOUC).
+            //
+            // The two shapes are fixed and never swap. `main` is the borderless
+            // deck overlay, `config` the decorated settings window — exactly the
+            // properties each already had, minus the mode that shuffled them.
             let app_handle = app.handle().clone();
-            let init = format!(
-                "document.documentElement.dataset.windowMode='{}'",
-                mode.as_str()
-            );
             let display_name = build_channel::display_name();
             // The borderless card carries no CSS drop shadow (it fills the window
             // exactly, so one would only pool in the corner notches). macOS
             // derives a transparent window's shadow from the drawn content's
             // alpha, i.e. from the rounded card itself — so let it.
-            let builder = WebviewWindowBuilder::new(&app_handle, "main", WebviewUrl::default())
-                .title(&display_name)
-                .shadow(true)
-                .initialization_script(init);
-            let builder = match mode {
-                WindowMode::Normal => builder
+            let deck_window =
+                WebviewWindowBuilder::new(&app_handle, DECK_WINDOW, WebviewUrl::default())
+                    .title(&display_name)
+                    .shadow(true)
+                    .initialization_script(window_role_script("deck"))
+                    .decorations(false)
+                    .transparent(true)
+                    .resizable(false)
+                    .inner_size(328.0, 300.0)
+                    .skip_taskbar(true)
+                    .visible(false)
+                    .build()?;
+
+            // Dev builds carry the channel + revision in the title so two
+            // installs are never confused for one another.
+            let app_title = if build_channel::is_dev() {
+                format!("{display_name} - Settings")
+            } else {
+                "Herdeck Settings".to_string()
+            };
+            let app_window =
+                WebviewWindowBuilder::new(&app_handle, APP_WINDOW, WebviewUrl::default())
+                    .title(&app_title)
+                    .shadow(true)
+                    .initialization_script(window_role_script("app"))
                     .decorations(true)
                     .transparent(false)
-                    .always_on_top(false)
                     .resizable(true)
                     .inner_size(1180.0, 780.0)
                     .min_inner_size(680.0, 540.0)
-                    .skip_taskbar(false),
-                WindowMode::Floating => builder
-                    .decorations(false)
-                    .transparent(true)
-                    .always_on_top(false)
-                    .resizable(false)
-                    .inner_size(328.0, 300.0)
-                    .skip_taskbar(true),
-                WindowMode::AlwaysOnTop => builder
-                    .decorations(false)
-                    .transparent(true)
-                    .always_on_top(true)
-                    .resizable(false)
-                    .inner_size(328.0, 300.0)
-                    .skip_taskbar(true),
-            };
-            let main_window = builder.build()?;
+                    .skip_taskbar(false)
+                    .visible(false)
+                    .build()?;
 
-            // Borderless modes get the top-right placement; normal opens where the
-            // OS puts it and is user-movable via the titlebar.
-            if mode.is_borderless() {
-                place_floating(&main_window);
+            // Not a creation-time property, unlike transparent/decorations: this
+            // is the same call the tray makes, and it never needs a restart.
+            let _ = deck_window.set_always_on_top(deck_always_on_top);
+            place_deck(&deck_window, startup.deck_position);
+
+            // Both are built hidden and opened per the remembered layout, so a
+            // window that should stay closed never flashes on screen first.
+            // `startup_state` guarantees at least one of these is true.
+            if startup.deck_visible {
+                let _ = deck_window.show();
+            }
+            if startup.app_visible {
+                let _ = app_window.show();
+                let _ = app_window.set_focus();
             }
 
-            // Normal mode has a close button; intercept close -> hide (like the
-            // `config` window) so the tray "Show" brings it back and the app +
-            // sidecar keep running. CloseRequested is window-close only — it does
-            // NOT fire for app.exit/app.restart, so this never blocks quit/restart.
+            // Closing either window hides it: the tray brings it back, and the
+            // app + sidecar keep running. Without this Tauri would DESTROY the
+            // window and every later "show" would fail. CloseRequested is
+            // window-close only — it does NOT fire for app.exit/app.restart, so
+            // this never blocks quit or an updater restart.
             {
-                let w = main_window.clone();
-                main_window.on_window_event(move |event| {
+                let handle = app_handle.clone();
+                let deck = deck_window.clone();
+                deck_window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        hide_role_window(&handle, DECK_WINDOW);
+                    }
+                    // Memory only: a single drag emits hundreds of these. The
+                    // write happens when the deck is hidden, and on exit.
+                    //
+                    // A position reported while the deck is hidden is not a user
+                    // drag — some window managers emit one on hide — and must
+                    // not overwrite the place the user actually left it.
+                    tauri::WindowEvent::Moved(position) => {
+                        if deck.is_visible().unwrap_or(false) {
+                            remember_deck_position(
+                                &handle,
+                                placement_space_position(&deck, *position),
+                            );
+                        }
+                    }
+                    _ => {}
+                });
+            }
+            {
+                let handle = app_handle.clone();
+                app_window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
-                        let _ = w.hide();
+                        hide_role_window(&handle, APP_WINDOW);
                     }
                 });
             }
 
-            build_tray(app, mode)?;
-
-            // The config window is hidden at startup and reopened on demand; if it
-            // were allowed to close, Tauri would DESTROY it and open_config would
-            // then fail with "config window not found". Intercept close -> hide.
-            if let Some(cfg_win) = app.get_webview_window("config") {
-                if build_channel::is_dev() {
-                    let _ = cfg_win.set_title(&format!("{display_name} - Settings"));
-                }
-                let w = cfg_win.clone();
-                cfg_win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = w.hide();
-                    }
-                });
-            }
+            build_tray(app)?;
             start_sidecar(
                 app,
                 setup_discovery,
@@ -1685,8 +1734,11 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("failed to build herdeck desktop app")
-        .run(move |_app_handle, event| {
+        .run(move |app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+                // The last chance to save a deck position that was dragged and
+                // never hidden — `Moved` deliberately does not touch the disk.
+                persist_window_state(app_handle);
                 // Tear the supervised sidecar down so it never outlives the shell.
                 exit_stop.store(true, Ordering::SeqCst);
                 if let Some(mut c) = exit_child.lock().unwrap().take() {
