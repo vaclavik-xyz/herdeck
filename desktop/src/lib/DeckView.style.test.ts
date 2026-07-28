@@ -30,15 +30,24 @@ function topLevelRules(css: string): { selectors: string[]; body: string }[] {
     .map(([, selector, body]) => ({ selectors: splitSelectorList(selector), body }));
 }
 
-/** Split a selector list on commas that separate SELECTORS, not the ones inside
- *  `:not(.a, .b)` — a fragment cut mid-argument keeps its opening paren, and the
- *  strip in trailingClasses would then read the excluded class as required. */
-function splitSelectorList(list: string): string[] {
+/** Hide every `(...)` behind a sentinel so a later split cannot cut inside one.
+ *  Both splitters below need this: a fragment cut mid-argument keeps its opening
+ *  paren, and the strip in `compounds` would then read an excluded class as
+ *  required. One copy, so a grammar fix lands once. */
+function maskGroups(text: string): { masked: string; unmask: (part: string) => string } {
   const groups: string[] = [];
-  const masked = list.replace(/\([^()]*\)/g, (group) => `\u0000${groups.push(group) - 1}\u0000`);
-  return masked
-    .split(",")
-    .map((part) => part.replace(/\u0000(\d+)\u0000/g, (_, i) => groups[Number(i)]).trim());
+  const masked = text.replace(/\([^()]*\)/g, (group) => `\u0000${groups.push(group) - 1}\u0000`);
+  return {
+    masked,
+    unmask: (part) => part.replace(/\u0000(\d+)\u0000/g, (_, i) => groups[Number(i)]),
+  };
+}
+
+/** Split a selector list on commas that separate SELECTORS, not the ones inside
+ *  `:not(.a, .b)`. */
+function splitSelectorList(list: string): string[] {
+  const { masked, unmask } = maskGroups(list);
+  return masked.split(",").map((part) => unmask(part).trim());
 }
 
 function atRuleBody(css: string, prelude: RegExp): string | null {
@@ -48,23 +57,69 @@ function atRuleBody(css: string, prelude: RegExp): string | null {
   return match ? match[1] : null;
 }
 
+/** Drop functional pseudos from a compound. The single strip, so teaching it
+ *  about `:is()`/`:where()` — still unhandled, so `.deck:is(.compact)` reads as
+ *  a plain `.deck` — is one edit rather than three that could disagree. */
+function stripPseudos(compound: string): string {
+  return compound.replace(/:(?:not|has)\([^)]*\)/g, "");
+}
+
+/** A selector's compounds with their functional pseudos INTACT: ".deck:not(.compact)
+ *  .panel img" -> [".deck:not(.compact)", ".panel", "img"]. The single splitter;
+ *  `compounds` is this plus a strip. Masking first is what lets the split be a
+ *  plain combinator regex, since `:not(.alt, .fade)` contains a space. */
+function rawCompounds(selector: string): string[] {
+  const { masked, unmask } = maskGroups(selector);
+  return masked
+    .trim()
+    .split(/[\s>+~]+/)
+    .map(unmask);
+}
+
+/** A selector's compounds with functional pseudos REMOVED: ".deck .cell.active"
+ *  -> [".deck", ".cell.active"]. Such an argument states a CONDITION — classes
+ *  this compound must lack (`:not(.alt)`) or that some other element must have
+ *  (`:has(.alt)`) — never classes this element itself carries. Collecting them
+ *  would read `:not(.alt)` as REQUIRING alt, which both rejects a legal base
+ *  rule and accepts it as the parity rule it is the exact opposite of. Callers
+ *  that must HONOUR the condition use `rawCompounds` instead. */
+function compounds(selector: string): string[] {
+  return (
+    rawCompounds(selector)
+      .map(stripPseudos)
+      // A compound that was ENTIRELY a pseudo (`.deck :has(.panel) .cell`)
+      // leaves an empty string behind once stripped. Dropping it keeps
+      // `scopedUnder` scanning the same compounds it scanned when the strip
+      // happened before the split. (It is not a correctness hazard for today's
+      // callers — an empty compound has no classes, so `every` over a non-empty
+      // list fails; it would only pass vacuously for a caller that asked for no
+      // classes at all, and none does.) `lastCompound` deliberately does NOT go
+      // through this filter: dropping an empty LAST compound would hand the
+      // rule's target to its parent, so a descendant-targeting rule would read
+      // as targeting the ancestor — fail-open, where returning "" is fail-closed.
+      .filter(Boolean)
+  );
+}
+
+function classesOf(compound: string): Set<string> {
+  return new Set([...compound.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]));
+}
+
+/** A selector's last compound: ".panel img" -> "img". The element a rule
+ *  TARGETS, as opposed to the ancestors that scope it. Strips its own pseudos
+ *  rather than reusing `compounds`, whose empty-compound filter would make a
+ *  pseudo-only target (`.deck .grid :has(.panel)`) report `.grid` — attributing
+ *  a descendant-targeting rule to its ancestor. Returning "" instead drops the
+ *  rule from `reaches`, which is the fail-closed direction for a guard. */
+function lastCompound(selector: string): string {
+  return stripPseudos(rawCompounds(selector).pop() ?? "");
+}
+
 /** The classes of a selector's LAST compound: ".deck .cell.active" -> {cell,
  *  active}. Comparing class sets rather than selector text keeps a scoping
  *  prefix, a reordered compound or `:is()` from reading as a deleted rule. */
 function trailingClasses(selector: string): Set<string> {
-  // Strip BEFORE splitting on combinators: `:not(.alt, .fade)` contains a space,
-  // so a descendant split would otherwise cut the compound mid-argument.
-  // A functional pseudo's argument states a CONDITION — classes this compound
-  // must lack (`:not(.alt)`) or that some other element must have (`:has(.alt)`)
-  // — never classes this element itself carries. Collecting them would read
-  // `:not(.alt)` as requiring alt, which both rejects a legal base rule and
-  // accepts it as the parity rule it is the exact opposite of.
-  const last = selector
-    .replace(/:(?:not|has)\([^)]*\)/g, "")
-    .trim()
-    .split(/[\s>+~]+/)
-    .pop() ?? "";
-  return new Set([...last.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]));
+  return classesOf(lastCompound(selector));
 }
 
 /** Is the rule scoped UNDER an element carrying all of `classes`? Unlike
@@ -72,14 +127,10 @@ function trailingClasses(selector: string): Set<string> {
  *  `.deck-offline.mini strong` styles the mini overlay even though it targets a
  *  bare `strong`, which carries no classes to match on. */
 function scopedUnder(selector: string, classes: string[]): boolean {
-  return selector
-    .replace(/:(?:not|has)\([^)]*\)/g, "")
-    .trim()
-    .split(/[\s>+~]+/)
-    .some((compound) => {
-      const have = new Set([...compound.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]));
-      return classes.every((c) => have.has(c));
-    });
+  return compounds(selector).some((compound) => {
+    const have = classesOf(compound);
+    return classes.every((c) => have.has(c));
+  });
 }
 
 /** Does any selector in the list reach an element with all of `classes` (and
@@ -220,6 +271,201 @@ describe("compact offline pill styling", () => {
       declares(container, /pointer-events:\s*none/),
       "the compact overlay swallows presses the deck would still have accepted",
     ).toBe(true);
+  });
+});
+
+// The row height must come from the square tiles, never from the panel. The
+// panel spans `grid-column: 4 / 6` — two columns PLUS the gap between them — so
+// its 2:1 artwork (392x196, against 196x196 tiles) wants (2C + gap) / 2 of
+// height, i.e. gap/2 MORE than the tiles. In an auto-height grid row the img's
+// `height: 100%` degenerates to auto, so it sizes itself, drags the row with
+// it, and the panel hangs below the tiles beside it. Only an out-of-flow image
+// hands the row height back to the tiles, and jsdom cannot see any of this.
+
+// ---------------------------------------------------------------------------
+// A small cascade model. Filtering selectors cannot answer "what does THIS
+// surface end up with", which is the only question a geometry guard can be
+// written against once overrides are possible. Its own rules are exercised by
+// "the cascade model" below, so a future edit to them fails loudly rather than
+// silently widening every guard that depends on it.
+// ---------------------------------------------------------------------------
+
+/** Does one compound match an element carrying `classes` (and tag `tag`)?
+ *  Required classes must be present, `:not()` classes must be absent, and a
+ *  leading tag must be the element's. */
+function compoundMatches(compound: string, classes: Set<string>, tag?: string): boolean {
+  const negated = new Set<string>();
+  for (const not of compound.matchAll(/:not\(([^)]*)\)/g)) {
+    for (const c of not[1].matchAll(/\.([A-Za-z0-9_-]+)/g)) negated.add(c[1]);
+  }
+  const bare = stripPseudos(compound);
+  const named = bare.match(/^[a-zA-Z][a-zA-Z0-9-]*/)?.[0];
+  // No `tag` means the caller does not constrain it, NOT that a tag makes the
+  // compound fail. Rejecting on an unconstrained tag hid `button.panel` — the
+  // panel IS a button — so an override written that way was invisible while
+  // both containing-block assertions stayed green.
+  if (tag !== undefined && named !== undefined && named !== tag) return false;
+  for (const c of classesOf(bare)) if (!classes.has(c)) return false;
+  for (const c of negated) if (classes.has(c)) return false;
+  return true;
+}
+
+/** Does `selector` reach the target element on a surface whose ancestor chain
+ *  carries `surface`? The chain is treated as one class bag, which is exact
+ *  here: every ancestor class in play sits on `.deck`, `.stage` or `.grid`. */
+function applies(
+  selector: string,
+  surface: Set<string>,
+  target: Set<string>,
+  tag?: string,
+): boolean {
+  const parts = rawCompounds(selector);
+  const last = parts.pop();
+  if (!last || !compoundMatches(last, target, tag)) return false;
+  return parts.every((part) => compoundMatches(part, surface));
+}
+
+/** The value the surface actually gets for `prop`, or undefined if nothing
+ *  declares it there. */
+function effective(
+  rules: { selectors: string[]; body: string }[],
+  prop: string,
+  surface: Set<string>,
+  target: Set<string>,
+  tag?: string,
+): string | undefined {
+  // Global, and the LAST hit wins inside a rule as well as across them: a
+  // block that declares the property twice (`position: absolute; …;
+  // position: static;`) paints the second value, and a non-global match would
+  // have read the first and called the guard satisfied.
+  const pattern = new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`, "g");
+  let value: string | undefined;
+  let important = false;
+  for (const rule of rules) {
+    if (!rule.selectors.some((s) => applies(s, surface, target, tag))) continue;
+    for (const hit of rule.body.matchAll(pattern)) {
+      const raw = hit[1].trim();
+      const flagged = /!important$/.test(raw);
+      // `!important` outranks every later ordinary declaration, so once one is
+      // seen only another may replace it. Without this the model both failed
+      // a correct sheet (reporting `absolute !important` as the literal value)
+      // and passed a broken one (a later `static` masking an important
+      // `absolute`).
+      if (flagged || !important) {
+        value = raw.replace(/\s*!important$/, "");
+        important ||= flagged;
+      }
+    }
+  }
+  return value;
+}
+
+describe("status panel row geometry", () => {
+  // At-rule bodies too, unlike everywhere else in this file: the compact deck IS
+  // the small-window surface, so `@media (max-width: …) { .panel img { position:
+  // static } }` is exactly how someone would plausibly undo this. Media
+  // conditions cannot be evaluated here, so such a rule is treated as applying
+  // and ordered last — fail-closed for a guard asserting a required value.
+  const rules = [
+    ...topLevelRules(STYLE),
+    ...[...STYLE.matchAll(AT_RULE)].flatMap((at) =>
+      at[0].startsWith("@media") ? topLevelRules(at[0].slice(at[0].indexOf("{") + 1, -1)) : [],
+    ),
+  ];
+
+  // Filtering SELECTORS cannot answer this guard's question. Three separate
+  // mutations proved it: scoping the declarations under `.deck.compact`,
+  // scoping them away with `.deck:not(.compact)`, and — the one that defeats
+  // any selector filter — leaving the base rule intact and overriding it with a
+  // later, more specific `.deck.compact .panel img { position: static }`. What
+  // the guard actually means is "each surface ENDS UP WITH these declarations",
+  // so it computes the effective value per surface and subsumes all three.
+  //
+  // Last-match-wins stands in for the cascade. In this sheet compact overrides
+  // are written after the base rules they override, so source order and
+  // specificity agree; a compact rule placed BEFORE its base would fool this,
+  // and that is the one shape it does not model.
+  //
+  // The panel's ancestor chain. The image's chain is this plus `panel` itself,
+  // since the image sits INSIDE the panel — the distinction the first draft of
+  // this matcher got wrong, which made every `.panel img` rule invisible and
+  // read the panel's own `position` as the image's.
+  const CHAIN = ["deck", "stage", "grid"];
+  const SURFACES: [string, string[]][] = [
+    ["the desktop card", CHAIN],
+    ["the compact deck", [...CHAIN, "compact"]],
+  ];
+
+  // The image carries no classes of its own, so its target class set is empty
+  // and only the tag names it.
+  const onImage = (prop: string, chain: string[]) =>
+    effective(rules, prop, new Set([...chain, "panel"]), new Set(), "img");
+  const onPanel = (prop: string, chain: string[]) =>
+    effective(rules, prop, new Set(chain), new Set(["panel"]), "button");
+
+  it.each(SURFACES)(
+    "takes the panel image out of flow on %s, so it cannot size the row",
+    (_name, chain) => {
+      expect(
+        onImage("position", chain),
+        "the panel image is in flow, so its 2:1 ratio sets the row height and the panel overhangs the tiles",
+      ).toBe("absolute");
+    },
+  );
+
+  // Without this the image escapes to the nearest positioned ancestor —
+  // `.stage`, which spans the whole grid plus its padding — and lands somewhere
+  // else entirely. Someone debugging a stray full-grid image should look there,
+  // not at `.deck`.
+  it.each(SURFACES)("makes the panel itself the containing block on %s", (_name, chain) => {
+    expect(
+      onPanel("position", chain),
+      "the panel is not positioned, so its absolute image is placed against .stage instead",
+    ).toBe("relative");
+  });
+
+  // The panel box is gap-width wider than two tiles. Filling it would stretch
+  // the 2:1 art horizontally — the same distortion that forced the D200's
+  // native small-window fix.
+  it.each(SURFACES)("letterboxes rather than stretches the artwork on %s", (_name, chain) => {
+    expect(
+      onImage("object-fit", chain),
+      "the panel image is stretched across the extra gap width instead of being letterboxed",
+    ).toBe("contain");
+  });
+});
+
+// The geometry guard above is only as good as this model, and the model has
+// four rules that no stylesheet in this repo exercises today — the sheet
+// contains no `!important` at all. Without these, dropping the importance
+// branch would turn it back into plain last-wins with every other test green,
+// and the only thing left checking it would be hand-mutating DeckView.svelte:
+// exactly the manual step this file exists to replace.
+describe("the cascade model", () => {
+  const SURFACE = new Set(["deck", "panel"]);
+  const TARGET = new Set<string>();
+  const positionOf = (css: string) =>
+    effective(topLevelRules(css), "position", SURFACE, TARGET, "img");
+
+  it.each([
+    ["the last matching rule wins", ".panel img { position: absolute } .panel img { position: static }", "static"],
+    ["the last declaration in a block wins", ".panel img { position: absolute; inset: 0; position: static }", "static"],
+    ["important outranks a later ordinary rule", ".panel img { position: absolute !important } .panel img { position: static }", "absolute"],
+    ["an ordinary rule yields to a later important one", ".panel img { position: absolute } .panel img { position: static !important }", "static"],
+    ["the later important wins between two", ".panel img { position: absolute !important } .panel img { position: static !important }", "static"],
+    ["importance is stripped from the value", ".panel img { position: absolute !important }", "absolute"],
+    ["a rule that does not apply is ignored", ".cell img { position: static } .panel img { position: absolute }", "absolute"],
+    ["a tag mismatch on the target is ignored", ".panel span { position: static } .panel img { position: absolute }", "absolute"],
+    ["an excluded ancestor class is honoured", ".deck:not(.deck) .panel img { position: static } .panel img { position: absolute }", "absolute"],
+    ["nothing declares it", ".panel img { inset: 0 }", undefined],
+  ])("%s", (_name, css, expected) => {
+    expect(positionOf(css)).toBe(expected);
+  });
+
+  it("matches an ancestor compound that names its own tag", () => {
+    // `button.panel img` must be seen: the panel IS a button, so an override
+    // written that way is real. Ancestor tags are unconstrained by design.
+    expect(positionOf("button.panel img { position: static }")).toBe("static");
   });
 });
 
