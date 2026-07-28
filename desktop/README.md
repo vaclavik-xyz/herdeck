@@ -34,7 +34,7 @@ desktop/
   index.html
   src/
     main.ts                  # Svelte 5 mount
-    App.svelte               # routes normal control room vs compact deck and onboarding
+    App.svelte               # routes the app vs deck surface by window role, and onboarding
     ConfigApp.svelte         # desktop overview and settings workspace
     lib/
       sidecar.ts             # framework-free discovery + /health helpers
@@ -74,7 +74,8 @@ python3 -m venv .venv
 
 # then, from desktop/
 npm install
-npm run tauri dev                   # opens the normal desktop control room
+npm run tauri dev                   # opens whichever windows the remembered layout says
+                                    # (a clean checkout: the app window)
 ```
 
 `npm run tauri dev` is the exact manual command to smoke-test the GUI window. It

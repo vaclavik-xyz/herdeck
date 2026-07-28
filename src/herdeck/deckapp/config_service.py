@@ -36,8 +36,8 @@ class ConfigService:
     # A write whose payload was loaded against an older on-disk revision is
     # rejected with this error (prefix-matched by the editor): blindly writing
     # would resurrect the stale snapshot and silently delete whatever changed
-    # the files meanwhile (re-onboarding's [[servers]], the tray window-mode
-    # switch, a hand edit).
+    # the files meanwhile (re-onboarding's [[servers]], the tray's
+    # always-on-top toggle, a hand edit).
     STALE_REVISION_ERROR = "stale_revision: config changed on disk since the editor loaded it"
 
     def __init__(self, config_path, local_path):

@@ -441,8 +441,8 @@
 {/if}
 
 <style>
-  /* Opaque by default (normal + plain browser); borderless makes the window
-     transparent so the rounded .shell is the only painted surface. */
+  /* Opaque by default (the app window + a plain browser); the deck role makes
+     the window transparent so the rounded .shell is the only painted surface. */
   :global(html, body) {
     margin: 0;
     background: var(--canvas);

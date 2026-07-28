@@ -145,7 +145,7 @@ describe("DeckView press feedback", () => {
     } finally { cleanup(); }
   });
 
-  // A press can still be in flight when the window mode switches or the app
+  // A press can still be in flight when the deck window is hidden or the app
   // quits. Without the guard the resolving press installs a 450ms timer that
   // teardown has already run past, and writes state on a dead component.
   it("installs no timer when the press resolves after teardown", async () => {

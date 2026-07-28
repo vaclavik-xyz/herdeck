@@ -1888,8 +1888,14 @@ pub fn run() {
     // ONCE. Both answers below can fall back to the legacy window_mode the fixed
     // roles replaced, each only where its own newer source is absent —
     // `deck_always_on_top` for the flag, `window-state.json` for the visibility.
-    // That is the design doc's migration table, and it decides exactly one
-    // launch: whichever source writes first makes the legacy key inert.
+    // That is the design doc's migration table.
+    //
+    // The two halves stop consulting it at different times. Visibility: after
+    // ONE launch, because exit always writes `window-state.json`. The flag: only
+    // once the user deliberately sets it, from the tray or the editor — nothing
+    // writes it automatically, so until then the legacy key decides every
+    // launch. `configClient.ts`'s `deckAlwaysOnTop` mirrors that fallback so the
+    // editor checkbox agrees with the deck in the meantime.
     let config_path = default_config_path();
     let config_text = std::fs::read_to_string(&config_path).unwrap_or_default();
     let deck_always_on_top = deck_prefs::resolve_deck_always_on_top(&config_text);
