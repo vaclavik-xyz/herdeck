@@ -724,6 +724,10 @@ mod plan_tests {
         assert_eq!((s.app_visible, s.deck_visible), (true, true));
         set_role_visible(&mut s, APP_WINDOW, false);
         assert_eq!((s.app_visible, s.deck_visible), (false, true));
+        // A label that owns neither flag must change nothing, rather than be
+        // quietly filed under "the app".
+        set_role_visible(&mut s, "somewhere-else", true);
+        assert_eq!((s.app_visible, s.deck_visible), (false, true));
     }
 
     // The role is read by the frontend before first paint; a typo here is a
@@ -1201,11 +1205,16 @@ fn place_deck(window: &tauri::WebviewWindow, remembered: Option<(i32, i32)>) {
 
 /// Which visibility flag a window label owns. Split out because the labels are
 /// historical and read backwards: `main` is the deck, `config` is the app.
+///
+/// A label that is neither records NOTHING. An `else` arm that assumed "the app"
+/// would turn any future third window — or a renamed constant — into a silently
+/// wrong remembered layout, which is exactly the class of bug this whole file is
+/// getting rid of.
 fn set_role_visible(state: &mut WindowState, label: &str, visible: bool) {
-    if label == DECK_WINDOW {
-        state.deck_visible = visible;
-    } else {
-        state.app_visible = visible;
+    match label {
+        DECK_WINDOW => state.deck_visible = visible,
+        APP_WINDOW => state.app_visible = visible,
+        _ => {}
     }
 }
 
@@ -1226,7 +1235,10 @@ fn update_window_state(app: &tauri::AppHandle, f: impl FnOnce(&mut WindowState))
 /// Write the live state out as it stands — the exit path, and the flush that
 /// pairs with `remember_deck_position`.
 fn persist_window_state(app: &tauri::AppHandle) {
-    update_window_state(app, |_| {});
+    if let Some(state) = app.try_state::<AppState>() {
+        let snapshot = *state.window_state.lock().unwrap();
+        window_state::store(&window_state::state_dir(), &snapshot);
+    }
 }
 
 /// Record the deck's new origin WITHOUT touching the disk: one drag emits
