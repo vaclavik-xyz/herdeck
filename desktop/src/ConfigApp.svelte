@@ -1043,11 +1043,15 @@
   }
   @media (max-width: 800px) {
     .secondary-status, .topbar > .status-pill { display: none; }
-    .body { grid-template-columns: 1fr; }
-    .sidebar { flex-direction: row; gap: 5px; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; }
+    /* Single column: the nav becomes a strip that must take its OWN height.
+       Without an explicit row template the grid stretches both implicit rows to
+       fill the flex parent, which inflated the selected nav item to half the
+       viewport (its background made the stretch visible; the others hid it). */
+    .body { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+    .sidebar { flex-direction: row; align-items: center; gap: 5px; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; }
     .settings-search { width: 148px; flex: none; margin: 0; }
     .settings-search kbd { display: none; }
-    .nav-group { display: flex; flex: none; gap: 5px; margin: 0; }
+    .nav-group { display: flex; flex: none; align-items: center; gap: 5px; margin: 0; }
     .nav-label, .sidebar-version { display: none; }
     .sidebar button { width: auto; min-width: max-content; justify-content: center; }
     .content { padding: 20px 16px 28px; }
