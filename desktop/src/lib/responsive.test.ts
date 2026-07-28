@@ -75,8 +75,9 @@ describe("the media stripper", () => {
   // at-rule leaked: a fixture containing two of them would otherwise keep
   // throwing after its own alternative was deleted from the pattern.
   it.each([
-    // MEDIA_BLOCK cannot parse a media block wrapping another braced at-rule,
-    // and @media is the only conditional here — so this pins `media` itself.
+    // Depth, not at-rule-ness, is what defeats MEDIA_BLOCK: it tolerates one
+    // level of nesting, and @keyframes puts its rules two levels down. @media
+    // is the only conditional in the fixture, so this pins `media` itself.
     ["@media", "a media block it cannot parse",
       "@media (max-width: 760px) { @keyframes spin { from { opacity: 0 } } }"],
     ["@supports", "a top-level @supports",
