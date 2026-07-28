@@ -1565,9 +1565,11 @@ pub fn run() {
     let stop = Arc::new(AtomicBool::new(false));
 
     // Resolve config.toml with the sidecar's existence-check order and read it
-    // ONCE, for two unrelated answers: the live deck preference, and — only if
-    // no window-state file exists yet, i.e. on the first launch after the
-    // upgrade — the legacy window_mode the fixed roles replaced.
+    // ONCE. Both answers below can fall back to the legacy window_mode the fixed
+    // roles replaced, each only where its own newer source is absent —
+    // `deck_always_on_top` for the flag, `window-state.json` for the visibility.
+    // That is the design doc's migration table, and it decides exactly one
+    // launch: whichever source writes first makes the legacy key inert.
     let home = PathBuf::from(env::var("HOME").unwrap_or_default());
     let repo_root = repo_root_from_manifest();
     let explicit_config = env::var("HERDECK_CONFIG").ok();
@@ -1578,7 +1580,7 @@ pub fn run() {
         &repo_root,
     );
     let config_text = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let deck_always_on_top = deck_prefs::parse_deck_always_on_top(&config_text);
+    let deck_always_on_top = deck_prefs::resolve_deck_always_on_top(&config_text);
     let startup = window_state::startup_state(
         window_state::load(&window_state::state_dir()),
         deck_prefs::parse_legacy_window_mode(&config_text).as_deref(),

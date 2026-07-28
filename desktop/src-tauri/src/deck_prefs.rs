@@ -43,22 +43,41 @@ fn make_absolute(p: &str) -> PathBuf {
     }
 }
 
-/// `[desktop].deck_always_on_top`. Defaults to false for a missing key, a wrong
-/// type, or an unparseable file — never panics. Applied live via
-/// `set_always_on_top`; unlike the `window_mode` it replaces, it never needs a
-/// restart, because it is not a creation-time window property.
-pub fn parse_deck_always_on_top(toml_str: &str) -> bool {
+/// `[desktop].deck_always_on_top` exactly as the key reads it: `None` when the
+/// key is absent, the wrong type, or the file does not parse — never panics.
+///
+/// Deliberately does NOT default to false. Absent and explicitly-false lead to
+/// opposite answers once the migration fallback runs, so the two must stay
+/// apart; `resolve_deck_always_on_top` is what applies a default.
+pub fn parse_deck_always_on_top(toml_str: &str) -> Option<bool> {
     toml_str
         .parse::<toml::Value>()
         .ok()
         .and_then(|v| v.get("desktop")?.get("deck_always_on_top")?.as_bool())
-        .unwrap_or(false)
+}
+
+/// Whether the deck floats above other windows — the value the app acts on.
+///
+/// The key wins whenever it is present, in EITHER direction: a user who wrote
+/// `deck_always_on_top = false` must not have a `window_mode` left behind in the
+/// same file turn it back on, and upgrading deliberately does not rewrite that
+/// file. Only an ABSENT key defers to the legacy mode, which is row 3 of the
+/// design doc's migration table — the one launch after an upgrade where a user
+/// who had a floating deck would otherwise silently lose it.
+///
+/// Applied live via `set_always_on_top`; unlike the `window_mode` it replaces,
+/// it never needs a restart, because it is not a creation-time window property.
+pub fn resolve_deck_always_on_top(toml_str: &str) -> bool {
+    parse_deck_always_on_top(toml_str)
+        .unwrap_or_else(|| parse_legacy_window_mode(toml_str).as_deref() == Some("always_on_top"))
 }
 
 /// The pre-roles `[desktop].window_mode`, read ONCE per launch as the migration
-/// fallback (see window_state::startup_state). Deliberately returns the raw
-/// string rather than an enum: nothing in the app models these as modes any
-/// more, and the mapping lives in one place.
+/// fallback for both halves of the table — the flag (see
+/// `resolve_deck_always_on_top`) and the visibility (see
+/// `window_state::startup_state`). Deliberately returns the raw string rather
+/// than an enum: nothing in the app models these as modes any more, and the
+/// mapping lives in one place.
 pub fn parse_legacy_window_mode(toml_str: &str) -> Option<String> {
     toml_str
         .parse::<toml::Value>()
@@ -122,18 +141,29 @@ mod tests {
         assert!(!got.exists());
     }
 
+    // Absent is NOT false: the two lead to opposite answers once the legacy
+    // fallback is applied, so the raw parser must keep them apart.
     #[test]
-    fn deck_always_on_top_defaults_to_false() {
-        assert!(!parse_deck_always_on_top(""));
-        assert!(!parse_deck_always_on_top("[desktop]\n"));
-        assert!(!parse_deck_always_on_top("this is not toml ["));
-        assert!(!parse_deck_always_on_top("[desktop]\ndeck_always_on_top = \"yes\"\n"));
+    fn an_absent_or_unusable_flag_reads_as_absent_not_as_false() {
+        assert_eq!(parse_deck_always_on_top(""), None);
+        assert_eq!(parse_deck_always_on_top("[desktop]\n"), None);
+        assert_eq!(parse_deck_always_on_top("this is not toml ["), None);
+        assert_eq!(
+            parse_deck_always_on_top("[desktop]\ndeck_always_on_top = \"yes\"\n"),
+            None
+        );
     }
 
     #[test]
     fn deck_always_on_top_reads_the_explicit_flag() {
-        assert!(parse_deck_always_on_top("[desktop]\ndeck_always_on_top = true\n"));
-        assert!(!parse_deck_always_on_top("[desktop]\ndeck_always_on_top = false\n"));
+        assert_eq!(
+            parse_deck_always_on_top("[desktop]\ndeck_always_on_top = true\n"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_deck_always_on_top("[desktop]\ndeck_always_on_top = false\n"),
+            Some(false)
+        );
     }
 
     // The legacy key is a MIGRATION source, read only when the new one is absent —
@@ -142,8 +172,64 @@ mod tests {
     fn the_legacy_mode_is_readable_but_separate() {
         let toml = "[desktop]\nwindow_mode = \"always_on_top\"\n";
         assert_eq!(parse_legacy_window_mode(toml).as_deref(), Some("always_on_top"));
-        assert!(!parse_deck_always_on_top(toml));
+        // `parse_` reads ONE key and sees no such key here. Not to be confused
+        // with `resolve_`, which composes both sources and answers `true` for
+        // this very input — the contrast is the point of the two names.
+        assert_eq!(parse_deck_always_on_top(toml), None);
+        assert!(resolve_deck_always_on_top(toml));
         assert_eq!(parse_legacy_window_mode("[desktop]\n"), None);
+    }
+
+    // The design doc's migration table, one test per row, because its own risk
+    // note says every row needs one. Rows 1, 2 and 4 differ only in visibility,
+    // which `window_state::startup_state` owns; the flag column is here.
+
+    // Row 3: the only row that turns the flag on, and the only reason the
+    // fallback exists. Without it an upgrading user's floating deck comes back
+    // NOT floating, which is the one thing the migration promises not to do.
+    #[test]
+    fn a_legacy_always_on_top_deck_keeps_floating_after_the_upgrade() {
+        assert!(resolve_deck_always_on_top(
+            "[desktop]\nwindow_mode = \"always_on_top\"\n"
+        ));
+    }
+
+    // Rows 1 and 2: the legacy modes that were never on top stay off.
+    #[test]
+    fn the_other_legacy_modes_do_not_turn_the_flag_on() {
+        for mode in ["normal", "floating"] {
+            let toml = format!("[desktop]\nwindow_mode = \"{mode}\"\n");
+            assert!(!resolve_deck_always_on_top(&toml), "mode {mode}");
+        }
+    }
+
+    // Row 4: absent or unparseable is the documented default, and a first run
+    // has neither key.
+    #[test]
+    fn no_key_and_no_legacy_mode_leaves_the_flag_off() {
+        assert!(!resolve_deck_always_on_top(""));
+        assert!(!resolve_deck_always_on_top("[desktop]\n"));
+        assert!(!resolve_deck_always_on_top("this is not toml ["));
+        assert!(!resolve_deck_always_on_top("[desktop]\nwindow_mode = \"sideways\"\n"));
+    }
+
+    // The new key decides whenever it is present, in EITHER direction. The
+    // false case is the one that matters: a user who deliberately turned the
+    // deck off must not have a stale window_mode turn it back on, and the
+    // legacy key is left in config.toml precisely because upgrading does not
+    // rewrite a user's file.
+    #[test]
+    fn the_explicit_key_outranks_the_legacy_mode_both_ways() {
+        assert!(!resolve_deck_always_on_top(
+            "[desktop]\nwindow_mode = \"always_on_top\"\ndeck_always_on_top = false\n"
+        ));
+        assert!(resolve_deck_always_on_top(
+            "[desktop]\nwindow_mode = \"normal\"\ndeck_always_on_top = true\n"
+        ));
+        // And with no legacy key in the file at all.
+        assert!(resolve_deck_always_on_top(
+            "[desktop]\ndeck_always_on_top = true\n"
+        ));
     }
 
     #[test]
