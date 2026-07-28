@@ -552,17 +552,21 @@
     max-width: 31ch;
     color: var(--text-dim);
   }
-  /* Rounded opaque card flush to the (transparent) window edge so the drop shadow
-     traces the card silhouette. */
+  /* Rounded opaque card flush to the (transparent) window edge, so macOS derives
+     the WINDOW shadow from this silhouette. Deliberately no CSS drop shadow: the
+     card fills the window exactly, so an outer box-shadow has nowhere to go but
+     the four rounded-corner notches, where it renders as a grey square corner.
+     PLATFORM NOTE: Tauri's window `shadow()` is macOS/Windows only, so the Linux
+     packages get no drop shadow here — only the 1px inset ring. Giving the card
+     a shadow on every platform means insetting it from the window edge (window =
+     card + blur padding) and teaching the content-fit sizing about that padding. */
   main.borderless .shell {
     width: 328px;
     position: absolute;
     inset: 0 auto auto 0;
     border-radius: 14px;
     background: var(--canvas);
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--text-faint) 60%, transparent),
-      0 18px 48px color-mix(in srgb, var(--canvas) 80%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-faint) 60%, transparent);
     transform: scale(var(--floating-scale));
     transform-origin: top left;
     overflow: hidden;

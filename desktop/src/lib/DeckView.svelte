@@ -59,12 +59,44 @@
     } catch {
       return;
     }
-    if (!r.ok) return;
-    active = i;
+    // The component can be torn down (window-mode switch, quit) while the POST
+    // is in flight; without this the resolving press installs a timer that
+    // teardown has already run past, and writes state on a dead component.
+    if (!r.ok || !alive) return;
+    flashActive(i);
     // The sidecar re-renders synchronously inside the POST handler, so the
     // updated frame already exists — show it now instead of waiting out the
     // 300ms poll (up to half a second of dead time on the primary interaction).
     loop?.kick();
+  }
+
+  // The outline is press FEEDBACK, not a selection: it says "that press landed".
+  // It used to be set and never cleared, so the last-pressed cell kept a blue
+  // ring forever — and because it is keyed by slot index, the ring stayed put
+  // while the agent under it changed, marking an unrelated tile.
+  const ACTIVE_MS = 450;
+  let activeTimer: ReturnType<typeof setTimeout> | undefined;
+  let alive = true;
+  // Re-pressing the SAME cell inside the flash window would otherwise just push
+  // the deadline out with the ring already lit — indistinguishable from a press
+  // that never landed. The parity flips per press and swaps the animation NAME,
+  // which restarts the animation synchronously (no rAF, so it stays testable).
+  let pressParity = $state(false);
+
+  function flashActive(i: number): void {
+    if (activeTimer) clearTimeout(activeTimer);
+    active = i;
+    pressParity = !pressParity;
+    activeTimer = setTimeout(() => {
+      activeTimer = undefined;
+      active = null;
+    }, ACTIVE_MS);
+  }
+
+  function clearActive(): void {
+    if (activeTimer) clearTimeout(activeTimer);
+    activeTimer = undefined;
+    active = null;
   }
 
   // Config-window preview passes onJump → "jump mode": a tile click switches the editor
@@ -98,7 +130,7 @@
         lastTransport = transport;
         differ = new DeckDiffer();
         view = initialView(view.slots);
-        active = null;
+        clearActive();
       });
     }
   });
@@ -112,8 +144,10 @@
     loop = visibilityGatedLoop(step, () => pollMs);
     window.addEventListener("keydown", onKey);
     return () => {
+      alive = false;
       loop?.stop();
       loop = null;
+      clearActive();
       window.removeEventListener("keydown", onKey);
     };
   });
@@ -141,6 +175,7 @@
       <button
         class="cell"
         class:active={active === i}
+        class:alt={pressParity}
         onclick={() => clickTile(i)}
         aria-label={locale.lang === "cs" ? `dlaždice ${i + 1}` : `tile ${i + 1}`}
       >
@@ -150,6 +185,7 @@
     <button
       class="panel"
       class:active={active === view.slots}
+      class:alt={pressParity}
       onclick={() => { if (!onJump) void press(view.slots); }}
       aria-label={locale.lang === "cs" ? "stavový panel" : "status panel"}
     >
@@ -233,6 +269,25 @@
   .panel.active {
     outline: 2px solid var(--accent-strong);
     outline-offset: -2px;
+    animation: press-a var(--dur) var(--ease);
+  }
+  /* Same keyframes under a second name: flipping the class on a re-press swaps
+     the animation-name, which is what restarts the animation. */
+  .cell.active.alt,
+  .panel.active.alt {
+    animation-name: press-b;
+  }
+  @keyframes press-a { from { outline-color: var(--text); } }
+  @keyframes press-b { from { outline-color: var(--text); } }
+  /* theme.css flattens every animation to .01ms under reduced motion, which
+     would leave those users with the very "did that press land?" ambiguity this
+     parity exists to remove. Give them a STATIC difference instead: consecutive
+     presses alternate the ring colour, which no animation rule can flatten. */
+  @media (prefers-reduced-motion: reduce) {
+    .cell.active.alt,
+    .panel.active.alt {
+      outline-color: var(--text);
+    }
   }
   .cell img,
   .panel img {
