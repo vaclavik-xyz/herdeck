@@ -61,6 +61,13 @@ function atRuleBody(css: string, prelude: RegExp): string | null {
  *  .panel img" -> [".deck:not(.compact)", ".panel", "img"]. The single splitter;
  *  `compounds` is this plus a strip. Masking first is what lets the split be a
  *  plain combinator regex, since `:not(.alt, .fade)` contains a space. */
+/** Drop functional pseudos from a compound. The single strip, so teaching it
+ *  about `:is()`/`:where()` — still unhandled, so `.deck:is(.compact)` reads as
+ *  a plain `.deck` — is one edit rather than three that could disagree. */
+function stripPseudos(compound: string): string {
+  return compound.replace(/:(?:not|has)\([^)]*\)/g, "");
+}
+
 function rawCompounds(selector: string): string[] {
   const { masked, unmask } = maskGroups(selector);
   return masked
@@ -79,7 +86,7 @@ function rawCompounds(selector: string): string[] {
 function compounds(selector: string): string[] {
   return (
     rawCompounds(selector)
-      .map((compound) => compound.replace(/:(?:not|has)\([^)]*\)/g, ""))
+      .map(stripPseudos)
       // A compound that was ENTIRELY a pseudo (`.deck :has(.panel) .cell`)
       // leaves an empty string behind once stripped. Dropping it keeps
       // `scopedUnder` scanning the same compounds it scanned when the strip
@@ -105,7 +112,7 @@ function classesOf(compound: string): Set<string> {
  *  a descendant-targeting rule to its ancestor. Returning "" instead drops the
  *  rule from `reaches`, which is the fail-closed direction for a guard. */
 function lastCompound(selector: string): string {
-  return (rawCompounds(selector).pop() ?? "").replace(/:(?:not|has)\([^)]*\)/g, "");
+  return stripPseudos(rawCompounds(selector).pop() ?? "");
 }
 
 /** The classes of a selector's LAST compound: ".deck .cell.active" -> {cell,
@@ -318,7 +325,7 @@ describe("status panel row geometry", () => {
     for (const not of compound.matchAll(/:not\(([^)]*)\)/g)) {
       for (const c of not[1].matchAll(/\.([A-Za-z0-9_-]+)/g)) negated.add(c[1]);
     }
-    const bare = compound.replace(/:(?:not|has)\([^)]*\)/g, "");
+    const bare = stripPseudos(compound);
     const named = bare.match(/^[a-zA-Z][a-zA-Z0-9-]*/)?.[0];
     // No `tag` means the caller does not constrain it, NOT that a tag makes the
     // compound fail. Rejecting on an unconstrained tag hid `button.panel` — the
@@ -359,10 +366,22 @@ describe("status panel row geometry", () => {
     // have read the first and called the guard satisfied.
     const pattern = new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`, "g");
     let value: string | undefined;
+    let important = false;
     for (const rule of rules) {
       if (!rule.selectors.some((s) => applies(s, surface, target, tag))) continue;
-      const hits = [...rule.body.matchAll(pattern)];
-      if (hits.length) value = hits[hits.length - 1][1].trim();
+      for (const hit of rule.body.matchAll(pattern)) {
+        const raw = hit[1].trim();
+        const flagged = /!important$/.test(raw);
+        // `!important` outranks every later ordinary declaration, so once one is
+        // seen only another may replace it. Without this the model both failed
+        // a correct sheet (reporting `absolute !important` as the literal value)
+        // and passed a broken one (a later `static` masking an important
+        // `absolute`).
+        if (flagged || !important) {
+          value = raw.replace(/\s*!important$/, "");
+          important ||= flagged;
+        }
+      }
     }
     return value;
   }
