@@ -24,9 +24,11 @@ function styleBlock(source: string): string {
 const MEDIA_BLOCK = /@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g;
 
 /** Rules OUTSIDE any @media — what a desktop viewport actually gets.
- *  MEDIA_BLOCK tolerates exactly one level of nesting, so a nested at-rule
- *  would leave the block unstripped and hand its rules over as unconditional —
- *  failing OPEN, which is how a guard quietly stops guarding. Assert instead. */
+ *  MEDIA_BLOCK tolerates exactly one level of nesting, whatever the inner block
+ *  is: anything TWO levels deep — a nested selector, or an at-rule carrying its
+ *  own rules — leaves the block unstripped and hands its rules over as
+ *  unconditional, failing OPEN. That is how a guard quietly stops guarding, so
+ *  the stripper asserts its own post-condition instead of trusting the result. */
 const CONDITIONAL_AT_RULE = /@(media|supports|container)\b/;
 
 function unconditional(css: string): string {
