@@ -595,33 +595,90 @@ mod plan_tests {
     // covered by the one CI runner that compiles this branch.
     #[test]
     fn a_wayland_session_is_recognised_by_either_signal() {
-        assert!(is_wayland_session(Some("wayland"), None));
-        assert!(is_wayland_session(Some("Wayland"), None));
-        assert!(is_wayland_session(None, Some("wayland-0")));
-        assert!(is_wayland_session(Some("x11"), Some("wayland-0")));
+        assert!(is_wayland_session(Some("wayland"), None, None));
+        assert!(is_wayland_session(Some("Wayland"), None, None));
+        assert!(is_wayland_session(None, Some("wayland-0"), None));
+        assert!(is_wayland_session(Some("x11"), Some("wayland-0"), None));
     }
 
     #[test]
     fn an_x11_session_is_not_mistaken_for_wayland() {
-        assert!(!is_wayland_session(Some("x11"), None));
-        assert!(!is_wayland_session(None, None));
+        assert!(!is_wayland_session(Some("x11"), None, None));
+        assert!(!is_wayland_session(None, None, None));
         // Exported-but-empty is how a cleared variable survives in a session env.
-        assert!(!is_wayland_session(Some("x11"), Some("")));
+        assert!(!is_wayland_session(Some("x11"), Some(""), None));
+    }
+
+    // GDK_BACKEND=x11 in a Wayland session is the standard WebKitGTK workaround:
+    // WAYLAND_DISPLAY stays exported, but GDK — and so tao — really is on X11 and
+    // reports a usable pointer. Believing the socket there would discard it.
+    #[test]
+    fn a_forced_backend_outranks_the_session_variables() {
+        assert!(!is_wayland_session(
+            Some("wayland"),
+            Some("wayland-0"),
+            Some("x11")
+        ));
+        assert!(is_wayland_session(Some("x11"), None, Some("wayland")));
+        // A list is a preference order; GDK takes the first that connects.
+        assert!(!is_wayland_session(None, Some("wayland-0"), Some("x11,wayland")));
+        // Exported-but-empty is not a choice, so the session signals stand.
+        assert!(is_wayland_session(Some("wayland"), None, Some("")));
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
-    fn linux_drops_the_pointer_reading_under_wayland() {
-        assert!(!pointer_is_locatable(Some("wayland"), None));
-        assert!(pointer_is_locatable(Some("x11"), None));
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn the_gtk_backend_drops_the_pointer_reading_under_wayland() {
+        assert!(!pointer_is_locatable(Some("wayland"), None, None));
+        assert!(pointer_is_locatable(Some("x11"), None, None));
     }
 
-    // The variables mean nothing off Linux, and a stray export must not cost a
-    // macOS user the pointer preference this whole path exists for.
+    // The variables mean nothing off the GTK backend, and a stray export must
+    // not cost a macOS user the pointer preference this path exists for.
     #[test]
-    #[cfg(not(target_os = "linux"))]
-    fn wayland_variables_are_ignored_off_linux() {
-        assert!(pointer_is_locatable(Some("wayland"), Some("wayland-0")));
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    fn wayland_variables_are_ignored_off_the_gtk_backend() {
+        assert!(pointer_is_locatable(
+            Some("wayland"),
+            Some("wayland-0"),
+            None
+        ));
+    }
+
+    // The space decision is what broke once already, and it is the one part that
+    // cannot be reached from a test on this host — so it takes the platform as an
+    // argument and both shapes are asserted everywhere.
+    #[test]
+    fn logical_placement_divides_by_each_factor_and_keeps_the_margin() {
+        let p = placement_units(false, 2.0, 2.0);
+        assert_eq!((p.screen_div, p.window_div, p.margin), (2.0, 2.0, 16.0));
+        // A window still on a 1x display, moving to a 2x one.
+        let mixed = placement_units(false, 2.0, 1.0);
+        assert_eq!((mixed.screen_div, mixed.window_div), (2.0, 1.0));
+        // A monitor tao could not inspect must not become a divide by zero.
+        let broken = placement_units(false, 0.0, -1.0);
+        assert_eq!((broken.screen_div, broken.window_div), (1.0, 1.0));
+    }
+
+    #[test]
+    fn physical_placement_divides_by_nothing_and_scales_the_margin() {
+        let p = placement_units(true, 2.0, 1.0);
+        // Windows measures in one global physical space, so nothing is divided —
+        // but a fixed 16 would then be 8 points on a 200% display.
+        assert_eq!((p.screen_div, p.window_div, p.margin), (1.0, 1.0, 32.0));
+        assert_eq!(placement_units(true, 0.0, 0.0).margin, 16.0);
+    }
+
+    #[test]
+    fn placement_hands_set_position_the_space_it_was_measured_in() {
+        assert!(matches!(
+            placement_position(false, 100.5, -20.5),
+            tauri::Position::Logical(p) if p.x == 100.5 && p.y == -20.5
+        ));
+        assert!(matches!(
+            placement_position(true, 100.6, -20.4),
+            tauri::Position::Physical(p) if p.x == 101 && p.y == -20
+        ));
     }
 
     // Monitor choice. `pick_monitor` is generic, so a &str stands in for a Monitor.
@@ -753,10 +810,70 @@ fn cursor_in_lookup_space(cursor: (f64, f64), scale: f64) -> (f64, f64) {
 
 /// Does this environment describe a Wayland session? Either signal alone is
 /// enough: the session type is what the seat advertises, and the socket is what
-/// GTK actually connects to when a session lies or is unset.
-fn is_wayland_session(session_type: Option<&str>, wayland_display: Option<&str>) -> bool {
+/// GTK connects to when the session type lies or is unset.
+///
+/// `GDK_BACKEND` overrides both, mirroring GDK's own precedence. Forcing x11 is
+/// the standard WebKitGTK workaround, and it leaves `WAYLAND_DISPLAY` exported
+/// in a session where tao then reports a perfectly real pointer — throwing that
+/// away would lose the preference on exactly the desks most likely to run it.
+fn is_wayland_session(
+    session_type: Option<&str>,
+    wayland_display: Option<&str>,
+    gdk_backend: Option<&str>,
+) -> bool {
+    if let Some(backend) = gdk_backend.filter(|b| !b.is_empty()) {
+        // A comma-separated list is a preference order; the first entry wins.
+        let first = backend.split(',').next().unwrap_or("").trim();
+        return first.eq_ignore_ascii_case("wayland");
+    }
     session_type.map_or(false, |s| s.eq_ignore_ascii_case("wayland"))
         || wayland_display.map_or(false, |d| !d.is_empty())
+}
+
+/// Which space a placement is computed in, and what the margin means there.
+///
+/// Windows keeps monitor rects and window positions in one global PHYSICAL
+/// space, so nothing is divided — but the margin is then consumed in physical
+/// pixels, where a fixed 16 would shrink to 8 points on a 200% display, so it
+/// scales with the screen instead. macOS and Linux compute in logical points,
+/// where the margin already means what it says.
+struct Placement {
+    screen_div: f64,
+    window_div: f64,
+    margin: f64,
+}
+
+fn placement_units(is_windows: bool, monitor_scale: f64, window_scale: f64) -> Placement {
+    if is_windows {
+        Placement {
+            screen_div: 1.0,
+            window_div: 1.0,
+            margin: FLOATING_MARGIN * usable_scale(monitor_scale),
+        }
+    } else {
+        Placement {
+            screen_div: usable_scale(monitor_scale),
+            window_div: usable_scale(window_scale),
+            margin: FLOATING_MARGIN,
+        }
+    }
+}
+
+/// The origin in the space `set_position` expects. tao converts a PHYSICAL
+/// argument with the WINDOW's factor, which is wrong for a target derived from
+/// the MONITOR's rect — so macOS and Linux hand it logical points and let the
+/// conversion be an identity, while Windows hands back the physical space it
+/// measured in to begin with.
+fn placement_position(is_windows: bool, x: f64, y: f64) -> tauri::Position {
+    if is_windows {
+        PhysicalPosition {
+            x: x.round() as i32,
+            y: y.round() as i32,
+        }
+        .into()
+    } else {
+        LogicalPosition { x, y }.into()
+    }
 }
 
 /// Can tao report where the pointer actually is? Under Wayland it cannot — the
@@ -764,10 +881,17 @@ fn is_wayland_session(session_type: Option<&str>, wayland_display: Option<&str>)
 /// rather than an error. Taken at face value that reads as "the pointer is on
 /// whichever monitor owns the origin", which does not merely make the preference
 /// inert: it OVERRIDES the better `current_monitor()` fallback with a wrong
-/// answer. Only Linux can be in a Wayland session; elsewhere the variables mean
-/// nothing and a stray export must not cost anyone the pointer preference.
-fn pointer_is_locatable(session_type: Option<&str>, wayland_display: Option<&str>) -> bool {
-    !cfg!(target_os = "linux") || !is_wayland_session(session_type, wayland_display)
+/// answer. Only the GTK backend can be in a Wayland session — that is every unix
+/// but macOS, since tao builds the same backend on the BSDs. Elsewhere the
+/// variables mean nothing and a stray export must not cost anyone the pointer
+/// preference this whole path exists for.
+fn pointer_is_locatable(
+    session_type: Option<&str>,
+    wayland_display: Option<&str>,
+    gdk_backend: Option<&str>,
+) -> bool {
+    !cfg!(all(unix, not(target_os = "macos")))
+        || !is_wayland_session(session_type, wayland_display, gdk_backend)
 }
 
 /// Which monitor the deck belongs on, preferring the one under the pointer.
@@ -807,6 +931,7 @@ fn active_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
     let cursor = if pointer_is_locatable(
         env::var("XDG_SESSION_TYPE").ok().as_deref(),
         env::var("WAYLAND_DISPLAY").ok().as_deref(),
+        env::var("GDK_BACKEND").ok().as_deref(),
     ) {
         window
             .cursor_position()
@@ -841,25 +966,21 @@ fn active_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
 /// there is nothing to convert and dividing would invent a space of its own.
 fn place_floating(window: &tauri::WebviewWindow) {
     if let (Some(monitor), Ok(win_size)) = (active_monitor(window), window.outer_size()) {
-        let (screen, win) = if cfg!(windows) {
-            (1.0, 1.0)
-        } else {
-            let screen = usable_scale(monitor.scale_factor());
-            (screen, usable_scale(window.scale_factor().unwrap_or(screen)))
-        };
+        let monitor_scale = monitor.scale_factor();
+        let units = placement_units(
+            cfg!(windows),
+            monitor_scale,
+            window.scale_factor().unwrap_or(monitor_scale),
+        );
+        let (screen, win) = (units.screen_div, units.window_div);
         let area = monitor.work_area();
         let (x, y) = floating_origin(
             (area.position.x as f64 / screen, area.position.y as f64 / screen),
             (area.size.width as f64 / screen, area.size.height as f64 / screen),
             (win_size.width as f64 / win, win_size.height as f64 / win),
-            FLOATING_MARGIN,
+            units.margin,
         );
-        let target: tauri::Position = if cfg!(windows) {
-            PhysicalPosition { x: x as i32, y: y as i32 }.into()
-        } else {
-            LogicalPosition { x, y }.into()
-        };
-        let _ = window.set_position(target);
+        let _ = window.set_position(placement_position(cfg!(windows), x, y));
     }
 }
 
