@@ -41,10 +41,8 @@ import {
   DEFAULT_TOGGLE_DECK_HOTKEY,
   toggleDeckHotkey,
   setToggleDeckHotkey,
-  WINDOW_MODES,
-  DEFAULT_WINDOW_MODE,
-  windowMode,
-  setWindowMode,
+  deckAlwaysOnTop,
+  setDeckAlwaysOnTop,
   type ConfigPayload,
   errorCountLabel,
   effectiveLanguage,
@@ -953,24 +951,24 @@ describe("toggle-deck hotkey helpers", () => {
   });
 });
 
-describe("window mode", () => {
-  it("defaults to normal when absent", () => {
-    expect(windowMode(emptyPayload())).toBe(DEFAULT_WINDOW_MODE);
-    expect(DEFAULT_WINDOW_MODE).toBe("normal");
+describe("deck always-on-top", () => {
+  it("defaults to false when the key is absent or the wrong type", () => {
+    expect(deckAlwaysOnTop(emptyPayload())).toBe(false);
+    const emptyDesktop = parseConfig({ base: { desktop: {} }, profiles: {}, local: {}, secrets: {} })!;
+    expect(deckAlwaysOnTop(emptyDesktop)).toBe(false);
+    const wrongType = parseConfig({
+      base: { desktop: { deck_always_on_top: "yes" } },
+      profiles: {},
+      local: {},
+      secrets: {},
+    })!;
+    expect(deckAlwaysOnTop(wrongType)).toBe(false);
   });
 
-  it("returns a stored valid mode", () => {
-    const p = setWindowMode(emptyPayload(), "always_on_top");
-    expect(windowMode(p)).toBe("always_on_top");
-  });
-
-  it("falls back to default for an unknown stored value", () => {
-    const p = setAt(emptyPayload(), "base", "desktop", "window_mode", "bogus");
-    expect(windowMode(p)).toBe("normal");
-  });
-
-  it("exposes exactly the three modes", () => {
-    expect(WINDOW_MODES).toEqual(["normal", "floating", "always_on_top"]);
+  it("round-trips through the payload", () => {
+    const next = setDeckAlwaysOnTop(emptyPayload(), true);
+    expect(deckAlwaysOnTop(next)).toBe(true);
+    expect(deckAlwaysOnTop(setDeckAlwaysOnTop(next, false))).toBe(false);
   });
 });
 

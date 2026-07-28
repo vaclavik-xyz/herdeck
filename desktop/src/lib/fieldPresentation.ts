@@ -20,7 +20,7 @@ const LABELS: Record<Lang, Record<string, string>> = {
     providers: "Usage providers", paid_only: "Paid accounts only", refresh_secs: "Refresh interval",
     codex_path: "Codex executable", claude_cache_path: "Claude usage cache", codexbar_path: "CodexBar executable",
     approve: "Approve keys", deny: "Deny keys", stop: "Stop keys", keys: "Key mappings",
-    extends: "Inherits from", servers: "Remote servers", window_mode: "Window mode",
+    extends: "Inherits from", servers: "Remote servers", deck_always_on_top: "Deck always on top",
     toggle_deck: "Show or hide shortcut",
   },
   cs: {
@@ -43,7 +43,7 @@ const LABELS: Record<Lang, Record<string, string>> = {
     codex_path: "Spustitelný soubor Codex", claude_cache_path: "Cache využití Claude",
     codexbar_path: "Spustitelný soubor CodexBar", approve: "Klávesy pro schválení",
     deny: "Klávesy pro zamítnutí", stop: "Klávesy pro zastavení", keys: "Mapování kláves",
-    extends: "Dědí z profilu", servers: "Vzdálené servery", window_mode: "Režim okna",
+    extends: "Dědí z profilu", servers: "Vzdálené servery", deck_always_on_top: "Deck vždy navrchu",
     toggle_deck: "Zkratka pro zobrazení",
   },
 };

@@ -443,7 +443,7 @@
         deck: { grid: "5x3", overview_order: ["local:personal", "macbench"] },
         view: { management: "launcher_menu", tile_fields: ["repo", "status"] },
         theme: { colors: {} },
-        desktop: { window_mode: "normal" },
+        desktop: { deck_always_on_top: false },
       },
       profiles: {},
       local: { local: { deck: "auto" }, hardware: { brightness: 80 } },
