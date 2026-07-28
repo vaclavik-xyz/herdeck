@@ -23,10 +23,11 @@ function styleBlock(source: string): string {
 
 /** One media block, tolerating exactly ONE level of nesting whatever the inner
  *  block is. Anything two levels deep — a nested selector, or an at-rule
- *  carrying its own rules — does not match, so the block survives and
- *  `unconditional()` hands its rules on as if a desktop viewport got them.
- *  That is failing OPEN, which is how a guard quietly stops guarding; if you
- *  widen this, keep the post-condition below able to detect what you missed. */
+ *  carrying its own rules — does not match, so the block survives; were its
+ *  rules then handed on they would read as unconditional, which is failing OPEN
+ *  and is how a guard quietly stops guarding. `unconditional()` therefore
+ *  asserts a post-condition rather than trusting this regex — if you widen it,
+ *  keep that assertion able to detect whatever you still miss. */
 const MEDIA_BLOCK = /@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g;
 
 /** The at-rules that can HIDE a rule from a desktop viewport. @keyframes,
