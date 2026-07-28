@@ -242,6 +242,11 @@
   .deck-offline.mini {
     padding: var(--s2);
     background: color-mix(in srgb, var(--canvas) 62%, transparent);
+    /* A single failed poll flips `online` false, so on the floating deck this
+       overlay appears for ~300ms at a time over a deck that still actuates.
+       The pill is informational; it must not swallow those presses (the desktop
+       card, which offers a full explanation instead of a live deck, still may). */
+    pointer-events: none;
   }
   .deck-offline.mini strong {
     padding: 4px 10px;

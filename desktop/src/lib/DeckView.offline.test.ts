@@ -56,18 +56,14 @@ describe("DeckView offline state", () => {
   });
 
   // The compact deck is the floating window, and its footer — the only other
-  // place that says "offline" — is sr-only there. Suppressing the overlay in
-  // compact mode left an unreachable runtime looking exactly like a deck with
-  // nothing on it: blank keys and no reason why.
+  // surface that says "offline" — is sr-only there (see DeckView.style.test.ts,
+  // which owns the CSS half of this). Suppressing the overlay in compact mode
+  // left an unreachable runtime looking exactly like a deck with nothing on it:
+  // blank keys and no reason why.
   it("explains itself in compact mode too, where the footer is sr-only", () => {
     setLang("en");
     const { target, cleanup } = render({ transport: null, compact: true });
     try {
-      expect(
-        target.querySelector(".deck.compact footer.summary"),
-        "the sr-only footer this covers for is gone; re-check what compact shows",
-      ).not.toBeNull();
-
       const overlay = target.querySelector(".deck-offline");
       expect(overlay, "the compact deck offers no reason for its blank keys").not.toBeNull();
       expect(overlay?.textContent).toContain("Waiting for the runtime");
