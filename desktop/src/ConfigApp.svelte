@@ -5,6 +5,7 @@
   import { listen } from "@tauri-apps/api/event";
   import ArrowBendDownRight from "phosphor-svelte/lib/ArrowBendDownRight";
   import ArrowRight from "phosphor-svelte/lib/ArrowRight";
+  import ArrowSquareIn from "phosphor-svelte/lib/ArrowSquareIn";
   import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
   import BellSimple from "phosphor-svelte/lib/BellSimple";
   import Command from "phosphor-svelte/lib/Command";
@@ -108,6 +109,7 @@
       clear_search: "Clear search",
       no_search_results: "No settings match this search.",
       show_deck: "Show deck",
+      hide_deck: "Hide deck",
       editing_profile: "Editing profile: {name}",
       overview_eyebrow: "System overview",
       overview_title: "System status",
@@ -209,6 +211,7 @@
       clear_search: "Vymazat hledání",
       no_search_results: "Žádné nastavení tomuto hledání neodpovídá.",
       show_deck: "Zobrazit deck",
+      hide_deck: "Skrýt deck",
       editing_profile: "Upravuješ profil: {name}",
       overview_eyebrow: "Přehled systému",
       overview_title: "Stav systému",
@@ -331,6 +334,11 @@
   }
 
   let discovery = $state<Discovery | null>(null);
+  // Followed from "deck-visibility-changed" so the top bar's toggle stays
+  // honest when the tray, the hotkey, or the deck's own close changed it —
+  // read once via `deck_visible` on mount since the deck can already be open
+  // by the time this window appears.
+  let deckVisible = $state(false);
   let payload = $state<ConfigPayload | null>(null);
   // Runtime diagnostics must describe the last config accepted by the
   // sidecar, not the draft currently being edited in `payload`.
@@ -627,6 +635,7 @@
 
     let alive = true;
     let unlisten: (() => void) | null = null;
+    let unlistenDeckVisibility: (() => void) | null = null;
     const statusPoll = visibilityGatedLoop(
       async () => {
         const transport = preview;
@@ -663,6 +672,23 @@
     }).catch(() => {
       /* plain-browser design preview has no Tauri event bridge */
     });
+    // Tells the toggle button below apart from a click: the tray item, the
+    // hotkey, and the deck's own ⌘W all change the SAME window, and all three
+    // reach `deckVisible` through this one event instead of three commands.
+    void listen<boolean>("deck-visibility-changed", (ev) => {
+      deckVisible = ev.payload;
+    }).then((fn) => {
+      unlistenDeckVisibility = fn;
+    }).catch(() => {
+      /* plain-browser design preview has no Tauri event bridge */
+    });
+    // The deck may already be open (tray, hotkey, a previous session) by the
+    // time this window mounts — one read to catch up, then the event above.
+    void invoke("deck_visible").then((v) => {
+      deckVisible = v === true;
+    }).catch(() => {
+      /* plain-browser design preview has no Tauri command bridge */
+    });
     // The config window is hidden on close, not destroyed — a payload can be
     // days old when it reappears. Refresh a CLEAN editor on visibility.
     const onVisible = (): void => {
@@ -685,6 +711,7 @@
       alive = false;
       statusPoll.stop();
       unlisten?.();
+      unlistenDeckVisibility?.();
       if (validateTimer) clearTimeout(validateTimer);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -701,12 +728,16 @@
     <span class="status-pill secondary-status"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span>{connectedRemoteServers}/{remoteServers} {lm.remote_servers.toLowerCase()}</span>
     <button
       class="show-deck-button"
-      data-action="show-deck"
-      title={lm.show_deck}
-      onclick={() => invoke("show_deck").catch(() => {})}
+      data-action="toggle-deck"
+      title={deckVisible ? lm.hide_deck : lm.show_deck}
+      onclick={() => invoke(deckVisible ? "hide_deck" : "show_deck").catch(() => {})}
     >
-      <ArrowSquareOut size={13} aria-hidden="true" />
-      <span>{lm.show_deck}</span>
+      {#if deckVisible}
+        <ArrowSquareIn size={13} aria-hidden="true" />
+      {:else}
+        <ArrowSquareOut size={13} aria-hidden="true" />
+      {/if}
+      <span>{deckVisible ? lm.hide_deck : lm.show_deck}</span>
     </button>
     <span class="top-spacer"></span>
     <label class="profile-picker">

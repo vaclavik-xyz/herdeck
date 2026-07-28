@@ -40,6 +40,13 @@ use window_state::WindowState;
 const DECK_WINDOW: &str = "main";
 const APP_WINDOW: &str = "config";
 
+/// Told to the app window whenever the DECK's visibility changes, so its own
+/// toggle button stays honest even when the tray, the hotkey, or the deck's
+/// own close (⌘W) changed it from somewhere else. Emitted beside the tray
+/// label sync in `show_role_window`/`hide_role_window` — same trigger, same
+/// `deck_label_refresh` gate.
+const DECK_VISIBILITY_EVENT: &str = "deck-visibility-changed";
+
 /// Managed state read by the `get_discovery` command and by the supervisor
 /// callback. The live child handle and stop flag are held as separate `Arc`s
 /// owned by the supervisor + exit-handler closures (not routed through here).
@@ -1386,6 +1393,7 @@ fn show_role_window(app: &tauri::AppHandle, label: &str) {
     update_window_state(app, |s| set_role_visible(s, label, true));
     if let Some(deck_visible) = deck_label_refresh(label, true) {
         sync_deck_tray_label(app, deck_visible);
+        let _ = app.emit_to(APP_WINDOW, DECK_VISIBILITY_EVENT, deck_visible);
     }
 }
 
@@ -1397,6 +1405,7 @@ fn hide_role_window(app: &tauri::AppHandle, label: &str) {
     update_window_state(app, |s| set_role_visible(s, label, false));
     if let Some(deck_visible) = deck_label_refresh(label, false) {
         sync_deck_tray_label(app, deck_visible);
+        let _ = app.emit_to(APP_WINDOW, DECK_VISIBILITY_EVENT, deck_visible);
     }
 }
 
@@ -1419,16 +1428,30 @@ fn show_app(app: tauri::AppHandle) {
     show_role_window(&app, APP_WINDOW);
 }
 
+/// The deck's actual on-screen visibility, read straight from the window
+/// rather than `WindowState` — both callers need "is it visible right now",
+/// not "was it last recorded so".
+fn deck_is_visible(app: &tauri::AppHandle) -> bool {
+    app.get_webview_window(DECK_WINDOW)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+
+/// Whether the deck overlay is visible right now. The app window's toggle
+/// button calls this once on mount — the deck may already be open (tray,
+/// hotkey, a previous session) by the time the app window appears, and after
+/// that its label follows `DECK_VISIBILITY_EVENT` instead of polling this.
+#[tauri::command]
+fn deck_visible(app: tauri::AppHandle) -> bool {
+    deck_is_visible(&app)
+}
+
 /// Show/hide the deck overlay — shared by the tray's `toggle_deck` item and
 /// the deck-toggle hotkey, so both flip the SAME window the SAME way. The tray
 /// item's own text follows from `show_role_window`/`hide_role_window`, which
 /// every deck-visibility path goes through.
 fn toggle_deck_window(app: &tauri::AppHandle) {
-    let visible = app
-        .get_webview_window(DECK_WINDOW)
-        .and_then(|w| w.is_visible().ok())
-        .unwrap_or(false);
-    if visible {
+    if deck_is_visible(app) {
         hide_role_window(app, DECK_WINDOW);
     } else {
         show_role_window(app, DECK_WINDOW);
@@ -1950,6 +1973,7 @@ pub fn run() {
             show_deck,
             hide_deck,
             show_app,
+            deck_visible,
             tray_set_language
         ])
         .setup(move |app| {

@@ -4,15 +4,16 @@
 // - deck_always_on_top: Apply must re-apply it live, the same way it already
 //   re-registers the hotkey — see docs/superpowers/plans/2026-07-28-window-roles.md
 //   and task-6-report.md.
-// - the top bar's show-deck control: the app window's own pop-out gesture —
-//   see task-7-report.md.
+// - the top bar's deck-toggle control: the app window's own show/hide gesture
+//   for the deck, kept in step with the tray and the hotkey via
+//   "deck-visibility-changed" — see task-7-report.md.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import { setLang } from "./lib/i18n.svelte";
 
-const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
+const { invokeMock, listenMock } = vi.hoisted(() => ({ invokeMock: vi.fn(), listenMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
 
 import ConfigApp from "./ConfigApp.svelte";
 
@@ -49,9 +50,19 @@ beforeEach(() => {
   Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
   invokeMock.mockReset();
   invokeMock.mockImplementation(async (cmd: string) => mockInvoke(cmd));
+  listenMock.mockReset();
+  listenMock.mockImplementation(() => Promise.resolve(() => {}));
   target = document.createElement("div");
   document.body.appendChild(target);
 });
+
+// The handler ConfigApp registered for one event name, so a test can fire it
+// directly — simulating the tray, the hotkey, or ⌘W changing the deck WITHOUT
+// a click in this window.
+function registeredListener(event: string): ((ev: { payload: unknown }) => void) | undefined {
+  const call = listenMock.mock.calls.find(([name]) => name === event);
+  return call?.[1] as ((ev: { payload: unknown }) => void) | undefined;
+}
 
 afterEach(() => {
   delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
@@ -102,24 +113,30 @@ describe("ConfigApp Apply re-applies deck_always_on_top", () => {
   });
 });
 
-// Task 7: the app window's own pop-out control, beside the tray toggle and the
-// CmdOrCtrl+Shift+D hotkey — same command, same destination window.
-describe("ConfigApp top bar show-deck control", () => {
-  it("offers a way to pop the deck out", async () => {
+// Task 7: the app window's own deck toggle, beside the tray's `toggle_deck`
+// item and the CmdOrCtrl+Shift+D hotkey — same command pair, same destination
+// window, same labels. It must ALSO follow "deck-visibility-changed" so it
+// stays honest when one of those other two paths changed the deck instead.
+describe("ConfigApp top bar deck-toggle control", () => {
+  it("offers a way to toggle the deck, translated, while the deck is hidden", async () => {
     const { target, cleanup } = renderConfigApp();
     try {
-      const button = target.querySelector<HTMLButtonElement>("[data-action='show-deck']");
-      expect(button, "the app window offers no way to open the deck").not.toBeNull();
+      const button = target.querySelector<HTMLButtonElement>("[data-action='toggle-deck']");
+      expect(button, "the app window offers no way to toggle the deck").not.toBeNull();
       expect(button!.title, "icon-only control without a translated title").toBeTruthy();
+      await vi.waitFor(() => {
+        expect(button!.title).toBe("Show deck");
+        expect(button!.textContent).toContain("Show deck");
+      });
     } finally {
       cleanup();
     }
   });
 
-  it("invokes show_deck when clicked", async () => {
+  it("invokes show_deck when clicked while the deck is hidden", async () => {
     const { target, cleanup } = renderConfigApp();
     try {
-      const button = target.querySelector<HTMLButtonElement>("[data-action='show-deck']");
+      const button = target.querySelector<HTMLButtonElement>("[data-action='toggle-deck']");
       expect(button).not.toBeNull();
       button!.click();
       flushSync();
@@ -127,6 +144,62 @@ describe("ConfigApp top bar show-deck control", () => {
       await vi.waitFor(() => {
         expect(invokeMock).toHaveBeenCalledWith("show_deck");
       });
+      expect(invokeMock).not.toHaveBeenCalledWith("hide_deck");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("reads the deck's visibility on mount, then shows hide_deck and its label", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === "deck_visible" ? true : mockInvoke(cmd)));
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await vi.waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("deck_visible");
+      });
+      const button = target.querySelector<HTMLButtonElement>("[data-action='toggle-deck']");
+      expect(button, "the app window offers no way to toggle the deck").not.toBeNull();
+      await vi.waitFor(() => {
+        expect(button!.title).toBe("Hide deck");
+        expect(button!.textContent).toContain("Hide deck");
+      });
+
+      button!.click();
+      flushSync();
+      await vi.waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("hide_deck");
+      });
+      expect(invokeMock).not.toHaveBeenCalledWith("show_deck");
+    } finally {
+      cleanup();
+    }
+  });
+
+  // The one that matters: the tray, the hotkey, or ⌘W can change the deck's
+  // visibility WITHOUT this window's button ever being clicked. The button
+  // must still tell the truth — via the event, not a click.
+  it("flips label and command to match, without a click, when deck-visibility-changed fires", async () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await vi.waitFor(() => {
+        expect(registeredListener("deck-visibility-changed"), "no deck-visibility-changed listener registered")
+          .toBeTruthy();
+      });
+      const button = target.querySelector<HTMLButtonElement>("[data-action='toggle-deck']");
+      await vi.waitFor(() => expect(button!.title).toBe("Show deck"));
+
+      registeredListener("deck-visibility-changed")!({ payload: true });
+      flushSync();
+
+      expect(button!.title).toBe("Hide deck");
+      expect(button!.textContent).toContain("Hide deck");
+      // No click happened — the flip came from the event alone.
+      expect(invokeMock).not.toHaveBeenCalledWith("hide_deck");
+      expect(invokeMock).not.toHaveBeenCalledWith("show_deck");
+
+      registeredListener("deck-visibility-changed")!({ payload: false });
+      flushSync();
+      expect(button!.title).toBe("Show deck");
     } finally {
       cleanup();
     }
