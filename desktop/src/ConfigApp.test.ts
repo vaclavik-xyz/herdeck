@@ -1,8 +1,11 @@
-// ConfigApp has no general test suite yet (nothing here mocks the Tauri
-// bridge before this file). This test is scoped narrowly to the fix-round
-// regression it exists to close: Apply must re-apply `deck_always_on_top`
-// live, the same way it already re-registers the hotkey — see
-// docs/superpowers/plans/2026-07-28-window-roles.md and task-6-report.md.
+// ConfigApp has no general test suite yet — this file is a narrow, growing
+// harness, not exhaustive coverage. It mocks the Tauri bridge once and each
+// describe block below drives one specific behavior through it:
+// - deck_always_on_top: Apply must re-apply it live, the same way it already
+//   re-registers the hotkey — see docs/superpowers/plans/2026-07-28-window-roles.md
+//   and task-6-report.md.
+// - the top bar's show-deck control: the app window's own pop-out gesture —
+//   see task-7-report.md.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import { setLang } from "./lib/i18n.svelte";
@@ -37,27 +40,34 @@ function mockInvoke(cmd: string): unknown {
   }
 }
 
+let target: HTMLElement;
+
+beforeEach(() => {
+  setLang("en");
+  // browserMode (the read-only design-preview path) is gated on this global's
+  // absence — set it so these tests run the real invoke-backed path.
+  Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+  invokeMock.mockReset();
+  invokeMock.mockImplementation(async (cmd: string) => mockInvoke(cmd));
+  target = document.createElement("div");
+  document.body.appendChild(target);
+});
+
+afterEach(() => {
+  delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  target.remove();
+});
+
+// Shared mount helper — every describe block below drives the same real
+// component through the same mocked Tauri bridge set up in beforeEach.
+function renderConfigApp(): { target: HTMLElement; cleanup: () => void } {
+  const instance = mount(ConfigApp, { target, props: { interactive: true } });
+  return { target, cleanup: () => unmount(instance) };
+}
+
 describe("ConfigApp Apply re-applies deck_always_on_top", () => {
-  let target: HTMLElement;
-
-  beforeEach(() => {
-    setLang("en");
-    // browserMode (the read-only design-preview path) is gated on this global's
-    // absence — set it so Apply actually runs the real invoke-backed path.
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
-    invokeMock.mockReset();
-    invokeMock.mockImplementation(async (cmd: string) => mockInvoke(cmd));
-    target = document.createElement("div");
-    document.body.appendChild(target);
-  });
-
-  afterEach(() => {
-    delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-    target.remove();
-  });
-
   it("invokes reload_deck_always_on_top after a successful save, like reload_hotkey", async () => {
-    const instance = mount(ConfigApp, { target, props: { interactive: true } });
+    const { target, cleanup } = renderConfigApp();
     try {
       const desktopNav = Array.from(target.querySelectorAll<HTMLButtonElement>(".sidebar button"))
         .find((b) => b.textContent?.includes("Window"));
@@ -87,7 +97,38 @@ describe("ConfigApp Apply re-applies deck_always_on_top", () => {
       // today — confirms this test drives the real Apply path, not a stub of it.
       expect(invokeMock).toHaveBeenCalledWith("reload_hotkey");
     } finally {
-      unmount(instance);
+      cleanup();
+    }
+  });
+});
+
+// Task 7: the app window's own pop-out control, beside the tray toggle and the
+// CmdOrCtrl+Shift+D hotkey — same command, same destination window.
+describe("ConfigApp top bar show-deck control", () => {
+  it("offers a way to pop the deck out", async () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      const button = target.querySelector<HTMLButtonElement>("[data-action='show-deck']");
+      expect(button, "the app window offers no way to open the deck").not.toBeNull();
+      expect(button!.title, "icon-only control without a translated title").toBeTruthy();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("invokes show_deck when clicked", async () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      const button = target.querySelector<HTMLButtonElement>("[data-action='show-deck']");
+      expect(button).not.toBeNull();
+      button!.click();
+      flushSync();
+
+      await vi.waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("show_deck");
+      });
+    } finally {
+      cleanup();
     }
   });
 });

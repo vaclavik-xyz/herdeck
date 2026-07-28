@@ -5,6 +5,7 @@
   import { listen } from "@tauri-apps/api/event";
   import ArrowBendDownRight from "phosphor-svelte/lib/ArrowBendDownRight";
   import ArrowRight from "phosphor-svelte/lib/ArrowRight";
+  import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
   import BellSimple from "phosphor-svelte/lib/BellSimple";
   import Command from "phosphor-svelte/lib/Command";
   import Gauge from "phosphor-svelte/lib/Gauge";
@@ -106,6 +107,7 @@
       search_settings: "Search settings",
       clear_search: "Clear search",
       no_search_results: "No settings match this search.",
+      show_deck: "Show deck",
       editing_profile: "Editing profile: {name}",
       overview_eyebrow: "System overview",
       overview_title: "System status",
@@ -206,6 +208,7 @@
       search_settings: "Hledat nastavení",
       clear_search: "Vymazat hledání",
       no_search_results: "Žádné nastavení tomuto hledání neodpovídá.",
+      show_deck: "Zobrazit deck",
       editing_profile: "Upravuješ profil: {name}",
       overview_eyebrow: "Přehled systému",
       overview_title: "Stav systému",
@@ -696,6 +699,15 @@
     </div>
     <span class="status-pill"><span class:ready={runtimeReady} class="status-dot"></span>{lm.runtime} · {runtimeReady ? lm.ready : lm.connecting}</span>
     <span class="status-pill secondary-status"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span>{connectedRemoteServers}/{remoteServers} {lm.remote_servers.toLowerCase()}</span>
+    <button
+      class="show-deck-button"
+      data-action="show-deck"
+      title={lm.show_deck}
+      onclick={() => invoke("show_deck").catch(() => {})}
+    >
+      <ArrowSquareOut size={13} aria-hidden="true" />
+      <span>{lm.show_deck}</span>
+    </button>
     <span class="top-spacer"></span>
     <label class="profile-picker">
       <span>{lm.profile}</span>
@@ -962,12 +974,14 @@
   .scope-badge { margin-top: 4px; padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text-dim); background: var(--panel); font: 9px var(--font-mono); }
   .page-heading p, .card-heading p, .card p { margin: 5px 0 0; color: var(--text-dim); font-size: 11px; }
   .eyebrow { color: var(--text-dim); font-size: 9px; font-weight: 650; letter-spacing: .04em; }
-  .secondary, .icon-button, .savebar button { border: 1px solid var(--line-strong); border-radius: var(--r-control); background: var(--panel-raised); color: var(--text); cursor: pointer; }
+  .secondary, .icon-button, .savebar button, .show-deck-button { border: 1px solid var(--line-strong); border-radius: var(--r-control); background: var(--panel-raised); color: var(--text); cursor: pointer; }
   .savebar button:disabled { cursor: default; }
   .secondary { min-height: 32px; padding: 0 12px; font-size: 11px; font-weight: 630; }
-  .secondary:hover, .savebar button:hover:not(:disabled) { background: var(--key); }
-  .secondary:active, .icon-button:active, .savebar button:active:not(:disabled) { transform: translateY(1px); }
+  .secondary:hover, .savebar button:hover:not(:disabled), .show-deck-button:hover { background: var(--key); }
+  .secondary:active, .icon-button:active, .savebar button:active:not(:disabled), .show-deck-button:active { transform: translateY(1px); }
   .icon-button { width: 31px; height: 31px; padding: 0; }
+  .show-deck-button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; color: var(--text-dim); font-size: 11px; font-weight: 630; white-space: nowrap; }
+  .show-deck-button:hover { color: var(--text); }
   .card { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); }
   .card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
   .card-heading h2 { margin: 0; font-size: 14px; letter-spacing: -.015em; }
