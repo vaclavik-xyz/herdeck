@@ -1,6 +1,7 @@
 <script lang="ts">
   import SelectField from "../fields/SelectField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import ConfirmRemoveButton from "../fields/ConfirmRemoveButton.svelte";
   import { defineMessages, fieldHelp, locale } from "../i18n.svelte";
   import {
     profileNames, createProfile, deleteProfile,
@@ -20,27 +21,25 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Profiles",
-      intro: "Named profiles overlay the base config. The active profile is picked at the top; per-section overrides are slice 4b-ii.",
+      intro: "Named profiles extend the base config. Choose the active profile from the toolbar and override only the settings it needs.",
       new_profile_name: "new profile name",
       create_profile: "+ create profile",
       remove_profile: "Remove profile",
       locked_delete: "cannot delete a profile locked via HERDECK_PROFILE",
       inherits_base_servers: "inherits base servers",
-      no_base_servers: "no servers in the base — add them in the Servers section",
+      no_base_servers: "no servers in the base. Add them in the Servers section",
       unknown_server: "(unknown)",
       serverless: "serverless: the profile will run with no servers (an explicit empty selection)",
       no_profiles: "No profiles yet. Create the first one above.",
     },
     cs: {
-      heading: "Profily",
       intro: "Pojmenované profily překrývají bázi. Aktivní profil se vybírá nahoře; per-sekce overrides jsou řez 4b-ii.",
       new_profile_name: "jméno nového profilu",
       create_profile: "+ vytvořit profil",
       remove_profile: "Smazat profil",
       locked_delete: "nelze smazat profil zamčený přes HERDECK_PROFILE",
       inherits_base_servers: "zdědí base servery",
-      no_base_servers: "žádné servery v bázi — přidej je v sekci Servery",
+      no_base_servers: "žádné servery v bázi. Přidej je v sekci Servery",
       unknown_server: "(neznámý)",
       serverless: "serverless: profil poběží bez serverů (explicitní prázdný výběr)",
       no_profiles: "Zatím žádný profil. Vytvoř první výše.",
@@ -108,25 +107,25 @@
   }
 </script>
 
-<h2>{lm.heading}</h2>
 <p class="hint">{lm.intro}</p>
 
 <div class="create">
   <input placeholder={lm.new_profile_name} bind:value={newName} />
-  <button type="button" onclick={create}>{lm.create_profile}</button>
+  <button type="button" disabled={!newName.trim()} onclick={create}>{lm.create_profile}</button>
 </div>
 
 {#each names as name (name)}
   <fieldset>
-    <legend>{name} <button type="button" title={lm.remove_profile} onclick={() => remove(name)}>×</button></legend>
+    <legend>{name} <ConfirmRemoveButton title={lm.remove_profile} onconfirm={() => remove(name)} /></legend>
     <SelectField
       label="extends"
       help={HELP.extends}
+      owner={name}
       value={profileExtends(payload, name)}
       options={extendsOptions(name)}
       onchange={(v) => setExtends(name, v)}
     />
-    <OverrideField label="servers" help={HELP.servers} state={srvState(name)} inheritedDisplay={lm.inherits_base_servers} onstate={(s) => setSrvState(name, s)}>
+    <OverrideField label="servers" help={HELP.servers} owner={name} state={srvState(name)} inheritedDisplay={lm.inherits_base_servers} onstate={(s) => setSrvState(name, s)}>
       <div class="servers">
         {#if serverOptions(name).length === 0}
           <span class="hint">{lm.no_base_servers}</span>
@@ -154,14 +153,37 @@
 {/if}
 
 <style>
-  h2 { margin: 0 0 8px; }
-  .hint { color: #888; margin: 0 0 8px; }
-  .create { display: flex; gap: 6px; margin: 8px 0; }
-  .create input { flex: 1; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
-  fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; } legend button { color: #e05050; background: none; border: 0; cursor: pointer; }
-  .servers { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 2px 0; }
-  .chk { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; color: #ccc; }
-  .unknown { color: #e05050; font-size: 11px; }
-  button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+  .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
+  .create { display: flex; gap: var(--s2); margin: var(--s3) 0; }
+  .create input {
+    flex: 1;
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text);
+  }
+  fieldset {
+    margin: var(--s2) 0;
+    padding: var(--s4) var(--s5);
+    border: 1px solid var(--line);
+    border-radius: var(--r-panel);
+    background: var(--panel);
+  }
+  legend { color: var(--text); font: var(--t-label); }
+  .servers { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: var(--s1) 0; }
+  .chk { display: inline-flex; align-items: center; gap: var(--s1); margin-right: var(--s4); color: var(--text); }
+  .unknown { color: var(--st-offline); font: var(--t-help); }
+  button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+  button:hover { color: var(--text); background: var(--panel-raised); }
 </style>

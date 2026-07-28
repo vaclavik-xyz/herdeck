@@ -3,6 +3,7 @@
   import ListField from "../fields/ListField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import ConfirmRemoveButton from "../fields/ConfirmRemoveButton.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import {
     DEFAULT_ANSWER_PROFILES, answerProfileRows, serializeNamedRows, applyMapSection,
@@ -21,7 +22,6 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Answer profiles",
       overlay_hint:
         "Per-entry overlay: override an inherited answer profile or add a profile-only one. Inherited entries cannot be removed in an overlay.",
       remove_entry: "Remove profile entry",
@@ -35,12 +35,11 @@
       remove_profile: "Remove answer profile",
       name_first_hint: "Enter a profile name to edit the keys.",
       add_profile: "+ add profile",
-      err_duplicate: "duplicate answer profile name — it won't save until you rename it",
+      err_duplicate: "duplicate answer profile name. Rename it before saving",
       err_exists: "entry '{name}' already exists",
       err_builtin_name: "'{name}' is a built-in answer profile and cannot replace a custom profile",
     },
     cs: {
-      heading: "Profily odpovědí",
       overlay_hint:
         "Per-entry overlay: přepiš zděděný answer profil nebo přidej profilový. Zděděné položky nelze v overlay smazat.",
       remove_entry: "Odebrat profilovou položku",
@@ -54,7 +53,7 @@
       remove_profile: "Odebrat answer profil",
       name_first_hint: "Zadej jméno profilu pro úpravu kláves.",
       add_profile: "+ přidat profil",
-      err_duplicate: "duplicitní jméno answer profilu — neuloží se, dokud nepřejmenuješ",
+      err_duplicate: "duplicitní jméno answer profilu. Před uložením ho přejmenuj",
       err_exists: "položka '{name}' už existuje",
       err_builtin_name: "„{name}“ je vestavěný answer profil a nemůže nahradit vlastní profil",
     },
@@ -64,6 +63,7 @@
   // Local editor rows (source of truth while editing); re-seeded only when ConfigApp bumps
   // `reloadRev` (load/discard/Apply-reload) — same pattern as StartProfilesSection.
   let rows = $state<AnswerProfileRow[]>(answerProfileRows(payload));
+  let removalRevision = $state(0);
   let seenRev = $state<number | null>(null);
   let rejectedRenameRev = $state(0);
 
@@ -118,7 +118,7 @@
     commit([...rows, { name: "", approve: [], deny: [], stop: [], approve_always: null }]);
   }
   function isBuiltIn(name: string): boolean { return Object.hasOwn(DEFAULT_ANSWER_PROFILES, name); }
-  function remove(i: number): void { commit(rows.filter((_, j) => j !== i)); }
+  function remove(i: number): void { removalRevision += 1; commit(rows.filter((_, j) => j !== i)); }
 
   // --- overlay mode: per-entry override (whole entry dict) ---
   const SEC = "answer_profiles";
@@ -198,15 +198,14 @@
   function removeOwn(name: string): void { payload = { ...payload, profiles: clearOverridePath(payload.profiles, prof, [SEC, name]) }; onChange(); }
 </script>
 
-<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <p class="hint">{lm.overlay_hint}</p>
   {#each entryNames() as name (name)}
     <fieldset>
-      <legend>{name}{#if !isInherited(name)} <button type="button" title={lm.remove_entry} onclick={() => removeOwn(name)}>×</button>{/if}</legend>
+      <legend>{name}{#if !isInherited(name)} <ConfirmRemoveButton title={lm.remove_entry} onconfirm={() => removeOwn(name)} />{/if}</legend>
       <OverrideField label="keys" help={HELP.keys} state={entryState(name)} inheritedDisplay={inhSummary(name)} onstate={(s) => setEntryState(name, s)}>
         {#each LIST_KEYS as k}
-          <ListField label={k} help={HELP[k]} value={entryKeyValue(name, k)} onchange={(v) => setEntryKey(name, k, v)} />
+          <ListField label={k} help={HELP[k]} owner={name} value={entryKeyValue(name, k)} onchange={(v) => setEntryKey(name, k, v)} />
         {/each}
         <TriStateListField label="approve_always" help={HELP.approve_always} state={aaStateOv(name)} list={aaListOv(name)} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: aaHint(name) })} resetKey={`${prof}:${reloadRev}:answer_profiles:${name}:approve_always`} onchange={(s, l) => setAAOv(name, s, l)} />
       </OverrideField>
@@ -214,21 +213,21 @@
   {/each}
   <div class="create">
     <input placeholder={lm.entry_name_placeholder} bind:value={newName} />
-    <button type="button" onclick={addEntry}>{lm.add_profile_only}</button>
+    <button type="button" disabled={!newName.trim()} onclick={addEntry}>{lm.add_profile_only}</button>
   </div>
 {:else}
   <p class="hint">{lm.base_hint}</p>
   {#each rows as e, i (i)}
     <fieldset>
-      <legend>{e.name || lm.new_profile}{#if !isBuiltIn(e.name)} <button type="button" title={lm.remove_profile} onclick={() => remove(i)}>×</button>{/if}</legend>
+      <legend>{e.name || lm.new_profile}{#if !isBuiltIn(e.name)} <ConfirmRemoveButton title={lm.remove_profile} identity={`${e.name}\u0000${JSON.stringify(e)}`} resetKey={removalRevision} onconfirm={() => remove(i)} />{/if}</legend>
       {#if !isBuiltIn(e.name)}
         {#key `${i}:${rejectedRenameRev}`}
-          <TextField label="name" help={HELP.name} value={e.name} oninput={(v) => rename(i, v)} />
+          <TextField label="name" help={HELP.name} owner={e.name} value={e.name} oninput={(v) => rename(i, v)} />
         {/key}
       {/if}
       {#if e.name.trim() !== ""}
         {#each LIST_KEYS as k}
-          <ListField label={k} help={HELP[k]} value={e[k] ?? []} onchange={(v) => setList(i, k, v)} />
+          <ListField label={k} help={HELP[k]} owner={e.name} value={e[k] ?? []} onchange={(v) => setList(i, k, v)} />
         {/each}
         <TriStateListField label="approve_always" help={HELP.approve_always} state={aaState(e)} list={e.approve_always ?? []} resetKey={`base:${reloadRev}:answer_profiles:${e.name}:approve_always`} onchange={(s, l) => setApproveAlways(i, s, l)} />
       {:else}
@@ -240,11 +239,34 @@
 {/if}
 
 <style>
-  h2 { margin: 0 0 8px; }
-  .hint { color: #888; margin: 0 0 8px; }
-  .create { display: flex; gap: 6px; margin: 8px 0; }
-  .create input { flex: 1; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
-  fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; } legend button { color: #e05050; background: none; border: 0; cursor: pointer; }
-  button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+  fieldset {
+    margin: var(--s2) 0;
+    padding: var(--s4) var(--s5);
+    border: 1px solid var(--line);
+    border-radius: var(--r-panel);
+    background: var(--panel);
+  }
+  legend { color: var(--text); font: var(--t-label); }
+  button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+  button:hover { color: var(--text); background: var(--panel-raised); }
+  .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
+  .create { display: flex; gap: var(--s2); margin: var(--s3) 0; }
+  .create input {
+    flex: 1;
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text);
+  }
 </style>

@@ -33,13 +33,13 @@ describe("AnswerProfilesSection", () => {
         expect(legend).toBeTruthy();
         expect(legend?.querySelector("button")).toBeNull();
         const fieldset = legend?.closest("fieldset");
-        const labels = Array.from(fieldset?.querySelectorAll(".fieldlabel") ?? []);
-        expect(labels.some((label) => label.textContent?.trim() === "name")).toBe(false);
+        const labels = Array.from(fieldset?.querySelectorAll<HTMLElement>("[data-config-key]") ?? []);
+        expect(labels.some((label) => label.dataset.configKey === "name")).toBe(false);
       }
       const custom = legends.find((item) => item.textContent?.includes("constructor"));
       expect(custom?.querySelector('button[title="Remove answer profile"]')).toBeTruthy();
-      const customLabels = Array.from(custom?.closest("fieldset")?.querySelectorAll(".fieldlabel") ?? []);
-      expect(customLabels.some((label) => label.textContent?.trim() === "name")).toBe(true);
+      const customLabels = Array.from(custom?.closest("fieldset")?.querySelectorAll<HTMLElement>("[data-config-key]") ?? []);
+      expect(customLabels.some((label) => label.dataset.configKey === "name")).toBe(true);
     } finally {
       unmount(instance);
       target.remove();
@@ -64,7 +64,7 @@ describe("AnswerProfilesSection", () => {
         payload,
         reloadRev: 0,
         onChange: () => {},
-        onError: (message) => errors.push(message),
+        onError: (message: string) => errors.push(message),
       },
     });
     try {

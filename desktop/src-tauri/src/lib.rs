@@ -413,12 +413,17 @@ fn config_post_json(
     }
 }
 
-/// Show + focus the (hidden-at-startup) config editor window.
+/// Show + focus the desktop editor. Normal mode already renders it in `main`;
+/// compact overlay modes use the dedicated full-size config window.
 #[tauri::command]
-fn open_config(app: tauri::AppHandle) -> Result<(), String> {
+fn open_config(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mode = *state.window_mode.lock().unwrap();
+    if mode == WindowMode::Normal {
+        let _ = app.emit_to("main", "open-settings", ());
+    }
     let w = app
-        .get_webview_window("config")
-        .ok_or_else(|| "config window not found".to_string())?;
+        .get_webview_window(window_mode::settings_window_label(mode))
+        .ok_or_else(|| "desktop settings window not found".to_string())?;
     w.show().map_err(|e| e.to_string())?;
     w.set_focus().map_err(|e| e.to_string())?;
     Ok(())
@@ -513,6 +518,24 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
 #[cfg(test)]
 mod plan_tests {
     use super::*;
+
+    #[test]
+    fn main_window_capability_allows_compact_window_control() {
+        let capability: serde_json::Value = serde_json::from_str(include_str!(
+            "../capabilities/default.json"
+        ))
+        .expect("default capability must be valid JSON");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("default capability must declare permissions");
+
+        assert!(permissions.iter().any(|permission| {
+            permission.as_str() == Some("core:window:allow-start-dragging")
+        }));
+        assert!(permissions.iter().any(|permission| {
+            permission.as_str() == Some("core:window:allow-set-position")
+        }));
+    }
 
     fn stable_runtime() -> Discovery {
         Discovery {
@@ -906,7 +929,12 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
             let wm_items = &wm_items_cb;
             match event.id.as_ref() {
             "settings" => {
-                if let Some(w) = app.get_webview_window("config") {
+                if current_mode == WindowMode::Normal {
+                    let _ = app.emit_to("main", "open-settings", ());
+                }
+                if let Some(w) =
+                    app.get_webview_window(window_mode::settings_window_label(current_mode))
+                {
                     let _ = w.show();
                     let _ = w.set_focus();
                 }
@@ -1089,21 +1117,22 @@ pub fn run() {
                     .transparent(false)
                     .always_on_top(false)
                     .resizable(true)
-                    .inner_size(380.0, 340.0)
+                    .inner_size(1180.0, 780.0)
+                    .min_inner_size(680.0, 540.0)
                     .skip_taskbar(false),
                 WindowMode::Floating => builder
                     .decorations(false)
                     .transparent(true)
                     .always_on_top(false)
                     .resizable(false)
-                    .inner_size(360.0, 320.0)
+                    .inner_size(328.0, 300.0)
                     .skip_taskbar(true),
                 WindowMode::AlwaysOnTop => builder
                     .decorations(false)
                     .transparent(true)
                     .always_on_top(true)
                     .resizable(false)
-                    .inner_size(360.0, 320.0)
+                    .inner_size(328.0, 300.0)
                     .skip_taskbar(true),
             };
             let main_window = builder.build()?;
@@ -1135,7 +1164,7 @@ pub fn run() {
             // then fail with "config window not found". Intercept close -> hide.
             if let Some(cfg_win) = app.get_webview_window("config") {
                 if build_channel::is_dev() {
-                    let _ = cfg_win.set_title(&format!("{display_name} — Config"));
+                    let _ = cfg_win.set_title(&format!("{display_name} - Settings"));
                 }
                 let w = cfg_win.clone();
                 cfg_win.on_window_event(move |event| {

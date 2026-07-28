@@ -26,13 +26,11 @@
 
   const LM = defineMessages({
     en: {
-      title: "Safety",
       none: "(none)",
       inherit: "Inherit",
       inherited_hint: "inherited: {value}",
     },
     cs: {
-      title: "Bezpečnost",
       none: "(nic)",
       inherit: "Zdědit",
       inherited_hint: "zděděno: {value}",
@@ -61,7 +59,6 @@
   }
 </script>
 
-<h2>{lm.title}{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <OverrideField label="approve_always" help={HELP.approve_always} state={scState("approve_always")} inheritedDisplay={hint("approve_always")} onstate={(s) => setScState("approve_always", s)}>
     <BooleanField label="" value={Boolean(scValue("approve_always"))} onchange={(v) => setSc("approve_always", v)} />
@@ -72,6 +69,3 @@
   <TriStateListField label="require_confirm_for" help={HELP.require_confirm_for} state={listFieldState(payload, "base", SEC, "require_confirm_for")} list={requireConfirmFor} customSeed={SAFETY_DEFAULTS.require_confirm_for as string[]} defaultHint={(SAFETY_DEFAULTS.require_confirm_for as string[]).join(" · ")} resetKey={`base:${reloadRev}:safety:require_confirm_for`} onchange={setBaseRcf} />
 {/if}
 
-<style>
-  h2 { margin: 0 0 8px; }
-</style>

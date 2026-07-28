@@ -3,6 +3,7 @@ import { flushSync, mount, unmount } from "svelte";
 
 import TriStateListField from "./TriStateListField.svelte";
 import TriStateListFieldHarness from "./TriStateListFieldHarness.svelte";
+import type { ListFieldState } from "../configClient";
 
 describe("TriStateListField", () => {
   it("seeds Custom with the effective default list", () => {
@@ -15,7 +16,7 @@ describe("TriStateListField", () => {
         state: "default",
         list: [],
         customSeed: ["act_force"],
-        onchange: (state, list) => changes.push([state, list]),
+        onchange: (state: ListFieldState, list: string[]) => changes.push([state, list]),
       },
     });
     try {
@@ -36,7 +37,7 @@ describe("TriStateListField", () => {
         state: "default",
         list: ["act_force"],
         customSeed: ["act_force"],
-        onchange: (state, list) => changes.push([state, list]),
+        onchange: (state: ListFieldState, list: string[]) => changes.push([state, list]),
       },
     });
     try {
@@ -57,7 +58,7 @@ describe("TriStateListField", () => {
         state: "default",
         list: [],
         customSeed: [],
-        onchange: (state, list) => changes.push([state, list]),
+        onchange: (state: ListFieldState, list: string[]) => changes.push([state, list]),
       },
     });
     try {
@@ -80,7 +81,7 @@ describe("TriStateListField", () => {
     const target = document.createElement("div");
     const instance = mount(TriStateListFieldHarness, {
       target,
-      props: { onchange: (state, list) => changes.push([state, list]) },
+      props: { onchange: (state: ListFieldState, list: string[]) => changes.push([state, list]) },
     });
     try {
       (target.querySelector(".field .seg button:nth-child(2)") as HTMLButtonElement).click();

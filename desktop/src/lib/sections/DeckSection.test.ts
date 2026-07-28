@@ -5,9 +5,7 @@ import { parseConfig } from "../configClient";
 import DeckSection from "./DeckSection.svelte";
 
 function inputFor(target: HTMLElement, label: string): HTMLInputElement {
-  const fieldLabel = Array.from(target.querySelectorAll(".fieldlabel")).find(
-    (node) => node.textContent?.trim() === label,
-  );
+  const fieldLabel = target.querySelector<HTMLElement>(`[data-config-key="${label}"]`);
   const input = fieldLabel?.parentElement?.querySelector("input");
   if (!(input instanceof HTMLInputElement)) throw new Error(`missing input for ${label}`);
   return input;

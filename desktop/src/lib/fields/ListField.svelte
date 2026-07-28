@@ -1,8 +1,9 @@
 <script lang="ts">
   import { t } from "../i18n.svelte";
+  import FieldCopy from "./FieldCopy.svelte";
 
-  let { label, value, onchange, help = "" }:
-    { label: string; value: string[]; onchange: (v: string[]) => void; help?: string } = $props();
+  let { label, value, onchange, help = "", owner = null }:
+    { label: string; value: string[]; onchange: (v: string[]) => void; help?: string; owner?: string | null } = $props();
 
   const items = $derived(Array.isArray(value) ? value : []);
 
@@ -17,8 +18,8 @@
   }
 </script>
 
-<div class="listfield">
-  <span class="label fieldlabel" class:hashelp={!!help} title={help || undefined}>{label}</span>
+<div class="listfield" class:unlabelled={!label}>
+  {#if label}<FieldCopy {label} {help} {owner} />{/if}
   <div class="rows">
     {#each items as item, i (i)}
       <div class="row">
@@ -31,13 +32,48 @@
 </div>
 
 <style>
-  .listfield { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr; align-items: start; gap: 8px; margin: 6px 0; }
-  .label { color: #aaa; padding-top: 4px; }
-  .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
-  .rows { display: flex; flex-direction: column; gap: 4px; }
-  .row { display: flex; gap: 6px; }
-  input { flex: 1; background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
-  button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
-  .row button { color: #e05050; }
+  .listfield {
+    display: grid;
+    grid-template-columns: var(--field-label-w) minmax(0, 1fr);
+    align-items: start;
+    gap: var(--s1) var(--s6);
+    padding: var(--s3) 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .listfield.unlabelled { grid-template-columns: minmax(0, 1fr); padding: 0; border-bottom: 0; }
+  .rows {
+    display: flex;
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    flex-direction: column;
+    gap: var(--s1);
+    max-width: var(--control-lg);
+  }
+  .listfield.unlabelled .rows { grid-column: 1; grid-row: auto; max-width: none; }
+  .row { display: flex; gap: var(--s2); }
+  input {
+    flex: 1;
+    min-height: 32px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text);
+  }
+  button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--panel-raised);
+    color: var(--text);
+    cursor: pointer;
+  }
+  button:hover { background: var(--key); }
+  .row button { color: var(--st-offline); }
   .add { align-self: flex-start; }
+  @media (max-width: 760px) {
+    .listfield { grid-template-columns: minmax(0, 1fr); }
+    .rows { grid-column: 1; grid-row: auto; max-width: none; }
+  }
 </style>

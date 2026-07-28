@@ -2,8 +2,9 @@
   import type { Snippet } from "svelte";
 
   import { t } from "../i18n.svelte";
+  import FieldCopy from "./FieldCopy.svelte";
 
-  let { label, state, inheritedDisplay, onstate, children, help = "" }:
+  let { label, state, inheritedDisplay, onstate, children, help = "", owner = null }:
     {
       label: string;
       state: "inherit" | "override";
@@ -11,6 +12,7 @@
       onstate: (s: "inherit" | "override") => void;
       children: Snippet;
       help?: string;
+      owner?: string | null;
     } = $props();
 
   const SEGMENTS = $derived<{ value: "inherit" | "override"; text: string }[]>([
@@ -24,7 +26,7 @@
 </script>
 
 <div class="override">
-  <span class="label fieldlabel" class:hashelp={!!help} title={help || undefined}>{label}</span>
+  <FieldCopy {label} {help} {owner} />
   <div class="body">
     <div class="seg" role="group" aria-label={label}>
       {#each SEGMENTS as s}
@@ -45,13 +47,49 @@
 </div>
 
 <style>
-  .override { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr; align-items: start; gap: 8px; margin: 6px 0; }
-  .label { color: #aaa; padding-top: 4px; }
-  .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
-  .body { display: flex; flex-direction: column; gap: 4px; }
-  .seg { display: inline-flex; align-self: flex-start; border: 1px solid #2a2a30; border-radius: 4px; overflow: hidden; }
-  .seg button { background: #141417; border: 0; border-right: 1px solid #2a2a30; color: #aaa; padding: 4px 10px; cursor: pointer; }
+  .override {
+    display: grid;
+    grid-template-columns: var(--field-label-w) minmax(0, 1fr);
+    align-items: start;
+    gap: var(--s1) var(--s6);
+    padding: var(--s3) 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .body {
+    display: flex;
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    flex-direction: column;
+    gap: var(--s2);
+    min-width: 0;
+  }
+  .seg {
+    display: inline-flex;
+    align-self: flex-start;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    overflow: hidden;
+  }
+  .seg button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 0;
+    border-right: 1px solid var(--line);
+    background: var(--field);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
   .seg button:last-child { border-right: 0; }
-  .seg button.on { background: #2a2a30; color: #e8e8ea; }
-  .hint { color: #777; margin: 2px 0; font-style: italic; }
+  .seg button:hover { color: var(--text); background: var(--panel-raised); }
+  .seg button.on {
+    background: var(--accent-soft);
+    color: var(--text);
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+  }
+  .hint { margin: 0; color: var(--text-dim); font: var(--t-help); }
+  @media (max-width: 760px) {
+    .override { grid-template-columns: minmax(0, 1fr); }
+    .body { grid-column: 1; grid-row: auto; }
+  }
 </style>

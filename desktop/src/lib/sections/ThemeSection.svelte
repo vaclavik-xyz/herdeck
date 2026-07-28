@@ -1,5 +1,6 @@
 <script lang="ts">
-  import ColorSelectField from "../fields/ColorSelectField.svelte";
+  import FieldGroup from "./FieldGroup.svelte";
+  import ColorSwatchField from "../fields/ColorSwatchField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import {
@@ -23,13 +24,15 @@
 
   const LM = defineMessages({
     en: {
-      title: "Colors",
+      group_status: "Agent status colors",
+      group_status_desc: "Each status keeps this colour on every tile and in this window.",
       none: "(none)",
       inherit: "Inherit",
       inherited_hint: "inherited: {value}",
     },
     cs: {
-      title: "Barvy",
+      group_status: "Barvy stavů agentů",
+      group_status_desc: "Každý stav má tuto barvu na dlaždici i v tomto okně.",
       none: "(nic)",
       inherit: "Zdědit",
       inherited_hint: "zděděno: {value}",
@@ -81,29 +84,21 @@
   }
 </script>
 
-<h2>{lm.title}{#if overlay} · overlay: {editProfile}{/if}</h2>
-<fieldset class="colors">
-  <legend>colors</legend>
+<FieldGroup title={lm.group_status} description={lm.group_status_desc}>
   {#if overlay}
     {#each STATUS as key (key)}
       <OverrideField label={key} help={HELP[key]} state={colorState(key)} inheritedDisplay={colorInheritedHint(key)} onstate={(s) => setColorState(key, s)}>
-        <ColorSelectField label="" value={colorValue(key)} allowEmpty={false} onchange={(v) => setColor(key, v)} />
+        <ColorSwatchField label="" value={colorValue(key)} allowEmpty={false} onchange={(v) => setColor(key, v)} />
       </OverrideField>
     {/each}
   {:else}
     {#each STATUS as key (key)}
-      <ColorSelectField label={key} help={HELP[key]} value={baseColorOf(key)} onchange={(v) => setBaseColor(key, v)} />
+      <ColorSwatchField label={key} help={HELP[key]} value={baseColorOf(key)} onchange={(v) => setBaseColor(key, v)} />
     {/each}
   {/if}
-</fieldset>
+</FieldGroup>
 {#if overlay}
   <TriStateListField label="server_accents" help={HELP.server_accents} state={overrideState(payload, prof, SEC, "server_accents")} list={ovAccents()} customSeed={inheritedAccents()} inheritLabel={lm.inherit} inheritHint={fmt(lm.inherited_hint, { value: accentHint() })} resetKey={`${prof}:${reloadRev}:theme:server_accents`} onchange={setOvAccents} />
 {:else}
   <TriStateListField label="server_accents" help={HELP.server_accents} state={listFieldState(payload, "base", SEC, "server_accents")} list={accents} customSeed={DEFAULT_SERVER_ACCENTS} defaultHint={DEFAULT_SERVER_ACCENTS.join(" · ")} resetKey={`base:${reloadRev}:theme:server_accents`} onchange={setBaseAccents} />
 {/if}
-
-<style>
-  h2 { margin: 0 0 8px; }
-  .colors { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  .colors legend { color: #ccc; }
-</style>

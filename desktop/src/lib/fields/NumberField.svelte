@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FieldCopy from "./FieldCopy.svelte";
   let {
     label,
     value,
@@ -34,8 +35,8 @@
   }
 </script>
 
-<label class="field">
-  <span class="fieldlabel" class:hashelp={!!help} title={help || undefined}>{label}</span>
+<label class="field" class:unlabelled={!label}>
+  {#if label}<FieldCopy {label} {help} />{/if}
   <input
     type="number"
     {step}
@@ -47,8 +48,35 @@
 </label>
 
 <style>
-  .field { display: grid; grid-template-columns: var(--field-label-w, 120px) 1fr; align-items: center; gap: 8px; margin: 4px 0; }
-  .field span { color: #aaa; }
-  .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
-  input { background: #141417; border: 1px solid #2a2a30; color: inherit; padding: 4px 6px; border-radius: 4px; }
+  .field {
+    display: grid;
+    grid-template-columns: var(--field-label-w) minmax(0, 1fr);
+    gap: var(--s1) var(--s6);
+    padding: var(--s3) 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .field.unlabelled {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0;
+    border-bottom: 0;
+  }
+  input {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+    width: 100%;
+    max-width: var(--control-sm);
+    min-height: 32px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text);
+  }
+  input:hover { border-color: var(--accent-ring); }
+  .field.unlabelled input { grid-column: 1; grid-row: auto; }
+  @media (max-width: 760px) {
+    .field { grid-template-columns: minmax(0, 1fr); }
+    input { grid-column: 1; grid-row: auto; max-width: none; }
+  }
 </style>

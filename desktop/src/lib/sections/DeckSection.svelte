@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FieldGroup from "./FieldGroup.svelte";
   import TextField from "../fields/TextField.svelte";
   import NumberField from "../fields/NumberField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
@@ -24,20 +25,20 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Deck",
       none: "(none)",
       inherit: "Inherit",
       inherited_hint: "inherited: {value}",
-      hw_legend: "Hardware (this machine — local.toml)",
+      hw_legend: "Hardware (this machine, local.toml)",
       hw_hint: "Applies only to this computer; never carried into profiles or the base config (not even in overlay mode).",
+      advanced: "Advanced device and runtime settings",
     },
     cs: {
-      heading: "Deck",
       none: "(nic)",
       inherit: "Zdědit",
       inherited_hint: "zděděno: {value}",
-      hw_legend: "Hardware (tento stroj — local.toml)",
+      hw_legend: "Hardware (tento stroj, local.toml)",
       hw_hint: "Platí jen pro tento počítač; nikdy se nepřenáší do profilů ani base configu (ani v overlay módu).",
+      advanced: "Pokročilé nastavení zařízení a runtime",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -92,7 +93,6 @@
   }
 </script>
 
-<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <OverrideField label="grid" help={HELP.grid} state={scState("grid")} inheritedDisplay={hint("grid")} onstate={(s) => setScState("grid", s)}>
     <TextField label="" value={String(scValue("grid") ?? "")} oninput={(v) => setSc("grid", v)} />
@@ -103,23 +103,26 @@
   <TriStateListField label="overview_order" help={HELP.overview_order} state={overviewState} list={overviewOrder} defaultHint={serverHint} resetKey={`base:${reloadRev}:deck:overview_order`} onchange={setBaseOverview} />
 {/if}
 
-<fieldset class="hw">
-  <legend>{lm.hw_legend}</legend>
-  <p class="hint">{lm.hw_hint}</p>
+<FieldGroup title={lm.hw_legend} description={lm.hw_hint}>
   <TextField label="deck" help={HELP.deck} value={hwDeck} oninput={(v) => setLocalStr("local", "deck", v)} />
-  <TextField label="herdr_socket" help={HELP.herdr_socket} value={hwSocket} oninput={(v) => setLocalStr("local", "herdr_socket", v)} />
-  <TextField label="web_bind" help={HELP.web_bind} value={hwBind} oninput={(v) => setLocalStr("local", "web_bind", v)} />
-  <NumberField label="web_port" help={HELP.web_port} value={hwPort} int min={0} max={65535} onchange={(v) => setLocalNum("local", "web_port", v)} />
-  <TextField label="icons_dir" help={HELP.icons_dir} value={hwIcons} oninput={(v) => setLocalStr("local", "icons_dir", v)} />
   <NumberField label="brightness" help={HELP.brightness} value={brightness} int min={0} max={100} onchange={(v) => setLocalNum("hardware", "brightness", v)} />
-  <NumberField label="debounce" help={HELP.debounce} value={debounce} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
-  <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step="any" min={Number.MIN_VALUE} max={86400} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
-  <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
-</fieldset>
+  <details class="advanced-settings">
+    <summary>{lm.advanced}</summary>
+    <div class="advanced-fields">
+      <TextField label="herdr_socket" help={HELP.herdr_socket} value={hwSocket} oninput={(v) => setLocalStr("local", "herdr_socket", v)} />
+      <TextField label="web_bind" help={HELP.web_bind} value={hwBind} oninput={(v) => setLocalStr("local", "web_bind", v)} />
+      <NumberField label="web_port" help={HELP.web_port} value={hwPort} int min={0} max={65535} onchange={(v) => setLocalNum("local", "web_port", v)} />
+      <TextField label="icons_dir" help={HELP.icons_dir} value={hwIcons} oninput={(v) => setLocalStr("local", "icons_dir", v)} />
+      <NumberField label="debounce" help={HELP.debounce} value={debounce} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
+      <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step="any" min={Number.MIN_VALUE} max={86400} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
+      <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
+    </div>
+  </details>
+</FieldGroup>
 
 <style>
-  h2 { margin: 0 0 8px; }
-  .hw { border: 1px solid #2a2a30; border-radius: 6px; margin: 12px 0; padding: 8px 12px; }
-  .hw legend { color: #ccc; }
-  .hint { color: #888; margin: 0 0 8px; }
+  .advanced-settings { margin: var(--s2) 0 0; border-top: 1px solid var(--line); padding-top: var(--s2); }
+  .advanced-settings summary { color: var(--text-dim); cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
+  .advanced-settings[open] summary { color: var(--text); margin-bottom: var(--s2); }
+  .advanced-fields { display: contents; }
 </style>

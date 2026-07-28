@@ -9,7 +9,11 @@
     SetupTransport,
     ConnectRequest,
   } from "./onboardingClient";
-  import { connectErrorMessage, shouldAutoReconnect } from "./onboardingClient";
+  import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
+  import CheckCircle from "phosphor-svelte/lib/CheckCircle";
+  import CloudArrowUp from "phosphor-svelte/lib/CloudArrowUp";
+  import GearSix from "phosphor-svelte/lib/GearSix";
+  import { connectErrorMessage, hasConnectionInventory, shouldAutoReconnect } from "./onboardingClient";
   import { defineMessages, fmt, locale } from "./i18n.svelte";
 
   let {
@@ -18,12 +22,18 @@
     transport,
     onConnected,
     onDismiss = undefined,
+    onOpenSettings = undefined,
+    manual = false,
+    variant = "compact",
   }: {
     view: "welcome" | "reconnect";
     status: SetupStatus | null;
     transport: SetupTransport | null;
     onConnected: () => void;
     onDismiss?: (() => void) | undefined;
+    onOpenSettings?: (() => void) | undefined;
+    manual?: boolean;
+    variant?: "compact" | "desktop";
   } = $props();
 
   const LM = defineMessages({
@@ -36,21 +46,22 @@
       connect_saved: "Connect to the saved connection",
       connect_remote_toggle: "Connect remotely…",
       welcome_h1: "Connect herdeck",
-      local_ok: "✓ herdr is running locally",
+      local_ok: "herdr is running locally",
       connect_local: "Connect locally",
       connect: "Connect",
-      remote_toggle: "Remote herdr…",
-      no_local: "herdr was not found locally — start it, or connect remotely below.",
+      remote_toggle: "Add remote connection…",
+      no_local: "herdr was not found locally. Start it, or connect remotely below.",
       url: "URL",
       token: "Token",
       id_optional: "ID (optional)",
       fill_url_token: "Fill in both URL and token.",
       demo: "Explore the demo",
-      back_to_deck: "← back to the deck",
-      sessions_h: "Active sessions",
-      sessions_hint: "Choose any local sessions and optionally keep the saved remote bridge.",
+      back_to_deck: "Back to Herdeck",
+      open_settings: "Open settings",
+      sessions_h: "Connections",
+      sessions_hint: "Choose the local sessions and saved bridge Herdeck should monitor.",
       saved_remote: "Saved remote bridge",
-      apply_connections: "Apply connections",
+      apply_connections: "Save and connect",
       running: "running",
       stopped: "not running",
     },
@@ -63,21 +74,22 @@
       connect_saved: "Připojit k uloženému spojení",
       connect_remote_toggle: "Připojit vzdáleně…",
       welcome_h1: "Připojit herdeck",
-      local_ok: "✓ herdr běží lokálně",
+      local_ok: "herdr běží lokálně",
       connect_local: "Připojit lokálně",
       connect: "Připojit",
-      remote_toggle: "Vzdálený herdr…",
-      no_local: "herdr nebyl lokálně nalezen — spusť ho, nebo se připoj vzdáleně níže.",
+      remote_toggle: "Přidat vzdálené připojení…",
+      no_local: "herdr nebyl lokálně nalezen. Spusť ho, nebo se připoj vzdáleně níže.",
       url: "URL",
       token: "Token",
       id_optional: "ID (volitelné)",
       fill_url_token: "Vyplň URL i token.",
       demo: "Prozkoumat demo",
-      back_to_deck: "← zpět na deck",
-      sessions_h: "Aktivní sessions",
-      sessions_hint: "Vyber libovolné lokální sessions a případně ponech uložený vzdálený bridge.",
+      back_to_deck: "Zpět do Herdecku",
+      open_settings: "Otevřít nastavení",
+      sessions_h: "Připojení",
+      sessions_hint: "Vyber lokální sessions a uložený bridge, které má Herdeck sledovat.",
       saved_remote: "Uložený vzdálený bridge",
-      apply_connections: "Použít připojení",
+      apply_connections: "Uložit a připojit",
       running: "běží",
       stopped: "neběží",
     },
@@ -100,6 +112,7 @@
   const localAvailable = $derived(status?.localHerdrAvailable === true);
   const savedAvailable = $derived(status?.savedRemoteAvailable === true);
   const localSessions = $derived(status?.localSessions ?? []);
+  const hasInventory = $derived(hasConnectionInventory(status));
 
   $effect(() => {
     if (!status || seededSessions) return;
@@ -133,7 +146,7 @@
         localAvailable,
         busy,
         tried: autoReconnectTried,
-        manual: onDismiss != null,
+        manual: manual || onDismiss != null,
       })
     ) {
       autoReconnectTried = true;
@@ -213,50 +226,49 @@
     busyAction === action ? lm.connecting : idle;
 </script>
 
-<section class="onboarding">
+<section class="onboarding" class:desktop={variant === "desktop"}>
   {#if view === "reconnect"}
     <h1>{lm.reconnect_h1}</h1>
     <p class="lead">{lm.reconnect_lead}</p>
     <p class="hint">
       {fmt(lm.reconnect_hint, { herdr: "herdr", socket: status?.socketPath ?? "?" })}
     </p>
-    <div class="actions">
-      <button class="primary" disabled={busy} onclick={connectLocal}>
-        {label(lm.retry, "local")}
-      </button>
-      {#if savedAvailable}
-        <button class="ghost" disabled={busy} onclick={connectSaved}>
-          {label(lm.connect_saved, "saved")}
+    {#if !hasInventory}
+      <div class="actions">
+        <button class="primary" disabled={busy} onclick={connectLocal}>
+          {label(lm.retry, "local")}
         </button>
-      {/if}
-      <button class="link" disabled={busy} onclick={() => (showRemote = !showRemote)}>
-        {lm.connect_remote_toggle}
-      </button>
-    </div>
+        <button class="link" disabled={busy} onclick={() => (showRemote = !showRemote)}>
+          {lm.connect_remote_toggle}
+        </button>
+      </div>
+    {/if}
   {:else}
     <h1>{lm.welcome_h1}</h1>
     {#if localAvailable}
-      <p class="lead ok">{lm.local_ok}</p>
-      <div class="actions">
-        {#if savedAvailable}
-          <button class="primary" disabled={busy} onclick={connectSaved}>
-            {label(lm.connect_saved, "saved")}
+      <p class="lead ok"><CheckCircle size={16} weight="fill" />{lm.local_ok}</p>
+      {#if !hasInventory}
+        <div class="actions">
+          {#if savedAvailable}
+            <button class="primary" disabled={busy} onclick={connectSaved}>
+              {label(lm.connect_saved, "saved")}
+            </button>
+            <button class="ghost" disabled={busy} onclick={connectLocal}>
+              {label(lm.connect_local, "local")}
+            </button>
+          {:else}
+            <button class="primary" disabled={busy} onclick={connectLocal}>
+              {label(lm.connect, "local")}
+            </button>
+          {/if}
+          <button class="link" disabled={busy} onclick={() => (showRemote = !showRemote)}>
+            {lm.remote_toggle}
           </button>
-          <button class="ghost" disabled={busy} onclick={connectLocal}>
-            {label(lm.connect_local, "local")}
-          </button>
-        {:else}
-          <button class="primary" disabled={busy} onclick={connectLocal}>
-            {label(lm.connect, "local")}
-          </button>
-        {/if}
-        <button class="link" disabled={busy} onclick={() => (showRemote = !showRemote)}>
-          {lm.remote_toggle}
-        </button>
-      </div>
+        </div>
+      {/if}
     {:else}
       <p class="lead">{lm.no_local}</p>
-      {#if savedAvailable}
+      {#if savedAvailable && !hasInventory}
         <div class="actions">
           <button class="ghost" disabled={busy} onclick={connectSaved}>
             {label(lm.connect_saved, "saved")}
@@ -270,8 +282,10 @@
 
   {#if localSessions.length > 0 || savedAvailable}
     <section class="sessions" aria-labelledby="sessions-heading">
-      <h2 id="sessions-heading">{lm.sessions_h}</h2>
-      <p>{lm.sessions_hint}</p>
+      <div class="section-heading">
+        <div><h2 id="sessions-heading">{lm.sessions_h}</h2><p>{lm.sessions_hint}</p></div>
+        <span class="connection-count">{selectedSessions.length + (includeSaved ? 1 : 0)}</span>
+      </div>
       <div class="session-list">
         {#each localSessions as session (session.name)}
           <label class:unavailable={!session.available}>
@@ -284,7 +298,7 @@
             <span class:online={session.available} class="dot"></span>
             <span>
               <strong>{session.name}</strong>
-              <small>{session.available ? lm.running : lm.stopped}</small>
+              <small>{session.available ? lm.running : lm.stopped} · {session.serverId}</small>
             </span>
           </label>
         {/each}
@@ -296,9 +310,14 @@
           </label>
         {/if}
       </div>
-      <button class="primary" disabled={busy} onclick={applyConnections}>
-        {label(lm.apply_connections, "sessions")}
-      </button>
+      <div class="session-actions">
+        <button class="primary" disabled={busy} onclick={applyConnections}>
+          {label(lm.apply_connections, "sessions")}
+        </button>
+        <button class="ghost remote-toggle" disabled={busy} onclick={() => (showRemote = !showRemote)}>
+          <CloudArrowUp size={15} />{lm.remote_toggle}
+        </button>
+      </div>
     </section>
   {/if}
 
@@ -319,8 +338,15 @@
     <button class="link" disabled={busy} onclick={connectDemo}>
       {label(lm.demo, "demo")}
     </button>
+    {#if onOpenSettings}
+      <button class="link dismiss" disabled={busy} onclick={onOpenSettings}>
+        <GearSix size={14} />{lm.open_settings}
+      </button>
+    {/if}
     {#if onDismiss}
-      <button class="link dismiss" disabled={busy} onclick={onDismiss}>{lm.back_to_deck}</button>
+      <button class="link dismiss" disabled={busy} onclick={onDismiss}>
+        <ArrowLeft size={14} />{lm.back_to_deck}
+      </button>
     {/if}
   </div>
 </section>
@@ -328,28 +354,38 @@
 <style>
   .onboarding {
     box-sizing: border-box;
-    padding: 24px 18px;
-    background: #0b0b0d;
-    color: #e7ecf3;
-    font: 13px/1.4 system-ui, -apple-system, sans-serif;
+    padding: 24px 20px;
+    background: var(--canvas);
+    color: var(--text);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
+  .onboarding.desktop {
+    min-width: 0;
+    padding: 38px 36px 30px;
+    background: var(--sidebar);
+  }
   h1 {
     margin: 0;
-    font-size: 17px;
+    font-size: 18px;
+    font-weight: 680;
+    letter-spacing: -.025em;
   }
   .lead {
     margin: 0;
-    color: #8b97a4;
+    color: var(--text-dim);
   }
   .lead.ok {
-    color: #3fb950;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--st-working);
   }
   .hint {
     margin: 0;
-    color: #6b7785;
+    color: var(--text-faint);
     font-size: 12px;
   }
   .actions,
@@ -359,65 +395,96 @@
     align-items: center;
     flex-wrap: wrap;
   }
+  .section-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 12px;
+  }
+  .section-heading > div {
+    min-width: 0;
+  }
+  .connection-count {
+    min-width: 24px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--key);
+    color: var(--text-dim);
+    font: 600 10px/1.5 ui-monospace, SFMono-Regular, monospace;
+    text-align: center;
+  }
   .remote {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 10px;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--line);
     border-radius: 10px;
-    background: #17171b;
+    background: var(--panel);
   }
   .sessions {
-    padding: 10px;
-    border: 1px solid #263142;
-    border-radius: 10px;
-    background: #11151b;
+    padding-top: 4px;
   }
-  .sessions h2 { margin: 0; font-size: 13px; color: #dce7f5; }
-  .sessions > p { margin: 3px 0 9px; color: #78879a; font-size: 11px; }
-  .session-list { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 9px; }
+  .sessions h2 { margin: 0; font-size: 13px; color: var(--text); }
+  .sessions p { margin: 3px 0 0; color: var(--text-dim); font-size: 11px; }
+  .session-list {
+    overflow: hidden;
+    margin-bottom: 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    background: var(--field);
+  }
   .session-list label {
     display: grid;
     grid-template-columns: auto 7px 1fr;
     align-items: center;
-    gap: 6px;
-    min-width: 115px;
-    padding: 7px 8px;
-    border: 1px solid #2a3546;
-    border-radius: 8px;
-    background: #171d26;
+    gap: 9px;
+    min-height: 52px;
+    padding: 8px 11px;
+    border-bottom: 1px solid var(--line);
     cursor: pointer;
+    transition: background .14s ease;
   }
-  .session-list label:has(input:checked) { border-color: #3979bd; }
-  .session-list label.unavailable { opacity: .58; }
-  .session-list input { margin: 0; accent-color: #58a6ff; }
-  .session-list .dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; }
-  .session-list .dot.online { background: #3fb950; box-shadow: 0 0 0 2px #1f4d2b; }
+  .session-list label:last-child { border-bottom: 0; }
+  .session-list label:hover { background: var(--panel-raised); }
+  .session-list label:has(input:checked) { background: var(--accent-soft); }
+  .session-list label.unavailable { opacity: .62; }
+  .session-list input { margin: 0; accent-color: var(--accent); }
+  .session-list .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--st-unknown); }
+  .session-list .dot.online { background: var(--st-working); }
   .session-list span:last-child { display: flex; flex-direction: column; min-width: 0; }
-  .session-list strong { font: 600 11px/1.2 ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; }
-  .session-list small { color: #78879a; font-size: 9px; }
+  .session-list strong { font: 600 11px/1.25 ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; }
+  .session-list small { margin-top: 2px; color: var(--text-dim); font-size: 9px; }
+  .session-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
   .remote label {
     display: flex;
     flex-direction: column;
     gap: 3px;
     font-size: 11px;
-    color: #8b97a4;
+    color: var(--text-dim);
   }
   .remote input {
     padding: 6px 8px;
-    border-radius: 6px;
-    border: 1px solid #2a2a2e;
-    background: #0b0b0d;
-    color: #e7ecf3;
+    border-radius: 7px;
+    border: 1px solid var(--line-strong);
+    background: var(--field);
+    color: var(--text);
     font: inherit;
   }
   button.primary {
+    min-height: 32px;
     padding: 7px 14px;
-    border: none;
+    border: 1px solid var(--accent-strong);
     border-radius: 7px;
-    background: #2563eb;
-    color: #fff;
+    background: var(--accent);
+    color: var(--canvas);
     font: inherit;
+    font-weight: 680;
     cursor: pointer;
   }
   button.primary:disabled {
@@ -425,11 +492,12 @@
     cursor: default;
   }
   button.ghost {
+    min-height: 32px;
     padding: 6px 13px;
-    border: 1px solid #2a3f66;
+    border: 1px solid var(--line-strong);
     border-radius: 7px;
     background: none;
-    color: #9db8e8;
+    color: var(--text);
     font: inherit;
     cursor: pointer;
   }
@@ -437,20 +505,56 @@
     opacity: 0.5;
     cursor: default;
   }
+  button.remote-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
   button.link {
     border: none;
     background: none;
-    color: #5af;
+    color: var(--accent-strong);
     cursor: pointer;
     font: inherit;
     padding: 4px 0;
   }
   button.link.dismiss {
     margin-left: auto;
-    color: #8b97a4;
+    color: var(--text-dim);
+  }
+  button.link.dismiss {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
   }
   .error {
     margin: 0;
-    color: #f0883e;
+    color: var(--st-offline-text);
+  }
+  button:focus-visible,
+  input:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+  }
+  button:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  @media (max-width: 760px) {
+    .onboarding.desktop {
+      padding: 24px;
+    }
+    .session-actions {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .session-actions button {
+      justify-content: center;
+      width: 100%;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .session-list label {
+      transition: none;
+    }
   }
 </style>

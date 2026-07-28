@@ -22,22 +22,20 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Window",
       mode_intro: "Floating deck window mode:",
       mode_normal: "a regular framed window",
       mode_floating: "frameless",
       mode_top: "always on top",
-      mode_restart: "The Apply button only saves this choice — it takes effect after the app restarts. For an immediate switch use the “Window mode” tray menu.",
+      mode_restart: "Apply saves this choice for the next app launch. To switch immediately, use Window mode in the tray menu.",
       hotkey_intro: "Global hotkey to show or hide the deck. Default",
       hotkey_rest: "; an empty field disables the hotkey. Takes effect after saving with Apply.",
     },
     cs: {
-      heading: "Okno",
       mode_intro: "Režim plovoucího okna decku:",
       mode_normal: "běžné okno s rámečkem",
       mode_floating: "bez rámečku",
       mode_top: "vždy navrchu",
-      mode_restart: "Tlačítko Použít tuto volbu jen uloží — projeví se po restartu aplikace. Pro okamžité přepnutí použij menu v liště „Režim okna\".",
+      mode_restart: "Tlačítko Použít tuto volbu uloží pro příští spuštění. Pro okamžité přepnutí použij v menu lišty položku Režim okna.",
       hotkey_intro: "Globální hotkey pro zobrazení/schování decku. Výchozí",
       hotkey_rest: "; prázdné pole = hotkey vypnutý. Změna se projeví po uložení tlačítkem Použít.",
     },
@@ -56,7 +54,6 @@
   }
 </script>
 
-<h2>{lm.heading}</h2>
 <p class="hint">
   {lm.mode_intro}
   <code>normal</code> = {lm.mode_normal},
@@ -72,7 +69,6 @@
 <TextField label="toggle_deck" help={HELP.toggle_deck} value={hotkey} oninput={setHotkey} />
 
 <style>
-  h2 { margin: 0 0 8px; }
-  .hint { color: #888; margin: 0 0 12px; }
-  code { color: #aaa; }
+  .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
+  code { color: var(--text-dim); font: var(--t-mono); }
 </style>

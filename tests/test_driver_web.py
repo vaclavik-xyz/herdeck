@@ -2,6 +2,7 @@ import http.cookiejar
 import io
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -303,7 +304,10 @@ def test_browser_exchanges_capability_token_for_http_only_session():
         with urllib.request.urlopen(request, timeout=2) as response:
             page = response.read().decode()
         assert d.press_token not in page
-        assert "__PRESS_TOKEN_JSON__" not in page
+        # Every placeholder must be substituted, not just this one: an unreplaced
+        # __XTERM_THEME__ ships a bare identifier that throws inside the preview
+        # handler, so the terminal would silently stop opening.
+        assert not re.search(r"__[A-Z_]+__", page), "unsubstituted page placeholder"
     finally:
         d.close()
 

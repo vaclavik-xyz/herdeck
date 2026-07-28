@@ -505,11 +505,12 @@ prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).
 
 ## Desktop app
 
-herdeck also ships a native **desktop app** (Tauri + Svelte): a floating,
-always-on-top window that renders the same deck as the hardware, plus a
-first-run onboarding flow and a full settings / config editor. It attaches to a
-running herdeck runtime or spawns its own sidecar. For development, run it from
-`desktop/`:
+herdeck also ships a native **desktop app** (Tauri + Svelte). Normal mode opens
+the full control room with onboarding, connections, live status, deck preview,
+and settings. Floating and Always on top provide a compact deck overlay. Resize
+that overlay with **⌘+** / **⌘−** and reset it to 100% with **⌘0**; the chosen
+scale is remembered on that Mac. The app attaches to a running herdeck runtime
+or spawns its own sidecar. For development, run it from `desktop/`:
 
 ```bash
 # from the repo root
@@ -518,7 +519,7 @@ python3 -m venv .venv
 
 cd desktop
 npm ci
-npm run tauri dev   # opens the floating window (needs a real desktop session)
+npm run tauri dev   # opens the desktop control room (needs a real desktop session)
 ```
 
 See **Native desktop app** under Install for a local application bundle and

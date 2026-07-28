@@ -32,6 +32,15 @@ export interface SetupLocalSession {
   selected: boolean;
 }
 
+/**
+ * A discovered session or saved bridge is edited through one connection
+ * picker. Rendering quick-connect buttons next to that picker creates two
+ * controls with the same outcome and lets their selected state disagree.
+ */
+export function hasConnectionInventory(status: SetupStatus | null): boolean {
+  return (status?.localSessions.length ?? 0) > 0 || status?.savedRemoteAvailable === true;
+}
+
 /** Narrow a raw `setup_status` result into a SetupStatus, or null when it is not
  *  a usable status object (treated by the caller as "not ready" -> show the deck). */
 export function parseSetupStatus(raw: unknown): SetupStatus | null {
@@ -170,27 +179,27 @@ export function setupTransport(invoke: InvokeFn): SetupTransport {
 const CONNECT_ERRORS: Record<"en" | "cs", Record<string, string>> = {
   en: {
     generic: "Connection failed.",
-    bad_token: "The token doesn't match — check the token value on the server (herdeck-bridge).",
-    unreachable: "The server is not responding — check the URL and port (is herdeck-bridge running?).",
-    socket_with_path: "herdr socket not found ({path}) — start herdr and try again.",
-    socket: "herdr socket not found — start herdr and try again.",
-    local_failed: "Local connection failed — is herdr running? Try again.",
+    bad_token: "The token doesn't match. Check the token value on the server (herdeck-bridge).",
+    unreachable: "The server is not responding. Check the URL and port (is herdeck-bridge running?).",
+    socket_with_path: "herdr socket not found ({path}). Start herdr and try again.",
+    socket: "herdr socket not found. Start herdr and try again.",
+    local_failed: "Local connection failed. Is herdr running? Try again.",
     demo_failed: "Switching to demo mode failed.",
     no_saved: "No saved connection found.",
-    config_unreadable: "The existing config is unreadable — fix it in Settings.",
-    config_malformed: "The existing config has a broken servers section — fix it in Settings.",
+    config_unreadable: "The existing config is unreadable. Fix it in Settings.",
+    config_malformed: "The existing config has a broken servers section. Fix it in Settings.",
   },
   cs: {
     generic: "Připojení selhalo.",
-    bad_token: "Token nesedí — zkontroluj hodnotu tokenu na serveru (herdeck-bridge).",
-    unreachable: "Server neodpovídá — zkontroluj URL a port (běží tam herdeck-bridge?).",
-    socket_with_path: "herdr socket nenalezen ({path}) — spusť herdr a zkus to znovu.",
-    socket: "herdr socket nenalezen — spusť herdr a zkus to znovu.",
-    local_failed: "Lokální připojení selhalo — běží herdr? Zkus to znovu.",
+    bad_token: "Token nesedí. Zkontroluj hodnotu tokenu na serveru (herdeck-bridge).",
+    unreachable: "Server neodpovídá. Zkontroluj URL a port (běží tam herdeck-bridge?).",
+    socket_with_path: "herdr socket nenalezen ({path}). Spusť herdr a zkus to znovu.",
+    socket: "herdr socket nenalezen. Spusť herdr a zkus to znovu.",
+    local_failed: "Lokální připojení selhalo. Běží herdr? Zkus to znovu.",
     demo_failed: "Přepnutí do demo režimu selhalo.",
     no_saved: "Uložené spojení nebylo nalezeno.",
-    config_unreadable: "Stávající config nejde přečíst — oprav ho v nastavení (Config).",
-    config_malformed: "Stávající config má poškozenou sekci serverů — oprav ho v nastavení (Config).",
+    config_unreadable: "Stávající config nejde přečíst. Oprav ho v nastavení.",
+    config_malformed: "Stávající config má poškozenou sekci serverů. Oprav ho v nastavení.",
   },
 };
 

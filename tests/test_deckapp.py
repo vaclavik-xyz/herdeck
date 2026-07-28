@@ -133,6 +133,14 @@ def test_state_has_required_shape():
     assert set(summ) == {"agents", "blocked", "working", "idle", "done", "waiting"}
 
 
+def test_state_maps_local_session_names_to_collision_safe_runtime_ids():
+    app = make_app()
+    runner = type("Runner", (), {"_herdeck_session_name": "default"})()
+    app._local_bridges = {"local:2": runner}
+
+    assert app._state()["local_connections"] == {"default": "local:2"}
+
+
 def test_tiles_render_as_png_bytes():
     app = make_app()
     png = app._tile_png(0)

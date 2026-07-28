@@ -566,6 +566,17 @@ class DeckApp:
             connections = getattr(self._source, "connections", None)
             if isinstance(connections, dict):
                 state["connections"] = connections
+            local_connections = {
+                session_name: server_id
+                for server_id, runner in self._local_bridges.items()
+                if isinstance(
+                    session_name := getattr(runner, "_herdeck_session_name", None),
+                    str,
+                )
+                and session_name
+            }
+            if local_connections:
+                state["local_connections"] = local_connections
             return state
 
     def _health(self) -> dict:
@@ -1227,6 +1238,7 @@ def _start_local_session_bridges(
                 server_id = f"{base}:{suffix}"
             used_ids.add(server_id)
             runner = (runner_factory or LocalBridgeRunner)(session.socket_path)
+            runner._herdeck_session_name = session.name
             try:
                 _host, port, token = runner.start()
             except Exception:

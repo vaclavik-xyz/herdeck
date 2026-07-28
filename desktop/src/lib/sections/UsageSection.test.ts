@@ -5,9 +5,7 @@ import { parseConfig } from "../configClient";
 import UsageSection from "./UsageSection.svelte";
 
 function inputFor(target: HTMLElement, label: string): HTMLInputElement {
-  const fieldLabel = Array.from(target.querySelectorAll(".fieldlabel")).find(
-    (node) => node.textContent?.trim() === label,
-  );
+  const fieldLabel = target.querySelector<HTMLElement>(`[data-config-key="${label}"]`);
   const input = fieldLabel?.parentElement?.querySelector("input");
   if (!(input instanceof HTMLInputElement)) throw new Error(`missing input for ${label}`);
   return input;
@@ -63,7 +61,7 @@ describe("UsageSection", () => {
     });
     try {
       const hints = Array.from(target.querySelectorAll(".override"), (field) => ({
-        label: field.querySelector(".label")?.textContent?.trim(),
+        label: field.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey,
         hint: field.querySelector(".hint")?.textContent,
       }));
       expect(hints.find((x) => x.label === "codex_path")?.hint).toContain("codex");

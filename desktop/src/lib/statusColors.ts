@@ -3,11 +3,18 @@ import defaults from "./configDefaults.json";
 export const DEFAULT_STATUS_COLORS: Record<string, string> = { ...defaults.theme.colors };
 export const DEFAULT_SERVER_ACCENTS: string[] = [...defaults.theme.server_accents];
 
-// Mirror of the backend named tile palette (src/herdeck/driver/base.py COLORS)
-// — keep in sync. Status colours resolve STRICTLY through this palette on the
-// backend (COLORS.get(name, dim)): a typo silently renders as the empty-tile
-// grey, so the editor offers these as a picker with swatches instead of free
-// text.
+// The USER-ASSIGNABLE subset of the backend named tile palette
+// (src/herdeck/driver/base.py COLORS) — keep in sync.
+//
+// Status colours resolve STRICTLY through this palette on the backend
+// (COLORS.get(name, dim)): a typo silently renders as the empty-tile grey, so
+// the editor offers these as a picker with swatches instead of free text.
+//
+// The backend's 13th entry, "empty" (32,32,36), is deliberately absent here: it
+// paints vacant slots, not agent state, and offering it in the picker would let
+// a status render as an empty key. A config naming it still resolves on the
+// backend; the window degrades it to dim, as it does for any name outside this
+// subset.
 export const PALETTE: Record<string, string> = {
   green: "rgb(40,180,70)",
   blue: "rgb(50,120,220)",
@@ -28,5 +35,6 @@ export const PALETTE_NAMES: string[] = Object.keys(PALETTE);
 /** CSS colour for a palette name or #rrggbb literal (server accents allow hex). */
 export function swatchColor(value: string): string {
   if (/^#[0-9a-fA-F]{6}$/.test(value)) return value;
-  return PALETTE[value] ?? "transparent";
+  // hasOwn, not `?? `: PALETTE["constructor"] would otherwise return a function.
+  return Object.hasOwn(PALETTE, value) ? PALETTE[value] : "transparent";
 }

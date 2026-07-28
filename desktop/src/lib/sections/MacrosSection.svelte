@@ -1,6 +1,7 @@
 <script lang="ts">
   import TextField from "../fields/TextField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import ConfirmRemoveButton from "../fields/ConfirmRemoveButton.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import {
     macrosOf, addMacro, removeMacro, updateMacro, macroRecords, inheritedMacros,
@@ -20,17 +21,17 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Macros",
       new_macro: "(new macro)",
       remove_macro: "Remove macro",
       add_macro: "+ add macro",
+      empty: "No macros yet. Add one to send a prepared message from the deck.",
       n_macros: "{n} macros",
     },
     cs: {
-      heading: "Makra",
       new_macro: "(nové makro)",
       remove_macro: "Odebrat makro",
       add_macro: "+ přidat makro",
+      empty: "Zatím žádné makro. Přidej připravenou zprávu, kterou odešleš z decku.",
       n_macros: "{n} maker",
     },
   });
@@ -38,9 +39,10 @@
 
   // --- base mode (unchanged) ---
   const macros = $derived(macrosOf(payload));
+  let removalRevision = $state(0);
   function set(i: number, field: keyof MacroRecord, v: string): void { payload = updateMacro(payload, i, field, v); onChange(); }
   function add(): void { payload = addMacro(payload); onChange(); }
-  function remove(i: number): void { payload = removeMacro(payload, i); onChange(); }
+  function remove(i: number): void { payload = removeMacro(payload, i); removalRevision += 1; onChange(); }
 
   // --- overlay mode: whole-list override (macros replace wholesale in the backend merge) ---
   function ovMacros(): MacroRecord[] { return macroRecords(overrideValuePath(payload, prof, ["macros"])); }
@@ -53,19 +55,19 @@
   }
   function ovSet(i: number, field: keyof MacroRecord, v: string): void { writeOv(ovMacros().map((m, j) => (j === i ? { ...m, [field]: v } : m))); }
   function ovAdd(): void { writeOv([...ovMacros(), { label: "", text: "" }]); }
-  function ovRemove(i: number): void { writeOv(ovMacros().filter((_, j) => j !== i)); }
+  function ovRemove(i: number): void { removalRevision += 1; writeOv(ovMacros().filter((_, j) => j !== i)); }
 </script>
 
-<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <OverrideField label="macros" help={HELP.macros} state={ovState()} inheritedDisplay={fmt(lm.n_macros, { n: inhMacros().length })} onstate={setOvState}>
     {#each ovMacros() as m, i (i)}
       <fieldset>
-        <legend>{m.label || lm.new_macro} <button type="button" title={lm.remove_macro} onclick={() => ovRemove(i)}>×</button></legend>
+        <legend>{m.label || lm.new_macro} <ConfirmRemoveButton title={lm.remove_macro} identity={`${m.label}\u0000${m.text}`} resetKey={removalRevision} onconfirm={() => ovRemove(i)} /></legend>
         <TextField label="label" help={HELP.label} value={m.label} oninput={(v) => ovSet(i, "label", v)} />
         <TextField label="text" help={HELP.text} value={m.text} oninput={(v) => ovSet(i, "text", v)} />
       </fieldset>
     {/each}
+    {#if ovMacros().length === 0}<p class="hint">{lm.empty}</p>{/if}
     <button type="button" onclick={ovAdd}>{lm.add_macro}</button>
   </OverrideField>
 {:else}
@@ -73,17 +75,34 @@
        rationale as ServersSection — a stable-id apparatus would add needless complexity. -->
   {#each macros as m, i (i)}
     <fieldset>
-      <legend>{m.label || lm.new_macro} <button type="button" title={lm.remove_macro} onclick={() => remove(i)}>×</button></legend>
+      <legend>{m.label || lm.new_macro} <ConfirmRemoveButton title={lm.remove_macro} identity={`${m.label}\u0000${m.text}`} resetKey={removalRevision} onconfirm={() => remove(i)} /></legend>
       <TextField label="label" help={HELP.label} value={m.label} oninput={(v) => set(i, "label", v)} />
       <TextField label="text" help={HELP.text} value={m.text} oninput={(v) => set(i, "text", v)} />
     </fieldset>
   {/each}
+  {#if macros.length === 0}<p class="hint">{lm.empty}</p>{/if}
   <button type="button" onclick={add}>{lm.add_macro}</button>
 {/if}
 
 <style>
-  h2 { margin: 0 0 8px; }
-  fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; } legend button { color: #e05050; background: none; border: 0; cursor: pointer; }
-  button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+  fieldset {
+    margin: var(--s2) 0;
+    padding: var(--s4) var(--s5);
+    border: 1px solid var(--line);
+    border-radius: var(--r-panel);
+    background: var(--panel);
+  }
+  legend { color: var(--text); font: var(--t-label); }
+  button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+  button:hover { color: var(--text); background: var(--panel-raised); }
+  .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
 </style>

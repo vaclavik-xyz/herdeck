@@ -12,6 +12,7 @@
     inheritedFor, inheritedForPath, overrideValue, overrideValuePath, overrideState,
     setOverride, clearOverride, setOverridePath, clearOverridePath, updateBaseTelegram,
   } from "../configClient";
+  import FieldGroup from "./FieldGroup.svelte";
   import { defineMessages, fieldHelp, fmt, locale, t } from "../i18n.svelte";
   import defaults from "../configDefaults.json";
 
@@ -39,7 +40,7 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Notifications",
+      group_telegram: "Telegram bot",
       tg_hint: "Empty field = inherit (a token is never saved blank).",
       none: "(none)",
       origin_own: "custom",
@@ -49,7 +50,7 @@
       clear_token_failed: "deleting token '{name}' failed (HTTP {code})",
     },
     cs: {
-      heading: "Notifikace",
+      group_telegram: "Telegram bot",
       tg_hint: "Prázdné pole = zdědit (token se nikdy neuloží prázdný).",
       none: "(nic)",
       origin_own: "vlastní",
@@ -223,7 +224,6 @@
   }
 </script>
 
-<h2>{lm.heading}{#if overlay} · overlay: {editProfile}{/if}</h2>
 {#if overlay}
   <OverrideField label="enabled" help={HELP.enabled} state={scState("enabled")} inheritedDisplay={scHint("enabled")} onstate={(s) => setScState("enabled", s)}>
     <BooleanField label="" value={scBool("enabled")} onchange={(v) => setSc("enabled", v)} />
@@ -233,11 +233,10 @@
   </OverrideField>
   <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} customSeed={effectiveList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} resetKey={`${prof}:${reloadRev}:notifications:on`} onchange={(s, l) => setOvList("on", s, l)} />
   <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} customSeed={effectiveList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} resetKey={`${prof}:${reloadRev}:notifications:backends`} onchange={(s, l) => setOvList("backends", s, l)} />
-  <fieldset class="tg">
-    <legend>Telegram</legend>
+  <FieldGroup title={lm.group_telegram}>
     <p class="hint">{lm.tg_hint}</p>
     <TokenSecretField
-      label={`token (${tgOrigin("token_env")})`}
+      label={`token_env (${tgOrigin("token_env")})`}
       help={HELP.token}
       value={tgValue("token_env")}
       flag={secretFlag(payload, tgValue("token_env"))}
@@ -258,26 +257,22 @@
     <OverrideField label="prompt_max_chars" help={HELP.prompt_max_chars} state={tgFieldState("prompt_max_chars")} inheritedDisplay={tgInheritedDisplay("prompt_max_chars")} onstate={(s) => setTgFieldState("prompt_max_chars", s)}>
       <NumberField label="" int value={tgNumber("prompt_max_chars")} onchange={(v) => setTgScalar("prompt_max_chars", v)} />
     </OverrideField>
-  </fieldset>
+  </FieldGroup>
 {:else}
   <BooleanField label="enabled" help={HELP.enabled} value={enabled} onchange={(v) => set("enabled", v)} />
   <BooleanField label="sound" help={HELP.sound} value={sound} onchange={(v) => set("sound", v)} />
   <TriStateListField label="on" help={HELP.on} state={onState} list={on} customSeed={NOTIF_LIST_DEFAULTS.on} defaultHint={NOTIF_LIST_DEFAULTS.on.join(" · ")} resetKey={`base:${reloadRev}:notifications:on`} onchange={(s, l) => setTri("on", s, l)} />
   <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} resetKey={`base:${reloadRev}:notifications:backends`} onchange={(s, l) => setTri("backends", s, l)} />
-  <fieldset class="tg">
-    <legend>Telegram</legend>
-    <TokenSecretField label="token" help={HELP.token} value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />
+  <FieldGroup title={lm.group_telegram}>
+    <TokenSecretField label="token_env" help={HELP.token} value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />
     <TextField label="chat_id" help={HELP.chat_id} value={telegram.chat_id} oninput={(v) => setTelegram("chat_id", v)} />
     <NumberField label="message_thread_id" help={HELP.message_thread_id} int value={telegram.message_thread_id} onchange={(v) => setTelegram("message_thread_id", v)} />
     <BooleanField label="interactive" help={HELP.interactive} value={telegram.interactive} onchange={(v) => setTelegram("interactive", v)} />
     <TextField label="allowed_user_ids" help={HELP.allowed_user_ids} value={integerListText(telegram.allowed_user_ids)} oninput={setBaseAllowedUsers} />
     <NumberField label="prompt_max_chars" help={HELP.prompt_max_chars} int value={telegram.prompt_max_chars} onchange={(v) => setTelegram("prompt_max_chars", v)} />
-  </fieldset>
+  </FieldGroup>
 {/if}
 
 <style>
-  h2 { margin: 0 0 8px; }
-  .tg { border: 1px solid #2a2a30; border-radius: 6px; margin: 12px 0; padding: 8px 12px; }
-  .tg legend { color: #ccc; }
-  .hint { color: #888; margin: 0 0 8px; }
+  .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
 </style>

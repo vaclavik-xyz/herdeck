@@ -22,6 +22,8 @@ function rawState(over: Record<string, unknown> = {}): Record<string, unknown> {
     summary: { agents: 4, blocked: 1, working: 2, idle: 1, done: 0, waiting: 0 },
     source: "mock",
     connected: false,
+    connections: { "local:review": true, macbench: false },
+    local_connections: { review: "local:review" },
     ...over,
   };
 }
@@ -37,6 +39,8 @@ describe("parseState", () => {
     expect(s.summary).toEqual({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0, waiting: 0 });
     expect(s.source).toBe("mock");
     expect(s.connected).toBe(false);
+    expect(s.connections).toEqual({ "local:review": true, macbench: false });
+    expect(s.localConnections).toEqual({ review: "local:review" });
   });
 
   it("returns null for junk / not-an-object / missing version", () => {
@@ -62,7 +66,7 @@ describe("summaryLabel", () => {
   });
 
   it("omits zero buckets and uses singular agent", () => {
-    expect(summaryLabel({ agents: 1, blocked: 0, working: 0, idle: 1, done: 0 })).toBe(
+    expect(summaryLabel({ agents: 1, blocked: 0, working: 0, idle: 1, done: 0, waiting: 0 })).toBe(
       "1 agent · 1 idle",
     );
   });
@@ -91,9 +95,13 @@ describe("DeckDiffer — transactional version gate + per-tile diff", () => {
     hasPanel: true,
     panel: 0,
     tiles: {},
+    sections: {},
+    connections: {},
+    localConnections: {},
     summary: emptySummary(),
     source: "mock",
     connected: false,
+    language: "en",
     ...over,
   });
 
@@ -280,6 +288,8 @@ describe("stepDeck — folds a poll into the render model", () => {
     expect(view.summary).toEqual({ agents: 4, blocked: 1, working: 2, idle: 1, done: 0, waiting: 0 });
     expect(view.source).toBe("live");
     expect(view.connected).toBe(true);
+    expect(view.connections).toEqual({ "local:review": true, macbench: false });
+    expect(view.localConnections).toEqual({ review: "local:review" });
     expect(summaryLabel(view.summary)).toContain("⚠ 1 blocked");
   });
 

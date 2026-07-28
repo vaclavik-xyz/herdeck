@@ -3,11 +3,36 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      body { font-family: -apple-system, system-ui, sans-serif; font-size: 9pt; margin: 12px; color: #d8d8d8; background: #2d2d2d; }
+      /* This panel is embedded in the Stream Deck app, so the SURFACE keeps the
+         host's own grey — herdeck's near-black canvas would read as a hole in
+         Elgato's chrome. Everything the host does not dictate (type, controls,
+         focus, accent) uses herdeck's tokens, whose values are mirrored from
+         desktop/src/lib/theme.css and checked by tests/test_ui_tokens.py. */
+      :root {
+        --host-surface: #2d2d2d;
+        --text: #e9edf2;
+        --text-dim: #98a2af;
+        --field: #0e1218;
+        --line-strong: #303945;
+        --accent-strong: #7aa9ff;
+        --r-control: 7px;
+        --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        --font-mono: "SF Mono", ui-monospace, SFMono-Regular, monospace;
+      }
+      body { font-family: var(--font-ui); font-size: 9pt; margin: 12px; color: var(--text); background: var(--host-surface); }
       label { display: block; margin-bottom: 4px; font-weight: 600; }
-      input { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #3d3d3d; color: #fff; border: 1px solid #555; border-radius: 3px; }
-      .hint { color: #888; margin-top: 6px; }
-      code { background: #1f1f1f; padding: 1px 4px; border-radius: 2px; }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 5px 8px;
+        background: var(--field);
+        color: var(--text);
+        border: 1px solid var(--line-strong);
+        border-radius: var(--r-control);
+      }
+      input:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+      .hint { color: var(--text-dim); margin-top: 6px; }
+      code { background: var(--field); color: var(--text-dim); font-family: var(--font-mono); padding: 1px 4px; border-radius: 4px; }
     </style>
   </head>
   <body>

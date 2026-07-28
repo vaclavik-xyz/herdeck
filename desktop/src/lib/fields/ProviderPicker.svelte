@@ -65,39 +65,39 @@
     gap: 9px;
     min-height: 46px;
     padding: 5px 9px;
-    border: 1px solid #25272e;
-    border-radius: 8px;
-    background: #111217;
+    border: 1px solid var(--line);
+    border-radius: var(--r-control);
+    background: var(--field);
     transition: border-color 120ms ease, background 120ms ease;
   }
-  .provider.enabled { border-color: #353944; background: #15171d; }
+  .provider.enabled { border-color: var(--line-strong); background: var(--panel-raised); }
   .mark {
     display: grid;
     place-items: center;
     width: 26px;
     height: 26px;
-    border-radius: 7px;
-    color: #fff;
+    border-radius: var(--r-control);
+    color: var(--text);
     font-size: 12px;
     font-weight: 750;
     letter-spacing: -0.02em;
   }
-  .mark.claude { background: #b85f42; }
-  .mark.codex { background: #147d69; }
+  .mark.claude { background: var(--brand-claude); }
+  .mark.codex { background: var(--brand-codex); }
   .identity { display: flex; flex-direction: column; min-width: 0; }
-  .name { color: #eeeef2; font-size: 13px; font-weight: 650; }
-  .fieldlabel.hashelp { text-decoration: underline dotted #5a5a62; text-underline-offset: 3px; cursor: help; }
-  .source { color: #797c87; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .state { color: #696c75; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
-  .enabled .state { color: #aeb2bd; }
+  .name { color: var(--text); font-size: 12px; font-weight: 650; }
+  .fieldlabel.hashelp { text-decoration: underline dotted var(--text-faint); text-underline-offset: 3px; cursor: help; }
+  .source { color: var(--text-dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .state { color: var(--text-faint); font-size: 10px; }
+  .enabled .state { color: var(--text-dim); }
   .switch {
     position: relative;
     width: 34px;
     height: 20px;
     padding: 0;
-    border: 1px solid #383b44;
+    border: 1px solid var(--line-strong);
     border-radius: 999px;
-    background: #24262d;
+    background: var(--key);
     cursor: pointer;
   }
   .switch span {
@@ -107,12 +107,12 @@
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background: #8b8e97;
+    background: var(--text-dim);
     transition: transform 120ms ease, background 120ms ease;
   }
-  .switch.on { border-color: #287e70; background: #1b554c; }
-  .switch.on span { transform: translateX(14px); background: #e7fff9; }
-  .switch:focus-visible { outline: 2px solid #6bd8c2; outline-offset: 2px; }
+  .switch.on { border-color: var(--accent-strong); background: var(--accent); }
+  .switch.on span { transform: translateX(14px); background: var(--text); }
+  .switch:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) {
     .provider, .switch span { transition: none; }
   }

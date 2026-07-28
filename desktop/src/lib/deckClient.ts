@@ -28,6 +28,8 @@ export interface DeckState {
   panel: number; // panel image version
   tiles: Record<number, number>; // tile index -> image version
   sections: Record<number, string>; // tile index -> config section key (klik-to-jump)
+  connections: Record<string, boolean>; // server/session id -> live connection state
+  localConnections: Record<string, string>; // local session name -> collision-safe runtime id
   summary: DeckSummary;
   source: string; // "mock" | "live"
   connected: boolean;
@@ -90,6 +92,24 @@ function parseSections(raw: unknown): Record<number, string> {
   return out;
 }
 
+function parseConnections(raw: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [id, connected] of Object.entries(raw as Record<string, unknown>)) {
+    if (id && typeof connected === "boolean") out[id] = connected;
+  }
+  return out;
+}
+
+function parseLocalConnections(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [name, runtimeId] of Object.entries(raw as Record<string, unknown>)) {
+    if (name && typeof runtimeId === "string" && runtimeId) out[name] = runtimeId;
+  }
+  return out;
+}
+
 /** Shape a raw `/state` JSON value into a DeckState, or null when it is not a
  *  usable snapshot (so the caller can treat it as an offline tick). */
 export function parseState(raw: unknown): DeckState | null {
@@ -103,6 +123,8 @@ export function parseState(raw: unknown): DeckState | null {
     panel: num(v.panel, -1),
     tiles: parseTiles(v.tiles),
     sections: parseSections(v.tile_sections),
+    connections: parseConnections(v.connections),
+    localConnections: parseLocalConnections(v.local_connections),
     summary: parseSummary(v.summary),
     source: typeof v.source === "string" ? v.source : "unknown",
     connected: v.connected === true,
@@ -264,6 +286,8 @@ export interface DeckViewModel {
   language: Lang;
   tiles: Record<number, string>; // index -> img src
   sections: Record<number, string>; // index -> config section key (klik-to-jump)
+  connections: Record<string, boolean>; // server/session id -> live connection state
+  localConnections: Record<string, string>; // local session name -> collision-safe runtime id
   panel: string | null;
 }
 
@@ -277,6 +301,8 @@ export function initialView(slots = 13): DeckViewModel {
     language: "en",
     tiles: {},
     sections: {},
+    connections: {},
+    localConnections: {},
     panel: null,
   };
 }
@@ -315,7 +341,9 @@ export async function stepDeck(
     prev.connected === state.connected &&
     (state.slots === 0 || prev.slots === state.slots) &&
     sameSummary(prev.summary, state.summary) &&
-    sameSections(prev.sections, state.sections)
+    sameRecords(prev.sections, state.sections) &&
+    sameRecords(prev.connections, state.connections) &&
+    sameRecords(prev.localConnections, state.localConnections)
   ) {
     differ.markSynced(state.version);
     return prev;
@@ -365,6 +393,8 @@ export async function stepDeck(
     language: state.language,
     tiles,
     sections: state.sections,
+    connections: state.connections,
+    localConnections: state.localConnections,
     panel,
   };
 }
@@ -379,10 +409,10 @@ function sameSummary(a: DeckSummary, b: DeckSummary): boolean {
   );
 }
 
-function sameSections(a: Record<number, string>, b: Record<number, string>): boolean {
+function sameRecords<T>(a: Record<string | number, T>, b: Record<string | number, T>): boolean {
   const ak = Object.keys(a);
   const bk = Object.keys(b);
   if (ak.length !== bk.length) return false;
-  for (const k of ak) if (a[Number(k)] !== b[Number(k)]) return false;
+  for (const k of ak) if (a[k] !== b[k]) return false;
   return true;
 }

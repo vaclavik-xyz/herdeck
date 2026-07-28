@@ -1,7 +1,9 @@
 <script lang="ts">
+  import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
   import { invoke } from "@tauri-apps/api/core";
   import TextField from "../fields/TextField.svelte";
   import TokenSecretField from "../fields/TokenSecretField.svelte";
+  import ConfirmRemoveButton from "../fields/ConfirmRemoveButton.svelte";
   import {
     commandTransport as cfgTransport,
     serversOf,
@@ -21,6 +23,7 @@
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
 
   const servers = $derived(serversOf(payload));
+  let removalRevision = $state(0);
 
   // Current-language tooltips for every field — required for each labelled
   // field (enforced by sections.help.test.ts); texts live in help.ts.
@@ -28,7 +31,6 @@
 
   const LM = defineMessages({
     en: {
-      heading: "Servers",
       local_heading: "Local sessions",
       local_hint: "Available Herdr sockets on this Mac. Changes apply without restarting herdeck.",
       available: "available",
@@ -42,7 +44,6 @@
       clear_token_failed: "clearing token '{name}' failed (HTTP {code})",
     },
     cs: {
-      heading: "Servery",
       local_heading: "Lokální sessions",
       local_hint: "Dostupné Herdr sockety na tomto Macu. Změny se projeví bez restartu herdecku.",
       available: "dostupná",
@@ -68,6 +69,7 @@
   }
   function remove(i: number): void {
     payload = removeServer(payload, i);
+    removalRevision += 1;
     onChange();
   }
   function selectLocal(name: string, selected: boolean): void {
@@ -92,14 +94,13 @@
   }
 </script>
 
-<h2>{lm.heading}</h2>
 <section class="local-sessions" aria-labelledby="local-sessions-heading">
   <div class="section-head">
     <div>
       <h3 id="local-sessions-heading">{lm.local_heading}</h3>
       <p>{lm.local_hint}</p>
     </div>
-    <span class="socket-mark" aria-hidden="true">⌁</span>
+    <span class="socket-mark" aria-hidden="true"><PlugsConnected size={22} /></span>
   </div>
   <div class="session-rail">
     {#each payload.localSessions as session (session.name)}
@@ -127,12 +128,13 @@
      A stable-id apparatus would add complexity that 9 řez-4 sections would clone. -->
 {#each servers as s, i (i)}
   <fieldset>
-    <legend>{s.id || lm.new_server} <button type="button" title={lm.remove_server} onclick={() => remove(i)}>×</button></legend>
-    <TextField label="id" help={HELP.id} value={s.id} oninput={(v) => set(i, "id", v)} />
-    <TextField label="url" help={HELP.url} value={s.url} oninput={(v) => set(i, "url", v)} />
+    <legend>{s.id || lm.new_server} <ConfirmRemoveButton title={lm.remove_server} identity={`${s.id}\u0000${s.url}\u0000${s.token_env}`} resetKey={removalRevision} onconfirm={() => remove(i)} /></legend>
+    <TextField label="id" help={HELP.id} owner={s.id} value={s.id} oninput={(v) => set(i, "id", v)} />
+    <TextField label="url" help={HELP.url} owner={s.id} value={s.url} oninput={(v) => set(i, "url", v)} />
     <TokenSecretField
-      label="token"
+      label="token_env"
       help={HELP.token}
+      owner={s.id}
       value={s.token_env}
       flag={secretFlag(payload, s.token_env)}
       oninput={(v) => set(i, "token_env", v)}
@@ -145,40 +147,49 @@
 
 <style>
   .local-sessions {
-    border: 1px solid #263142;
-    border-radius: 10px;
-    background: #11151b;
-    padding: 12px;
-    margin-bottom: 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-panel);
+    background: var(--panel);
+    padding: var(--s4) var(--s5);
+    margin-bottom: var(--s4);
   }
-  .section-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-  .section-head h3, .remote-heading { margin: 0; color: #dce7f5; font-size: 14px; }
-  .section-head p { margin: 3px 0 0; color: #78879a; font-size: 11px; max-width: 430px; }
-  .socket-mark { color: #58a6ff; font: 24px/1 ui-monospace, monospace; }
-  .session-rail { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .section-head { display: flex; justify-content: space-between; gap: var(--s3); align-items: flex-start; }
+  .section-head h3, .remote-heading { margin: 0; color: var(--text); font: var(--t-h2); letter-spacing: -.01em; }
+  .section-head p { margin: var(--s1) 0 0; color: var(--text-dim); font: var(--t-help); max-width: 60ch; }
+  .socket-mark { color: var(--accent-strong); font: 22px/1 var(--font-mono); }
+  .session-rail { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
   .session-rail label {
     min-width: 120px;
     display: grid;
     grid-template-columns: auto 8px 1fr;
-    gap: 7px;
+    gap: var(--s2);
     align-items: center;
-    border: 1px solid #2a3546;
-    border-radius: 8px;
-    padding: 8px 10px;
-    background: #171d26;
+    border: 1px solid var(--line);
+    border-radius: var(--r-control);
+    padding: var(--s2) var(--s3);
+    background: var(--field);
     cursor: pointer;
   }
-  .session-rail label:has(input:checked) { border-color: #3979bd; box-shadow: inset 0 0 0 1px #244d78; }
+  .session-rail label:has(input:checked) { border-color: var(--accent-strong); background: var(--accent-soft); }
   .session-rail label.unavailable { opacity: .62; }
-  .session-rail input { margin: 0; accent-color: #58a6ff; }
-  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; box-shadow: 0 0 0 2px #252c36; }
-  .status-dot.online { background: #3fb950; box-shadow: 0 0 0 2px #1f4d2b; }
+  .session-rail input { margin: 0; accent-color: var(--accent); }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+  .status-dot.online { background: var(--st-working); }
   .session-copy { display: flex; flex-direction: column; min-width: 0; }
-  .session-copy strong { color: #dce7f5; font: 600 12px/1.2 ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; }
-  .session-copy small { color: #78879a; font-size: 10px; }
-  .remote-heading { margin: 0 0 8px; }
-  fieldset { border: 1px solid #2a2a30; border-radius: 6px; margin: 8px 0; padding: 8px 12px; }
-  legend { color: #ccc; } legend button { color: #e05050; background: none; border: 0; cursor: pointer; }
-  button { background: #1b1b1f; border: 1px solid #2a2a30; color: inherit; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
-  h2 { margin: 0 0 8px; }
+  .session-copy strong { color: var(--text); font: 600 12px/1.2 var(--font-mono); overflow: hidden; text-overflow: ellipsis; }
+  .session-copy small { color: var(--text-dim); font-size: 10px; }
+  .remote-heading { margin: 0 0 var(--s2); }
+  fieldset { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); padding: var(--s4) var(--s5); margin: var(--s2) 0; }
+  legend { color: var(--text); }
+  button {
+    min-height: 30px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--field);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+  button:hover { color: var(--text); background: var(--panel-raised); }
 </style>

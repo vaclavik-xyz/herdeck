@@ -19,12 +19,16 @@
     transport,
     pollMs = 300,
     onJump = undefined,
+    onView = undefined,
+    compact = false,
   }: {
     // Live transport (built from the sidecar url + token via sidecar.ts). Null
     // until the shell reports both; the deck then renders its offline state.
     transport: DeckTransport | null;
     pollMs?: number;
     onJump?: (section: string) => void;
+    onView?: (view: DeckViewModel) => void;
+    compact?: boolean;
   } = $props();
 
   let view = $state<DeckViewModel>(initialView());
@@ -35,9 +39,11 @@
   async function step(): Promise<void> {
     if (!transport) {
       view = { ...view, online: false };
+      onView?.(view);
       return;
     }
     view = await stepDeck(transport, differ, view);
+    onView?.(view);
     // The deck's [view].language leads; the window follows so tiles and chrome
     // always speak the same language.
     setLang(view.language);
@@ -128,7 +134,8 @@
   );
 </script>
 
-<section class="deck" class:offline={!view.online}>
+<section class="deck" class:offline={!view.online} class:compact>
+  <div class="stage">
   <div class="grid">
     {#each cells as i (i)}
       <button
@@ -149,8 +156,17 @@
       {#if view.panel}<img src={view.panel} alt="" />{/if}
     </button>
   </div>
+  {#if !view.online && !compact}
+    <div class="deck-offline">
+      <strong>{locale.lang === "cs" ? "Čekám na runtime" : "Waiting for the runtime"}</strong>
+      <p>{locale.lang === "cs"
+        ? "Deck se zobrazí, jakmile odpoví lokální Herdeck runtime."
+        : "The deck appears here as soon as the local Herdeck runtime answers."}</p>
+    </div>
+  {/if}
+  </div>
 
-  <footer class="summary">
+  <footer class="summary" aria-live="polite">
     <span
       class="dot"
       class:on={view.online && (view.source !== "live" || view.connected)}
@@ -163,30 +179,45 @@
 </section>
 
 <style>
+  .stage { position: relative; }
+  .deck-offline {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    align-content: center;
+    justify-items: center;
+    gap: var(--s1);
+    padding: var(--s5);
+    border-radius: var(--r-panel);
+    background: color-mix(in srgb, var(--canvas) 78%, transparent);
+    text-align: center;
+  }
+  .deck-offline strong { font: var(--t-h2); color: var(--text); }
+  .deck-offline p { margin: 0; max-width: 34ch; color: var(--text-dim); font: var(--t-help); }
   .deck {
     display: flex;
     flex-direction: column;
     gap: 8px;
     box-sizing: border-box;
     padding: 10px;
-    background: #0b0b0d;
+    background: var(--canvas);
     font: 12px/1.3 system-ui, -apple-system, sans-serif;
-    color: #e7ecf3;
+    color: var(--text);
   }
   .grid {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 6px;
     padding: 10px;
-    border-radius: 14px;
-    background: #2a2a2e;
+    border-radius: 11px;
+    background: var(--key);
   }
   .cell,
   .panel {
     border: none;
     padding: 0;
     border-radius: 8px;
-    background: #111;
+    background: var(--panel);
     cursor: pointer;
     overflow: hidden;
   }
@@ -200,8 +231,8 @@
   }
   .cell.active,
   .panel.active {
-    outline: 3px solid #5af;
-    outline-offset: -3px;
+    outline: 2px solid var(--accent-strong);
+    outline-offset: -2px;
   }
   .cell img,
   .panel img {
@@ -224,16 +255,16 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #6b7785;
+    background: var(--st-unknown);
   }
   .dot.on {
-    background: #3fb950;
+    background: var(--st-working);
   }
   .dot.mock {
-    background: #d29922;
+    background: var(--st-blocked);
   }
   .dot.warn {
-    background: #f0883e;
+    background: var(--st-waiting);
   }
   .counts {
     flex: 1;
@@ -243,8 +274,36 @@
     white-space: nowrap;
   }
   .src {
-    color: #8b97a4;
+    color: var(--text-dim);
     font-size: 11px;
     white-space: nowrap;
+  }
+  .deck.compact {
+    gap: 0;
+    padding: 8px;
+    background: var(--canvas);
+  }
+  .deck.compact .grid {
+    gap: 4px;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .deck.compact .cell,
+  .deck.compact .panel {
+    border-radius: 7px;
+    background: var(--panel);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .deck.compact footer.summary {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 </style>
