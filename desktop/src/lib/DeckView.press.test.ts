@@ -67,21 +67,58 @@ describe("DeckView press feedback", () => {
     } finally { cleanup(); }
   });
 
-  it("moves the outline to the newest press instead of accumulating", async () => {
+  // A second press must CANCEL the first press's timer, not merely outrank it:
+  // otherwise the earlier deadline fires mid-flash and blanks the newer outline.
+  it("restarts the deadline on the next press instead of inheriting the old one", async () => {
     const transport = fakeTransport();
     const { target, cleanup } = render({ transport, compact: true });
     try {
       const cells = target.querySelectorAll<HTMLButtonElement>(".cell");
       cells[1].click();
       await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(200); // still within the first flash
+      await vi.advanceTimersByTimeAsync(200); // t≈200, inside the first flash
       cells[4].click();
       await vi.advanceTimersByTimeAsync(0);
       flushSync();
 
-      const outlined = [...target.querySelectorAll(".cell")]
+      const outlined = () => [...target.querySelectorAll(".cell")]
         .flatMap((c, i) => (c.classList.contains("active") ? [i] : []));
-      expect(outlined).toEqual([4]);
+      expect(outlined()).toEqual([4]);
+
+      // t≈500: past the FIRST press's original deadline (450). If its timer was
+      // never cancelled, it fires here and wrongly clears cell 4.
+      await vi.advanceTimersByTimeAsync(300);
+      flushSync();
+      expect(outlined(), "a stale timer cleared the newer outline").toEqual([4]);
+
+      await vi.advanceTimersByTimeAsync(250); // t≈750, past cell 4's own deadline
+      flushSync();
+      expect(outlined()).toEqual([]);
+    } finally { cleanup(); }
+  });
+
+  // Pressing the same tile twice is a normal deck interaction; with the ring
+  // already lit, an unchanged DOM makes the second press look dropped.
+  it("retriggers the flash when the same cell is pressed again", async () => {
+    const transport = fakeTransport();
+    const { target, cleanup } = render({ transport, compact: true });
+    try {
+      const cell = target.querySelectorAll<HTMLButtonElement>(".cell")[3];
+      cell.click();
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+      const first = cell.classList.contains("alt");
+
+      await vi.advanceTimersByTimeAsync(150); // still lit
+      cell.click();
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+
+      expect(cell.classList.contains("active")).toBe(true);
+      expect(
+        cell.classList.contains("alt"),
+        "the second press left the DOM unchanged, so the animation never restarted",
+      ).toBe(!first);
     } finally { cleanup(); }
   });
 });

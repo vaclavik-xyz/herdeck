@@ -59,7 +59,10 @@
     } catch {
       return;
     }
-    if (!r.ok) return;
+    // The component can be torn down (window-mode switch, quit) while the POST
+    // is in flight; without this the resolving press installs a timer that
+    // teardown has already run past, and writes state on a dead component.
+    if (!r.ok || !alive) return;
     flashActive(i);
     // The sidecar re-renders synchronously inside the POST handler, so the
     // updated frame already exists — show it now instead of waiting out the
@@ -73,10 +76,17 @@
   // while the agent under it changed, marking an unrelated tile.
   const ACTIVE_MS = 450;
   let activeTimer: ReturnType<typeof setTimeout> | undefined;
+  let alive = true;
+  // Re-pressing the SAME cell inside the flash window would otherwise just push
+  // the deadline out with the ring already lit — indistinguishable from a press
+  // that never landed. The parity flips per press and swaps the animation NAME,
+  // which restarts the animation synchronously (no rAF, so it stays testable).
+  let pressParity = $state(false);
 
   function flashActive(i: number): void {
-    active = i;
     if (activeTimer) clearTimeout(activeTimer);
+    active = i;
+    pressParity = !pressParity;
     activeTimer = setTimeout(() => {
       activeTimer = undefined;
       active = null;
@@ -134,6 +144,7 @@
     loop = visibilityGatedLoop(step, () => pollMs);
     window.addEventListener("keydown", onKey);
     return () => {
+      alive = false;
       loop?.stop();
       loop = null;
       clearActive();
@@ -164,6 +175,7 @@
       <button
         class="cell"
         class:active={active === i}
+        class:alt={pressParity}
         onclick={() => clickTile(i)}
         aria-label={locale.lang === "cs" ? `dlaždice ${i + 1}` : `tile ${i + 1}`}
       >
@@ -173,6 +185,7 @@
     <button
       class="panel"
       class:active={active === view.slots}
+      class:alt={pressParity}
       onclick={() => { if (!onJump) void press(view.slots); }}
       aria-label={locale.lang === "cs" ? "stavový panel" : "status panel"}
     >
@@ -256,7 +269,16 @@
   .panel.active {
     outline: 2px solid var(--accent-strong);
     outline-offset: -2px;
+    animation: press-a var(--dur) var(--ease);
   }
+  /* Same keyframes under a second name: flipping the class on a re-press swaps
+     the animation-name, which is what restarts the animation. */
+  .cell.active.alt,
+  .panel.active.alt {
+    animation-name: press-b;
+  }
+  @keyframes press-a { from { outline-color: var(--text); } }
+  @keyframes press-b { from { outline-color: var(--text); } }
   .cell img,
   .panel img {
     display: block;
