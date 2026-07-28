@@ -7,7 +7,7 @@
   import ConfigApp from "./ConfigApp.svelte";
   import DeckView from "./lib/DeckView.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
-  import { appSurface, desktopSetupVisible } from "./lib/appSurface";
+  import { appSurface, desktopSetupVisible, windowRole } from "./lib/appSurface";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport } from "./lib/deckClient";
   import { fitDecision } from "./lib/windowFit";
@@ -31,15 +31,14 @@
   import { visibilityGatedLoop } from "./lib/pollGate";
   import { updateTransport, type UpdateInfo } from "./lib/updateClient";
 
-  // Window mode is injected on <html data-window-mode> by Rust BEFORE first paint
-  // (initialization_script), so the borderless CSS applies with no FOUC. Falls
-  // back to "normal" in a plain browser (no Tauri / no attribute).
-  const windowMode =
-    (typeof document !== "undefined"
-      ? document.documentElement.dataset.windowMode
-      : undefined) ?? "normal";
-  const borderless = windowMode !== "normal";
-  const surface = appSurface(windowMode);
+  // Injected on <html data-window-role> by Rust BEFORE first paint
+  // (initialization_script), so the borderless CSS applies with no flash of
+  // opaque chrome. Falls back to "app" in a plain browser (no Tauri / no
+  // attribute) — the settings surface is the one worth designing against.
+  const role =
+    (typeof document !== "undefined" ? windowRole(document) : undefined) ?? "app";
+  const borderless = role === "deck";
+  const surface = appSurface(role);
 
   let shell = $state<HTMLElement | undefined>(undefined);
   let desktopSetupOverlay = $state<HTMLElement | undefined>(undefined);
@@ -217,6 +216,12 @@
       const d = asDiscovery(event.payload);
       if (d) discovery = d;
     });
+    // Rust emits both of these to APP_WINDOW only (`app.emit_to("config", ...)`
+    // in lib.rs's tray handlers), and Tauri delivers an emit_to'd event solely
+    // to the targeted webview's IPC channel — so this listener is registered
+    // in both windows but only ever fires in the config window, where
+    // `reonboard`/`desktopSetupHidden` actually affect the rendered surface
+    // (both are read only by the surface === "desktop" branch below).
     const reonboardListener = listen("reonboard", () => {
       reonboard = true;
       desktopSetupHidden = false;
@@ -437,10 +442,8 @@
     background: var(--canvas);
     color-scheme: dark; /* dark native widgets + scrollbars (WebKit) */
   }
-  :global(html[data-window-mode="floating"]),
-  :global(html[data-window-mode="floating"] body),
-  :global(html[data-window-mode="always_on_top"]),
-  :global(html[data-window-mode="always_on_top"] body) {
+  :global(html[data-window-role="deck"]),
+  :global(html[data-window-role="deck"] body) {
     background: transparent;
   }
 
