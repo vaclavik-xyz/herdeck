@@ -357,7 +357,7 @@
     padding: 24px 20px;
     background: var(--canvas);
     color: var(--text);
-    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    font: var(--t-body);
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -411,7 +411,7 @@
     border-radius: 999px;
     background: var(--key);
     color: var(--text-dim);
-    font: 600 10px/1.5 ui-monospace, SFMono-Regular, monospace;
+    font: 600 10px/1.5 var(--font-mono);
     text-align: center;
   }
   .remote {
@@ -454,7 +454,7 @@
   .session-list .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--st-unknown); }
   .session-list .dot.online { background: var(--st-working); }
   .session-list span:last-child { display: flex; flex-direction: column; min-width: 0; }
-  .session-list strong { font: 600 11px/1.25 ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; }
+  .session-list strong { font: 600 11px/1.25 var(--font-mono); overflow: hidden; text-overflow: ellipsis; }
   .session-list small { margin-top: 2px; color: var(--text-dim); font-size: 9px; }
   .session-actions {
     display: flex;
@@ -487,10 +487,6 @@
     font-weight: 680;
     cursor: pointer;
   }
-  button.primary:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
   button.ghost {
     min-height: 32px;
     padding: 6px 13px;
@@ -500,10 +496,6 @@
     color: var(--text);
     font: inherit;
     cursor: pointer;
-  }
-  button.ghost:disabled {
-    opacity: 0.5;
-    cursor: default;
   }
   button.remote-toggle {
     display: inline-flex;
@@ -519,13 +511,11 @@
     padding: 4px 0;
   }
   button.link.dismiss {
-    margin-left: auto;
-    color: var(--text-dim);
-  }
-  button.link.dismiss {
     display: inline-flex;
+    margin-left: auto;
     align-items: center;
     gap: 5px;
+    color: var(--text-dim);
   }
   .error {
     margin: 0;

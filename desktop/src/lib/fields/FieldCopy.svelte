@@ -67,4 +67,9 @@
     color: var(--st-offline-text);
     font: var(--t-help);
   }
+  /* Every consumer collapses to ONE column here; keeping column 2 would create
+     an implicit track sized to the message and widen the whole form. */
+  @media (max-width: 760px) {
+    .fielderror { grid-column: 1; }
+  }
 </style>

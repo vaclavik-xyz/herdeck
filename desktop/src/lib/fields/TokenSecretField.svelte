@@ -71,4 +71,13 @@
   .ok { color: var(--form-ok); } .missing { color: var(--form-missing); }
   .setrow { display: flex; gap: 8px; margin: 4px 0 8px calc(var(--field-label-w, 120px) + 8px); }
   button { background: var(--panel-raised); border: 1px solid var(--line); color: inherit; border-radius: var(--r-control); cursor: pointer; }
+  /* Without this the 240px label track stayed fixed on a phone and this field
+     alone pushed the whole Connections page into a horizontal scroll. */
+  @media (max-width: 760px) {
+    .field { grid-template-columns: minmax(0, 1fr) auto; }
+    .field > input { grid-column: 1 / -1; grid-row: auto; }
+    .setrow { flex-wrap: wrap; margin-left: 0; }
+    .setrow input { flex: 1 1 100%; min-width: 0; }
+    button { min-height: 32px; padding: 0 var(--s3); }
+  }
 </style>
