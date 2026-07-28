@@ -21,21 +21,22 @@ function styleBlock(source: string): string {
   return match ? match[1].replace(/\/\*[\s\S]*?\*\//g, "") : "";
 }
 
+/** One media block, tolerating exactly ONE level of nesting whatever the inner
+ *  block is. Anything two levels deep — a nested selector, or an at-rule
+ *  carrying its own rules — does not match, so the block survives and
+ *  `unconditional()` hands its rules on as if a desktop viewport got them.
+ *  That is failing OPEN, which is how a guard quietly stops guarding; if you
+ *  widen this, keep the post-condition below able to detect what you missed. */
 const MEDIA_BLOCK = /@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g;
 
-/** Rules OUTSIDE any @media — what a desktop viewport actually gets.
- *  MEDIA_BLOCK tolerates exactly one level of nesting, whatever the inner block
- *  is: anything TWO levels deep — a nested selector, or an at-rule carrying its
- *  own rules — leaves the block unstripped and hands its rules over as
- *  unconditional, failing OPEN. That is how a guard quietly stops guarding, so
- *  the stripper asserts its own post-condition instead of trusting the result. */
+/** The at-rules that can HIDE a rule from a desktop viewport. @keyframes,
+ *  @font-face and an "@" inside a url() cannot, and must not send the next
+ *  author after the regex. */
 const CONDITIONAL_AT_RULE = /@(media|supports|container)\b/;
 
+/** Rules OUTSIDE any @media — what a desktop viewport actually gets. */
 function unconditional(css: string): string {
   const out = css.replace(MEDIA_BLOCK, "");
-  // Only the at-rules that can HIDE a rule from a desktop viewport matter here;
-  // @keyframes, @font-face and an "@" inside a url() are none of this guard's
-  // business and must not send the next author after the regex.
   const leftover = out.match(CONDITIONAL_AT_RULE);
   if (leftover) {
     throw new Error(
