@@ -56,21 +56,25 @@ const DECK_VISIBILITY_EVENT: &str = "deck-visibility-changed";
 /// Mirrors the `DECK_VISIBILITY_EVENT` emit_to pattern above.
 const FLOATING_ZOOM_EVENT: &str = "floating-zoom-command";
 
-/// Menu item ids used in more than one place: the tray's own construction in
-/// `build_tray`, `build_deck_context_menu` (which reuses "show_app" and
-/// "deck_aot" so the two menus share one `on_menu_event` handler instead of
-/// each carrying its own), and the `on_menu_event` match itself. A plain
-/// string literal repeated across those sites has no compiler check tying
-/// them together — a typo in any one copy (e.g. `MenuItem::with_id(app,
+/// Every tray/context-menu item id: built once in `build_tray` (or, for
+/// "show_app"/"deck_aot", also in `build_deck_context_menu`, which reuses
+/// them so the two menus share one `on_menu_event` handler instead of each
+/// carrying its own) and matched again in `on_menu_event`. A plain string
+/// literal repeated across those sites has no compiler check tying them
+/// together — a typo in any one copy (e.g. `MenuItem::with_id(app,
 /// "zoom_ni", …)`) builds fine and produces a menu item that silently never
 /// fires, which no test can catch either. These consts are the single
-/// spelling every site refers to instead.
+/// spelling every site refers to instead, so the whole handler reads one way.
 const MENU_ID_SHOW_APP: &str = "show_app";
 const MENU_ID_DECK_AOT: &str = "deck_aot";
 const MENU_ID_HIDE_DECK: &str = "hide_deck";
 const MENU_ID_ZOOM_IN: &str = "zoom_in";
 const MENU_ID_ZOOM_OUT: &str = "zoom_out";
 const MENU_ID_ZOOM_RESET: &str = "zoom_reset";
+const MENU_ID_TOGGLE_DECK: &str = "toggle_deck";
+const MENU_ID_RECONNECT: &str = "reconnect";
+const MENU_ID_AUTOSTART: &str = "autostart";
+const MENU_ID_QUIT: &str = "quit";
 
 /// Managed state read by the `get_discovery` command and by the supervisor
 /// callback. The live child handle and stop flag are held as separate `Arc`s
@@ -1959,7 +1963,7 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
     let show_app = MenuItem::with_id(app, MENU_ID_SHOW_APP, l[0], true, None::<&str>)?;
     let toggle_deck = MenuItem::with_id(
         app,
-        "toggle_deck",
+        MENU_ID_TOGGLE_DECK,
         toggle_deck_label("en", deck_visible),
         true,
         None::<&str>,
@@ -1974,14 +1978,14 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
     )?;
     let autostart = CheckMenuItem::with_id(
         app,
-        "autostart",
+        MENU_ID_AUTOSTART,
         l[4],
         true,
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
-    let reconnect = MenuItem::with_id(app, "reconnect", l[5], true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", l[6], true, None::<&str>)?;
+    let reconnect = MenuItem::with_id(app, MENU_ID_RECONNECT, l[5], true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, MENU_ID_QUIT, l[6], true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[&show_app, &toggle_deck, &deck_aot, &autostart, &reconnect, &quit],
@@ -2015,7 +2019,7 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
                 let _ = app.emit_to(APP_WINDOW, "open-settings", ());
                 show_role_window(app, APP_WINDOW);
             }
-            "toggle_deck" => toggle_deck_window(app),
+            MENU_ID_TOGGLE_DECK => toggle_deck_window(app),
             MENU_ID_DECK_AOT => {
                 // Also the deck context menu's "Deck always on top" checkbox,
                 // for the same reason as "show_app" above.
@@ -2041,13 +2045,13 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
                     }
                 }
             }
-            "reconnect" => {
+            MENU_ID_RECONNECT => {
                 // Onboarding lives on the app surface, so the re-onboard event
                 // and the window that has to be looking at it are the same one.
                 let _ = app.emit_to(APP_WINDOW, "reonboard", ());
                 show_role_window(app, APP_WINDOW);
             }
-            "autostart" => {
+            MENU_ID_AUTOSTART => {
                 let mgr = app.autolaunch();
                 let now = mgr.is_enabled().unwrap_or(false);
                 let res = if now { mgr.disable() } else { mgr.enable() };
@@ -2056,7 +2060,7 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
                 }
                 let _ = autostart_cb.set_checked(mgr.is_enabled().unwrap_or(false));
             }
-            "quit" => app.exit(0),
+            MENU_ID_QUIT => app.exit(0),
             // The deck's own right-click context menu (`build_deck_context_menu`).
             // MENU_ID_HIDE_DECK is new; MENU_ID_DECK_AOT and MENU_ID_SHOW_APP
             // above already cover the context menu's checkbox and open-app
