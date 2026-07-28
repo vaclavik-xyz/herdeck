@@ -71,10 +71,15 @@ describe("the media stripper", () => {
     expect(out).not.toContain("blue");
   });
 
-  it("refuses to guess when a block nests deeper than it can parse", () => {
-    expect(() =>
-      unconditional("@media (max-width: 760px) { @supports (display: grid) { .field { color: blue; } } }"),
-    ).toThrow(/survived stripping/);
+  // One case per alternative in CONDITIONAL_AT_RULE: dropping any of them from
+  // the pattern must fail something, or the guard silently shrinks.
+  it.each([
+    ["a media block nested deeper than it can parse",
+      "@media (max-width: 760px) { @supports (display: grid) { .field { color: blue; } } }"],
+    ["a top-level @supports", "@supports (display: grid) { .field { color: blue; } }"],
+    ["a top-level @container", "@container (min-width: 400px) { .field { color: blue; } }"],
+  ])("refuses to guess at %s", (_name, css) => {
+    expect(() => unconditional(css)).toThrow(/survived stripping/);
   });
 
   // The guard keys on at-rules that can HIDE a rule from a desktop viewport.
@@ -84,7 +89,8 @@ describe("the media stripper", () => {
     expect(() =>
       unconditional(
         '.icon { background: url("icon@2x.png"); content: "@"; }\n'
-        + "@keyframes spin { from { opacity: 0 } to { opacity: 1 } }",
+        + "@keyframes spin { from { opacity: 0 } to { opacity: 1 } }\n"
+        + '@font-face { font-family: x; src: url("x@2.woff2"); }',
       ),
     ).not.toThrow();
   });
