@@ -195,7 +195,10 @@ describe("compact offline pill styling", () => {
   });
 
   it.each([
-    ["padding of its own, not the card's --s5", /padding:\s*(?!var\(--s5\))/],
+    // The whitespace lives INSIDE the lookahead: with `\s*` in front of it the
+    // engine backtracks that to empty, the lookahead then reads a space rather
+    // than `var(`, succeeds, and the rejection rejects nothing.
+    ["padding of its own, not the card's --s5", /padding:(?![^;]*var\(--s5\))/],
     ["a scrim over the dimmed keys", /background:/],
   ])("gives the compact overlay %s", (_what, pattern) => {
     expect(declares(container, pattern)).toBe(true);
@@ -232,7 +235,9 @@ describe("compact deck chrome", () => {
   it("keeps the compact status footer sr-only", () => {
     expect(hidden.length, "no rule hides the status footer on the compact deck").toBeGreaterThan(0);
     expect(
-      hidden.some((r) => /clip:/.test(r.body) && /width:\s*1px/.test(r.body)),
+      // Either clipping property: `clip-path: inset(50%)` upholds the premise
+      // just as well, and this guard is about the premise, not the spelling.
+      hidden.some((r) => /clip(-path)?:/.test(r.body) && /width:\s*1px/.test(r.body)),
       "the compact footer is no longer clipped, so the offline pill now duplicates it",
     ).toBe(true);
   });
