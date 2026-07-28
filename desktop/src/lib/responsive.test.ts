@@ -23,9 +23,16 @@ function styleBlock(source: string): string {
 
 const MEDIA_BLOCK = /@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g;
 
-/** Rules OUTSIDE any @media — what a desktop viewport actually gets. */
+/** Rules OUTSIDE any @media — what a desktop viewport actually gets.
+ *  MEDIA_BLOCK tolerates exactly one level of nesting, so a nested at-rule
+ *  would leave the block unstripped and hand its rules over as unconditional —
+ *  failing OPEN, which is how a guard quietly stops guarding. Assert instead. */
 function unconditional(css: string): string {
-  return css.replace(MEDIA_BLOCK, "");
+  const out = css.replace(MEDIA_BLOCK, "");
+  if (out.includes("@")) {
+    throw new Error(`unparsed at-rule near "${out.slice(out.indexOf("@"), out.indexOf("@") + 40)}" — the media stripper needs updating`);
+  }
+  return out;
 }
 
 /** The body of the phone media block, or "" when there is none. */
@@ -78,8 +85,11 @@ describe("responsive field layout", () => {
     expect(collapsed.length, `${selector} never redeclares its grid on a phone`)
       .toBeGreaterThan(0);
     for (const value of collapsed) {
-      expect(value, `${selector} still carries the fixed label track on a phone`)
-        .not.toContain("var(--field-label-w");
+      // The SHAPE, not the absence of the token: --field-label-w is literally
+      // 240px, so `240px minmax(0, 1fr)` would dodge a token-name check while
+      // reproducing the horizontal scroll exactly. The first track must flex.
+      expect(value.trim(), `${selector} keeps a fixed first track on a phone`)
+        .toMatch(/^minmax\(0,\s*1fr\)/);
     }
   });
 
@@ -105,16 +115,19 @@ describe("ConfirmRemoveButton owns its appearance", () => {
   const css = styleBlock(read("./fields/ConfirmRemoveButton.svelte"));
   // Every BARE `button {…}` rule, not just the first (the surface may be split
   // or reordered), but only OUTSIDE a media query: a surface declared solely in
-  // the phone block would leave the desktop button as UA chrome.
-  const base = rules(unconditional(css))
-    .filter(([selector]) => selector === "button")
-    .map(([, body]) => body)
-    .join("\n");
+  // the phone block would leave the desktop button as UA chrome. Resolved
+  // lazily so an unparsable stylesheet fails a test, not collection.
+  const base = (): string =>
+    rules(unconditional(css))
+      .filter(([selector]) => selector === "button")
+      .map(([, body]) => body)
+      .join("\n");
 
   it("declares its own surface rather than inheriting one", () => {
-    expect(base).toMatch(/background:/);
-    expect(base).toMatch(/border:/);
-    expect(base).toMatch(/border-radius:/);
+    const surface = base();
+    expect(surface).toMatch(/background:/);
+    expect(surface).toMatch(/border:/);
+    expect(surface).toMatch(/border-radius:/);
   });
 
   it("needs no !important, because it overrides nothing", () => {
