@@ -56,6 +56,22 @@ const DECK_VISIBILITY_EVENT: &str = "deck-visibility-changed";
 /// Mirrors the `DECK_VISIBILITY_EVENT` emit_to pattern above.
 const FLOATING_ZOOM_EVENT: &str = "floating-zoom-command";
 
+/// Menu item ids used in more than one place: the tray's own construction in
+/// `build_tray`, `build_deck_context_menu` (which reuses "show_app" and
+/// "deck_aot" so the two menus share one `on_menu_event` handler instead of
+/// each carrying its own), and the `on_menu_event` match itself. A plain
+/// string literal repeated across those sites has no compiler check tying
+/// them together — a typo in any one copy (e.g. `MenuItem::with_id(app,
+/// "zoom_ni", …)`) builds fine and produces a menu item that silently never
+/// fires, which no test can catch either. These consts are the single
+/// spelling every site refers to instead.
+const MENU_ID_SHOW_APP: &str = "show_app";
+const MENU_ID_DECK_AOT: &str = "deck_aot";
+const MENU_ID_HIDE_DECK: &str = "hide_deck";
+const MENU_ID_ZOOM_IN: &str = "zoom_in";
+const MENU_ID_ZOOM_OUT: &str = "zoom_out";
+const MENU_ID_ZOOM_RESET: &str = "zoom_reset";
+
 /// Managed state read by the `get_discovery` command and by the supervisor
 /// callback. The live child handle and stop flag are held as separate `Arc`s
 /// owned by the supervisor + exit-handler closures (not routed through here).
@@ -1784,9 +1800,9 @@ fn deck_context_menu_texts(lang: &str) -> [&'static str; 6] {
 /// id→command mapping has a test that does not need a live tray or window.
 fn zoom_command_for_menu_id(id: &str) -> Option<&'static str> {
     match id {
-        "zoom_in" => Some("in"),
-        "zoom_out" => Some("out"),
-        "zoom_reset" => Some("reset"),
+        MENU_ID_ZOOM_IN => Some("in"),
+        MENU_ID_ZOOM_OUT => Some("out"),
+        MENU_ID_ZOOM_RESET => Some("reset"),
         _ => None,
     }
 }
@@ -1870,13 +1886,20 @@ fn build_deck_context_menu(
     always_on_top: bool,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let texts = deck_context_menu_texts(lang);
-    let hide = MenuItem::with_id(app, "hide_deck", texts[0], true, None::<&str>)?;
-    let zoom_in = MenuItem::with_id(app, "zoom_in", texts[1], true, Some("CmdOrCtrl+="))?;
-    let zoom_out = MenuItem::with_id(app, "zoom_out", texts[2], true, Some("CmdOrCtrl+-"))?;
-    let zoom_reset = MenuItem::with_id(app, "zoom_reset", texts[3], true, Some("CmdOrCtrl+0"))?;
-    let deck_aot =
-        CheckMenuItem::with_id(app, "deck_aot", texts[4], true, always_on_top, None::<&str>)?;
-    let open_app = MenuItem::with_id(app, "show_app", texts[5], true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, MENU_ID_HIDE_DECK, texts[0], true, None::<&str>)?;
+    let zoom_in = MenuItem::with_id(app, MENU_ID_ZOOM_IN, texts[1], true, Some("CmdOrCtrl+="))?;
+    let zoom_out = MenuItem::with_id(app, MENU_ID_ZOOM_OUT, texts[2], true, Some("CmdOrCtrl+-"))?;
+    let zoom_reset =
+        MenuItem::with_id(app, MENU_ID_ZOOM_RESET, texts[3], true, Some("CmdOrCtrl+0"))?;
+    let deck_aot = CheckMenuItem::with_id(
+        app,
+        MENU_ID_DECK_AOT,
+        texts[4],
+        true,
+        always_on_top,
+        None::<&str>,
+    )?;
+    let open_app = MenuItem::with_id(app, MENU_ID_SHOW_APP, texts[5], true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     Menu::with_items(
@@ -1933,7 +1956,7 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
     // Built with the English (default-language) labels; tray_set_language
     // retitles everything the moment the WebView learns the configured language.
     let l = tray_labels("en");
-    let show_app = MenuItem::with_id(app, "show_app", l[0], true, None::<&str>)?;
+    let show_app = MenuItem::with_id(app, MENU_ID_SHOW_APP, l[0], true, None::<&str>)?;
     let toggle_deck = MenuItem::with_id(
         app,
         "toggle_deck",
@@ -1943,7 +1966,7 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
     )?;
     let deck_aot = CheckMenuItem::with_id(
         app,
-        "deck_aot",
+        MENU_ID_DECK_AOT,
         l[3],
         true,
         deck_always_on_top,
@@ -1982,7 +2005,7 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id.as_ref() {
-            "show_app" => {
+            MENU_ID_SHOW_APP => {
                 // Also the deck context menu's "Open Herdeck" item
                 // (`build_deck_context_menu` gives it this SAME id, on
                 // purpose, so it runs through this one arm instead of a copy).
@@ -1993,7 +2016,7 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
                 show_role_window(app, APP_WINDOW);
             }
             "toggle_deck" => toggle_deck_window(app),
-            "deck_aot" => {
+            MENU_ID_DECK_AOT => {
                 // Also the deck context menu's "Deck always on top" checkbox,
                 // for the same reason as "show_app" above.
                 let Some(state) = app.try_state::<AppState>() else {
@@ -2035,16 +2058,19 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
             }
             "quit" => app.exit(0),
             // The deck's own right-click context menu (`build_deck_context_menu`).
-            // "hide_deck" is new; "deck_aot" and "show_app" above already cover
-            // the context menu's checkbox and open-app items because those
-            // items are built with the SAME ids.
-            "hide_deck" => hide_role_window(app, DECK_WINDOW),
-            "zoom_in" | "zoom_out" | "zoom_reset" => {
-                if let Some(cmd) = zoom_command_for_menu_id(event.id.as_ref()) {
+            // MENU_ID_HIDE_DECK is new; MENU_ID_DECK_AOT and MENU_ID_SHOW_APP
+            // above already cover the context menu's checkbox and open-app
+            // items because those items are built with the SAME ids.
+            MENU_ID_HIDE_DECK => hide_role_window(app, DECK_WINDOW),
+            // Catch-all: anything left is either one of the three zoom ids
+            // (routed through the SAME mapper `zoom_command_for_menu_id`
+            // tests pin down) or truly unknown, in which case it is a no-op —
+            // one arm instead of listing the zoom ids again here too.
+            id => {
+                if let Some(cmd) = zoom_command_for_menu_id(id) {
                     let _ = app.emit_to(DECK_WINDOW, FLOATING_ZOOM_EVENT, cmd);
                 }
             }
-            _ => {}
         });
 
     // Reuse the embedded app icon for the tray (skip gracefully if absent).

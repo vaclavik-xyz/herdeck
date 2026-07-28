@@ -273,7 +273,12 @@
     // from the context menu's zoom items in lib.rs) — same emit_to pattern as
     // `reonboardListener`/`settingsListener` above: registered in both
     // windows, but Tauri only ever delivers it to the deck's own IPC channel.
+    // The `borderless` guard is a second line of defense, not the only one —
+    // every other floating-scale entry point (`onFloatingScaleKey` above,
+    // the `ResizeObserver` below) carries the same guard so none of them
+    // depends solely on Rust never widening the `emit_to` target.
     const zoomListener = listen(DECK_ZOOM_EVENT, (event) => {
+      if (!borderless) return;
       const command = floatingScaleCommandFromEvent(event.payload);
       if (command) void applyFloatingScale(command);
     });
