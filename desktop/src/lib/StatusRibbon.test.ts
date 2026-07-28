@@ -34,6 +34,19 @@ describe("StatusRibbon", () => {
     } finally { cleanup(); }
   });
 
+  it("marks empty statuses so a non-zero count is what the eye lands on", () => {
+    const empty = { agents: 4, blocked: 0, working: 4, idle: 0, done: 0, waiting: 0 };
+    const { target, cleanup } = render({ ready: true, summary: empty, labels: LABELS });
+    try {
+      const zeroed = (status: string) =>
+        target.querySelector(`[data-status="${status}"]`)?.classList.contains("zero");
+      expect(zeroed("working")).toBe(false); // 4 agents: full strength
+      expect(zeroed("blocked")).toBe(true);
+      expect(zeroed("waiting")).toBe(true);
+      expect(zeroed("done")).toBe(true);
+    } finally { cleanup(); }
+  });
+
   it("colours each cell from the deck's own palette, defaulting to the backend colours", () => {
     const { target, cleanup } = render({ ready: true, summary: SUMMARY, labels: LABELS });
     try {

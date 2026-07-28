@@ -70,5 +70,8 @@
 
 <style>
   .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
+  /* Each hint introduces the field BELOW it. The second one sat flush against
+     the preceding field's bottom rule and read as its footnote instead. */
+  .hint:not(:first-child) { margin-top: var(--s5); }
   code { color: var(--text-dim); font: var(--t-mono); }
 </style>

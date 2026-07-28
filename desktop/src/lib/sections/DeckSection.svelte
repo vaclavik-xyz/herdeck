@@ -121,7 +121,8 @@
 </FieldGroup>
 
 <style>
-  .advanced-settings { margin: var(--s2) 0 0; border-top: 1px solid var(--line); padding-top: var(--s2); }
+  /* see UsageSection: the preceding field already draws the separating rule */
+  .advanced-settings { margin: var(--s5) 0 0; }
   .advanced-settings summary { color: var(--text-dim); cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
   .advanced-settings[open] summary { color: var(--text); margin-bottom: var(--s2); }
   .advanced-fields { display: contents; }

@@ -67,4 +67,11 @@
     color: var(--st-offline-text);
     font: var(--t-help);
   }
+  /* Every consumer collapses to ONE column here; keeping column 2 would create
+     an implicit track sized to the message and widen the whole form. Row 4,
+     not 3: the control is auto-placed and would otherwise be pushed past the
+     message, which then reads above its own field — the reverse of desktop. */
+  @media (max-width: 760px) {
+    .fielderror { grid-column: 1 / -1; grid-row: 4; }
+  }
 </style>

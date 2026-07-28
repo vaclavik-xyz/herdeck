@@ -26,3 +26,7 @@ docs/superpowers/
 .clawpatch/
 .roborev.toml
 uv.lock
+
+# npm only belongs under desktop/, but running a JS tool from the repo root
+# creates one here too — and only desktop/.gitignore was guarding against it.
+node_modules/

@@ -48,7 +48,7 @@
     <strong>{summary.agents}</strong>
   </div>
   {#each cells as cell (cell.status)}
-    <div class="cell" data-status={cell.status} style={`--cell:var(--st-${cell.tone})`}>
+    <div class="cell" class:zero={cell.count === 0} data-status={cell.status} style={`--cell:var(--st-${cell.tone})`}>
       <span class="dot" aria-hidden="true"></span>
       <strong>{cell.count}</strong>
       <span class="eyebrow">{cell.label}</span>
@@ -92,6 +92,12 @@
      the ready case, so the waiting state overrides it explicitly. */
   .runtime .dot { grid-row: 1 / span 2; width: 10px; height: 10px; background: var(--st-blocked); }
   .runtime.ready .dot { background: var(--cell); }
+  /* A status with nobody in it is not news. The cells keep their places (the
+     row must not reflow as counts change) but step back, so the one status
+     that DOES have agents in it is what the eye lands on. */
+  .cell.zero .dot { background: var(--st-dim); }
+  .cell.zero strong { color: var(--text-faint); }
+  .cell.zero .eyebrow { color: var(--text-faint); }
   strong {
     font: 650 22px/1 var(--font-mono);
     font-variant-numeric: tabular-nums;
