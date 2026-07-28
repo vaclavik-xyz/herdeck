@@ -153,6 +153,9 @@
   });
 
   const cells = $derived(Array.from({ length: view.slots }, (_, i) => i));
+  const offlineTitle = $derived(
+    locale.lang === "cs" ? "Čekám na runtime" : "Waiting for the runtime",
+  );
   const statusText = $derived(
     !view.online
       ? locale.lang === "cs"
@@ -192,12 +195,14 @@
       {#if view.panel}<img src={view.panel} alt="" />{/if}
     </button>
   </div>
-  {#if !view.online && !compact}
-    <div class="deck-offline">
-      <strong>{locale.lang === "cs" ? "Čekám na runtime" : "Waiting for the runtime"}</strong>
-      <p>{locale.lang === "cs"
-        ? "Deck se zobrazí, jakmile odpoví lokální Herdeck runtime."
-        : "The deck appears here as soon as the local Herdeck runtime answers."}</p>
+  {#if !view.online}
+    <div class="deck-offline" class:mini={compact}>
+      <strong>{offlineTitle}</strong>
+      {#if !compact}
+        <p>{locale.lang === "cs"
+          ? "Deck se zobrazí, jakmile odpoví lokální Herdeck runtime."
+          : "The deck appears here as soon as the local Herdeck runtime answers."}</p>
+      {/if}
     </div>
   {/if}
   </div>
@@ -230,6 +235,27 @@
   }
   .deck-offline strong { font: var(--t-h2); color: var(--text); }
   .deck-offline p { margin: 0; max-width: 34ch; color: var(--text-dim); font: var(--t-help); }
+  /* The compact deck hides its footer from sight (sr-only), so an unreachable
+     runtime used to render as 13 blank keys with nothing saying why — the same
+     picture as a deck that simply has no agents. Same overlay, sized for a
+     328px card: one pill, no paragraph. */
+  .deck-offline.mini {
+    padding: var(--s2);
+    background: color-mix(in srgb, var(--canvas) 62%, transparent);
+    /* A single failed poll flips `online` false, so on the floating deck this
+       overlay appears for ~300ms at a time over a deck that still actuates.
+       The pill is informational; it must not swallow those presses (the desktop
+       card, which offers a full explanation instead of a live deck, still may). */
+    pointer-events: none;
+  }
+  .deck-offline.mini strong {
+    padding: 4px 10px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: var(--panel-raised);
+    font: var(--t-label);
+    color: var(--text-dim);
+  }
   .deck {
     display: flex;
     flex-direction: column;
