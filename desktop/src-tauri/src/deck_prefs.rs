@@ -115,6 +115,29 @@ pub fn read_window_mode(path: &Path) -> WindowMode {
     }
 }
 
+/// `[desktop].deck_always_on_top`. Defaults to false for a missing key, a wrong
+/// type, or an unparseable file — never panics. Applied live via
+/// `set_always_on_top`; unlike the `window_mode` it replaces, it never needs a
+/// restart, because it is not a creation-time window property.
+pub fn parse_deck_always_on_top(toml_str: &str) -> bool {
+    toml_str
+        .parse::<toml::Value>()
+        .ok()
+        .and_then(|v| v.get("desktop")?.get("deck_always_on_top")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// The pre-roles `[desktop].window_mode`, read ONCE per launch as the migration
+/// fallback (see window_state::startup_state). Deliberately returns the raw
+/// string rather than an enum: nothing in the app models these as modes any
+/// more, and the mapping lives in one place.
+pub fn parse_legacy_window_mode(toml_str: &str) -> Option<String> {
+    toml_str
+        .parse::<toml::Value>()
+        .ok()
+        .and_then(|v| Some(v.get("desktop")?.get("window_mode")?.as_str()?.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +267,29 @@ mod tests {
         let p = scratch("read-file").join("config.toml");
         std::fs::write(&p, "[desktop]\nwindow_mode = \"floating\"\n").unwrap();
         assert_eq!(read_window_mode(&p), WindowMode::Floating);
+    }
+
+    #[test]
+    fn deck_always_on_top_defaults_to_false() {
+        assert!(!parse_deck_always_on_top(""));
+        assert!(!parse_deck_always_on_top("[desktop]\n"));
+        assert!(!parse_deck_always_on_top("this is not toml ["));
+        assert!(!parse_deck_always_on_top("[desktop]\ndeck_always_on_top = \"yes\"\n"));
+    }
+
+    #[test]
+    fn deck_always_on_top_reads_the_explicit_flag() {
+        assert!(parse_deck_always_on_top("[desktop]\ndeck_always_on_top = true\n"));
+        assert!(!parse_deck_always_on_top("[desktop]\ndeck_always_on_top = false\n"));
+    }
+
+    // The legacy key is a MIGRATION source, read only when the new one is absent —
+    // so it must survive being read, not be interpreted as the new flag.
+    #[test]
+    fn the_legacy_mode_is_readable_but_separate() {
+        let toml = "[desktop]\nwindow_mode = \"always_on_top\"\n";
+        assert_eq!(parse_legacy_window_mode(toml).as_deref(), Some("always_on_top"));
+        assert!(!parse_deck_always_on_top(toml));
+        assert_eq!(parse_legacy_window_mode("[desktop]\n"), None);
     }
 }

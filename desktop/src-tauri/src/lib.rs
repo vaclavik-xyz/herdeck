@@ -11,7 +11,7 @@ pub mod build_channel;
 pub mod hotkey;
 pub mod http;
 pub mod sidecar;
-pub mod window_mode;
+pub mod deck_prefs;
 pub mod window_state;
 
 use std::env;
@@ -28,7 +28,7 @@ use tauri::{
 };
 use tauri_plugin_updater::UpdaterExt;
 
-use window_mode::WindowMode;
+use deck_prefs::WindowMode;
 
 use sidecar::{supervise, CommandSpec, Discovery, SupervisorConfig};
 
@@ -425,7 +425,7 @@ fn open_config(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Resu
         let _ = app.emit_to("main", "open-settings", ());
     }
     let w = app
-        .get_webview_window(window_mode::settings_window_label(mode))
+        .get_webview_window(deck_prefs::settings_window_label(mode))
         .ok_or_else(|| "desktop settings window not found".to_string())?;
     w.show().map_err(|e| e.to_string())?;
     w.set_focus().map_err(|e| e.to_string())?;
@@ -1328,7 +1328,7 @@ fn select_window_mode(app: &tauri::AppHandle, target: WindowMode, items: &WmItem
         set_wm_checks(items, current); // revert to the real persisted mode
         return;
     }
-    if window_mode::switch_needs_restart(current, target) {
+    if deck_prefs::switch_needs_restart(current, target) {
         // NOT app.restart(): a tray menu event runs on the MAIN THREAD, where
         // Tauri's restart() skips RunEvent::ExitRequested/Exit and would ORPHAN
         // the sidecar child (its kill lives in that handler). request_restart()
@@ -1429,7 +1429,7 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
                     let _ = app.emit_to("main", "open-settings", ());
                 }
                 if let Some(w) =
-                    app.get_webview_window(window_mode::settings_window_label(current_mode))
+                    app.get_webview_window(deck_prefs::settings_window_label(current_mode))
                 {
                     let _ = w.show();
                     let _ = w.set_focus();
@@ -1540,12 +1540,12 @@ pub fn run() {
     let repo_root = repo_root_from_manifest();
     let explicit_config = env::var("HERDECK_CONFIG").ok();
     let config_override = build_channel::config_override(explicit_config.as_deref(), &home);
-    let config_path = window_mode::resolve_config_path(
+    let config_path = deck_prefs::resolve_config_path(
         config_override.as_ref().and_then(|path| path.to_str()),
         &home,
         &repo_root,
     );
-    let mode = window_mode::read_window_mode(&config_path);
+    let mode = deck_prefs::read_window_mode(&config_path);
 
     // Clones for the setup closure and the supervisor.
     let setup_discovery = discovery.clone();
