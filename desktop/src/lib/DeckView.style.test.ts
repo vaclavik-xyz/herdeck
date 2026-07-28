@@ -281,6 +281,77 @@ describe("compact offline pill styling", () => {
 // `height: 100%` degenerates to auto, so it sizes itself, drags the row with
 // it, and the panel hangs below the tiles beside it. Only an out-of-flow image
 // hands the row height back to the tiles, and jsdom cannot see any of this.
+
+// ---------------------------------------------------------------------------
+// A small cascade model. Filtering selectors cannot answer "what does THIS
+// surface end up with", which is the only question a geometry guard can be
+// written against once overrides are possible. Its own rules are exercised by
+// "the cascade model" below, so a future edit to them fails loudly rather than
+// silently widening every guard that depends on it.
+// ---------------------------------------------------------------------------
+
+function compoundMatches(compound: string, classes: Set<string>, tag?: string): boolean {
+  const negated = new Set<string>();
+  for (const not of compound.matchAll(/:not\(([^)]*)\)/g)) {
+    for (const c of not[1].matchAll(/\.([A-Za-z0-9_-]+)/g)) negated.add(c[1]);
+  }
+  const bare = stripPseudos(compound);
+  const named = bare.match(/^[a-zA-Z][a-zA-Z0-9-]*/)?.[0];
+  // No `tag` means the caller does not constrain it, NOT that a tag makes the
+  // compound fail. Rejecting on an unconstrained tag hid `button.panel` — the
+  // panel IS a button — so an override written that way was invisible while
+  // both containing-block assertions stayed green.
+  if (tag !== undefined && named !== undefined && named !== tag) return false;
+  for (const c of classesOf(bare)) if (!classes.has(c)) return false;
+  for (const c of negated) if (classes.has(c)) return false;
+  return true;
+}
+
+function applies(
+  selector: string,
+  surface: Set<string>,
+  target: Set<string>,
+  tag?: string,
+): boolean {
+  const parts = rawCompounds(selector);
+  const last = parts.pop();
+  if (!last || !compoundMatches(last, target, tag)) return false;
+  return parts.every((part) => compoundMatches(part, surface));
+}
+
+function effective(
+  rules: { selectors: string[]; body: string }[],
+  prop: string,
+  surface: Set<string>,
+  target: Set<string>,
+  tag?: string,
+): string | undefined {
+  // Global, and the LAST hit wins inside a rule as well as across them: a
+  // block that declares the property twice (`position: absolute; …;
+  // position: static;`) paints the second value, and a non-global match would
+  // have read the first and called the guard satisfied.
+  const pattern = new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`, "g");
+  let value: string | undefined;
+  let important = false;
+  for (const rule of rules) {
+    if (!rule.selectors.some((s) => applies(s, surface, target, tag))) continue;
+    for (const hit of rule.body.matchAll(pattern)) {
+      const raw = hit[1].trim();
+      const flagged = /!important$/.test(raw);
+      // `!important` outranks every later ordinary declaration, so once one is
+      // seen only another may replace it. Without this the model both failed
+      // a correct sheet (reporting `absolute !important` as the literal value)
+      // and passed a broken one (a later `static` masking an important
+      // `absolute`).
+      if (flagged || !important) {
+        value = raw.replace(/\s*!important$/, "");
+        important ||= flagged;
+      }
+    }
+  }
+  return value;
+}
+
 describe("status panel row geometry", () => {
   // At-rule bodies too, unlike everywhere else in this file: the compact deck IS
   // the small-window surface, so `@media (max-width: …) { .panel img { position:
@@ -320,78 +391,17 @@ describe("status panel row geometry", () => {
   /** Does one compound match an element carrying `classes` (and tag `tag`)?
    *  Required classes must be present, `:not()` classes must be absent, and a
    *  leading tag must be the element's. */
-  function compoundMatches(compound: string, classes: Set<string>, tag?: string): boolean {
-    const negated = new Set<string>();
-    for (const not of compound.matchAll(/:not\(([^)]*)\)/g)) {
-      for (const c of not[1].matchAll(/\.([A-Za-z0-9_-]+)/g)) negated.add(c[1]);
-    }
-    const bare = stripPseudos(compound);
-    const named = bare.match(/^[a-zA-Z][a-zA-Z0-9-]*/)?.[0];
-    // No `tag` means the caller does not constrain it, NOT that a tag makes the
-    // compound fail. Rejecting on an unconstrained tag hid `button.panel` — the
-    // panel IS a button — so an override written that way was invisible while
-    // both containing-block assertions stayed green.
-    if (tag !== undefined && named !== undefined && named !== tag) return false;
-    for (const c of classesOf(bare)) if (!classes.has(c)) return false;
-    for (const c of negated) if (classes.has(c)) return false;
-    return true;
-  }
-
   /** Does `selector` reach the target element on a surface whose ancestor chain
    *  carries `surface`? The chain is treated as one class bag, which is exact
    *  here: every ancestor class in play sits on `.deck`, `.stage` or `.grid`. */
-  function applies(
-    selector: string,
-    surface: Set<string>,
-    target: Set<string>,
-    tag?: string,
-  ): boolean {
-    const parts = rawCompounds(selector);
-    const last = parts.pop();
-    if (!last || !compoundMatches(last, target, tag)) return false;
-    return parts.every((part) => compoundMatches(part, surface));
-  }
-
   /** The value the surface actually gets for `prop`, or undefined if nothing
    *  declares it there. */
-  function effective(
-    prop: string,
-    surface: Set<string>,
-    target: Set<string>,
-    tag?: string,
-  ): string | undefined {
-    // Global, and the LAST hit wins inside a rule as well as across them: a
-    // block that declares the property twice (`position: absolute; …;
-    // position: static;`) paints the second value, and a non-global match would
-    // have read the first and called the guard satisfied.
-    const pattern = new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`, "g");
-    let value: string | undefined;
-    let important = false;
-    for (const rule of rules) {
-      if (!rule.selectors.some((s) => applies(s, surface, target, tag))) continue;
-      for (const hit of rule.body.matchAll(pattern)) {
-        const raw = hit[1].trim();
-        const flagged = /!important$/.test(raw);
-        // `!important` outranks every later ordinary declaration, so once one is
-        // seen only another may replace it. Without this the model both failed
-        // a correct sheet (reporting `absolute !important` as the literal value)
-        // and passed a broken one (a later `static` masking an important
-        // `absolute`).
-        if (flagged || !important) {
-          value = raw.replace(/\s*!important$/, "");
-          important ||= flagged;
-        }
-      }
-    }
-    return value;
-  }
-
   // The image carries no classes of its own, so its target class set is empty
   // and only the tag names it.
   const onImage = (prop: string, chain: string[]) =>
-    effective(prop, new Set([...chain, "panel"]), new Set(), "img");
+    effective(rules, prop, new Set([...chain, "panel"]), new Set(), "img");
   const onPanel = (prop: string, chain: string[]) =>
-    effective(prop, new Set(chain), new Set(["panel"]), "button");
+    effective(rules, prop, new Set(chain), new Set(["panel"]), "button");
 
   it.each(SURFACES)(
     "takes the panel image out of flow on %s, so it cannot size the row",
@@ -422,6 +432,40 @@ describe("status panel row geometry", () => {
       onImage("object-fit", chain),
       "the panel image is stretched across the extra gap width instead of being letterboxed",
     ).toBe("contain");
+  });
+});
+
+// The geometry guard below is only as good as this model, and the model has
+// four rules that no stylesheet in this repo exercises today — the sheet
+// contains no `!important` at all. Without these, dropping the importance
+// branch would turn it back into plain last-wins with every other test green,
+// and the only thing left checking it would be hand-mutating DeckView.svelte:
+// exactly the manual step this file exists to replace.
+describe("the cascade model", () => {
+  const SURFACE = new Set(["deck", "panel"]);
+  const TARGET = new Set<string>();
+  const positionOf = (css: string) =>
+    effective(topLevelRules(css), "position", SURFACE, TARGET, "img");
+
+  it.each([
+    ["the last matching rule wins", ".panel img { position: absolute } .panel img { position: static }", "static"],
+    ["the last declaration in a block wins", ".panel img { position: absolute; inset: 0; position: static }", "static"],
+    ["important outranks a later ordinary rule", ".panel img { position: absolute !important } .panel img { position: static }", "absolute"],
+    ["an ordinary rule yields to a later important one", ".panel img { position: absolute } .panel img { position: static !important }", "static"],
+    ["the later important wins between two", ".panel img { position: absolute !important } .panel img { position: static !important }", "static"],
+    ["importance is stripped from the value", ".panel img { position: absolute !important }", "absolute"],
+    ["a rule that does not apply is ignored", ".cell img { position: static } .panel img { position: absolute }", "absolute"],
+    ["a tag mismatch on the target is ignored", ".panel span { position: static } .panel img { position: absolute }", "absolute"],
+    ["an excluded ancestor class is honoured", ".deck:not(.deck) .panel img { position: static } .panel img { position: absolute }", "absolute"],
+    ["nothing declares it", ".panel img { inset: 0 }", undefined],
+  ])("%s", (_name, css, expected) => {
+    expect(positionOf(css)).toBe(expected);
+  });
+
+  it("matches an ancestor compound that names its own tag", () => {
+    // `button.panel img` must be seen: the panel IS a button, so an override
+    // written that way is real. Ancestor tags are unconstrained by design.
+    expect(positionOf("button.panel img { position: static }")).toBe("static");
   });
 });
 
