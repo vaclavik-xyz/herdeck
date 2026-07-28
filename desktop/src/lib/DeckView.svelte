@@ -286,10 +286,12 @@
   .cell {
     aspect-ratio: 1 / 1;
   }
-  /* Panel pins to the last two cells of the bottom row and stretches to the
-     row height the square tiles set — same placement as the web simulator. */
+  /* Panel pins to the last two cells of the bottom row — same placement as the
+     web simulator. `position: relative` is load-bearing: it makes this the
+     containing block for the out-of-flow image below. */
   .panel {
     grid-column: 4 / 6;
+    position: relative;
   }
   .cell.active,
   .panel.active {
@@ -320,6 +322,30 @@
     display: block;
     width: 100%;
     height: 100%;
+  }
+  /* The row height must come from the square tiles, never from the panel. The
+     panel spans two columns PLUS the gap between them, so its 2:1 artwork
+     (392x196, against 196x196 tiles) wants gap/2 more height than a tile. Left
+     in flow, `height: 100%` degenerates to auto in an auto-height grid row, so
+     the image sized itself, dragged the row with it, and the panel hung a few
+     pixels below the tiles beside it. Out of flow it cannot; `contain`
+     letterboxes into the extra gap width instead of stretching the art.
+
+     This hands the row height to the panel's NEIGHBOURS, so it assumes it has
+     some — true only while the deck is five columns wide, since the sidecar
+     reports `slots = cols * rows - 2` and the last row keeps a 3-tile
+     remainder. A wider `[deck].grid` (say 8x4 -> 30 slots) fills whole rows
+     against the `repeat(5, 1fr)` above, leaves the panel alone in a row with no
+     in-flow content, and that row collapses to zero. Such a deck already
+     renders wrong here — the column count is hardcoded and the tiles wrap at
+     five whatever the hardware says — but note that this rule turns "the panel
+     sits wrong" into "the panel is gone". Giving it back a height of its own
+     (`aspect-ratio`) is not the fix: a definite width would make it contribute
+     (2C + gap) / 2 to row sizing again and restore the overhang. */
+  .panel img {
+    position: absolute;
+    inset: 0;
+    object-fit: contain;
   }
   .deck.offline .grid {
     opacity: 0.45;
