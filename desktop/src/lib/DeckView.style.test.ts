@@ -30,15 +30,24 @@ function topLevelRules(css: string): { selectors: string[]; body: string }[] {
     .map(([, selector, body]) => ({ selectors: splitSelectorList(selector), body }));
 }
 
-/** Split a selector list on commas that separate SELECTORS, not the ones inside
- *  `:not(.a, .b)` — a fragment cut mid-argument keeps its opening paren, and the
- *  strip in trailingClasses would then read the excluded class as required. */
-function splitSelectorList(list: string): string[] {
+/** Hide every `(...)` behind a sentinel so a later split cannot cut inside one.
+ *  Both splitters below need this: a fragment cut mid-argument keeps its opening
+ *  paren, and the strip in `compounds` would then read an excluded class as
+ *  required. One copy, so a grammar fix lands once. */
+function maskGroups(text: string): { masked: string; unmask: (part: string) => string } {
   const groups: string[] = [];
-  const masked = list.replace(/\([^()]*\)/g, (group) => `\u0000${groups.push(group) - 1}\u0000`);
-  return masked
-    .split(",")
-    .map((part) => part.replace(/\u0000(\d+)\u0000/g, (_, i) => groups[Number(i)]).trim());
+  const masked = text.replace(/\([^()]*\)/g, (group) => `\u0000${groups.push(group) - 1}\u0000`);
+  return {
+    masked,
+    unmask: (part) => part.replace(/\u0000(\d+)\u0000/g, (_, i) => groups[Number(i)]),
+  };
+}
+
+/** Split a selector list on commas that separate SELECTORS, not the ones inside
+ *  `:not(.a, .b)`. */
+function splitSelectorList(list: string): string[] {
+  const { masked, unmask } = maskGroups(list);
+  return masked.split(",").map((part) => unmask(part).trim());
 }
 
 function atRuleBody(css: string, prelude: RegExp): string | null {
@@ -48,31 +57,37 @@ function atRuleBody(css: string, prelude: RegExp): string | null {
   return match ? match[1] : null;
 }
 
-/** A selector's compounds, in order: ".deck .cell.active" -> [".deck",
- *  ".cell.active"]. The single place that knows the compound grammar, so a fix
- *  to it lands once.
- *
- *  Functional pseudos are stripped BEFORE the split: `:not(.alt, .fade)`
- *  contains a space, so a descendant split would otherwise cut the compound
- *  mid-argument. Their argument states a CONDITION — classes this compound must
- *  lack (`:not(.alt)`) or that some other element must have (`:has(.alt)`) —
- *  never classes this element itself carries. Collecting them would read
- *  `:not(.alt)` as REQUIRING alt, which both rejects a legal base rule and
- *  accepts it as the parity rule it is the exact opposite of. */
-function compounds(selector: string): string[] {
-  return selector
-    .replace(/:(?:not|has)\([^)]*\)/g, "")
+/** A selector's compounds with their functional pseudos INTACT: ".deck:not(.compact)
+ *  .panel img" -> [".deck:not(.compact)", ".panel", "img"]. The single splitter;
+ *  `compounds` is this plus a strip. Masking first is what lets the split be a
+ *  plain combinator regex, since `:not(.alt, .fade)` contains a space. */
+function rawCompounds(selector: string): string[] {
+  const { masked, unmask } = maskGroups(selector);
+  return masked
     .trim()
-    .split(/[\s>+~]+/);
+    .split(/[\s>+~]+/)
+    .map(unmask);
+}
+
+/** A selector's compounds with functional pseudos REMOVED: ".deck .cell.active"
+ *  -> [".deck", ".cell.active"]. Such an argument states a CONDITION — classes
+ *  this compound must lack (`:not(.alt)`) or that some other element must have
+ *  (`:has(.alt)`) — never classes this element itself carries. Collecting them
+ *  would read `:not(.alt)` as REQUIRING alt, which both rejects a legal base
+ *  rule and accepts it as the parity rule it is the exact opposite of. Callers
+ *  that must HONOUR the condition use `rawCompounds` instead. */
+function compounds(selector: string): string[] {
+  return rawCompounds(selector).map((compound) =>
+    compound.replace(/:(?:not|has)\([^)]*\)/g, ""),
+  );
 }
 
 function classesOf(compound: string): Set<string> {
   return new Set([...compound.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]));
 }
 
-/** A selector's last compound: ".panel img" -> "img". Pairs with `scopedUnder`
- *  to name a bare tag inside a classed ancestor, which `trailingClasses` cannot
- *  distinguish because such a compound carries no classes at all. */
+/** A selector's last compound: ".panel img" -> "img". The element a rule
+ *  TARGETS, as opposed to the ancestors that scope it. */
 function lastCompound(selector: string): string {
   return compounds(selector).pop() ?? "";
 }
@@ -258,6 +273,7 @@ describe("status panel row geometry", () => {
   // are written after the base rules they override, so source order and
   // specificity agree; a compact rule placed BEFORE its base would fool this,
   // and that is the one shape it does not model.
+  //
   // The panel's ancestor chain. The image's chain is this plus `panel` itself,
   // since the image sits INSIDE the panel — the distinction the first draft of
   // this matcher got wrong, which made every `.panel img` rule invisible and
@@ -267,18 +283,6 @@ describe("status panel row geometry", () => {
     ["the desktop card", CHAIN],
     ["the compact deck", [...CHAIN, "compact"]],
   ];
-
-  /** Compounds with `:not()` arguments KEPT, so the matcher can honour them —
-   *  the opposite of `compounds()`, which strips them because its callers ask
-   *  what a rule targets rather than whether it applies. */
-  function rawCompounds(selector: string): string[] {
-    const groups: string[] = [];
-    const masked = selector.replace(/\([^()]*\)/g, (g) => `\u0000${groups.push(g) - 1}\u0000`);
-    return masked
-      .trim()
-      .split(/[\s>+~]+/)
-      .map((part) => part.replace(/\u0000(\d+)\u0000/g, (_, i) => groups[Number(i)]));
-  }
 
   /** Does one compound match an element carrying `classes` (and tag `tag`)?
    *  Required classes must be present, `:not()` classes must be absent, and a
