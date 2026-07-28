@@ -27,10 +27,19 @@ const MEDIA_BLOCK = /@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g;
  *  MEDIA_BLOCK tolerates exactly one level of nesting, so a nested at-rule
  *  would leave the block unstripped and hand its rules over as unconditional —
  *  failing OPEN, which is how a guard quietly stops guarding. Assert instead. */
+const CONDITIONAL_AT_RULE = /@(media|supports|container)\b/;
+
 function unconditional(css: string): string {
   const out = css.replace(MEDIA_BLOCK, "");
-  if (out.includes("@")) {
-    throw new Error(`unparsed at-rule near "${out.slice(out.indexOf("@"), out.indexOf("@") + 40)}" — the media stripper needs updating`);
+  // Only the at-rules that can HIDE a rule from a desktop viewport matter here;
+  // @keyframes, @font-face and an "@" inside a url() are none of this guard's
+  // business and must not send the next author after the regex.
+  const leftover = out.match(CONDITIONAL_AT_RULE);
+  if (leftover) {
+    throw new Error(
+      `${leftover[0]} survived stripping — MEDIA_BLOCK handles one level of `
+      + "nesting only, and rules inside this block would be read as unconditional",
+    );
   }
   return out;
 }
@@ -49,6 +58,24 @@ function rules(css: string): [string, string][] {
     .map(([, selector, body]) => [selector.trim(), body] as [string, string])
     .filter(([selector]) => !selector.startsWith("@"));
 }
+
+// Both guards below read the stylesheet through unconditional(); if it ever
+// under-strips they go vacuous with every test still green, so it gets its own.
+describe("the media stripper", () => {
+  it("keeps base rules and drops everything a media query holds", () => {
+    const out = unconditional(
+      ".field { color: red; }\n@media (max-width: 760px) {\n  .field { color: blue; }\n  .rows { gap: 0; }\n}\n.after { color: green; }",
+    );
+    expect(rules(out).map(([selector]) => selector)).toEqual([".field", ".after"]);
+    expect(out).not.toContain("blue");
+  });
+
+  it("refuses to guess when a block nests deeper than it can parse", () => {
+    expect(() =>
+      unconditional("@media (max-width: 760px) { @supports (display: grid) { .field { color: blue; } } }"),
+    ).toThrow(/survived stripping/);
+  });
+});
 
 describe("responsive field layout", () => {
   const fields = readdirSync(FIELDS_DIR).filter((f) => f.endsWith(".svelte"));
@@ -87,9 +114,12 @@ describe("responsive field layout", () => {
     for (const value of collapsed) {
       // The SHAPE, not the absence of the token: --field-label-w is literally
       // 240px, so `240px minmax(0, 1fr)` would dodge a token-name check while
-      // reproducing the horizontal scroll exactly. The first track must flex.
-      expect(value.trim(), `${selector} keeps a fixed first track on a phone`)
-        .toMatch(/^minmax\(0,\s*1fr\)/);
+      // reproducing the horizontal scroll exactly. minmax(0, 1fr) specifically,
+      // not a bare 1fr — 1fr floors at min-content, which overflows just as far.
+      expect(
+        value.trim(),
+        `${selector} must collapse to a minmax(0, 1fr) first track on a phone`,
+      ).toMatch(/^minmax\(0,\s*1fr\)/);
     }
   });
 
