@@ -977,7 +977,6 @@
   .deck-surface :global(footer.summary) { padding: 8px 4px 1px; color: var(--text-dim); }
   .overview-stack { display: grid; gap: 10px; }
   .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--st-working) 30%, transparent); border-radius: var(--r-control); background: transparent; color: var(--st-working); font: 600 9px "SF Mono", ui-monospace, monospace; white-space: nowrap; }
-  .badge.warning { border-color: color-mix(in srgb, var(--st-blocked) 30%, transparent); background: transparent; color: var(--st-blocked); }
   .connection-card { padding: var(--s4) var(--s5); }
   .connection-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; min-height: 51px; border-top: 1px solid var(--line); }
   .connection-row:first-of-type { margin-top: 11px; }
