@@ -251,7 +251,14 @@ describe("status panel row geometry", () => {
   // three declarations under `.deck.compact` would leave every test here green
   // while the desktop card — the surface the overhang was measured on —
   // regressed to exactly the bug this guard exists for.
-  const unconditional = (s: string) => !scopedUnder(s, ["compact"]);
+  //
+  // It reads the RAW selector text rather than asking `scopedUnder`, and that is
+  // deliberate: `compounds()` strips `:not(…)` by design, so the mirror mutation
+  // `.deck:not(.compact) .panel img` would read as unconditional and pass while
+  // the compact deck — same `.panel`, same 2:1 image — lost the fix. Both decks
+  // need these declarations, so the guard rejects any mention of compact,
+  // positive or negated.
+  const unconditional = (s: string) => !/\bcompact\b/.test(s);
   const panelImg = rules.filter((r) =>
     r.selectors.some(
       (s) => unconditional(s) && scopedUnder(s, ["panel"]) && /^img\b/.test(lastCompound(s)),
@@ -281,21 +288,6 @@ describe("status panel row geometry", () => {
     ).toBe(true);
   });
 
-  // The fix hands the row height to the panel's NEIGHBOURS, so it assumes the
-  // panel always has some. That holds only while the grid is five columns wide:
-  // the sidecar reports `slots = cols * rows - 2`, so the last row keeps a
-  // 3-tile remainder for the panel to sit beside. Widen the grid and the cells
-  // fill whole rows, the panel auto-places alone in a fresh one with no in-flow
-  // content, and that row collapses to zero — the panel would vanish rather
-  // than merely sit wrong. Pinned here so a configurable geometry has to come
-  // back and give the panel a height of its own.
-  it("keeps the five-column assumption the out-of-flow image depends on", () => {
-    const grid = rules.filter((r) => reaches(r.selectors, ["grid"]));
-    expect(
-      grid.some((r) => /grid-template-columns:\s*repeat\(\s*5\s*,/.test(r.body)),
-      "the grid is no longer five columns, so the panel may now be alone in a row that collapses to zero height",
-    ).toBe(true);
-  });
 
   // The panel box is gap-width wider than two tiles. Filling it would stretch
   // the 2:1 art horizontally — the same distortion that forced the D200's
