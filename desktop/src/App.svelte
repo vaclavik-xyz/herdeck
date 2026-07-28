@@ -179,6 +179,12 @@
   }
 
   function scheduleFitWindow(scrollHeight: number): Promise<void> {
+    // A measurement of 0 is a WebView that has not laid out on screen, not
+    // content that shrank to nothing: the deck window is created hidden and its
+    // ResizeObserver attaches on mount regardless. Acting on it would record a
+    // zero-height frame here and ask for a zero-height window below (fitDecision
+    // refuses the second half; this is what keeps the frame geometry honest).
+    if (!(scrollHeight > 0)) return Promise.resolve();
     floatingContentHeight = scrollHeight;
     const scheduled = fitQueue.then(() => fitWindow(scrollHeight));
     fitQueue = scheduled.catch(() => {});
