@@ -22,7 +22,9 @@ use std::time::Duration;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    Emitter, LogicalPosition, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder,
+};
 use tauri_plugin_updater::UpdaterExt;
 
 use window_mode::WindowMode;
@@ -586,6 +588,42 @@ mod plan_tests {
         assert_eq!(usable_scale(2.0), 2.0);
     }
 
+    // Wayland hands back a hard (0, 0) instead of an error, so a believed
+    // pointer reading would pin the deck to whatever monitor owns the origin —
+    // worse than the current_monitor() fallback it would be overriding. Detection
+    // is asserted on every host so the shipped Linux behaviour is not only
+    // covered by the one CI runner that compiles this branch.
+    #[test]
+    fn a_wayland_session_is_recognised_by_either_signal() {
+        assert!(is_wayland_session(Some("wayland"), None));
+        assert!(is_wayland_session(Some("Wayland"), None));
+        assert!(is_wayland_session(None, Some("wayland-0")));
+        assert!(is_wayland_session(Some("x11"), Some("wayland-0")));
+    }
+
+    #[test]
+    fn an_x11_session_is_not_mistaken_for_wayland() {
+        assert!(!is_wayland_session(Some("x11"), None));
+        assert!(!is_wayland_session(None, None));
+        // Exported-but-empty is how a cleared variable survives in a session env.
+        assert!(!is_wayland_session(Some("x11"), Some("")));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_drops_the_pointer_reading_under_wayland() {
+        assert!(!pointer_is_locatable(Some("wayland"), None));
+        assert!(pointer_is_locatable(Some("x11"), None));
+    }
+
+    // The variables mean nothing off Linux, and a stray export must not cost a
+    // macOS user the pointer preference this whole path exists for.
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn wayland_variables_are_ignored_off_linux() {
+        assert!(pointer_is_locatable(Some("wayland"), Some("wayland-0")));
+    }
+
     // Monitor choice. `pick_monitor` is generic, so a &str stands in for a Monitor.
     #[test]
     fn monitor_choice_prefers_the_pointers_screen() {
@@ -694,17 +732,42 @@ fn usable_scale(factor: f64) -> f64 {
 
 /// Put tao's cursor reading into the space its point lookup hit-tests.
 ///
-/// macOS is the odd one out. `cursor_position()` there takes the logical
-/// `NSEvent.mouseLocation` and multiplies it by the PRIMARY monitor's scale
-/// factor, while `monitor_from_point` hit-tests raw `CGDisplayBounds`, which are
-/// logical. Left uncorrected on a Retina primary, a pointer on the built-in
-/// display resolves to a monitor to its right, or — further out — to no monitor
-/// at all, so the whole pointer preference silently never fires. Windows
-/// (physical against `MonitorFromPoint`) and X11 (GDK points against
-/// `monitor_at_point`) already agree with themselves, hence a scale of 1.
+/// tao reports the cursor as "physical" on every platform, but on two of the
+/// three it gets there by scaling a LOGICAL reading by a single global factor,
+/// while the matching lookup hit-tests logical rects:
+///
+/// - macOS scales `NSEvent.mouseLocation` by the PRIMARY monitor's factor;
+///   `monitor_from_point` tests raw `CGDisplayBounds`, which are logical points.
+/// - Linux scales the GDK pointer by the default window group's factor;
+///   `monitor_at_point` takes GDK logical coordinates. Invisible at scale 1,
+///   which is why X11 looks fine until someone sets `GDK_SCALE=2`.
+///
+/// Left uncorrected, a pointer on a 2x display resolves to a monitor to its
+/// right — or, further out, to none at all, so the whole preference silently
+/// never fires. Windows is the exception: `GetCursorPos` and `MonitorFromPoint`
+/// are both raw physical, so it passes a scale of 1.
 fn cursor_in_lookup_space(cursor: (f64, f64), scale: f64) -> (f64, f64) {
     let scale = usable_scale(scale);
     (cursor.0 / scale, cursor.1 / scale)
+}
+
+/// Does this environment describe a Wayland session? Either signal alone is
+/// enough: the session type is what the seat advertises, and the socket is what
+/// GTK actually connects to when a session lies or is unset.
+fn is_wayland_session(session_type: Option<&str>, wayland_display: Option<&str>) -> bool {
+    session_type.map_or(false, |s| s.eq_ignore_ascii_case("wayland"))
+        || wayland_display.map_or(false, |d| !d.is_empty())
+}
+
+/// Can tao report where the pointer actually is? Under Wayland it cannot — the
+/// compositor keeps the global cursor to itself, and tao returns a hard `(0, 0)`
+/// rather than an error. Taken at face value that reads as "the pointer is on
+/// whichever monitor owns the origin", which does not merely make the preference
+/// inert: it OVERRIDES the better `current_monitor()` fallback with a wrong
+/// answer. Only Linux can be in a Wayland session; elsewhere the variables mean
+/// nothing and a stray export must not cost anyone the pointer preference.
+fn pointer_is_locatable(session_type: Option<&str>, wayland_display: Option<&str>) -> bool {
+    !cfg!(target_os = "linux") || !is_wayland_session(session_type, wayland_display)
 }
 
 /// Which monitor the deck belongs on, preferring the one under the pointer.
@@ -729,22 +792,31 @@ fn pick_monitor<M>(
 }
 
 fn active_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
-    // See cursor_in_lookup_space: only macOS reads the cursor in a different
-    // space from the one it hit-tests.
-    let scale = if cfg!(target_os = "macos") {
+    // See cursor_in_lookup_space. The primary monitor's factor is exactly what
+    // macOS scales by, and the closest reachable stand-in for the GDK default
+    // group's factor on Linux — the two coincide on any uniformly-scaled desk.
+    let scale = if cfg!(windows) {
+        1.0
+    } else {
         window
             .primary_monitor()
             .ok()
             .flatten()
             .map_or(1.0, |m| m.scale_factor())
-    } else {
-        1.0
     };
-    pick_monitor(
+    let cursor = if pointer_is_locatable(
+        env::var("XDG_SESSION_TYPE").ok().as_deref(),
+        env::var("WAYLAND_DISPLAY").ok().as_deref(),
+    ) {
         window
             .cursor_position()
             .ok()
-            .map(|p| cursor_in_lookup_space((p.x, p.y), scale)),
+            .map(|p| cursor_in_lookup_space((p.x, p.y), scale))
+    } else {
+        None
+    };
+    pick_monitor(
+        cursor,
         |x, y| window.monitor_from_point(x, y).ok().flatten(),
         || window.current_monitor().ok().flatten(),
         || window.primary_monitor().ok().flatten(),
@@ -756,17 +828,25 @@ fn active_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
 /// Placement uses the WORK area, not the full screen, so the deck never opens
 /// under the macOS menu bar or behind the dock.
 ///
-/// Everything is computed in LOGICAL points, the one space all three inputs
-/// agree on. `work_area()` and `outer_size()` are both "physical", but each is
-/// scaled by a DIFFERENT factor — the monitor's and the window's — and those
-/// part company the moment the deck moves between a Retina screen and an
-/// external one. tao then converts a physical `set_position` argument with the
-/// WINDOW's factor, so a physical target derived from the MONITOR's rect lands
-/// wrong as well. Handing it a logical position removes both mismatches.
+/// On macOS and Linux this is computed in LOGICAL points, the one space the
+/// inputs agree on. `work_area()` and `outer_size()` are both "physical" there,
+/// but each is scaled by a DIFFERENT factor — the monitor's and the window's —
+/// and those part company the moment the deck moves between a Retina screen and
+/// an external one. tao then converts a physical `set_position` argument with
+/// the WINDOW's factor, so a physical target derived from the MONITOR's rect
+/// lands wrong as well. A logical position removes both mismatches.
+///
+/// Windows is the opposite case and takes the untouched physical path:
+/// `rcWork` and window positions already live in one global physical space, so
+/// there is nothing to convert and dividing would invent a space of its own.
 fn place_floating(window: &tauri::WebviewWindow) {
     if let (Some(monitor), Ok(win_size)) = (active_monitor(window), window.outer_size()) {
-        let screen = usable_scale(monitor.scale_factor());
-        let win = usable_scale(window.scale_factor().unwrap_or(screen));
+        let (screen, win) = if cfg!(windows) {
+            (1.0, 1.0)
+        } else {
+            let screen = usable_scale(monitor.scale_factor());
+            (screen, usable_scale(window.scale_factor().unwrap_or(screen)))
+        };
         let area = monitor.work_area();
         let (x, y) = floating_origin(
             (area.position.x as f64 / screen, area.position.y as f64 / screen),
@@ -774,7 +854,12 @@ fn place_floating(window: &tauri::WebviewWindow) {
             (win_size.width as f64 / win, win_size.height as f64 / win),
             FLOATING_MARGIN,
         );
-        let _ = window.set_position(LogicalPosition { x, y });
+        let target: tauri::Position = if cfg!(windows) {
+            PhysicalPosition { x: x as i32, y: y as i32 }.into()
+        } else {
+            LogicalPosition { x, y }.into()
+        };
+        let _ = window.set_position(target);
     }
 }
 
