@@ -11,14 +11,21 @@ import { describe, it, expect } from "vitest";
 const SOURCE = readFileSync(fileURLToPath(new URL("./DeckView.svelte", import.meta.url)), "utf8");
 const STYLE = SOURCE.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? "";
 
+const COMMENT = /\/\*[\s\S]*?\*\//g;
+// Block-less at-rules first: without this the block form's prelude would run
+// from an `@import …;` to the last `{` in the sheet and swallow everything.
+const AT_STATEMENT = /@[a-z-]+[^;{}]*;/g;
 // One level of nesting: enough for @media { rule {} } and @keyframes { from {} }.
-const AT_RULE = /@[a-z-]+[^{]*\{(?:[^{}]|\{[^{}]*\})*\}/g;
+const AT_RULE = /@[a-z-]+[^{};]*\{(?:[^{}]|\{[^{}]*\})*\}/g;
 
-/** Rules outside any at-rule. The parser is brace-naive, so at-rule blocks must
- *  go first — otherwise their inner rules flatten into the same list and, being
- *  order-dependent, a reordered stylesheet silently retargets every lookup. */
+/** Rules outside any at-rule. The parser is brace-naive and takes a selector to
+ *  be "everything since the last `}`", so comments and at-rule blocks must go
+ *  first — otherwise a comment glues onto the next selector and an at-rule's
+ *  inner rules flatten into the same list, both of which silently retarget the
+ *  lookups depending on where in the file things happen to sit. */
 function topLevelRules(css: string): [string, string][] {
-  return [...css.replace(AT_RULE, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  const flat = css.replace(COMMENT, "").replace(AT_STATEMENT, "").replace(AT_RULE, "");
+  return [...flat.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
     .map(([, selector, body]) => [selector.trim(), body] as [string, string]);
 }
 
@@ -37,6 +44,11 @@ function ringColour(body: string): string | undefined {
   )?.trim();
 }
 
+// The panel is a press target in its own right (`press(view.slots)`), so every
+// rule that carries the flash must name it too — dropping `.panel` from a
+// selector list is invisible to a `.cell`-only assertion.
+const TARGETS = [".cell.active", ".panel.active"];
+
 describe("press flash styling", () => {
   const rules = topLevelRules(STYLE);
   const base = rules.find(([sel]) => sel.includes(".cell.active") && !sel.includes(".alt"));
@@ -45,6 +57,11 @@ describe("press flash styling", () => {
   it("restarts the flash by swapping the animation name", () => {
     expect(base?.[1], "no base rule for the pressed cell").toMatch(/animation:\s*press-a/);
     expect(alt?.[1], "no parity rule to restart the animation").toMatch(/animation-name:\s*press-b/);
+  });
+
+  it("flashes the panel as well as the tiles", () => {
+    expect(base?.[0], "the base flash skips the panel").toContain(".panel.active");
+    expect(alt?.[0], "the parity retrigger skips the panel").toContain(".panel.active.alt");
   });
 
   it("keeps the two keyframes identical, or alternate presses would differ", () => {
@@ -63,6 +80,9 @@ describe("press flash styling", () => {
 
     const parity = topLevelRules(reduced!).find(([sel]) => sel.includes(".cell.active.alt"));
     expect(parity, "reduced motion leaves the parity with no visual difference").toBeDefined();
+    for (const target of TARGETS) {
+      expect(parity![0], `reduced motion skips ${target}`).toContain(`${target}.alt`);
+    }
 
     const plain = ringColour(base?.[1] ?? "");
     const alternate = ringColour(parity![1]);

@@ -122,6 +122,29 @@ describe("DeckView press feedback", () => {
     } finally { cleanup(); }
   });
 
+  // The status panel is pressed through the same path (`press(view.slots)`) and
+  // is just as re-pressable, so it needs the retrigger too.
+  it("retriggers the flash on a repeated panel press", async () => {
+    const transport = fakeTransport();
+    const { target, cleanup } = render({ transport, compact: true });
+    try {
+      const panel = target.querySelector<HTMLButtonElement>(".panel")!;
+      panel.click();
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+      expect(panel.classList.contains("active"), "the panel press left no feedback").toBe(true);
+      const first = panel.classList.contains("alt");
+
+      await vi.advanceTimersByTimeAsync(150);
+      panel.click();
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+
+      expect(panel.classList.contains("active")).toBe(true);
+      expect(panel.classList.contains("alt"), "the panel never retriggers").toBe(!first);
+    } finally { cleanup(); }
+  });
+
   // A press can still be in flight when the window mode switches or the app
   // quits. Without the guard the resolving press installs a 450ms timer that
   // teardown has already run past, and writes state on a dead component.
