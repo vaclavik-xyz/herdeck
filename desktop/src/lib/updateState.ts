@@ -112,10 +112,7 @@ export function applyResolvedAway(state: UpdateState): UpdateState {
   return { ...state, availableUpdate: null, notice: { kind: "up-to-date" }, checkSeq: state.checkSeq + 1 };
 }
 
-/** Whether `notice` is worth auto-dismissing on a timer (App.svelte). An
- *  exhaustive switch, not a bare non-null check: adding a kind to `Notice`
- *  later must make an explicit choice here rather than being silently swept
- *  (or silently left stuck) by default.
+/** Whether `notice` is worth auto-dismissing on a timer (App.svelte).
  *
  *  All three current kinds are `true`. "checking" included: `update_check`
  *  is a plain `invoke` with no timeout anywhere in the chain (no timeout on
@@ -126,13 +123,24 @@ export function applyResolvedAway(state: UpdateState): UpdateState {
  *  reveals whatever `availableUpdate` says underneath, and if the check
  *  eventually does settle, `checkSeq` is untouched by the dismissal, so
  *  `applyCheckResult` still applies its result normally — the notice just
- *  doesn't wait around to show it. */
+ *  doesn't wait around to show it.
+ *
+ *  Written as a switch with an explicit `default: true`, not left to fall
+ *  off the end: this repo's `npm run build` is a plain `vite build` (esbuild
+ *  strips types without checking them) and CI runs no `tsc`/`svelte-check`
+ *  step, so a future kind added to `Notice` without touching this function
+ *  would ship and run, not just fail to compile. Falling through to `true`
+ *  keeps the one safe default (nothing gets silently stuck) even then; the
+ *  switch's per-kind cases stay for a human to reconsider deliberately, not
+ *  to gate the outcome. */
 export function isDismissableNotice(notice: Notice | null): boolean {
   if (notice === null) return false;
   switch (notice.kind) {
     case "checking":
     case "up-to-date":
     case "failed":
+      return true;
+    default:
       return true;
   }
 }

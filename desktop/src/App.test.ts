@@ -650,6 +650,92 @@ describe("App update install resolution clears both windows", () => {
     }
   });
 
+  // The property that motivated a COUNTER over a boolean flag:
+  // `installingUpdate` is back to `false` (its own `finally` already ran)
+  // well before an earlier resolution's echo completes its IPC round trip,
+  // so a second install can start — and claim a second slot — before the
+  // first one's echo has landed. A boolean would be consumed by the FIRST
+  // of two echoes and wrongly treat the SECOND as a genuinely new
+  // resolution, bumping `checkSeq` an extra, unwanted time and invalidating
+  // a check that was never actually stale.
+  it("suppresses two of its own echoes outstanding at once, not just one", async () => {
+    let resolveManual: (v: unknown) => void = () => {};
+    const deliverEchoes: Array<() => void> = [];
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // manual, deferred
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    // Only the install resolutions' own broadcasts (payload `null`) are
+    // deferred — the "available" broadcasts (the mount's own check, and the
+    // direct delivery below simulating the other window's) loop back
+    // synchronously as usual, so this test's `deliverEchoes` count is
+    // exactly the two install echoes it's about.
+    emitMock.mockImplementation((event: string, payload: unknown) => {
+      if (payload !== null) {
+        for (const [name, cb] of listenMock.mock.calls) {
+          if (name === event) (cb as (ev: { payload: unknown }) => void)({ payload });
+        }
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        deliverEchoes.push(() => {
+          for (const [name, cb] of listenMock.mock.calls) {
+            if (name === event) (cb as (ev: { payload: unknown }) => void)({ payload });
+          }
+          resolve();
+        });
+      });
+    });
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+
+      // Install #1 resolves, applies locally, its echo deferred (slot 1).
+      target.querySelector<HTMLButtonElement>('[role="status"] button')!.click();
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck is up to date."));
+
+      // A genuinely NEW update is found (the other window's check, say) —
+      // an unconditional broadcast, delivered directly.
+      const resultListener = listenMock.mock.calls.find(([name]) => name === "update-check-result");
+      const deliver = resultListener![1] as (ev: { payload: unknown }) => void;
+      deliver({ payload: { kind: "available", info: { version: "0.3.0", current_version: "0.1.0" } } });
+      flushSync();
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.3.0 is available."));
+
+      // Install #2: `installingUpdate` is already back to false (install
+      // #1's `finally` already ran) — this claims a SECOND slot before the
+      // first echo has arrived.
+      target.querySelector<HTMLButtonElement>('[role="status"] button')!.click();
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck is up to date."));
+
+      // A check starts, left in flight.
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+
+      // BOTH deferred echoes now land.
+      expect(deliverEchoes).toHaveLength(2);
+      deliverEchoes[0]();
+      deliverEchoes[1]();
+      await new Promise((r) => setTimeout(r, 0));
+
+      // The in-flight check's own result must still apply — it was never
+      // actually invalidated by either echo.
+      resolveManual({ version: "0.4.0", current_version: "0.1.0" });
+      await vi.waitFor(() =>
+        expect(
+          target.textContent,
+          "an echo was wrongly treated as a new resolution, bumping checkSeq and invalidating a check that was never stale",
+        ).toContain("Herdeck 0.4.0 is available."),
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
   it("does not broadcast a clear when the install succeeds (about to restart)", async () => {
     const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
     const baseInvoke = mockInvoke(check);
