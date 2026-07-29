@@ -18,10 +18,8 @@ from herdeck.update import (
 # works right up until the project reaches that version, at which point the
 # update-available tests silently start asserting the opposite of their names —
 # which is exactly what happened on the 0.2.0 bump.
-NEWER_TAG = "v{}.{}.0".format(
-    int(__version__.split(".")[0]),
-    int(__version__.split(".")[1].split("-")[0].split("+")[0]) + 1,
-)
+_MAJOR, _MINOR = (int(part) for part in __version__.split(".")[:2])
+NEWER_TAG = f"v{_MAJOR}.{_MINOR + 1}.0"
 
 
 def _release(tag: str = NEWER_TAG) -> dict:
@@ -80,6 +78,9 @@ def test_check_for_update_reports_no_update_for_an_equal_or_older_release(tag):
 
     assert status.update_available is False
     assert status.current_version == __version__
+    # Pinned here too: this is the path where a version could be read from the
+    # wrong side of the comparison and nothing else would notice.
+    assert status.latest_version == tag.removeprefix("v")
 
 
 def test_update_check_says_up_to_date_when_the_release_is_not_newer(monkeypatch, capsys):
