@@ -478,9 +478,8 @@ describe("App update install resolution clears both windows", () => {
   it("does not broadcast a clear when the install succeeds (about to restart)", async () => {
     const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
     const baseInvoke = mockInvoke(check);
-    invokeMock.mockImplementation(async (cmd: string) =>
-      cmd === "update_install" ? true : baseInvoke(cmd),
-    );
+    const install = vi.fn().mockResolvedValue(true);
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === "update_install" ? install() : baseInvoke(cmd)));
     const { target, cleanup } = render();
     try {
       await vi.waitFor(() => {
@@ -490,10 +489,16 @@ describe("App update install resolution clears both windows", () => {
 
       const installButton = target.querySelector("button");
       installButton!.click();
-      // installUpdate's async body needs a turn to run through.
-      await new Promise((r) => setTimeout(r, 0));
+      // Positive check first: confirm installUpdate's async body actually
+      // ran through to the (successful) resolution, not just that nothing
+      // happened at all — a `not.toHaveBeenCalledWith(…, null)` alone would
+      // also pass if the install path silently never ran.
+      await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(1));
+      expect(target.textContent, "a successful install must leave the banner as-is").toContain(
+        "Herdeck 0.2.0 is available.",
+      );
 
-      expect(emitMock).not.toHaveBeenCalledWith(expect.anything(), null);
+      expect(emitMock).not.toHaveBeenCalledWith("update-check-result", null);
     } finally {
       cleanup();
     }
@@ -537,6 +542,103 @@ describe("App update install resolution clears both windows", () => {
       });
     } finally {
       cleanup();
+    }
+  });
+
+  // The mirror case: a check straddling the resolution reports the SAME
+  // version install just resolved away. That is not fresh news — it is
+  // exactly the stale banner the resolution retracted, and reshowing it
+  // would put the install button back for a click that only resolves
+  // `false` again.
+  it("does not resurrect the SAME version an install just resolved away", async () => {
+    let resolveManual: (v: unknown) => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // manual, deferred
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      });
+
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+
+      const installButton = target.querySelector("button");
+      installButton!.click();
+      await vi.waitFor(() => {
+        expect(target.querySelector(".banner")).toBeNull();
+      });
+
+      // The in-flight re-check resolves with the SAME version install just
+      // resolved away — stale, not fresh.
+      resolveManual({ version: "0.2.0", current_version: "0.1.0" });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(
+        target.querySelector(".banner"),
+        "resurrected the same version install already resolved away",
+      ).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  // installUpdate's resolution can happen in EITHER window (both render the
+  // install button) — the generation guard is per-window state, so it must
+  // be kept in sync through the SAME "update-check-result" broadcast an
+  // available update travels over, or a check running in the window that
+  // never installed anything is blind to what the other one just resolved.
+  it("keeps a resolved-away update cleared when the app's check settles after the DECK's install", async () => {
+    let resolveManual: (v: unknown) => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // app's automatic mount check
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // app's manual re-check, deferred
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    const deck = renderWithRole("deck");
+    try {
+      const app = render();
+      try {
+        await vi.waitFor(() => expect(app.target.textContent).toContain("Herdeck 0.2.0 is available."));
+        await vi.waitFor(() => expect(deck.target.textContent).toContain("Herdeck 0.2.0 is available."));
+
+        // A manual re-check starts in the APP window and is left in flight.
+        registeredListener("check-for-updates")!();
+        await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+
+        // The user installs from the DECK window instead.
+        const deckInstallButton = deck.target.querySelector("button");
+        deckInstallButton!.click();
+        await vi.waitFor(() => expect(app.target.querySelector(".banner")).toBeNull());
+        await vi.waitFor(() => expect(deck.target.querySelector(".banner")).toBeNull());
+
+        // The app window's in-flight check (started before the DECK's
+        // install resolved things) now settles with the same stale version.
+        resolveManual({ version: "0.2.0", current_version: "0.1.0" });
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(
+          app.target.querySelector(".banner"),
+          "the app window resurrected what the deck's install cleared",
+        ).toBeNull();
+        expect(
+          deck.target.querySelector(".banner"),
+          "the deck window resurrected what its own install cleared",
+        ).toBeNull();
+      } finally {
+        app.cleanup();
+      }
+    } finally {
+      deck.cleanup();
     }
   });
 });

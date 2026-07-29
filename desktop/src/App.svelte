@@ -70,13 +70,37 @@
   // check produced it.
   let updateError = $state("");
   let installingUpdate = $state(false);
-  // Bumped only when installUpdate definitively resolves an update away
-  // (`!installed`). Lets checkForUpdate tell "nothing else has happened
-  // since I started" from "install already gave a real answer while I was
-  // still in flight" — a check that started BEFORE that resolution reports
-  // stale information once it finally settles, and a lesser (non-available)
-  // outcome from it must not un-clear what install already cleared.
+  // Bumped only when an install (in EITHER window — both render the install
+  // button, see the `event.payload === null` branch below) definitively
+  // resolves an update away. Lets checkForUpdate tell "nothing else has
+  // happened since I started" from "install already gave a real answer
+  // while I was still in flight" — a check that started BEFORE that
+  // resolution reports stale information once it finally settles.
   let updateGeneration = 0;
+  // The version that generation bump resolved away, so a check straddling
+  // it can tell "the same stale news install just retracted" (drop it, or
+  // the user could click Install again and just get `false` again) from "a
+  // genuinely different, newer update" (apply it — it's real, current
+  // information the earlier resolution knows nothing about).
+  let resolvedAwayVersion: string | null = null;
+
+  /** Record that whatever "available" version is live right now has been
+   *  resolved away, and clear it. Shared by installUpdate's own resolution
+   *  and the broadcast listener's `null` case (an install can happen in
+   *  either window), so the two can never disagree about what was retracted. */
+  function recordResolvedAway(): void {
+    // Idempotent by design: a real Tauri `emit` reaches its own sender, so
+    // installUpdate's direct call and this SAME window's own
+    // updateResultListener both fire for one clear. Without this guard the
+    // second call would read the ALREADY-nulled state and overwrite the
+    // just-recorded version with null, losing exactly the information the
+    // anti-downgrade guard needs. Nothing left to resolve away means this
+    // clear was already recorded — a no-op, not a second bump.
+    if (updateState?.kind !== "available") return;
+    resolvedAwayVersion = updateState.info.version;
+    updateGeneration += 1;
+    updateState = null;
+  }
   let floatingScrollable = $state(false);
   let floatingContentHeight = $state(300);
   let floatingScale = $state((() => {
@@ -166,12 +190,19 @@
     // including failure — the fact that the automatic one never could is
     // exactly the defect a manual check exists to fix.
     if (manual || result.kind === "available") {
-      // installUpdate resolved definitively WHILE this check was in flight:
-      // a lesser (non-"available") outcome from a check that started before
-      // that resolution is stale news and must not un-clear it. A genuinely
-      // NEW "available" from this same check still applies regardless.
+      // An install (in EITHER window) resolved definitively WHILE this check
+      // was in flight: a lesser (non-"available") outcome from a check that
+      // started before that resolution is stale news and must not un-clear
+      // it. An "available" result for that SAME version is equally stale —
+      // it is exactly what was just resolved away, and re-showing it would
+      // put the install button back for a click that only resolves `false`
+      // again. Only a genuinely different (newer) version is real news.
       const supersededByInstall = updateGeneration !== startGeneration;
-      if (!supersededByInstall || result.kind === "available") {
+      const staleResolvedVersion =
+        result.kind === "available" && result.info.version === resolvedAwayVersion;
+      const isFreshOutcome =
+        !supersededByInstall || (result.kind === "available" && !staleResolvedVersion);
+      if (isFreshOutcome) {
         // A transient/failed outcome must never displace an update that is
         // STILL there and installable: a re-check finding nothing new (or
         // failing outright) does not mean the earlier one stopped being
@@ -182,12 +213,17 @@
         // check apply its own result normally.
         const prior = updateState;
         updateState = result.kind === "available" || prior?.kind !== "available" ? result : prior;
+        // Gated on the SAME `isFreshOutcome` as the local assignment above —
+        // not just `result.kind === "available"` — or a stale same-version
+        // result rejected here would still reach the OTHER window (and this
+        // window's own listener, since a broadcast reaches its sender too)
+        // completely unfiltered, resurrecting exactly what was just rejected.
+        if (result.kind === "available") {
+          void emit(UPDATE_RESULT_EVENT, result).catch(() => {
+            // Not in a Tauri WebView (plain browser preview): nothing to tell.
+          });
+        }
       }
-    }
-    if (result.kind === "available") {
-      void emit(UPDATE_RESULT_EVENT, result).catch(() => {
-        // Not in a Tauri WebView (plain browser preview): nothing to tell.
-      });
     }
   }
 
@@ -205,11 +241,7 @@
         // otherwise has no way to make: without this, a window that never
         // installs anything (the deck) would keep an "Install and restart"
         // button for an update the process has already decided is gone.
-        // Bumping the generation is what lets a check already in flight when
-        // this ran recognize its own eventual result as stale (see
-        // checkForUpdate's `supersededByInstall`).
-        updateGeneration += 1;
-        updateState = null;
+        recordResolvedAway();
         void emit(UPDATE_RESULT_EVENT, null).catch(() => {
           // Not in a Tauri WebView (plain browser preview): nothing to tell.
         });
@@ -399,18 +431,23 @@
 
     // The other half of `checkForUpdate`'s broadcast (an available update)
     // and `installUpdate`'s (its resolution, `null`): whichever window ran
-    // the check or the install (only the app window ever does — see below),
-    // BOTH windows' `updateState` follow it. Registering this in the SAME
-    // window that emitted is harmless: the assignment just repeats the value
-    // that function already set locally. `listen<UpdateCheckState>`'s type
+    // the check (only the app window ever does — see below) or clicked
+    // Install (either window can — both render the button), BOTH windows'
+    // `updateState` follow it. Registering this in the SAME window that
+    // emitted is harmless: the assignment just repeats the value that
+    // function already set locally. `listen<UpdateCheckState>`'s type
     // parameter is a compile-time label only — `asUpdateCheckState` is what
     // actually guards against a malformed payload reaching `state.info` and
     // crashing the render, the same way `asDiscovery` guards `discoveryListener`.
     // A `null` payload is distinguished from a malformed one: it is the
-    // explicit "clear" signal, not something to just silently ignore.
+    // explicit "clear" signal, not something to just silently ignore — and
+    // it goes through the SAME `recordResolvedAway` an install in THIS
+    // window would, so a check in flight here is protected against a
+    // resolution that happened in the OTHER window exactly as it would be
+    // against one of its own.
     const updateResultListener = listen<unknown>(UPDATE_RESULT_EVENT, (event) => {
       if (event.payload === null) {
-        updateState = null;
+        recordResolvedAway();
         return;
       }
       const result = asUpdateCheckState(event.payload);
