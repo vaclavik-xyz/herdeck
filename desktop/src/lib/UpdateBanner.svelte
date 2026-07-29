@@ -5,6 +5,14 @@
   // same state two different ways. An install failure (installError) always
   // wins over the check's own state: it means the user already committed to
   // installing, so it is the more urgent thing to show.
+  //
+  // Renders through exactly ONE `<Banner>` call site (never a per-kind
+  // `{:else if}` chain of separate `<Banner>` tags): Banner's own div carries
+  // `role="status"`/`aria-live="polite"`, and a live region only reliably
+  // announces a CONTENT change on an element that already existed — WKWebView
+  // + VoiceOver is unreliable about a region that appears with its message
+  // already in it. A single instance persists across checking -> available ->
+  // up-to-date/failed instead of being destroyed and recreated at each step.
   import Banner from "./Banner.svelte";
   import { defineMessages, fmt, locale } from "./i18n.svelte";
   import type { UpdateCheckState } from "./updateClient";
@@ -41,21 +49,34 @@
   });
   const m = $derived(LM[locale.lang]);
   const installAction = $derived(installing ? m.installing : m.install);
+
+  type Presentation = {
+    kind: "warning" | "error" | "success";
+    message: string;
+    actionLabel?: string;
+    onAction?: () => void;
+  };
+
+  const view = $derived.by((): Presentation => {
+    if (installError) return { kind: "error", message: installError };
+    switch (state?.kind) {
+      case "available":
+        return {
+          kind: "warning",
+          message: fmt(m.available, { version: state.info.version }),
+          actionLabel: installAction,
+          onAction: onInstall,
+        };
+      case "up-to-date":
+        return { kind: "success", message: m.upToDate };
+      case "checking":
+        return { kind: "warning", message: m.checking };
+      case "failed":
+        return { kind: "error", message: fmt(m.failed, { reason: state.reason }) };
+      default:
+        return { kind: "warning", message: "" };
+    }
+  });
 </script>
 
-{#if installError}
-  <Banner kind="error" message={installError} />
-{:else if state?.kind === "available"}
-  <Banner
-    kind="warning"
-    message={fmt(m.available, { version: state.info.version })}
-    actionLabel={installAction}
-    onAction={onInstall}
-  />
-{:else if state?.kind === "up-to-date"}
-  <Banner kind="success" message={m.upToDate} />
-{:else if state?.kind === "checking"}
-  <Banner kind="warning" message={m.checking} />
-{:else if state?.kind === "failed"}
-  <Banner kind="error" message={fmt(m.failed, { reason: state.reason })} />
-{/if}
+<Banner kind={view.kind} message={view.message} actionLabel={view.actionLabel} onAction={view.onAction} />

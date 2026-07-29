@@ -7,7 +7,7 @@
 // tray's "check-for-updates" event through it, the same way ConfigApp.test.ts
 // drives deck-visibility-changed.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount, unmount } from "svelte";
+import { flushSync, mount, unmount } from "svelte";
 import { setLang } from "./lib/i18n.svelte";
 
 const { invokeMock, listenMock, emitMock } = vi.hoisted(() => ({
@@ -83,8 +83,15 @@ afterEach(() => {
   target.remove();
 });
 
+// The LAST registration wins when more than one instance is mounted (the
+// deck-then-app tests below): Tauri's real `emit_to(APP_WINDOW, …)` only
+// ever reaches the app window's own channel, and in every test here the app
+// instance — the one actually meant to receive "check-for-updates" — is
+// mounted after the deck. For the single-instance tests this is simply the
+// only match.
 function registeredListener(event: string): (() => void) | undefined {
-  const call = listenMock.mock.calls.find(([name]) => name === event);
+  const calls = listenMock.mock.calls.filter(([name]) => name === event);
+  const call = calls[calls.length - 1];
   return call?.[1] as (() => void) | undefined;
 }
 
@@ -189,6 +196,36 @@ describe("App update check", () => {
   });
 });
 
+// listen<UpdateCheckState>'s type parameter is compile-time only — nothing
+// stops a malformed payload (a future emitter, a stray broadcast from
+// somewhere else) from reaching the listener at runtime. asUpdateCheckState
+// is the actual guard; this drives the registered callback directly with a
+// bad payload, the one thing a real cross-window emit can't be made to do
+// from this test file.
+describe("App update-check-result listener", () => {
+  it("ignores a malformed broadcast instead of crashing on state.info", async () => {
+    invokeMock.mockImplementation(mockInvoke(() => null));
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(listenMock.mock.calls.some(([name]) => name === "update-check-result")).toBe(true);
+      });
+      const call = listenMock.mock.calls.find(([name]) => name === "update-check-result");
+      const cb = call![1] as (ev: { payload: unknown }) => void;
+
+      // "available" with no `info` — exactly the shape that would throw
+      // inside UpdateBanner's `state.info.version` if it were assigned as-is.
+      expect(() => {
+        cb({ payload: { kind: "available" } });
+        flushSync(); // force the render synchronously so a bad assignment surfaces here
+      }).not.toThrow();
+      expect(target.querySelector(".banner"), "a rejected payload must not render").toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 // Both windows mount this same component. Only the app window may ever run
 // the check itself (asserted directly here); the deck window's ability to
 // SHOW a result it never checked for depends entirely on the
@@ -227,6 +264,82 @@ describe("App update check across windows", () => {
       }
     } finally {
       deck.cleanup();
+    }
+  });
+
+  it("does not resize/notify the deck for a purely informational manual result", async () => {
+    // The app window's manual check finds nothing new — that is only
+    // interesting to the window that asked, not to a deck overlay that
+    // never asked anything.
+    const check = vi.fn().mockResolvedValue(null);
+    invokeMock.mockImplementation(mockInvoke(check));
+    const deck = renderWithRole("deck");
+    try {
+      const app = render();
+      try {
+        await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+        registeredListener("check-for-updates")!();
+        await vi.waitFor(() => {
+          expect(app.target.textContent).toContain("Herdeck is up to date.");
+        });
+        expect(deck.target.querySelector(".banner")).toBeNull();
+      } finally {
+        app.cleanup();
+      }
+    } finally {
+      deck.cleanup();
+    }
+  });
+});
+
+// A later, lesser outcome must never erase a real, still-installable update:
+// the check that found it does not stop being true just because a
+// subsequent check found nothing new or failed outright.
+describe("App update check does not downgrade a found update", () => {
+  it("keeps an available update after a later manual check finds nothing new", async () => {
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" })
+      .mockResolvedValueOnce(null);
+    invokeMock.mockImplementation(mockInvoke(check));
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      });
+
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+      // Give the second result's assignment a tick to (not) apply.
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      expect(target.textContent).not.toContain("up to date");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("keeps an available update after a later manual check fails", async () => {
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" })
+      .mockRejectedValueOnce(new Error("offline"));
+    invokeMock.mockImplementation(mockInvoke(check));
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      });
+
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      expect(target.textContent).not.toContain("Update check failed");
+    } finally {
+      cleanup();
     }
   });
 });

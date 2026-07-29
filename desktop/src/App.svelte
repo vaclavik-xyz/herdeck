@@ -34,7 +34,13 @@
   import { locale } from "./lib/i18n.svelte";
   import { visibilityGatedLoop } from "./lib/pollGate";
   import UpdateBanner from "./lib/UpdateBanner.svelte";
-  import { reasonOf, runUpdateCheck, updateTransport, type UpdateCheckState } from "./lib/updateClient";
+  import {
+    asUpdateCheckState,
+    reasonOf,
+    runUpdateCheck,
+    updateTransport,
+    type UpdateCheckState,
+  } from "./lib/updateClient";
 
   // Injected on <html data-window-role> by Rust BEFORE first paint
   // (initialization_script), so the borderless CSS applies with no flash of
@@ -118,11 +124,14 @@
   }
 
   // Only the app window ever runs a check (see the mount gate below), but
-  // BOTH windows need to be able to show its result — the deck's own
-  // automatic check is gone, so without this it could never learn of an
-  // update at all. Broadcast (not emit_to) reaches every window, including
-  // the one that sent it; a single shared name keeps the emit and the
-  // listen below from drifting apart.
+  // BOTH windows need to be able to show a FOUND update — the deck's own
+  // automatic check is gone, so without this it could never learn of one at
+  // all. Broadcast (not emit_to) reaches every window, including the one
+  // that sent it; a single shared name keeps the emit and the listen below
+  // from drifting apart. Only "available" ever crosses this: "checking" /
+  // "up-to-date" / "failed" are informational answers to a check the user
+  // asked for in ONE window, and popping them onto the deck too would resize
+  // its content-fit frame for a message it never asked about.
   const UPDATE_RESULT_EVENT = "update-check-result";
 
   // One check path for both callers below: the silent mount check and the
@@ -130,6 +139,7 @@
   // it decides whether a non-available outcome (checking/up-to-date/failed)
   // is worth showing at all.
   async function checkForUpdate(manual: boolean): Promise<void> {
+    const before = updateState;
     if (manual) updateState = { kind: "checking" };
     const result = await runUpdateCheck(() => updater.check());
     // Automatic checks are best-effort: offline startup and an empty release
@@ -138,7 +148,15 @@
     // including failure — the fact that the automatic one never could is
     // exactly the defect a manual check exists to fix.
     if (manual || result.kind === "available") {
-      updateState = result;
+      // A transient/failed outcome must never displace an update that is
+      // STILL there and installable: a re-check finding nothing new (or
+      // failing outright) does not mean the earlier one stopped being real.
+      // `before` (not the live `updateState`, already overwritten to
+      // "checking" above) is what the check actually started from. Restore
+      // it rather than leaving "checking" stuck when the guard rejects.
+      updateState = result.kind === "available" || before?.kind !== "available" ? result : before;
+    }
+    if (result.kind === "available") {
       void emit(UPDATE_RESULT_EVENT, result).catch(() => {
         // Not in a Tauri WebView (plain browser preview): nothing to tell.
       });
@@ -339,9 +357,13 @@
     // the check (only the app window ever does — see below), BOTH windows'
     // `updateState` follow the result. Registering this in the SAME window
     // that emitted is harmless: the assignment just repeats the value that
-    // function already set locally.
-    const updateResultListener = listen<UpdateCheckState>(UPDATE_RESULT_EVENT, (event) => {
-      updateState = event.payload;
+    // function already set locally. `listen<UpdateCheckState>`'s type
+    // parameter is a compile-time label only — `asUpdateCheckState` is what
+    // actually guards against a malformed payload reaching `state.info` and
+    // crashing the render, the same way `asDiscovery` guards `discoveryListener`.
+    const updateResultListener = listen<unknown>(UPDATE_RESULT_EVENT, (event) => {
+      const result = asUpdateCheckState(event.payload);
+      if (result) updateState = result;
     });
 
     void (async () => {

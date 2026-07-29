@@ -27,6 +27,37 @@ export function asUpdateInfo(value: unknown): UpdateInfo | null {
   return { version: row.version, current_version: row.current_version };
 }
 
+/** Narrow an unvalidated `UPDATE_RESULT_EVENT` payload (crossing the
+ *  Rust/webview event bus, or another window's broadcast) into an
+ *  `UpdateCheckState`, or `null` for anything unrecognised. `listen<T>`'s
+ *  type parameter is a compile-time assertion only — it does not check the
+ *  payload actually has that shape — so an unvalidated assignment straight
+ *  into rendered state (`state.info.version`) would crash the receiving
+ *  window on a malformed or future-shaped message instead of just ignoring
+ *  it, the same way `asUpdateInfo`/`asDiscovery` guard every other value
+ *  that crosses that boundary. */
+export function asUpdateCheckState(value: unknown): UpdateCheckState | null {
+  if (value == null || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  switch (v.kind) {
+    case "checking":
+      return { kind: "checking" };
+    case "up-to-date":
+      return { kind: "up-to-date" };
+    case "failed":
+      return typeof v.reason === "string" ? { kind: "failed", reason: v.reason } : null;
+    case "available":
+      try {
+        const info = asUpdateInfo(v.info ?? null);
+        return info ? { kind: "available", info } : null;
+      } catch {
+        return null;
+      }
+    default:
+      return null;
+  }
+}
+
 /** A thrown value's displayable reason, never empty: a message-less `Error`,
  *  a non-Error rejection, or `throw undefined`/`null` all fall back to a
  *  labelled placeholder instead of rendering as a blank or truncated string.

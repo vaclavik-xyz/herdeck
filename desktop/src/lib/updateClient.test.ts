@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { asUpdateInfo, reasonOf, runUpdateCheck, updateTransport } from "./updateClient";
+import {
+  asUpdateCheckState,
+  asUpdateInfo,
+  reasonOf,
+  runUpdateCheck,
+  updateTransport,
+} from "./updateClient";
 
 describe("update client", () => {
   it("accepts a shaped update and null when current", () => {
@@ -99,5 +105,49 @@ describe("reasonOf", () => {
     // thrown, which the fallback only kicks in for a truly blank message.
     expect(reasonOf(undefined)).toBe("undefined");
     expect(reasonOf(null)).toBe("null");
+  });
+});
+
+// asUpdateCheckState guards the one place an UNVALIDATED value crosses back
+// into rendered state: the cross-window "update-check-result" broadcast in
+// App.svelte. `listen<UpdateCheckState>`'s type parameter is compile-time
+// only, so this is the only actual check that a malformed or future-shaped
+// payload doesn't reach `state.info.version` and crash the render.
+describe("asUpdateCheckState", () => {
+  it("accepts every valid shape", () => {
+    expect(asUpdateCheckState({ kind: "checking" })).toEqual({ kind: "checking" });
+    expect(asUpdateCheckState({ kind: "up-to-date" })).toEqual({ kind: "up-to-date" });
+    expect(asUpdateCheckState({ kind: "failed", reason: "offline" })).toEqual({
+      kind: "failed",
+      reason: "offline",
+    });
+    const info = { version: "0.2.0", current_version: "0.1.0" };
+    expect(asUpdateCheckState({ kind: "available", info })).toEqual({
+      kind: "available",
+      info,
+    });
+  });
+
+  it("rejects non-object payloads", () => {
+    expect(asUpdateCheckState(null)).toBeNull();
+    expect(asUpdateCheckState(undefined)).toBeNull();
+    expect(asUpdateCheckState("available")).toBeNull();
+    expect(asUpdateCheckState(42)).toBeNull();
+  });
+
+  it("rejects an unrecognised or missing kind", () => {
+    expect(asUpdateCheckState({})).toBeNull();
+    expect(asUpdateCheckState({ kind: "installing" })).toBeNull();
+  });
+
+  it("rejects a failed payload with no string reason", () => {
+    expect(asUpdateCheckState({ kind: "failed" })).toBeNull();
+    expect(asUpdateCheckState({ kind: "failed", reason: 42 })).toBeNull();
+  });
+
+  it("rejects an available payload with a missing or malformed info", () => {
+    expect(asUpdateCheckState({ kind: "available" })).toBeNull();
+    expect(asUpdateCheckState({ kind: "available", info: { version: 2 } })).toBeNull();
+    expect(asUpdateCheckState({ kind: "available", info: null })).toBeNull();
   });
 });
