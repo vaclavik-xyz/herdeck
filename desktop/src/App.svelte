@@ -283,10 +283,12 @@
           // retracted nothing, it doesn't bump the generation either (see
           // recordResolvedAway), so it alone can't mark that check's own
           // outcome superseded. A DIFFERENT resolution (e.g. a real
-          // retraction broadcast from the other window) still can, in which
-          // case only that check's own next settle — or another manual
-          // check — clears the placeholder; nothing here sweeps it on a
-          // timer the way up-to-date/failed are. Only answer here when
+          // retraction broadcast from the other window) still can — in
+          // which case that check's settle is dropped unless it finds a
+          // genuinely different "available" version; for up-to-date/failed,
+          // only ANOTHER manual check (which re-enters with a fresh
+          // generation) clears the placeholder. Nothing sweeps "checking" on
+          // a timer the way up-to-date/failed are. Only answer here when
           // NEITHER "available" nor "checking" is live.
           if (updateState?.kind !== "available" && updateState?.kind !== "checking") {
             updateState = { kind: "up-to-date" };
