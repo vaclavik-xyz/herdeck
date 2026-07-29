@@ -90,19 +90,27 @@
    *  "resolved" case (an install can happen in either window), so the two
    *  can never disagree about what was retracted.
    *
+   *  `version` is `null` when installUpdate ran with no live "available"
+   *  state to target (e.g. retried from the installError banner, which
+   *  offers the same action regardless of `state`) — that resolution
+   *  retracted nothing in particular, so it must NOT overwrite a real
+   *  version an EARLIER resolution already recorded; doing so would let a
+   *  check straddling that earlier resolution pass the staleness check and
+   *  resurrect exactly what it retracted. The generation bump still happens
+   *  unconditionally: a real resolution occurred either way, and any check
+   *  in flight still needs to recognize its own eventual non-"available"
+   *  result as potentially stale.
+   *
    *  Only CLEARS the live state when it currently shows that exact version:
    *  `updater.install()` is awaited, so a genuinely newer update can land
    *  (from a check settling, or the other window) while it was in flight —
-   *  that update was never what got resolved and must survive. The
-   *  generation bump and recorded version happen regardless, since a real
-   *  resolution occurred either way and any check straddling it still needs
-   *  to recognize its own eventual result as potentially stale. A real Tauri
+   *  that update was never what got resolved and must survive. A real Tauri
    *  `emit` reaches its own sender, so installUpdate's direct call and this
    *  SAME window's own updateResultListener both fire for one clear — this
    *  is naturally idempotent to that since both pass the SAME `version`. */
   function recordResolvedAway(version: string | null): void {
     updateGeneration += 1;
-    resolvedAwayVersion = version;
+    if (version !== null) resolvedAwayVersion = version;
     if (updateState?.kind === "available" && updateState.info.version === version) {
       updateState = null;
     }
@@ -253,9 +261,14 @@
         // installs anything (the deck) would keep an "Install and restart"
         // button for an update the process has already decided is gone.
         recordResolvedAway(targetVersion);
-        void emit(UPDATE_RESULT_EVENT, { resolvedAway: targetVersion }).catch(() => {
-          // Not in a Tauri WebView (plain browser preview): nothing to tell.
-        });
+        // Nothing to tell the other window when there was no live target
+        // (installUpdate ran from the installError retry with no
+        // "available" state showing) — this resolution retracted nothing.
+        if (targetVersion !== null) {
+          void emit(UPDATE_RESULT_EVENT, { resolvedAway: targetVersion }).catch(() => {
+            // Not in a Tauri WebView (plain browser preview): nothing to tell.
+          });
+        }
       }
     } catch (error) {
       updateError = reasonOf(error);

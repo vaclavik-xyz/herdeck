@@ -490,15 +490,28 @@ describe("App update install resolution clears both windows", () => {
       const installButton = target.querySelector("button");
       installButton!.click();
       // Positive check first: confirm installUpdate's async body actually
-      // ran through to the (successful) resolution, not just that nothing
-      // happened at all — a `not.toHaveBeenCalledWith(…, null)` alone would
-      // also pass if the install path silently never ran.
-      await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(1));
+      // ran all the way through to the (successful) resolution, not just
+      // that nothing happened at all — a `not.toHaveBeenCalledWith(…, null)`
+      // alone would also pass if the install path silently never ran.
+      // Waiting on `install` having been CALLED is not enough: that happens
+      // synchronously on click, before its promise (and the code after
+      // awaiting it) has settled. A macrotask boundary (not just a
+      // microtask/`vi.waitFor`'s first synchronous check) is what actually
+      // guarantees the whole async body — including the code after the
+      // await — has run to completion.
+      await new Promise((r) => setTimeout(r, 0));
+      expect(install).toHaveBeenCalledTimes(1);
       expect(target.textContent, "a successful install must leave the banner as-is").toContain(
         "Herdeck 0.2.0 is available.",
       );
 
-      expect(emitMock).not.toHaveBeenCalledWith("update-check-result", null);
+      // Written against the CURRENT clear shape ({resolvedAway: version}),
+      // not the old bare `null` — asserting against a shape nothing emits
+      // any more would pass vacuously even if a clear leaked out here.
+      expect(emitMock).not.toHaveBeenCalledWith(
+        "update-check-result",
+        expect.objectContaining({ resolvedAway: expect.anything() }),
+      );
     } finally {
       cleanup();
     }
@@ -635,6 +648,143 @@ describe("App update install resolution clears both windows", () => {
       ).toContain("Herdeck 0.3.0 is available.");
     } finally {
       cleanup();
+    }
+  });
+
+  // Pins WHICH version gets recorded and blacklisted, not just that survival
+  // happens to work out: two checks are in flight when the install resolves
+  // (0.2.0) — one later reports that SAME version (must be rejected as
+  // stale), the other a genuinely different one (must be accepted). If
+  // recordResolvedAway ever recorded the wrong version (e.g. the live one at
+  // resolution time instead of the captured target), one half of this would
+  // flip silently while the other still passed.
+  it("rejects a straddling check reporting the resolved version, accepts one reporting a different one", async () => {
+    let resolveB: (v: unknown) => void = () => {};
+    let resolveC: (v: unknown) => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveB = resolve; })) // manual check B
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveC = resolve; })); // manual check C
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      });
+
+      // Both checks start (and are left in flight) before the install below.
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(3));
+
+      const installButton = target.querySelector("button");
+      installButton!.click();
+      await vi.waitFor(() => expect(target.querySelector(".banner")).toBeNull());
+
+      // Check B resolves with the SAME version install just resolved away.
+      resolveB({ version: "0.2.0", current_version: "0.1.0" });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(target.querySelector(".banner"), "the resolved version was resurrected").toBeNull();
+
+      // Check C resolves with a genuinely DIFFERENT version — real news,
+      // unaffected by the earlier resolution's blacklist.
+      resolveC({ version: "0.3.0", current_version: "0.1.0" });
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.3.0 is available.");
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  // installError offers the same retry action regardless of `state` (see
+  // UpdateBanner), so installUpdate can run with NO live "available" state
+  // at all — reached here through real UI interaction across both windows:
+  // the app's install THROWS (installError set, its OWN state untouched),
+  // then the DECK installs instead (resolves false, broadcasting the
+  // resolution), which clears the APP's state to null while its error
+  // stays. The app's error banner still offers a retry — clicked with no
+  // live target, recordResolvedAway must not let that wipe the version the
+  // deck's resolution already recorded.
+  it("does not let a retry with no live target erase a previously recorded resolved-away version", async () => {
+    // A check that starts NOW and is left in flight through everything
+    // below — its `startGeneration` is captured before any resolution
+    // happens, which is what makes it "straddle" them once it finally
+    // settles (a check that started fresh AFTER the fact wouldn't: its own
+    // generation would already match, bypassing the staleness check
+    // entirely — this is the one shape that actually exercises it).
+    let resolveStraddler: (v: unknown) => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveStraddler = resolve; }));
+    const baseInvoke = mockInvoke(check);
+    let appInstallThrows = true;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_install") {
+        if (appInstallThrows) {
+          appInstallThrows = false;
+          throw new Error("network error");
+        }
+        return false;
+      }
+      return baseInvoke(cmd);
+    });
+    const deck = renderWithRole("deck");
+    try {
+      const app = render();
+      try {
+        await vi.waitFor(() => expect(app.target.textContent).toContain("Herdeck 0.2.0 is available."));
+        await vi.waitFor(() => expect(deck.target.textContent).toContain("Herdeck 0.2.0 is available."));
+
+        registeredListener("check-for-updates")!();
+        await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+
+        // The app's install throws: installError is set, but its OWN
+        // updateState is untouched by a throw — still "available 0.2.0".
+        app.target.querySelector("button")!.click();
+        await vi.waitFor(() => expect(app.target.textContent).toContain("network error"));
+
+        // The deck installs instead — resolves false, targeting the deck's
+        // own live "0.2.0", and broadcasts that resolution to the app too.
+        // Waiting for the DECK's own banner to clear (not the app's, which
+        // still shows only the error regardless) confirms its installUpdate
+        // — including the emit — ran to completion.
+        deck.target.querySelector("button")!.click();
+        await vi.waitFor(() => expect(deck.target.querySelector(".banner")).toBeNull());
+        // The app still shows ONLY the error (it outranks state) —
+        // updateState was cleared by the deck's broadcast, but installError
+        // never was.
+        expect(app.target.textContent).toContain("network error");
+
+        // The app's error banner still offers the SAME retry action —
+        // clicked with no live "available" state (targetVersion is null).
+        const retryButton = app.target.querySelector("button");
+        expect(retryButton?.textContent).toBe("Install and restart");
+        retryButton!.click();
+        await new Promise((r) => setTimeout(r, 0));
+
+        // NOW the straddling check (in flight since before either
+        // resolution) settles with that SAME version — must still be
+        // rejected, proving the no-target retry did not wipe the "0.2.0"
+        // the deck's install had already recorded.
+        resolveStraddler({ version: "0.2.0", current_version: "0.1.0" });
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(
+          app.target.querySelector(".banner"),
+          "a no-target retry erased the recorded version, letting a stale check resurrect it",
+        ).toBeNull();
+      } finally {
+        app.cleanup();
+      }
+    } finally {
+      deck.cleanup();
     }
   });
 
