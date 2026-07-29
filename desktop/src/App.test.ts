@@ -702,6 +702,62 @@ describe("App update install resolution clears both windows", () => {
     }
   });
 
+  // Two SEPARATE resolutions in sequence: if the retracted version were kept
+  // in a single slot rather than an accumulating set, the second install
+  // would overwrite the first's record, un-protecting it — a check that
+  // straddled only the FIRST resolution would then slip through once the
+  // slot no longer names what it retracted.
+  it("keeps both versions blacklisted after two sequential install resolutions", async () => {
+    let resolveStraddlerX: (v: unknown) => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveStraddlerX = resolve; })) // check X
+      .mockResolvedValueOnce({ version: "0.3.0", current_version: "0.1.0" }); // finds the newer update
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      });
+
+      // Check X starts and is left in flight through everything below.
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+
+      // First install: resolves 0.2.0 away and records it.
+      target.querySelector("button")!.click();
+      await vi.waitFor(() => expect(target.querySelector(".banner")).toBeNull());
+
+      // A fresh check (its own generation matches, so it is not superseded)
+      // finds a genuinely newer update.
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.3.0 is available.");
+      });
+
+      // Second install: resolves 0.3.0 away too, and must record IT
+      // WITHOUT losing the earlier record of 0.2.0.
+      target.querySelector("button")!.click();
+      await vi.waitFor(() => expect(target.querySelector(".banner")).toBeNull());
+
+      // Check X (in flight since before EITHER install) finally settles
+      // with the FIRST resolved version — must still be rejected.
+      resolveStraddlerX({ version: "0.2.0", current_version: "0.1.0" });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(
+        target.querySelector(".banner"),
+        "the second install's resolution overwrote the first's record, un-protecting 0.2.0",
+      ).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
   // installError offers the same retry action regardless of `state` (see
   // UpdateBanner), so installUpdate can run with NO live "available" state
   // at all — reached here through real UI interaction across both windows:
@@ -767,7 +823,7 @@ describe("App update install resolution clears both windows", () => {
         const retryButton = app.target.querySelector("button");
         expect(retryButton?.textContent).toBe("Install and restart");
         retryButton!.click();
-        await new Promise((r) => setTimeout(r, 0));
+        await vi.waitFor(() => expect(app.target.textContent).toContain("Herdeck is up to date."));
 
         // NOW the straddling check (in flight since before either
         // resolution) settles with that SAME version — must still be
@@ -777,9 +833,10 @@ describe("App update install resolution clears both windows", () => {
         await new Promise((r) => setTimeout(r, 0));
 
         expect(
-          app.target.querySelector(".banner"),
+          app.target.textContent,
           "a no-target retry erased the recorded version, letting a stale check resurrect it",
-        ).toBeNull();
+        ).toContain("Herdeck is up to date.");
+        expect(app.target.textContent).not.toContain("is available");
       } finally {
         app.cleanup();
       }
@@ -949,6 +1006,40 @@ describe("App update banner auto-dismiss", () => {
         await vi.advanceTimersByTimeAsync(8000);
         expect(target.textContent, "an actionable available-update banner must not auto-dismiss")
           .toContain("Herdeck 0.2.0 is available.");
+      } finally {
+        cleanup();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // installError outranks every updateState kind and used to be cleared
+  // ONLY by installUpdate's own entry (a retry click) — ignored, it would
+  // pin a red bar for the rest of the process's life. Same 8s window as
+  // the two kinds above, tracked independently of updateState.
+  it("clears an install error after a timeout, revealing the update underneath again", async () => {
+    vi.useFakeTimers();
+    try {
+      const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "update_install") throw new Error("disk full");
+        return mockInvoke(check)(cmd);
+      });
+      const { target, cleanup } = render();
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+
+        target.querySelector("button")!.click();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.textContent).toContain("disk full");
+
+        await vi.advanceTimersByTimeAsync(8000);
+        expect(target.textContent, "the install error never cleared").not.toContain("disk full");
+        // installError merely masked the available update — it is still
+        // there, and shows again once the error is out of the way.
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
       } finally {
         cleanup();
       }

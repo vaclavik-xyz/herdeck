@@ -77,12 +77,16 @@
   // while I was still in flight" — a check that started BEFORE that
   // resolution reports stale information once it finally settles.
   let updateGeneration = 0;
-  // The version that generation bump resolved away, so a check straddling
-  // it can tell "the same stale news install just retracted" (drop it, or
+  // Every version a resolution has retracted, so a check straddling one of
+  // them can tell "the same stale news install just retracted" (drop it, or
   // the user could click Install again and just get `false` again) from "a
   // genuinely different, newer update" (apply it — it's real, current
-  // information the earlier resolution knows nothing about).
-  let resolvedAwayVersion: string | null = null;
+  // information no earlier resolution knows anything about). An
+  // ACCUMULATING set, not a single slot: two resolutions can happen in
+  // sequence (an install, then a fresh check finding something newer, then
+  // ANOTHER install), and a slot would let the second overwrite — and so
+  // un-protect — the first's record.
+  let resolvedAwayVersions = new Set<string>();
 
   /** Record that `version` — the update installUpdate actually targeted,
    *  captured at ITS start, not re-derived here — has been resolved away.
@@ -93,13 +97,10 @@
    *  `version` is `null` when installUpdate ran with no live "available"
    *  state to target (e.g. retried from the installError banner, which
    *  offers the same action regardless of `state`) — that resolution
-   *  retracted nothing in particular, so it must NOT overwrite a real
-   *  version an EARLIER resolution already recorded; doing so would let a
-   *  check straddling that earlier resolution pass the staleness check and
-   *  resurrect exactly what it retracted. The generation bump still happens
-   *  unconditionally: a real resolution occurred either way, and any check
-   *  in flight still needs to recognize its own eventual non-"available"
-   *  result as potentially stale.
+   *  retracted nothing in particular, so it adds nothing to the set. The
+   *  generation bump still happens unconditionally: a real resolution
+   *  occurred either way, and any check in flight still needs to recognize
+   *  its own eventual non-"available" result as potentially stale.
    *
    *  Only CLEARS the live state when it currently shows that exact version:
    *  `updater.install()` is awaited, so a genuinely newer update can land
@@ -107,10 +108,10 @@
    *  that update was never what got resolved and must survive. A real Tauri
    *  `emit` reaches its own sender, so installUpdate's direct call and this
    *  SAME window's own updateResultListener both fire for one clear — this
-   *  is naturally idempotent to that since both pass the SAME `version`. */
+   *  is naturally idempotent to that since both add the SAME `version`. */
   function recordResolvedAway(version: string | null): void {
     updateGeneration += 1;
-    if (version !== null) resolvedAwayVersion = version;
+    if (version !== null) resolvedAwayVersions.add(version);
     if (updateState?.kind === "available" && updateState.info.version === version) {
       updateState = null;
     }
@@ -213,7 +214,7 @@
       // again. Only a genuinely different (newer) version is real news.
       const supersededByInstall = updateGeneration !== startGeneration;
       const staleResolvedVersion =
-        result.kind === "available" && result.info.version === resolvedAwayVersion;
+        result.kind === "available" && resolvedAwayVersions.has(result.info.version);
       const isFreshOutcome =
         !supersededByInstall || (result.kind === "available" && !staleResolvedVersion);
       if (isFreshOutcome) {
@@ -261,10 +262,15 @@
         // installs anything (the deck) would keep an "Install and restart"
         // button for an update the process has already decided is gone.
         recordResolvedAway(targetVersion);
-        // Nothing to tell the other window when there was no live target
-        // (installUpdate ran from the installError retry with no
-        // "available" state showing) — this resolution retracted nothing.
-        if (targetVersion !== null) {
+        // No live target (installUpdate ran from the installError retry
+        // with no "available" state showing): the user asked for a retry
+        // and deserves an answer, not the banner just silently vanishing —
+        // show "up to date" (the 8s effect below sweeps it away same as any
+        // other check's). Nothing to tell the OTHER window in this case: it
+        // retracted nothing in particular for it either.
+        if (targetVersion === null) {
+          updateState = { kind: "up-to-date" };
+        } else {
           void emit(UPDATE_RESULT_EVENT, { resolvedAway: targetVersion }).catch(() => {
             // Not in a Tauri WebView (plain browser preview): nothing to tell.
           });
@@ -289,6 +295,20 @@
     if (kind !== "up-to-date" && kind !== "failed") return;
     const timer = setTimeout(() => {
       if (updateState?.kind === kind) updateState = null;
+    }, 8000);
+    return () => clearTimeout(timer);
+  });
+
+  // installError outranks every updateState kind in UpdateBanner and is
+  // otherwise cleared only by installUpdate's own entry (a retry click) —
+  // ignored, it would pin a red bar for the rest of the process's life,
+  // masking any later state and permanently stealing content-fit height on
+  // the deck. Same 8s window as the effect above, tracked separately since
+  // installError and updateState change independently of each other.
+  $effect(() => {
+    if (!updateError) return;
+    const timer = setTimeout(() => {
+      updateError = "";
     }, 8000);
     return () => clearTimeout(timer);
   });
