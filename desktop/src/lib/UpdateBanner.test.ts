@@ -130,6 +130,24 @@ describe("UpdateBanner", () => {
     }
   });
 
+  it("offers a retry action on an install failure, not an unretryable dead end", () => {
+    const onInstall = vi.fn();
+    const { target, cleanup } = render({
+      state: { kind: "available", info: { version: "0.2.0", current_version: "0.1.0" } },
+      installError: "disk full",
+      onInstall,
+    });
+    try {
+      const button = target.querySelector("button");
+      expect(button, "no retry action rendered on the install error").not.toBeNull();
+      expect(button!.textContent).toBe("Install and restart");
+      button!.click();
+      expect(onInstall).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("renders every state in Czech too", () => {
     setLang("cs");
     const cases: Array<[UpdateCheckState, string]> = [

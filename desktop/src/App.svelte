@@ -71,7 +71,7 @@
   let updateError = $state("");
   let installingUpdate = $state(false);
   // Bumped only when an install (in EITHER window — both render the install
-  // button, see the `event.payload === null` branch below) definitively
+  // button, see the `resolvedAway` branch of the listener below) definitively
   // resolves an update away. Lets checkForUpdate tell "nothing else has
   // happened since I started" from "install already gave a real answer
   // while I was still in flight" — a check that started BEFORE that
@@ -84,22 +84,28 @@
   // information the earlier resolution knows nothing about).
   let resolvedAwayVersion: string | null = null;
 
-  /** Record that whatever "available" version is live right now has been
-   *  resolved away, and clear it. Shared by installUpdate's own resolution
-   *  and the broadcast listener's `null` case (an install can happen in
-   *  either window), so the two can never disagree about what was retracted. */
-  function recordResolvedAway(): void {
-    // Idempotent by design: a real Tauri `emit` reaches its own sender, so
-    // installUpdate's direct call and this SAME window's own
-    // updateResultListener both fire for one clear. Without this guard the
-    // second call would read the ALREADY-nulled state and overwrite the
-    // just-recorded version with null, losing exactly the information the
-    // anti-downgrade guard needs. Nothing left to resolve away means this
-    // clear was already recorded — a no-op, not a second bump.
-    if (updateState?.kind !== "available") return;
-    resolvedAwayVersion = updateState.info.version;
+  /** Record that `version` — the update installUpdate actually targeted,
+   *  captured at ITS start, not re-derived here — has been resolved away.
+   *  Shared by installUpdate's own resolution and the broadcast listener's
+   *  "resolved" case (an install can happen in either window), so the two
+   *  can never disagree about what was retracted.
+   *
+   *  Only CLEARS the live state when it currently shows that exact version:
+   *  `updater.install()` is awaited, so a genuinely newer update can land
+   *  (from a check settling, or the other window) while it was in flight —
+   *  that update was never what got resolved and must survive. The
+   *  generation bump and recorded version happen regardless, since a real
+   *  resolution occurred either way and any check straddling it still needs
+   *  to recognize its own eventual result as potentially stale. A real Tauri
+   *  `emit` reaches its own sender, so installUpdate's direct call and this
+   *  SAME window's own updateResultListener both fire for one clear — this
+   *  is naturally idempotent to that since both pass the SAME `version`. */
+  function recordResolvedAway(version: string | null): void {
     updateGeneration += 1;
-    updateState = null;
+    resolvedAwayVersion = version;
+    if (updateState?.kind === "available" && updateState.info.version === version) {
+      updateState = null;
+    }
   }
   let floatingScrollable = $state(false);
   let floatingContentHeight = $state(300);
@@ -231,6 +237,11 @@
     if (installingUpdate) return;
     installingUpdate = true;
     updateError = "";
+    // Captured BEFORE `updater.install()` — an awaited download-and-verify
+    // that can take a while — rather than re-read from `updateState` once it
+    // resolves, which could have moved on to a genuinely different update by
+    // then (see recordResolvedAway's doc comment).
+    const targetVersion = updateState?.kind === "available" ? updateState.info.version : null;
     try {
       const installed = await updater.install();
       if (!installed) {
@@ -241,8 +252,8 @@
         // otherwise has no way to make: without this, a window that never
         // installs anything (the deck) would keep an "Install and restart"
         // button for an update the process has already decided is gone.
-        recordResolvedAway();
-        void emit(UPDATE_RESULT_EVENT, null).catch(() => {
+        recordResolvedAway(targetVersion);
+        void emit(UPDATE_RESULT_EVENT, { resolvedAway: targetVersion }).catch(() => {
           // Not in a Tauri WebView (plain browser preview): nothing to tell.
         });
       }
@@ -439,18 +450,21 @@
     // parameter is a compile-time label only — `asUpdateCheckState` is what
     // actually guards against a malformed payload reaching `state.info` and
     // crashing the render, the same way `asDiscovery` guards `discoveryListener`.
-    // A `null` payload is distinguished from a malformed one: it is the
-    // explicit "clear" signal, not something to just silently ignore — and
-    // it goes through the SAME `recordResolvedAway` an install in THIS
-    // window would, so a check in flight here is protected against a
-    // resolution that happened in the OTHER window exactly as it would be
-    // against one of its own.
+    // A `{resolvedAway}` payload is distinguished from a malformed one: it is
+    // the explicit "install resolution" signal (carrying WHICH version, so
+    // this window doesn't have to guess from its own possibly-moved-on live
+    // state), not something to just silently ignore — and it goes through
+    // the SAME `recordResolvedAway` an install in THIS window would, so a
+    // check in flight here is protected against a resolution that happened
+    // in the OTHER window exactly as it would be against one of its own.
     const updateResultListener = listen<unknown>(UPDATE_RESULT_EVENT, (event) => {
-      if (event.payload === null) {
-        recordResolvedAway();
+      const payload = event.payload;
+      if (payload !== null && typeof payload === "object" && "resolvedAway" in payload) {
+        const version = (payload as { resolvedAway: unknown }).resolvedAway;
+        recordResolvedAway(typeof version === "string" ? version : null);
         return;
       }
-      const result = asUpdateCheckState(event.payload);
+      const result = asUpdateCheckState(payload);
       if (result) updateState = result;
     });
 

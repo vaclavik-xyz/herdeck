@@ -4,7 +4,10 @@
   // there is exactly one rendering path so the two can never describe the
   // same state two different ways. An install failure (installError) always
   // wins over the check's own state: it means the user already committed to
-  // installing, so it is the more urgent thing to show.
+  // installing, so it is the more urgent thing to show — and it carries the
+  // SAME retry action as "available", not a dead end: installUpdate clears
+  // updateError back to "" the moment a retry starts, so nothing else needs
+  // to sweep it away.
   //
   // Renders through exactly ONE `<Banner>` call site (never a per-kind
   // `{:else if}` chain of separate `<Banner>` tags): Banner's own div carries
@@ -58,7 +61,9 @@
   };
 
   const view = $derived.by((): Presentation => {
-    if (installError) return { kind: "error", message: installError };
+    if (installError) {
+      return { kind: "error", message: installError, actionLabel: installAction, onAction: onInstall };
+    }
     switch (state?.kind) {
       case "available":
         return {

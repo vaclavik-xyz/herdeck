@@ -589,6 +589,55 @@ describe("App update install resolution clears both windows", () => {
     }
   });
 
+  // The reverse ordering: installUpdate captures the version it is actually
+  // targeting BEFORE awaiting `updater.install()` — an awaited
+  // download-and-verify that can take a while. If a genuinely NEWER update
+  // lands (from a check settling) WHILE that install is still pending, the
+  // eventual resolution must retract only the version it was actually asked
+  // about, not whatever happens to be live once it finally settles.
+  it("does not clear a newer update that lands while install() is still resolving an older one", async () => {
+    let resolveInstall: (v: unknown) => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
+      .mockResolvedValueOnce({ version: "0.3.0", current_version: "0.1.0" }); // manual re-check
+    const install = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { resolveInstall = resolve; }));
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? install() : baseInvoke(cmd),
+    );
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      });
+
+      // Click install — its promise is left pending (install is "in flight").
+      const installButton = target.querySelector("button");
+      installButton!.click();
+      await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(1));
+
+      // WHILE install() is still pending, a manual re-check settles with a
+      // genuinely newer available update.
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.3.0 is available.");
+      });
+
+      // NOW install() finally resolves false — for the 0.2.0 it was actually
+      // asked about, not the 0.3.0 that has since appeared.
+      resolveInstall(false);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(
+        target.textContent,
+        "a newer update that landed mid-install was wrongly cleared away with the old one",
+      ).toContain("Herdeck 0.3.0 is available.");
+    } finally {
+      cleanup();
+    }
+  });
+
   // installUpdate's resolution can happen in EITHER window (both render the
   // install button) — the generation guard is per-window state, so it must
   // be kept in sync through the SAME "update-check-result" broadcast an
