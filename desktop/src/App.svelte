@@ -3,7 +3,6 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
-  import Banner from "./lib/Banner.svelte";
   import ConfigApp from "./ConfigApp.svelte";
   import DeckView from "./lib/DeckView.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
@@ -34,7 +33,8 @@
   } from "./lib/onboardingClient";
   import { locale } from "./lib/i18n.svelte";
   import { visibilityGatedLoop } from "./lib/pollGate";
-  import { updateTransport, type UpdateInfo } from "./lib/updateClient";
+  import UpdateBanner from "./lib/UpdateBanner.svelte";
+  import { runUpdateCheck, updateTransport, type UpdateCheckState } from "./lib/updateClient";
 
   // Injected on <html data-window-role> by Rust BEFORE first paint
   // (initialization_script), so the borderless CSS applies with no flash of
@@ -54,7 +54,14 @@
   // status would show the deck (so a demo/local-pinned user can re-onboard).
   let reonboard = $state(false);
   let desktopSetupHidden = $state(false);
-  let availableUpdate = $state<UpdateInfo | null>(null);
+  // null = no check has landed yet (nothing to render). Once a check
+  // completes it is always one of the four UpdateCheckState kinds — see
+  // UpdateBanner, the one place that renders this.
+  let updateState = $state<UpdateCheckState | null>(null);
+  // Install failures are kept separate from the check's own state: they can
+  // only happen after installUpdate() is already running, on top of whatever
+  // updateState says, and must outrank it in UpdateBanner regardless of which
+  // check produced it.
   let updateError = $state("");
   let installingUpdate = $state(false);
   let floatingScrollable = $state(false);
@@ -110,12 +117,20 @@
     }
   }
 
-  async function checkForUpdate(): Promise<void> {
-    try {
-      availableUpdate = await updater.check();
-    } catch {
-      // Automatic checks are best-effort: offline startup and an empty release
-      // channel must never interfere with the deck.
+  // One check path for both callers below: the silent mount check and the
+  // tray's manual one. `manual` is the only thing that differs between them —
+  // it decides whether a non-available outcome (checking/up-to-date/failed)
+  // is worth showing at all.
+  async function checkForUpdate(manual: boolean): Promise<void> {
+    if (manual) updateState = { kind: "checking" };
+    const result = await runUpdateCheck(() => updater.check());
+    // Automatic checks are best-effort: offline startup and an empty release
+    // channel must never interfere with the deck, so only a found update is
+    // worth surfacing. A user-requested check reports EVERY outcome,
+    // including failure — the fact that the automatic one never could is
+    // exactly the defect a manual check exists to fix.
+    if (manual || result.kind === "available") {
+      updateState = result;
     }
   }
 
@@ -125,7 +140,7 @@
     updateError = "";
     try {
       const installed = await updater.install();
-      if (!installed) availableUpdate = null;
+      if (!installed) updateState = null;
     } catch (error) {
       updateError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -283,13 +298,28 @@
       if (command) void applyFloatingScale(command);
     });
 
+    // Rust emits this to the APP window only (tray's "Check for updates" item
+    // — see MENU_ID_CHECK_UPDATE in lib.rs), via the same emit_to pattern as
+    // `reonboardListener`/`settingsListener` above: registered in both
+    // windows, but Tauri only ever delivers it to the app window's own IPC
+    // channel. `show_role_window` already brought that window forward before
+    // this fires, so the result is never rendered into a hidden window.
+    const checkUpdateListener = listen("check-for-updates", () => {
+      void checkForUpdate(true);
+    });
+
     void (async () => {
       while (alive && !discovery) {
         await pullDiscovery();
         if (!discovery) await new Promise((r) => setTimeout(r, 400));
       }
     })();
-    void checkForUpdate();
+    // Both windows mount this component, but only one process should ever
+    // check on startup: the app window, which is also the only one the
+    // tray's manual check ever targets. The deck window's own banner can
+    // still DISPLAY a found update (see the template below) — it just never
+    // runs a second check of its own.
+    if (surface === "desktop") void checkForUpdate(false);
 
     // Visibility-gated: the setup poll parks while the window is hidden (the
     // deck lives in the tray) and refreshes immediately on show.
@@ -322,6 +352,7 @@
       void reonboardListener.then((unlisten) => unlisten());
       void settingsListener.then((unlisten) => unlisten());
       void zoomListener.then((unlisten) => unlisten());
+      void checkUpdateListener.then((unlisten) => unlisten());
       window.removeEventListener("keydown", onFloatingScaleKey);
       window.removeEventListener("contextmenu", onDeckContextMenu);
       setupPoll.stop();
@@ -329,22 +360,11 @@
     };
   });
 
-  const updateMessage = $derived(
-    availableUpdate
-      ? locale.lang === "cs"
-        ? `Je dostupný Herdeck ${availableUpdate.version}.`
-        : `Herdeck ${availableUpdate.version} is available.`
-      : "",
-  );
-  const updateAction = $derived(
-    installingUpdate
-      ? locale.lang === "cs"
-        ? "Instaluji…"
-        : "Installing…"
-      : locale.lang === "cs"
-        ? "Nainstalovat a restartovat"
-        : "Install and restart",
-  );
+  // Whether UpdateBanner has anything to render — kept here (rather than
+  // inside UpdateBanner) so both windows can skip the wrapping
+  // `.desktop-banner` div entirely when there is nothing to show, matching
+  // what the pre-existing markup did for `updateError`/an available update.
+  const showUpdateBanner = $derived(updateError !== "" || updateState !== null);
   const connectionSetupLabel = $derived(
     locale.lang === "cs" ? "Nastavení připojení" : "Connection setup",
   );
@@ -379,15 +399,13 @@
 
 {#if surface === "desktop"}
   <div class="desktop-app">
-    {#if updateError}
-      <div class="desktop-banner"><Banner kind="error" message={updateError} /></div>
-    {:else if availableUpdate}
+    {#if showUpdateBanner}
       <div class="desktop-banner">
-        <Banner
-          kind="warning"
-          message={updateMessage}
-          actionLabel={updateAction}
-          onAction={installUpdate}
+        <UpdateBanner
+          state={updateState}
+          installError={updateError}
+          installing={installingUpdate}
+          onInstall={installUpdate}
         />
       </div>
     {/if}
@@ -447,14 +465,12 @@
         <span class="grabber" data-tauri-drag-region></span>
       </div>
     {/if}
-    {#if updateError}
-      <Banner kind="error" message={updateError} />
-    {:else if availableUpdate}
-      <Banner
-        kind="warning"
-        message={updateMessage}
-        actionLabel={updateAction}
-        onAction={installUpdate}
+    {#if showUpdateBanner}
+      <UpdateBanner
+        state={updateState}
+        installError={updateError}
+        installing={installingUpdate}
+        onInstall={installUpdate}
       />
     {/if}
     {#if view === "deck"}
