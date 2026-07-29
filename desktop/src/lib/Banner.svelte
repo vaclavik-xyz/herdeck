@@ -9,7 +9,7 @@
 </script>
 
 {#if message}
-  <div class="banner {kind}">
+  <div class="banner {kind}" role="status" aria-live="polite">
     <span class="msg">{message}</span>
     {#if actionLabel}
       <button type="button" onclick={() => onAction?.()}>{actionLabel}</button>

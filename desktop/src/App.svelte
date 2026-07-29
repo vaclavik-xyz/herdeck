@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { emit, listen } from "@tauri-apps/api/event";
   import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
   import ConfigApp from "./ConfigApp.svelte";
   import DeckView from "./lib/DeckView.svelte";
@@ -34,7 +34,7 @@
   import { locale } from "./lib/i18n.svelte";
   import { visibilityGatedLoop } from "./lib/pollGate";
   import UpdateBanner from "./lib/UpdateBanner.svelte";
-  import { runUpdateCheck, updateTransport, type UpdateCheckState } from "./lib/updateClient";
+  import { reasonOf, runUpdateCheck, updateTransport, type UpdateCheckState } from "./lib/updateClient";
 
   // Injected on <html data-window-role> by Rust BEFORE first paint
   // (initialization_script), so the borderless CSS applies with no flash of
@@ -117,6 +117,14 @@
     }
   }
 
+  // Only the app window ever runs a check (see the mount gate below), but
+  // BOTH windows need to be able to show its result — the deck's own
+  // automatic check is gone, so without this it could never learn of an
+  // update at all. Broadcast (not emit_to) reaches every window, including
+  // the one that sent it; a single shared name keeps the emit and the
+  // listen below from drifting apart.
+  const UPDATE_RESULT_EVENT = "update-check-result";
+
   // One check path for both callers below: the silent mount check and the
   // tray's manual one. `manual` is the only thing that differs between them —
   // it decides whether a non-available outcome (checking/up-to-date/failed)
@@ -131,6 +139,9 @@
     // exactly the defect a manual check exists to fix.
     if (manual || result.kind === "available") {
       updateState = result;
+      void emit(UPDATE_RESULT_EVENT, result).catch(() => {
+        // Not in a Tauri WebView (plain browser preview): nothing to tell.
+      });
     }
   }
 
@@ -142,11 +153,27 @@
       const installed = await updater.install();
       if (!installed) updateState = null;
     } catch (error) {
-      updateError = error instanceof Error ? error.message : String(error);
+      updateError = reasonOf(error);
     } finally {
       installingUpdate = false;
     }
   }
+
+  // "Up to date" and "failed" are informational dead ends — nothing else
+  // ever clears them (unlike "available", which installUpdate can resolve),
+  // so left alone they would pin the banner to the top of the window (or
+  // permanently steal height from the content-fit deck) for the rest of the
+  // process's life. Re-runs on every new `updateState`, so a fresh check
+  // result cancels the previous timer via the effect's own cleanup and starts
+  // a new one — it never clears a kind newer than the one it was scheduled for.
+  $effect(() => {
+    const kind = updateState?.kind;
+    if (kind !== "up-to-date" && kind !== "failed") return;
+    const timer = setTimeout(() => {
+      if (updateState?.kind === kind) updateState = null;
+    }, 8000);
+    return () => clearTimeout(timer);
+  });
 
   // Content-fit: size the borderless window to the intrinsic content height. Skips
   // redundant calls via fitDecision's anti-feedback guard. No-op (try/catch) when
@@ -308,6 +335,15 @@
       void checkForUpdate(true);
     });
 
+    // The other half of `checkForUpdate`'s broadcast: whichever window ran
+    // the check (only the app window ever does — see below), BOTH windows'
+    // `updateState` follow the result. Registering this in the SAME window
+    // that emitted is harmless: the assignment just repeats the value that
+    // function already set locally.
+    const updateResultListener = listen<UpdateCheckState>(UPDATE_RESULT_EVENT, (event) => {
+      updateState = event.payload;
+    });
+
     void (async () => {
       while (alive && !discovery) {
         await pullDiscovery();
@@ -315,10 +351,9 @@
       }
     })();
     // Both windows mount this component, but only one process should ever
-    // check on startup: the app window, which is also the only one the
-    // tray's manual check ever targets. The deck window's own banner can
-    // still DISPLAY a found update (see the template below) — it just never
-    // runs a second check of its own.
+    // check on startup: the app window. The deck window's own banner can
+    // still DISPLAY a found update — it just never runs a second check of
+    // its own, learning the result from `updateResultListener` instead.
     if (surface === "desktop") void checkForUpdate(false);
 
     // Visibility-gated: the setup poll parks while the window is hidden (the
@@ -353,6 +388,7 @@
       void settingsListener.then((unlisten) => unlisten());
       void zoomListener.then((unlisten) => unlisten());
       void checkUpdateListener.then((unlisten) => unlisten());
+      void updateResultListener.then((unlisten) => unlisten());
       window.removeEventListener("keydown", onFloatingScaleKey);
       window.removeEventListener("contextmenu", onDeckContextMenu);
       setupPoll.stop();

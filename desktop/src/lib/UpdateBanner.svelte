@@ -6,7 +6,7 @@
   // wins over the check's own state: it means the user already committed to
   // installing, so it is the more urgent thing to show.
   import Banner from "./Banner.svelte";
-  import { locale } from "./i18n.svelte";
+  import { defineMessages, fmt, locale } from "./i18n.svelte";
   import type { UpdateCheckState } from "./updateClient";
 
   let {
@@ -21,11 +21,26 @@
     onInstall: () => void;
   } = $props();
 
-  const installAction = $derived(
-    locale.lang === "cs"
-      ? installing ? "Instaluji…" : "Nainstalovat a restartovat"
-      : installing ? "Installing…" : "Install and restart",
-  );
+  const LM = defineMessages({
+    en: {
+      available: "Herdeck {version} is available.",
+      upToDate: "Herdeck is up to date.",
+      checking: "Checking for updates…",
+      failed: "Update check failed: {reason}",
+      install: "Install and restart",
+      installing: "Installing…",
+    },
+    cs: {
+      available: "Je dostupný Herdeck {version}.",
+      upToDate: "Herdeck je aktuální.",
+      checking: "Kontroluji aktualizace…",
+      failed: "Kontrola aktualizací selhala: {reason}",
+      install: "Nainstalovat a restartovat",
+      installing: "Instaluji…",
+    },
+  });
+  const m = $derived(LM[locale.lang]);
+  const installAction = $derived(installing ? m.installing : m.install);
 </script>
 
 {#if installError}
@@ -33,27 +48,14 @@
 {:else if state?.kind === "available"}
   <Banner
     kind="warning"
-    message={locale.lang === "cs"
-      ? `Je dostupný Herdeck ${state.info.version}.`
-      : `Herdeck ${state.info.version} is available.`}
+    message={fmt(m.available, { version: state.info.version })}
     actionLabel={installAction}
     onAction={onInstall}
   />
 {:else if state?.kind === "up-to-date"}
-  <Banner
-    kind="success"
-    message={locale.lang === "cs" ? "Herdeck je aktuální." : "Herdeck is up to date."}
-  />
+  <Banner kind="success" message={m.upToDate} />
 {:else if state?.kind === "checking"}
-  <Banner
-    kind="warning"
-    message={locale.lang === "cs" ? "Kontroluji aktualizace…" : "Checking for updates…"}
-  />
+  <Banner kind="warning" message={m.checking} />
 {:else if state?.kind === "failed"}
-  <Banner
-    kind="error"
-    message={locale.lang === "cs"
-      ? `Kontrola aktualizací selhala: ${state.reason}`
-      : `Update check failed: ${state.reason}`}
-  />
+  <Banner kind="error" message={fmt(m.failed, { reason: state.reason })} />
 {/if}

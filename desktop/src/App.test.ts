@@ -10,9 +10,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
 import { setLang } from "./lib/i18n.svelte";
 
-const { invokeMock, listenMock } = vi.hoisted(() => ({ invokeMock: vi.fn(), listenMock: vi.fn() }));
+const { invokeMock, listenMock, emitMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  listenMock: vi.fn(),
+  emitMock: vi.fn(),
+}));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock, emit: emitMock }));
 
 import App from "./App.svelte";
 
@@ -59,12 +63,23 @@ beforeEach(() => {
   invokeMock.mockReset();
   listenMock.mockReset();
   listenMock.mockImplementation(() => Promise.resolve(() => {}));
+  // A real Tauri `emit` reaches every window's listeners, including the
+  // sender's own — so the mock delivers to every callback registered (via
+  // listenMock) for that event name, across however many instances are
+  // mounted, the same way two real windows sharing one process would.
+  emitMock.mockReset();
+  emitMock.mockImplementation(async (event: string, payload: unknown) => {
+    for (const [name, cb] of listenMock.mock.calls) {
+      if (name === event) (cb as (ev: { payload: unknown }) => void)({ payload });
+    }
+  });
   target = document.createElement("div");
   document.body.appendChild(target);
 });
 
 afterEach(() => {
   delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  delete document.documentElement.dataset.windowRole;
   target.remove();
 });
 
@@ -76,6 +91,20 @@ function registeredListener(event: string): (() => void) | undefined {
 function render(): { target: HTMLElement; cleanup: () => void } {
   const instance = mount(App, { target });
   return { target, cleanup: () => unmount(instance) };
+}
+
+// Rust stamps `data-window-role` on `<html>` before first paint, and
+// App.svelte reads it into a plain (non-reactive) `const role` once, at
+// component construction — so setting the attribute only for the
+// synchronous `mount()` call, then clearing it immediately after, gives this
+// one instance the "deck" role without affecting any other mounted here.
+function renderWithRole(role: "app" | "deck"): { target: HTMLElement; cleanup: () => void } {
+  const t = document.createElement("div");
+  document.body.appendChild(t);
+  if (role === "deck") document.documentElement.dataset.windowRole = "deck";
+  const instance = mount(App, { target: t });
+  delete document.documentElement.dataset.windowRole;
+  return { target: t, cleanup: () => { unmount(instance); t.remove(); } };
 }
 
 describe("App update check", () => {
@@ -156,6 +185,98 @@ describe("App update check", () => {
       });
     } finally {
       cleanup();
+    }
+  });
+});
+
+// Both windows mount this same component. Only the app window may ever run
+// the check itself (asserted directly here); the deck window's ability to
+// SHOW a result it never checked for depends entirely on the
+// "update-check-result" broadcast — this is the part that was previously
+// just a comment's claim with nothing behind it.
+describe("App update check across windows", () => {
+  it("never runs its own check from the deck window", async () => {
+    const check = vi.fn().mockResolvedValue(null);
+    invokeMock.mockImplementation(mockInvoke(check));
+    const { cleanup } = renderWithRole("deck");
+    try {
+      // There is nothing to wait FOR — this gives any stray promise chain a
+      // turn before asserting its absence.
+      await new Promise((r) => setTimeout(r, 0));
+      expect(check).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("shows an update in the deck window that only the app window's check found", async () => {
+    const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
+    invokeMock.mockImplementation(mockInvoke(check));
+    const deck = renderWithRole("deck");
+    try {
+      const app = render();
+      try {
+        await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => {
+          expect(deck.target.textContent).toContain("Herdeck 0.2.0 is available.");
+        });
+        // Confirms the deck never ran a check of its own to get there.
+        expect(check).toHaveBeenCalledTimes(1);
+      } finally {
+        app.cleanup();
+      }
+    } finally {
+      deck.cleanup();
+    }
+  });
+});
+
+// "Up to date" and "failed" are dead ends nothing else ever clears — left
+// alone they would pin the banner in place (stealing height from the
+// content-fit deck window) for the rest of the process's life. "Available"
+// stays until installed or dismissed by an install attempt; it must NOT be
+// swept away on the same clock.
+describe("App update banner auto-dismiss", () => {
+  it("clears a failed manual check after a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const check = vi.fn().mockRejectedValue(new Error("offline"));
+      invokeMock.mockImplementation(mockInvoke(check));
+      const { target, cleanup } = render();
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        registeredListener("check-for-updates")!();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.textContent).toContain("Update check failed: offline");
+
+        await vi.advanceTimersByTimeAsync(8000);
+        expect(target.querySelector(".banner"), "the failed banner never cleared").toBeNull();
+      } finally {
+        cleanup();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not clear an available update on the same timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
+      invokeMock.mockImplementation(mockInvoke(check));
+      const { target, cleanup } = render();
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+
+        await vi.advanceTimersByTimeAsync(8000);
+        expect(target.textContent, "an actionable available-update banner must not auto-dismiss")
+          .toContain("Herdeck 0.2.0 is available.");
+      } finally {
+        cleanup();
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

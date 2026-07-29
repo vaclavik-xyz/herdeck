@@ -27,6 +27,16 @@ export function asUpdateInfo(value: unknown): UpdateInfo | null {
   return { version: row.version, current_version: row.current_version };
 }
 
+/** A thrown value's displayable reason, never empty: a message-less `Error`,
+ *  a non-Error rejection, or `throw undefined`/`null` all fall back to a
+ *  labelled placeholder instead of rendering as a blank or truncated string.
+ *  Shared by `runUpdateCheck` and `installUpdate` (App.svelte) so the two
+ *  error paths can't drift on how they turn a caught value into text. */
+export function reasonOf(error: unknown): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  return reason.trim() || "unknown error";
+}
+
 export function updateTransport(invoke: Invoke) {
   return {
     async check(): Promise<UpdateInfo | null> {
@@ -52,6 +62,6 @@ export async function runUpdateCheck(
     const info = await check();
     return info ? { kind: "available", info } : { kind: "up-to-date" };
   } catch (error) {
-    return { kind: "failed", reason: error instanceof Error ? error.message : String(error) };
+    return { kind: "failed", reason: reasonOf(error) };
   }
 }
