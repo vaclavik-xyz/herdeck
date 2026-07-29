@@ -1,8 +1,10 @@
 # herdeck desktop
 
-Tauri 2 (Rust) + Svelte + Vite desktop app for herdeck. Normal mode opens the
-full desktop control room; Floating and Always on top keep the compact live-deck
-overlay available beside other work.
+Tauri 2 (Rust) + Svelte + Vite desktop app for herdeck. Two fixed-role windows:
+the **app** window is the full desktop control room, and the **deck** window is
+a compact, borderless live-deck overlay you can keep open beside other work.
+Either can be shown or hidden independently; `[desktop].deck_always_on_top`
+keeps the deck above other windows.
 
 The Rust shell owns the window + tray and either **attaches** to a Herdeck
 runtime that is already listening (via its discovery JSON) or **spawns and
@@ -13,12 +15,12 @@ access `token` and proxies `/state`, `/tile`, and `/press` through Rust commands
 so the token never crosses into JS (the runtime is a different origin and sends
 no CORS headers).
 
-The Svelte frontend has two complementary surfaces:
+The Svelte frontend has two complementary surfaces, one per window role:
 
-- **Desktop control room** - the normal window combines runtime status, a
-  contained live-deck preview, connections, and the full settings editor.
-- **Compact DeckView** - Floating and Always on top poll `/state`, render the
-  `/tile` PNGs, and turn clicks into `/press`, mirroring the hardware deck.
+- **Desktop control room** (`config` window) - runtime status, a contained
+  live-deck preview, connections, and the full settings editor.
+- **Compact DeckView** (`main` window, the deck) - polls `/state`, renders the
+  `/tile` PNGs, and turns clicks into `/press`, mirroring the hardware deck.
 - **Onboarding** - a first-run and change-connection flow inside the active
   surface, followed by a sectioned
   settings editor (servers, theme, view, macros, notifications, safety,
@@ -32,7 +34,7 @@ desktop/
   index.html
   src/
     main.ts                  # Svelte 5 mount
-    App.svelte               # routes normal control room vs compact deck and onboarding
+    App.svelte               # routes the app vs deck surface by window role, and onboarding
     ConfigApp.svelte         # desktop overview and settings workspace
     lib/
       sidecar.ts             # framework-free discovery + /health helpers
@@ -53,7 +55,8 @@ desktop/
       lib.rs                 # window + tray + sidecar supervisor + command wiring
       sidecar.rs             # spawn/parse/supervise logic (+ unit tests)
       http.rs                # loopback HTTP proxy with token injection (+ tests)
-      window_mode.rs         # window mode (normal/floating/always-on-top)
+      deck_prefs.rs          # deck_always_on_top + config path prefs
+      window_state.rs        # ~/.cache/herdeck/window-state.json read/write (+ tests)
       hotkey.rs              # global hotkey
     tests/                   # integration tests
 ```
@@ -71,7 +74,8 @@ python3 -m venv .venv
 
 # then, from desktop/
 npm install
-npm run tauri dev                   # opens the normal desktop control room
+npm run tauri dev                   # opens whichever windows the remembered layout says
+                                    # (a clean checkout: the app window)
 ```
 
 `npm run tauri dev` is the exact manual command to smoke-test the GUI window. It
@@ -81,7 +85,8 @@ For fast Settings-only UI work without a Tauri window, run `npm run dev` and
 open `http://<tailscale-ip>:1420/?window=config`. The query override is used
 only when the Tauri window API is unavailable; packaged app window routing is
 unchanged. Add `&section=deck` (or another sidebar key) to open a specific
-settings panel with a non-writing browser fixture.
+settings panel with a non-writing browser fixture. `?window=main` mirrors the
+other real window label and previews the compact deck surface instead.
 
 ### Dev override (no venv / external sidecar)
 

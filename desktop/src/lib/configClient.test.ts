@@ -41,10 +41,8 @@ import {
   DEFAULT_TOGGLE_DECK_HOTKEY,
   toggleDeckHotkey,
   setToggleDeckHotkey,
-  WINDOW_MODES,
-  DEFAULT_WINDOW_MODE,
-  windowMode,
-  setWindowMode,
+  deckAlwaysOnTop,
+  setDeckAlwaysOnTop,
   type ConfigPayload,
   errorCountLabel,
   effectiveLanguage,
@@ -953,24 +951,48 @@ describe("toggle-deck hotkey helpers", () => {
   });
 });
 
-describe("window mode", () => {
-  it("defaults to normal when absent", () => {
-    expect(windowMode(emptyPayload())).toBe(DEFAULT_WINDOW_MODE);
-    expect(DEFAULT_WINDOW_MODE).toBe("normal");
+describe("deck always-on-top", () => {
+  const desktop = (over: Record<string, unknown>) =>
+    parseConfig({ base: { desktop: over }, profiles: {}, local: {}, secrets: {} })!;
+
+  it("defaults to false when the key is absent and there is no legacy mode", () => {
+    expect(deckAlwaysOnTop(emptyPayload())).toBe(false);
+    expect(deckAlwaysOnTop(desktop({}))).toBe(false);
   });
 
-  it("returns a stored valid mode", () => {
-    const p = setWindowMode(emptyPayload(), "always_on_top");
-    expect(windowMode(p)).toBe("always_on_top");
+  it("round-trips through the payload", () => {
+    const next = setDeckAlwaysOnTop(emptyPayload(), true);
+    expect(deckAlwaysOnTop(next)).toBe(true);
+    expect(deckAlwaysOnTop(setDeckAlwaysOnTop(next, false))).toBe(false);
   });
 
-  it("falls back to default for an unknown stored value", () => {
-    const p = setAt(emptyPayload(), "base", "desktop", "window_mode", "bogus");
-    expect(windowMode(p)).toBe("normal");
+  // The migration fallback, mirroring `deck_prefs::resolve_deck_always_on_top`
+  // row for row. Without it the checkbox reads the OPPOSITE of the deck the
+  // migrating user is looking at, and cannot be corrected from this screen.
+  it("falls back to a legacy always_on_top window_mode when the key is absent", () => {
+    expect(deckAlwaysOnTop(desktop({ window_mode: "always_on_top" }))).toBe(true);
   });
 
-  it("exposes exactly the three modes", () => {
-    expect(WINDOW_MODES).toEqual(["normal", "floating", "always_on_top"]);
+  it("leaves the flag off for the legacy modes that never floated", () => {
+    expect(deckAlwaysOnTop(desktop({ window_mode: "floating" }))).toBe(false);
+    expect(deckAlwaysOnTop(desktop({ window_mode: "normal" }))).toBe(false);
+    expect(deckAlwaysOnTop(desktop({ window_mode: "sideways" }))).toBe(false);
+  });
+
+  it("lets an explicit stored value outrank the legacy mode both ways", () => {
+    expect(
+      deckAlwaysOnTop(desktop({ window_mode: "always_on_top", deck_always_on_top: false })),
+    ).toBe(false);
+    expect(deckAlwaysOnTop(desktop({ window_mode: "normal", deck_always_on_top: true }))).toBe(true);
+  });
+
+  // A wrong-typed key is treated as ABSENT, exactly like the Rust resolver's
+  // `as_bool()` — so it defers to the legacy mode rather than reading as false.
+  it("treats a wrong-typed key as absent, like the Rust resolver", () => {
+    expect(deckAlwaysOnTop(desktop({ deck_always_on_top: "yes" }))).toBe(false);
+    expect(
+      deckAlwaysOnTop(desktop({ deck_always_on_top: "yes", window_mode: "always_on_top" })),
+    ).toBe(true);
   });
 });
 

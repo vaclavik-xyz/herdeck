@@ -95,7 +95,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       servers: "Which servers the profile uses; inheriting takes the parent's or base selection, empty = a profile with no servers.",
     },
     desktop: {
-      window_mode: "Deck window appearance: normal = framed, floating = frameless, always_on_top = always on top (after restart).",
+      deck_always_on_top: "Keeps the floating deck window above other windows; applied immediately, no restart.",
       toggle_deck: "Global shortcut to show/hide the deck; default Cmd/Ctrl+Shift+D, empty field = disabled.",
     },
   },
@@ -186,7 +186,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       servers: "Které servery profil používá; při dědění přebírá výběr rodiče či báze, prázdný výběr = profil bez serverů.",
     },
     desktop: {
-      window_mode: "Vzhled okna decku: normal = s rámečkem, floating = bez rámečku, always_on_top = vždy navrchu (po restartu).",
+      deck_always_on_top: "Drží plovoucí okno decku nad ostatními okny; použije se hned, bez restartu.",
       toggle_deck: "Globální zkratka pro zobrazení/skrytí decku; výchozí Cmd/Ctrl+Shift+D, prázdné pole = vypnuto.",
     },
   },

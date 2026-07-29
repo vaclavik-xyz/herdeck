@@ -980,25 +980,24 @@ export function setToggleDeckHotkey(payload: ConfigPayload, value: string): Conf
   return setAt(payload, "base", "hotkeys", "toggle_deck", value);
 }
 
-/** The three deck window modes (matches Rust `WindowMode::as_str`). */
-export const WINDOW_MODES = ["normal", "floating", "always_on_top"] as const;
-export type WindowMode = (typeof WINDOW_MODES)[number];
-
-/** Default deck window mode. Mirrors Rust `parse_window_mode` (missing → Normal). */
-export const DEFAULT_WINDOW_MODE: WindowMode = "normal";
-
-/** The configured deck window mode. An ABSENT or unknown value → the default,
- *  mirroring the Rust parser (missing/garbage → Normal). */
-export function windowMode(payload: ConfigPayload): WindowMode {
-  const v = getAt(payload, "base", "desktop", "window_mode");
-  return typeof v === "string" && (WINDOW_MODES as readonly string[]).includes(v)
-    ? (v as WindowMode)
-    : DEFAULT_WINDOW_MODE;
+/** Whether the floating deck window stays above other windows. Applied live by
+ *  `deck_prefs::resolve_deck_always_on_top` on the Rust side — no restart needed.
+ *
+ *  Mirrors that resolver, including its migration fallback: a stored boolean wins
+ *  in either direction, and anything else — absent, or the wrong type — defers to
+ *  the legacy `window_mode`, the one setting the migration can turn on. Without
+ *  the fallback this checkbox would render unchecked for a migrating
+ *  `always_on_top` user whose deck is in fact floating, and unchecking an
+ *  already-unchecked box writes nothing, so the legacy key would win forever. */
+export function deckAlwaysOnTop(payload: ConfigPayload): boolean {
+  const v = getAt(payload, "base", "desktop", "deck_always_on_top");
+  if (typeof v === "boolean") return v;
+  return getAt(payload, "base", "desktop", "window_mode") === "always_on_top";
 }
 
-/** NEW payload with base.desktop.window_mode set. */
-export function setWindowMode(payload: ConfigPayload, value: WindowMode): ConfigPayload {
-  return setAt(payload, "base", "desktop", "window_mode", value);
+/** NEW payload with base.desktop.deck_always_on_top set. */
+export function setDeckAlwaysOnTop(payload: ConfigPayload, value: boolean): ConfigPayload {
+  return setAt(payload, "base", "desktop", "deck_always_on_top", value);
 }
 
 export function commandTransport(invoke: InvokeFn): ConfigTransport {

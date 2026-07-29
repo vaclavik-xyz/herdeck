@@ -1,17 +1,20 @@
 //! herdeck desktop shell (phase 1, slice 3).
 //!
-//! A floating, always-on-top window that hosts the DeckView WebView, plus a tray
-//! icon (show/hide/quit). On startup it spawns and supervises the Python sidecar
+//! Two windows with fixed roles — the borderless `main` deck overlay and the
+//! decorated `config` settings window — plus a tray icon (show/hide/quit).
+//! Neither ever changes shape, so nothing here needs a restart. On startup it
+//! spawns and supervises the Python sidecar
 //! (`python -m herdeck.deckapp`), reads its first stdout line (the discovery JSON
 //! `{url, host, port, token, source}`), and hands the url+token to the WebView so
 //! the frontend can reach the sidecar over loopback. The sidecar is restarted on
 //! crash and killed on quit.
 
 pub mod build_channel;
+pub mod deck_prefs;
 pub mod hotkey;
 pub mod http;
 pub mod sidecar;
-pub mod window_mode;
+pub mod window_state;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -20,26 +23,72 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::menu::{CheckMenuItem, Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, ContextMenu, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{
     Emitter, LogicalPosition, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_updater::UpdaterExt;
 
-use window_mode::WindowMode;
-
 use sidecar::{supervise, CommandSpec, Discovery, SupervisorConfig};
+use window_state::WindowState;
+
+/// The two fixed window roles. The labels are historical — `main` is the
+/// borderless deck overlay, `config` the decorated settings window — and are
+/// kept deliberately: `capabilities/default.json` scopes permissions to exactly
+/// these two strings, and renaming would buy nothing a user can see.
+const DECK_WINDOW: &str = "main";
+const APP_WINDOW: &str = "config";
+
+/// Told to the app window whenever the DECK's visibility changes, so its own
+/// toggle button stays honest even when the tray, the hotkey, or the deck's
+/// own close (⌘W) changed it from somewhere else. Emitted beside the tray
+/// label sync in `show_role_window`/`hide_role_window` — same trigger, same
+/// `deck_label_refresh` gate.
+const DECK_VISIBILITY_EVENT: &str = "deck-visibility-changed";
+
+/// Told to the DECK window (never the app window) when a zoom item is picked
+/// from the deck's own right-click context menu. The zoom level itself lives
+/// entirely in the deck's WebView (`floatingScale.ts`'s `localStorage` value
+/// plus a CSS variable), so Rust cannot change it directly — it just forwards
+/// the chosen command ("in" | "out" | "reset") and `App.svelte` applies it via
+/// the same `applyFloatingScale` the ⌘+/⌘-/⌘0 keydown handler already uses.
+/// Mirrors the `DECK_VISIBILITY_EVENT` emit_to pattern above.
+const FLOATING_ZOOM_EVENT: &str = "floating-zoom-command";
+
+/// Every tray/context-menu item id: built once in `build_tray` (or, for
+/// "show_app"/"deck_aot", also in `build_deck_context_menu`, which reuses
+/// them so the two menus share one `on_menu_event` handler instead of each
+/// carrying its own) and matched again in `on_menu_event`. A plain string
+/// literal repeated across those sites has no compiler check tying them
+/// together — a typo in any one copy (e.g. `MenuItem::with_id(app,
+/// "zoom_ni", …)`) builds fine and produces a menu item that silently never
+/// fires, which no test can catch either. These consts are the single
+/// spelling every site refers to instead, so the whole handler reads one way.
+const MENU_ID_SHOW_APP: &str = "show_app";
+const MENU_ID_DECK_AOT: &str = "deck_aot";
+const MENU_ID_HIDE_DECK: &str = "hide_deck";
+const MENU_ID_ZOOM_IN: &str = "zoom_in";
+const MENU_ID_ZOOM_OUT: &str = "zoom_out";
+const MENU_ID_ZOOM_RESET: &str = "zoom_reset";
+const MENU_ID_TOGGLE_DECK: &str = "toggle_deck";
+const MENU_ID_RECONNECT: &str = "reconnect";
+const MENU_ID_AUTOSTART: &str = "autostart";
+const MENU_ID_QUIT: &str = "quit";
 
 /// Managed state read by the `get_discovery` command and by the supervisor
 /// callback. The live child handle and stop flag are held as separate `Arc`s
 /// owned by the supervisor + exit-handler closures (not routed through here).
 struct AppState {
     discovery: Arc<Mutex<Option<Discovery>>>,
-    /// The live window mode. Set at startup from config; updated in-process on a
-    /// live floating↔always_on_top switch (a restart-mode switch replaces the
-    /// whole process, which re-reads config).
-    window_mode: Arc<Mutex<WindowMode>>,
+    /// Which windows are open and where the deck sits. Mirrored to disk on every
+    /// show/hide and on exit, so the next launch reopens the same layout.
+    window_state: Arc<Mutex<WindowState>>,
+    /// The live value of `[desktop].deck_always_on_top`, applied to the deck
+    /// window and flipped by the tray's `deck_aot` checkbox. Kept in memory
+    /// (rather than re-read from config) so a failed persist can revert the
+    /// checkbox to what is ACTUALLY in effect, not to stale config text.
+    deck_always_on_top: Arc<Mutex<bool>>,
 }
 
 /// Default timeout for the Rust-side sidecar proxy calls.
@@ -139,14 +188,6 @@ fn get_discovery(state: tauri::State<'_, AppState>) -> Option<DiscoveryView> {
         .unwrap()
         .as_ref()
         .map(DiscoveryView::from)
-}
-
-/// The window mode the deck was built with (updated live on a borderless switch).
-/// The frontend ALSO reads `<html data-window-mode>` (set pre-paint by Rust); this
-/// command is the programmatic path for logic that needs it after mount.
-#[tauri::command]
-fn get_window_mode(state: tauri::State<'_, AppState>) -> String {
-    state.window_mode.lock().unwrap().as_str().to_string()
 }
 
 /// The current discovery, or an error until the supervised sidecar has reported
@@ -415,22 +456,6 @@ fn config_post_json(
     }
 }
 
-/// Show + focus the desktop editor. Normal mode already renders it in `main`;
-/// compact overlay modes use the dedicated full-size config window.
-#[tauri::command]
-fn open_config(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mode = *state.window_mode.lock().unwrap();
-    if mode == WindowMode::Normal {
-        let _ = app.emit_to("main", "open-settings", ());
-    }
-    let w = app
-        .get_webview_window(window_mode::settings_window_label(mode))
-        .ok_or_else(|| "desktop settings window not found".to_string())?;
-    w.show().map_err(|e| e.to_string())?;
-    w.set_focus().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 /// How the sidecar is obtained: either an externally-managed one (dev override
 /// via env, no spawn) or a child process we spawn and supervise.
 enum SidecarPlan {
@@ -447,6 +472,23 @@ fn repo_root_from_manifest() -> PathBuf {
         .and_then(|p| p.parent())
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| manifest.to_path_buf())
+}
+
+/// Resolve `config.toml`'s path exactly as `run()` does at startup: the
+/// dev-channel/`HERDECK_CONFIG` override, then the sidecar's own
+/// existence-check order. Callable again later (see `reload_deck_always_on_top`)
+/// so a live re-read can never disagree with what the config editor's own
+/// `/config` write just persisted.
+fn default_config_path() -> PathBuf {
+    let home = PathBuf::from(env::var("HOME").unwrap_or_default());
+    let repo_root = repo_root_from_manifest();
+    let explicit_config = env::var("HERDECK_CONFIG").ok();
+    let config_override = build_channel::config_override(explicit_config.as_deref(), &home);
+    deck_prefs::resolve_config_path(
+        config_override.as_ref().and_then(|path| path.to_str()),
+        &home,
+        &repo_root,
+    )
 }
 
 /// Best-effort `http://host:port/...` split (informational fields for the
@@ -730,6 +772,61 @@ mod plan_tests {
         ));
     }
 
+    // The labels read backwards — `main` is the DECK — so the mapping from a
+    // label to the flag it owns is worth pinning down rather than eyeballing.
+    #[test]
+    fn visibility_is_recorded_against_the_role_the_label_names() {
+        let mut s = window_state::WindowState::default();
+        assert_eq!((s.app_visible, s.deck_visible), (true, false));
+        set_role_visible(&mut s, DECK_WINDOW, true);
+        assert_eq!((s.app_visible, s.deck_visible), (true, true));
+        set_role_visible(&mut s, APP_WINDOW, false);
+        assert_eq!((s.app_visible, s.deck_visible), (false, true));
+        // A label that owns neither flag must change nothing, rather than be
+        // quietly filed under "the app".
+        set_role_visible(&mut s, "somewhere-else", true);
+        assert_eq!((s.app_visible, s.deck_visible), (false, true));
+    }
+
+    // The role is read by the frontend before first paint; a typo here is a
+    // window that silently renders the other surface.
+    #[test]
+    fn the_role_script_sets_the_attribute_the_frontend_reads() {
+        assert_eq!(
+            window_role_script("deck"),
+            "document.documentElement.dataset.windowRole='deck'"
+        );
+    }
+
+    // The single-coordinate half of the same space decision, and unreachable
+    // from a test on this host for the same reason — so it too takes the
+    // platform as an argument and both shapes are asserted everywhere.
+    #[test]
+    fn a_coordinate_is_divided_off_windows_and_left_alone_on_it() {
+        assert_eq!(placement_divisor(false, 2.0), 2.0);
+        assert_eq!(placement_divisor(true, 2.0), 1.0);
+        // A monitor tao could not inspect must not become a divide by zero.
+        assert_eq!(placement_divisor(false, 0.0), 1.0);
+        assert_eq!(placement_divisor(false, -1.0), 1.0);
+    }
+
+    // A deck the user dragged somewhere deliberate comes back there — but only
+    // if "there" still exists. The numbers are a real two-display desk: a Retina
+    // built-in and an external one up and to the left of it.
+    #[test]
+    fn a_remembered_position_off_every_monitor_is_rejected() {
+        let monitors = [((0, 0), (2514u32, 1410u32)), ((-1343, -1050), (1680, 1050))];
+        assert!(position_is_on_any(&monitors, (2170, 46)));
+        assert!(position_is_on_any(&monitors, (-1000, -900)));
+        // The unplugged display: remembered, but nothing is there any more.
+        assert!(!position_is_on_any(&monitors, (4000, 300)));
+        // Off in Y alone is off as well — the same two displays restacked
+        // vertically leave every X in range and no Y anywhere near it.
+        assert!(!position_is_on_any(&monitors, (2170, 5000)));
+        // Exactly on the far edge is off: a window placed there is invisible.
+        assert!(!position_is_on_any(&monitors, (2514, 0)));
+    }
+
     // Monitor choice. `pick_monitor` is generic, so a &str stands in for a Monitor.
     #[test]
     fn monitor_choice_prefers_the_pointers_screen() {
@@ -802,6 +899,139 @@ mod plan_tests {
             }
             SidecarPlan::External(_) => panic!("dev build attached the stable runtime"),
         }
+    }
+
+    // Task 4: the tray's window-mode picker is gone, replaced by a single
+    // deck-visibility toggle and an always-on-top checkbox. One label per menu
+    // item now, not per mode.
+    #[test]
+    fn every_tray_label_exists_in_both_languages() {
+        let en = tray_labels("en");
+        let cs = tray_labels("cs");
+        assert_eq!(en.len(), cs.len());
+        assert!(en.iter().all(|l| !l.is_empty()));
+        assert!(cs.iter().all(|l| !l.is_empty()));
+        // The mode radio items are gone; nothing may name them any more.
+        assert!(!cs.iter().any(|l| l.contains("Režim okna")));
+        // show_app + toggle_deck(show) + toggle_deck(hide) + deck_aot +
+        // autostart + reconnect + quit — `TrayMenuItems::retitle` indexes
+        // every one of these, so the array length must match exactly.
+        assert_eq!(en.len(), 7);
+        // A label accidentally left English in the cs array (or vice versa)
+        // is exactly the defect this test exists to catch.
+        for (i, (e, c)) in en.iter().zip(cs.iter()).enumerate() {
+            assert_ne!(e, c, "tray_labels[{i}] is identical in en and cs");
+        }
+    }
+
+    // The `toggle_deck` tray item's text depends on BOTH the language and the
+    // deck's current visibility. Pulled out of the (untestable-without-a-tray)
+    // retitle logic into a pure function so that interaction has a test at all.
+    #[test]
+    fn toggle_deck_label_reflects_visibility_in_both_languages() {
+        assert_eq!(toggle_deck_label("en", false), "Show deck");
+        assert_eq!(toggle_deck_label("en", true), "Hide deck");
+        assert_eq!(toggle_deck_label("cs", false), "Zobrazit deck");
+        assert_eq!(toggle_deck_label("cs", true), "Skrýt deck");
+    }
+
+    // The label follows the DECK's visibility and nothing else. Showing the app
+    // window (from the tray, or from re-onboarding) must leave "Show deck"
+    // alone; syncing on every window would make the item name the wrong gesture
+    // just as surely as never syncing it does.
+    #[test]
+    fn only_the_deck_window_refreshes_the_deck_tray_label() {
+        assert_eq!(deck_label_refresh(DECK_WINDOW, true), Some(true));
+        assert_eq!(deck_label_refresh(DECK_WINDOW, false), Some(false));
+        assert_eq!(deck_label_refresh(APP_WINDOW, true), None);
+        assert_eq!(deck_label_refresh("some-future-window", false), None);
+    }
+
+    // A config that cannot be READ is not a config that says false: applying
+    // false there would unfloat the deck, uncheck the tray box and rewrite the
+    // cached flag while config.toml still said true.
+    #[test]
+    fn an_unreadable_config_leaves_the_live_always_on_top_alone() {
+        let dir = std::env::temp_dir().join("herdeck-aot-target");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(deck_always_on_top_target(&dir.join("absent.toml")), None);
+        // A directory is readable-but-not-a-file: still no value to apply.
+        assert_eq!(deck_always_on_top_target(&dir), None);
+
+        let empty = dir.join("empty.toml");
+        std::fs::write(&empty, "").unwrap();
+        assert_eq!(deck_always_on_top_target(&empty), Some(false));
+
+        let on = dir.join("on.toml");
+        std::fs::write(&on, "[desktop]\ndeck_always_on_top = true\n").unwrap();
+        assert_eq!(deck_always_on_top_target(&on), Some(true));
+
+        // And it resolves, not just parses: the legacy migration fallback
+        // applies to a live reload exactly as it does at startup.
+        let legacy = dir.join("legacy.toml");
+        std::fs::write(&legacy, "[desktop]\nwindow_mode = \"always_on_top\"\n").unwrap();
+        assert_eq!(deck_always_on_top_target(&legacy), Some(true));
+    }
+
+    // The deck's right-click context menu shares three of its six items with
+    // the tray: this pins down that they are, byte-for-byte, the SAME string —
+    // not just "close enough" translations typed twice.
+    #[test]
+    fn deck_context_menu_reuses_the_trays_hide_aot_and_open_labels() {
+        for lang in ["en", "cs"] {
+            let tray = tray_labels(lang);
+            let ctx = deck_context_menu_texts(lang);
+            assert_eq!(ctx[0], tray[2], "hide label diverged from the tray's ({lang})");
+            assert_eq!(ctx[4], tray[3], "always-on-top label diverged from the tray's ({lang})");
+            assert_eq!(ctx[5], tray[0], "open-app label diverged from the tray's ({lang})");
+        }
+    }
+
+    // Mirrors `every_tray_label_exists_in_both_languages`: every context-menu
+    // text must exist in both languages and actually differ between them (a
+    // label left English in the cs array, or vice versa, is the bug this
+    // guards against).
+    #[test]
+    fn every_deck_context_menu_text_exists_in_both_languages() {
+        let en = deck_context_menu_texts("en");
+        let cs = deck_context_menu_texts("cs");
+        assert!(en.iter().all(|l| !l.is_empty()));
+        assert!(cs.iter().all(|l| !l.is_empty()));
+        for (i, (e, c)) in en.iter().zip(cs.iter()).enumerate() {
+            assert_ne!(e, c, "deck_context_menu_texts[{i}] is identical in en and cs");
+        }
+    }
+
+    // Same shape of guarantee for the three zoom-only labels, on their own —
+    // `deck_context_menu_texts` already covers them too, but this pins the
+    // smaller building block down directly.
+    #[test]
+    fn every_zoom_label_exists_in_both_languages() {
+        let en = deck_context_zoom_labels("en");
+        let cs = deck_context_zoom_labels("cs");
+        assert!(en.iter().all(|l| !l.is_empty()));
+        assert!(cs.iter().all(|l| !l.is_empty()));
+        // Element-wise, not just "the arrays as a whole differ somewhere" —
+        // the latter would miss a single label left untranslated as long as
+        // the other two still differed.
+        for (i, (e, c)) in en.iter().zip(cs.iter()).enumerate() {
+            assert_ne!(e, c, "deck_context_zoom_labels[{i}] is identical in en and cs");
+        }
+    }
+
+    // The id→command mapping the `on_menu_event` match delegates to. Any id
+    // that is not one of the three zoom items must resolve to `None` rather
+    // than accidentally firing a zoom on an unrelated click.
+    #[test]
+    fn zoom_menu_ids_map_to_the_floating_scale_commands_they_name() {
+        assert_eq!(zoom_command_for_menu_id("zoom_in"), Some("in"));
+        assert_eq!(zoom_command_for_menu_id("zoom_out"), Some("out"));
+        assert_eq!(zoom_command_for_menu_id("zoom_reset"), Some("reset"));
+        assert_eq!(zoom_command_for_menu_id("show_app"), None);
+        assert_eq!(zoom_command_for_menu_id("hide_deck"), None);
+        assert_eq!(zoom_command_for_menu_id("deck_aot"), None);
     }
 }
 
@@ -1038,8 +1268,77 @@ fn active_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
     )
 }
 
+/// Is a remembered deck origin still on a connected screen? Checked before
+/// restoring it, so a deck last seen on an unplugged monitor comes back where
+/// the user is rather than nowhere. Unit-agnostic like `floating_origin`: the
+/// caller measures the areas and the position in one space (see
+/// `placement_space_position`) and this only compares them.
+fn position_is_on_any(areas: &[((i32, i32), (u32, u32))], pos: (i32, i32)) -> bool {
+    areas.iter().any(|((ax, ay), (w, h))| {
+        pos.0 >= *ax && pos.0 < ax + *w as i32 && pos.1 >= *ay && pos.1 < ay + *h as i32
+    })
+}
+
+/// What divides a tao "physical" reading to reach the space placements are
+/// measured in — the same choice `Placement` makes, for a single coordinate.
+///
+/// Off Windows that space is logical points (see `place_floating`), and tao got
+/// to "physical" by scaling a logical value UP, so the same factor divides it
+/// back down. `scale` is therefore whichever factor produced the reading: a
+/// monitor rect is scaled by the MONITOR's, a window origin by the WINDOW's, and
+/// on a mixed-DPI desk those are not the same number. Windows keeps both in one
+/// global physical space and needs no conversion at all.
+fn placement_divisor(is_windows: bool, scale: f64) -> f64 {
+    if is_windows {
+        1.0
+    } else {
+        usable_scale(scale)
+    }
+}
+
+/// Every connected monitor's work area, in the space placements are measured in.
+/// Dividing per monitor is the point: on a desk mixing a 2x built-in with a 1x
+/// external the two PHYSICAL work rects overlap, so a containment test run in
+/// that space answers for the wrong screen.
+fn monitor_work_areas(window: &tauri::WebviewWindow) -> Vec<((i32, i32), (u32, u32))> {
+    window
+        .available_monitors()
+        .into_iter()
+        .flatten()
+        .map(|monitor| {
+            let div = placement_divisor(cfg!(windows), monitor.scale_factor());
+            let area = monitor.work_area();
+            (
+                (
+                    (area.position.x as f64 / div).round() as i32,
+                    (area.position.y as f64 / div).round() as i32,
+                ),
+                (
+                    (area.size.width as f64 / div).round() as u32,
+                    (area.size.height as f64 / div).round() as u32,
+                ),
+            )
+        })
+        .collect()
+}
+
+/// A window origin as tao reports it (`Moved`, `outer_position()`), put into the
+/// space placements are measured in. This is the space the remembered deck
+/// position is STORED in, so that restoring it is exactly `placement_position`'s
+/// job — the same conversion `place_floating` already trusts, run backwards.
+fn placement_space_position(
+    window: &tauri::WebviewWindow,
+    pos: PhysicalPosition<i32>,
+) -> (i32, i32) {
+    let div = placement_divisor(cfg!(windows), window.scale_factor().unwrap_or(1.0));
+    (
+        (pos.x as f64 / div).round() as i32,
+        (pos.y as f64 / div).round() as i32,
+    )
+}
+
 /// Position the floating window near the top-right of the monitor the user is on.
-/// The builder owns `always_on_top` (per mode); this only places the window.
+/// `deck_always_on_top` is applied separately; this only places the window.
 /// Placement uses the WORK area, not the full screen, so the deck never opens
 /// under the macOS menu bar or behind the dock.
 ///
@@ -1074,15 +1373,247 @@ fn place_floating(window: &tauri::WebviewWindow) {
     }
 }
 
-/// Show/hide the floating `main` window — the deck-toggle hotkey action.
-fn toggle_main_window(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        if w.is_visible().unwrap_or(false) {
-            let _ = w.hide();
-        } else {
-            let _ = w.show();
-            let _ = w.set_focus();
+/// Stamp a window's role on `<html>` before its first paint. The frontend picks
+/// its surface from that attribute, so injecting it any later would show the
+/// deck a frame of the opaque settings styling first (FOUC).
+fn window_role_script(role: &str) -> String {
+    format!("document.documentElement.dataset.windowRole='{role}'")
+}
+
+/// Put the deck back where the user last dragged it, or near the top-right of
+/// the monitor the pointer is on. A remembered origin is honoured only while it
+/// still lands on a connected screen: a borderless window dropped onto an
+/// unplugged display has no titlebar to drag it back with.
+fn place_deck(window: &tauri::WebviewWindow, remembered: Option<(i32, i32)>) {
+    if let Some((x, y)) = remembered {
+        if position_is_on_any(&monitor_work_areas(window), (x, y)) {
+            let _ = window.set_position(placement_position(cfg!(windows), x as f64, y as f64));
+            return;
         }
+    }
+    place_floating(window);
+}
+
+/// Which visibility flag a window label owns. Split out because the labels are
+/// historical and read backwards: `main` is the deck, `config` is the app.
+///
+/// A label that is neither records NOTHING. An `else` arm that assumed "the app"
+/// would turn any future third window — or a renamed constant — into a silently
+/// wrong remembered layout, which is exactly the class of bug this whole file is
+/// getting rid of.
+fn set_role_visible(state: &mut WindowState, label: &str, visible: bool) {
+    match label {
+        DECK_WINDOW => state.deck_visible = visible,
+        APP_WINDOW => state.app_visible = visible,
+        _ => {}
+    }
+}
+
+/// The ONE place `window-state.json` is written from, so its two callers cannot
+/// drift apart. Snapshots under the lock and writes outside it. Best-effort:
+/// losing the file costs the next launch its remembered layout and nothing else.
+fn store_window_state(state: &AppState) {
+    let snapshot = *state.window_state.lock().unwrap();
+    window_state::store(&window_state::state_dir(), &snapshot);
+}
+
+/// Mutate the live window state and mirror it to disk.
+fn update_window_state(app: &tauri::AppHandle, f: impl FnOnce(&mut WindowState)) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    f(&mut state.window_state.lock().unwrap());
+    store_window_state(&state);
+}
+
+/// Write the live state out as it stands — the exit path, and the flush that
+/// pairs with `remember_deck_position`.
+fn persist_window_state(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        store_window_state(&state);
+    }
+}
+
+/// Record the deck's new origin WITHOUT touching the disk: one drag emits
+/// hundreds of `Moved` events. Hiding or closing the deck writes, and so does
+/// exit, which between them cover every way a position can be the last thing
+/// that changed.
+fn remember_deck_position(app: &tauri::AppHandle, position: (i32, i32)) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.window_state.lock().unwrap().deck_position = Some(position);
+    }
+}
+
+/// Whether a visibility change should retitle the tray's `toggle_deck` item, and
+/// to what: `Some(visible)` for the deck, `None` for any other window. The app
+/// window opening must not turn "Show deck" into "Hide deck".
+///
+/// Split out of `show_role_window`/`hide_role_window` because it is the only part
+/// of the sync a unit test can reach — the rest needs a live tray menu.
+fn deck_label_refresh(label: &str, visible: bool) -> Option<bool> {
+    (label == DECK_WINDOW).then_some(visible)
+}
+
+/// Retitle the tray's `toggle_deck` item for the deck's new visibility, so the
+/// item always names what it will do next.
+///
+/// Takes both locks it needs one at a time and holds neither across the other:
+/// its callers have already released `AppState.window_state` by the time they
+/// get here (`update_window_state` drops its guard when it returns), and nothing
+/// reached from `TrayHandles` takes a window-state lock.
+fn sync_deck_tray_label(app: &tauri::AppHandle, deck_visible: bool) {
+    if let Some(handles) = app.try_state::<TrayHandles>() {
+        if let Some(items) = handles.0.lock().unwrap().as_ref() {
+            items.sync_toggle_deck_label(deck_visible);
+        }
+    }
+}
+
+/// Show a role window and record that it is open. Every entry point — tray,
+/// hotkey, frontend command — goes through here, so the remembered layout can
+/// never drift from what is actually on screen, and neither can the tray's own
+/// show/hide-deck label.
+fn show_role_window(app: &tauri::AppHandle, label: &str) {
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    update_window_state(app, |s| set_role_visible(s, label, true));
+    if let Some(deck_visible) = deck_label_refresh(label, true) {
+        sync_deck_tray_label(app, deck_visible);
+        let _ = app.emit_to(APP_WINDOW, DECK_VISIBILITY_EVENT, deck_visible);
+    }
+}
+
+/// Hide a role window and record that it is closed (see `show_role_window`).
+fn hide_role_window(app: &tauri::AppHandle, label: &str) {
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.hide();
+    }
+    update_window_state(app, |s| set_role_visible(s, label, false));
+    if let Some(deck_visible) = deck_label_refresh(label, false) {
+        sync_deck_tray_label(app, deck_visible);
+        let _ = app.emit_to(APP_WINDOW, DECK_VISIBILITY_EVENT, deck_visible);
+    }
+}
+
+/// Open the deck overlay. The tray and the app window's pop-out control both
+/// land here; the frontend reaches it through the command of the same name.
+#[tauri::command]
+fn show_deck(app: tauri::AppHandle) {
+    show_role_window(&app, DECK_WINDOW);
+}
+
+/// Close the deck overlay back to the tray.
+#[tauri::command]
+fn hide_deck(app: tauri::AppHandle) {
+    hide_role_window(&app, DECK_WINDOW);
+}
+
+/// Open the settings window — the app surface, and where onboarding lives.
+#[tauri::command]
+fn show_app(app: tauri::AppHandle) {
+    show_role_window(&app, APP_WINDOW);
+}
+
+/// The deck's actual on-screen visibility, read straight from the window
+/// rather than `WindowState` — every caller needs "is it visible right now",
+/// not "was it last recorded so".
+fn deck_is_visible(app: &tauri::AppHandle) -> bool {
+    app.get_webview_window(DECK_WINDOW)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+
+/// Whether the deck overlay is visible right now. The app window's toggle
+/// button calls this once on mount — the deck may already be open (tray,
+/// hotkey, a previous session) by the time the app window appears, and after
+/// that its label follows `DECK_VISIBILITY_EVENT` instead of polling this.
+#[tauri::command]
+fn deck_visible(app: tauri::AppHandle) -> bool {
+    deck_is_visible(&app)
+}
+
+/// Show/hide the deck overlay — shared by the tray's `toggle_deck` item and
+/// the deck-toggle hotkey, so both flip the SAME window the SAME way. The tray
+/// item's own text follows from `show_role_window`/`hide_role_window`, which
+/// every deck-visibility path goes through.
+fn toggle_deck_window(app: &tauri::AppHandle) {
+    if deck_is_visible(app) {
+        hide_role_window(app, DECK_WINDOW);
+    } else {
+        show_role_window(app, DECK_WINDOW);
+    }
+}
+
+/// Persist `[desktop].deck_always_on_top = target` to base config via the
+/// sidecar. Read-modify-write over the existing `/config` routes (token
+/// injected Rust-side, like the editor) — the same shape the pre-roles
+/// `persist_window_mode` used for `window_mode`. It deliberately sends no
+/// `revision`: `tests/test_config_service.py::
+/// test_write_without_revision_stays_compatible` documents that the sidecar
+/// must keep accepting a revision-free body like this one.
+///
+/// Returns `Ok(())` ONLY on a confirmed write: the `/config` contract returns
+/// validation failures as HTTP 200 with a non-empty `errors`, writing NOTHING,
+/// so success requires HTTP 200 AND `errors == []`. The POST blocks on the
+/// sidecar's `_setup_lock`, so it uses the longer `SETUP_CONNECT_TIMEOUT`; a
+/// timeout there is a genuine wedge, not a slow-but-fine write.
+fn persist_deck_always_on_top(state: &AppState, target: bool) -> Result<(), String> {
+    let d = state
+        .discovery
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "sidecar not ready".to_string())?;
+    let body = http::http_get(
+        &d.host,
+        d.port,
+        &format!("/config?token={}", d.token),
+        SIDECAR_TIMEOUT,
+    )?;
+    let mut cfg: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("invalid /config JSON: {e}"))?;
+    {
+        let base = cfg
+            .get_mut("base")
+            .and_then(|b| b.as_object_mut())
+            .ok_or_else(|| "config response missing base table".to_string())?;
+        let desktop = base
+            .entry("desktop")
+            .or_insert_with(|| serde_json::json!({}));
+        let desktop_obj = desktop
+            .as_object_mut()
+            .ok_or_else(|| "config desktop is not a table".to_string())?;
+        desktop_obj.insert(
+            "deck_always_on_top".to_string(),
+            serde_json::Value::Bool(target),
+        );
+    }
+    // POST only {base, profiles, local} — the redacted `secrets` field from the GET
+    // is display-only and never written back (secret values are one-way).
+    let payload = serde_json::json!({
+        "base": cfg.get("base").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "profiles": cfg.get("profiles").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "local": cfg.get("local").cloned().unwrap_or_else(|| serde_json::json!({})),
+    });
+    let (code, resp) = http::http_post_json(
+        &d.host,
+        d.port,
+        "/config",
+        (HDR_TOKEN, &d.token),
+        &payload.to_string(),
+        SETUP_CONNECT_TIMEOUT,
+    )?;
+    if code != 200 {
+        return Err(format!("POST /config returned HTTP {code}"));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&resp).map_err(|e| format!("invalid /config response JSON: {e}"))?;
+    match parsed.get("errors").and_then(|e| e.as_array()) {
+        Some(arr) if arr.is_empty() => Ok(()),
+        Some(_) => Err("config rejected (validation errors)".to_string()),
+        None => Err("config response missing 'errors' field".to_string()),
     }
 }
 
@@ -1121,7 +1652,7 @@ fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) {
     let app_for_cb = app.clone();
     let handler = move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
         if event.state == ShortcutState::Pressed {
-            toggle_main_window(&app_for_cb);
+            toggle_deck_window(&app_for_cb);
         }
     };
     if let Err(e) = gs.on_shortcut(accel.as_str(), handler) {
@@ -1132,7 +1663,7 @@ fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) {
                 hotkey::DEFAULT_TOGGLE_DECK,
                 move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
                     if event.state == ShortcutState::Pressed {
-                        toggle_main_window(&app_for_fb);
+                        toggle_deck_window(&app_for_fb);
                     }
                 },
             );
@@ -1155,44 +1686,128 @@ async fn reload_hotkey(
     .await
 }
 
-/// The three window-mode tray checkboxes. There is no native radio group, so we
-/// hold all three handles and drive the checkmarks ourselves (like `autostart_cb`).
-#[derive(Clone)]
-struct WmItems {
-    normal: CheckMenuItem<tauri::Wry>,
-    floating: CheckMenuItem<tauri::Wry>,
-    aot: CheckMenuItem<tauri::Wry>,
+/// The always-on-top value a live re-read should apply, or `None` when the
+/// config could not be READ at all — which is not the same answer as a config
+/// that says `false`. Reading `""` on failure would resolve to `false` and hand
+/// that to the window, `AppState` and the tray checkbox while `config.toml`
+/// still said `true`, so the two outcomes stay apart here.
+fn deck_always_on_top_target(config_path: &Path) -> Option<bool> {
+    let config_text = std::fs::read_to_string(config_path).ok()?;
+    Some(deck_prefs::resolve_deck_always_on_top(&config_text))
+}
+
+/// Re-read `[desktop].deck_always_on_top` from config.toml and apply it live:
+/// the deck window's actual always-on-top state, the cached `AppState` value,
+/// and the tray checkbox all move together — the same three the tray's own
+/// `deck_aot` menu handler keeps in sync. The editor calls this after a
+/// successful config write, exactly like `reload_hotkey` for the accelerator.
+///
+/// Reads straight from disk instead of taking the new value as an argument,
+/// so it can never disagree with what Apply just persisted: Apply writes
+/// through the sidecar's `/config` route, not through this process's own file
+/// handle, so this process has no other way to learn the confirmed value. A
+/// read that fails outright changes NOTHING (see `deck_always_on_top_target`).
+#[tauri::command]
+fn reload_deck_always_on_top(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    tray: tauri::State<'_, TrayHandles>,
+) {
+    let Some(target) = deck_always_on_top_target(&default_config_path()) else {
+        eprintln!("deck always-on-top: config unreadable, leaving the live value alone");
+        return;
+    };
+    if let Some(w) = app.get_webview_window(DECK_WINDOW) {
+        let _ = w.set_always_on_top(target);
+    }
+    *state.deck_always_on_top.lock().unwrap() = target;
+    if let Some(items) = tray.0.lock().unwrap().as_ref() {
+        let _ = items.deck_aot.set_checked(target);
+    }
 }
 
 /// English/Czech texts for every tray item, keyed by the item order in
-/// `TrayHandles::retitle`. The tray is native — the WebView retitles it via the
-/// `tray_set_language` command when the deck's `[view].language` changes.
-fn tray_labels(lang: &str) -> [&'static str; 10] {
+/// `TrayMenuItems::retitle`. The tray is native — the WebView retitles it via
+/// the `tray_set_language` command when the deck's `[view].language` changes.
+///
+/// `toggle_deck` occupies TWO slots (show/hide) because its text also depends
+/// on the deck's current visibility, not just the language — see
+/// `toggle_deck_label`, which picks between them.
+fn tray_labels(lang: &str) -> [&'static str; 7] {
     match lang {
         "cs" => [
-            "Nastavení…",
-            "Zobrazit",
-            "Skrýt",
-            "Normální",
-            "Plovoucí",
-            "Vždy navrchu",
-            "Režim okna",
+            "Otevřít Herdeck",
+            "Zobrazit deck",
+            "Skrýt deck",
+            "Deck vždy navrchu",
             "Spouštět po přihlášení",
             "Změnit připojení…",
             "Ukončit",
         ],
         _ => [
-            "Settings…",
-            "Show",
-            "Hide",
-            "Normal",
-            "Floating",
-            "Always on top",
-            "Window mode",
+            "Open Herdeck",
+            "Show deck",
+            "Hide deck",
+            "Deck always on top",
             "Start at login",
             "Change connection…",
             "Quit",
         ],
+    }
+}
+
+/// Which text the `toggle_deck` tray item (and its hotkey-driven refresh)
+/// shows: it depends on both the language and whether the deck is currently
+/// visible. Pulled out of `TrayMenuItems::retitle` as a pure function — the
+/// interaction is the part worth pinning down with a test, and building a
+/// real tray in a unit test isn't possible.
+fn toggle_deck_label(lang: &str, deck_visible: bool) -> &'static str {
+    let l = tray_labels(lang);
+    if deck_visible {
+        l[2] // "Hide deck" / "Skrýt deck"
+    } else {
+        l[1] // "Show deck" / "Zobrazit deck"
+    }
+}
+
+/// English/Czech texts unique to the deck's right-click context menu — the
+/// three zoom items, which the tray has no equivalent of. "Hide deck",
+/// "Deck always on top" and "Open Herdeck" are NOT retyped here: see
+/// `deck_context_menu_texts`, which pulls them from `tray_labels` instead so
+/// the two menus can never describe the same action two different ways.
+fn deck_context_zoom_labels(lang: &str) -> [&'static str; 3] {
+    match lang {
+        "cs" => ["Zvětšit", "Zmenšit", "Původní velikost"],
+        _ => ["Zoom in", "Zoom out", "Actual size"],
+    }
+}
+
+/// The six texts on the deck's right-click context menu, in on-screen order:
+/// hide, the three zoom commands, the always-on-top checkbox, then open-app.
+/// Split out of `build_deck_context_menu` (which needs a live `AppHandle` to
+/// build real menu items and so cannot run in a unit test) purely so the
+/// EN/CS mapping — and the fact that three of the six reuse `tray_labels`
+/// byte-for-byte — has a test that does not need a display.
+fn deck_context_menu_texts(lang: &str) -> [&'static str; 6] {
+    let tray = tray_labels(lang);
+    let zoom = deck_context_zoom_labels(lang);
+    [
+        tray[2], // "Hide deck" / "Skrýt deck" — identical to the tray's
+        zoom[0], zoom[1], zoom[2],
+        tray[3], // "Deck always on top" / "Deck vždy navrchu" — identical to the tray's
+        tray[0], // "Open Herdeck" / "Otevřít Herdeck" — identical to the tray's
+    ]
+}
+
+/// Which floating-scale command a context-menu zoom item's id names, or
+/// `None` for any other id. Pulled out of the `on_menu_event` match so the
+/// id→command mapping has a test that does not need a live tray or window.
+fn zoom_command_for_menu_id(id: &str) -> Option<&'static str> {
+    match id {
+        MENU_ID_ZOOM_IN => Some("in"),
+        MENU_ID_ZOOM_OUT => Some("out"),
+        MENU_ID_ZOOM_RESET => Some("reset"),
+        _ => None,
     }
 }
 
@@ -1202,217 +1817,190 @@ fn tray_labels(lang: &str) -> [&'static str; 10] {
 struct TrayHandles(Mutex<Option<TrayMenuItems>>);
 
 struct TrayMenuItems {
-    settings: MenuItem<tauri::Wry>,
-    show: MenuItem<tauri::Wry>,
-    hide: MenuItem<tauri::Wry>,
-    wm: WmItems,
-    wm_submenu: tauri::menu::Submenu<tauri::Wry>,
+    show_app: MenuItem<tauri::Wry>,
+    toggle_deck: MenuItem<tauri::Wry>,
+    deck_aot: CheckMenuItem<tauri::Wry>,
     autostart: CheckMenuItem<tauri::Wry>,
     reconnect: MenuItem<tauri::Wry>,
     quit: MenuItem<tauri::Wry>,
+    /// The language `retitle` was last called with. Needed so a
+    /// visibility-only refresh of `toggle_deck` (`sync_toggle_deck_label`,
+    /// run from every path that shows or hides the deck) can pick the right
+    /// string without its caller having to track the language too.
+    lang: Mutex<String>,
 }
 
 impl TrayMenuItems {
-    fn retitle(&self, lang: &str) {
+    fn retitle(&self, lang: &str, deck_visible: bool) {
         let l = tray_labels(lang);
-        let _ = self.settings.set_text(l[0]);
-        let _ = self.show.set_text(l[1]);
-        let _ = self.hide.set_text(l[2]);
-        let _ = self.wm.normal.set_text(l[3]);
-        let _ = self.wm.floating.set_text(l[4]);
-        let _ = self.wm.aot.set_text(l[5]);
-        let _ = self.wm_submenu.set_text(l[6]);
-        let _ = self.autostart.set_text(l[7]);
-        let _ = self.reconnect.set_text(l[8]);
-        let _ = self.quit.set_text(l[9]);
+        let _ = self.show_app.set_text(l[0]);
+        let _ = self.toggle_deck.set_text(toggle_deck_label(lang, deck_visible));
+        let _ = self.deck_aot.set_text(l[3]);
+        let _ = self.autostart.set_text(l[4]);
+        let _ = self.reconnect.set_text(l[5]);
+        let _ = self.quit.set_text(l[6]);
+        *self.lang.lock().unwrap() = lang.to_string();
+    }
+
+    /// Refresh only `toggle_deck`'s text for a visibility change, in whichever
+    /// language `retitle` was last called with. The counterpart to `retitle`,
+    /// which instead needs the visibility handed in because IT runs on a
+    /// language change.
+    fn sync_toggle_deck_label(&self, deck_visible: bool) {
+        let lang = self.lang.lock().unwrap().clone();
+        let _ = self.toggle_deck.set_text(toggle_deck_label(&lang, deck_visible));
+    }
+
+    /// The language `retitle` was last called with. The single source of
+    /// truth for "what language is the UI in right now" — the deck's own
+    /// `[view].language` feeds it via `tray_set_language` (see `App.svelte`'s
+    /// `locale` effect), so anything else that needs the current language
+    /// (the context menu below) reads it from here instead of tracking it a
+    /// second time.
+    fn current_lang(&self) -> String {
+        self.lang.lock().unwrap().clone()
     }
 }
 
 /// Retitle the native tray menu for `lang` ("en"/"cs"). Called by the WebView
 /// whenever the deck-reported language changes; unknown values fall back to en.
 #[tauri::command]
-fn tray_set_language(lang: String, handles: tauri::State<'_, TrayHandles>) {
+fn tray_set_language(app: tauri::AppHandle, lang: String, handles: tauri::State<'_, TrayHandles>) {
+    let deck_visible = deck_is_visible(&app);
     if let Some(items) = handles.0.lock().unwrap().as_ref() {
-        items.retitle(&lang);
+        items.retitle(&lang, deck_visible);
     }
 }
 
-/// Check exactly the item for `mode`, uncheck the other two.
-fn set_wm_checks(items: &WmItems, mode: WindowMode) {
-    let _ = items.normal.set_checked(mode == WindowMode::Normal);
-    let _ = items.floating.set_checked(mode == WindowMode::Floating);
-    let _ = items.aot.set_checked(mode == WindowMode::AlwaysOnTop);
+/// Build the deck's right-click context menu fresh for every popup, so its
+/// "Deck always on top" checkbox always shows the CURRENT flag rather than a
+/// snapshot from whenever the tray was last built.
+///
+/// "Hide deck", "Deck always on top" and "Open Herdeck" carry the SAME ids as
+/// their tray counterparts ("deck_aot" and "show_app" ARE the tray's ids;
+/// "hide_deck" is new but goes through the same `on_menu_event` closure as
+/// `toggle_deck`'s hide path). `TrayIconBuilder::on_menu_event` is registered
+/// ONCE for the whole app and — per its own doc comment — fires "for any menu
+/// event, whether it is coming from this window, another window, or from the
+/// tray icon menu". Reusing an id therefore reuses the tray's existing
+/// handler outright; it does not add a second copy of that logic.
+fn build_deck_context_menu(
+    app: &tauri::AppHandle,
+    lang: &str,
+    always_on_top: bool,
+) -> tauri::Result<Menu<tauri::Wry>> {
+    let texts = deck_context_menu_texts(lang);
+    let hide = MenuItem::with_id(app, MENU_ID_HIDE_DECK, texts[0], true, None::<&str>)?;
+    let zoom_in = MenuItem::with_id(app, MENU_ID_ZOOM_IN, texts[1], true, Some("CmdOrCtrl+="))?;
+    let zoom_out = MenuItem::with_id(app, MENU_ID_ZOOM_OUT, texts[2], true, Some("CmdOrCtrl+-"))?;
+    let zoom_reset =
+        MenuItem::with_id(app, MENU_ID_ZOOM_RESET, texts[3], true, Some("CmdOrCtrl+0"))?;
+    let deck_aot = CheckMenuItem::with_id(
+        app,
+        MENU_ID_DECK_AOT,
+        texts[4],
+        true,
+        always_on_top,
+        None::<&str>,
+    )?;
+    let open_app = MenuItem::with_id(app, MENU_ID_SHOW_APP, texts[5], true, None::<&str>)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    Menu::with_items(
+        app,
+        &[
+            &hide,
+            &sep1,
+            &zoom_in,
+            &zoom_out,
+            &zoom_reset,
+            &sep2,
+            &deck_aot,
+            &open_app,
+        ],
+    )
 }
 
-/// Persist `window_mode = target` to base config via the sidecar. Read-modify-write
-/// over the existing `/config` routes (token injected Rust-side, like the editor).
-/// Returns `Ok(())` ONLY on a confirmed write: the `/config` contract returns
-/// validation failures as HTTP 200 with a non-empty `errors`, writing NOTHING, so
-/// success requires HTTP 200 AND `errors == []`. The POST blocks on `_setup_lock`,
-/// so it uses the longer `SETUP_CONNECT_TIMEOUT`; a timeout there is a genuine wedge.
-fn persist_window_mode(state: &AppState, target: WindowMode) -> Result<(), String> {
-    let d = state
-        .discovery
+/// Pop the deck's right-click context menu on the deck window, at the
+/// cursor. Called by the deck's own `contextmenu` listener (never the app
+/// window's — see `App.svelte`). Plain `fn`, not `async`: every other
+/// command here that touches a window or the tray (`show_deck`, `tray_set_
+/// language`, `reload_deck_always_on_top`, …) is sync for the same reason —
+/// the native menu/window APIs it calls are main-thread-only, and Tauri's
+/// `Menu::popup` already hops there itself.
+#[tauri::command]
+fn show_deck_context_menu(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    tray: tauri::State<'_, TrayHandles>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window(DECK_WINDOW)
+        .ok_or_else(|| "deck window missing".to_string())?;
+    let lang = tray
+        .0
         .lock()
         .unwrap()
-        .clone()
-        .ok_or_else(|| "sidecar not ready".to_string())?;
-    let body = http::http_get(
-        &d.host,
-        d.port,
-        &format!("/config?token={}", d.token),
-        SIDECAR_TIMEOUT,
-    )?;
-    let mut cfg: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("invalid /config JSON: {e}"))?;
-    {
-        let base = cfg
-            .get_mut("base")
-            .and_then(|b| b.as_object_mut())
-            .ok_or_else(|| "config response missing base table".to_string())?;
-        let desktop = base
-            .entry("desktop")
-            .or_insert_with(|| serde_json::json!({}));
-        let desktop_obj = desktop
-            .as_object_mut()
-            .ok_or_else(|| "config desktop is not a table".to_string())?;
-        desktop_obj.insert(
-            "window_mode".to_string(),
-            serde_json::Value::String(target.as_str().to_string()),
-        );
-    }
-    // POST only {base, profiles, local} — the redacted `secrets` field from the GET
-    // is display-only and never written back (secret values are one-way).
-    let payload = serde_json::json!({
-        "base": cfg.get("base").cloned().unwrap_or_else(|| serde_json::json!({})),
-        "profiles": cfg.get("profiles").cloned().unwrap_or_else(|| serde_json::json!({})),
-        "local": cfg.get("local").cloned().unwrap_or_else(|| serde_json::json!({})),
-    });
-    let (code, resp) = http::http_post_json(
-        &d.host,
-        d.port,
-        "/config",
-        (HDR_TOKEN, &d.token),
-        &payload.to_string(),
-        SETUP_CONNECT_TIMEOUT,
-    )?;
-    if code != 200 {
-        return Err(format!("POST /config returned HTTP {code}"));
-    }
-    let parsed: serde_json::Value =
-        serde_json::from_str(&resp).map_err(|e| format!("invalid /config response JSON: {e}"))?;
-    match parsed.get("errors").and_then(|e| e.as_array()) {
-        Some(arr) if arr.is_empty() => Ok(()),
-        Some(_) => Err("config rejected (validation errors)".to_string()),
-        None => Err("config response missing 'errors' field".to_string()),
-    }
+        .as_ref()
+        .map(TrayMenuItems::current_lang)
+        .unwrap_or_else(|| "en".to_string());
+    let always_on_top = *state.deck_always_on_top.lock().unwrap();
+    let menu = build_deck_context_menu(&app, &lang, always_on_top).map_err(|e| e.to_string())?;
+    let webview: &tauri::Webview<tauri::Wry> = window.as_ref();
+    menu.popup(webview.window()).map_err(|e| e.to_string())
 }
 
-/// Tray handler for a window-mode choice: persist FIRST, apply only on success.
-/// floating↔always_on_top applies live (toggle always_on_top); any change to/from
-/// normal restarts (transparent is creation-time). On persist failure: revert the
-/// checkmarks, log, do nothing else.
-fn select_window_mode(app: &tauri::AppHandle, target: WindowMode, items: &WmItems) {
-    let state = match app.try_state::<AppState>() {
-        Some(s) => s,
-        None => return,
-    };
-    let current = *state.window_mode.lock().unwrap();
-    if target == current {
-        set_wm_checks(items, current); // re-assert, no-op
-        return;
-    }
-    if let Err(e) = persist_window_mode(&state, target) {
-        eprintln!("window mode: persist failed, not applying: {e}");
-        set_wm_checks(items, current); // revert to the real persisted mode
-        return;
-    }
-    if window_mode::switch_needs_restart(current, target) {
-        // NOT app.restart(): a tray menu event runs on the MAIN THREAD, where
-        // Tauri's restart() skips RunEvent::ExitRequested/Exit and would ORPHAN
-        // the sidecar child (its kill lives in that handler). request_restart()
-        // routes through the event loop so the exit handler runs before restart.
-        app.request_restart();
-        return;
-    }
-    // Reached only for a live borderless↔borderless switch.
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_always_on_top(target == WindowMode::AlwaysOnTop);
-    }
-    *state.window_mode.lock().unwrap() = target;
-    set_wm_checks(items, target);
-}
-
-/// Build the tray icon with a show/hide/quit menu.
-fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
+/// Build the tray icon. `deck_always_on_top` and `deck_visible` are the
+/// values `run()` already resolved at startup (config text + window state) —
+/// handed in rather than re-read here, so the tray's initial checkbox and
+/// `toggle_deck` label always agree with what actually got applied to the
+/// windows.
+fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) -> tauri::Result<()> {
     use tauri_plugin_autostart::ManagerExt;
     // Built with the English (default-language) labels; tray_set_language
     // retitles everything the moment the WebView learns the configured language.
     let l = tray_labels("en");
-    let settings = MenuItem::with_id(app, "settings", l[0], true, None::<&str>)?;
-    let show = MenuItem::with_id(app, "show", l[1], true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, "hide", l[2], true, None::<&str>)?;
-    let wm_normal = CheckMenuItem::with_id(
+    let show_app = MenuItem::with_id(app, MENU_ID_SHOW_APP, l[0], true, None::<&str>)?;
+    let toggle_deck = MenuItem::with_id(
         app,
-        "wm_normal",
+        MENU_ID_TOGGLE_DECK,
+        toggle_deck_label("en", deck_visible),
+        true,
+        None::<&str>,
+    )?;
+    let deck_aot = CheckMenuItem::with_id(
+        app,
+        MENU_ID_DECK_AOT,
         l[3],
         true,
-        current_mode == WindowMode::Normal,
+        deck_always_on_top,
         None::<&str>,
     )?;
-    let wm_floating = CheckMenuItem::with_id(
-        app,
-        "wm_floating",
-        l[4],
-        true,
-        current_mode == WindowMode::Floating,
-        None::<&str>,
-    )?;
-    let wm_aot = CheckMenuItem::with_id(
-        app,
-        "wm_aot",
-        l[5],
-        true,
-        current_mode == WindowMode::AlwaysOnTop,
-        None::<&str>,
-    )?;
-    let wm_submenu = tauri::menu::Submenu::with_items(
-        app,
-        l[6],
-        true,
-        &[&wm_normal, &wm_floating, &wm_aot],
-    )?;
-    let wm_items = WmItems {
-        normal: wm_normal,
-        floating: wm_floating,
-        aot: wm_aot,
-    };
     let autostart = CheckMenuItem::with_id(
         app,
-        "autostart",
-        l[7],
+        MENU_ID_AUTOSTART,
+        l[4],
         true,
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
-    let reconnect = MenuItem::with_id(app, "reconnect", l[8], true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", l[9], true, None::<&str>)?;
+    let reconnect = MenuItem::with_id(app, MENU_ID_RECONNECT, l[5], true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, MENU_ID_QUIT, l[6], true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&settings, &show, &hide, &wm_submenu, &reconnect, &autostart, &quit],
+        &[&show_app, &toggle_deck, &deck_aot, &autostart, &reconnect, &quit],
     )?;
     let autostart_cb = autostart.clone();
-    let wm_items_cb = wm_items.clone();
+    let deck_aot_cb = deck_aot.clone();
     if let Some(handles) = app.try_state::<TrayHandles>() {
         *handles.0.lock().unwrap() = Some(TrayMenuItems {
-            settings: settings.clone(),
-            show: show.clone(),
-            hide: hide.clone(),
-            wm: wm_items.clone(),
-            wm_submenu: wm_submenu.clone(),
+            show_app: show_app.clone(),
+            toggle_deck: toggle_deck.clone(),
+            deck_aot: deck_aot.clone(),
             autostart: autostart.clone(),
             reconnect: reconnect.clone(),
             quit: quit.clone(),
+            lang: Mutex::new("en".to_string()),
         });
     }
 
@@ -1420,39 +2008,50 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
         .tooltip(build_channel::display_name())
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(move |app, event| {
-            let wm_items = &wm_items_cb;
-            match event.id.as_ref() {
-            "settings" => {
-                if current_mode == WindowMode::Normal {
-                    let _ = app.emit_to("main", "open-settings", ());
-                }
-                if let Some(w) =
-                    app.get_webview_window(window_mode::settings_window_label(current_mode))
-                {
-                    let _ = w.show();
-                    let _ = w.set_focus();
+        .on_menu_event(move |app, event| match event.id.as_ref() {
+            MENU_ID_SHOW_APP => {
+                // Also the deck context menu's "Open Herdeck" item
+                // (`build_deck_context_menu` gives it this SAME id, on
+                // purpose, so it runs through this one arm instead of a copy).
+                //
+                // Mirrors what the pre-roles `normal` mode did: opening the app
+                // dismisses a re-onboarding card the user never went through with.
+                let _ = app.emit_to(APP_WINDOW, "open-settings", ());
+                show_role_window(app, APP_WINDOW);
+            }
+            MENU_ID_TOGGLE_DECK => toggle_deck_window(app),
+            MENU_ID_DECK_AOT => {
+                // Also the deck context menu's "Deck always on top" checkbox,
+                // for the same reason as "show_app" above.
+                let Some(state) = app.try_state::<AppState>() else {
+                    return;
+                };
+                let current = *state.deck_always_on_top.lock().unwrap();
+                let target = !current;
+                match persist_deck_always_on_top(&state, target) {
+                    Ok(()) => {
+                        if let Some(w) = app.get_webview_window(DECK_WINDOW) {
+                            let _ = w.set_always_on_top(target);
+                        }
+                        *state.deck_always_on_top.lock().unwrap() = target;
+                        let _ = deck_aot_cb.set_checked(target);
+                    }
+                    Err(e) => {
+                        eprintln!("deck always-on-top: persist failed, not applying: {e}");
+                        // Nothing changed on disk or on the window — force the
+                        // checkbox back to that same unchanged value, in case
+                        // the native widget already flipped itself on click.
+                        let _ = deck_aot_cb.set_checked(current);
+                    }
                 }
             }
-            "show" => {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+            MENU_ID_RECONNECT => {
+                // Onboarding lives on the app surface, so the re-onboard event
+                // and the window that has to be looking at it are the same one.
+                let _ = app.emit_to(APP_WINDOW, "reonboard", ());
+                show_role_window(app, APP_WINDOW);
             }
-            "hide" => {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.hide();
-                }
-            }
-            "reconnect" => {
-                let _ = app.emit_to("main", "reonboard", ());
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
-            }
-            "autostart" => {
+            MENU_ID_AUTOSTART => {
                 let mgr = app.autolaunch();
                 let now = mgr.is_enabled().unwrap_or(false);
                 let res = if now { mgr.disable() } else { mgr.enable() };
@@ -1461,12 +2060,21 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
                 }
                 let _ = autostart_cb.set_checked(mgr.is_enabled().unwrap_or(false));
             }
-            "wm_normal" => select_window_mode(app, WindowMode::Normal, wm_items),
-            "wm_floating" => select_window_mode(app, WindowMode::Floating, wm_items),
-            "wm_aot" => select_window_mode(app, WindowMode::AlwaysOnTop, wm_items),
-            "quit" => app.exit(0),
-            _ => {}
-        }
+            MENU_ID_QUIT => app.exit(0),
+            // The deck's own right-click context menu (`build_deck_context_menu`).
+            // MENU_ID_HIDE_DECK is new; MENU_ID_DECK_AOT and MENU_ID_SHOW_APP
+            // above already cover the context menu's checkbox and open-app
+            // items because those items are built with the SAME ids.
+            MENU_ID_HIDE_DECK => hide_role_window(app, DECK_WINDOW),
+            // Catch-all: anything left is either one of the three zoom ids
+            // (routed through the SAME mapper `zoom_command_for_menu_id`
+            // tests pin down) or truly unknown, in which case it is a no-op —
+            // one arm instead of listing the zoom ids again here too.
+            id => {
+                if let Some(cmd) = zoom_command_for_menu_id(id) {
+                    let _ = app.emit_to(DECK_WINDOW, FLOATING_ZOOM_EVENT, cmd);
+                }
+            }
         });
 
     // Reuse the embedded app icon for the tray (skip gracefully if absent).
@@ -1479,7 +2087,7 @@ fn build_tray(app: &tauri::App, current_mode: WindowMode) -> tauri::Result<()> {
 
 /// Start the sidecar supervisor (or record the external discovery). `config_path`
 /// is exported as `HERDECK_CONFIG` so the spawned sidecar reads the SAME config
-/// file Rust resolved the window mode from (mooting the sidecar's CWD-relative
+/// file Rust resolved the deck preferences from (mooting the sidecar's CWD-relative
 /// branch — important for the frozen `.app`, where CWD is nondeterministic).
 fn start_sidecar(
     app: &tauri::App,
@@ -1532,19 +2140,25 @@ pub fn run() {
     let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let stop = Arc::new(AtomicBool::new(false));
 
-    // Resolve config.toml with the sidecar's existence-check order, then read the
-    // window mode BEFORE the window is built (transparent/decorations are
-    // creation-time props in Tauri 2).
-    let home = PathBuf::from(env::var("HOME").unwrap_or_default());
-    let repo_root = repo_root_from_manifest();
-    let explicit_config = env::var("HERDECK_CONFIG").ok();
-    let config_override = build_channel::config_override(explicit_config.as_deref(), &home);
-    let config_path = window_mode::resolve_config_path(
-        config_override.as_ref().and_then(|path| path.to_str()),
-        &home,
-        &repo_root,
+    // Resolve config.toml with the sidecar's existence-check order and read it
+    // ONCE. Both answers below can fall back to the legacy window_mode the fixed
+    // roles replaced, each only where its own newer source is absent —
+    // `deck_always_on_top` for the flag, `window-state.json` for the visibility.
+    // That is the design doc's migration table.
+    //
+    // The two halves stop consulting it at different times. Visibility: after
+    // ONE launch, because exit always writes `window-state.json`. The flag: only
+    // once the user deliberately sets it, from the tray or the editor — nothing
+    // writes it automatically, so until then the legacy key decides every
+    // launch. `configClient.ts`'s `deckAlwaysOnTop` mirrors that fallback so the
+    // editor checkbox agrees with the deck in the meantime.
+    let config_path = default_config_path();
+    let config_text = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let deck_always_on_top = deck_prefs::resolve_deck_always_on_top(&config_text);
+    let startup = window_state::startup_state(
+        window_state::load(&window_state::state_dir()),
+        deck_prefs::parse_legacy_window_mode(&config_text).as_deref(),
     );
-    let mode = window_mode::read_window_mode(&config_path);
 
     // Clones for the setup closure and the supervisor.
     let setup_discovery = discovery.clone();
@@ -1557,7 +2171,8 @@ pub fn run() {
 
     let state = AppState {
         discovery,
-        window_mode: Arc::new(Mutex::new(mode)),
+        window_state: Arc::new(Mutex::new(startup)),
+        deck_always_on_top: Arc::new(Mutex::new(deck_always_on_top)),
     };
 
     tauri::Builder::default()
@@ -1586,93 +2201,122 @@ pub fn run() {
             config_secret_clear,
             setup_status,
             setup_connect,
-            open_config,
             reload_hotkey,
-            get_window_mode,
-            tray_set_language
+            reload_deck_always_on_top,
+            show_deck,
+            hide_deck,
+            show_app,
+            deck_visible,
+            tray_set_language,
+            show_deck_context_menu
         ])
         .setup(move |app| {
-            // `main` is no longer in tauri.conf.json — build it here so its
-            // transparent/decorations match the mode. The init script sets
-            // `<html data-window-mode>` BEFORE first paint so the borderless CSS
-            // applies with no flash of opaque-normal styling (FOUC).
+            // NEITHER window is declared in tauri.conf.json: both are built here
+            // so both get an initialization script, which stamps the window's
+            // role on `<html>` before its first paint. The frontend routes its
+            // surface off that attribute, so injecting it any later would show a
+            // flash of the wrong styling (FOUC).
+            //
+            // The two shapes are fixed and never swap. `main` is the borderless
+            // deck overlay, `config` the decorated settings window — exactly the
+            // properties each already had, minus the mode that shuffled them.
             let app_handle = app.handle().clone();
-            let init = format!(
-                "document.documentElement.dataset.windowMode='{}'",
-                mode.as_str()
-            );
             let display_name = build_channel::display_name();
             // The borderless card carries no CSS drop shadow (it fills the window
             // exactly, so one would only pool in the corner notches). macOS
             // derives a transparent window's shadow from the drawn content's
             // alpha, i.e. from the rounded card itself — so let it.
-            let builder = WebviewWindowBuilder::new(&app_handle, "main", WebviewUrl::default())
-                .title(&display_name)
-                .shadow(true)
-                .initialization_script(init);
-            let builder = match mode {
-                WindowMode::Normal => builder
+            let deck_window =
+                WebviewWindowBuilder::new(&app_handle, DECK_WINDOW, WebviewUrl::default())
+                    .title(&display_name)
+                    .shadow(true)
+                    .initialization_script(window_role_script("deck"))
+                    .decorations(false)
+                    .transparent(true)
+                    .resizable(false)
+                    .inner_size(328.0, 300.0)
+                    .skip_taskbar(true)
+                    .visible(false)
+                    .build()?;
+
+            // Dev builds carry the channel + revision in the title so two
+            // installs are never confused for one another.
+            let app_title = if build_channel::is_dev() {
+                format!("{display_name} - Settings")
+            } else {
+                "Herdeck Settings".to_string()
+            };
+            let app_window =
+                WebviewWindowBuilder::new(&app_handle, APP_WINDOW, WebviewUrl::default())
+                    .title(&app_title)
+                    .shadow(true)
+                    .initialization_script(window_role_script("app"))
                     .decorations(true)
                     .transparent(false)
-                    .always_on_top(false)
                     .resizable(true)
                     .inner_size(1180.0, 780.0)
                     .min_inner_size(680.0, 540.0)
-                    .skip_taskbar(false),
-                WindowMode::Floating => builder
-                    .decorations(false)
-                    .transparent(true)
-                    .always_on_top(false)
-                    .resizable(false)
-                    .inner_size(328.0, 300.0)
-                    .skip_taskbar(true),
-                WindowMode::AlwaysOnTop => builder
-                    .decorations(false)
-                    .transparent(true)
-                    .always_on_top(true)
-                    .resizable(false)
-                    .inner_size(328.0, 300.0)
-                    .skip_taskbar(true),
-            };
-            let main_window = builder.build()?;
+                    .skip_taskbar(false)
+                    .visible(false)
+                    .build()?;
 
-            // Borderless modes get the top-right placement; normal opens where the
-            // OS puts it and is user-movable via the titlebar.
-            if mode.is_borderless() {
-                place_floating(&main_window);
+            // Not a creation-time property, unlike transparent/decorations: this
+            // is the same call the tray makes, and it never needs a restart.
+            let _ = deck_window.set_always_on_top(deck_always_on_top);
+            place_deck(&deck_window, startup.deck_position);
+
+            // Both are built hidden and opened per the remembered layout, so a
+            // window that should stay closed never flashes on screen first.
+            // `startup_state` guarantees at least one of these is true.
+            if startup.deck_visible {
+                let _ = deck_window.show();
+            }
+            if startup.app_visible {
+                let _ = app_window.show();
+                let _ = app_window.set_focus();
             }
 
-            // Normal mode has a close button; intercept close -> hide (like the
-            // `config` window) so the tray "Show" brings it back and the app +
-            // sidecar keep running. CloseRequested is window-close only — it does
-            // NOT fire for app.exit/app.restart, so this never blocks quit/restart.
+            // Closing either window hides it: the tray brings it back, and the
+            // app + sidecar keep running. Without this Tauri would DESTROY the
+            // window and every later "show" would fail. CloseRequested is
+            // window-close only — it does NOT fire for app.exit/app.restart, so
+            // this never blocks quit or an updater restart.
             {
-                let w = main_window.clone();
-                main_window.on_window_event(move |event| {
+                let handle = app_handle.clone();
+                let deck = deck_window.clone();
+                deck_window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        hide_role_window(&handle, DECK_WINDOW);
+                    }
+                    // Memory only: a single drag emits hundreds of these. The
+                    // write happens when the deck is hidden, and on exit.
+                    //
+                    // A position reported while the deck is hidden is not a user
+                    // drag — some window managers emit one on hide — and must
+                    // not overwrite the place the user actually left it.
+                    tauri::WindowEvent::Moved(position) => {
+                        if deck.is_visible().unwrap_or(false) {
+                            remember_deck_position(
+                                &handle,
+                                placement_space_position(&deck, *position),
+                            );
+                        }
+                    }
+                    _ => {}
+                });
+            }
+            {
+                let handle = app_handle.clone();
+                app_window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
-                        let _ = w.hide();
+                        hide_role_window(&handle, APP_WINDOW);
                     }
                 });
             }
 
-            build_tray(app, mode)?;
-
-            // The config window is hidden at startup and reopened on demand; if it
-            // were allowed to close, Tauri would DESTROY it and open_config would
-            // then fail with "config window not found". Intercept close -> hide.
-            if let Some(cfg_win) = app.get_webview_window("config") {
-                if build_channel::is_dev() {
-                    let _ = cfg_win.set_title(&format!("{display_name} - Settings"));
-                }
-                let w = cfg_win.clone();
-                cfg_win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = w.hide();
-                    }
-                });
-            }
+            build_tray(app, deck_always_on_top, startup.deck_visible)?;
             start_sidecar(
                 app,
                 setup_discovery,
@@ -1684,8 +2328,11 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("failed to build herdeck desktop app")
-        .run(move |_app_handle, event| {
+        .run(move |app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+                // The last chance to save a deck position that was dragged and
+                // never hidden — `Moved` deliberately does not touch the disk.
+                persist_window_state(app_handle);
                 // Tear the supervised sidecar down so it never outlives the shell.
                 exit_stop.store(true, Ordering::SeqCst);
                 if let Some(mut c) = exit_child.lock().unwrap().take() {

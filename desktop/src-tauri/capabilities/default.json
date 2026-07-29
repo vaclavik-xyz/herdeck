@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default capability for the floating deck window (core APIs: events for discovery, window controls).",
+  "description": "Default capability for both role windows, the deck and the app (core APIs: events for discovery, window controls).",
   "windows": ["main", "config"],
   "permissions": [
     "core:default",

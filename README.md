@@ -505,12 +505,14 @@ prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).
 
 ## Desktop app
 
-herdeck also ships a native **desktop app** (Tauri + Svelte). Normal mode opens
-the full control room with onboarding, connections, live status, deck preview,
-and settings. Floating and Always on top provide a compact deck overlay. Resize
-that overlay with **⌘+** / **⌘−** and reset it to 100% with **⌘0**; the chosen
-scale is remembered on that Mac. The app attaches to a running herdeck runtime
-or spawns its own sidecar. For development, run it from `desktop/`:
+herdeck also ships a native **desktop app** (Tauri + Svelte), as two windows
+with fixed roles: an app window with the full control room (onboarding,
+connections, live status, deck preview, and settings) and a compact,
+borderless deck window that overlays your other work. Either can be shown or
+hidden independently, and the deck can be kept always on top. Resize the deck
+with **⌘+** / **⌘−** and reset it to 100% with **⌘0**; the chosen scale is
+remembered on that Mac. The app attaches to a running herdeck runtime or
+spawns its own sidecar. For development, run it from `desktop/`:
 
 ```bash
 # from the repo root

@@ -5,6 +5,8 @@
   import { listen } from "@tauri-apps/api/event";
   import ArrowBendDownRight from "phosphor-svelte/lib/ArrowBendDownRight";
   import ArrowRight from "phosphor-svelte/lib/ArrowRight";
+  import ArrowSquareIn from "phosphor-svelte/lib/ArrowSquareIn";
+  import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
   import BellSimple from "phosphor-svelte/lib/BellSimple";
   import Command from "phosphor-svelte/lib/Command";
   import Gauge from "phosphor-svelte/lib/Gauge";
@@ -106,6 +108,8 @@
       search_settings: "Search settings",
       clear_search: "Clear search",
       no_search_results: "No settings match this search.",
+      show_deck: "Show deck",
+      hide_deck: "Hide deck",
       editing_profile: "Editing profile: {name}",
       overview_eyebrow: "System overview",
       overview_title: "System status",
@@ -206,6 +210,8 @@
       search_settings: "Hledat nastavení",
       clear_search: "Vymazat hledání",
       no_search_results: "Žádné nastavení tomuto hledání neodpovídá.",
+      show_deck: "Zobrazit deck",
+      hide_deck: "Skrýt deck",
       editing_profile: "Upravuješ profil: {name}",
       overview_eyebrow: "Přehled systému",
       overview_title: "Stav systému",
@@ -328,6 +334,11 @@
   }
 
   let discovery = $state<Discovery | null>(null);
+  // Followed from "deck-visibility-changed" so the top bar's toggle stays
+  // honest when the tray, the hotkey, or the deck's own close changed it —
+  // read once via `deck_visible` on mount since the deck can already be open
+  // by the time this window appears.
+  let deckVisible = $state(false);
   let payload = $state<ConfigPayload | null>(null);
   // Runtime diagnostics must describe the last config accepted by the
   // sidecar, not the draft currently being edited in `payload`.
@@ -443,7 +454,7 @@
         deck: { grid: "5x3", overview_order: ["local:personal", "macbench"] },
         view: { management: "launcher_menu", tile_fields: ["repo", "status"] },
         theme: { colors: {} },
-        desktop: { window_mode: "normal" },
+        desktop: { deck_always_on_top: false },
       },
       profiles: {},
       local: { local: { deck: "auto" }, hardware: { brightness: 80 } },
@@ -543,6 +554,10 @@
         await load(); // re-read saved state (preview refreshes itself via its own poll)
         // A changed [hotkeys] accelerator only takes effect once Rust re-registers it.
         void invoke("reload_hotkey").catch(() => {});
+        // Same reasoning for [desktop].deck_always_on_top: it is applied live via
+        // set_always_on_top, not a creation-time window property, so nothing
+        // restarts it — but nothing re-applies it either without this call.
+        void invoke("reload_deck_always_on_top").catch(() => {});
         if (orphans.length > 0) {
           setBanner(
             "warning",
@@ -620,6 +635,7 @@
 
     let alive = true;
     let unlisten: (() => void) | null = null;
+    let unlistenDeckVisibility: (() => void) | null = null;
     const statusPoll = visibilityGatedLoop(
       async () => {
         const transport = preview;
@@ -656,6 +672,29 @@
     }).catch(() => {
       /* plain-browser design preview has no Tauri event bridge */
     });
+    // Tells the toggle button below apart from a click: the tray item, the
+    // hotkey, and the deck's own ⌘W all change the SAME window, and all three
+    // reach `deckVisible` through this one event instead of three commands.
+    // The mount-time snapshot is chained onto the listener's OWN registration
+    // (not fired in parallel with it) — the deck may already be open (tray,
+    // hotkey, a previous session) by the time this window mounts, and reading
+    // the snapshot before the listener is live could drop an event that lands
+    // in between. Tauri gives no ordering guarantee between a command reply
+    // and an event on the same channel, so `sawDeckVisibilityEvent` also
+    // lets a real-time event that resolves BEFORE the snapshot win over the
+    // (now stale) one.
+    let sawDeckVisibilityEvent = false;
+    void listen<boolean>("deck-visibility-changed", (ev) => {
+      sawDeckVisibilityEvent = true;
+      deckVisible = ev.payload;
+    }).then((fn) => {
+      unlistenDeckVisibility = fn;
+      return invoke("deck_visible");
+    }).then((v) => {
+      if (!sawDeckVisibilityEvent) deckVisible = v === true;
+    }).catch(() => {
+      /* plain-browser design preview has no Tauri bridge */
+    });
     // The config window is hidden on close, not destroyed — a payload can be
     // days old when it reappears. Refresh a CLEAN editor on visibility.
     const onVisible = (): void => {
@@ -678,6 +717,7 @@
       alive = false;
       statusPoll.stop();
       unlisten?.();
+      unlistenDeckVisibility?.();
       if (validateTimer) clearTimeout(validateTimer);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -692,6 +732,19 @@
     </div>
     <span class="status-pill"><span class:ready={runtimeReady} class="status-dot"></span>{lm.runtime} · {runtimeReady ? lm.ready : lm.connecting}</span>
     <span class="status-pill secondary-status"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span>{connectedRemoteServers}/{remoteServers} {lm.remote_servers.toLowerCase()}</span>
+    <button
+      class="show-deck-button"
+      data-action="toggle-deck"
+      title={deckVisible ? lm.hide_deck : lm.show_deck}
+      onclick={() => invoke(deckVisible ? "hide_deck" : "show_deck").catch(() => {})}
+    >
+      {#if deckVisible}
+        <ArrowSquareIn size={13} aria-hidden="true" />
+      {:else}
+        <ArrowSquareOut size={13} aria-hidden="true" />
+      {/if}
+      <span>{deckVisible ? lm.hide_deck : lm.show_deck}</span>
+    </button>
     <span class="top-spacer"></span>
     <label class="profile-picker">
       <span>{lm.profile}</span>
@@ -958,12 +1011,14 @@
   .scope-badge { margin-top: 4px; padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text-dim); background: var(--panel); font: 9px var(--font-mono); }
   .page-heading p, .card-heading p, .card p { margin: 5px 0 0; color: var(--text-dim); font-size: 11px; }
   .eyebrow { color: var(--text-dim); font-size: 9px; font-weight: 650; letter-spacing: .04em; }
-  .secondary, .icon-button, .savebar button { border: 1px solid var(--line-strong); border-radius: var(--r-control); background: var(--panel-raised); color: var(--text); cursor: pointer; }
+  .secondary, .icon-button, .savebar button, .show-deck-button { border: 1px solid var(--line-strong); border-radius: var(--r-control); background: var(--panel-raised); color: var(--text); cursor: pointer; }
   .savebar button:disabled { cursor: default; }
   .secondary { min-height: 32px; padding: 0 12px; font-size: 11px; font-weight: 630; }
-  .secondary:hover, .savebar button:hover:not(:disabled) { background: var(--key); }
-  .secondary:active, .icon-button:active, .savebar button:active:not(:disabled) { transform: translateY(1px); }
+  .secondary:hover, .savebar button:hover:not(:disabled), .show-deck-button:hover { background: var(--key); }
+  .secondary:active, .icon-button:active, .savebar button:active:not(:disabled), .show-deck-button:active { transform: translateY(1px); }
   .icon-button { width: 31px; height: 31px; padding: 0; }
+  .show-deck-button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; color: var(--text-dim); font-size: 11px; font-weight: 630; white-space: nowrap; }
+  .show-deck-button:hover { color: var(--text); }
   .card { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); }
   .card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
   .card-heading h2 { margin: 0; font-size: 14px; letter-spacing: -.015em; }

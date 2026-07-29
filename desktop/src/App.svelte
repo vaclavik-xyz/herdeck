@@ -7,9 +7,14 @@
   import ConfigApp from "./ConfigApp.svelte";
   import DeckView from "./lib/DeckView.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
-  import { appSurface, desktopSetupVisible } from "./lib/appSurface";
+  import { appSurface, desktopSetupVisible, windowRole } from "./lib/appSurface";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport } from "./lib/deckClient";
+  import {
+    DECK_ZOOM_EVENT,
+    floatingScaleCommandFromEvent,
+    shouldBypassDeckContextMenu,
+  } from "./lib/deckContextMenu";
   import { fitDecision } from "./lib/windowFit";
   import {
     anchoredFloatingPosition,
@@ -31,15 +36,14 @@
   import { visibilityGatedLoop } from "./lib/pollGate";
   import { updateTransport, type UpdateInfo } from "./lib/updateClient";
 
-  // Window mode is injected on <html data-window-mode> by Rust BEFORE first paint
-  // (initialization_script), so the borderless CSS applies with no FOUC. Falls
-  // back to "normal" in a plain browser (no Tauri / no attribute).
-  const windowMode =
-    (typeof document !== "undefined"
-      ? document.documentElement.dataset.windowMode
-      : undefined) ?? "normal";
-  const borderless = windowMode !== "normal";
-  const surface = appSurface(windowMode);
+  // Injected on <html data-window-role> by Rust BEFORE first paint
+  // (initialization_script), so the borderless CSS applies with no flash of
+  // opaque chrome. Falls back to "app" in a plain browser (no Tauri / no
+  // attribute) — the settings surface is the one worth designing against.
+  const role =
+    (typeof document !== "undefined" ? windowRole(document) : undefined) ?? "app";
+  const borderless = role === "deck";
+  const surface = appSurface(role);
 
   let shell = $state<HTMLElement | undefined>(undefined);
   let desktopSetupOverlay = $state<HTMLElement | undefined>(undefined);
@@ -180,6 +184,12 @@
   }
 
   function scheduleFitWindow(scrollHeight: number): Promise<void> {
+    // A measurement of 0 is a WebView that has not laid out on screen, not
+    // content that shrank to nothing: the deck window is created hidden and its
+    // ResizeObserver attaches on mount regardless. Acting on it would record a
+    // zero-height frame here and ask for a zero-height window below (fitDecision
+    // refuses the second half; this is what keeps the frame geometry honest).
+    if (!(scrollHeight > 0)) return Promise.resolve();
     floatingContentHeight = scrollHeight;
     const scheduled = fitQueue.then(() => fitWindow(scrollHeight));
     fitQueue = scheduled.catch(() => {});
@@ -217,6 +227,12 @@
       const d = asDiscovery(event.payload);
       if (d) discovery = d;
     });
+    // Rust emits both of these to APP_WINDOW only (`app.emit_to("config", ...)`
+    // in lib.rs's tray handlers), and Tauri delivers an emit_to'd event solely
+    // to the targeted webview's IPC channel — so this listener is registered
+    // in both windows but only ever fires in the config window, where
+    // `reonboard`/`desktopSetupHidden` actually affect the rendered surface
+    // (both are read only by the surface === "desktop" branch below).
     const reonboardListener = listen("reonboard", () => {
       reonboard = true;
       desktopSetupHidden = false;
@@ -238,6 +254,34 @@
       void applyFloatingScale(command);
     };
     window.addEventListener("keydown", onFloatingScaleKey);
+
+    // Borderless-only: claim the deck's right-click for the native menu Rust
+    // pops via `show_deck_context_menu` (see lib.rs's `build_deck_context_menu`).
+    // Shift+right-click deliberately falls through to the WebView's own
+    // context menu instead, so "Inspect Element" stays reachable in dev
+    // builds once the plain right-click is claimed by the custom menu.
+    const onDeckContextMenu = (event: MouseEvent): void => {
+      if (!borderless || shouldBypassDeckContextMenu(event)) return;
+      event.preventDefault();
+      void invoke("show_deck_context_menu").catch(() => {
+        // Not in a Tauri WebView (plain browser preview): nothing to pop.
+      });
+    };
+    window.addEventListener("contextmenu", onDeckContextMenu);
+
+    // Rust emits this to the DECK window only (`app.emit_to(DECK_WINDOW, ...)`
+    // from the context menu's zoom items in lib.rs) — same emit_to pattern as
+    // `reonboardListener`/`settingsListener` above: registered in both
+    // windows, but Tauri only ever delivers it to the deck's own IPC channel.
+    // The `borderless` guard is a second line of defense, not the only one —
+    // every other floating-scale entry point (`onFloatingScaleKey` above,
+    // the `ResizeObserver` below) carries the same guard so none of them
+    // depends solely on Rust never widening the `emit_to` target.
+    const zoomListener = listen(DECK_ZOOM_EVENT, (event) => {
+      if (!borderless) return;
+      const command = floatingScaleCommandFromEvent(event.payload);
+      if (command) void applyFloatingScale(command);
+    });
 
     void (async () => {
       while (alive && !discovery) {
@@ -277,7 +321,9 @@
       void discoveryListener.then((unlisten) => unlisten());
       void reonboardListener.then((unlisten) => unlisten());
       void settingsListener.then((unlisten) => unlisten());
+      void zoomListener.then((unlisten) => unlisten());
       window.removeEventListener("keydown", onFloatingScaleKey);
+      window.removeEventListener("contextmenu", onDeckContextMenu);
       setupPoll.stop();
       ro?.disconnect();
     };
@@ -430,17 +476,15 @@
 {/if}
 
 <style>
-  /* Opaque by default (normal + plain browser); borderless makes the window
-     transparent so the rounded .shell is the only painted surface. */
+  /* Opaque by default (the app window + a plain browser); the deck role makes
+     the window transparent so the rounded .shell is the only painted surface. */
   :global(html, body) {
     margin: 0;
     background: var(--canvas);
     color-scheme: dark; /* dark native widgets + scrollbars (WebKit) */
   }
-  :global(html[data-window-mode="floating"]),
-  :global(html[data-window-mode="floating"] body),
-  :global(html[data-window-mode="always_on_top"]),
-  :global(html[data-window-mode="always_on_top"] body) {
+  :global(html[data-window-role="deck"]),
+  :global(html[data-window-role="deck"] body) {
     background: transparent;
   }
 
