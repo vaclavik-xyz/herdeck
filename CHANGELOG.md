@@ -6,6 +6,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Check for updates** in the tray. It opens the app window and answers either
+  way — a newer release, "you are up to date", or the failure and its reason.
+
+### Fixed
+- The update check ran once per window mount and swallowed every failure
+  silently, so a tray-resident app could sit on an old version indefinitely with
+  no way to retry and no way to tell "up to date" from "the check broke". A
+  check you asked for now always reports; automatic ones stay quiet, so an
+  offline start still cannot disturb the deck.
+
 ## [0.2.0] - 2026-07-29
 
 ### Added
