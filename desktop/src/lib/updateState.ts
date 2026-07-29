@@ -99,15 +99,13 @@ export function applyAvailableBroadcast(state: UpdateState, info: UpdateInfo): U
  *  will be dropped, overwriting "checking" here (with "up to date": there is
  *  nothing left to install) is what keeps it from sitting there forever.
  *
- *  Called EXACTLY ONCE per real resolution — App.svelte applies it locally,
- *  synchronously, and separately suppresses the echo of that same emit
- *  reaching its own listener (a counter, not a comparison against the
- *  resulting state: anything else — a new check starting, say — could
- *  change the state in between, and comparing against a stale expectation
- *  would then fail to recognise the echo and bump the epoch a second time
- *  for nothing). A genuinely different, later resolution — the OTHER
- *  window's, or this same window's own later retry — is never suppressed
- *  and bumps the epoch normally. */
+ *  App.svelte applies this locally and synchronously, and a real Tauri
+ *  `emit` reaches its own sender, so this same resolution's echo re-applies
+ *  it again through the listener — deliberately not suppressed: every
+ *  field but the epoch is idempotent, and the extra bump only drops a check
+ *  whose `beginCheck` landed inside that one emit's in-process round trip
+ *  (sub-millisecond), narrower than any hazard this module already accepts
+ *  dropping elsewhere — the user just checks again. */
 export function applyResolvedAway(state: UpdateState): UpdateState {
   return { ...state, availableUpdate: null, notice: { kind: "up-to-date" }, checkSeq: state.checkSeq + 1 };
 }

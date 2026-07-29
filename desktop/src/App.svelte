@@ -76,16 +76,6 @@
   // check produced it.
   let updateError = $state("");
   let installingUpdate = $state(false);
-  // How many of installUpdate's own resolutions are still waiting for their
-  // OWN emit to echo back through this window's listener (a real Tauri
-  // `emit` reaches its sender). Not a boolean: `installingUpdate` can be
-  // false again (its `finally` runs before the echo necessarily arrives)
-  // while an earlier resolution's echo is still in flight, so a second
-  // install could start and add a second pending echo before the first
-  // lands. Each echo received while this is above zero is this window's
-  // OWN, already-applied-locally resolution — decrement and skip, don't
-  // apply (and so don't bump updateState.checkSeq) a second time for it.
-  let pendingLocalResolutionEchoes = 0;
   let floatingScrollable = $state(false);
   let floatingContentHeight = $state(300);
   let floatingScale = $state((() => {
@@ -191,17 +181,12 @@
         // anything, and a window that never installs — the deck — would
         // keep an "Install and restart" button for an update the process
         // has already decided is gone). A real Tauri `emit` reaches its own
-        // sender, so `pendingLocalResolutionEchoes` marks this one as
-        // already applied — the listener below skips re-applying (and so
-        // re-bumping `checkSeq` for) its own echo of it.
+        // sender, so the listener below applies this SAME resolution again
+        // via its echo — see updateState.ts's applyResolvedAway for why
+        // that is left alone rather than suppressed.
         updateState = applyResolvedAway(updateState);
-        pendingLocalResolutionEchoes += 1;
         void emit(UPDATE_RESULT_EVENT, null).catch(() => {
-          // Not in a Tauri WebView (plain browser preview), or a genuine IPC
-          // failure: no listener will ever echo this back — release the slot
-          // nothing will consume, or a later genuine resolution's echo would
-          // be wrongly swallowed by it instead.
-          pendingLocalResolutionEchoes -= 1;
+          // Not in a Tauri WebView (plain browser preview): nothing to tell.
         });
       }
     } catch (error) {
@@ -413,25 +398,17 @@
     // whichever window ran the check (only the app window ever does — see
     // below) or clicked Install (either window can — both render the
     // button), BOTH windows' `updateState` follow it. Registering this in
-    // the SAME window that emitted is harmless for `applyAvailableBroadcast`
-    // (checkForUpdate's own local apply and this listener's echo of the
-    // SAME "available" result always agree) but NOT for `applyResolvedAway`,
-    // which bumps `checkSeq` on every call: `pendingLocalResolutionEchoes`
-    // is what tells this window's own already-applied resolution apart from
-    // a genuinely new one (this window's own later retry, or a broadcast
-    // from the OTHER window) — see installUpdate. `listen<unknown>`'s type
-    // parameter is a compile-time label only — `asUpdateCheckState` is what
-    // actually guards against a malformed payload reaching `state.info` and
-    // crashing the render, the same way `asDiscovery` guards
-    // `discoveryListener`. `null` is distinguished from a malformed payload:
-    // it is the explicit "resolved" signal, not something to just silently
-    // ignore.
+    // the SAME window that emitted means installUpdate's own resolution
+    // re-applies here too, via its own echo (a real Tauri `emit` reaches its
+    // sender) — see `applyResolvedAway` in updateState.ts for why that is
+    // left alone rather than suppressed. `listen<unknown>`'s type parameter
+    // is a compile-time label only — `asUpdateCheckState` is what actually
+    // guards against a malformed payload reaching `state.info` and crashing
+    // the render, the same way `asDiscovery` guards `discoveryListener`.
+    // `null` is distinguished from a malformed payload: it is the explicit
+    // "resolved" signal, not something to just silently ignore.
     const updateResultListener = listen<unknown>(UPDATE_RESULT_EVENT, (event) => {
       if (event.payload === null) {
-        if (pendingLocalResolutionEchoes > 0) {
-          pendingLocalResolutionEchoes -= 1;
-          return;
-        }
         updateState = applyResolvedAway(updateState);
         return;
       }
