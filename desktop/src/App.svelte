@@ -1,9 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { emit, listen } from "@tauri-apps/api/event";
   import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
-  import Banner from "./lib/Banner.svelte";
   import ConfigApp from "./ConfigApp.svelte";
   import DeckView from "./lib/DeckView.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
@@ -34,7 +33,17 @@
   } from "./lib/onboardingClient";
   import { locale } from "./lib/i18n.svelte";
   import { visibilityGatedLoop } from "./lib/pollGate";
-  import { updateTransport, type UpdateInfo } from "./lib/updateClient";
+  import UpdateBanner from "./lib/UpdateBanner.svelte";
+  import { asUpdateCheckState, reasonOf, runUpdateCheck, updateTransport } from "./lib/updateClient";
+  import {
+    applyAvailableBroadcast,
+    applyCheckResult,
+    applyResolvedAway,
+    beginCheck,
+    initialUpdateState,
+    isDismissableNotice,
+    type UpdateState,
+  } from "./lib/updateState";
 
   // Injected on <html data-window-role> by Rust BEFORE first paint
   // (initialization_script), so the borderless CSS applies with no flash of
@@ -54,7 +63,17 @@
   // status would show the deck (so a demo/local-pinned user can re-onboard).
   let reonboard = $state(false);
   let desktopSetupHidden = $state(false);
-  let availableUpdate = $state<UpdateInfo | null>(null);
+  // Sticky `availableUpdate` + transient `notice`, reconciled by pure
+  // functions in updateState.ts — see that file for the full reasoning. A
+  // stale in-flight check can never erase a live update because the two are
+  // different fields; `updateState.checkSeq` (a monotonic epoch) is the only
+  // protection needed against overlapping checks or a check racing an
+  // install resolution.
+  let updateState = $state<UpdateState>(initialUpdateState());
+  // Install failures are kept separate from the check's own state: they can
+  // only happen after installUpdate() is already running, on top of whatever
+  // updateState says, and must outrank it in UpdateBanner regardless of which
+  // check produced it.
   let updateError = $state("");
   let installingUpdate = $state(false);
   let floatingScrollable = $state(false);
@@ -110,12 +129,35 @@
     }
   }
 
-  async function checkForUpdate(): Promise<void> {
-    try {
-      availableUpdate = await updater.check();
-    } catch {
-      // Automatic checks are best-effort: offline startup and an empty release
-      // channel must never interfere with the deck.
+  // Only the app window ever runs a check (see the mount gate below), but
+  // BOTH windows need to be able to show a FOUND update — the deck's own
+  // automatic check is gone, so without this it could never learn of one at
+  // all. Broadcast (not emit_to) reaches every window, including the one
+  // that sent it; a single shared name keeps the emit and the listen below
+  // from drifting apart. Only "available" ever crosses this: "checking" /
+  // "up-to-date" / "failed" are informational answers to a check the user
+  // asked for in ONE window, and popping them onto the deck too would resize
+  // its content-fit frame for a message it never asked about.
+  const UPDATE_RESULT_EVENT = "update-check-result";
+
+  // One check path for both callers below: the silent mount check and the
+  // tray's manual one. `manual` is the only thing that differs between them
+  // — see updateState.ts's beginCheck/applyCheckResult for the reasoning
+  // (a manual check always shows "checking" and reports every outcome; an
+  // automatic one stays silent unless it finds an update).
+  async function checkForUpdate(manual: boolean): Promise<void> {
+    const { state, seq } = beginCheck(updateState, manual);
+    updateState = state;
+    const result = await runUpdateCheck(() => updater.check());
+    // Dropped outright if a LATER check or an install resolution has already
+    // moved the epoch on since this one started — no comparison needed, and
+    // no way for a stale result to un-clear or resurrect anything.
+    if (seq !== updateState.checkSeq) return;
+    updateState = applyCheckResult(updateState, seq, manual, result);
+    if (result.kind === "available") {
+      void emit(UPDATE_RESULT_EVENT, result).catch(() => {
+        // Not in a Tauri WebView (plain browser preview): nothing to tell.
+      });
     }
   }
 
@@ -125,13 +167,71 @@
     updateError = "";
     try {
       const installed = await updater.install();
-      if (!installed) availableUpdate = null;
+      if (!installed) {
+        // A definitive resolution — the updater's own re-check found the
+        // release gone or already applied (a SUCCESSFUL install never
+        // reaches here: it calls app.request_restart() Rust-side and the
+        // process ends, so no race with a successful install can exist).
+        // Applied HERE, synchronously, so the button is gone the instant
+        // `installingUpdate` is (a real IPC round trip to the broadcast
+        // listener below is real time — an impatient double-click in that
+        // gap must not re-invoke `updater.install()`) — and separately
+        // broadcast so the OTHER window learns of it too (an
+        // "available"-only broadcast otherwise has no way to retract
+        // anything, and a window that never installs — the deck — would
+        // keep an "Install and restart" button for an update the process
+        // has already decided is gone). A real Tauri `emit` reaches its own
+        // sender, so the listener below applies this SAME resolution again
+        // via its echo — see updateState.ts's applyResolvedAway for why
+        // that is left alone rather than suppressed.
+        updateState = applyResolvedAway(updateState);
+        void emit(UPDATE_RESULT_EVENT, null).catch(() => {
+          // Not in a Tauri WebView (plain browser preview): nothing to tell.
+        });
+      }
     } catch (error) {
-      updateError = error instanceof Error ? error.message : String(error);
+      updateError = reasonOf(error);
     } finally {
       installingUpdate = false;
     }
   }
+
+  // Every notice — "checking" included — is swept on this timer, not just
+  // "up to date"/"failed": nothing else ever clears them (unlike the sticky
+  // `availableUpdate`, which only installUpdate resolves), so left alone
+  // they would pin the banner to the top of the window (or permanently
+  // steal height from the content-fit deck) for the rest of the process's
+  // life. "checking" needs this MORE than the other two: `update_check` is
+  // a plain invoke with no timeout anywhere in the chain, so an ordinary
+  // hung request (no adversarial timing needed) would otherwise strand it —
+  // and the install action it covers — forever. Sweeping it is safe:
+  // `checkSeq` is untouched, so if the check DOES eventually settle,
+  // `applyCheckResult` still applies its result normally; the sweep only
+  // reveals whatever `availableUpdate` says underneath in the meantime. Re-
+  // runs on every new notice, so a fresh one cancels the previous timer via
+  // the effect's own cleanup and starts a new one.
+  $effect(() => {
+    if (!isDismissableNotice(updateState.notice)) return;
+    const dismissed = updateState.notice;
+    const timer = setTimeout(() => {
+      if (updateState.notice === dismissed) updateState = { ...updateState, notice: null };
+    }, 8000);
+    return () => clearTimeout(timer);
+  });
+
+  // installError outranks both `notice` and `availableUpdate` in UpdateBanner
+  // and is otherwise cleared only by installUpdate's own entry (a retry
+  // click) — ignored, it would pin a red bar for the rest of the process's
+  // life, masking any later state and permanently stealing content-fit
+  // height on the deck. Same 8s window as the effect above, tracked
+  // separately since installError changes independently of updateState.
+  $effect(() => {
+    if (!updateError) return;
+    const timer = setTimeout(() => {
+      updateError = "";
+    }, 8000);
+    return () => clearTimeout(timer);
+  });
 
   // Content-fit: size the borderless window to the intrinsic content height. Skips
   // redundant calls via fitDecision's anti-feedback guard. No-op (try/catch) when
@@ -283,13 +383,52 @@
       if (command) void applyFloatingScale(command);
     });
 
+    // Rust emits this to the APP window only (tray's "Check for updates" item
+    // — see MENU_ID_CHECK_UPDATE in lib.rs), via the same emit_to pattern as
+    // `reonboardListener`/`settingsListener` above: registered in both
+    // windows, but Tauri only ever delivers it to the app window's own IPC
+    // channel. `show_role_window` already brought that window forward before
+    // this fires, so the result is never rendered into a hidden window.
+    const checkUpdateListener = listen("check-for-updates", () => {
+      void checkForUpdate(true);
+    });
+
+    // The other half of `checkForUpdate`'s broadcast (a found "available"
+    // update) and `installUpdate`'s (its resolution, a `null` payload):
+    // whichever window ran the check (only the app window ever does — see
+    // below) or clicked Install (either window can — both render the
+    // button), BOTH windows' `updateState` follow it. Registering this in
+    // the SAME window that emitted means installUpdate's own resolution
+    // re-applies here too, via its own echo (a real Tauri `emit` reaches its
+    // sender) — see `applyResolvedAway` in updateState.ts for why that is
+    // left alone rather than suppressed. `listen<unknown>`'s type parameter
+    // is a compile-time label only — `asUpdateCheckState` is what actually
+    // guards against a malformed payload reaching `state.info` and crashing
+    // the render, the same way `asDiscovery` guards `discoveryListener`.
+    // `null` is distinguished from a malformed payload: it is the explicit
+    // "resolved" signal, not something to just silently ignore.
+    const updateResultListener = listen<unknown>(UPDATE_RESULT_EVENT, (event) => {
+      if (event.payload === null) {
+        updateState = applyResolvedAway(updateState);
+        return;
+      }
+      const result = asUpdateCheckState(event.payload);
+      if (result?.kind === "available") {
+        updateState = applyAvailableBroadcast(updateState, result.info);
+      }
+    });
+
     void (async () => {
       while (alive && !discovery) {
         await pullDiscovery();
         if (!discovery) await new Promise((r) => setTimeout(r, 400));
       }
     })();
-    void checkForUpdate();
+    // Both windows mount this component, but only one process should ever
+    // check on startup: the app window. The deck window's own banner can
+    // still DISPLAY a found update — it just never runs a second check of
+    // its own, learning the result from `updateResultListener` instead.
+    if (surface === "desktop") void checkForUpdate(false);
 
     // Visibility-gated: the setup poll parks while the window is hidden (the
     // deck lives in the tray) and refreshes immediately on show.
@@ -322,6 +461,8 @@
       void reonboardListener.then((unlisten) => unlisten());
       void settingsListener.then((unlisten) => unlisten());
       void zoomListener.then((unlisten) => unlisten());
+      void checkUpdateListener.then((unlisten) => unlisten());
+      void updateResultListener.then((unlisten) => unlisten());
       window.removeEventListener("keydown", onFloatingScaleKey);
       window.removeEventListener("contextmenu", onDeckContextMenu);
       setupPoll.stop();
@@ -329,22 +470,6 @@
     };
   });
 
-  const updateMessage = $derived(
-    availableUpdate
-      ? locale.lang === "cs"
-        ? `Je dostupný Herdeck ${availableUpdate.version}.`
-        : `Herdeck ${availableUpdate.version} is available.`
-      : "",
-  );
-  const updateAction = $derived(
-    installingUpdate
-      ? locale.lang === "cs"
-        ? "Instaluji…"
-        : "Installing…"
-      : locale.lang === "cs"
-        ? "Nainstalovat a restartovat"
-        : "Install and restart",
-  );
   const connectionSetupLabel = $derived(
     locale.lang === "cs" ? "Nastavení připojení" : "Connection setup",
   );
@@ -379,18 +504,15 @@
 
 {#if surface === "desktop"}
   <div class="desktop-app">
-    {#if updateError}
-      <div class="desktop-banner"><Banner kind="error" message={updateError} /></div>
-    {:else if availableUpdate}
-      <div class="desktop-banner">
-        <Banner
-          kind="warning"
-          message={updateMessage}
-          actionLabel={updateAction}
-          onAction={installUpdate}
-        />
-      </div>
-    {/if}
+    <div class="desktop-banner">
+      <UpdateBanner
+        availableUpdate={updateState.availableUpdate}
+        notice={updateState.notice}
+        installError={updateError}
+        installing={installingUpdate}
+        onInstall={installUpdate}
+      />
+    </div>
     <div class="desktop-control-room" inert={showDesktopSetup} aria-hidden={showDesktopSetup}>
       <ConfigApp interactive={!showDesktopSetup} />
     </div>
@@ -447,16 +569,13 @@
         <span class="grabber" data-tauri-drag-region></span>
       </div>
     {/if}
-    {#if updateError}
-      <Banner kind="error" message={updateError} />
-    {:else if availableUpdate}
-      <Banner
-        kind="warning"
-        message={updateMessage}
-        actionLabel={updateAction}
-        onAction={installUpdate}
-      />
-    {/if}
+    <UpdateBanner
+      availableUpdate={updateState.availableUpdate}
+      notice={updateState.notice}
+      installError={updateError}
+      installing={installingUpdate}
+      onInstall={installUpdate}
+    />
     {#if view === "deck"}
       <DeckView {transport} compact />
     {:else}
