@@ -14,8 +14,17 @@ from herdeck.update import (
     main,
 )
 
+# One minor above whatever this checkout is. Hard-coding the "newer" release
+# works right up until the project reaches that version, at which point the
+# update-available tests silently start asserting the opposite of their names —
+# which is exactly what happened on the 0.2.0 bump.
+NEWER_TAG = "v{}.{}.0".format(
+    int(__version__.split(".")[0]),
+    int(__version__.split(".")[1].split("-")[0].split("+")[0]) + 1,
+)
 
-def _release(tag: str = "v0.2.0") -> dict:
+
+def _release(tag: str = NEWER_TAG) -> dict:
     return {
         "tag_name": tag,
         "html_url": f"https://github.com/vaclavik-xyz/herdeck/releases/tag/{tag}",
@@ -50,7 +59,7 @@ def test_check_for_update_reports_newer_release():
     )
 
     assert status.update_available is True
-    assert status.latest_version == "0.2.0"
+    assert status.latest_version == NEWER_TAG.lstrip("v")
     assert status.current_version == "0.1.0"
 
 
@@ -67,7 +76,7 @@ def test_update_check_json_output(monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
     assert payload["update_available"] is True
-    assert payload["latest_version"] == "0.2.0"
+    assert payload["latest_version"] == NEWER_TAG.lstrip("v")
 
 
 def test_update_requires_explicit_check():
