@@ -277,11 +277,13 @@
           // something to install" — it must survive a resolution that never
           // concerned it (e.g. a genuinely newer update landed from a check
           // or the other window while this retry's install() was in
-          // flight). "checking" is itself an answer-in-progress: a check
-          // the user explicitly started (the generation bump just above
-          // already marks its eventual non-"available" result as
-          // superseded) must not be told "up to date" out from under it
-          // before it even finishes. Only answer here when NEITHER is live.
+          // flight). "checking" is itself an answer-in-progress: a check the
+          // user explicitly started must not be told "up to date" out from
+          // under it before it even finishes — and since THIS resolution
+          // retracted nothing, it doesn't bump the generation either (see
+          // recordResolvedAway), so that check's own outcome still lands
+          // normally and clears the placeholder itself once it settles.
+          // Only answer here when NEITHER is live.
           if (updateState?.kind !== "available" && updateState?.kind !== "checking") {
             updateState = { kind: "up-to-date" };
           }
