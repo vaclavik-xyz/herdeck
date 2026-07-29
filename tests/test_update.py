@@ -59,13 +59,39 @@ def test_check_for_update_reports_newer_release():
     )
 
     assert status.update_available is True
-    assert status.latest_version == NEWER_TAG.lstrip("v")
+    assert status.latest_version == NEWER_TAG.removeprefix("v")
     assert status.current_version == "0.1.0"
 
 
 def test_check_for_update_rejects_incomplete_release_response():
     with pytest.raises(UpdateCheckError, match="missing tag_name or html_url"):
         check_for_update(fetch_json=lambda endpoint: {"tag_name": "v0.2.0"})
+
+
+# The mirror of the bug above. Nothing pinned the negative direction, which is
+# why an inversion could hide there: a check that always says "update available"
+# passes every test that only ever asks for one.
+@pytest.mark.parametrize("tag", [f"v{__version__}", "v0.0.1"])
+def test_check_for_update_reports_no_update_for_an_equal_or_older_release(tag):
+    status = check_for_update(
+        fetch_json=lambda endpoint: _release(tag),
+        current_version=__version__,
+    )
+
+    assert status.update_available is False
+    assert status.current_version == __version__
+
+
+def test_update_check_says_up_to_date_when_the_release_is_not_newer(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "herdeck.update._fetch_json", lambda endpoint: _release(f"v{__version__}")
+    )
+
+    assert main(["--check"]) == 0
+
+    out = capsys.readouterr().out
+    assert "up to date" in out
+    assert "is available" not in out
 
 
 def test_update_check_json_output(monkeypatch, capsys):
@@ -76,7 +102,7 @@ def test_update_check_json_output(monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
     assert payload["update_available"] is True
-    assert payload["latest_version"] == NEWER_TAG.lstrip("v")
+    assert payload["latest_version"] == NEWER_TAG.removeprefix("v")
 
 
 def test_update_requires_explicit_check():
