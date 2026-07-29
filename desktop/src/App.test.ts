@@ -485,48 +485,21 @@ describe("App update install resolution clears both windows", () => {
     }
   });
 
-  // A real Tauri `emit` reaches its own sender — so if installUpdate applied
-  // applyResolvedAway BOTH locally and through the listener's echo of that
-  // same emit, checkSeq would bump twice for one resolution (and could
-  // invalidate a check started in the gap between the two applications).
-  // Verified two ways: the resolution must NOT apply when the emit
-  // "succeeds" without actually reaching any listener (proving there is no
-  // hidden direct-apply fallback in the success path), and it MUST still
-  // apply when the emit fails outright (the actual non-Tauri-WebView case
-  // the fallback exists for).
-  it("applies the resolution only through the broadcast listener, not a second local call", async () => {
+  // installUpdate applies its own resolution SYNCHRONOUSLY, not only once a
+  // broadcast round-trip completes — a real IPC round trip is real time,
+  // and a window that depended solely on the echo would leave its "Install
+  // and restart" button live (and re-clickable) for that whole gap.
+  it("clears the banner immediately, even if the emit never reaches any listener", async () => {
     const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
     const baseInvoke = mockInvoke(check);
     invokeMock.mockImplementation(async (cmd: string) =>
       cmd === "update_install" ? false : baseInvoke(cmd),
     );
-    // A "black hole" emit: resolves successfully (so the .catch fallback
-    // does NOT run) but never actually delivers to any registered listener.
+    // A "black hole" emit: resolves successfully but never actually
+    // delivers to any registered listener — simulating an echo that is
+    // simply slow, or a broadcast that never reaches this window's own
+    // channel for some reason. The LOCAL apply must not depend on it.
     emitMock.mockImplementation(async () => {});
-    const { target, cleanup } = render();
-    try {
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
-
-      const installButton = target.querySelector<HTMLButtonElement>('[role="status"] button');
-      installButton!.click();
-      await new Promise((r) => setTimeout(r, 0));
-
-      expect(
-        target.textContent,
-        "installUpdate applied the resolution directly instead of solely through the listener",
-      ).toContain("Herdeck 0.2.0 is available.");
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("falls back to a direct local apply when the emit itself fails (no Tauri WebView)", async () => {
-    const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
-    const baseInvoke = mockInvoke(check);
-    invokeMock.mockImplementation(async (cmd: string) =>
-      cmd === "update_install" ? false : baseInvoke(cmd),
-    );
-    emitMock.mockRejectedValue(new Error("not in a Tauri WebView"));
     const { target, cleanup } = render();
     try {
       await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
@@ -535,10 +508,143 @@ describe("App update install resolution clears both windows", () => {
       installButton!.click();
 
       await vi.waitFor(() => {
-        expect(target.textContent, "the fallback never applied the resolution locally").toContain(
+        expect(target.textContent, "the local apply depended on the echo arriving").toContain(
           "Herdeck is up to date.",
         );
       });
+    } finally {
+      cleanup();
+    }
+  });
+
+  // If installUpdate's emit itself fails (a plain browser preview, or a
+  // one-off IPC error), the `.catch` releases the pending-echo slot it had
+  // just claimed — without that release, the slot would leak, and a LATER,
+  // genuinely different resolution's real echo would be wrongly treated as
+  // "just an echo of the earlier one" and suppressed instead of applied.
+  // A leaked slot and a correctly-released one are NOT distinguishable by
+  // the resolution's own rendered text (applyResolvedAway's output is the
+  // same "up to date" message either way) — the observable difference is
+  // whether it bumped `checkSeq`. A genuinely separate resolution wrongly
+  // treated as "just an echo" would leave `checkSeq` untouched, letting an
+  // otherwise-stale, overlapping check apply its result instead of being
+  // correctly dropped.
+  it("does not leak a pending-echo slot when the emit fails, suppressing a later genuine resolution", async () => {
+    let resolveManual: (v: unknown) => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // manual, deferred
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    // Only install #1's OWN emit (the `null` resolution payload) fails —
+    // NOT `mockRejectedValueOnce`, which would target whichever emit call
+    // happens to go first. That is the mount's own automatic check's
+    // "available" broadcast (fired on mount, before this test ever clicks
+    // anything), and its failure is invisible here: the local apply from
+    // `checkForUpdate` already ran synchronously regardless of whether the
+    // broadcast succeeds, in this single-window test with nothing else to
+    // reach. Matching on the payload instead targets the actual call this
+    // test means to fail, however many others precede it. The direct
+    // listener delivery further below is not routed through `emitMock` at
+    // all, so it always "succeeds" regardless.
+    emitMock.mockImplementation(async (event: string, payload: unknown) => {
+      if (payload === null) throw new Error("transient IPC failure");
+      for (const [name, cb] of listenMock.mock.calls) {
+        if (name === event) (cb as (ev: { payload: unknown }) => void)({ payload });
+      }
+    });
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+
+      // Install #1: its emit fails — the catch must release the slot it
+      // claimed, or it lingers to wrongly swallow the NEXT null delivered.
+      target.querySelector<HTMLButtonElement>('[role="status"] button')!.click();
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck is up to date."));
+
+      // A manual check starts and is left in flight.
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+
+      // A genuinely SEPARATE resolution now arrives (simulating the other
+      // window installing something) — driven directly since nothing on
+      // this side emitted it, so a leaked slot has no legitimate echo to
+      // consume here; it would swallow THIS instead.
+      const resultListener = listenMock.mock.calls.find(([name]) => name === "update-check-result");
+      const deliver = resultListener![1] as (ev: { payload: unknown }) => void;
+      deliver({ payload: null });
+      flushSync();
+
+      // If that genuine resolution was wrongly suppressed, checkSeq never
+      // moved, and the in-flight check above (which should be treated as
+      // stale once a real resolution lands) will incorrectly still apply.
+      resolveManual({ version: "0.9.9", current_version: "0.1.0" });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(
+        target.textContent,
+        "a leaked echo slot suppressed a genuine resolution, letting a stale check apply instead",
+      ).not.toContain("0.9.9");
+    } finally {
+      cleanup();
+    }
+  });
+
+  // A real Tauri `emit` reaches its own sender, so installUpdate's local
+  // apply and the echo through its own listener both fire for ONE
+  // resolution — normally back-to-back, but the echo is a real IPC round
+  // trip, so a check can genuinely start in the gap between the two. The
+  // default `emitMock` delivers synchronously (no real gap to exploit), so
+  // this test defers the echo explicitly to construct one: a check started
+  // AFTER the local apply but BEFORE the echo lands must still have its own
+  // result apply once it settles — which only holds if the echo's
+  // `applyResolvedAway` call is a no-op, not a second `checkSeq` bump.
+  it("does not let a deferred echo of its own resolution double-bump the epoch", async () => {
+    let resolveManual: (v: unknown) => void = () => {};
+    let deliverEcho: () => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // manual, deferred
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    emitMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          deliverEcho = () => {
+            for (const [name, cb] of listenMock.mock.calls) {
+              if (name === "update-check-result") (cb as (ev: { payload: unknown }) => void)({ payload: null });
+            }
+            resolve();
+          };
+        }),
+    );
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+
+      const installButton = target.querySelector<HTMLButtonElement>('[role="status"] button');
+      installButton!.click();
+      // The local apply is synchronous — the banner already answers, even
+      // though the echo (deferred above) has not been delivered yet.
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck is up to date."));
+
+      // A check starts in exactly that gap, before the echo lands.
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+
+      // NOW the echo lands. If applyResolvedAway bumped checkSeq again
+      // here, the check above would be invalidated before it even settles.
+      deliverEcho();
+      await new Promise((r) => setTimeout(r, 0));
+
+      // The check's own result must still apply.
+      resolveManual({ version: "0.3.0", current_version: "0.1.0" });
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.3.0 is available."));
     } finally {
       cleanup();
     }
@@ -710,11 +816,11 @@ describe("App update banner is a persistent live region", () => {
   });
 });
 
-// "Up to date" and "failed" notices are dead ends nothing else ever clears —
-// left alone they would pin the banner in place (stealing height from the
-// content-fit deck window) for the rest of the process's life. The sticky
-// "available" update stays until installed or retracted by a confirmed
-// up-to-date; it must NOT be swept away on the same clock.
+// Every notice — "checking" included — is a dead end nothing else ever
+// clears; left alone it would pin the banner in place (stealing height from
+// the content-fit deck window) for the rest of the process's life. The
+// sticky "available" update stays until installed or retracted by a
+// confirmed up-to-date; it must NOT be swept away on the same clock.
 describe("App update banner auto-dismiss", () => {
   it("clears a failed manual check after a timeout", async () => {
     vi.useFakeTimers();
@@ -821,6 +927,49 @@ describe("App update banner auto-dismiss", () => {
         expect(target.textContent, "the available update never reappeared").toContain(
           "Herdeck 0.2.0 is available.",
         );
+      } finally {
+        cleanup();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The load-bearing half of isDismissableNotice's own claim: sweeping
+  // "checking" must not touch checkSeq, or a hung check that eventually DOES
+  // settle — after its own notice was already swept away — would have its
+  // real result silently dropped as stale. A future "cancel the stale check"
+  // tidy-up that bumped checkSeq in the dismissal path would break exactly
+  // this without any other test noticing.
+  it("still applies a check's result after its own 'checking' notice was already swept", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveManual: (v: unknown) => void = () => {};
+      const check = vi
+        .fn()
+        .mockResolvedValueOnce(null) // automatic mount check: up to date, silent
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; }));
+      invokeMock.mockImplementation(mockInvoke(check));
+      const { target, cleanup } = render();
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+
+        registeredListener("check-for-updates")!();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.textContent).toContain("Checking for updates");
+
+        // The notice is swept while the check is still hung...
+        await vi.advanceTimersByTimeAsync(8000);
+        expect(target.textContent).not.toContain("Checking for updates");
+
+        // ...and only THEN does the check finally settle.
+        resolveManual({ version: "0.2.0", current_version: "0.1.0" });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(
+          target.textContent,
+          "the check's real result was dropped as stale after its notice was swept",
+        ).toContain("Herdeck 0.2.0 is available.");
       } finally {
         cleanup();
       }

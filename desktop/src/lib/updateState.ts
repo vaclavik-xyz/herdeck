@@ -91,28 +91,48 @@ export function applyAvailableBroadcast(state: UpdateState, info: UpdateInfo): U
 /** installUpdate resolved with nothing left to install (the updater's own
  *  re-check found the release gone or already applied — see App.svelte for
  *  the full argument on why a successful install can never reach here).
- *  Bumps the epoch unconditionally, even when there was no live
- *  `availableUpdate` to retract (installError's retry action offers the
- *  same install regardless of state): a check left in flight in EITHER
- *  window when this runs must not un-clear it once it settles, and a
- *  "checking" placeholder must not be stranded — since this write already
- *  guarantees that check's own result will be dropped, overwriting
- *  "checking" here (with "up to date": there is nothing left to install) is
- *  what keeps it from sitting there forever. */
+ *  Bumps the epoch, even when there was no live `availableUpdate` to retract
+ *  (installError's retry action offers the same install regardless of
+ *  state): a check left in flight in EITHER window when this runs must not
+ *  un-clear it once it settles, and a "checking" placeholder must not be
+ *  stranded — since this write already guarantees that check's own result
+ *  will be dropped, overwriting "checking" here (with "up to date": there is
+ *  nothing left to install) is what keeps it from sitting there forever.
+ *
+ *  Called EXACTLY ONCE per real resolution — App.svelte applies it locally,
+ *  synchronously, and separately suppresses the echo of that same emit
+ *  reaching its own listener (a counter, not a comparison against the
+ *  resulting state: anything else — a new check starting, say — could
+ *  change the state in between, and comparing against a stale expectation
+ *  would then fail to recognise the echo and bump the epoch a second time
+ *  for nothing). A genuinely different, later resolution — the OTHER
+ *  window's, or this same window's own later retry — is never suppressed
+ *  and bumps the epoch normally. */
 export function applyResolvedAway(state: UpdateState): UpdateState {
   return { ...state, availableUpdate: null, notice: { kind: "up-to-date" }, checkSeq: state.checkSeq + 1 };
 }
 
-/** Whether `notice` is worth auto-dismissing on a timer (App.svelte). Includes
- *  "checking": `update_check` is a plain `invoke` with no timeout anywhere in
- *  the chain (no timeout on the transport, none on the updater plugin
- *  config), so an ordinary hung request — no adversarial timing needed, just
- *  a bad network — would otherwise strand it forever, taking the install
- *  action down with it (the notice covers `availableUpdate` in the banner).
- *  Dismissing it is safe: it reveals whatever `availableUpdate` says
- *  underneath, and if the check eventually does settle, `checkSeq` is
- *  untouched by the dismissal, so `applyCheckResult` still applies its
- *  result normally — the notice just doesn't wait around to show it. */
+/** Whether `notice` is worth auto-dismissing on a timer (App.svelte). An
+ *  exhaustive switch, not a bare non-null check: adding a kind to `Notice`
+ *  later must make an explicit choice here rather than being silently swept
+ *  (or silently left stuck) by default.
+ *
+ *  All three current kinds are `true`. "checking" included: `update_check`
+ *  is a plain `invoke` with no timeout anywhere in the chain (no timeout on
+ *  the transport, none on the updater plugin config), so an ordinary hung
+ *  request — no adversarial timing needed, just a bad network — would
+ *  otherwise strand it forever, taking the install action down with it (the
+ *  notice covers `availableUpdate` in the banner). Dismissing it is safe: it
+ *  reveals whatever `availableUpdate` says underneath, and if the check
+ *  eventually does settle, `checkSeq` is untouched by the dismissal, so
+ *  `applyCheckResult` still applies its result normally — the notice just
+ *  doesn't wait around to show it. */
 export function isDismissableNotice(notice: Notice | null): boolean {
-  return notice !== null;
+  if (notice === null) return false;
+  switch (notice.kind) {
+    case "checking":
+    case "up-to-date":
+    case "failed":
+      return true;
+  }
 }
