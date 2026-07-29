@@ -6,7 +6,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-29
+
 ### Added
+- The desktop app is built around two windows with fixed roles: an app window
+  that hosts the control room, and a borderless deck window you pop out of it.
+  Show the deck from the app window's toggle, the tray, or `CmdOrCtrl+Shift+D`;
+  close it the same ways, with ⌘W, or from the deck's own right-click menu,
+  which also carries the zoom steps and their shortcuts.
+- `[desktop].deck_always_on_top` keeps the deck above other windows, applied
+  live from the editor or the tray with no restart.
+- Which windows were open, and where the deck sat, are remembered between
+  launches in `~/.cache/herdeck/window-state.json`.
+- The settings window, onboarding and floating deck are rebuilt around one token
+  layer in which herdeck's own status palette is the semantic colour system, so
+  the window and the physical Stream Deck agree by construction.
 - Live terminal preview in the browser deck: long-press, right-click, or use
   `Shift+Enter` on an agent tile to watch that pane read-only, streamed from
   herdr (`terminal session observe`, herdr >= 0.7.3) through the bridge.
@@ -21,10 +35,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   subscribes to tab/workspace/worktree events, so workspace, tab, and branch
   labels update instantly. **herdr >= 0.7.2 is now required** — check with
   `herdr status`, upgrade with `herdr update`.
+- **`[desktop].window_mode` is replaced by `[desktop].deck_always_on_top`.**
+  The old three-valued key decided four unrelated things at once and forced a
+  process restart on any switch involving `normal`; nothing restarts now.
+  Migration is automatic and happens once: `normal` opens the app window,
+  `floating` and `always_on_top` open the deck, and `always_on_top` also turns
+  the new flag on. The legacy key is read as a fallback and then ignored — it is
+  deliberately left in your `config.toml` rather than rewritten.
 
 ### Fixed
 - Herdr 0.7.5 protocol compatibility for submitted prompts and agent launches,
   while preserving protocol 16 and custom argv-based start profiles.
+- The floating deck opened on the primary monitor rather than the one in use,
+  and could be placed under the dock or the menu bar. It now lands in the work
+  area of the screen the pointer is on, on Windows and Wayland too.
+- A compact deck that could not reach the runtime showed a grid of blank keys
+  and no reason why.
+- The status panel spans two grid columns plus the gap between them, so its 2:1
+  artwork set the deck's row height and hung a few pixels below the tiles.
+- A press outline was never cleared, so the last-pressed key kept its ring while
+  the agent under it changed; the deck card's shadow pooled in its rounded
+  corners; and the navigation strip stretched on narrow screens.
 
 ## [0.1.1]
 
@@ -51,6 +82,7 @@ Initial public release.
   configurable tiles, themes, profiles, macros, and notifications
   (macOS + Telegram).
 
-[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/vaclavik-xyz/herdeck/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vaclavik-xyz/herdeck/releases/tag/v0.1.0
