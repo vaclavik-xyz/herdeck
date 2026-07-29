@@ -731,6 +731,21 @@ describe("App update install resolution clears both windows", () => {
           "an echo was wrongly treated as a new resolution, bumping checkSeq and invalidating a check that was never stale",
         ).toContain("Herdeck 0.4.0 is available."),
       );
+
+      // A THIRD, genuinely separate resolution now arrives (the other
+      // window installing something else) — delivered directly, the same
+      // way the "new update found" broadcast above was, so nothing on this
+      // side claimed a slot for it. A latching guard (incremented on every
+      // install but never decremented, rather than actually counted back
+      // down to zero) would still be sitting above zero from the first two
+      // installs and would wrongly swallow this one forever, exactly the
+      // failure the counter exists to rule out.
+      deliver({ payload: null });
+      flushSync();
+      expect(
+        target.textContent,
+        "a non-decrementing (latched) guard swallowed a genuine third resolution",
+      ).toContain("Herdeck is up to date.");
     } finally {
       cleanup();
     }

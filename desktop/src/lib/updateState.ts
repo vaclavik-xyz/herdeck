@@ -125,14 +125,19 @@ export function applyResolvedAway(state: UpdateState): UpdateState {
  *  `applyCheckResult` still applies its result normally — the notice just
  *  doesn't wait around to show it.
  *
- *  Written as a switch with an explicit `default: true`, not left to fall
- *  off the end: this repo's `npm run build` is a plain `vite build` (esbuild
- *  strips types without checking them) and CI runs no `tsc`/`svelte-check`
- *  step, so a future kind added to `Notice` without touching this function
- *  would ship and run, not just fail to compile. Falling through to `true`
- *  keeps the one safe default (nothing gets silently stuck) even then; the
- *  switch's per-kind cases stay for a human to reconsider deliberately, not
- *  to gate the outcome. */
+ *  Written as a switch with a `default` case, not left to fall off the end
+ *  (which `: boolean`'s return type would otherwise make a compile error) —
+ *  but the default is not a bare fallback: `notice` is asserted `never`
+ *  there first, so adding a kind to `Notice` without touching this function
+ *  is STILL a compile error (the assertion fails to typecheck), the same
+ *  protection an exhaustive switch with no default gives. What changes is
+ *  what happens if that error is ever ignored and the code ships anyway:
+ *  this repo's `npm run build` is a plain `vite build` (esbuild strips
+ *  types without checking them) and CI runs no `tsc`/`svelte-check` step, so
+ *  an unhandled kind falling all the way through to a bare `default` WOULD
+ *  ship and run, silently stranding it — the return there is the one safe
+ *  choice (nothing gets silently stuck) for that scenario specifically, not
+ *  a replacement for the per-kind cases above it. */
 export function isDismissableNotice(notice: Notice | null): boolean {
   if (notice === null) return false;
   switch (notice.kind) {
@@ -140,7 +145,10 @@ export function isDismissableNotice(notice: Notice | null): boolean {
     case "up-to-date":
     case "failed":
       return true;
-    default:
+    default: {
+      const exhaustive: never = notice;
+      void exhaustive;
       return true;
+    }
   }
 }
