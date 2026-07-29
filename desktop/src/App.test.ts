@@ -424,6 +424,121 @@ describe("App update install resolution clears both windows", () => {
       deck.cleanup();
     }
   });
+
+  // The exact race the anti-downgrade guard has to survive: a check that was
+  // ALREADY in flight when installUpdate legitimately resolved the update
+  // away must not bring it back when it finally settles with a lesser
+  // outcome. A guard that compares against a snapshot from when the check
+  // STARTED (rather than the live state at the moment it resolves) gets this
+  // backwards.
+  it("does not resurrect an update that install already resolved away, from a check in flight before it", async () => {
+    let resolveManual: (v: unknown) => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // manual, deferred
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      });
+
+      // A manual re-check starts on top of the available update (no
+      // "checking" placeholder — see the neighbouring describe block) and
+      // is left in flight.
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+
+      // The user installs WHILE that re-check is still pending, and the
+      // updater finds nothing left to install.
+      const installButton = target.querySelector("button");
+      installButton!.click();
+      await vi.waitFor(() => {
+        expect(target.querySelector(".banner"), "install resolution never cleared the banner").toBeNull();
+      });
+
+      // NOW the re-check that started before the install finally resolves,
+      // with nothing new — it must not resurrect what install just cleared.
+      resolveManual(null);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(
+        target.querySelector(".banner"),
+        "a stale in-flight check resurrected an update the install already resolved away",
+      ).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("does not broadcast a clear when the install succeeds (about to restart)", async () => {
+    const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? true : baseInvoke(cmd),
+    );
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      });
+      emitMock.mockClear();
+
+      const installButton = target.querySelector("button");
+      installButton!.click();
+      // installUpdate's async body needs a turn to run through.
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(emitMock).not.toHaveBeenCalledWith(expect.anything(), null);
+    } finally {
+      cleanup();
+    }
+  });
+
+  // The "superseded by install" guard exists to keep a STALE lesser outcome
+  // from un-clearing a resolved-away update — it must not go further and
+  // swallow a genuinely NEW available update a check reports after that
+  // same install resolution, which is real, current information.
+  it("still applies a fresh available update found by a check resolving after an install resolution", async () => {
+    let resolveManual: (v: unknown) => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // manual, deferred
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      });
+
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+
+      const installButton = target.querySelector("button");
+      installButton!.click();
+      await vi.waitFor(() => {
+        expect(target.querySelector(".banner")).toBeNull();
+      });
+
+      // The re-check that started before the install now resolves with a
+      // NEWER available update — a fresh answer, not stale news, and must
+      // still show up despite having started before the install resolved.
+      resolveManual({ version: "0.3.0", current_version: "0.1.0" });
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.3.0 is available.");
+      });
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 // A live region only reliably announces a CONTENT change on an element that

@@ -70,6 +70,13 @@
   // check produced it.
   let updateError = $state("");
   let installingUpdate = $state(false);
+  // Bumped only when installUpdate definitively resolves an update away
+  // (`!installed`). Lets checkForUpdate tell "nothing else has happened
+  // since I started" from "install already gave a real answer while I was
+  // still in flight" — a check that started BEFORE that resolution reports
+  // stale information once it finally settles, and a lesser (non-available)
+  // outcome from it must not un-clear what install already cleared.
+  let updateGeneration = 0;
   let floatingScrollable = $state(false);
   let floatingContentHeight = $state(300);
   let floatingScale = $state((() => {
@@ -139,7 +146,13 @@
   // it decides whether a non-available outcome (checking/up-to-date/failed)
   // is worth showing at all.
   async function checkForUpdate(manual: boolean): Promise<void> {
+    // Only feeds the "checking" placeholder decision just below — NOT the
+    // anti-downgrade guard further down, which must read the LIVE state at
+    // resolution time instead. This snapshot can go stale while the check is
+    // in flight (an install resolving, another check landing), and using it
+    // there let a retracted or superseded update come back from the dead.
     const before = updateState;
+    const startGeneration = updateGeneration;
     // Don't hide an already-actionable "available" banner behind a transient
     // "checking" placeholder: `update_check` is a plain invoke with no
     // timeout, so a hung re-check would otherwise strand the install button
@@ -153,16 +166,23 @@
     // including failure — the fact that the automatic one never could is
     // exactly the defect a manual check exists to fix.
     if (manual || result.kind === "available") {
-      // A transient/failed outcome must never displace an update that is
-      // STILL there and installable: a re-check finding nothing new (or
-      // failing outright) does not mean the earlier one stopped being real.
-      // Checks can overlap (a mount check racing a manual one, or a
-      // double-clicked tray item) — compare against whatever is LIVE right
-      // now, not just what this call started from, and only fall back to
-      // `before` while the live value is still the "checking" placeholder
-      // this call itself may have set (nothing else has settled since).
-      const prior = updateState?.kind === "checking" ? before : updateState;
-      updateState = result.kind === "available" || prior?.kind !== "available" ? result : prior;
+      // installUpdate resolved definitively WHILE this check was in flight:
+      // a lesser (non-"available") outcome from a check that started before
+      // that resolution is stale news and must not un-clear it. A genuinely
+      // NEW "available" from this same check still applies regardless.
+      const supersededByInstall = updateGeneration !== startGeneration;
+      if (!supersededByInstall || result.kind === "available") {
+        // A transient/failed outcome must never displace an update that is
+        // STILL there and installable: a re-check finding nothing new (or
+        // failing outright) does not mean the earlier one stopped being
+        // real. Compare against whatever is LIVE right now (checks can
+        // overlap — a mount check racing a manual one, or a double-clicked
+        // tray item), not a snapshot from when this call started: "checking"
+        // is never "available", so this still lets the very next resolved
+        // check apply its own result normally.
+        const prior = updateState;
+        updateState = result.kind === "available" || prior?.kind !== "available" ? result : prior;
+      }
     }
     if (result.kind === "available") {
       void emit(UPDATE_RESULT_EVENT, result).catch(() => {
@@ -185,6 +205,10 @@
         // otherwise has no way to make: without this, a window that never
         // installs anything (the deck) would keep an "Install and restart"
         // button for an update the process has already decided is gone.
+        // Bumping the generation is what lets a check already in flight when
+        // this ran recognize its own eventual result as stale (see
+        // checkForUpdate's `supersededByInstall`).
+        updateGeneration += 1;
         updateState = null;
         void emit(UPDATE_RESULT_EVENT, null).catch(() => {
           // Not in a Tauri WebView (plain browser preview): nothing to tell.
