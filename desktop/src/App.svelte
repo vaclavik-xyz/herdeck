@@ -34,13 +34,16 @@
   import { locale } from "./lib/i18n.svelte";
   import { visibilityGatedLoop } from "./lib/pollGate";
   import UpdateBanner from "./lib/UpdateBanner.svelte";
+  import { asUpdateCheckState, reasonOf, runUpdateCheck, updateTransport } from "./lib/updateClient";
   import {
-    asUpdateCheckState,
-    reasonOf,
-    runUpdateCheck,
-    updateTransport,
-    type UpdateCheckState,
-  } from "./lib/updateClient";
+    applyAvailableBroadcast,
+    applyCheckResult,
+    applyResolvedAway,
+    beginCheck,
+    initialUpdateState,
+    isDismissableNotice,
+    type UpdateState,
+  } from "./lib/updateState";
 
   // Injected on <html data-window-role> by Rust BEFORE first paint
   // (initialization_script), so the borderless CSS applies with no flash of
@@ -60,66 +63,19 @@
   // status would show the deck (so a demo/local-pinned user can re-onboard).
   let reonboard = $state(false);
   let desktopSetupHidden = $state(false);
-  // null = no check has landed yet (nothing to render). Once a check
-  // completes it is always one of the four UpdateCheckState kinds — see
-  // UpdateBanner, the one place that renders this.
-  let updateState = $state<UpdateCheckState | null>(null);
+  // Sticky `availableUpdate` + transient `notice`, reconciled by pure
+  // functions in updateState.ts — see that file for the full reasoning. A
+  // stale in-flight check can never erase a live update because the two are
+  // different fields; `updateState.checkSeq` (a monotonic epoch) is the only
+  // protection needed against overlapping checks or a check racing an
+  // install resolution.
+  let updateState = $state<UpdateState>(initialUpdateState());
   // Install failures are kept separate from the check's own state: they can
   // only happen after installUpdate() is already running, on top of whatever
   // updateState says, and must outrank it in UpdateBanner regardless of which
   // check produced it.
   let updateError = $state("");
   let installingUpdate = $state(false);
-  // Bumped only when an install (in EITHER window — both render the install
-  // button, see the `resolvedAway` branch of the listener below) definitively
-  // resolves an update away. Lets checkForUpdate tell "nothing else has
-  // happened since I started" from "install already gave a real answer
-  // while I was still in flight" — a check that started BEFORE that
-  // resolution reports stale information once it finally settles.
-  let updateGeneration = 0;
-  // Every version a resolution has retracted, so a check straddling one of
-  // them can tell "the same stale news install just retracted" (drop it, or
-  // the user could click Install again and just get `false` again) from "a
-  // genuinely different, newer update" (apply it — it's real, current
-  // information no earlier resolution knows anything about). An
-  // ACCUMULATING set, not a single slot: two resolutions can happen in
-  // sequence (an install, then a fresh check finding something newer, then
-  // ANOTHER install), and a slot would let the second overwrite — and so
-  // un-protect — the first's record.
-  let resolvedAwayVersions = new Set<string>();
-
-  /** Record that `version` — the update installUpdate actually targeted,
-   *  captured at ITS start, not re-derived here — has been resolved away.
-   *  Shared by installUpdate's own resolution and the broadcast listener's
-   *  "resolved" case (an install can happen in either window), so the two
-   *  can never disagree about what was retracted.
-   *
-   *  `version` is `null` when installUpdate ran with no live "available"
-   *  state to target (e.g. retried from the installError banner, which
-   *  offers the same action regardless of `state`) — that resolution
-   *  retracted NOTHING in particular, so it must not bump the generation
-   *  either: a check already in flight (left showing "checking" — see the
-   *  no-target fallback below) captured its `startGeneration` before this
-   *  ran, and an unearned bump would mark its own eventual, perfectly good
-   *  result as "superseded" with nothing to be superseded BY, stranding the
-   *  placeholder forever (the 8s effect only sweeps up-to-date/failed).
-   *
-   *  Only CLEARS the live state when it currently shows that exact version:
-   *  `updater.install()` is awaited, so a genuinely newer update can land
-   *  (from a check settling, or the other window) while it was in flight —
-   *  that update was never what got resolved and must survive. A real Tauri
-   *  `emit` reaches its own sender, so installUpdate's direct call and this
-   *  SAME window's own updateResultListener both fire for one clear — this
-   *  is naturally idempotent to that since both add the SAME `version`. */
-  function recordResolvedAway(version: string | null): void {
-    if (version !== null) {
-      updateGeneration += 1;
-      resolvedAwayVersions.add(version);
-    }
-    if (updateState?.kind === "available" && updateState.info.version === version) {
-      updateState = null;
-    }
-  }
   let floatingScrollable = $state(false);
   let floatingContentHeight = $state(300);
   let floatingScale = $state((() => {
@@ -185,64 +141,23 @@
   const UPDATE_RESULT_EVENT = "update-check-result";
 
   // One check path for both callers below: the silent mount check and the
-  // tray's manual one. `manual` is the only thing that differs between them —
-  // it decides whether a non-available outcome (checking/up-to-date/failed)
-  // is worth showing at all.
+  // tray's manual one. `manual` is the only thing that differs between them
+  // — see updateState.ts's beginCheck/applyCheckResult for the reasoning
+  // (a manual check always shows "checking" and reports every outcome; an
+  // automatic one stays silent unless it finds an update).
   async function checkForUpdate(manual: boolean): Promise<void> {
-    // Only feeds the "checking" placeholder decision just below — NOT the
-    // anti-downgrade guard further down, which must read the LIVE state at
-    // resolution time instead. This snapshot can go stale while the check is
-    // in flight (an install resolving, another check landing), and using it
-    // there let a retracted or superseded update come back from the dead.
-    const before = updateState;
-    const startGeneration = updateGeneration;
-    // Don't hide an already-actionable "available" banner behind a transient
-    // "checking" placeholder: `update_check` is a plain invoke with no
-    // timeout, so a hung re-check would otherwise strand the install button
-    // gone for the rest of the process's life, which is the same silence
-    // this whole feature exists to close, reached by a different path.
-    if (manual && before?.kind !== "available") updateState = { kind: "checking" };
+    const { state, seq } = beginCheck(updateState, manual);
+    updateState = state;
     const result = await runUpdateCheck(() => updater.check());
-    // Automatic checks are best-effort: offline startup and an empty release
-    // channel must never interfere with the deck, so only a found update is
-    // worth surfacing. A user-requested check reports EVERY outcome,
-    // including failure — the fact that the automatic one never could is
-    // exactly the defect a manual check exists to fix.
-    if (manual || result.kind === "available") {
-      // An install (in EITHER window) resolved definitively WHILE this check
-      // was in flight: a lesser (non-"available") outcome from a check that
-      // started before that resolution is stale news and must not un-clear
-      // it. An "available" result for that SAME version is equally stale —
-      // it is exactly what was just resolved away, and re-showing it would
-      // put the install button back for a click that only resolves `false`
-      // again. Only a genuinely different (newer) version is real news.
-      const supersededByInstall = updateGeneration !== startGeneration;
-      const staleResolvedVersion =
-        result.kind === "available" && resolvedAwayVersions.has(result.info.version);
-      const isFreshOutcome =
-        !supersededByInstall || (result.kind === "available" && !staleResolvedVersion);
-      if (isFreshOutcome) {
-        // A transient/failed outcome must never displace an update that is
-        // STILL there and installable: a re-check finding nothing new (or
-        // failing outright) does not mean the earlier one stopped being
-        // real. Compare against whatever is LIVE right now (checks can
-        // overlap — a mount check racing a manual one, or a double-clicked
-        // tray item), not a snapshot from when this call started: "checking"
-        // is never "available", so this still lets the very next resolved
-        // check apply its own result normally.
-        const prior = updateState;
-        updateState = result.kind === "available" || prior?.kind !== "available" ? result : prior;
-        // Gated on the SAME `isFreshOutcome` as the local assignment above —
-        // not just `result.kind === "available"` — or a stale same-version
-        // result rejected here would still reach the OTHER window (and this
-        // window's own listener, since a broadcast reaches its sender too)
-        // completely unfiltered, resurrecting exactly what was just rejected.
-        if (result.kind === "available") {
-          void emit(UPDATE_RESULT_EVENT, result).catch(() => {
-            // Not in a Tauri WebView (plain browser preview): nothing to tell.
-          });
-        }
-      }
+    // Dropped outright if a LATER check or an install resolution has already
+    // moved the epoch on since this one started — no comparison needed, and
+    // no way for a stale result to un-clear or resurrect anything.
+    if (seq !== updateState.checkSeq) return;
+    updateState = applyCheckResult(updateState, seq, manual, result);
+    if (result.kind === "available") {
+      void emit(UPDATE_RESULT_EVENT, result).catch(() => {
+        // Not in a Tauri WebView (plain browser preview): nothing to tell.
+      });
     }
   }
 
@@ -250,54 +165,24 @@
     if (installingUpdate) return;
     installingUpdate = true;
     updateError = "";
-    // Captured BEFORE `updater.install()` — an awaited download-and-verify
-    // that can take a while — rather than re-read from `updateState` once it
-    // resolves, which could have moved on to a genuinely different update by
-    // then (see recordResolvedAway's doc comment).
-    const targetVersion = updateState?.kind === "available" ? updateState.info.version : null;
     try {
       const installed = await updater.install();
       if (!installed) {
-        // A definitive resolution (the updater itself found nothing to
-        // install, most likely someone/something else already did), unlike
-        // the transient outcomes above — it clears the banner in BOTH
-        // windows, the one retraction the "available"-only broadcast above
-        // otherwise has no way to make: without this, a window that never
-        // installs anything (the deck) would keep an "Install and restart"
-        // button for an update the process has already decided is gone.
-        recordResolvedAway(targetVersion);
-        // No live target (installUpdate ran from the installError retry
-        // with no "available" state showing): the user asked for a retry
-        // and deserves an answer, not the banner just silently vanishing —
-        // show "up to date" (the 8s effect below sweeps it away same as any
-        // other check's). Nothing to tell the OTHER window in this case: it
-        // retracted nothing in particular for it either.
-        if (targetVersion === null) {
-          // A live "available" banner already IS the answer to "is there
-          // something to install" — it must survive a resolution that never
-          // concerned it (e.g. a genuinely newer update landed from a check
-          // or the other window while this retry's install() was in
-          // flight). "checking" is itself an answer-in-progress: a check the
-          // user explicitly started must not be told "up to date" out from
-          // under it before it even finishes — and since THIS resolution
-          // retracted nothing, it doesn't bump the generation either (see
-          // recordResolvedAway), so it alone can't mark that check's own
-          // outcome superseded. A DIFFERENT resolution (e.g. a real
-          // retraction broadcast from the other window) still can — in
-          // which case that check's settle is dropped unless it finds a
-          // genuinely different "available" version; for up-to-date/failed,
-          // only ANOTHER manual check (which re-enters with a fresh
-          // generation) clears the placeholder. Nothing sweeps "checking" on
-          // a timer the way up-to-date/failed are. Only answer here when
-          // NEITHER "available" nor "checking" is live.
-          if (updateState?.kind !== "available" && updateState?.kind !== "checking") {
-            updateState = { kind: "up-to-date" };
-          }
-        } else {
-          void emit(UPDATE_RESULT_EVENT, { resolvedAway: targetVersion }).catch(() => {
-            // Not in a Tauri WebView (plain browser preview): nothing to tell.
-          });
-        }
+        // A definitive resolution — the updater's own re-check found the
+        // release gone or already applied (a SUCCESSFUL install never
+        // reaches here: it calls app.request_restart() Rust-side and the
+        // process ends, so no race with a successful install can exist).
+        // Clears the banner in BOTH windows via the broadcast below, the one
+        // retraction the "available"-only broadcast otherwise has no way to
+        // make: without this, a window that never installs anything (the
+        // deck) would keep an "Install and restart" button for an update
+        // the process has already decided is gone. Runs the same whether or
+        // not there was a live target (installError's retry action offers
+        // this regardless of state) — applyResolvedAway answers either way.
+        updateState = applyResolvedAway(updateState);
+        void emit(UPDATE_RESULT_EVENT, null).catch(() => {
+          // Not in a Tauri WebView (plain browser preview): nothing to tell.
+        });
       }
     } catch (error) {
       updateError = reasonOf(error);
@@ -306,28 +191,31 @@
     }
   }
 
-  // "Up to date" and "failed" are informational dead ends — nothing else
-  // ever clears them (unlike "available", which installUpdate can resolve),
-  // so left alone they would pin the banner to the top of the window (or
-  // permanently steal height from the content-fit deck) for the rest of the
-  // process's life. Re-runs on every new `updateState`, so a fresh check
-  // result cancels the previous timer via the effect's own cleanup and starts
-  // a new one — it never clears a kind newer than the one it was scheduled for.
+  // "Up to date" and "failed" notices are dead ends — nothing else ever
+  // clears them (unlike the sticky `availableUpdate`, which only
+  // installUpdate resolves), so left alone they would pin the banner to the
+  // top of the window (or permanently steal height from the content-fit
+  // deck) for the rest of the process's life. "checking" is NOT swept by
+  // this timer: it always resolves on its own once the check it stands for
+  // actually settles (or is overwritten by applyResolvedAway if a
+  // resolution lands first — see updateState.ts). Re-runs on every new
+  // notice, so a fresh one cancels the previous timer via the effect's own
+  // cleanup and starts a new one.
   $effect(() => {
-    const kind = updateState?.kind;
-    if (kind !== "up-to-date" && kind !== "failed") return;
+    if (!isDismissableNotice(updateState.notice)) return;
+    const dismissed = updateState.notice;
     const timer = setTimeout(() => {
-      if (updateState?.kind === kind) updateState = null;
+      if (updateState.notice === dismissed) updateState = { ...updateState, notice: null };
     }, 8000);
     return () => clearTimeout(timer);
   });
 
-  // installError outranks every updateState kind in UpdateBanner and is
-  // otherwise cleared only by installUpdate's own entry (a retry click) —
-  // ignored, it would pin a red bar for the rest of the process's life,
-  // masking any later state and permanently stealing content-fit height on
-  // the deck. Same 8s window as the effect above, tracked separately since
-  // installError and updateState change independently of each other.
+  // installError outranks both `notice` and `availableUpdate` in UpdateBanner
+  // and is otherwise cleared only by installUpdate's own entry (a retry
+  // click) — ignored, it would pin a red bar for the rest of the process's
+  // life, masking any later state and permanently stealing content-fit
+  // height on the deck. Same 8s window as the effect above, tracked
+  // separately since installError changes independently of updateState.
   $effect(() => {
     if (!updateError) return;
     const timer = setTimeout(() => {
@@ -496,32 +384,28 @@
       void checkForUpdate(true);
     });
 
-    // The other half of `checkForUpdate`'s broadcast (an available update)
-    // and `installUpdate`'s (its resolution, `null`): whichever window ran
-    // the check (only the app window ever does — see below) or clicked
-    // Install (either window can — both render the button), BOTH windows'
-    // `updateState` follow it. Registering this in the SAME window that
-    // emitted is harmless: the assignment just repeats the value that
-    // function already set locally. `listen<UpdateCheckState>`'s type
-    // parameter is a compile-time label only — `asUpdateCheckState` is what
-    // actually guards against a malformed payload reaching `state.info` and
-    // crashing the render, the same way `asDiscovery` guards `discoveryListener`.
-    // A `{resolvedAway}` payload is distinguished from a malformed one: it is
-    // the explicit "install resolution" signal (carrying WHICH version, so
-    // this window doesn't have to guess from its own possibly-moved-on live
-    // state), not something to just silently ignore — and it goes through
-    // the SAME `recordResolvedAway` an install in THIS window would, so a
-    // check in flight here is protected against a resolution that happened
-    // in the OTHER window exactly as it would be against one of its own.
+    // The other half of `checkForUpdate`'s broadcast (a found "available"
+    // update) and `installUpdate`'s (its resolution, a `null` payload):
+    // whichever window ran the check (only the app window ever does — see
+    // below) or clicked Install (either window can — both render the
+    // button), BOTH windows' `updateState` follow it. Registering this in
+    // the SAME window that emitted is harmless: `applyAvailableBroadcast`
+    // and `applyResolvedAway` are both safe to apply twice for one event.
+    // `listen<unknown>`'s type parameter is a compile-time label only —
+    // `asUpdateCheckState` is what actually guards against a malformed
+    // payload reaching `state.info` and crashing the render, the same way
+    // `asDiscovery` guards `discoveryListener`. `null` is distinguished from
+    // a malformed payload: it is the explicit "resolved" signal, not
+    // something to just silently ignore.
     const updateResultListener = listen<unknown>(UPDATE_RESULT_EVENT, (event) => {
-      const payload = event.payload;
-      if (payload !== null && typeof payload === "object" && "resolvedAway" in payload) {
-        const version = (payload as { resolvedAway: unknown }).resolvedAway;
-        recordResolvedAway(typeof version === "string" ? version : null);
+      if (event.payload === null) {
+        updateState = applyResolvedAway(updateState);
         return;
       }
-      const result = asUpdateCheckState(payload);
-      if (result) updateState = result;
+      const result = asUpdateCheckState(event.payload);
+      if (result?.kind === "available") {
+        updateState = applyAvailableBroadcast(updateState, result.info);
+      }
     });
 
     void (async () => {
@@ -612,7 +496,8 @@
   <div class="desktop-app">
     <div class="desktop-banner">
       <UpdateBanner
-        state={updateState}
+        availableUpdate={updateState.availableUpdate}
+        notice={updateState.notice}
         installError={updateError}
         installing={installingUpdate}
         onInstall={installUpdate}
@@ -675,7 +560,8 @@
       </div>
     {/if}
     <UpdateBanner
-      state={updateState}
+      availableUpdate={updateState.availableUpdate}
+      notice={updateState.notice}
       installError={updateError}
       installing={installingUpdate}
       onInstall={installUpdate}

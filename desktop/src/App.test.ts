@@ -6,6 +6,12 @@
 // — with a mocked Tauri bridge, and drives both the mount-time check and the
 // tray's "check-for-updates" event through it, the same way ConfigApp.test.ts
 // drives deck-visibility-changed.
+//
+// The reconciliation itself (sticky availableUpdate + transient notice +
+// monotonic checkSeq) is a pure reducer tested in isolation in
+// updateState.test.ts — what belongs HERE is the wiring: does the mount
+// effect actually call it, does the tray listener, does the broadcast reach
+// the other window, does the DOM show what the reducer says.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import { setLang } from "./lib/i18n.svelte";
@@ -196,12 +202,12 @@ describe("App update check", () => {
   });
 });
 
-// listen<UpdateCheckState>'s type parameter is compile-time only — nothing
-// stops a malformed payload (a future emitter, a stray broadcast from
-// somewhere else) from reaching the listener at runtime. asUpdateCheckState
-// is the actual guard; this drives the registered callback directly with a
-// bad payload, the one thing a real cross-window emit can't be made to do
-// from this test file.
+// listen<unknown>'s type parameter is compile-time only — nothing stops a
+// malformed payload (a future emitter, a stray broadcast from somewhere
+// else) from reaching the listener at runtime. asUpdateCheckState is the
+// actual guard; this drives the registered callback directly with a bad
+// payload, the one thing a real cross-window emit can't be made to do from
+// this test file.
 describe("App update-check-result listener", () => {
   it("ignores a malformed broadcast instead of crashing on state.info", async () => {
     invokeMock.mockImplementation(mockInvoke(() => null));
@@ -214,7 +220,8 @@ describe("App update-check-result listener", () => {
       const cb = call![1] as (ev: { payload: unknown }) => void;
 
       // "available" with no `info` — exactly the shape that would throw
-      // inside UpdateBanner's `state.info.version` if it were assigned as-is.
+      // inside UpdateBanner's `availableUpdate.version` if it were assigned
+      // as-is.
       expect(() => {
         cb({ payload: { kind: "available" } });
         flushSync(); // force the render synchronously so a bad assignment surfaces here
@@ -292,11 +299,56 @@ describe("App update check across windows", () => {
   });
 });
 
-// A later, lesser outcome must never erase a real, still-installable update:
-// the check that found it does not stop being true just because a
-// subsequent check found nothing new or failed outright.
-describe("App update check does not downgrade a found update", () => {
-  it("keeps an available update after a later manual check finds nothing new", async () => {
+// The behaviour a manual re-check has when an update is ALREADY showing —
+// the state a user is most likely to click "Check for updates" from. This is
+// where the original defect lived: a manual check used to report NOTHING at
+// all here (see the review at .superpowers/sdd/update-check-review.md,
+// Finding 1). The fix is structural, not a guard: `notice` and
+// `availableUpdate` are different fields (updateState.ts), so a transient
+// outcome renders on top of the sticky one without needing to compare
+// against it.
+describe("App update check on top of an already-found update", () => {
+  it("reports a failure from a manual re-check, and the available update survives underneath", async () => {
+    vi.useFakeTimers();
+    try {
+      const check = vi
+        .fn()
+        .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic
+        .mockRejectedValueOnce(new Error("offline")); // manual re-check
+      invokeMock.mockImplementation(mockInvoke(check));
+      const { target, cleanup } = render();
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+
+        registeredListener("check-for-updates")!();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // The original defect: nothing changed here at all — not while
+        // checking, not on failure. Now the failure is reported...
+        expect(target.textContent).toContain("Update check failed: offline");
+        // ...temporarily covering the install button (scoped to the update
+        // banner's own live region — an unscoped "button" query would find
+        // ConfigApp's unrelated "Show deck" button instead)...
+        expect(target.querySelector<HTMLButtonElement>('[role="status"] button')).toBeNull();
+
+        // ...but the update itself was never touched underneath: once the
+        // notice auto-dismisses, the install action is exactly where it was.
+        await vi.advanceTimersByTimeAsync(8000);
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+        expect(target.querySelector<HTMLButtonElement>('[role="status"] button')?.textContent).toBe("Install and restart");
+      } finally {
+        cleanup();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a manual re-check confirming up-to-date retracts a stale available update", async () => {
+    // Not a regression: a confirmed up-to-date means the release was pulled
+    // or already applied, so the install button really has nothing left to
+    // do — see Finding 7 in the review.
     const check = vi
       .fn()
       .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" })
@@ -304,80 +356,82 @@ describe("App update check does not downgrade a found update", () => {
     invokeMock.mockImplementation(mockInvoke(check));
     const { target, cleanup } = render();
     try {
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
 
       registeredListener("check-for-updates")!();
-      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-      // Give the second result's assignment a tick to (not) apply.
-      await new Promise((r) => setTimeout(r, 0));
-
-      expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      expect(target.textContent).not.toContain("up to date");
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck is up to date."));
+      expect(target.textContent).not.toContain("is available");
     } finally {
       cleanup();
     }
   });
 
-  it("keeps an available update after a later manual check fails", async () => {
+  it("shows 'checking' during a manual re-check, temporarily covering an available update", async () => {
+    let resolveSecond: (v: unknown) => void = () => {};
     const check = vi
       .fn()
       .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" })
-      .mockRejectedValueOnce(new Error("offline"));
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
     invokeMock.mockImplementation(mockInvoke(check));
     const { target, cleanup } = render();
     try {
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
 
       registeredListener("check-for-updates")!();
       await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-      await new Promise((r) => setTimeout(r, 0));
+      expect(target.textContent).toContain("Checking for updates");
+      expect(target.textContent).not.toContain("is available");
 
-      expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      expect(target.textContent).not.toContain("Update check failed");
+      // Resolves with the same version: the update reappears once
+      // "checking" clears, exactly as it was before the re-check.
+      resolveSecond({ version: "0.2.0", current_version: "0.1.0" });
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
     } finally {
       cleanup();
     }
   });
 
-  // The two tests above cover checks that never overlap (one fully settles,
-  // THEN the next starts). Checks can genuinely overlap — a manual check
-  // fired while the automatic mount check is still in flight, or a
-  // double-clicked tray item — and a fix that only compares against what
-  // THIS call started from (rather than the latest settled value) is
-  // defeated by exactly that interleaving.
-  it("keeps an available update found by a check that resolves before an overlapping, lesser one", async () => {
-    let resolveAutomatic: (v: unknown) => void = () => {};
+  // The accepted cost of the simplification (see the review): a check that
+  // was straddling an install resolution — in flight when it landed — is
+  // dropped outright by the monotonic epoch, even if it would have reported
+  // a genuinely newer version. The user re-checks. This is deliberately
+  // different from three earlier commits' behaviour (which tried to
+  // preserve exactly this case with a generation counter and a per-version
+  // blacklist) — pinned here so the trade-off stays a decision, not a
+  // silent regression.
+  it("(accepted cost) drops a straddling check's fresh discovery once an install resolution lands", async () => {
+    // Starting a manual check on top of an already-showing update means
+    // "checking" now covers the install button (the fix above) — so the
+    // resolution below is driven directly through the broadcast listener,
+    // the same path installUpdate's own resolution reaches the OTHER window
+    // through, rather than depending on which DOM button happens to be
+    // reachable under the notice.
     let resolveManual: (v: unknown) => void = () => {};
     const check = vi
       .fn()
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveAutomatic = resolve; }))
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; }));
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // manual, deferred
     invokeMock.mockImplementation(mockInvoke(check));
     const { target, cleanup } = render();
     try {
-      // The automatic mount check is in flight (before = null)...
-      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
-      // ...and a manual one starts on TOP of it, also capturing before = null.
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+
       registeredListener("check-for-updates")!();
       await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
 
-      // The automatic check (started FIRST) resolves FIRST, with the real update.
-      resolveAutomatic({ version: "0.2.0", current_version: "0.1.0" });
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
+      const resultListener = listenMock.mock.calls.find(([name]) => name === "update-check-result");
+      const deliver = resultListener![1] as (ev: { payload: unknown }) => void;
+      deliver({ payload: null });
+      flushSync();
+      expect(target.textContent).toContain("Herdeck is up to date.");
 
-      // The manual check (its OWN stale `before` snapshot was null) resolves
-      // SECOND, with nothing new — it must not erase what the other found.
-      resolveManual(null);
+      // The re-check that started BEFORE the resolution settles now, with a
+      // genuinely newer version — dropped anyway: the epoch already moved
+      // on while it was in flight.
+      resolveManual({ version: "0.3.0", current_version: "0.1.0" });
       await new Promise((r) => setTimeout(r, 0));
-
-      expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      expect(target.textContent).not.toContain("up to date");
+      expect(target.textContent).not.toContain("0.3.0");
+      expect(target.textContent).toContain("Herdeck is up to date.");
     } finally {
       cleanup();
     }
@@ -385,12 +439,14 @@ describe("App update check does not downgrade a found update", () => {
 });
 
 // installUpdate's own resolution (the updater found nothing installable —
-// typically something else already applied it) is the one thing that can
-// retract an "available" banner besides a fresh check finding a newer one.
-// It must clear it everywhere, not just in the window where install was
-// clicked, since only one window (the app window) ever offers that button.
+// typically something else already applied it, or the release was pulled;
+// a SUCCESSFUL install never reaches here, since it calls
+// app.request_restart() Rust-side and the process ends) is the one thing
+// that can retract an "available" banner besides a fresh check confirming
+// up-to-date. It must clear it everywhere, not just in the window where
+// install was clicked, since either window can offer that button.
 describe("App update install resolution clears both windows", () => {
-  it("clears the banner in both windows when the install resolves to nothing installable", async () => {
+  it("clears the available update in both windows when the install resolves to nothing installable", async () => {
     const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
     const baseInvoke = mockInvoke(check);
     invokeMock.mockImplementation(async (cmd: string) =>
@@ -407,71 +463,25 @@ describe("App update install resolution clears both windows", () => {
           expect(deck.target.textContent).toContain("Herdeck 0.2.0 is available.");
         });
 
-        const installButton = app.target.querySelector("button");
+        const installButton = app.target.querySelector<HTMLButtonElement>('[role="status"] button');
         expect(installButton?.textContent).toBe("Install and restart");
         installButton!.click();
 
+        // applyResolvedAway answers "up to date" (not silence) in BOTH
+        // windows — the app locally, the deck via the broadcast.
         await vi.waitFor(() => {
-          expect(app.target.querySelector(".banner"), "app window banner never cleared").toBeNull();
+          expect(app.target.textContent, "app window never answered").toContain("Herdeck is up to date.");
         });
         await vi.waitFor(() => {
-          expect(deck.target.querySelector(".banner"), "deck window banner never cleared").toBeNull();
+          expect(deck.target.textContent, "deck window never learned of the resolution").toContain(
+            "Herdeck is up to date.",
+          );
         });
       } finally {
         app.cleanup();
       }
     } finally {
       deck.cleanup();
-    }
-  });
-
-  // The exact race the anti-downgrade guard has to survive: a check that was
-  // ALREADY in flight when installUpdate legitimately resolved the update
-  // away must not bring it back when it finally settles with a lesser
-  // outcome. A guard that compares against a snapshot from when the check
-  // STARTED (rather than the live state at the moment it resolves) gets this
-  // backwards.
-  it("does not resurrect an update that install already resolved away, from a check in flight before it", async () => {
-    let resolveManual: (v: unknown) => void = () => {};
-    const check = vi
-      .fn()
-      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // manual, deferred
-    const baseInvoke = mockInvoke(check);
-    invokeMock.mockImplementation(async (cmd: string) =>
-      cmd === "update_install" ? false : baseInvoke(cmd),
-    );
-    const { target, cleanup } = render();
-    try {
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
-
-      // A manual re-check starts on top of the available update (no
-      // "checking" placeholder — see the neighbouring describe block) and
-      // is left in flight.
-      registeredListener("check-for-updates")!();
-      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-
-      // The user installs WHILE that re-check is still pending, and the
-      // updater finds nothing left to install.
-      const installButton = target.querySelector("button");
-      installButton!.click();
-      await vi.waitFor(() => {
-        expect(target.querySelector(".banner"), "install resolution never cleared the banner").toBeNull();
-      });
-
-      // NOW the re-check that started before the install finally resolves,
-      // with nothing new — it must not resurrect what install just cleared.
-      resolveManual(null);
-      await new Promise((r) => setTimeout(r, 0));
-
-      expect(
-        target.querySelector(".banner"),
-        "a stale in-flight check resurrected an update the install already resolved away",
-      ).toBeNull();
-    } finally {
-      cleanup();
     }
   });
 
@@ -505,487 +515,17 @@ describe("App update install resolution clears both windows", () => {
         "Herdeck 0.2.0 is available.",
       );
 
-      // Written against the CURRENT clear shape ({resolvedAway: version}),
-      // not the old bare `null` — asserting against a shape nothing emits
-      // any more would pass vacuously even if a clear leaked out here.
-      expect(emitMock).not.toHaveBeenCalledWith(
-        "update-check-result",
-        expect.objectContaining({ resolvedAway: expect.anything() }),
-      );
-    } finally {
-      cleanup();
-    }
-  });
-
-  // The "superseded by install" guard exists to keep a STALE lesser outcome
-  // from un-clearing a resolved-away update — it must not go further and
-  // swallow a genuinely NEW available update a check reports after that
-  // same install resolution, which is real, current information.
-  it("still applies a fresh available update found by a check resolving after an install resolution", async () => {
-    let resolveManual: (v: unknown) => void = () => {};
-    const check = vi
-      .fn()
-      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // manual, deferred
-    const baseInvoke = mockInvoke(check);
-    invokeMock.mockImplementation(async (cmd: string) =>
-      cmd === "update_install" ? false : baseInvoke(cmd),
-    );
-    const { target, cleanup } = render();
-    try {
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
-
-      registeredListener("check-for-updates")!();
-      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-
-      const installButton = target.querySelector("button");
-      installButton!.click();
-      await vi.waitFor(() => {
-        expect(target.querySelector(".banner")).toBeNull();
-      });
-
-      // The re-check that started before the install now resolves with a
-      // NEWER available update — a fresh answer, not stale news, and must
-      // still show up despite having started before the install resolved.
-      resolveManual({ version: "0.3.0", current_version: "0.1.0" });
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.3.0 is available.");
-      });
-    } finally {
-      cleanup();
-    }
-  });
-
-  // The mirror case: a check straddling the resolution reports the SAME
-  // version install just resolved away. That is not fresh news — it is
-  // exactly the stale banner the resolution retracted, and reshowing it
-  // would put the install button back for a click that only resolves
-  // `false` again.
-  it("does not resurrect the SAME version an install just resolved away", async () => {
-    let resolveManual: (v: unknown) => void = () => {};
-    const check = vi
-      .fn()
-      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; })); // manual, deferred
-    const baseInvoke = mockInvoke(check);
-    invokeMock.mockImplementation(async (cmd: string) =>
-      cmd === "update_install" ? false : baseInvoke(cmd),
-    );
-    const { target, cleanup } = render();
-    try {
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
-
-      registeredListener("check-for-updates")!();
-      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-
-      const installButton = target.querySelector("button");
-      installButton!.click();
-      await vi.waitFor(() => {
-        expect(target.querySelector(".banner")).toBeNull();
-      });
-
-      // The in-flight re-check resolves with the SAME version install just
-      // resolved away — stale, not fresh.
-      resolveManual({ version: "0.2.0", current_version: "0.1.0" });
-      await new Promise((r) => setTimeout(r, 0));
-
-      expect(
-        target.querySelector(".banner"),
-        "resurrected the same version install already resolved away",
-      ).toBeNull();
-    } finally {
-      cleanup();
-    }
-  });
-
-  // The reverse ordering: installUpdate captures the version it is actually
-  // targeting BEFORE awaiting `updater.install()` — an awaited
-  // download-and-verify that can take a while. If a genuinely NEWER update
-  // lands (from a check settling) WHILE that install is still pending, the
-  // eventual resolution must retract only the version it was actually asked
-  // about, not whatever happens to be live once it finally settles.
-  it("does not clear a newer update that lands while install() is still resolving an older one", async () => {
-    let resolveInstall: (v: unknown) => void = () => {};
-    const check = vi
-      .fn()
-      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
-      .mockResolvedValueOnce({ version: "0.3.0", current_version: "0.1.0" }); // manual re-check
-    const install = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { resolveInstall = resolve; }));
-    const baseInvoke = mockInvoke(check);
-    invokeMock.mockImplementation(async (cmd: string) =>
-      cmd === "update_install" ? install() : baseInvoke(cmd),
-    );
-    const { target, cleanup } = render();
-    try {
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
-
-      // Click install — its promise is left pending (install is "in flight").
-      const installButton = target.querySelector("button");
-      installButton!.click();
-      await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(1));
-
-      // WHILE install() is still pending, a manual re-check settles with a
-      // genuinely newer available update.
-      registeredListener("check-for-updates")!();
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.3.0 is available.");
-      });
-
-      // NOW install() finally resolves false — for the 0.2.0 it was actually
-      // asked about, not the 0.3.0 that has since appeared.
-      resolveInstall(false);
-      await new Promise((r) => setTimeout(r, 0));
-
-      expect(
-        target.textContent,
-        "a newer update that landed mid-install was wrongly cleared away with the old one",
-      ).toContain("Herdeck 0.3.0 is available.");
-    } finally {
-      cleanup();
-    }
-  });
-
-  // Pins WHICH version gets recorded and blacklisted, not just that survival
-  // happens to work out: two checks are in flight when the install resolves
-  // (0.2.0) — one later reports that SAME version (must be rejected as
-  // stale), the other a genuinely different one (must be accepted). If
-  // recordResolvedAway ever recorded the wrong version (e.g. the live one at
-  // resolution time instead of the captured target), one half of this would
-  // flip silently while the other still passed.
-  it("rejects a straddling check reporting the resolved version, accepts one reporting a different one", async () => {
-    let resolveB: (v: unknown) => void = () => {};
-    let resolveC: (v: unknown) => void = () => {};
-    const check = vi
-      .fn()
-      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveB = resolve; })) // manual check B
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveC = resolve; })); // manual check C
-    const baseInvoke = mockInvoke(check);
-    invokeMock.mockImplementation(async (cmd: string) =>
-      cmd === "update_install" ? false : baseInvoke(cmd),
-    );
-    const { target, cleanup } = render();
-    try {
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
-
-      // Both checks start (and are left in flight) before the install below.
-      registeredListener("check-for-updates")!();
-      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-      registeredListener("check-for-updates")!();
-      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(3));
-
-      const installButton = target.querySelector("button");
-      installButton!.click();
-      await vi.waitFor(() => expect(target.querySelector(".banner")).toBeNull());
-
-      // Check B resolves with the SAME version install just resolved away.
-      resolveB({ version: "0.2.0", current_version: "0.1.0" });
-      await new Promise((r) => setTimeout(r, 0));
-      expect(target.querySelector(".banner"), "the resolved version was resurrected").toBeNull();
-
-      // Check C resolves with a genuinely DIFFERENT version — real news,
-      // unaffected by the earlier resolution's blacklist.
-      resolveC({ version: "0.3.0", current_version: "0.1.0" });
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.3.0 is available.");
-      });
-    } finally {
-      cleanup();
-    }
-  });
-
-  // Two SEPARATE resolutions in sequence: if the retracted version were kept
-  // in a single slot rather than an accumulating set, the second install
-  // would overwrite the first's record, un-protecting it — a check that
-  // straddled only the FIRST resolution would then slip through once the
-  // slot no longer names what it retracted.
-  it("keeps both versions blacklisted after two sequential install resolutions", async () => {
-    let resolveStraddlerX: (v: unknown) => void = () => {};
-    const check = vi
-      .fn()
-      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveStraddlerX = resolve; })) // check X
-      .mockResolvedValueOnce({ version: "0.3.0", current_version: "0.1.0" }); // finds the newer update
-    const baseInvoke = mockInvoke(check);
-    invokeMock.mockImplementation(async (cmd: string) =>
-      cmd === "update_install" ? false : baseInvoke(cmd),
-    );
-    const { target, cleanup } = render();
-    try {
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
-
-      // Check X starts and is left in flight through everything below.
-      registeredListener("check-for-updates")!();
-      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-
-      // First install: resolves 0.2.0 away and records it.
-      target.querySelector("button")!.click();
-      await vi.waitFor(() => expect(target.querySelector(".banner")).toBeNull());
-
-      // A fresh check (its own generation matches, so it is not superseded)
-      // finds a genuinely newer update.
-      registeredListener("check-for-updates")!();
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.3.0 is available.");
-      });
-
-      // Second install: resolves 0.3.0 away too, and must record IT
-      // WITHOUT losing the earlier record of 0.2.0.
-      target.querySelector("button")!.click();
-      await vi.waitFor(() => expect(target.querySelector(".banner")).toBeNull());
-
-      // Check X (in flight since before EITHER install) finally settles
-      // with the FIRST resolved version — must still be rejected.
-      resolveStraddlerX({ version: "0.2.0", current_version: "0.1.0" });
-      await new Promise((r) => setTimeout(r, 0));
-
-      expect(
-        target.querySelector(".banner"),
-        "the second install's resolution overwrote the first's record, un-protecting 0.2.0",
-      ).toBeNull();
-    } finally {
-      cleanup();
-    }
-  });
-
-  // installError offers the same retry action regardless of `state` (see
-  // UpdateBanner), so installUpdate can run with NO live "available" state
-  // at all — reached here through real UI interaction across both windows:
-  // the app's install THROWS (installError set, its OWN state untouched),
-  // then the DECK installs instead (resolves false, broadcasting the
-  // resolution), which clears the APP's state to null while its error
-  // stays. The app's error banner still offers a retry — clicked with no
-  // live target, recordResolvedAway must not let that wipe the version the
-  // deck's resolution already recorded.
-  it("does not let a retry with no live target erase a previously recorded resolved-away version", async () => {
-    // A check that starts NOW and is left in flight through everything
-    // below — its `startGeneration` is captured before any resolution
-    // happens, which is what makes it "straddle" them once it finally
-    // settles (a check that started fresh AFTER the fact wouldn't: its own
-    // generation would already match, bypassing the staleness check
-    // entirely — this is the one shape that actually exercises it).
-    let resolveStraddler: (v: unknown) => void = () => {};
-    const check = vi
-      .fn()
-      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveStraddler = resolve; }));
-    const baseInvoke = mockInvoke(check);
-    let appInstallThrows = true;
-    invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "update_install") {
-        if (appInstallThrows) {
-          appInstallThrows = false;
-          throw new Error("network error");
-        }
-        return false;
-      }
-      return baseInvoke(cmd);
-    });
-    const deck = renderWithRole("deck");
-    try {
-      const app = render();
-      try {
-        await vi.waitFor(() => expect(app.target.textContent).toContain("Herdeck 0.2.0 is available."));
-        await vi.waitFor(() => expect(deck.target.textContent).toContain("Herdeck 0.2.0 is available."));
-
-        registeredListener("check-for-updates")!();
-        await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-
-        // The app's install throws: installError is set, but its OWN
-        // updateState is untouched by a throw — still "available 0.2.0".
-        app.target.querySelector("button")!.click();
-        await vi.waitFor(() => expect(app.target.textContent).toContain("network error"));
-
-        // The deck installs instead — resolves false, targeting the deck's
-        // own live "0.2.0", and broadcasts that resolution to the app too.
-        // Waiting for the DECK's own banner to clear (not the app's, which
-        // still shows only the error regardless) confirms its installUpdate
-        // — including the emit — ran to completion.
-        deck.target.querySelector("button")!.click();
-        await vi.waitFor(() => expect(deck.target.querySelector(".banner")).toBeNull());
-        // The app still shows ONLY the error (it outranks state) —
-        // updateState was cleared by the deck's broadcast, but installError
-        // never was.
-        expect(app.target.textContent).toContain("network error");
-
-        // The app's error banner still offers the SAME retry action —
-        // clicked with no live "available" state (targetVersion is null).
-        const retryButton = app.target.querySelector("button");
-        expect(retryButton?.textContent).toBe("Install and restart");
-        retryButton!.click();
-        await vi.waitFor(() => expect(app.target.textContent).toContain("Herdeck is up to date."));
-
-        // NOW the straddling check (in flight since before either
-        // resolution) settles with that SAME version — must still be
-        // rejected, proving the no-target retry did not wipe the "0.2.0"
-        // the deck's install had already recorded.
-        resolveStraddler({ version: "0.2.0", current_version: "0.1.0" });
-        await new Promise((r) => setTimeout(r, 0));
-
-        expect(
-          app.target.textContent,
-          "a no-target retry erased the recorded version, letting a stale check resurrect it",
-        ).toContain("Herdeck is up to date.");
-        expect(app.target.textContent).not.toContain("is available");
-      } finally {
-        app.cleanup();
-      }
-    } finally {
-      deck.cleanup();
-    }
-  });
-
-  // A live "available" banner already IS the answer to "is there something
-  // to install" — a no-target retry's "up to date" fallback must not
-  // clobber one that appeared WHILE that retry's install() was still in
-  // flight (e.g. a genuinely newer update arriving from the other window,
-  // simulated here by driving the "update-check-result" listener directly).
-  it("does not let a no-target retry's 'up to date' fallback clobber a newer update that lands mid-retry", async () => {
-    const check = vi.fn().mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" });
-    let resolveRetryInstall: (v: unknown) => void = () => {};
-    const install = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        throw new Error("network error");
-      })
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveRetryInstall = resolve; }));
-    const baseInvoke = mockInvoke(check);
-    invokeMock.mockImplementation(async (cmd: string) => (cmd === "update_install" ? install() : baseInvoke(cmd)));
-    const { target, cleanup } = render();
-    try {
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
-
-      // Install throws: installError is set, but the throw itself never
-      // touches updateState — still "available 0.2.0".
-      target.querySelector("button")!.click();
-      await vi.waitFor(() => expect(target.textContent).toContain("network error"));
-
-      // Simulate "resolved elsewhere" (the other window) clearing THIS
-      // window's state to null while installError stays — driving the
-      // listener directly, the same way the malformed-payload test does,
-      // rather than mounting a second window just to reach this one step.
-      const resultListener = listenMock.mock.calls.find(([name]) => name === "update-check-result");
-      const deliver = resultListener![1] as (ev: { payload: unknown }) => void;
-      deliver({ payload: { resolvedAway: "0.2.0" } });
-      flushSync();
-      expect(target.querySelector(".banner")?.textContent).toContain("network error");
-
-      // Retry with no live target — its install() is left pending.
-      target.querySelector("button")!.click();
-      await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(2));
-
-      // WHILE that retry is still pending, a genuinely newer update lands
-      // (the other window's own check, say).
-      deliver({
-        payload: { kind: "available", info: { version: "0.3.0", current_version: "0.1.0" } },
-      });
-      flushSync();
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.3.0 is available."));
-
-      // NOW the retry's install() finally resolves false — it targeted
-      // nothing (targetVersion was null), and must not answer "up to date"
-      // over an update that is genuinely still there.
-      resolveRetryInstall(false);
-      await new Promise((r) => setTimeout(r, 0));
-
-      expect(
-        target.textContent,
-        "the no-target retry's fallback clobbered a newer update that landed mid-retry",
-      ).toContain("Herdeck 0.3.0 is available.");
-    } finally {
-      cleanup();
-    }
-  });
-
-  // "checking" is an answer-in-progress, not nothing: a check the user
-  // explicitly started from the tray must not be told "up to date" out
-  // from under it by an unrelated no-target retry resolving in the
-  // background.
-  it("does not let a no-target retry's 'up to date' fallback clobber a check in progress", async () => {
-    let resolveRetryInstall: (v: unknown) => void = () => {};
-    let resolveManualCheck: (v: unknown) => void = () => {};
-    const install = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        throw new Error("network error");
-      })
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveRetryInstall = resolve; }));
-    const check = vi
-      .fn()
-      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveManualCheck = resolve; }));
-    const baseInvoke = mockInvoke(check);
-    invokeMock.mockImplementation(async (cmd: string) => (cmd === "update_install" ? install() : baseInvoke(cmd)));
-    const { target, cleanup } = render();
-    try {
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
-
-      // Install throws: installError is set, updateState untouched.
-      target.querySelector("button")!.click();
-      await vi.waitFor(() => expect(target.textContent).toContain("network error"));
-
-      // Simulate "resolved elsewhere" clearing this window's state to null
-      // while installError stays.
-      const resultListener = listenMock.mock.calls.find(([name]) => name === "update-check-result");
-      const deliver = resultListener![1] as (ev: { payload: unknown }) => void;
-      deliver({ payload: { resolvedAway: "0.2.0" } });
-      flushSync();
-
-      // Retry with no live target — its install() is left pending.
-      target.querySelector("button")!.click();
-      await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(2));
-
-      // WHILE that retry is still pending, the user fires a manual check
-      // from the tray — it is left "checking" (its own update_check never
-      // settles in this test).
-      registeredListener("check-for-updates")!();
-      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-      await new Promise((r) => setTimeout(r, 0));
-      expect(target.textContent).toContain("Checking for updates");
-
-      // NOW the retry's install() finally resolves false — it targeted
-      // nothing, and must not tell the user "up to date" out from under a
-      // check they explicitly started and is still running.
-      resolveRetryInstall(false);
-      await new Promise((r) => setTimeout(r, 0));
-
-      expect(
-        target.textContent,
-        "the no-target retry answered 'up to date' over a check still in progress",
-      ).toContain("Checking for updates");
-
-      // The check itself then settles — its own outcome must actually
-      // land, not stay permanently stuck on "Checking for updates". Resolved
-      // with "up to date" specifically (NOT "available"): an available
-      // result already bypasses the supersede gate outright, so only a
-      // non-available outcome actually exercises whether the no-target
-      // resolution wrongly marked this check as superseded.
-      resolveManualCheck(null);
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck is up to date.");
-      });
+      expect(emitMock).not.toHaveBeenCalledWith("update-check-result", null);
     } finally {
       cleanup();
     }
   });
 
   // installUpdate's resolution can happen in EITHER window (both render the
-  // install button) — the generation guard is per-window state, so it must
-  // be kept in sync through the SAME "update-check-result" broadcast an
-  // available update travels over, or a check running in the window that
-  // never installed anything is blind to what the other one just resolved.
+  // install button) — the epoch is per-window state, so it must be kept in
+  // sync through the SAME "update-check-result" broadcast an available
+  // update travels over, or a check running in the window that never
+  // installed anything is blind to what the other one just resolved.
   it("keeps a resolved-away update cleared when the app's check settles after the DECK's install", async () => {
     let resolveManual: (v: unknown) => void = () => {};
     const check = vi
@@ -1008,29 +548,72 @@ describe("App update install resolution clears both windows", () => {
         await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
 
         // The user installs from the DECK window instead.
-        const deckInstallButton = deck.target.querySelector("button");
+        const deckInstallButton = deck.target.querySelector<HTMLButtonElement>('[role="status"] button');
         deckInstallButton!.click();
-        await vi.waitFor(() => expect(app.target.querySelector(".banner")).toBeNull());
-        await vi.waitFor(() => expect(deck.target.querySelector(".banner")).toBeNull());
+        await vi.waitFor(() => expect(deck.target.textContent).toContain("Herdeck is up to date."));
 
         // The app window's in-flight check (started before the DECK's
-        // install resolved things) now settles with the same stale version.
+        // install resolved things) now settles with the same stale version
+        // — dropped, since the deck's broadcast already moved the app's
+        // own epoch on.
         resolveManual({ version: "0.2.0", current_version: "0.1.0" });
         await new Promise((r) => setTimeout(r, 0));
 
         expect(
-          app.target.querySelector(".banner"),
+          app.target.textContent,
           "the app window resurrected what the deck's install cleared",
-        ).toBeNull();
+        ).toContain("Herdeck is up to date.");
         expect(
-          deck.target.querySelector(".banner"),
+          deck.target.textContent,
           "the deck window resurrected what its own install cleared",
-        ).toBeNull();
+        ).toContain("Herdeck is up to date.");
       } finally {
         app.cleanup();
       }
     } finally {
       deck.cleanup();
+    }
+  });
+
+  // The mechanism that keeps a "checking" placeholder from being stranded
+  // forever: an install resolution overwrites it outright (rather than
+  // trying to preserve it), and bumps the epoch so the check's own eventual
+  // result — now guaranteed superseded — is safely dropped instead of
+  // silently applying over a state that has moved on.
+  it("overwrites (rather than strands) a live 'checking' notice when an install resolves", async () => {
+    let resolveManual: (v: unknown) => void = () => {};
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveManual = resolve; }));
+    invokeMock.mockImplementation(mockInvoke(check));
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+      expect(target.textContent).toContain("Checking for updates");
+      // "checking" covers the install button entirely (notice replaces the
+      // whole view) — so the resolution below is driven directly through
+      // the broadcast listener, the same path installUpdate's own
+      // resolution reaches the OTHER window through.
+      const resultListener = listenMock.mock.calls.find(([name]) => name === "update-check-result");
+      const deliver = resultListener![1] as (ev: { payload: unknown }) => void;
+      deliver({ payload: null });
+      flushSync();
+
+      expect(target.textContent, "'checking' was left stranded instead of overwritten").toContain(
+        "Herdeck is up to date.",
+      );
+
+      // The check itself then settles — its own outcome is safely dropped
+      // (the epoch already moved on), not applied over the resolved state.
+      resolveManual({ version: "0.2.0", current_version: "0.1.0" });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(target.textContent).toContain("Herdeck is up to date.");
+    } finally {
+      cleanup();
     }
   });
 });
@@ -1068,44 +651,11 @@ describe("App update banner is a persistent live region", () => {
   });
 });
 
-// A manual re-check must not hide an already-actionable "available" banner
-// behind "Checking for updates…" — `update_check` is a plain invoke with no
-// timeout, so a hung re-check would otherwise strand the install button gone
-// for the rest of the process's life.
-describe("App update banner keeps the install action visible during a re-check", () => {
-  it("does not show 'checking' when a manual re-check starts from an available update", async () => {
-    let resolveSecond: (v: unknown) => void = () => {};
-    const check = vi
-      .fn()
-      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" })
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
-    invokeMock.mockImplementation(mockInvoke(check));
-    const { target, cleanup } = render();
-    try {
-      await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      });
-
-      registeredListener("check-for-updates")!();
-      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-      // The re-check is now in flight (its promise never resolved above) —
-      // the install button must still be there right now, not "checking".
-      expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-      expect(target.querySelector("button")?.textContent).toBe("Install and restart");
-      expect(target.textContent).not.toContain("Checking for updates");
-
-      resolveSecond(null); // let the in-flight check settle so nothing leaks
-    } finally {
-      cleanup();
-    }
-  });
-});
-
-// "Up to date" and "failed" are dead ends nothing else ever clears — left
-// alone they would pin the banner in place (stealing height from the
-// content-fit deck window) for the rest of the process's life. "Available"
-// stays until installed or dismissed by an install attempt; it must NOT be
-// swept away on the same clock.
+// "Up to date" and "failed" notices are dead ends nothing else ever clears —
+// left alone they would pin the banner in place (stealing height from the
+// content-fit deck window) for the rest of the process's life. The sticky
+// "available" update stays until installed or retracted by a confirmed
+// up-to-date; it must NOT be swept away on the same clock.
 describe("App update banner auto-dismiss", () => {
   it("clears a failed manual check after a timeout", async () => {
     vi.useFakeTimers();
@@ -1150,10 +700,45 @@ describe("App update banner auto-dismiss", () => {
     }
   });
 
-  // installError outranks every updateState kind and used to be cleared
-  // ONLY by installUpdate's own entry (a retry click) — ignored, it would
-  // pin a red bar for the rest of the process's life. Same 8s window as
-  // the two kinds above, tracked independently of updateState.
+  // "checking" is an answer-in-progress, not a dead end — it must survive
+  // the same 8s window that sweeps up-to-date/failed, since it always
+  // resolves on its own once the check it stands for actually settles (see
+  // isDismissableNotice in updateState.ts).
+  it("does not clear a 'checking' notice on the same timeout", async () => {
+    // The automatic mount check never shows "checking" (only a manual one
+    // does — see beginCheck in updateState.ts), so this drives the tray
+    // listener instead, same as the other manual-check tests.
+    vi.useFakeTimers();
+    try {
+      const check = vi
+        .fn()
+        .mockResolvedValueOnce(null) // automatic mount check: up to date, silent
+        .mockImplementationOnce(() => new Promise(() => {})); // manual re-check, never settles here
+      invokeMock.mockImplementation(mockInvoke(check));
+      const { target, cleanup } = render();
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.querySelector(".banner")).toBeNull();
+
+        registeredListener("check-for-updates")!();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.textContent).toContain("Checking for updates");
+
+        await vi.advanceTimersByTimeAsync(8000);
+        expect(target.textContent, "a 'checking' notice must not auto-dismiss on a timer")
+          .toContain("Checking for updates");
+      } finally {
+        cleanup();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // installError outranks both `notice` and `availableUpdate`, and used to
+  // be cleared ONLY by installUpdate's own entry (a retry click) — ignored,
+  // it would pin a red bar for the rest of the process's life. Same 8s
+  // window as the two kinds above, tracked independently of updateState.
   it("clears an install error after a timeout, revealing the update underneath again", async () => {
     vi.useFakeTimers();
     try {
