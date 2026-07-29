@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { asUpdateInfo, updateTransport } from "./updateClient";
+import { asUpdateInfo, runUpdateCheck, updateTransport } from "./updateClient";
 
 describe("update client", () => {
   it("accepts a shaped update and null when current", () => {
@@ -28,5 +28,41 @@ describe("update client", () => {
     });
     await expect(transport.install()).resolves.toBe(true);
     expect(invoke.mock.calls).toEqual([["update_check"], ["update_install"]]);
+  });
+});
+
+// runUpdateCheck shapes a check's outcome for the UI — the manual "check for
+// updates" tray item and the silent mount check both go through it (see
+// App.svelte), so all three transport outcomes have to map to a distinct,
+// renderable state. This is the seam that makes the fourth outcome (a failed
+// check) testable at all, since it is exactly what the mount-only path used
+// to swallow — the bug a manual check exists to fix.
+describe("runUpdateCheck", () => {
+  it("reports an available update", async () => {
+    const info = { version: "0.2.0", current_version: "0.1.0" };
+    await expect(runUpdateCheck(async () => info)).resolves.toEqual({
+      kind: "available",
+      info,
+    });
+  });
+
+  it("reports up to date when the check finds nothing", async () => {
+    await expect(runUpdateCheck(async () => null)).resolves.toEqual({ kind: "up-to-date" });
+  });
+
+  it("reports failure with the error's message instead of throwing", async () => {
+    await expect(
+      runUpdateCheck(async () => {
+        throw new Error("offline");
+      }),
+    ).resolves.toEqual({ kind: "failed", reason: "offline" });
+  });
+
+  it("stringifies a non-Error rejection rather than losing the reason", async () => {
+    await expect(
+      runUpdateCheck(async () => {
+        throw "network down";
+      }),
+    ).resolves.toEqual({ kind: "failed", reason: "network down" });
   });
 });
