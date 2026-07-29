@@ -909,6 +909,66 @@ describe("App update install resolution clears both windows", () => {
     }
   });
 
+  // "checking" is an answer-in-progress, not nothing: a check the user
+  // explicitly started from the tray must not be told "up to date" out
+  // from under it by an unrelated no-target retry resolving in the
+  // background.
+  it("does not let a no-target retry's 'up to date' fallback clobber a check in progress", async () => {
+    let resolveRetryInstall: (v: unknown) => void = () => {};
+    const install = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        throw new Error("network error");
+      })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRetryInstall = resolve; }));
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
+      .mockImplementationOnce(() => new Promise(() => {})); // manual check, never settles in this test
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === "update_install" ? install() : baseInvoke(cmd)));
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+
+      // Install throws: installError is set, updateState untouched.
+      target.querySelector("button")!.click();
+      await vi.waitFor(() => expect(target.textContent).toContain("network error"));
+
+      // Simulate "resolved elsewhere" clearing this window's state to null
+      // while installError stays.
+      const resultListener = listenMock.mock.calls.find(([name]) => name === "update-check-result");
+      const deliver = resultListener![1] as (ev: { payload: unknown }) => void;
+      deliver({ payload: { resolvedAway: "0.2.0" } });
+      flushSync();
+
+      // Retry with no live target — its install() is left pending.
+      target.querySelector("button")!.click();
+      await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(2));
+
+      // WHILE that retry is still pending, the user fires a manual check
+      // from the tray — it is left "checking" (its own update_check never
+      // settles in this test).
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(target.textContent).toContain("Checking for updates");
+
+      // NOW the retry's install() finally resolves false — it targeted
+      // nothing, and must not tell the user "up to date" out from under a
+      // check they explicitly started and is still running.
+      resolveRetryInstall(false);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(
+        target.textContent,
+        "the no-target retry answered 'up to date' over a check still in progress",
+      ).toContain("Checking for updates");
+    } finally {
+      cleanup();
+    }
+  });
+
   // installUpdate's resolution can happen in EITHER window (both render the
   // install button) — the generation guard is per-window state, so it must
   // be kept in sync through the SAME "update-check-result" broadcast an

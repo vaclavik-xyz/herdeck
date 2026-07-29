@@ -273,9 +273,14 @@
           // something to install" — it must survive a resolution that never
           // concerned it (e.g. a genuinely newer update landed from a check
           // or the other window while this retry's install() was in
-          // flight). Only answer with "up to date" when there is nothing
-          // live to answer over.
-          if (updateState?.kind !== "available") updateState = { kind: "up-to-date" };
+          // flight). "checking" is itself an answer-in-progress: a check
+          // the user explicitly started (the generation bump just above
+          // already marks its eventual non-"available" result as
+          // superseded) must not be told "up to date" out from under it
+          // before it even finishes. Only answer here when NEITHER is live.
+          if (updateState?.kind !== "available" && updateState?.kind !== "checking") {
+            updateState = { kind: "up-to-date" };
+          }
         } else {
           void emit(UPDATE_RESULT_EVENT, { resolvedAway: targetVersion }).catch(() => {
             // Not in a Tauri WebView (plain browser preview): nothing to tell.
