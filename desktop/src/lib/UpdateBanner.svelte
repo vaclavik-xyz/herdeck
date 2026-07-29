@@ -6,8 +6,9 @@
   // wins over the check's own state: it means the user already committed to
   // installing, so it is the more urgent thing to show — and it carries the
   // SAME retry action as "available", not a dead end: installUpdate clears
-  // updateError back to "" the moment a retry starts, so nothing else needs
-  // to sweep it away.
+  // updateError on a retry click, and App's own 8s effect auto-dismisses it
+  // otherwise (same window as up-to-date/failed), so an ignored failure
+  // doesn't outlive its cause either.
   //
   // Renders through exactly ONE `<Banner>` call site (never a per-kind
   // `{:else if}` chain of separate `<Banner>` tags): Banner's own div carries

@@ -269,7 +269,13 @@
         // other check's). Nothing to tell the OTHER window in this case: it
         // retracted nothing in particular for it either.
         if (targetVersion === null) {
-          updateState = { kind: "up-to-date" };
+          // A live "available" banner already IS the answer to "is there
+          // something to install" — it must survive a resolution that never
+          // concerned it (e.g. a genuinely newer update landed from a check
+          // or the other window while this retry's install() was in
+          // flight). Only answer with "up to date" when there is nothing
+          // live to answer over.
+          if (updateState?.kind !== "available") updateState = { kind: "up-to-date" };
         } else {
           void emit(UPDATE_RESULT_EVENT, { resolvedAway: targetVersion }).catch(() => {
             // Not in a Tauri WebView (plain browser preview): nothing to tell.

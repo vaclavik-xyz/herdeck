@@ -845,6 +845,70 @@ describe("App update install resolution clears both windows", () => {
     }
   });
 
+  // A live "available" banner already IS the answer to "is there something
+  // to install" — a no-target retry's "up to date" fallback must not
+  // clobber one that appeared WHILE that retry's install() was still in
+  // flight (e.g. a genuinely newer update arriving from the other window,
+  // simulated here by driving the "update-check-result" listener directly).
+  it("does not let a no-target retry's 'up to date' fallback clobber a newer update that lands mid-retry", async () => {
+    const check = vi.fn().mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" });
+    let resolveRetryInstall: (v: unknown) => void = () => {};
+    const install = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        throw new Error("network error");
+      })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRetryInstall = resolve; }));
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === "update_install" ? install() : baseInvoke(cmd)));
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+      });
+
+      // Install throws: installError is set, but the throw itself never
+      // touches updateState — still "available 0.2.0".
+      target.querySelector("button")!.click();
+      await vi.waitFor(() => expect(target.textContent).toContain("network error"));
+
+      // Simulate "resolved elsewhere" (the other window) clearing THIS
+      // window's state to null while installError stays — driving the
+      // listener directly, the same way the malformed-payload test does,
+      // rather than mounting a second window just to reach this one step.
+      const resultListener = listenMock.mock.calls.find(([name]) => name === "update-check-result");
+      const deliver = resultListener![1] as (ev: { payload: unknown }) => void;
+      deliver({ payload: { resolvedAway: "0.2.0" } });
+      flushSync();
+      expect(target.querySelector(".banner")?.textContent).toContain("network error");
+
+      // Retry with no live target — its install() is left pending.
+      target.querySelector("button")!.click();
+      await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(2));
+
+      // WHILE that retry is still pending, a genuinely newer update lands
+      // (the other window's own check, say).
+      deliver({
+        payload: { kind: "available", info: { version: "0.3.0", current_version: "0.1.0" } },
+      });
+      flushSync();
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.3.0 is available."));
+
+      // NOW the retry's install() finally resolves false — it targeted
+      // nothing (targetVersion was null), and must not answer "up to date"
+      // over an update that is genuinely still there.
+      resolveRetryInstall(false);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(
+        target.textContent,
+        "the no-target retry's fallback clobbered a newer update that landed mid-retry",
+      ).toContain("Herdeck 0.3.0 is available.");
+    } finally {
+      cleanup();
+    }
+  });
+
   // installUpdate's resolution can happen in EITHER window (both render the
   // install button) — the generation guard is per-window state, so it must
   // be kept in sync through the SAME "update-check-result" broadcast an
