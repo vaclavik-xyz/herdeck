@@ -97,10 +97,12 @@
    *  `version` is `null` when installUpdate ran with no live "available"
    *  state to target (e.g. retried from the installError banner, which
    *  offers the same action regardless of `state`) — that resolution
-   *  retracted nothing in particular, so it adds nothing to the set. The
-   *  generation bump still happens unconditionally: a real resolution
-   *  occurred either way, and any check in flight still needs to recognize
-   *  its own eventual non-"available" result as potentially stale.
+   *  retracted NOTHING in particular, so it must not bump the generation
+   *  either: a check already in flight (left showing "checking" — see the
+   *  no-target fallback below) captured its `startGeneration` before this
+   *  ran, and an unearned bump would mark its own eventual, perfectly good
+   *  result as "superseded" with nothing to be superseded BY, stranding the
+   *  placeholder forever (the 8s effect only sweeps up-to-date/failed).
    *
    *  Only CLEARS the live state when it currently shows that exact version:
    *  `updater.install()` is awaited, so a genuinely newer update can land
@@ -110,8 +112,10 @@
    *  SAME window's own updateResultListener both fire for one clear — this
    *  is naturally idempotent to that since both add the SAME `version`. */
   function recordResolvedAway(version: string | null): void {
-    updateGeneration += 1;
-    if (version !== null) resolvedAwayVersions.add(version);
+    if (version !== null) {
+      updateGeneration += 1;
+      resolvedAwayVersions.add(version);
+    }
     if (updateState?.kind === "available" && updateState.info.version === version) {
       updateState = null;
     }

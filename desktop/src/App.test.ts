@@ -915,6 +915,7 @@ describe("App update install resolution clears both windows", () => {
   // background.
   it("does not let a no-target retry's 'up to date' fallback clobber a check in progress", async () => {
     let resolveRetryInstall: (v: unknown) => void = () => {};
+    let resolveManualCheck: (v: unknown) => void = () => {};
     const install = vi
       .fn()
       .mockImplementationOnce(async () => {
@@ -924,7 +925,7 @@ describe("App update install resolution clears both windows", () => {
     const check = vi
       .fn()
       .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" }) // automatic mount check
-      .mockImplementationOnce(() => new Promise(() => {})); // manual check, never settles in this test
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveManualCheck = resolve; }));
     const baseInvoke = mockInvoke(check);
     invokeMock.mockImplementation(async (cmd: string) => (cmd === "update_install" ? install() : baseInvoke(cmd)));
     const { target, cleanup } = render();
@@ -964,6 +965,17 @@ describe("App update install resolution clears both windows", () => {
         target.textContent,
         "the no-target retry answered 'up to date' over a check still in progress",
       ).toContain("Checking for updates");
+
+      // The check itself then settles — its own outcome must actually
+      // land, not stay permanently stuck on "Checking for updates". Resolved
+      // with "up to date" specifically (NOT "available"): an available
+      // result already bypasses the supersede gate outright, so only a
+      // non-available outcome actually exercises whether the no-target
+      // resolution wrongly marked this check as superseded.
+      resolveManualCheck(null);
+      await vi.waitFor(() => {
+        expect(target.textContent).toContain("Herdeck is up to date.");
+      });
     } finally {
       cleanup();
     }
