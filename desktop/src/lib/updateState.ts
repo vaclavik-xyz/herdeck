@@ -103,9 +103,16 @@ export function applyResolvedAway(state: UpdateState): UpdateState {
   return { ...state, availableUpdate: null, notice: { kind: "up-to-date" }, checkSeq: state.checkSeq + 1 };
 }
 
-/** Whether `notice` is a dead end nothing else ever clears (auto-dismissed
- *  on a timer by App.svelte) — as opposed to "checking", which always
- *  resolves on its own once the check it stands for actually settles. */
+/** Whether `notice` is worth auto-dismissing on a timer (App.svelte). Includes
+ *  "checking": `update_check` is a plain `invoke` with no timeout anywhere in
+ *  the chain (no timeout on the transport, none on the updater plugin
+ *  config), so an ordinary hung request — no adversarial timing needed, just
+ *  a bad network — would otherwise strand it forever, taking the install
+ *  action down with it (the notice covers `availableUpdate` in the banner).
+ *  Dismissing it is safe: it reveals whatever `availableUpdate` says
+ *  underneath, and if the check eventually does settle, `checkSeq` is
+ *  untouched by the dismissal, so `applyCheckResult` still applies its
+ *  result normally — the notice just doesn't wait around to show it. */
 export function isDismissableNotice(notice: Notice | null): boolean {
-  return notice?.kind === "up-to-date" || notice?.kind === "failed";
+  return notice !== null;
 }

@@ -172,16 +172,19 @@
         // release gone or already applied (a SUCCESSFUL install never
         // reaches here: it calls app.request_restart() Rust-side and the
         // process ends, so no race with a successful install can exist).
-        // Clears the banner in BOTH windows via the broadcast below, the one
-        // retraction the "available"-only broadcast otherwise has no way to
-        // make: without this, a window that never installs anything (the
-        // deck) would keep an "Install and restart" button for an update
-        // the process has already decided is gone. Runs the same whether or
-        // not there was a live target (installError's retry action offers
-        // this regardless of state) — applyResolvedAway answers either way.
-        updateState = applyResolvedAway(updateState);
+        // Must clear the banner in BOTH windows — the one retraction the
+        // "available"-only broadcast otherwise has no way to make, without
+        // which a window that never installs anything (the deck) would keep
+        // an "Install and restart" button for an update the process has
+        // already decided is gone. Applied ONLY through the listener below
+        // (never locally here too): a real Tauri `emit` reaches its own
+        // sender, so applying it here AND letting the echo apply it again
+        // would double-bump `checkSeq`, which could invalidate a check
+        // started in the gap between the two applications. The `.catch`
+        // fallback covers the one case where the listener never fires at
+        // all — no Tauri WebView (a plain browser preview).
         void emit(UPDATE_RESULT_EVENT, null).catch(() => {
-          // Not in a Tauri WebView (plain browser preview): nothing to tell.
+          updateState = applyResolvedAway(updateState);
         });
       }
     } catch (error) {
@@ -388,15 +391,17 @@
     // update) and `installUpdate`'s (its resolution, a `null` payload):
     // whichever window ran the check (only the app window ever does — see
     // below) or clicked Install (either window can — both render the
-    // button), BOTH windows' `updateState` follow it. Registering this in
-    // the SAME window that emitted is harmless: `applyAvailableBroadcast`
-    // and `applyResolvedAway` are both safe to apply twice for one event.
-    // `listen<unknown>`'s type parameter is a compile-time label only —
-    // `asUpdateCheckState` is what actually guards against a malformed
-    // payload reaching `state.info` and crashing the render, the same way
-    // `asDiscovery` guards `discoveryListener`. `null` is distinguished from
-    // a malformed payload: it is the explicit "resolved" signal, not
-    // something to just silently ignore.
+    // button), BOTH windows' `updateState` follow it. `applyAvailableBroadcast`
+    // is naturally idempotent (checkForUpdate's own local `applyCheckResult`
+    // call and this listener's echo of the SAME "available" result always
+    // agree), but `applyResolvedAway` bumps `checkSeq` on every call — so
+    // this listener is the ONLY place `installUpdate` applies its resolution;
+    // see the `.catch` there for why. `listen<unknown>`'s type parameter is a
+    // compile-time label only — `asUpdateCheckState` is what actually guards
+    // against a malformed payload reaching `state.info` and crashing the
+    // render, the same way `asDiscovery` guards `discoveryListener`. `null`
+    // is distinguished from a malformed payload: it is the explicit
+    // "resolved" signal, not something to just silently ignore.
     const updateResultListener = listen<unknown>(UPDATE_RESULT_EVENT, (event) => {
       if (event.payload === null) {
         updateState = applyResolvedAway(updateState);

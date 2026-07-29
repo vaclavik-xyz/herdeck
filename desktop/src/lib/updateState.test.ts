@@ -136,8 +136,15 @@ describe("isDismissableNotice", () => {
     expect(isDismissableNotice({ kind: "failed", reason: "x" })).toBe(true);
   });
 
-  it("is false for checking and null", () => {
-    expect(isDismissableNotice({ kind: "checking" })).toBe(false);
+  // "checking" is included too: update_check has no timeout anywhere in the
+  // chain, so an ordinary hung request (no adversarial timing needed) would
+  // otherwise strand it — and the notice covering `availableUpdate` — for
+  // the rest of the process's life.
+  it("is true for checking", () => {
+    expect(isDismissableNotice({ kind: "checking" })).toBe(true);
+  });
+
+  it("is false for null (nothing to dismiss)", () => {
     expect(isDismissableNotice(null)).toBe(false);
   });
 });

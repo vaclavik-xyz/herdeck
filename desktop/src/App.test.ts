@@ -485,6 +485,65 @@ describe("App update install resolution clears both windows", () => {
     }
   });
 
+  // A real Tauri `emit` reaches its own sender — so if installUpdate applied
+  // applyResolvedAway BOTH locally and through the listener's echo of that
+  // same emit, checkSeq would bump twice for one resolution (and could
+  // invalidate a check started in the gap between the two applications).
+  // Verified two ways: the resolution must NOT apply when the emit
+  // "succeeds" without actually reaching any listener (proving there is no
+  // hidden direct-apply fallback in the success path), and it MUST still
+  // apply when the emit fails outright (the actual non-Tauri-WebView case
+  // the fallback exists for).
+  it("applies the resolution only through the broadcast listener, not a second local call", async () => {
+    const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    // A "black hole" emit: resolves successfully (so the .catch fallback
+    // does NOT run) but never actually delivers to any registered listener.
+    emitMock.mockImplementation(async () => {});
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+
+      const installButton = target.querySelector<HTMLButtonElement>('[role="status"] button');
+      installButton!.click();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(
+        target.textContent,
+        "installUpdate applied the resolution directly instead of solely through the listener",
+      ).toContain("Herdeck 0.2.0 is available.");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("falls back to a direct local apply when the emit itself fails (no Tauri WebView)", async () => {
+    const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
+    const baseInvoke = mockInvoke(check);
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "update_install" ? false : baseInvoke(cmd),
+    );
+    emitMock.mockRejectedValue(new Error("not in a Tauri WebView"));
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+
+      const installButton = target.querySelector<HTMLButtonElement>('[role="status"] button');
+      installButton!.click();
+
+      await vi.waitFor(() => {
+        expect(target.textContent, "the fallback never applied the resolution locally").toContain(
+          "Herdeck is up to date.",
+        );
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
   it("does not broadcast a clear when the install succeeds (about to restart)", async () => {
     const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
     const baseInvoke = mockInvoke(check);
@@ -700,11 +759,13 @@ describe("App update banner auto-dismiss", () => {
     }
   });
 
-  // "checking" is an answer-in-progress, not a dead end — it must survive
-  // the same 8s window that sweeps up-to-date/failed, since it always
-  // resolves on its own once the check it stands for actually settles (see
-  // isDismissableNotice in updateState.ts).
-  it("does not clear a 'checking' notice on the same timeout", async () => {
+  // "checking" is swept too, same as up-to-date/failed: update_check has no
+  // timeout anywhere in the chain, so an ordinary hung request (no
+  // adversarial timing needed, just a bad network) would otherwise strand
+  // it — and the install action it covers — for the rest of the process's
+  // life. Dismissing it is safe: checkSeq is untouched, so if the check
+  // eventually does settle, applyCheckResult still applies its result.
+  it("clears a stuck 'checking' notice after a timeout, revealing what was underneath", async () => {
     // The automatic mount check never shows "checking" (only a manual one
     // does — see beginCheck in updateState.ts), so this drives the tray
     // listener instead, same as the other manual-check tests.
@@ -725,8 +786,41 @@ describe("App update banner auto-dismiss", () => {
         expect(target.textContent).toContain("Checking for updates");
 
         await vi.advanceTimersByTimeAsync(8000);
-        expect(target.textContent, "a 'checking' notice must not auto-dismiss on a timer")
-          .toContain("Checking for updates");
+        expect(target.textContent, "a stuck 'checking' notice was never swept").not.toContain(
+          "Checking for updates",
+        );
+        expect(target.querySelector(".banner")).toBeNull();
+      } finally {
+        cleanup();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not clear an available update covered by a 'checking' notice that later times out", async () => {
+    // The banner shows "checking" (temporarily covering the button); once
+    // that dismisses, the available update it never touched is back.
+    vi.useFakeTimers();
+    try {
+      const check = vi
+        .fn()
+        .mockResolvedValueOnce({ version: "0.2.0", current_version: "0.1.0" })
+        .mockImplementationOnce(() => new Promise(() => {})); // manual re-check, never settles here
+      invokeMock.mockImplementation(mockInvoke(check));
+      const { target, cleanup } = render();
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+
+        registeredListener("check-for-updates")!();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.textContent).toContain("Checking for updates");
+
+        await vi.advanceTimersByTimeAsync(8000);
+        expect(target.textContent, "the available update never reappeared").toContain(
+          "Herdeck 0.2.0 is available.",
+        );
       } finally {
         cleanup();
       }
