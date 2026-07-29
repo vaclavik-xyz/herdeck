@@ -74,6 +74,7 @@ const MENU_ID_ZOOM_RESET: &str = "zoom_reset";
 const MENU_ID_TOGGLE_DECK: &str = "toggle_deck";
 const MENU_ID_RECONNECT: &str = "reconnect";
 const MENU_ID_AUTOSTART: &str = "autostart";
+const MENU_ID_CHECK_UPDATE: &str = "check_update";
 const MENU_ID_QUIT: &str = "quit";
 
 /// Managed state read by the `get_discovery` command and by the supervisor
@@ -914,14 +915,26 @@ mod plan_tests {
         // The mode radio items are gone; nothing may name them any more.
         assert!(!cs.iter().any(|l| l.contains("Režim okna")));
         // show_app + toggle_deck(show) + toggle_deck(hide) + deck_aot +
-        // autostart + reconnect + quit — `TrayMenuItems::retitle` indexes
-        // every one of these, so the array length must match exactly.
-        assert_eq!(en.len(), 7);
+        // autostart + reconnect + check_update + quit — `TrayMenuItems::
+        // retitle` indexes every one of these, so the array length must
+        // match exactly.
+        assert_eq!(en.len(), 8);
         // A label accidentally left English in the cs array (or vice versa)
         // is exactly the defect this test exists to catch.
         for (i, (e, c)) in en.iter().zip(cs.iter()).enumerate() {
             assert_ne!(e, c, "tray_labels[{i}] is identical in en and cs");
         }
+    }
+
+    // The new "Check for updates" tray item (slot 6, just above "Quit" — see
+    // `build_tray`/`TrayMenuItems::retitle`), pinned by exact text rather than
+    // just "non-empty and differs from cs", which the generic parity test
+    // above already covers: a future edit that renames it in one language
+    // only, or that shuffles it to the wrong slot, must fail HERE.
+    #[test]
+    fn check_update_tray_label_exists_in_both_languages() {
+        assert_eq!(tray_labels("en")[6], "Check for updates");
+        assert_eq!(tray_labels("cs")[6], "Zkontrolovat aktualizace");
     }
 
     // The `toggle_deck` tray item's text depends on BOTH the language and the
@@ -1733,7 +1746,7 @@ fn reload_deck_always_on_top(
 /// `toggle_deck` occupies TWO slots (show/hide) because its text also depends
 /// on the deck's current visibility, not just the language — see
 /// `toggle_deck_label`, which picks between them.
-fn tray_labels(lang: &str) -> [&'static str; 7] {
+fn tray_labels(lang: &str) -> [&'static str; 8] {
     match lang {
         "cs" => [
             "Otevřít Herdeck",
@@ -1742,6 +1755,7 @@ fn tray_labels(lang: &str) -> [&'static str; 7] {
             "Deck vždy navrchu",
             "Spouštět po přihlášení",
             "Změnit připojení…",
+            "Zkontrolovat aktualizace",
             "Ukončit",
         ],
         _ => [
@@ -1751,6 +1765,7 @@ fn tray_labels(lang: &str) -> [&'static str; 7] {
             "Deck always on top",
             "Start at login",
             "Change connection…",
+            "Check for updates",
             "Quit",
         ],
     }
@@ -1822,6 +1837,7 @@ struct TrayMenuItems {
     deck_aot: CheckMenuItem<tauri::Wry>,
     autostart: CheckMenuItem<tauri::Wry>,
     reconnect: MenuItem<tauri::Wry>,
+    check_update: MenuItem<tauri::Wry>,
     quit: MenuItem<tauri::Wry>,
     /// The language `retitle` was last called with. Needed so a
     /// visibility-only refresh of `toggle_deck` (`sync_toggle_deck_label`,
@@ -1838,7 +1854,8 @@ impl TrayMenuItems {
         let _ = self.deck_aot.set_text(l[3]);
         let _ = self.autostart.set_text(l[4]);
         let _ = self.reconnect.set_text(l[5]);
-        let _ = self.quit.set_text(l[6]);
+        let _ = self.check_update.set_text(l[6]);
+        let _ = self.quit.set_text(l[7]);
         *self.lang.lock().unwrap() = lang.to_string();
     }
 
@@ -1985,10 +2002,19 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
         None::<&str>,
     )?;
     let reconnect = MenuItem::with_id(app, MENU_ID_RECONNECT, l[5], true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, MENU_ID_QUIT, l[6], true, None::<&str>)?;
+    let check_update = MenuItem::with_id(app, MENU_ID_CHECK_UPDATE, l[6], true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, MENU_ID_QUIT, l[7], true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&show_app, &toggle_deck, &deck_aot, &autostart, &reconnect, &quit],
+        &[
+            &show_app,
+            &toggle_deck,
+            &deck_aot,
+            &autostart,
+            &reconnect,
+            &check_update,
+            &quit,
+        ],
     )?;
     let autostart_cb = autostart.clone();
     let deck_aot_cb = deck_aot.clone();
@@ -1999,6 +2025,7 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
             deck_aot: deck_aot.clone(),
             autostart: autostart.clone(),
             reconnect: reconnect.clone(),
+            check_update: check_update.clone(),
             quit: quit.clone(),
             lang: Mutex::new("en".to_string()),
         });
@@ -2049,6 +2076,17 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
                 // Onboarding lives on the app surface, so the re-onboard event
                 // and the window that has to be looking at it are the same one.
                 let _ = app.emit_to(APP_WINDOW, "reonboard", ());
+                show_role_window(app, APP_WINDOW);
+            }
+            MENU_ID_CHECK_UPDATE => {
+                // The actual check runs in the WebView (`updateClient.ts`, via
+                // `update_check`/`update_install`) — this just asks App.svelte
+                // to run it and brings the app window forward so the result
+                // (available / up to date / failed) is never rendered into a
+                // hidden window. Unlike the silent mount-time check, a
+                // user-requested one must report every outcome, including
+                // failure — see App.svelte's "check-for-updates" listener.
+                let _ = app.emit_to(APP_WINDOW, "check-for-updates", ());
                 show_role_window(app, APP_WINDOW);
             }
             MENU_ID_AUTOSTART => {
