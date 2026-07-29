@@ -9,6 +9,7 @@ import {
   beginCheck,
   initialUpdateState,
   isDismissableNotice,
+  type Notice,
   type UpdateState,
 } from "./updateState";
 
@@ -146,5 +147,14 @@ describe("isDismissableNotice", () => {
 
   it("is false for null (nothing to dismiss)", () => {
     expect(isDismissableNotice(null)).toBe(false);
+  });
+
+  // The `default` branch is unreachable for any well-typed `Notice` — that's
+  // the whole point of the `never` assertion beside it — so nothing else
+  // here ever runs it. It exists for the ill-typed-but-shipped case (a kind
+  // added to `Notice` without touching this function, on a build that,
+  // unlike this repo's tests, never ran tsc): still `true`, not stranded.
+  it("still answers true for a kind the type system doesn't know about (the ill-typed-but-shipped fallback)", () => {
+    expect(isDismissableNotice({ kind: "future" } as unknown as Notice)).toBe(true);
   });
 });
