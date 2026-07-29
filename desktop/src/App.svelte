@@ -140,7 +140,12 @@
   // is worth showing at all.
   async function checkForUpdate(manual: boolean): Promise<void> {
     const before = updateState;
-    if (manual) updateState = { kind: "checking" };
+    // Don't hide an already-actionable "available" banner behind a transient
+    // "checking" placeholder: `update_check` is a plain invoke with no
+    // timeout, so a hung re-check would otherwise strand the install button
+    // gone for the rest of the process's life, which is the same silence
+    // this whole feature exists to close, reached by a different path.
+    if (manual && before?.kind !== "available") updateState = { kind: "checking" };
     const result = await runUpdateCheck(() => updater.check());
     // Automatic checks are best-effort: offline startup and an empty release
     // channel must never interfere with the deck, so only a found update is
@@ -151,10 +156,13 @@
       // A transient/failed outcome must never displace an update that is
       // STILL there and installable: a re-check finding nothing new (or
       // failing outright) does not mean the earlier one stopped being real.
-      // `before` (not the live `updateState`, already overwritten to
-      // "checking" above) is what the check actually started from. Restore
-      // it rather than leaving "checking" stuck when the guard rejects.
-      updateState = result.kind === "available" || before?.kind !== "available" ? result : before;
+      // Checks can overlap (a mount check racing a manual one, or a
+      // double-clicked tray item) — compare against whatever is LIVE right
+      // now, not just what this call started from, and only fall back to
+      // `before` while the live value is still the "checking" placeholder
+      // this call itself may have set (nothing else has settled since).
+      const prior = updateState?.kind === "checking" ? before : updateState;
+      updateState = result.kind === "available" || prior?.kind !== "available" ? result : prior;
     }
     if (result.kind === "available") {
       void emit(UPDATE_RESULT_EVENT, result).catch(() => {
@@ -169,7 +177,19 @@
     updateError = "";
     try {
       const installed = await updater.install();
-      if (!installed) updateState = null;
+      if (!installed) {
+        // A definitive resolution (the updater itself found nothing to
+        // install, most likely someone/something else already did), unlike
+        // the transient outcomes above — it clears the banner in BOTH
+        // windows, the one retraction the "available"-only broadcast above
+        // otherwise has no way to make: without this, a window that never
+        // installs anything (the deck) would keep an "Install and restart"
+        // button for an update the process has already decided is gone.
+        updateState = null;
+        void emit(UPDATE_RESULT_EVENT, null).catch(() => {
+          // Not in a Tauri WebView (plain browser preview): nothing to tell.
+        });
+      }
     } catch (error) {
       updateError = reasonOf(error);
     } finally {
@@ -353,15 +373,22 @@
       void checkForUpdate(true);
     });
 
-    // The other half of `checkForUpdate`'s broadcast: whichever window ran
-    // the check (only the app window ever does — see below), BOTH windows'
-    // `updateState` follow the result. Registering this in the SAME window
-    // that emitted is harmless: the assignment just repeats the value that
-    // function already set locally. `listen<UpdateCheckState>`'s type
+    // The other half of `checkForUpdate`'s broadcast (an available update)
+    // and `installUpdate`'s (its resolution, `null`): whichever window ran
+    // the check or the install (only the app window ever does — see below),
+    // BOTH windows' `updateState` follow it. Registering this in the SAME
+    // window that emitted is harmless: the assignment just repeats the value
+    // that function already set locally. `listen<UpdateCheckState>`'s type
     // parameter is a compile-time label only — `asUpdateCheckState` is what
     // actually guards against a malformed payload reaching `state.info` and
     // crashing the render, the same way `asDiscovery` guards `discoveryListener`.
+    // A `null` payload is distinguished from a malformed one: it is the
+    // explicit "clear" signal, not something to just silently ignore.
     const updateResultListener = listen<unknown>(UPDATE_RESULT_EVENT, (event) => {
+      if (event.payload === null) {
+        updateState = null;
+        return;
+      }
       const result = asUpdateCheckState(event.payload);
       if (result) updateState = result;
     });
@@ -418,11 +445,6 @@
     };
   });
 
-  // Whether UpdateBanner has anything to render — kept here (rather than
-  // inside UpdateBanner) so both windows can skip the wrapping
-  // `.desktop-banner` div entirely when there is nothing to show, matching
-  // what the pre-existing markup did for `updateError`/an available update.
-  const showUpdateBanner = $derived(updateError !== "" || updateState !== null);
   const connectionSetupLabel = $derived(
     locale.lang === "cs" ? "Nastavení připojení" : "Connection setup",
   );
@@ -457,16 +479,14 @@
 
 {#if surface === "desktop"}
   <div class="desktop-app">
-    {#if showUpdateBanner}
-      <div class="desktop-banner">
-        <UpdateBanner
-          state={updateState}
-          installError={updateError}
-          installing={installingUpdate}
-          onInstall={installUpdate}
-        />
-      </div>
-    {/if}
+    <div class="desktop-banner">
+      <UpdateBanner
+        state={updateState}
+        installError={updateError}
+        installing={installingUpdate}
+        onInstall={installUpdate}
+      />
+    </div>
     <div class="desktop-control-room" inert={showDesktopSetup} aria-hidden={showDesktopSetup}>
       <ConfigApp interactive={!showDesktopSetup} />
     </div>
@@ -523,14 +543,12 @@
         <span class="grabber" data-tauri-drag-region></span>
       </div>
     {/if}
-    {#if showUpdateBanner}
-      <UpdateBanner
-        state={updateState}
-        installError={updateError}
-        installing={installingUpdate}
-        onInstall={installUpdate}
-      />
-    {/if}
+    <UpdateBanner
+      state={updateState}
+      installError={updateError}
+      installing={installingUpdate}
+      onInstall={installUpdate}
+    />
     {#if view === "deck"}
       <DeckView {transport} compact />
     {:else}

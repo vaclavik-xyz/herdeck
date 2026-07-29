@@ -34,10 +34,22 @@ function render(props: {
 }
 
 describe("UpdateBanner", () => {
-  it("renders nothing when there is no state and no install error", () => {
+  it("renders no visible banner box when there is no state and no install error", () => {
     const { target, cleanup } = render({ state: null });
     try {
       expect(target.querySelector(".banner")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("still renders a persistent [role=status] live region even with nothing to say", () => {
+    // Mounted unconditionally in App.svelte specifically so this region
+    // exists BEFORE the first check settles — a live region only reliably
+    // announces a content change on an element that already existed.
+    const { target, cleanup } = render({ state: null });
+    try {
+      expect(target.querySelector('[role="status"]')).not.toBeNull();
     } finally {
       cleanup();
     }
