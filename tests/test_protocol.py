@@ -56,6 +56,43 @@ def test_decode_snapshot_preserves_terminal_identity():
     assert msg.states[0].terminal_id == "term-123"
 
 
+def test_decode_snapshot_preserves_state_labels():
+    raw = (
+        '{"type":"snapshot","server_id":"workbox","panes":'
+        '[{"pane_id":"w1:p1","agent_type":"claude","label":"api","status":"working",'
+        '"state_labels":{"working":"PROBE","idle":"parked"}}]}'
+    )
+
+    msg = decode_inbound(raw)
+
+    assert msg.states[0].state_labels == {"working": "PROBE", "idle": "parked"}
+
+
+def test_decode_snapshot_without_state_labels_defaults_to_empty():
+    # An older herdr (or an older bridge) simply omits the field.
+    msg = decode_inbound(
+        '{"type":"snapshot","server_id":"old","panes":'
+        '[{"pane_id":"p1","agent_type":"codex","label":"api","status":"idle"}]}'
+    )
+
+    assert msg.states[0].state_labels == {}
+
+
+def test_decode_snapshot_drops_malformed_state_labels():
+    raw = (
+        '{"type":"snapshot","server_id":"workbox","panes":'
+        '[{"pane_id":"w1:p1","agent_type":"claude","label":"api","status":"working",'
+        '"state_labels":{"working":7,"idle":"parked"}},'
+        '{"pane_id":"w1:p2","agent_type":"claude","label":"web","status":"idle",'
+        '"state_labels":"working"}]}'
+    )
+
+    msg = decode_inbound(raw)
+
+    assert msg.states[0].state_labels == {"idle": "parked"}
+    assert msg.states[1].state_labels == {}
+
+
 def test_decode_snapshot_preserves_work_context_and_capabilities():
     raw = (
         '{"type":"snapshot","server_id":"workbox","protocol":2,'

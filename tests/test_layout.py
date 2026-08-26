@@ -361,14 +361,139 @@ def test_waiting_status_color_is_violet():
     assert status_color(Status.WAITING) == "violet"
 
 
-def test_waiting_status_text_uses_holder_label():
-    from herdeck.layout import waiting_status_text
+def test_waiting_tile_uses_holder_label():
+    from herdeck.layout import tile_status_text
 
-    assert waiting_status_text("⏳ ci") == "CI"
-    assert waiting_status_text("⏳ review +1") == "REVIEW +1"
-    assert waiting_status_text("") == "WAITING"  # fallback word
-    assert waiting_status_text("", lang="cs") == "V POZADÍ"
-    assert len(waiting_status_text("⏳ a-very-long-marker-name")) <= 12
+    def held(waiting_on):
+        return _labelled(Status.WAITING, {}, waiting_on=waiting_on)
+
+    assert tile_status_text(held("⏳ ci")) == "CI"
+    assert tile_status_text(held("⏳ review +1")) == "REVIEW +1"
+    assert tile_status_text(held("")) == "WAITING"  # fallback word
+    assert tile_status_text(held(""), lang="cs") == "V POZADÍ"
+    assert len(tile_status_text(held("⏳ a-very-long-marker-name"))) <= 12
+
+
+def _labelled(status, state_labels, waiting_on=""):
+    return AgentState(
+        AgentKey("s", "p"),
+        "claude",
+        "api",
+        status,
+        waiting_on=waiting_on,
+        state_labels=state_labels,
+    )
+
+
+def test_tile_status_text_uses_herdr_state_label():
+    from herdeck.layout import tile_status_text
+
+    agent = _labelled(Status.WORKING, {"working": "probe", "idle": "parked"})
+
+    assert tile_status_text(agent) == "PROBE"
+    # The label is herdr's, so it wins in either UI language.
+    assert tile_status_text(agent, lang="cs") == "PROBE"
+
+
+def test_tile_status_text_falls_back_to_the_status_word():
+    from herdeck.layout import tile_status_text
+
+    # No entry for the current status, an empty entry, and no map at all.
+    assert tile_status_text(_labelled(Status.WORKING, {"idle": "parked"})) == "WORKING"
+    assert tile_status_text(_labelled(Status.WORKING, {"working": "  "})) == "WORKING"
+    assert tile_status_text(_labelled(Status.IDLE, {}), lang="cs") == "NEČINNÝ"
+
+
+def test_tile_status_text_scrubs_variation_selector_off_vs16_emoji():
+    from herdeck.layout import tile_status_text
+
+    # A label spelled with the VS16 presentation selector ("⚠️" is U+26A0
+    # WARNING SIGN + U+FE0F): the emoji's base is dropped by the font-glyph
+    # filter, but U+FE0F alone is category Mn, which the filter otherwise
+    # keeps for scripts — so without special-casing it, the selector used to
+    # survive and draw as a leading tofu box even with the base gone.
+    agent = _labelled(Status.WAITING, {}, waiting_on="⚠️ ci")
+    label = tile_status_text(agent)
+    assert label == "CI"
+    assert "️" not in label
+
+
+def test_tile_status_text_drops_enclosing_keycap_mark():
+    from herdeck.layout import tile_status_text
+
+    # A keycap off a phone keyboard ("1️⃣" = "1" + VS16 U+FE0F + the
+    # enclosing mark U+20E3, category Me) exercises both halves of the fix at
+    # once: dropping only the variation selector while leaving Me out of
+    # _UNDRAWABLE would still draw the enclosing mark as a tofu box.
+    agent = _labelled(Status.WAITING, {}, waiting_on="1️⃣ ci")
+    assert tile_status_text(agent) == "1 CI"
+
+
+def test_tile_status_text_keeps_combining_marks_needed_to_spell_a_word():
+    from herdeck.layout import tile_status_text
+
+    # Thai "ไม่ว่าง" (busy) ends in Mn combining marks that carry the tone —
+    # dropping them the way Me/variation selectors are dropped would truncate
+    # the word to a form no Thai reader would recognize.
+    agent = _labelled(Status.WAITING, {}, waiting_on="ไม่ว่าง")
+    assert tile_status_text(agent) == "ไม่ว่าง".upper()
+
+
+def test_tile_status_text_waiting_on_beats_state_label():
+    from herdeck.layout import tile_status_text
+
+    agent = _labelled(Status.WAITING, {"waiting": "held"}, waiting_on="⏳ ci")
+
+    assert tile_status_text(agent) == "CI"
+
+
+def test_tile_status_text_offline_beats_state_label():
+    from herdeck.layout import tile_status_text
+
+    agent = _labelled(Status.WORKING, {"working": "probe"})
+
+    assert tile_status_text(agent, down=True) == "OFFLINE"
+
+
+def test_tile_status_text_waiting_falls_through_to_the_state_label():
+    from herdeck.layout import tile_status_text
+
+    # A pane whose wire status is literally "waiting" with no holder label:
+    # herdr's own label still beats the generic word.
+    assert tile_status_text(_labelled(Status.WAITING, {"waiting": "held"})) == "HELD"
+    assert tile_status_text(_labelled(Status.WAITING, {})) == "WAITING"
+
+
+def test_tile_status_text_flattens_a_multiline_state_label():
+    from herdeck.layout import tile_status_text
+
+    # A newline reaching the renderer raises out of Pillow's single-line text
+    # measurement and takes the whole frame with it.
+    text = tile_status_text(_labelled(Status.WORKING, {"working": "run\nning\t2"}))
+
+    assert text == "RUN NING 2"
+
+
+def test_tile_status_text_drops_pictographs_the_tile_font_cannot_draw():
+    from herdeck.layout import tile_status_text
+
+    # state_labels is third-party text; the tile font has no emoji glyphs.
+    assert tile_status_text(_labelled(Status.WORKING, {"working": "🔍 review"})) == "REVIEW"
+    # A powerline/Nerd Font glyph from the private use area is tofu too.
+    assert tile_status_text(_labelled(Status.WORKING, {"working": "\ue0b0 ci"})) == "CI"
+    # So is a bare control character that str.split() would not remove.
+    assert tile_status_text(_labelled(Status.WORKING, {"working": "held\x00x"})) == "HELDX"
+    # Plain punctuation and math symbols are drawable and must survive.
+    assert tile_status_text(_labelled(Status.WORKING, {"working": "review +1"})) == "REVIEW +1"
+
+
+def test_tile_status_text_clips_a_long_state_label():
+    from herdeck.layout import tile_status_text
+
+    agent = _labelled(Status.WORKING, {"working": "⏳ a-very-long-marker-name"})
+
+    assert len(tile_status_text(agent)) <= 12
+    assert "⏳" not in tile_status_text(agent)
 
 
 def test_panel_overview_counts_show_pending_only_when_nonzero():

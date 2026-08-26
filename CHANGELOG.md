@@ -9,6 +9,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - **Check for updates** in the tray. It opens the app window and answers either
   way — a newer release, "you are up to date", or the failure and its reason.
+- **Qwen Code** joins the agent kinds herdeck can launch through herdr's
+  managed start.
+- Agent tiles now show herdr's own per-status label when one is set, so the
+  deck and herdr's own sidebar always agree on the wording. herdeck's own
+  explicit **waiting** label still takes precedence, and the generic status
+  word remains the fallback when herdr has no label for that status.
+- A one-time startup warning when the connected herdr predates 0.7.4, naming
+  the consequence plainly: the **waiting** state will silently never appear.
+- A warning is now logged whenever herdr reports that a pane read omitted
+  older terminal rows, so a decision made on a clipped prompt is diagnosable
+  instead of invisible.
+
+### Changed
+- The stated herdr requirement rises from 0.7.2 to 0.7.4: the metadata tokens
+  herdeck's **waiting** state is derived from shipped in that release.
 
 ### Fixed
 - The update check ran once per window mount and swallowed every failure
@@ -16,6 +31,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no way to retry and no way to tell "up to date" from "the check broke". A
   check you asked for now always reports; automatic ones stay quiet, so an
   offline start still cannot disturb the deck.
+- Answering a blocked agent from the deck — the drill's numbered-answer submit
+  — stopped working against herdr 0.8.2, which now rejects a prompt answer for
+  an agent already sitting at an approval or question dialog. herdeck now
+  answers through herdr's pane-level primitives instead, so this works again.
+  Because those type raw keystrokes with no paste framing, an answer that is
+  empty, whitespace-only, or contains an embedded newline or control character
+  is now refused outright rather than sent half-formed.
+- A managed agent start no longer fails outright when the connected herdr does
+  not recognize the agent kind; herdeck falls back to starting it by typing
+  into the pane, as it always did before managed start.
 
 ## [0.2.0] - 2026-07-29
 
@@ -82,7 +107,7 @@ Initial public release.
   runtime, Start at login support, and signed in-app updates.
 - Linux desktop packages for x86_64 and arm64 (AppImage, deb, and rpm).
 - Control panel for AI coding agents running under
-  [herdr](https://github.com/ogulcancelik/herdr).
+  [herdr](https://github.com/herdrdev/herdr).
 - Front-ends: Ulanzi D200 hardware deck, Elgato Stream Deck plugin, browser
   simulator, and a native Tauri + Svelte desktop app.
 - `herdeck-bridge` — token-authenticated WebSocket bridge over herdr's socket.

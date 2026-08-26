@@ -66,6 +66,11 @@ def _agent_record(agent: AgentState, *, available: bool) -> dict:
             for key, value in agent.metadata.items()
             if _bounded(key, 32)
         },
+        "state_labels": {
+            _bounded(key, 32): _bounded(value, 80)
+            for key, value in agent.state_labels.items()
+            if _bounded(key, 32)
+        },
         "repository": _bounded(agent.repo, 256),
         "branch": _bounded(agent.branch, 256),
         "project": _bounded(agent.project, 256),

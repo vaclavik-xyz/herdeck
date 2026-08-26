@@ -74,6 +74,10 @@ class AgentState:
     waiting_on: str = ""
     progress: str = ""
     metadata: dict[str, str] = field(default_factory=dict)
+    # herdr 0.8.2's native per-status labels ({status value: label}), the same
+    # map herdr's own sidebar renders. Empty against an older herdr, and empty
+    # on 0.8.2 until an integration sets one.
+    state_labels: dict[str, str] = field(default_factory=dict)
     # Stable Herdr terminal identity. ``pane_id`` is a public location and may
     # be moved or recycled; long-lived controls must bind to this value too.
     terminal_id: str = ""

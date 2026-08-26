@@ -592,6 +592,91 @@ def test_tile_press_dismisses_held_detail():
     assert o._usage_detail_until == 0.0
 
 
+def _tile_for(o, label="api"):
+    return {t.label: t for t in o.render().tiles if t.label}[label]
+
+
+def test_agent_tile_shows_herdr_state_label():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot(
+        "dev",
+        [
+            AgentState(
+                AgentKey("dev", "p1"),
+                "claude",
+                "api",
+                Status.WORKING,
+                state_labels={"working": "probe", "idle": "parked"},
+            )
+        ],
+    )
+
+    assert _tile_for(o).status_text == "PROBE"
+
+
+def test_agent_tile_without_state_labels_keeps_the_status_word():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.WORKING)])
+
+    assert _tile_for(o).status_text == "WORKING"
+
+
+def test_agent_tile_state_label_ignores_other_statuses():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot(
+        "dev",
+        [
+            AgentState(
+                AgentKey("dev", "p1"),
+                "claude",
+                "api",
+                Status.IDLE,
+                state_labels={"working": "probe"},
+            )
+        ],
+    )
+
+    assert _tile_for(o).status_text == "IDLE"
+
+
+def test_agent_tile_waiting_on_beats_the_state_label():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot(
+        "dev",
+        [
+            AgentState(
+                AgentKey("dev", "p1"),
+                "claude",
+                "api",
+                Status.WAITING,
+                waiting_on="⏳ ci",
+                state_labels={"waiting": "held"},
+            )
+        ],
+    )
+
+    assert _tile_for(o).status_text == "CI"
+
+
+def test_offline_agent_tile_beats_the_state_label():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot(
+        "dev",
+        [
+            AgentState(
+                AgentKey("dev", "p1"),
+                "claude",
+                "api",
+                Status.WORKING,
+                state_labels={"working": "probe"},
+            )
+        ],
+    )
+    o.set_connection("dev", False)
+
+    assert _tile_for(o).status_text == "OFFLINE"
+
+
 def test_waiting_agent_renders_violet_with_holder_label():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot(

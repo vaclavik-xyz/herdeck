@@ -11,12 +11,13 @@ import shlex
 import shutil
 import stat
 import time
+import unicodedata
 from typing import Protocol
 
 import websockets
 
 from .decisions import decision_choices, decision_revision
-from .model import WorkContext
+from .model import Status, WorkContext
 from .protocol import encode
 
 log = logging.getLogger(__name__)
@@ -24,9 +25,22 @@ log = logging.getLogger(__name__)
 # herdr agent_status values that mark a pane as worth showing on the deck.
 _AGENT_STATUSES = {"idle", "working", "blocked", "done"}
 
-# Hard floor: session.snapshot shipped in herdr 0.7.2; there is no fallback path.
+# Advisory floor: the metadata `tokens` field that Status.WAITING derivation
+# depends on shipped in herdr 0.7.4. _require_snapshot_support compares
+# session.snapshot's own `version` field against this and logs a warning
+# when it's lower — this is NOT the hard gate (see _SNAPSHOT_UNSUPPORTED
+# below), and must stay a separate constant: bumping this floor for a future
+# metadata field must not silently rewrite the hard-failure message.
+_MIN_HERDR_VERSION = (0, 7, 4)
+_MIN_HERDR_VERSION_STR = ".".join(str(part) for part in _MIN_HERDR_VERSION)
+
+# Hard floor: session.snapshot itself is missing entirely (pre-0.7.2 herdr) —
+# the only thing the startup probe can actually detect. The message names
+# 0.7.4, not the bare 0.7.2 detection floor, so a user fixing a hard failure
+# lands on a herdr with Status.WAITING support too. Kept as a literal string,
+# independent of _MIN_HERDR_VERSION on purpose (see comment above it).
 _SNAPSHOT_UNSUPPORTED = (
-    "herdeck requires herdr >= 0.7.2 (session.snapshot missing); run 'herdr update'"
+    "herdeck requires herdr >= 0.7.4 (session.snapshot missing); run 'herdr update'"
 )
 
 # Startup probe bound: a herdr that accepts but never answers (e.g. mid
@@ -36,7 +50,15 @@ _HERDR_RPC_TIMEOUT = 10.0
 _HERDR_SUBSCRIBE_TIMEOUT = 10.0
 _HERDR_LINE_LIMIT = 1024 * 1024 + 1  # 1 MiB payload plus NDJSON newline
 _WIRE_PROTOCOL = 3
-_WIRE_CAPABILITIES = ("work_context", "terminal_preview", "metadata_tokens")
+# `state_labels` is additive on the pane wire record, so it is advertised as a
+# capability instead of bumping the protocol: an older bridge simply omits it.
+_WIRE_CAPABILITIES = ("work_context", "terminal_preview", "metadata_tokens", "state_labels")
+
+# herdr's native per-status label map is bounded by the Status enum itself: the
+# deck only ever reads the entry for a pane's current status, so a key that is
+# not a status value can never reach a tile. Values are clipped like the other
+# free-text wire fields (the tile clips again, to its own slot width).
+_STATE_LABEL_VALUE_MAX = 160
 
 # Herdr protocol 17 made managed agent startup pane-first and restricted it to
 # known agent kinds. Existing Herdeck start profiles remain argv-based, so map
@@ -64,6 +86,7 @@ _MANAGED_AGENT_KINDS = {
     "opencode",
     "pi",
     "qodercli",
+    "qwen",
 }
 _MANAGED_AGENT_EXECUTABLE_ALIASES = {"cursor-agent": "cursor"}
 
@@ -147,6 +170,23 @@ def resolve_herdr_socket_path(*, getenv=os.environ.get, fallback: str | None = N
     return os.path.expanduser("~/.config/herdr/herdr.sock")
 
 
+def _parse_herdr_version(version: object) -> tuple[int, ...] | None:
+    """Parse session.snapshot's `version` (e.g. "0.8.2") into a comparable tuple.
+
+    Defensive by design: an absent, non-string, or non-numeric-dotted value
+    returns None rather than raising. An older herdr that omits `version`
+    entirely, or a future format this can't parse, must never break the
+    startup probe over a version comparison that is advisory, not fatal.
+    """
+    if not isinstance(version, str) or not version:
+        return None
+    parts = version.split(".")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError:
+        return None
+
+
 def _validate_snapshot(snapshot: object) -> dict:
     if not isinstance(snapshot, dict):
         raise RuntimeError("session.snapshot snapshot must be an object")
@@ -192,6 +232,11 @@ def _validate_snapshot(snapshot: object) -> dict:
                 raise RuntimeError("session.snapshot agent token keys must be strings")
             if not all(isinstance(value, str) for value in tokens.values()):
                 raise RuntimeError("session.snapshot agent token values must be strings")
+        # `state_labels` is deliberately NOT validated here, unlike its sibling
+        # `tokens`: it is cosmetic and any integration may write it, while a
+        # raise from this function degrades to `cur = None` in stream() — a deck
+        # frozen on its last frame, silently, until the bad value goes away.
+        # _wire_state_labels drops what it can't use instead.
     for record in snapshot.get("panes", []):
         pane_id = record.get("pane_id")
         if not isinstance(pane_id, str) or not pane_id:
@@ -219,6 +264,130 @@ async def _wait_until(awaitable, deadline: float, message: str):
         raise TimeoutError(message) from exc
 
 
+class HerdrRpcError(RuntimeError):
+    """A herdr RPC returned an error response."""
+
+    def __init__(self, method: str, code: str, message: str):
+        super().__init__(f"herdr RPC {method} failed: {message}")
+        self.method = method
+        self.code = code
+        self.message = message
+
+
+def _is_typeable(ch: str) -> bool:
+    """True for a character answer_blocked may type as literal keystrokes.
+
+    answer_blocked types raw keystrokes with no bracketed-paste framing, so
+    anything a terminal acts on instead of drawing has to be refused: category
+    Cc (the C0 controls incl. newline and tab, DEL, the C1 controls incl.
+    U+0085 NEL) and Zl/Zp (U+2028/U+2029 LINE and PARAGRAPH SEPARATOR). Cs
+    joins them because it cannot be typed at all: json.loads accepts a lone
+    `\\ud800` escape off the client socket, and re-encoding that surrogate for
+    the herdr RPC produces JSON no strict parser will read. This is broader
+    than semantic_api's `ord(ch) < 32 or ord(ch) == 127` body check, which is
+    about JSON hygiene rather than about what a pane can type.
+
+    Everything else is typed exactly as the user wrote it — a non-ASCII space
+    (U+00A0 after a Czech single-letter preposition) or the U+200D joining an
+    emoji sequence is legible input, not a hazard. `_is_legible` is what stops
+    an answer made only of such characters from reaching the confirming enter.
+    """
+    return unicodedata.category(ch) not in ("Cc", "Zl", "Zp", "Cs")
+
+
+def _is_legible(ch: str) -> bool:
+    """True for a character that puts something legible in the dialog's input.
+
+    `str.isprintable()` is False for every Unicode Other and Separator except
+    the ASCII space, which covers both the untypeable characters above and the
+    ones that type as nothing at all: U+200B, U+FEFF, U+2060, U+00AD, U+180E,
+    U+200D, the bidi overrides, and the non-ASCII spaces. Combining marks
+    (categories Mn/Mc/Me) are excluded too — they render only on a preceding
+    base character, so they form no answer on their own.
+    """
+    return ch.isprintable() and not ch.isspace() and unicodedata.category(ch)[0] != "M"
+
+
+def _is_attached_mark(ch: str) -> bool:
+    """True for a mark that is part of the character it follows.
+
+    Mn and Mc are what scripts need to spell a word — Thai `"ใช่"` ends in Mn,
+    Devanagari `"हाँ"` in Mc then Mn — so the trailing trim must keep them or
+    it rewrites the answer. Me (enclosing marks) and the variation selectors
+    are decoration on top of a character that already stands on its own, so a
+    keycap `"1️⃣"` off a phone keyboard answers as the `"1"` the dialog offers.
+    Only reached for a character that follows the legible one at the trailing
+    edge or the mark run already attached to it, so it always has a base
+    somewhere in front of it; a mark with no base is noise at either edge.
+    """
+    if 0xFE00 <= ord(ch) <= 0xFE0F or 0xE0100 <= ord(ch) <= 0xE01EF:
+        return False
+    return unicodedata.category(ch) in ("Mn", "Mc")
+
+
+def _normalize_blocked_answer(text: object) -> tuple[str | None, str | None]:
+    """Normalize and validate text bound for answer_blocked: the single rule
+    both the handler and the SocketHerdr backstop must agree on, so it lives
+    in exactly one place.
+
+    Trailing whitespace (e.g. a pasted reply's trailing newline) is trimmed
+    rather than rejected. What remains must carry at least one legible
+    character — answer_blocked types text then presses enter, so an answer
+    that types nothing visible would silently confirm whatever the blocked
+    dialog's default choice is, and a bare U+200B or U+FEFF off a rich-text
+    paste is as empty as a bare newline — and every character in it must be
+    one the pane primitives can type literally.
+
+    Characters that type as nothing are then trimmed off the *edges*, so a
+    BOM-prefixed paste answers `"1"` rather than typing `"﻿1"`, which a
+    numbered dialog does not match — leaving the enter to confirm the default.
+    Interior ones are left exactly as written: they are what makes
+    `"v\xa0pořádku"` and a ZWJ emoji sequence the user's own answer.
+
+    Both cuts land on a legible character; the trailing one then extends over
+    the marks attached to it. A mark only belongs to the answer when it has a
+    base character in front of it: dropping an attached one rewrites the answer
+    — Thai `"ใช่"` typed as `"ใช"`, Devanagari `"हाँ"` as `"ह"`, which is
+    precisely the unmatched-answer-then-enter this trim exists to prevent —
+    while keeping an orphaned one (`"yes ́"`) types a stray accent the
+    dialog does not match either.
+
+    Residual, and deliberately not closed here — either no character property
+    separates the case from a legitimate answer, or closing it would cost more
+    than it buys:
+      * an interior format character that is not a joiner — a bidi override
+        (`"yes‮on"`) or a tag character reorders or hides what is typed,
+        yet sits between legible characters, so the edge trim cannot reach it;
+      * a printable-but-blank code point (U+2800 BRAILLE PATTERN BLANK, the
+        Hangul fillers) counts as legible;
+      * a trailing variation selector is dropped as decoration, so an answer
+        written in emoji presentation (`"❤️"`) is typed in its bare form
+        (`"❤"`) — the tradeoff that lets a keycap answer as its digit;
+      * an answer that is legible and typed exactly as written but is not a
+        valid option for *that* dialog — the enter still lands on the default.
+        Closing that needs a read-back of the dialog, not a predicate.
+
+    Returns (normalized_text, None) when usable, or (None, reason) where
+    reason is the caller-facing skip-result message token.
+    """
+    if not isinstance(text, str):
+        # A non-conforming client can put a JSON null or number in `text`;
+        # nothing here is typeable, so the answer is refused exactly like a
+        # string full of untypeable characters, rather than raising and
+        # leaving handle_client_message's caller to hang on a reqless error.
+        return None, "untypeable_blocked_answer"
+    normalized = text.rstrip()
+    if not any(_is_legible(ch) for ch in normalized):
+        return None, "empty_blocked_answer"
+    if not all(_is_typeable(ch) for ch in normalized):
+        return None, "untypeable_blocked_answer"
+    start = next(i for i, ch in enumerate(normalized) if _is_legible(ch))
+    end = max(i for i, ch in enumerate(normalized) if _is_legible(ch))
+    while end + 1 < len(normalized) and _is_attached_mark(normalized[end + 1]):
+        end += 1
+    return normalized[start : end + 1], None
+
+
 class HerdrClient(Protocol):
     async def snapshot(self) -> dict: ...
     async def get_pane(self, pane_id: str) -> dict: ...
@@ -226,6 +395,7 @@ class HerdrClient(Protocol):
     async def send_keys(self, pane_id: str, keys: list[str]) -> None: ...
     async def focus_agent(self, pane_id: str) -> None: ...
     async def send_text(self, pane_id: str, text: str) -> None: ...
+    async def answer_blocked(self, pane_id: str, text: str) -> None: ...
     async def start_agent(self, name: str, argv: list[str]) -> None: ...
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]: ...
 
@@ -250,6 +420,27 @@ def _workspaces_by_id(workspaces: list[dict]) -> dict[str, str]:
 def _tabs_by_id(tabs: list[dict]) -> dict[str, str]:
     """Index herdr tabs (session.snapshot's ``tabs`` list) as {tab_id: label}."""
     return {t["tab_id"]: t.get("label", "") for t in (tabs or []) if t.get("tab_id")}
+
+
+def _wire_state_labels(raw: object) -> dict[str, str]:
+    """herdr 0.8.2's native ``{status: label}`` map, read defensively.
+
+    A pre-0.8.2 herdr omits the field entirely and a 0.8.2 one omits it until
+    something sets it, so absence is the normal case and never a warning. The
+    labels are cosmetic and open to any integration, so anything unusable is
+    dropped here rather than raised: a bad label must never cost a snapshot.
+
+    Only entries keyed by a real status value survive, which bounds the map
+    deterministically (the one key the tile reads can never be crowded out).
+    """
+    if not isinstance(raw, dict):
+        return {}
+    known = {status.value for status in Status}
+    return {
+        key: value[:_STATE_LABEL_VALUE_MAX]
+        for key, value in raw.items()
+        if key in known and isinstance(value, str)
+    }
 
 
 def _herdr_pane_to_wire(
@@ -286,6 +477,7 @@ def _herdr_pane_to_wire(
         "waiting_on": tokens.get("waiting_on", ""),
         "progress": tokens.get("progress", ""),
         "metadata": tokens,
+        "state_labels": _wire_state_labels(p.get("state_labels")),
         "terminal_id": p.get("terminal_id") or "",
         "title": (p.get("title") or p.get("terminal_title_stripped") or "")[:160],
         "display_agent": (p.get("display_agent") or "")[:160],
@@ -385,6 +577,15 @@ class StubHerdr:
     async def send_text(self, pane_id: str, text: str) -> None:
         self.sent.append((pane_id, text))
 
+    async def answer_blocked(self, pane_id: str, text: str) -> None:
+        # No guard here: handle_client_message runs _normalize_blocked_answer
+        # first, so anything empty, illegible (whitespace, U+200B, U+FEFF …) or
+        # carrying an untypeable character is rejected before ever reaching
+        # this (see SocketHerdr.answer_blocked for the real backstop). Tests
+        # that assert nothing was typed therefore pin the handler's guard, not
+        # a duplicate one here.
+        self.sent.append((pane_id, text))
+
     async def start_agent(self, name: str, argv: list[str]) -> None:
         self.started.append((name, argv))
 
@@ -423,7 +624,40 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     if kind == "send_text":
         if await _pane_identity_changed(herdr, msg):
             return _identity_changed_result(msg)
-        await herdr.send_text(msg["pane_id"], msg["text"])
+        if not isinstance(msg.get("text"), str):
+            # A non-conforming client can put a JSON null or number in
+            # "text", or omit the key entirely — .get folds both into this
+            # skip rather than a KeyError. Reject before the RPC even goes
+            # out: on the common (not-yet-blocked) pane a non-str value would
+            # instead ride straight into herdr.send_text below and come back
+            # as some other HerdrRpcError code, which the branch below
+            # re-raises — the same reqless hang this skip result exists to
+            # avoid, just reached one call earlier.
+            return encode(
+                {
+                    "type": "result",
+                    "req": msg["req"],
+                    "data": {"skipped": True, "message": "untypeable_blocked_answer"},
+                }
+            )
+        try:
+            await herdr.send_text(msg["pane_id"], msg["text"])
+        except HerdrRpcError as exc:
+            if exc.code != "agent_blocked":
+                raise
+            # herdr >= 0.8.2 rejects agent.prompt on an already-blocked pane;
+            # fall back to the pane-level primitives, which carry no such
+            # guard.
+            normalized_text, reject_reason = _normalize_blocked_answer(msg["text"])
+            if reject_reason is not None:
+                return encode(
+                    {
+                        "type": "result",
+                        "req": msg["req"],
+                        "data": {"skipped": True, "message": reject_reason},
+                    }
+                )
+            await herdr.answer_blocked(msg["pane_id"], normalized_text)
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "choose_if_blocked":
         pane = await herdr.get_pane(msg["pane_id"])
@@ -472,7 +706,7 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
                     "data": {"skipped": True, "message": "stale_choice"},
                 }
             )
-        await herdr.send_text(msg["pane_id"], msg["choice"])
+        await herdr.answer_blocked(msg["pane_id"], msg["choice"])
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "start":
         await herdr.start_agent(msg["name"], msg["argv"])
@@ -1033,9 +1267,11 @@ class SocketHerdr:
                     err = res["error"]
                     if isinstance(err, dict):
                         message = err.get("message", str(err))
+                        code = err.get("code", "")
                     else:
                         message = str(err)
-                    raise RuntimeError(f"herdr RPC {method} failed: {message}")
+                        code = ""
+                    raise HerdrRpcError(method, code, message)
                 if not isinstance(res.get("result"), dict):
                     raise RuntimeError(f"herdr RPC {method} result must be an object")
                 return res
@@ -1097,7 +1333,13 @@ class SocketHerdr:
 
     async def read_pane(self, pane_id: str, source: str) -> str:
         res = await self._rpc("pane.read", {"pane_id": pane_id, "source": source})
-        return res.get("result", {}).get("read", {}).get("text", "")
+        read = res.get("result", {}).get("read", {})
+        if read.get("truncated"):
+            # herdr >= 0.8.0 omits older terminal rows from the returned
+            # window; surface it so a decision made on a clipped prompt is
+            # diagnosable instead of silently wrong.
+            log.warning("herdr pane.read %s truncated older rows (source=%s)", pane_id, source)
+        return read.get("text", "")
 
     async def send_keys(self, pane_id: str, keys: list[str]) -> None:
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": keys}, retry=False)
@@ -1110,10 +1352,43 @@ class SocketHerdr:
         if await self._protocol_version() >= 17:
             # Protocol 17 replaced agent.send with an atomic, bracketed-paste
             # aware prompt submission.
-            await self._rpc("agent.prompt", {"target": pane_id, "text": text}, retry=False)
+            try:
+                await self._rpc("agent.prompt", {"target": pane_id, "text": text}, retry=False)
+            except HerdrRpcError as exc:
+                if exc.code != "agent_prompt_stalled":
+                    raise
+                message = "herdr saw no state change within 5s after the prompt (agent_prompt_stalled)"
+                log.warning(
+                    "%s pane_id=%s herdr_message=%s", message, pane_id, exc.message
+                )
+                raise HerdrRpcError("agent.prompt", exc.code, message) from exc
             return
         # Protocol 16 agent.send types text without submitting it.
         await self._rpc("agent.send", {"target": pane_id, "text": text}, retry=False)
+        await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
+
+    async def answer_blocked(self, pane_id: str, text: str) -> None:
+        """Answer an agent sitting at an approval/question dialog.
+
+        herdr >= 0.8.2 rejects agent.prompt for a blocked agent with
+        `agent_blocked` before sending any input, so a dialog answer has to go
+        through the pane-level primitives, which carry no such guard. Those
+        primitives type raw keystrokes with no bracketed-paste framing, so an
+        embedded control character (a newline in particular) would submit
+        mid-typing instead of arriving as literal answer text.
+
+        handle_client_message's send_text fallback already rejects such an
+        answer via _normalize_blocked_answer before calling in, but
+        choose_if_blocked (and any other caller) reaches this method directly,
+        so the same helper runs here too — one shared rule, so the two paths
+        cannot drift apart on what counts as untypeable, illegible or a
+        trimmable trailing newline.
+        """
+        normalized_text, reject_reason = _normalize_blocked_answer(text)
+        if reject_reason is not None:
+            raise ValueError(f"answer_blocked: {reject_reason}")
+        text = normalized_text
+        await self._rpc("pane.send_text", {"pane_id": pane_id, "text": text}, retry=False)
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
 
     async def _close_created_tab(self, tab_id: str) -> None:
@@ -1160,34 +1435,54 @@ class SocketHerdr:
         try:
             kind = _managed_agent_kind(argv)
             if kind is not None:
-                await self._rpc(
-                    "agent.start",
-                    {
-                        "name": _managed_agent_name(kind, pane_id),
-                        "kind": kind,
-                        "pane_id": pane_id,
-                        "args": argv[1:],
-                    },
-                    retry=False,
-                )
+                try:
+                    await self._rpc(
+                        "agent.start",
+                        {
+                            "name": _managed_agent_name(kind, pane_id),
+                            "kind": kind,
+                            "pane_id": pane_id,
+                            "args": argv[1:],
+                        },
+                        retry=False,
+                    )
+                except HerdrRpcError as exc:
+                    if exc.code != "unsupported_agent_kind":
+                        raise
+                    # herdr validates the kind before the pane lookup (verified
+                    # live against 0.8.2), so a herdr that predates this entry
+                    # in _MANAGED_AGENT_KINDS rejects it here with no side
+                    # effects on the tab/pane we already created. Fall back to
+                    # raw pane input instead of aborting the whole launch.
+                    log.warning(
+                        "herdr rejected managed agent kind %s (unsupported_agent_kind); "
+                        "falling back to raw pane input on %s",
+                        kind,
+                        pane_id,
+                    )
+                    await self._send_raw_argv(pane_id, argv)
             else:
                 # Keep custom wrappers and future agent executables working even
                 # though Herdr's managed kind enum does not know them yet.
-                await self._rpc(
-                    "pane.send_text",
-                    {"pane_id": pane_id, "text": shlex.join(argv)},
-                    retry=False,
-                )
-                await self._rpc(
-                    "pane.send_keys",
-                    {"pane_id": pane_id, "keys": ["enter"]},
-                    retry=False,
-                )
+                await self._send_raw_argv(pane_id, argv)
         except BaseException:
             # Do not leave an empty/orphaned tab when a managed or raw launch
             # fails after layout creation. Preserve the original launch error.
             await self._close_created_tab(tab_id)
             raise
+
+    async def _send_raw_argv(self, pane_id: str, argv: list[str]) -> None:
+        """Type argv as literal shell input into pane_id, then submit it.
+
+        Used both for agent kinds herdr's managed agent.start does not know
+        about, and as the fallback when it rejects a kind we thought it knew.
+        """
+        await self._rpc(
+            "pane.send_text",
+            {"pane_id": pane_id, "text": shlex.join(argv)},
+            retry=False,
+        )
+        await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
 
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]:
         # herdr scopes worktree.list to ONE repo (focused when unparametrized);
@@ -1370,18 +1665,31 @@ async def _serve_connection(
 
 
 async def _require_snapshot_support(herdr: HerdrClient) -> None:
-    """Fail fast when herdr predates session.snapshot (herdeck needs >= 0.7.2).
+    """Fail fast when herdr predates session.snapshot (herdeck needs >= 0.7.4).
 
     Only the version error is fatal: a herdr that is merely not up yet (or is
     mid live-handoff) must not kill the bridge — the stream retries those
-    exactly as before."""
+    exactly as before. A herdr that answers but reports a version below the
+    recommended floor is not fatal either (it works, just without
+    Status.WAITING) — logged as a warning instead."""
     try:
-        await asyncio.wait_for(herdr.snapshot(), timeout=_PROBE_TIMEOUT)
+        snapshot = await asyncio.wait_for(herdr.snapshot(), timeout=_PROBE_TIMEOUT)
     except RuntimeError as exc:
         if str(exc) == _SNAPSHOT_UNSUPPORTED:
             raise
+        return
     except Exception:
-        pass
+        return
+    # snapshot is typed as dict by the HerdrClient protocol, but this check is
+    # purely advisory — never let a non-conforming client turn it fatal.
+    version = _parse_herdr_version(snapshot.get("version") if isinstance(snapshot, dict) else None)
+    if version is not None and version < _MIN_HERDR_VERSION:
+        log.warning(
+            "herdr reports version %s, below the recommended >= %s; "
+            "session.snapshot's metadata `tokens` is unavailable, so Status.WAITING will never appear",
+            snapshot.get("version"),
+            _MIN_HERDR_VERSION_STR,
+        )
 
 
 def _log_broadcast_task_failure(task: asyncio.Task) -> None:

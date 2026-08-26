@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from .driver.base import PanelGauge, PanelView
@@ -355,14 +356,78 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
     return raw_lines, lines
 
 
-def waiting_status_text(waiting_on: str, lang: str = "en") -> str:
-    """Tile status word for a WAITING agent: the holder's label ('⏳ ci' ->
-    'CI') beats a generic word. The hourglass is stripped — the tile font has
-    no emoji glyphs (it would render as a tofu box)."""
-    text = (waiting_on or "").replace("⏳", "").strip()
-    if not text:
-        return tr(lang, "status.waiting")
-    return text.upper()[:12]
+# Unicode categories the tile font cannot draw: pictographs and modifier
+# symbols, private use (powerline/Nerd Font icons), surrogates, unassigned,
+# controls, and enclosing marks (Me — a keycap-style combiner with no base
+# glyph of its own). This is a proxy for glyph coverage, not a guarantee of
+# it — the categories left in still admit plenty the font may lack (arrows,
+# CJK), which costs a tofu box, not a frame. Sm is left in for the ASCII math
+# punctuation a marker like "review +1" needs, not because the whole category
+# is drawable. Mn/Mc are left in too — a label in Thai, Devanagari or Hebrew
+# with niqqud needs them to spell a word — but the variation selectors are
+# category Mn and are dropped by codepoint alongside Me below: they decorate
+# a base character that already stands on its own, so without this a label
+# spelled with VS16 (e.g. "⚠️ ci") drops the emoji's base but keeps its
+# selector, which the font draws as a leading tofu box. Mirrors the same
+# distinction `_is_attached_mark` in bridge.py draws for answer text, though
+# the two rules answer different questions and are deliberately kept separate.
+_UNDRAWABLE = frozenset({"So", "Sk", "Co", "Cs", "Cn", "Cc", "Cf", "Me"})
+
+
+def _is_variation_selector(ch: str) -> bool:
+    # The supplementary range (VS17-VS256) is unreachable here — the caller
+    # already drops anything past the BMP before this runs — but it is kept
+    # for parity with `_is_attached_mark` in bridge.py, whose caller has no
+    # such limit.
+    return 0xFE00 <= ord(ch) <= 0xFE0F or 0xE0100 <= ord(ch) <= 0xE01EF
+
+
+def _short_status_label(text: str) -> str:
+    """Normalise a foreign label into the tile's status slot: uppercase like
+    the built-in status words, clipped to what the slot fits.
+
+    The label is not herdeck's text — a `waiting_on` marker or one of herdr's
+    state labels, either of which any integration may write — so it is scrubbed
+    of what the tile cannot draw: everything the font has no glyph for (the
+    hourglass herdwatch prefixes, emoji, the private-use area where powerline
+    and Nerd Font icons live, controls, anything past the BMP) would render as
+    a tofu box, and an embedded newline raises out of Pillow's single-line text
+    measurement and would take the whole frame down with it.
+    """
+    kept = "".join(
+        ch
+        for ch in (text or "")
+        # whitespace survives the filter so that words separated by a newline or
+        # a tab stay separated once split() collapses the run to one space.
+        if ch.isspace()
+        or (
+            ord(ch) <= 0xFFFF
+            and not _is_variation_selector(ch)
+            and unicodedata.category(ch) not in _UNDRAWABLE
+        )
+    )
+    return " ".join(kept.split()).upper()[:12]
+
+
+def tile_status_text(agent: AgentState, lang: str = "en", down: bool = False) -> str:
+    """The agent tile's status word, in strict precedence order: the server
+    being down, herdeck's own explicit `waiting_on` holder label, herdr's
+    native per-status label (0.8.2+, what herdr's sidebar shows), and finally
+    the generic translated status word.
+
+    Shared by every agent-tile path so the deck, the window and the Elgato
+    surface can't drift apart on which label wins.
+    """
+    if down:
+        return tr(lang, "status.offline")
+    if agent.status is Status.WAITING:
+        held = _short_status_label(agent.waiting_on)
+        if held:
+            return held
+    native = _short_status_label(agent.state_labels.get(agent.status.value, ""))
+    if native:
+        return native
+    return tr(lang, f"status.{agent.status.value}")
 
 
 def panel_detail(agent: AgentState, text: str, lang: str = "en") -> PanelView:

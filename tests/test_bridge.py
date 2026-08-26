@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from herdeck.bridge import (
+    HerdrRpcError,
     StubHerdr,
     _herdr_pane_to_wire,
     _is_agent_pane,
@@ -58,6 +59,7 @@ def test_herdr_pane_to_wire_maps_fields():
         "waiting_on": "",
         "progress": "",
         "metadata": {},
+        "state_labels": {},
         "terminal_id": "",
         "title": "",
         "display_agent": "",
@@ -70,6 +72,53 @@ def test_herdr_pane_to_wire_passes_waiting_on_through():
     raw = raw_pane(agent="claude", status="working", cwd="/x/api")
     raw["tokens"] = {"waiting_on": "\u23f3 ci"}
     assert _herdr_pane_to_wire(raw)["waiting_on"] == "\u23f3 ci"
+
+
+def test_herdr_pane_to_wire_passes_state_labels_through():
+    # herdr 0.8.2's native per-status labels ride through untouched.
+    raw = raw_pane(agent="claude", status="working", cwd="/x/api")
+    raw["state_labels"] = {"working": "PROBE", "idle": "parked"}
+
+    assert _herdr_pane_to_wire(raw)["state_labels"] == {"working": "PROBE", "idle": "parked"}
+
+
+def test_herdr_pane_to_wire_defaults_state_labels_for_older_herdr():
+    # A pre-0.8.2 herdr omits the field entirely; absence is not an error.
+    assert _herdr_pane_to_wire(raw_pane())["state_labels"] == {}
+
+
+@pytest.mark.parametrize("bad", ["working", 7, None, ["working"]])
+def test_herdr_pane_to_wire_drops_non_object_state_labels(bad):
+    raw = raw_pane()
+    raw["state_labels"] = bad
+
+    assert _herdr_pane_to_wire(raw)["state_labels"] == {}
+
+
+def test_herdr_pane_to_wire_drops_malformed_state_label_entries():
+    # Cosmetic labels: a bad entry is dropped, the good ones still render.
+    raw = raw_pane()
+    raw["state_labels"] = {"working": 7, "idle": "parked", 3: "three", "done": None}
+
+    assert _herdr_pane_to_wire(raw)["state_labels"] == {"idle": "parked"}
+
+
+def test_herdr_pane_to_wire_keeps_only_status_keyed_state_labels():
+    # The tile only ever reads the entry for the pane's own status, so unknown
+    # keys are dropped -- they can never crowd out the one that matters.
+    raw = raw_pane()
+    raw["state_labels"] = dict(
+        {f"s{i}": f"L{i}" for i in range(40)}, working="probe", blocked="held"
+    )
+
+    assert _herdr_pane_to_wire(raw)["state_labels"] == {"working": "probe", "blocked": "held"}
+
+
+def test_herdr_pane_to_wire_clips_a_long_state_label():
+    raw = raw_pane()
+    raw["state_labels"] = {"working": "x" * 500}
+
+    assert _herdr_pane_to_wire(raw)["state_labels"] == {"working": "x" * 160}
 
 
 def test_herdr_pane_to_wire_passes_terminal_identity_through():
@@ -154,6 +203,7 @@ async def test_list_returns_mapped_filtered_snapshot(herdr):
         "work_context",
         "terminal_preview",
         "metadata_tokens",
+        "state_labels",
     ]
     p = msg["panes"][0]
     assert p["pane_id"] == "w1:p1"
@@ -426,6 +476,77 @@ async def test_rpc_error_envelope_raises(monkeypatch):
         await h.read_pane("w1:p1", "detection")
 
 
+async def test_rpc_error_raises_herdr_rpc_error_with_code(monkeypatch):
+    import asyncio as _asyncio
+
+    from herdeck.bridge import SocketHerdr
+
+    class FakeWriter:
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            pass
+
+        async def wait_closed(self):
+            pass
+
+    class FakeReader:
+        async def readline(self):
+            return b'{"id":"b","error":{"code":"agent_blocked","message":"pane is blocked"}}\n'
+
+    async def fake_conn(path, **kwargs):
+        return FakeReader(), FakeWriter()
+
+    monkeypatch.setattr(_asyncio, "open_unix_connection", fake_conn)
+
+    h = SocketHerdr("/tmp/herdr.sock")
+    with pytest.raises(HerdrRpcError) as exc_info:
+        await h.read_pane("w1:p1", "detection")
+
+    exc = exc_info.value
+    assert exc.code == "agent_blocked"
+    assert exc.message == "pane is blocked"
+    assert str(exc) == "herdr RPC pane.read failed: pane is blocked"
+
+
+async def test_rpc_error_non_dict_error_yields_empty_code(monkeypatch):
+    import asyncio as _asyncio
+
+    from herdeck.bridge import SocketHerdr
+
+    class FakeWriter:
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            pass
+
+        async def wait_closed(self):
+            pass
+
+    class FakeReader:
+        async def readline(self):
+            return b'{"id":"b","error":"boom"}\n'
+
+    async def fake_conn(path, **kwargs):
+        return FakeReader(), FakeWriter()
+
+    monkeypatch.setattr(_asyncio, "open_unix_connection", fake_conn)
+
+    h = SocketHerdr("/tmp/herdr.sock")
+    with pytest.raises(HerdrRpcError) as exc_info:
+        await h.read_pane("w1:p1", "detection")
+
+    assert exc_info.value.code == ""
+
+
 async def test_rpc_has_absolute_timeout(monkeypatch):
     import asyncio as _asyncio
 
@@ -631,6 +752,313 @@ async def test_send_text_calls_herdr(herdr):
     assert herdr.sent == [("w1:p1", "continue")]
 
 
+async def test_send_text_falls_back_to_answer_blocked_on_agent_blocked(herdr):
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr, "workbox", '{"type":"send_text","req":"s2","pane_id":"w1:p1","text":"continue"}'
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    assert herdr.sent == [("w1:p1", "continue")]
+
+
+async def test_send_text_skips_non_string_text_instead_of_hanging(herdr):
+    # A non-conforming client can put a JSON null (or number) in "text".
+    # Passed straight through, that used to either raise AttributeError out
+    # of _normalize_blocked_answer's text.rstrip() (on the agent_blocked
+    # fallback path) or ride into herdr.send_text and come back as some other
+    # HerdrRpcError (on the common path) — either way re-raised out of
+    # handle_client_message, which the connection's blanket handler turns
+    # into a bare {"type": "error"} with no "req", leaving the caller's
+    # pending future to time out instead of getting this clean skip result.
+    out = await handle_client_message(
+        herdr, "workbox", '{"type":"send_text","req":"s2b","pane_id":"w1:p1","text":null}'
+    )
+
+    msg = json.loads(out)
+    assert msg["req"] == "s2b"
+    assert msg["data"] == {"skipped": True, "message": "untypeable_blocked_answer"}
+    assert herdr.sent == []
+
+
+async def test_send_text_skips_missing_text_key_instead_of_hanging(herdr):
+    # A message that omits "text" entirely is at least as likely from a
+    # non-conforming client as an explicit null, and msg["text"] would raise
+    # KeyError for it — the same reqless-hang class this branch's guard
+    # exists to close. msg.get("text") must fold this into the same skip.
+    out = await handle_client_message(
+        herdr, "workbox", '{"type":"send_text","req":"s2c","pane_id":"w1:p1"}'
+    )
+
+    msg = json.loads(out)
+    assert msg["req"] == "s2c"
+    assert msg["data"] == {"skipped": True, "message": "untypeable_blocked_answer"}
+    assert herdr.sent == []
+
+
+def test_normalize_blocked_answer_rejects_non_string_text():
+    # The upfront guard on the send_text branch is the primary defence, but
+    # _normalize_blocked_answer keeps its own isinstance check too — it is
+    # the shared backstop SocketHerdr.answer_blocked relies on for every
+    # caller, including choose_if_blocked, which never routes through the
+    # send_text branch's guard at all.
+    from herdeck.bridge import _normalize_blocked_answer
+
+    assert _normalize_blocked_answer(None) == (None, "untypeable_blocked_answer")
+    assert _normalize_blocked_answer(42) == (None, "untypeable_blocked_answer")
+
+
+async def test_send_text_propagates_non_agent_blocked_error(herdr):
+    async def stalled_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_prompt_stalled", "no state change")
+
+    herdr.send_text = stalled_send_text
+
+    with pytest.raises(HerdrRpcError, match="no state change"):
+        await handle_client_message(
+            herdr, "workbox", '{"type":"send_text","req":"s3","pane_id":"w1:p1","text":"continue"}'
+        )
+    assert herdr.sent == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes, approve\nsomething else entirely",
+        # over-broad normalisation (e.g. stripping ALL newlines, or per-line
+        # strip()) would pass this case even though the embedded newline is
+        # still there once the trailing one is trimmed off:
+        "yes, approve\nsomething else entirely\r\n",
+    ],
+)
+async def test_send_text_multiline_fallback_is_skipped_not_typed(herdr, text):
+    """answer_blocked has no bracketed-paste framing: an embedded newline
+    would submit mid-typing (e.g. a two-line Telegram reply to a blocked
+    agent), so the multiline fallback must be rejected, not typed."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s4", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "untypeable_blocked_answer"}
+    assert herdr.sent == []  # never typed into the pane; StubHerdr.answer_blocked has no guard
+    # of its own, so this only passes because handle_client_message checked first.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes\r\n",
+        # rstrip() (not rstrip("\r\n")) is what makes these two acceptable:
+        # a newline with trailing spaces after it, and a plain trailing space.
+        "yes\n  ",
+        "yes ",
+    ],
+)
+async def test_send_text_fallback_trims_trailing_newline_before_checking(herdr, text):
+    """A lone trailing newline (e.g. a pasted Telegram reply) is common,
+    legitimate input, not a multiline answer, and must not be dropped."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s5", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    # the *normalised* text is what gets typed, not the raw payload
+    assert herdr.sent == [("w1:p1", "yes")]
+
+
+@pytest.mark.parametrize("text", ["\n", "\r\n\r\n", "   ", "\ue000"])
+async def test_send_text_fallback_rejects_empty_answer(herdr, text):
+    """An empty normalised answer must never reach answer_blocked: typing
+    nothing and pressing enter would silently confirm the blocked dialog's
+    default choice — this is a safety guard, not a formatting nicety."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s6", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "empty_blocked_answer"}
+    assert herdr.sent == []  # nothing typed, no accidental "enter" against the default choice
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "\u200b",  # ZERO WIDTH SPACE
+        "\ufeff",  # BOM / ZERO WIDTH NO-BREAK SPACE
+        "\u2060",  # WORD JOINER
+        "\u00ad",  # SOFT HYPHEN
+        "\u180e",  # MONGOLIAN VOWEL SEPARATOR
+        "\u200d",  # ZERO WIDTH JOINER
+        "\u0301",  # COMBINING ACUTE ACCENT: printable, but no base to sit on
+        " \u200b\n",  # invisible plus real whitespace, as a paste would carry it
+    ],
+)
+async def test_send_text_fallback_rejects_invisible_answer(herdr, text):
+    """str.isspace() is False for U+200B/U+FEFF/U+2060/U+00AD/U+180E and they
+    are all >= 32, so rstrip() leaves them and an ord-based control-char check
+    waves them through — yet they type nothing, so the enter that follows
+    confirms the dialog's default. They are as empty as a bare newline."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s7", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "empty_blocked_answer"}
+    assert herdr.sent == []  # nothing typed, no accidental "enter" against the default choice
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes\u2028no",  # LINE SEPARATOR
+        "yes\u2029no",  # PARAGRAPH SEPARATOR
+        "yes\u0085no",  # NEL (a C1 control: isspace(), but ord > 127)
+        "yes\u007fno",  # DEL
+        "yes\tno",  # TAB: a keystroke the dialog acts on, not literal text
+        # json.loads accepts a lone surrogate escape off the client socket; it
+        # cannot be typed and cannot be re-encoded for the herdr RPC either.
+        "yes\ud800",
+    ],
+)
+async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
+    """Three reasons live on this side of the split. U+2028/U+2029/U+0085 are
+    isspace() but ord > 127, so an ord-based control-char check waves them
+    through, and a terminal may treat them as a line break: a submit halfway
+    through the answer. TAB and DEL were always refused by the ord-based check
+    and stay refused, because the dialog acts on them as keystrokes instead of
+    drawing them. A lone surrogate is refused for an unrelated reason:
+    nothing types it, and re-encoding it for the herdr RPC yields JSON no
+    strict parser reads."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s8", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "untypeable_blocked_answer"}
+    assert herdr.sent == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes",
+        "1",
+        "ano, pokra\u010duj",
+        "e\u0301clair \U0001f600",  # combining mark ON a base character, and emoji
+        "v\u00a0po\u0159\u00e1dku",  # NBSP, as Czech typography and rich-text pastes insert it
+        "\U0001f469\u200d\U0001f4bb hotovo",  # U+200D joining an emoji sequence
+        "yes\u200bno",  # invisible, but the answer still carries legible text
+    ],
+)
+async def test_send_text_fallback_still_accepts_legible_answers(herdr, text):
+    """The guard must not swallow ordinary answers. Only what a terminal acts
+    on (Cc/Zl/Zp) and what cannot be encoded at all (Cs) are refused; a
+    non-ASCII space or a zero-width joiner inside legible text is typed exactly
+    as written, rather than being dropped under a message that names neither
+    the character nor the reason."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s9", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    assert herdr.sent == [("w1:p1", text)]
+
+
+@pytest.mark.parametrize(
+    ("text", "typed"),
+    [
+        ("\ufeff1", "1"),  # BOM-prefixed paste answering a numbered dialog
+        ("1\u200b", "1"),
+        ("1\u200b\n", "1"),  # rstrip() takes the newline and leaves the ZWSP behind
+        ("\u200byes", "yes"),  # the legible run starts only after the invisible
+        ("  yes  ", "yes"),
+        ("\u0301yes", "yes"),  # a leading combining mark has no base character: noise
+        # …but a trailing one belongs to the character in front of it. Cutting
+        # at the last *legible* character would type "hotov", "\u0e43\u0e0a" and
+        # "\u0939" — an answer the dialog cannot match, then enter.
+        ("\ufeffhotov\u0301", "hotov\u0301"),
+        ("\ufeff\u0e43\u0e0a\u0e48", "\u0e43\u0e0a\u0e48"),  # Thai "ano", trailing Mn
+        ("\u200b\u0939\u093e\u0901", "\u0939\u093e\u0901"),  # Devanagari "ano", Mc + Mn
+        # An orphaned trailing mark is noise at this edge too: nothing precedes
+        # it to carry it, so keeping it (and the separator that orphaned it)
+        # types an answer the dialog cannot match.
+        ("yes \u0301", "yes"),
+        ("yes\u200b\u0301", "yes"),
+        # Presentation-only marks are dropped, so a keycap answers as its digit
+        ("1\ufe0f\u20e3", "1"),
+        ("1\u20e3", "1"),
+    ],
+)
+async def test_send_text_fallback_trims_edge_invisibles(herdr, text, typed):
+    """An invisible glued to the edge of a real answer is worse than one on its
+    own: "\ufeff1" is legible enough to pass the empty check, gets typed, and
+    then a numbered dialog does not match it — so the enter confirms the
+    default. Trim the illegible edges instead, as with trailing whitespace."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s10", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    assert herdr.sent == [("w1:p1", typed)]
+
+
 async def test_guarded_choice_rechecks_prompt_and_blocked_status_before_send(herdr):
     herdr.panes[0]["terminal_id"] = "term-1"
     prompt = "Choose:\n1. Continue\n2. Explain first"
@@ -648,6 +1076,33 @@ async def test_guarded_choice_rechecks_prompt_and_blocked_status_before_send(her
                 "terminal_id": "term-1",
                 "choice": "2",
                 "decision_revision": revision,
+            }
+        ),
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    assert herdr.sent == [("w1:p1", "2")]
+
+
+async def test_choose_if_blocked_uses_answer_blocked_not_send_text(herdr):
+    async def fail_send_text(pane_id, text):
+        raise AssertionError("choose_if_blocked must use answer_blocked, not send_text")
+
+    herdr.send_text = fail_send_text
+
+    prompt = "Choose:\n1. Continue\n2. Explain first"
+    herdr.detection["w1:p1"] = prompt
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps(
+            {
+                "type": "choose_if_blocked",
+                "req": "c-ab",
+                "pane_id": "w1:p1",
+                "choice": "2",
+                "decision_revision": decision_revision("workbox", "w1:p1", "", prompt),
             }
         ),
     )
@@ -1064,7 +1519,210 @@ async def test_socket_herdr_send_text_uses_protocol_specific_agent_api(protocol,
     assert calls == expected_calls
 
 
-async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow():
+async def test_socket_herdr_answer_blocked_sends_text_then_enter():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    await h.answer_blocked("w1:p1", "yes")
+
+    assert calls == [
+        ("pane.send_text", {"pane_id": "w1:p1", "text": "yes"}, False),
+        ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
+    ]
+
+
+async def test_socket_herdr_answer_blocked_rejects_multiline_text():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    with pytest.raises(ValueError, match="untypeable_blocked_answer"):
+        await h.answer_blocked("w1:p1", "line one\nline two")
+
+    assert calls == []  # rejected before any RPC
+
+
+async def test_socket_herdr_answer_blocked_rejects_empty_answer():
+    """An empty normalised answer must be refused, not typed: answer_blocked
+    types text then presses enter, so typing nothing would silently confirm
+    the blocked dialog's default choice."""
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    for whitespace_only in ("\n", "\r\n\r\n", "   "):
+        with pytest.raises(ValueError, match="empty_blocked_answer"):
+            await h.answer_blocked("w1:p1", whitespace_only)
+
+    assert calls == []  # rejected before any RPC
+
+
+async def test_socket_herdr_answer_blocked_rejects_invisible_answer():
+    """The backstop matters on its own: choose_if_blocked calls answer_blocked
+    directly, never through handle_client_message's send_text branch. A bare
+    zero-width character types nothing, so the enter after it would confirm
+    the dialog's default."""
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    illegible = ("\u200b", "\ufeff", "\u2060", "\u00ad", "\u180e", "\u0301", " \u200b\n", "\ue000")
+    for invisible in illegible:
+        with pytest.raises(ValueError, match="empty_blocked_answer"):
+            await h.answer_blocked("w1:p1", invisible)
+
+    assert calls == []  # rejected before any RPC
+
+
+async def test_socket_herdr_answer_blocked_trims_edge_invisibles():
+    """The backstop trims the same edges the handler does: choose_if_blocked
+    passes its choice key straight in, so a BOM-prefixed "1" would otherwise be
+    typed whole and leave the enter on the dialog's default."""
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    for raw in ("\ufeff1", "1\u200b", "1\u200b\n", "  1  ", "\u03011"):
+        await h.answer_blocked("w1:p1", raw)
+    # a trailing mark is kept: it belongs to the base character before it
+    await h.answer_blocked("w1:p1", "\ufeff1\u0301")
+
+    assert calls == [
+        ("pane.send_text", {"pane_id": "w1:p1", "text": "1"}, False),
+        ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
+    ] * 5 + [
+        ("pane.send_text", {"pane_id": "w1:p1", "text": "1\u0301"}, False),
+        ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
+    ]
+
+
+async def test_socket_herdr_answer_blocked_rejects_embedded_untypeable_char():
+    """Line separators and controls are keystrokes the terminal acts on, not
+    literal answer text — at the backstop as much as at the handler."""
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    for text in ("yes\u2028no", "yes\u2029no", "yes\u0085no", "yes\u007fno", "yes\tno", "yes\ud800"):
+        with pytest.raises(ValueError, match="untypeable_blocked_answer"):
+            await h.answer_blocked("w1:p1", text)
+
+    assert calls == []  # rejected before any RPC
+
+
+async def test_socket_herdr_answer_blocked_trims_trailing_newline():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    # "yes\n  " and "yes " only survive because the trim is rstrip(), not
+    # rstrip("\r\n") — and what gets typed is the normalised text.
+    for raw in ("yes\r\n", "yes\n  ", "yes "):
+        await h.answer_blocked("w1:p1", raw)
+
+    assert calls == [
+        ("pane.send_text", {"pane_id": "w1:p1", "text": "yes"}, False),
+        ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
+    ] * 3
+
+
+async def test_socket_herdr_send_text_maps_stalled_prompt_to_actionable_error(caplog):
+    import logging
+
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        raise HerdrRpcError("agent.prompt", "agent_prompt_stalled", "herdr says: no reply")
+
+    h._rpc = fake_rpc
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        with pytest.raises(HerdrRpcError) as exc_info:
+            await h.send_text("w1:p1", "continue")
+
+    exc = exc_info.value
+    assert exc.code == "agent_prompt_stalled"
+    assert exc.message == (
+        "herdr saw no state change within 5s after the prompt (agent_prompt_stalled)"
+    )
+    assert "w1:p1" in caplog.text
+    assert "herdr says: no reply" in caplog.text  # herdr's own message, not just via __cause__
+
+
+async def test_socket_herdr_send_text_propagates_unrelated_error_code():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        raise HerdrRpcError("agent.prompt", "some_other_error", "boom")
+
+    h._rpc = fake_rpc
+
+    with pytest.raises(HerdrRpcError) as exc_info:
+        await h.send_text("w1:p1", "continue")
+
+    assert exc_info.value.code == "some_other_error"
+    assert exc_info.value.message == "boom"
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_kind"),
+    [
+        (["codex", "-m", "gpt-5.4"], "codex"),
+        (["qwen", "-m", "qwen-max"], "qwen"),
+    ],
+)
+async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow(argv, expected_kind):
     from herdeck.bridge import SocketHerdr
 
     h = SocketHerdr("/nonexistent")
@@ -1084,7 +1742,7 @@ async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow():
         return {"result": {}}
 
     h._rpc = fake_rpc
-    await h.start_agent("reviewer", ["codex", "-m", "gpt-5.4"])
+    await h.start_agent("reviewer", argv)
 
     assert calls[:2] == [
         ("session.snapshot", {}, True),
@@ -1093,10 +1751,95 @@ async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow():
     method, params, retry = calls[2]
     assert method == "agent.start"
     assert retry is False
-    assert params["kind"] == "codex"
+    assert params["kind"] == expected_kind
     assert params["pane_id"] == "w1:p2"
-    assert params["args"] == ["-m", "gpt-5.4"]
-    assert params["name"].startswith("codex-")
+    assert params["args"] == argv[1:]
+    assert params["name"].startswith(f"{expected_kind}-")
+
+
+async def test_socket_herdr_start_agent_falls_back_to_raw_pane_on_unsupported_kind(caplog):
+    """herdr rejects a kind it doesn't know yet (older herdr, newer herdeck
+    _MANAGED_AGENT_KINDS entry) with `unsupported_agent_kind` before ever
+    touching the pane, so the already-created tab is reused for raw pane
+    input instead of being torn down. The degradation is logged so a user
+    whose qwen agent silently loses managed startup has a diagnosable trace."""
+    import logging
+
+    from herdeck.bridge import HerdrRpcError, SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        if method == "tab.create":
+            return {
+                "result": {
+                    "tab": {"tab_id": "w1:t2"},
+                    "root_pane": {"pane_id": "w1:p2"},
+                }
+            }
+        if method == "agent.start":
+            raise HerdrRpcError("agent.start", "unsupported_agent_kind", "unsupported kind qwen")
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        await h.start_agent("reviewer", ["qwen", "-m", "qwen-max"])
+
+    assert "qwen" in caplog.text
+    assert "w1:p2" in caplog.text
+
+    methods = [call[0] for call in calls]
+    assert methods == [
+        "session.snapshot",
+        "tab.create",
+        "agent.start",
+        "pane.send_text",
+        "pane.send_keys",
+    ]
+    assert "tab.close" not in methods
+    send_text_call = calls[3]
+    assert send_text_call[1] == {"pane_id": "w1:p2", "text": "qwen -m qwen-max"}
+    send_keys_call = calls[4]
+    assert send_keys_call[1] == {"pane_id": "w1:p2", "keys": ["enter"]}
+
+
+async def test_socket_herdr_start_agent_closes_tab_on_other_agent_start_error():
+    """Only `unsupported_agent_kind` gets the raw-pane fallback; any other
+    agent.start failure (e.g. herdr not finding the just-created pane) must
+    keep closing the tab and re-raising, exactly as before."""
+    from herdeck.bridge import HerdrRpcError, SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        if method == "tab.create":
+            return {
+                "result": {
+                    "tab": {"tab_id": "w1:t2"},
+                    "root_pane": {"pane_id": "w1:p2"},
+                }
+            }
+        if method == "agent.start":
+            raise HerdrRpcError("agent.start", "agent_pane_not_found", "agent target pane not found")
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+
+    with pytest.raises(HerdrRpcError) as exc_info:
+        await h.start_agent("reviewer", ["qwen", "-m", "qwen-max"])
+
+    assert exc_info.value.code == "agent_pane_not_found"
+    methods = [call[0] for call in calls]
+    assert "pane.send_text" not in methods
+    assert calls[-1] == ("tab.close", {"tab_id": "w1:t2"}, False)
 
 
 async def test_socket_herdr_start_agent_preserves_custom_command_on_protocol_17():
@@ -1319,6 +2062,47 @@ async def test_socket_herdr_snapshot_rejects_malformed_tokens():
         await h.snapshot()
 
 
+async def test_socket_herdr_snapshot_tolerates_malformed_state_labels():
+    # Any integration may write state_labels, and a snapshot exception degrades
+    # to a deck frozen on its last frame -- a cosmetic label must never do that.
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        return {
+            "result": {
+                "snapshot": {
+                    "agents": [
+                        {
+                            "pane_id": "w1:p1",
+                            "state_labels": {"working": 123},
+                        }
+                    ]
+                }
+            }
+        }
+
+    h._rpc = fake_rpc
+
+    snapshot = await h.snapshot()
+
+    assert _herdr_pane_to_wire(snapshot["agents"][0])["state_labels"] == {}
+
+
+async def test_socket_herdr_snapshot_accepts_absent_state_labels():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        return {"result": {"snapshot": {"agents": [{"pane_id": "w1:p1"}]}}}
+
+    h._rpc = fake_rpc
+
+    assert (await h.snapshot())["agents"] == [{"pane_id": "w1:p1"}]
+
+
 async def test_socket_herdr_snapshot_maps_unknown_method_to_version_hint():
     from herdeck.bridge import SocketHerdr
 
@@ -1331,8 +2115,47 @@ async def test_socket_herdr_snapshot_maps_unknown_method_to_version_hint():
         )
 
     h._rpc = fake_rpc
-    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.4"):
         await h.snapshot()
+
+
+async def test_socket_herdr_read_pane_warns_on_truncated_response(caplog):
+    import logging
+
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        return {"result": {"read": {"text": "clipped prompt", "truncated": True}}}
+
+    h._rpc = fake_rpc
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        text = await h.read_pane("w1:p1", "detection")
+
+    assert text == "clipped prompt"
+    assert "w1:p1" in caplog.text
+    assert "truncated" in caplog.text
+
+
+async def test_socket_herdr_read_pane_no_warning_when_not_truncated(caplog):
+    import logging
+
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        return {"result": {"read": {"text": "full prompt", "truncated": False}}}
+
+    h._rpc = fake_rpc
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        text = await h.read_pane("w1:p1", "detection")
+
+    assert text == "full prompt"
+    assert caplog.text == ""
 
 
 async def test_stub_herdr_snapshot_composes_lists():
@@ -1468,7 +2291,7 @@ async def test_retained_lifecycle_event_only_resubscribes_after_real_topology_ch
     assert await events._topology_changed("pane_moved", subscribed) is True
 
 
-# --- herdr version gate (hard requirement: >= 0.7.2) ---
+# --- herdr version gate (hard requirement: >= 0.7.4) ---
 
 
 async def test_require_snapshot_support_rejects_old_herdr():
@@ -1478,7 +2301,7 @@ async def test_require_snapshot_support_rejects_old_herdr():
         async def snapshot(self):
             raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
 
-    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.4"):
         await _require_snapshot_support(OldHerdr())
 
 
@@ -1497,6 +2320,70 @@ async def test_require_snapshot_support_tolerates_down_or_flaky_herdr():
     await _require_snapshot_support(FlakyHerdr())  # must not raise
 
 
+@pytest.mark.parametrize(
+    ("version", "expect_warning"),
+    [
+        ("0.7.3", True),  # below the floor
+        ("0.7.4", False),  # exactly at the floor: must not warn
+        ("0.8.2", False),  # above the floor
+    ],
+)
+async def test_require_snapshot_support_warns_only_below_recommended_version(
+    caplog, version, expect_warning
+):
+    import logging
+
+    from herdeck.bridge import _require_snapshot_support
+
+    class VersionedHerdr:
+        async def snapshot(self):
+            return {"agents": [], "protocol": 18, "version": version}
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        await _require_snapshot_support(VersionedHerdr())  # must not raise
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    if expect_warning:
+        assert len(warnings) == 1
+        assert version in caplog.text
+        assert "0.7.4" in caplog.text
+    else:
+        assert warnings == []
+
+
+async def test_require_snapshot_support_ignores_missing_or_malformed_version(caplog):
+    import logging
+
+    from herdeck.bridge import _require_snapshot_support
+
+    class NoVersionHerdr:
+        async def snapshot(self):
+            return {"agents": [], "protocol": 20}
+
+    class WeirdVersionHerdr:
+        async def snapshot(self):
+            return {"agents": [], "protocol": 20, "version": "not-a-version"}
+
+    class NoneSnapshotHerdr:
+        # A non-conforming HerdrClient (stub, future implementation) that
+        # returns something other than a dict must not turn this advisory
+        # probe fatal.
+        async def snapshot(self):
+            return None
+
+    class ListSnapshotHerdr:
+        async def snapshot(self):
+            return []
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        await _require_snapshot_support(NoVersionHerdr())
+        await _require_snapshot_support(WeirdVersionHerdr())
+        await _require_snapshot_support(NoneSnapshotHerdr())  # must not raise
+        await _require_snapshot_support(ListSnapshotHerdr())  # must not raise
+
+    assert caplog.text == ""
+
+
 async def test_start_local_bridge_probes_snapshot_support():
     from herdeck.bridge import _SNAPSHOT_UNSUPPORTED, start_local_bridge
 
@@ -1504,7 +2391,7 @@ async def test_start_local_bridge_probes_snapshot_support():
         async def snapshot(self):
             raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
 
-    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.4"):
         await start_local_bridge("/unused.sock", herdr=OldHerdr())
 
 
@@ -1533,7 +2420,7 @@ async def test_stream_surfaces_version_error_instead_of_retrying():
             raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
 
     gen = HerdrEvents(OldHerdr(), poll_interval=0).stream()
-    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.4"):
         await gen.__anext__()
 
 
@@ -1561,7 +2448,7 @@ async def test_start_local_bridge_logs_when_broadcast_dies_after_startup(caplog)
     )
     try:
         with caplog.at_level(logging.ERROR, logger="herdeck.bridge"):
-            with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+            with pytest.raises(RuntimeError, match="herdr >= 0.7.4"):
                 await asyncio.wait_for(btask, timeout=1.0)
         assert "broadcast stopped" in caplog.text
     finally:

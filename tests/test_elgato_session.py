@@ -471,6 +471,35 @@ def test_action_and_slot_tiles_speak_czech_when_configured():
     assert slot.status_text == "PRACUJE"
 
 
+def test_slot_tile_shows_herdr_state_label():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s1", (0, 0))])
+    working = state("p1", Status.WORKING)
+    working.state_labels = {"working": "probe"}
+    sess.apply_snapshot("dev", [working])
+
+    assert sess._slot_tile(0).status_text == "PROBE"
+
+
+def test_slot_tile_without_state_labels_keeps_the_status_word():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s1", (0, 0))])
+    sess.apply_snapshot("dev", [state("p1", Status.WORKING)])
+
+    assert sess._slot_tile(0).status_text == "WORKING"
+
+
+def test_slot_tile_waiting_on_beats_the_state_label():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s1", (0, 0))])
+    held = state("p1", Status.WAITING)
+    held.waiting_on = "⏳ ci"
+    held.state_labels = {"waiting": "held"}
+    sess.apply_snapshot("dev", [held])
+
+    assert sess._slot_tile(0).status_text == "CI"
+
+
 def test_action_tiles_default_to_english():
     sess = ElgatoSession(make_config(), FakeIcons())
     assert sess._action_tile("a1", "deny").label == "Deny"

@@ -364,13 +364,7 @@ class ElgatoSession:
             tile_fill=self.config.view.tile_fill,
             repo=primary,
             branch=secondary,
-            status_text=(
-                self._tr("status.offline")
-                if down
-                else layout.waiting_status_text(s.waiting_on, self.config.view.language)
-                if s.status is Status.WAITING
-                else self._tr(f"status.{s.status.value}")
-            ),
+            status_text=layout.tile_status_text(s, self.config.view.language, down),
         )
 
     # --- render ---

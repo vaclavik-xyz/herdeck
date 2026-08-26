@@ -121,15 +121,16 @@ Stable v1 fields are:
 
 - top level: `api_version`, `agents`
 - identity/state: `server_id`, `pane_id`, `terminal_id`, `status`, `available`
-- display: `agent_type`, `label`, `waiting_on`, `progress`, `metadata`, `repository`, `branch`,
-  `project`, `workspace`, `tab`
+- display: `agent_type`, `label`, `waiting_on`, `progress`, `metadata`, `state_labels`,
+  `repository`, `branch`, `project`, `workspace`, `tab`
 - work: `source`, `item`, `run`, `url`
 
-Prompt text, terminal frames, raw backend messages, credential values, and
-unrecognized backend state labels are never included. Reconnects may keep an
-agent record with `available: false`; the next authoritative snapshot replaces
-the complete server slice, so removed panes and replaced terminal identities do
-not remain as stale rows.
+Prompt text, terminal frames, raw backend messages, and credential values are
+never included. An unrecognized backend `status` normalizes to `unknown`
+rather than being passed through. Reconnects may keep an agent record with
+`available: false`; the next authoritative snapshot replaces the complete
+server slice, so removed panes and replaced terminal identities do not remain
+as stale rows.
 
 ### Approve, deny, and stop
 
