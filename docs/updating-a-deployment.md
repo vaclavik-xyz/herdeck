@@ -186,6 +186,10 @@ you — agreement on zero means nothing attached; `/health` claiming connected
 while the bridge shows no socket, or the reverse, means one end has not noticed
 the link is gone.
 
+Healthy is one established connection per attached client: each render host,
+plus any web cockpit. A count above that means something extra attached — a
+stale sidecar, for instance, which is what the process count above is for.
+
 **Render.** A rising `version` means the runtime is rasterising. It bumps once
 per changed tile plus the panel, and only tiles on screen are versioned — the
 deck pages agents through its slots, so agents paged off contribute nothing and
@@ -214,19 +218,32 @@ holds them still legitimately. The elapsed bucket catches people out: it steps
 every 5 seconds under a minute, every minute under an hour, every hour beyond —
 so on a long-running deployment, exactly the deck you look at after a deploy, an
 agent showing `12m` changes its tile once a minute. A deck left in a drill or a
-menu view carries no elapsed text at all.
+menu view carries no elapsed text at all. And every slot is rasterised whether
+or not an agent occupies it, so on a deck whose agents have gone away `/tile/0`
+is a blank tile that hashes the same forever — it is only a meaningful probe
+while `summary`'s `agents` count is non-zero.
 
-To force the question, cause an agent status change yourself. That changes the
-tile's status word, so **the tile hash and `version` must move** — `summary`
-only confirms the change reached the source. `summary` moving while `version`
-does not is the stall signature, not a reassurance.
+To force the question, put the deck back in the overview and then cause an
+agent status change yourself. **Do it from the overview**: the launcher and the
+profile menu render no agent tiles and not the overview panel, and a drill view
+renders only the drilled agent's action tiles, so in any of them a status change
+moves nothing and a healthy deck looks stalled.
+
+From the overview, split what you expect. The panel carries the status counts,
+so `version` moves even when the agent that changed is paged off screen. The
+tile hash only moves if that agent is on the visible page — the deck pages, so
+`/tile/0` can stay byte-identical while the deck is working perfectly.
+
+`summary` proves only that the change reached the source. `summary` moving while
+`version` stays flat, with the deck in the overview, is the stall signature.
 
 **Delivery is not covered by any of this.** The version is bumped when the frame
 lands in the HTTP buffer, before it is handed to the sinks, and a sink that
 raises is isolated and only logged. A dark device with a rising version is a
 delivery problem — this repo has hit exactly that, with `/panel` and `/tile/N`
 correct while the device showed black. Look for `render sink ... failed to
-deliver a frame` in the log.
+deliver a frame` in the runtime's log — the path is the `StandardErrorPath` of
+the launchd job you restarted above.
 
 ### Checking what the built UI says
 
