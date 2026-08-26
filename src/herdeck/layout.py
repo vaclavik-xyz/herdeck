@@ -375,6 +375,10 @@ _UNDRAWABLE = frozenset({"So", "Sk", "Co", "Cs", "Cn", "Cc", "Cf", "Me"})
 
 
 def _is_variation_selector(ch: str) -> bool:
+    # The supplementary range (VS17-VS256) is unreachable here — the caller
+    # already drops anything past the BMP before this runs — but it is kept
+    # for parity with `_is_attached_mark` in bridge.py, whose caller has no
+    # such limit.
     return 0xFE00 <= ord(ch) <= 0xFE0F or 0xE0100 <= ord(ch) <= 0xE01EF
 
 

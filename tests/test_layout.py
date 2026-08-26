@@ -418,6 +418,17 @@ def test_tile_status_text_scrubs_variation_selector_off_vs16_emoji():
     assert "️" not in label
 
 
+def test_tile_status_text_drops_enclosing_keycap_mark():
+    from herdeck.layout import tile_status_text
+
+    # A keycap off a phone keyboard ("1️⃣" = "1" + VS16 U+FE0F + the
+    # enclosing mark U+20E3, category Me) exercises both halves of the fix at
+    # once: dropping only the variation selector while leaving Me in
+    # _UNDRAWABLE would still draw the enclosing mark as a tofu box.
+    agent = _labelled(Status.WAITING, {}, waiting_on="1️⃣ ci")
+    assert tile_status_text(agent) == "1 CI"
+
+
 def test_tile_status_text_keeps_combining_marks_needed_to_spell_a_word():
     from herdeck.layout import tile_status_text
 
