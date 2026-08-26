@@ -5,7 +5,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parents[1]
+VERSION = (ROOT / "VERSION").read_text().strip()
 VERSIONED_FILES = (
     "VERSION",
     "scripts/set-version.py",
@@ -22,14 +25,34 @@ VERSIONED_FILES = (
 )
 
 
-def test_all_release_manifests_match_canonical_version():
-    result = subprocess.run(
-        [sys.executable, "scripts/set-version.py", "--check"],
-        cwd=ROOT,
+@pytest.fixture
+def sandbox(tmp_path):
+    """A tree holding just the versioned manifests, safe to bump and to break."""
+    for relative in VERSIONED_FILES:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, destination)
+    return tmp_path
+
+
+def run_script(*args, cwd):
+    return subprocess.run(
+        [sys.executable, "scripts/set-version.py", *args],
+        cwd=cwd,
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def write(root: Path, relative: str, text: str) -> None:
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def test_all_release_manifests_match_canonical_version():
+    result = run_script("--check", cwd=ROOT)
 
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -40,25 +63,13 @@ def test_release_workflow_rejects_a_tag_that_does_not_match_version():
     assert 'test "$GITHUB_REF_NAME" = "v$(cat VERSION)"' in workflow
 
 
-def test_version_script_synchronizes_a_real_version_bump(tmp_path):
-    for relative in VERSIONED_FILES:
-        source = ROOT / relative
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-
-    result = subprocess.run(
-        [sys.executable, "scripts/set-version.py", "9.8.7"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def test_version_script_synchronizes_a_real_version_bump(sandbox):
+    result = run_script("9.8.7", cwd=sandbox)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (tmp_path / "VERSION").read_text() == "9.8.7\n"
-    assert 'version = "9.8.7"' in (tmp_path / "pyproject.toml").read_text()
-    manifest = (tmp_path / "streamdeck/xyz.vaclavik.herdeck.sdPlugin/manifest.json")
+    assert (sandbox / "VERSION").read_text() == "9.8.7\n"
+    assert 'version = "9.8.7"' in (sandbox / "pyproject.toml").read_text()
+    manifest = sandbox / "streamdeck/xyz.vaclavik.herdeck.sdPlugin/manifest.json"
     assert '"Version": "9.8.7.0"' in manifest.read_text()
 
 
@@ -70,80 +81,98 @@ def test_version_script_synchronizes_a_real_version_bump(tmp_path):
 # whole 0.2.0 release. These pin the scan that closes it.
 
 
-def _run(*args, cwd=ROOT):
-    return subprocess.run(
-        [sys.executable, "scripts/set-version.py", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def test_check_rejects_a_source_file_that_hard_codes_the_current_version(sandbox):
+    write(sandbox, "desktop/src/Widget.svelte", f"<span>v{VERSION}</span>\n")
 
-
-def test_check_rejects_a_source_file_that_hard_codes_the_current_version(tmp_path):
-    for relative in VERSIONED_FILES:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / relative, destination)
-    component = tmp_path / "desktop/src/Widget.svelte"
-    component.parent.mkdir(parents=True, exist_ok=True)
-    version = (ROOT / "VERSION").read_text().strip()
-    component.write_text(f"<span>v{version}</span>\n")
-
-    result = _run("--check", cwd=tmp_path)
+    result = run_script("--check", cwd=sandbox)
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "desktop/src/Widget.svelte:1" in result.stdout
-    assert f"hard-codes {version}" in result.stdout
+    assert f"hard-codes {VERSION}" in result.stdout
 
 
-def test_check_ignores_versions_that_are_not_ours(tmp_path):
-    for relative in VERSIONED_FILES:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / relative, destination)
-    component = tmp_path / "desktop/src/Widget.svelte"
-    component.parent.mkdir(parents=True, exist_ok=True)
-    # herdr's version, an IP, and our version embedded in a longer number: none
-    # of these is a claim about what this build is.
-    version = (ROOT / "VERSION").read_text().strip()
-    component.write_text(
-        f"<!-- needs herdr 0.7.4 -->\n<span>127.0.0.1</span>\n<span>10.{version}</span>\n"
-    )
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"const artifact = 'herdeck_{VERSION}_x64.dmg';",
+        f"const artifact = 'herdeck-{VERSION}.dmg';",
+        f"const artifact = 'Herdeck_{VERSION}_amd64.AppImage';",
+        f"const url = 'https://example.test/v{VERSION}/herdeck.tar.gz';",
+    ],
+)
+def test_check_rejects_a_version_written_into_a_release_artifact_name(sandbox, text):
+    # The word-boundary form of this scan missed every one of these: `_` is a
+    # word character, so `herdeck_0.2.0_x64` read as one long word.
+    write(sandbox, "desktop/src/Widget.ts", text + "\n")
 
-    result = _run("--check", cwd=tmp_path)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_check_ignores_version_fixtures_in_tests(tmp_path):
-    for relative in VERSIONED_FILES:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / relative, destination)
-    version = (ROOT / "VERSION").read_text().strip()
-    spec = tmp_path / "desktop/src/Widget.test.ts"
-    spec.parent.mkdir(parents=True, exist_ok=True)
-    spec.write_text(f'const current = "{version}";\n')
-
-    result = _run("--check", cwd=tmp_path)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_bump_refuses_to_strand_a_literal_of_the_outgoing_version(tmp_path):
-    for relative in VERSIONED_FILES:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / relative, destination)
-    outgoing = (ROOT / "VERSION").read_text().strip()
-    component = tmp_path / "desktop/src/Widget.svelte"
-    component.parent.mkdir(parents=True, exist_ok=True)
-    component.write_text(f"<span>v{outgoing}</span>\n")
-
-    result = _run("9.8.7", cwd=tmp_path)
+    result = run_script("--check", cwd=sandbox)
 
     assert result.returncode == 1, result.stdout + result.stderr
-    assert f"hard-codes the outgoing {outgoing}" in result.stdout
+    assert "desktop/src/Widget.ts:1" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "// needs herdr 0.7.4",  # another project's version
+        "const host = '127.0.0.1';",  # an address
+        f"const other = '10.{VERSION}';",  # ours inside a longer number
+        f"const other = '{VERSION}.5';",  # a four-component number
+        f"const other = '{VERSION}1';",  # a longer number
+    ],
+)
+def test_check_ignores_numbers_that_are_not_our_version(sandbox, text):
+    write(sandbox, "desktop/src/Widget.ts", text + "\n")
+
+    result = run_script("--check", cwd=sandbox)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_check_ignores_version_fixtures_in_tests(sandbox):
+    write(sandbox, "desktop/src/Widget.test.ts", f'const current = "{VERSION}";\n')
+
+    result = run_script("--check", cwd=sandbox)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_check_ignores_vendored_bundles(sandbox):
+    write(sandbox, "src/herdeck/assets/web/xterm.js", f"var v='{VERSION}';\n")
+
+    result = run_script("--check", cwd=sandbox)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_check_truncates_an_enormous_matching_line(sandbox):
+    write(sandbox, "desktop/src/Widget.ts", f"// {'x' * 5000} v{VERSION}\n")
+
+    result = run_script("--check", cwd=sandbox)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert max(len(line) for line in result.stdout.splitlines()) < 200
+
+
+def test_bump_refuses_to_strand_a_literal_of_the_outgoing_version(sandbox):
+    write(sandbox, "desktop/src/Widget.svelte", f"<span>v{VERSION}</span>\n")
+
+    result = run_script("9.8.7", cwd=sandbox)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"hard-codes the outgoing {VERSION}" in result.stdout
     # A refused bump must not leave the tree half-written.
-    assert (tmp_path / "VERSION").read_text().strip() == outgoing
+    assert (sandbox / "VERSION").read_text().strip() == VERSION
+
+
+def test_bump_refuses_a_literal_of_the_incoming_version_before_writing(sandbox):
+    # Without this, the bump rewrites twelve manifests and only then fails the
+    # --check it runs itself — the opposite of the contract above.
+    write(sandbox, "desktop/src/Widget.svelte", "<span>v9.8.7</span>\n")
+
+    result = run_script("9.8.7", cwd=sandbox)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "hard-codes the incoming 9.8.7" in result.stdout
+    assert (sandbox / "VERSION").read_text().strip() == VERSION
+    assert f'version = "{VERSION}"' in (sandbox / "pyproject.toml").read_text()

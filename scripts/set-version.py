@@ -27,6 +27,9 @@ SOURCE_SUFFIXES = frozenset({".py", ".ts", ".js", ".svelte", ".rs"})
 # those are arbitrary values, not claims about what this build is.
 TEST_MARKERS = (".test.", ".spec.")
 SKIP_DIRECTORIES = frozenset({"node_modules", "build", "dist", "target", "__pycache__"})
+# Third-party code vendored into our own tree: xterm and its addons ship as
+# single-line minified bundles, neither ours to edit nor sane to scan.
+SKIP_RELATIVE_DIRECTORIES = ("src/herdeck/assets/web",)
 # Sanctioned homes for a literal version inside a source tree. Each one must also
 # be covered by versions(), so it cannot drift.
 VERSION_LITERAL_ALLOWLIST = frozenset({"src/herdeck/__init__.py"})
@@ -93,20 +96,27 @@ def set_version(version: str) -> None:
     if not VERSION_RE.fullmatch(version):
         raise SystemExit("version must be stable SemVer in MAJOR.MINOR.PATCH form")
 
+    previous = VERSION_FILE.read_text().strip()
     # --check only ever looks for the current version, so it catches a literal on
     # the commit that introduces it but goes blind the moment the version moves
-    # past it. A bump is exactly when that blindness starts, so look for the
-    # outgoing version here, while it is still the one to search for.
-    previous = VERSION_FILE.read_text().strip()
+    # past it. A bump is where that blindness begins, so pre-flight BOTH
+    # directions here, before a single file is written: the outgoing scan stops a
+    # literal being stranded where --check would no longer look for it, and the
+    # incoming one stops a bump that would rewrite twelve manifests and only then
+    # fail the --check it runs itself.
+    blockers = []
     if previous != version:
-        stale = stray_version_literals(previous)
-        if stale:
-            for path, number, line in stale:
-                print(f"{path}:{number}: hard-codes the outgoing {previous}: {line}")
-            raise SystemExit(
-                f"refusing to bump {previous} -> {version}: the lines above would "
-                f"keep saying {previous} and --check would stop noticing them"
-            )
+        blockers.append((f"the outgoing {previous}", stray_version_literals(previous)))
+    blockers.append((f"the incoming {version}", stray_version_literals(version)))
+    reported = [(label, hits) for label, hits in blockers if hits]
+    if reported:
+        for label, hits in reported:
+            for path, number, line in hits:
+                print(f"{path}:{number}: hard-codes {label}: {line}")
+        raise SystemExit(
+            f"refusing to bump {previous} -> {version}: nothing was written, so fix "
+            f"the lines above and run it again"
+        )
 
     VERSION_FILE.write_text(version + "\n")
     _replace(
@@ -161,7 +171,10 @@ def _source_files():
         for path in sorted(root.rglob("*")):
             if path.suffix not in SOURCE_SUFFIXES or not path.is_file():
                 continue
+            relative = path.relative_to(ROOT).as_posix()
             if SKIP_DIRECTORIES.intersection(path.relative_to(ROOT).parts):
+                continue
+            if any(relative.startswith(f"{d}/") for d in SKIP_RELATIVE_DIRECTORIES):
                 continue
             if any(marker in path.name for marker in TEST_MARKERS):
                 continue
@@ -169,16 +182,20 @@ def _source_files():
 
 
 def stray_version_literals(expected: str) -> list[tuple[str, int, str]]:
-    """Source lines that hard-code `expected` outside the sanctioned manifests.
+    r"""Source lines that hard-code `expected` outside the sanctioned manifests.
 
     The optional `v` matters: the literal this check exists for was written
     `<span>v0.1.1</span>`, and a lookbehind placed after the prefix would treat
     the `v` as the preceding word character and miss it.
 
-    The surrounding character classes stop `0.2.0` from matching inside `10.2.0`
-    or an address like `10.2.0.4`, so a match is a real claim about the version.
+    The boundaries are digits and dots rather than word characters, because the
+    other place a version gets hand-written here is a release artifact —
+    `herdeck_0.2.0_x64.dmg`, `Herdeck_0.2.0_amd64.AppImage`, a download URL — and
+    `\w` would swallow the surrounding `_` as part of a longer word and skip it.
+    The lookahead rejects only a following digit or dot-digit, so `0.2.01` and the
+    address `10.0.2.0` are not versions while `herdeck-0.2.0.dmg` still is.
     """
-    pattern = re.compile(rf"(?<![\w.])v?{re.escape(expected)}(?![\w.])")
+    pattern = re.compile(rf"(?<![\d.])v?{re.escape(expected)}(?!\d|\.\d)")
     found: list[tuple[str, int, str]] = []
     for path in _source_files():
         relative = path.relative_to(ROOT).as_posix()
@@ -186,7 +203,11 @@ def stray_version_literals(expected: str) -> list[tuple[str, int, str]]:
             continue
         for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
             if pattern.search(line):
-                found.append((relative, number, line.strip()))
+                # A vendored bundle can be one 300 KB line; never print it whole.
+                text = line.strip()
+                if len(text) > 120:
+                    text = text[:117] + "..."
+                found.append((relative, number, text))
     return found
 
 
