@@ -788,7 +788,7 @@
         </div>
       {/each}
       {#if filteredNavGroups.length === 0}<p class="nav-empty">{lm.no_search_results}</p>{/if}
-      <div class="sidebar-version"><strong>Herdeck Desktop</strong><span>v0.1.1</span></div>
+      <div class="sidebar-version"><strong>Herdeck Desktop</strong><span>v{__APP_VERSION__}</span></div>
     </nav>
 
     <section class="content" bind:this={contentRoot}>
