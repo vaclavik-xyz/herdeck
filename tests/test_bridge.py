@@ -1378,6 +1378,84 @@ async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow(argv, expe
     assert params["name"].startswith(f"{expected_kind}-")
 
 
+async def test_socket_herdr_start_agent_falls_back_to_raw_pane_on_unsupported_kind():
+    """herdr rejects a kind it doesn't know yet (older herdr, newer herdeck
+    _MANAGED_AGENT_KINDS entry) with `unsupported_agent_kind` before ever
+    touching the pane, so the already-created tab is reused for raw pane
+    input instead of being torn down."""
+    from herdeck.bridge import HerdrRpcError, SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        if method == "tab.create":
+            return {
+                "result": {
+                    "tab": {"tab_id": "w1:t2"},
+                    "root_pane": {"pane_id": "w1:p2"},
+                }
+            }
+        if method == "agent.start":
+            raise HerdrRpcError("agent.start", "unsupported_agent_kind", "unsupported kind qwen")
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    await h.start_agent("reviewer", ["qwen", "-m", "qwen-max"])
+
+    methods = [call[0] for call in calls]
+    assert methods == [
+        "session.snapshot",
+        "tab.create",
+        "agent.start",
+        "pane.send_text",
+        "pane.send_keys",
+    ]
+    assert "tab.close" not in methods
+    send_text_call = calls[3]
+    assert send_text_call[1] == {"pane_id": "w1:p2", "text": "qwen -m qwen-max"}
+    send_keys_call = calls[4]
+    assert send_keys_call[1] == {"pane_id": "w1:p2", "keys": ["enter"]}
+
+
+async def test_socket_herdr_start_agent_closes_tab_on_other_agent_start_error():
+    """Only `unsupported_agent_kind` gets the raw-pane fallback; any other
+    agent.start failure (e.g. herdr not finding the just-created pane) must
+    keep closing the tab and re-raising, exactly as before."""
+    from herdeck.bridge import HerdrRpcError, SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        if method == "tab.create":
+            return {
+                "result": {
+                    "tab": {"tab_id": "w1:t2"},
+                    "root_pane": {"pane_id": "w1:p2"},
+                }
+            }
+        if method == "agent.start":
+            raise HerdrRpcError("agent.start", "agent_pane_not_found", "agent target pane not found")
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+
+    with pytest.raises(HerdrRpcError) as exc_info:
+        await h.start_agent("reviewer", ["qwen", "-m", "qwen-max"])
+
+    assert exc_info.value.code == "agent_pane_not_found"
+    methods = [call[0] for call in calls]
+    assert "pane.send_text" not in methods
+    assert calls[-1] == ("tab.close", {"tab_id": "w1:t2"}, False)
+
+
 async def test_socket_herdr_start_agent_preserves_custom_command_on_protocol_17():
     from herdeck.bridge import SocketHerdr
 
@@ -1813,6 +1891,57 @@ async def test_require_snapshot_support_tolerates_down_or_flaky_herdr():
 
     await _require_snapshot_support(DownHerdr())  # must not raise
     await _require_snapshot_support(FlakyHerdr())  # must not raise
+
+
+async def test_require_snapshot_support_warns_once_below_recommended_version(caplog):
+    import logging
+
+    from herdeck.bridge import _require_snapshot_support
+
+    class OldButWorkingHerdr:
+        async def snapshot(self):
+            return {"agents": [], "protocol": 18, "version": "0.7.3"}
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        await _require_snapshot_support(OldButWorkingHerdr())  # must not raise
+
+    assert "0.7.3" in caplog.text
+    assert "0.7.4" in caplog.text
+
+
+async def test_require_snapshot_support_no_warning_at_or_above_recommended_version(caplog):
+    import logging
+
+    from herdeck.bridge import _require_snapshot_support
+
+    class CurrentHerdr:
+        async def snapshot(self):
+            return {"agents": [], "protocol": 20, "version": "0.8.2"}
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        await _require_snapshot_support(CurrentHerdr())
+
+    assert caplog.text == ""
+
+
+async def test_require_snapshot_support_ignores_missing_or_malformed_version(caplog):
+    import logging
+
+    from herdeck.bridge import _require_snapshot_support
+
+    class NoVersionHerdr:
+        async def snapshot(self):
+            return {"agents": [], "protocol": 20}
+
+    class WeirdVersionHerdr:
+        async def snapshot(self):
+            return {"agents": [], "protocol": 20, "version": "not-a-version"}
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        await _require_snapshot_support(NoVersionHerdr())
+        await _require_snapshot_support(WeirdVersionHerdr())
+
+    assert caplog.text == ""
 
 
 async def test_start_local_bridge_probes_snapshot_support():

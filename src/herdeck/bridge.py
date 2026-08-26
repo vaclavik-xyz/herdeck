@@ -30,6 +30,13 @@ _SNAPSHOT_UNSUPPORTED = (
     "herdeck requires herdr >= 0.7.4 (session.snapshot missing); run 'herdr update'"
 )
 
+# The probe above can only detect a herdr predating session.snapshot itself
+# (< 0.7.2) — it cannot fail startup on a herdr that answers but is still
+# below 0.7.4, since that would lock out users on a working 0.7.2/0.7.3.
+# _require_snapshot_support instead compares session.snapshot's own `version`
+# field against this floor and logs a one-time warning.
+_MIN_HERDR_VERSION = (0, 7, 4)
+
 # Startup probe bound: a herdr that accepts but never answers (e.g. mid
 # live-handoff) must not block bridge startup; timeout = transient, not fatal.
 _PROBE_TIMEOUT = 5.0
@@ -147,6 +154,23 @@ def resolve_herdr_socket_path(*, getenv=os.environ.get, fallback: str | None = N
     if session:
         return os.path.expanduser(f"~/.config/herdr/sessions/{session}/herdr.sock")
     return os.path.expanduser("~/.config/herdr/herdr.sock")
+
+
+def _parse_herdr_version(version: object) -> tuple[int, ...] | None:
+    """Parse session.snapshot's `version` (e.g. "0.8.2") into a comparable tuple.
+
+    Defensive by design: an absent, non-string, or non-numeric-dotted value
+    returns None rather than raising. An older herdr that omits `version`
+    entirely, or a future format this can't parse, must never break the
+    startup probe over a version comparison that is advisory, not fatal.
+    """
+    if not isinstance(version, str) or not version:
+        return None
+    parts = version.split(".")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError:
+        return None
 
 
 def _validate_snapshot(snapshot: object) -> dict:
@@ -1244,34 +1268,48 @@ class SocketHerdr:
         try:
             kind = _managed_agent_kind(argv)
             if kind is not None:
-                await self._rpc(
-                    "agent.start",
-                    {
-                        "name": _managed_agent_name(kind, pane_id),
-                        "kind": kind,
-                        "pane_id": pane_id,
-                        "args": argv[1:],
-                    },
-                    retry=False,
-                )
+                try:
+                    await self._rpc(
+                        "agent.start",
+                        {
+                            "name": _managed_agent_name(kind, pane_id),
+                            "kind": kind,
+                            "pane_id": pane_id,
+                            "args": argv[1:],
+                        },
+                        retry=False,
+                    )
+                except HerdrRpcError as exc:
+                    if exc.code != "unsupported_agent_kind":
+                        raise
+                    # herdr validates the kind before the pane lookup (verified
+                    # live against 0.8.2), so a herdr that predates this entry
+                    # in _MANAGED_AGENT_KINDS rejects it here with no side
+                    # effects on the tab/pane we already created. Fall back to
+                    # raw pane input instead of aborting the whole launch.
+                    await self._send_raw_argv(pane_id, argv)
             else:
                 # Keep custom wrappers and future agent executables working even
                 # though Herdr's managed kind enum does not know them yet.
-                await self._rpc(
-                    "pane.send_text",
-                    {"pane_id": pane_id, "text": shlex.join(argv)},
-                    retry=False,
-                )
-                await self._rpc(
-                    "pane.send_keys",
-                    {"pane_id": pane_id, "keys": ["enter"]},
-                    retry=False,
-                )
+                await self._send_raw_argv(pane_id, argv)
         except BaseException:
             # Do not leave an empty/orphaned tab when a managed or raw launch
             # fails after layout creation. Preserve the original launch error.
             await self._close_created_tab(tab_id)
             raise
+
+    async def _send_raw_argv(self, pane_id: str, argv: list[str]) -> None:
+        """Type argv as literal shell input into pane_id, then submit it.
+
+        Used both for agent kinds herdr's managed agent.start does not know
+        about, and as the fallback when it rejects a kind we thought it knew.
+        """
+        await self._rpc(
+            "pane.send_text",
+            {"pane_id": pane_id, "text": shlex.join(argv)},
+            retry=False,
+        )
+        await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
 
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]:
         # herdr scopes worktree.list to ONE repo (focused when unparametrized);
@@ -1458,14 +1496,24 @@ async def _require_snapshot_support(herdr: HerdrClient) -> None:
 
     Only the version error is fatal: a herdr that is merely not up yet (or is
     mid live-handoff) must not kill the bridge — the stream retries those
-    exactly as before."""
+    exactly as before. A herdr that answers but reports a version below 0.7.4
+    is not fatal either (it works, just without Status.WAITING) — logged as a
+    one-time warning instead."""
     try:
-        await asyncio.wait_for(herdr.snapshot(), timeout=_PROBE_TIMEOUT)
+        snapshot = await asyncio.wait_for(herdr.snapshot(), timeout=_PROBE_TIMEOUT)
     except RuntimeError as exc:
         if str(exc) == _SNAPSHOT_UNSUPPORTED:
             raise
+        return
     except Exception:
-        pass
+        return
+    version = _parse_herdr_version(snapshot.get("version"))
+    if version is not None and version < _MIN_HERDR_VERSION:
+        log.warning(
+            "herdr reports version %s, below the recommended >= 0.7.4; "
+            "session.snapshot's metadata `tokens` is unavailable, so Status.WAITING will never appear",
+            snapshot.get("version"),
+        )
 
 
 def _log_broadcast_task_failure(task: asyncio.Task) -> None:
