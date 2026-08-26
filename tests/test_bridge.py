@@ -59,6 +59,7 @@ def test_herdr_pane_to_wire_maps_fields():
         "waiting_on": "",
         "progress": "",
         "metadata": {},
+        "state_labels": {},
         "terminal_id": "",
         "title": "",
         "display_agent": "",
@@ -71,6 +72,45 @@ def test_herdr_pane_to_wire_passes_waiting_on_through():
     raw = raw_pane(agent="claude", status="working", cwd="/x/api")
     raw["tokens"] = {"waiting_on": "\u23f3 ci"}
     assert _herdr_pane_to_wire(raw)["waiting_on"] == "\u23f3 ci"
+
+
+def test_herdr_pane_to_wire_passes_state_labels_through():
+    # herdr 0.8.2's native per-status labels ride through untouched.
+    raw = raw_pane(agent="claude", status="working", cwd="/x/api")
+    raw["state_labels"] = {"working": "PROBE", "idle": "parked"}
+
+    assert _herdr_pane_to_wire(raw)["state_labels"] == {"working": "PROBE", "idle": "parked"}
+
+
+def test_herdr_pane_to_wire_defaults_state_labels_for_older_herdr():
+    # A pre-0.8.2 herdr omits the field entirely; absence is not an error.
+    assert _herdr_pane_to_wire(raw_pane())["state_labels"] == {}
+
+
+@pytest.mark.parametrize("bad", ["working", 7, None, ["working"]])
+def test_herdr_pane_to_wire_drops_non_object_state_labels(bad):
+    raw = raw_pane()
+    raw["state_labels"] = bad
+
+    assert _herdr_pane_to_wire(raw)["state_labels"] == {}
+
+
+def test_herdr_pane_to_wire_drops_malformed_state_label_entries():
+    # Cosmetic labels: a bad entry is dropped, the good ones still render.
+    raw = raw_pane()
+    raw["state_labels"] = {"working": 7, "idle": "parked", 3: "three", "done": None}
+
+    assert _herdr_pane_to_wire(raw)["state_labels"] == {"idle": "parked"}
+
+
+def test_herdr_pane_to_wire_caps_state_labels():
+    raw = raw_pane()
+    raw["state_labels"] = {f"s{i}": f"L{i}" for i in range(40)}
+
+    labels = _herdr_pane_to_wire(raw)["state_labels"]
+
+    assert len(labels) == 16
+    assert labels["s0"] == "L0"
 
 
 def test_herdr_pane_to_wire_passes_terminal_identity_through():
@@ -155,6 +195,7 @@ async def test_list_returns_mapped_filtered_snapshot(herdr):
         "work_context",
         "terminal_preview",
         "metadata_tokens",
+        "state_labels",
     ]
     p = msg["panes"][0]
     assert p["pane_id"] == "w1:p1"
@@ -1726,6 +1767,44 @@ async def test_socket_herdr_snapshot_rejects_malformed_tokens():
 
     with pytest.raises(RuntimeError, match="token values must be strings"):
         await h.snapshot()
+
+
+async def test_socket_herdr_snapshot_rejects_malformed_state_labels():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        return {
+            "result": {
+                "snapshot": {
+                    "agents": [
+                        {
+                            "pane_id": "w1:p1",
+                            "state_labels": {"working": 123},
+                        }
+                    ]
+                }
+            }
+        }
+
+    h._rpc = fake_rpc
+
+    with pytest.raises(RuntimeError, match="state_label values must be strings"):
+        await h.snapshot()
+
+
+async def test_socket_herdr_snapshot_accepts_absent_state_labels():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        return {"result": {"snapshot": {"agents": [{"pane_id": "w1:p1"}]}}}
+
+    h._rpc = fake_rpc
+
+    assert (await h.snapshot())["agents"] == [{"pane_id": "w1:p1"}]
 
 
 async def test_socket_herdr_snapshot_maps_unknown_method_to_version_hint():

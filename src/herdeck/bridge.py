@@ -49,7 +49,14 @@ _HERDR_RPC_TIMEOUT = 10.0
 _HERDR_SUBSCRIBE_TIMEOUT = 10.0
 _HERDR_LINE_LIMIT = 1024 * 1024 + 1  # 1 MiB payload plus NDJSON newline
 _WIRE_PROTOCOL = 3
-_WIRE_CAPABILITIES = ("work_context", "terminal_preview", "metadata_tokens")
+# `state_labels` is additive on the pane wire record, so it is advertised as a
+# capability instead of bumping the protocol: an older bridge simply omits it.
+_WIRE_CAPABILITIES = ("work_context", "terminal_preview", "metadata_tokens", "state_labels")
+
+# Bound on herdr's native per-status label map. herdr's own schema caps the
+# sibling `tokens` map at 16 entries but leaves `state_labels` uncapped; the
+# deck only ever reads one entry per Status, so 16 is generous either way.
+_STATE_LABELS_MAX = 16
 
 # Herdr protocol 17 made managed agent startup pane-first and restricted it to
 # known agent kinds. Existing Herdeck start profiles remain argv-based, so map
@@ -223,6 +230,14 @@ def _validate_snapshot(snapshot: object) -> dict:
                 raise RuntimeError("session.snapshot agent token keys must be strings")
             if not all(isinstance(value, str) for value in tokens.values()):
                 raise RuntimeError("session.snapshot agent token values must be strings")
+        state_labels = record.get("state_labels")
+        if state_labels is not None:
+            if not isinstance(state_labels, dict):
+                raise RuntimeError("session.snapshot agent state_labels must be an object")
+            if not all(isinstance(key, str) for key in state_labels):
+                raise RuntimeError("session.snapshot agent state_label keys must be strings")
+            if not all(isinstance(value, str) for value in state_labels.values()):
+                raise RuntimeError("session.snapshot agent state_label values must be strings")
     for record in snapshot.get("panes", []):
         pane_id = record.get("pane_id")
         if not isinstance(pane_id, str) or not pane_id:
@@ -323,6 +338,25 @@ def _tabs_by_id(tabs: list[dict]) -> dict[str, str]:
     return {t["tab_id"]: t.get("label", "") for t in (tabs or []) if t.get("tab_id")}
 
 
+def _wire_state_labels(raw: object) -> dict[str, str]:
+    """herdr 0.8.2's native ``{status: label}`` map, read defensively.
+
+    A pre-0.8.2 herdr omits the field entirely and a 0.8.2 one omits it until
+    something sets it, so absence is the normal case and never a warning. The
+    labels are cosmetic, so anything malformed is dropped here rather than
+    surfaced (the snapshot-level contract is enforced by _validate_snapshot).
+    """
+    if not isinstance(raw, dict):
+        return {}
+    labels: dict[str, str] = {}
+    for key, value in raw.items():
+        if len(labels) >= _STATE_LABELS_MAX:
+            break
+        if isinstance(key, str) and isinstance(value, str):
+            labels[key] = value
+    return labels
+
+
 def _herdr_pane_to_wire(
     p: dict,
     wt_by_ws: dict[str, dict] | None = None,
@@ -357,6 +391,7 @@ def _herdr_pane_to_wire(
         "waiting_on": tokens.get("waiting_on", ""),
         "progress": tokens.get("progress", ""),
         "metadata": tokens,
+        "state_labels": _wire_state_labels(p.get("state_labels")),
         "terminal_id": p.get("terminal_id") or "",
         "title": (p.get("title") or p.get("terminal_title_stripped") or "")[:160],
         "display_agent": (p.get("display_agent") or "")[:160],

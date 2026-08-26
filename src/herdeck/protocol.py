@@ -25,6 +25,7 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
     if status in (Status.WORKING, Status.IDLE, Status.DONE) and waiting_on:
         status = Status.WAITING
     metadata = pane.get("metadata") if isinstance(pane.get("metadata"), dict) else {}
+    state_labels = pane.get("state_labels") if isinstance(pane.get("state_labels"), dict) else {}
     wire_work = pane.get("work") if isinstance(pane.get("work"), dict) else {}
     work_tokens = {
         "work_source": wire_work.get("source", ""),
@@ -45,6 +46,13 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         waiting_on=waiting_on,
         progress=pane.get("progress") or "",
         metadata={str(key): str(value) for key, value in metadata.items()},
+        # Cosmetic labels: a malformed entry is dropped, never coerced into
+        # tile text (a stray non-string would read as nonsense on the deck).
+        state_labels={
+            key: value
+            for key, value in state_labels.items()
+            if isinstance(key, str) and isinstance(value, str)
+        },
         terminal_id=pane.get("terminal_id") or "",
         title=pane.get("title") or "",
         display_agent=pane.get("display_agent") or "",
