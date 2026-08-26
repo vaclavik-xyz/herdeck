@@ -160,9 +160,12 @@ curl "$URL/state?token=$TOKEN"    # slots, panel, tile versions, agent summary
 ```
 
 A rising `version` between two `/state` calls means the runtime is rendering.
-On a live default deck it rises on its own — measured at roughly 20 over 12
-seconds with nobody touching anything — because `time` is a default tile field
-and the periodic full refresh re-renders so the elapsed text advances.
+On a default deck it rises on its own, because `time` is a default tile field
+and the periodic full refresh re-renders so the elapsed text advances. It bumps
+once per changed tile plus the panel, so the rate tracks how many tiles are
+moving, not a fixed cadence — a 28-agent deck measured ~20 in 12 seconds, while
+a healthy two-agent deck may only manage 2-4. Watch whether it moves, not how
+fast.
 
 **It does not mean the physical deck received anything.** The version is bumped
 when the frame lands in the HTTP buffer, before it is handed to the sinks, and a
@@ -174,7 +177,8 @@ for `render sink ... failed to deliver a frame` in the log.
 The images tell you a frame exists, not that one is being made: the endpoints
 serve the bytes of the last successful refresh and never re-render on the
 request path, so a runtime whose ticker died after its first frame serves the
-same PNG forever. Compare two fetches instead of looking at one:
+same PNG forever. Compare two fetches instead of looking at one — spaced wider
+than the bucket the tiles are currently in:
 
 ```bash
 curl -sf "$URL/panel?token=$TOKEN" -o /tmp/panel.png && file /tmp/panel.png
@@ -189,10 +193,30 @@ pipeline reports `shasum`'s exit status, not `curl`'s.
 
 **Before reading a frozen hash or a frozen version as a stall, check what the
 deck is showing.** Both are computed from rendered bytes, so anything static on
-screen holds them still legitimately — a deck left in a drill or a menu view
-carries no elapsed text on any tile, and a deck with no agents renders the same
-blank slots every time. Put it back in the overview first, or cause an agent
-status change and watch `/state`'s `summary` move.
+screen holds them still legitimately.
+
+The one that catches people out is the elapsed bucket. It steps every 5 seconds
+under a minute, every minute under an hour, and every hour beyond — so on a
+long-running deployment, which is exactly the deck you look at after a deploy,
+an agent showing `12m` changes its tile once a minute and one showing `3h` once
+an hour. Two fetches seconds apart hash identically on a perfectly healthy deck.
+Space them wider than the bucket you can see on the tiles.
+
+A deck left in a drill or a menu view carries no elapsed text on any tile at
+all, and a deck with no agents renders the same blank slots every time. Put it
+back in the overview first, or skip the waiting entirely: cause an agent status
+change yourself and watch `/state`'s `summary` move.
+
+From the bridge host, confirm the far end actually attached — `/health`'s
+`connections` is the runtime's own view, and this is what tells "the bridge is
+up but nobody is connected" apart from "the runtime lost the link":
+
+```bash
+lsof -a -p BRIDGE_PID -i -Pn | grep ESTABLISHED
+```
+
+Expect one established connection per client: each render host, plus any web
+cockpit.
 
 ### Checking what the built UI says
 
