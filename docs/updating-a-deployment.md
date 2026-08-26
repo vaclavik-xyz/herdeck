@@ -47,14 +47,23 @@ deleted code with nothing to show for it. When a release removes files, clear
 the synced subtree first:
 
 ```bash
-ssh HOST 'mv ~/path/to/herdeck/src/herdeck ~/herdeck-src.old'
+ssh HOST 'rm -rf ~/herdeck-src.old && mv ~/path/to/herdeck/src/herdeck ~/herdeck-src.old'
 git archive --format=tar main | ssh HOST 'tar -x -C ~/path/to/herdeck'
 ```
 
 Move it aside rather than deleting it, and stop the service for that window.
 The runtime imports lazily well after startup, so an import landing in the gap
 raises `ImportError` on a live process — and if the stream or the connection
-dies mid-transfer, the moved-aside copy is the rollback.
+dies mid-transfer, the moved-aside copy is the rollback:
+
+```bash
+ssh HOST 'rm -rf ~/path/to/herdeck/src/herdeck && mv ~/herdeck-src.old ~/path/to/herdeck/src/herdeck'
+```
+
+Clear the destination in both directions. `mv` into a directory that already
+exists nests inside it instead of replacing it, so a second deploy would leave
+the first deploy's tree at the documented rollback path and the real backup one
+level down.
 
 **Do not delete the whole checkout.** The venv usually lives inside it and is
 installed editable, so the launchd unit's `ProgramArguments` points straight at
@@ -171,17 +180,24 @@ curl -sf "$URL/tile/0?token=$TOKEN" -o /tmp/t.png && shasum /tmp/t.png
 ```
 
 Fetch to a file and gate the check on `&&`. Piping into `shasum` hides the
-failure it is most likely to hit: on a 404 (no agents, or slot 0 empty) or a
-rejected token the body is empty, and an empty body always hashes to
-`da39a3ee5e6b4b0d3255bfef95601890afd80709`. Two such runs match, which reads as
-"not repainting" — a false stall on top of the check meant to find real ones.
-`--fail` alone does not save you here, because a pipeline reports `shasum`'s
-exit status, not `curl`'s.
+failure it is most likely to hit: a 404 (no agents, or slot 0 empty) returns an
+empty body and a rejected token returns a constant error page, so either way two
+runs hash the same and it reads as "not repainting" — a false stall on top of
+the check meant to find real ones. Do not treat any particular hash as the tell.
+`--fail` alone does not save you, because a pipeline reports `shasum`'s exit
+status, not `curl`'s; with `-sf` a failure prints nothing at all, so add
+`-w '%{http_code}'` when you need to tell a 403 from a 404.
 
 Two hashes about fifteen seconds apart are enough on a default deck: tile bytes
 carry the elapsed text, and the periodic full refresh comes round roughly every
 ten seconds. The same caveats as above apply — no agents, no `time` field, or
 everything past the hour bucket, and the bytes legitimately stop changing.
+
+One more is specific to this check: slot 0 only holds an agent tile in the
+overview. In a drill or a menu view it is a static option or label tile with no
+elapsed text, so a deck someone was poking at during the deploy gives two
+identical hashes while rendering perfectly. Fall back to `/state`'s `version`,
+which the panel drives too.
 
 On the bridge host, one established connection per client should be visible:
 
