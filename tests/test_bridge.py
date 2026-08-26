@@ -1305,7 +1305,14 @@ async def test_socket_herdr_send_text_propagates_unrelated_error_code():
     assert exc_info.value.message == "boom"
 
 
-async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow():
+@pytest.mark.parametrize(
+    ("argv", "expected_kind"),
+    [
+        (["codex", "-m", "gpt-5.4"], "codex"),
+        (["qwen", "-m", "qwen-max"], "qwen"),
+    ],
+)
+async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow(argv, expected_kind):
     from herdeck.bridge import SocketHerdr
 
     h = SocketHerdr("/nonexistent")
@@ -1325,7 +1332,7 @@ async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow():
         return {"result": {}}
 
     h._rpc = fake_rpc
-    await h.start_agent("reviewer", ["codex", "-m", "gpt-5.4"])
+    await h.start_agent("reviewer", argv)
 
     assert calls[:2] == [
         ("session.snapshot", {}, True),
@@ -1334,10 +1341,10 @@ async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow():
     method, params, retry = calls[2]
     assert method == "agent.start"
     assert retry is False
-    assert params["kind"] == "codex"
+    assert params["kind"] == expected_kind
     assert params["pane_id"] == "w1:p2"
-    assert params["args"] == ["-m", "gpt-5.4"]
-    assert params["name"].startswith("codex-")
+    assert params["args"] == argv[1:]
+    assert params["name"].startswith(f"{expected_kind}-")
 
 
 async def test_socket_herdr_start_agent_preserves_custom_command_on_protocol_17():
