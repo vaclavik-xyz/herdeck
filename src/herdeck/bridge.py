@@ -352,8 +352,9 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
     while keeping an orphaned one (`"yes ́"`) types a stray accent the
     dialog does not match either.
 
-    Residual, and deliberately not closed here, because no character property
-    separates these from a legitimate answer:
+    Residual, and deliberately not closed here — either no character property
+    separates the case from a legitimate answer, or closing it would cost more
+    than it buys:
       * an interior format character that is not a joiner — a bidi override
         (`"yes‮on"`) or a tag character reorders or hides what is typed,
         yet sits between legible characters, so the edge trim cannot reach it;
