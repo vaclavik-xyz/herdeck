@@ -159,67 +159,40 @@ curl "$URL/health?token=$TOKEN"   # {"ok": true, "connected": true, ...}
 curl "$URL/state?token=$TOKEN"    # slots, panel, tile versions, agent summary
 ```
 
-A `version` that rises between two `/state` calls means the runtime is
-*rendering* — and on a default deck it should rise on its own. `time`
-is a default tile field, elapsed text steps every 5 seconds under a minute and
-every minute under an hour, and the periodic full refresh re-renders exactly so
-that advance reaches the deck. **So a version that has not moved for several
-minutes on a deck with agents is a stall signature, not a quiet one.**
+A rising `version` between two `/state` calls means the runtime is rendering.
+On a live default deck it rises on its own — measured at roughly 20 over 12
+seconds with nobody touching anything — because `time` is a default tile field
+and the periodic full refresh re-renders so the elapsed text advances.
 
-It genuinely holds static only with no agent tiles, with `time` removed from
-`[view].tile_fields`, or once every agent has sat in one status past the hour
-bucket.
+**It does not mean the physical deck received anything.** The version is bumped
+when the frame lands in the HTTP buffer, before it is handed to the sinks, and a
+sink that raises is isolated and only logged. A dark device with a rising
+version is a delivery problem, not a render stall — this repo has hit exactly
+that, with `/panel` and `/tile/N` correct while the device showed black. Look
+for `render sink ... failed to deliver a frame` in the log.
 
-**A rising version does not mean the physical deck received anything.** The
-version is bumped when the frame lands in the HTTP buffer, before it is handed
-to the sinks, and a sink that raises is isolated and only logged. So a dark
-device with a rising version is a delivery problem, not a render stall — this
-repo has hit exactly that, with `/panel` and `/tile/N` correct while the device
-showed black. Look for `render sink ... failed to deliver a frame` in the log.
-
-Fetching the images tells you a frame exists, not that one is being made — the
-endpoints serve the bytes stored by the last successful refresh and never
-re-render on the request path, so a runtime whose ticker died after its first
-frame serves the same PNG forever:
+The images tell you a frame exists, not that one is being made: the endpoints
+serve the bytes of the last successful refresh and never re-render on the
+request path, so a runtime whose ticker died after its first frame serves the
+same PNG forever. Compare two fetches instead of looking at one:
 
 ```bash
 curl -sf "$URL/panel?token=$TOKEN" -o /tmp/panel.png && file /tmp/panel.png
 curl -sf "$URL/tile/0?token=$TOKEN" -o /tmp/t.png && shasum /tmp/t.png
 ```
 
-Fetch to a file and gate the check on `&&`. Piping into `shasum` hides the
-failure it is most likely to hit: a rejected token returns a constant error page
-and a 404 returns an empty body, so either way two runs hash the same and it
-reads as "not repainting" — a false stall on top of the check meant to find real
-ones. Do not treat any particular hash as the tell.
+Fetch to a file and gate on `&&`. Piping into `shasum` hides the failure it is
+most likely to hit: a rejected token returns a constant error page, so two runs
+hash the same and it reads as "not repainting" — a false stall on top of the
+check meant to find real ones. `--fail` alone does not save you, because a
+pipeline reports `shasum`'s exit status, not `curl`'s.
 
-Note which response means what. Every slot is rasterised on every render, empty
-ones included, so a deck with no agents answers `200` with blank bytes that hash
-the same every time — benign. A `404` means no refresh has ever completed (or
-the index is past `slots`), which is the stall you are hunting, not a quiet deck.
-`--fail` alone does not save you, because a pipeline reports `shasum`'s exit
-status, not `curl`'s; with `-sf` a failure prints nothing at all, so add
-`-w '%{http_code}'` when you need to tell a 403 from a 404.
-
-Two hashes about fifteen seconds apart are enough on a default deck: tile bytes
-carry the elapsed text, and the periodic full refresh comes round roughly every
-ten seconds. The same caveats as above apply — no agents, no `time` field, or
-everything past the hour bucket, and the bytes legitimately stop changing.
-
-One more applies to the whole section, not just this check. In a drill or a
-menu view **no** tile carries elapsed text and neither does the panel, so a deck
-someone was poking at during the deploy freezes the tile hash *and* `version`
-alike, while rendering perfectly. Do not read one as a cross-check on the other
-— they go still for the same reason.
-
-Put the deck back in the overview before comparing, or watch `/state`'s
-`summary` across an agent status change you cause yourself.
-
-On the bridge host, one established connection per client should be visible:
-
-```bash
-lsof -a -p BRIDGE_PID -i -Pn | grep ESTABLISHED
-```
+**Before reading a frozen hash or a frozen version as a stall, check what the
+deck is showing.** Both are computed from rendered bytes, so anything static on
+screen holds them still legitimately — a deck left in a drill or a menu view
+carries no elapsed text on any tile, and a deck with no agents renders the same
+blank slots every time. Put it back in the overview first, or cause an agent
+status change and watch `/state`'s `summary` move.
 
 ### Checking what the built UI says
 
