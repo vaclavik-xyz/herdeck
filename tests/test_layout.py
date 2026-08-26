@@ -371,6 +371,61 @@ def test_waiting_status_text_uses_holder_label():
     assert len(waiting_status_text("⏳ a-very-long-marker-name")) <= 12
 
 
+def _labelled(status, state_labels, waiting_on=""):
+    return AgentState(
+        AgentKey("s", "p"),
+        "claude",
+        "api",
+        status,
+        waiting_on=waiting_on,
+        state_labels=state_labels,
+    )
+
+
+def test_tile_status_text_uses_herdr_state_label():
+    from herdeck.layout import tile_status_text
+
+    agent = _labelled(Status.WORKING, {"working": "probe", "idle": "parked"})
+
+    assert tile_status_text(agent) == "PROBE"
+    # The label is herdr's, so it wins in either UI language.
+    assert tile_status_text(agent, lang="cs") == "PROBE"
+
+
+def test_tile_status_text_falls_back_to_the_status_word():
+    from herdeck.layout import tile_status_text
+
+    # No entry for the current status, an empty entry, and no map at all.
+    assert tile_status_text(_labelled(Status.WORKING, {"idle": "parked"})) == "WORKING"
+    assert tile_status_text(_labelled(Status.WORKING, {"working": "  "})) == "WORKING"
+    assert tile_status_text(_labelled(Status.IDLE, {}), lang="cs") == "NEČINNÝ"
+
+
+def test_tile_status_text_waiting_on_beats_state_label():
+    from herdeck.layout import tile_status_text
+
+    agent = _labelled(Status.WAITING, {"waiting": "held"}, waiting_on="⏳ ci")
+
+    assert tile_status_text(agent) == "CI"
+
+
+def test_tile_status_text_offline_beats_state_label():
+    from herdeck.layout import tile_status_text
+
+    agent = _labelled(Status.WORKING, {"working": "probe"})
+
+    assert tile_status_text(agent, down=True) == "OFFLINE"
+
+
+def test_tile_status_text_clips_a_long_state_label():
+    from herdeck.layout import tile_status_text
+
+    agent = _labelled(Status.WORKING, {"working": "⏳ a-very-long-marker-name"})
+
+    assert len(tile_status_text(agent)) <= 12
+    assert "⏳" not in tile_status_text(agent)
+
+
 def test_panel_overview_counts_show_pending_only_when_nonzero():
     pv = panel_overview(Counts(0, 2, 3, 1, waiting=1), 0, 1, set(), 7, None)
     assert pv.lines[0] == "W2 · P1 · I3 · D1"

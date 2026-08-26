@@ -355,14 +355,36 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
     return raw_lines, lines
 
 
+def _short_status_label(text: str) -> str:
+    """Normalise a foreign label into the tile's status slot: uppercase like
+    the built-in status words, clipped to what the slot fits. The hourglass is
+    stripped — the tile font has no emoji glyphs (it would render as tofu)."""
+    return (text or "").replace("⏳", "").strip().upper()[:12]
+
+
 def waiting_status_text(waiting_on: str, lang: str = "en") -> str:
     """Tile status word for a WAITING agent: the holder's label ('⏳ ci' ->
-    'CI') beats a generic word. The hourglass is stripped — the tile font has
-    no emoji glyphs (it would render as a tofu box)."""
-    text = (waiting_on or "").replace("⏳", "").strip()
-    if not text:
-        return tr(lang, "status.waiting")
-    return text.upper()[:12]
+    'CI') beats a generic word."""
+    return _short_status_label(waiting_on) or tr(lang, "status.waiting")
+
+
+def tile_status_text(agent: AgentState, lang: str = "en", down: bool = False) -> str:
+    """The agent tile's status word, in strict precedence order: the server
+    being down, herdeck's own explicit `waiting_on` holder label, herdr's
+    native per-status label (0.8.2+, what herdr's sidebar shows), and finally
+    the generic translated status word.
+
+    Shared by every agent-tile path so the deck, the window and the Elgato
+    surface can't drift apart on which label wins.
+    """
+    if down:
+        return tr(lang, "status.offline")
+    if agent.status is Status.WAITING:
+        return waiting_status_text(agent.waiting_on, lang)
+    native = _short_status_label(agent.state_labels.get(agent.status.value, ""))
+    if native:
+        return native
+    return tr(lang, f"status.{agent.status.value}")
 
 
 def panel_detail(agent: AgentState, text: str, lang: str = "en") -> PanelView:

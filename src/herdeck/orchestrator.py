@@ -458,14 +458,8 @@ class Orchestrator:
                         tile_fill=self.config.view.tile_fill,
                         repo=layout.compose_line(s, primary_tokens),
                         branch=layout.compose_line(s, secondary_tokens),
-                        status_text=(
-                            self._tr("status.offline")
-                            if down
-                            else layout.waiting_status_text(
-                                s.waiting_on, self.config.view.language
-                            )
-                            if s.status is Status.WAITING
-                            else self._tr(f"status.{s.status.value}")
+                        status_text=layout.tile_status_text(
+                            s, self.config.view.language, down
                         )
                         if "status" in fields
                         else None,
