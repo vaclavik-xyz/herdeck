@@ -900,14 +900,15 @@ async def test_send_text_fallback_rejects_invisible_answer(herdr, text):
     [
         "yes\u2028no",  # LINE SEPARATOR
         "yes\u2029no",  # PARAGRAPH SEPARATOR
-        "yes\u0085no",  # NEL
-        "yes\u200bno",  # an invisible embedded in otherwise legible text
+        "yes\u0085no",  # NEL (a C1 control: isspace(), but ord > 127)
+        "yes\u007fno",  # DEL
+        "yes\tno",  # TAB: a keystroke the dialog acts on, not literal text
     ],
 )
 async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
-    """These are isspace() but ord > 127 (or neither), so an ord-based
-    control-char check passes them; none of them types as literal answer
-    text, so the answer must be refused rather than typed blind."""
+    """U+2028/U+2029/U+0085 are isspace() but ord > 127, so an ord-based
+    control-char check waves them through; a terminal may treat them as a line
+    break, i.e. as a submit halfway through the answer."""
 
     async def blocked_send_text(pane_id, text):
         raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
@@ -924,11 +925,23 @@ async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
     assert herdr.sent == []
 
 
-@pytest.mark.parametrize("text", ["yes", "1", "ano, pokra\u010duj", "e\u0301clair \U0001f600"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes",
+        "1",
+        "ano, pokra\u010duj",
+        "e\u0301clair \U0001f600",  # combining mark ON a base character, and emoji
+        "v\u00a0po\u0159\u00e1dku",  # NBSP, as Czech typography and rich-text pastes insert it
+        "\U0001f469\u200d\U0001f4bb hotovo",  # U+200D joining an emoji sequence
+        "yes\u200bno",  # invisible, but the answer still carries legible text
+    ],
+)
 async def test_send_text_fallback_still_accepts_legible_answers(herdr, text):
-    """The guard must not swallow ordinary answers: accented and non-Latin
-    letters, a combining mark on a base character, digits and emoji all type
-    fine."""
+    """The guard must not swallow ordinary answers. Only characters a terminal
+    acts on (Cc/Zl/Zp) are refused; a non-ASCII space or a zero-width joiner
+    inside legible text is typed exactly as written, rather than being dropped
+    under a message that names neither the character nor the reason."""
 
     async def blocked_send_text(pane_id, text):
         raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
@@ -1485,8 +1498,8 @@ async def test_socket_herdr_answer_blocked_rejects_invisible_answer():
 
 
 async def test_socket_herdr_answer_blocked_rejects_embedded_untypeable_char():
-    """isspace() but ord > 127 (U+2028/U+2029/U+0085), or invisible mid-word:
-    none of these types as literal answer text at the backstop either."""
+    """Line separators and controls are keystrokes the terminal acts on, not
+    literal answer text — at the backstop as much as at the handler."""
     from herdeck.bridge import SocketHerdr
 
     h = SocketHerdr("/nonexistent")
@@ -1497,7 +1510,7 @@ async def test_socket_herdr_answer_blocked_rejects_embedded_untypeable_char():
         return {"result": {}}
 
     h._rpc = fake_rpc
-    for text in ("yes\u2028no", "yes\u2029no", "yes\u0085no", "yes\u200bno"):
+    for text in ("yes\u2028no", "yes\u2029no", "yes\u0085no", "yes\u007fno", "yes\tno"):
         with pytest.raises(ValueError, match="multiline_blocked_answer"):
             await h.answer_blocked("w1:p1", text)
 

@@ -277,27 +277,32 @@ class HerdrRpcError(RuntimeError):
 def _is_typeable(ch: str) -> bool:
     """True for a character answer_blocked may type as literal keystrokes.
 
-    `str.isprintable()` is False for every Unicode Other and Separator except
-    the ASCII space, which is exactly the set that must not be typed raw (no
-    bracketed-paste framing): the C0 controls and DEL, which submit or edit
-    mid-typing; U+0085 NEL and U+2028/U+2029 LINE/PARAGRAPH SEPARATOR, which a
-    terminal may treat as a line break; and the zero-width format characters
-    (U+200B, U+FEFF, U+2060, U+00AD, U+180E, the bidi overrides), which type as
-    nothing at all. Non-ASCII spaces (U+00A0 &c.) are refused with them — the
-    refusal is reported to the caller, so a paste carrying one is retypeable,
-    whereas anything invisible that slips through is typed blind before enter.
+    answer_blocked types raw keystrokes with no bracketed-paste framing, so
+    anything a terminal acts on instead of drawing has to be refused: category
+    Cc (the C0 controls incl. newline and tab, DEL, the C1 controls incl.
+    U+0085 NEL) and Zl/Zp (U+2028/U+2029 LINE and PARAGRAPH SEPARATOR). This
+    is broader than semantic_api's `ord(ch) < 32 or ord(ch) == 127` body check,
+    which is about JSON hygiene rather than about what a pane can type.
+
+    Everything else is typed exactly as the user wrote it — a non-ASCII space
+    (U+00A0 after a Czech single-letter preposition) or the U+200D joining an
+    emoji sequence is legible input, not a hazard. `_is_legible` is what stops
+    an answer made only of such characters from reaching the confirming enter.
     """
-    return ch.isprintable()
+    return unicodedata.category(ch) not in ("Cc", "Zl", "Zp")
 
 
 def _is_legible(ch: str) -> bool:
     """True for a character that puts something legible in the dialog's input.
 
-    Whitespace does not qualify; neither does anything `_is_typeable` refuses;
-    neither do combining marks (categories Mn/Mc/Me), which render only on a
-    preceding base character and so form no answer on their own.
+    `str.isprintable()` is False for every Unicode Other and Separator except
+    the ASCII space, which covers both the untypeable characters above and the
+    ones that type as nothing at all: U+200B, U+FEFF, U+2060, U+00AD, U+180E,
+    U+200D, the bidi overrides, and the non-ASCII spaces. Combining marks
+    (categories Mn/Mc/Me) are excluded too — they render only on a preceding
+    base character, so they form no answer on their own.
     """
-    return _is_typeable(ch) and not ch.isspace() and unicodedata.category(ch)[0] != "M"
+    return ch.isprintable() and not ch.isspace() and unicodedata.category(ch)[0] != "M"
 
 
 def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
