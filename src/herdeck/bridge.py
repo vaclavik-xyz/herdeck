@@ -267,6 +267,28 @@ def _has_control_char(text: str) -> bool:
     return any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
 
 
+def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
+    """Normalize and validate text bound for answer_blocked: the single rule
+    both the handler and the SocketHerdr backstop must agree on, so it lives
+    in exactly one place.
+
+    Trailing whitespace (e.g. a pasted reply's trailing newline) is trimmed
+    rather than rejected. What remains must be non-empty — answer_blocked
+    types text then presses enter, so an empty answer would silently confirm
+    whatever the blocked dialog's default choice is — and free of control
+    characters, which would submit mid-typing (no bracketed-paste framing).
+
+    Returns (normalized_text, None) when usable, or (None, reason) where
+    reason is the caller-facing skip-result message token.
+    """
+    normalized = text.rstrip()
+    if not normalized:
+        return None, "empty_blocked_answer"
+    if _has_control_char(normalized):
+        return None, "multiline_blocked_answer"
+    return normalized, None
+
+
 class HerdrClient(Protocol):
     async def snapshot(self) -> dict: ...
     async def get_pane(self, pane_id: str) -> dict: ...
@@ -485,17 +507,14 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
                 raise
             # herdr >= 0.8.2 rejects agent.prompt on an already-blocked pane;
             # fall back to the pane-level primitives, which carry no such
-            # guard. Those primitives type raw keystrokes with no
-            # bracketed-paste framing, so reject embedded control characters
-            # (a lone trailing newline is normal input, e.g. a pasted Telegram
-            # reply, and is trimmed rather than rejected).
-            normalized_text = msg["text"].rstrip("\r\n")
-            if _has_control_char(normalized_text):
+            # guard.
+            normalized_text, reject_reason = _normalize_blocked_answer(msg["text"])
+            if reject_reason is not None:
                 return encode(
                     {
                         "type": "result",
                         "req": msg["req"],
-                        "data": {"skipped": True, "message": "multiline_blocked_answer"},
+                        "data": {"skipped": True, "message": reject_reason},
                     }
                 )
             await herdr.answer_blocked(msg["pane_id"], normalized_text)
@@ -1218,14 +1237,16 @@ class SocketHerdr:
         embedded control character (a newline in particular) would submit
         mid-typing instead of arriving as literal answer text.
 
-        handle_client_message already rejects this case before calling in;
-        this check is a defence-in-depth backstop for any other caller. A
-        lone trailing newline (e.g. a pasted reply) is trimmed, not rejected,
-        so this agrees with the handler on what counts as multiline.
+        handle_client_message already rejects this case before calling in via
+        _normalize_blocked_answer; this check is a defence-in-depth backstop
+        for any other caller, sharing that same helper so the two can't drift
+        apart on what counts as multiline, empty, or a trimmable trailing
+        newline.
         """
-        text = text.rstrip("\r\n")
-        if _has_control_char(text):
-            raise ValueError("answer_blocked text must not contain control characters")
+        normalized_text, reject_reason = _normalize_blocked_answer(text)
+        if reject_reason is not None:
+            raise ValueError(f"answer_blocked: {reject_reason}")
+        text = normalized_text
         await self._rpc("pane.send_text", {"pane_id": pane_id, "text": text}, retry=False)
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
 

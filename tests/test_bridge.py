@@ -730,7 +730,17 @@ async def test_send_text_propagates_non_agent_blocked_error(herdr):
     assert herdr.sent == []
 
 
-async def test_send_text_multiline_fallback_is_skipped_not_typed(herdr):
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes, approve\nsomething else entirely",
+        # over-broad normalisation (e.g. stripping ALL newlines, or per-line
+        # strip()) would pass this case even though the embedded newline is
+        # still there once the trailing one is trimmed off:
+        "yes, approve\nsomething else entirely\r\n",
+    ],
+)
+async def test_send_text_multiline_fallback_is_skipped_not_typed(herdr, text):
     """answer_blocked has no bracketed-paste framing: an embedded newline
     would submit mid-typing (e.g. a two-line Telegram reply to a blocked
     agent), so the multiline fallback must be rejected, not typed."""
@@ -743,14 +753,7 @@ async def test_send_text_multiline_fallback_is_skipped_not_typed(herdr):
     out = await handle_client_message(
         herdr,
         "workbox",
-        json.dumps(
-            {
-                "type": "send_text",
-                "req": "s4",
-                "pane_id": "w1:p1",
-                "text": "yes, approve\nsomething else entirely",
-            }
-        ),
+        json.dumps({"type": "send_text", "req": "s4", "pane_id": "w1:p1", "text": text}),
     )
 
     assert json.loads(out)["data"] == {"skipped": True, "message": "multiline_blocked_answer"}
@@ -773,6 +776,27 @@ async def test_send_text_fallback_trims_trailing_newline_before_checking(herdr):
 
     assert json.loads(out)["data"] == {"sent": True}
     assert herdr.sent == [("w1:p1", "yes")]  # trailing CRLF trimmed before typing
+
+
+@pytest.mark.parametrize("text", ["\n", "\r\n\r\n", "   "])
+async def test_send_text_fallback_rejects_empty_answer(herdr, text):
+    """An empty normalised answer must never reach answer_blocked: typing
+    nothing and pressing enter would silently confirm the blocked dialog's
+    default choice — this is a safety guard, not a formatting nicety."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s6", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "empty_blocked_answer"}
+    assert herdr.sent == []  # nothing typed, no accidental "enter" against the default choice
 
 
 async def test_guarded_choice_rechecks_prompt_and_blocked_status_before_send(herdr):
@@ -1265,8 +1289,29 @@ async def test_socket_herdr_answer_blocked_rejects_multiline_text():
         return {"result": {}}
 
     h._rpc = fake_rpc
-    with pytest.raises(ValueError, match="control characters"):
+    with pytest.raises(ValueError, match="multiline_blocked_answer"):
         await h.answer_blocked("w1:p1", "line one\nline two")
+
+    assert calls == []  # rejected before any RPC
+
+
+async def test_socket_herdr_answer_blocked_rejects_empty_answer():
+    """An empty normalised answer must be refused, not typed: answer_blocked
+    types text then presses enter, so typing nothing would silently confirm
+    the blocked dialog's default choice."""
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    for whitespace_only in ("\n", "\r\n\r\n", "   "):
+        with pytest.raises(ValueError, match="empty_blocked_answer"):
+            await h.answer_blocked("w1:p1", whitespace_only)
 
     assert calls == []  # rejected before any RPC
 
