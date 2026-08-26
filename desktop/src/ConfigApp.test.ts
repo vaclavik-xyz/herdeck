@@ -298,7 +298,14 @@ describe("ConfigApp sidebar version", () => {
     // test above and drift again at the next release.
     // vitest runs from desktop/, and import.meta.url is not a file: URL under jsdom.
     const source = readFileSync(resolve(process.cwd(), "src/ConfigApp.svelte"), "utf8");
-    expect(source).toContain("__APP_VERSION__");
-    expect(source).not.toMatch(/sidebar-version[^]*?v\d+\.\d+\.\d+/);
+    // Scope this to the markup line itself. A pattern spanning the rest of the
+    // file would also fail on an unrelated "v1.2.3" in a help string, a comment
+    // or the <style> block, and blame the sidebar for it.
+    const line = source
+      .split("\n")
+      .find((l) => l.includes('class="sidebar-version"'));
+    expect(line).toBeDefined();
+    expect(line).toContain("__APP_VERSION__");
+    expect(line).not.toMatch(/v\d+\.\d+\.\d+/);
   });
 });
