@@ -7,6 +7,9 @@
 // - the top bar's deck-toggle control: the app window's own show/hide gesture
 //   for the deck, kept in step with the tray and the hotkey via
 //   "deck-visibility-changed" — see task-7-report.md.
+// - the sidebar version: it must come from package.json, not a literal.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import { setLang } from "./lib/i18n.svelte";
@@ -16,6 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
 
 import ConfigApp from "./ConfigApp.svelte";
+import pkg from "../package.json" with { type: "json" };
 
 function rawConfig() {
   return {
@@ -270,5 +274,31 @@ describe("ConfigApp top bar deck-toggle control", () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+describe("ConfigApp sidebar version", () => {
+  // This drifted once: the sidebar hard-coded v0.1.1 while the app shipped 0.2.0,
+  // and nothing caught it because scripts/set-version.py (and the parity test that
+  // backs it) only knows about the manifests, not a string inside a component.
+  // The fix was to stop having a literal at all — vite.config.ts injects
+  // __APP_VERSION__ from package.json — and this pins that it stays that way.
+  it("shows the version from package.json, not a hard-coded string", () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      const shown = target.querySelector(".sidebar-version span")?.textContent?.trim();
+      expect(shown).toBe(`v${pkg.version}`);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("renders the injected constant rather than a literal in the source", () => {
+    // A literal that merely happens to equal package.json today would pass the
+    // test above and drift again at the next release.
+    // vitest runs from desktop/, and import.meta.url is not a file: URL under jsdom.
+    const source = readFileSync(resolve(process.cwd(), "src/ConfigApp.svelte"), "utf8");
+    expect(source).toContain("__APP_VERSION__");
+    expect(source).not.toMatch(/sidebar-version[^]*?v\d+\.\d+\.\d+/);
   });
 });
