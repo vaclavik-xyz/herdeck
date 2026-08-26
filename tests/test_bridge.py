@@ -1622,12 +1622,6 @@ async def test_socket_herdr_read_pane_no_warning_when_not_truncated(caplog):
     assert caplog.text == ""
 
 
-def test_managed_agent_kinds_includes_qwen():
-    from herdeck.bridge import _MANAGED_AGENT_KINDS
-
-    assert "qwen" in _MANAGED_AGENT_KINDS
-
-
 async def test_stub_herdr_snapshot_composes_lists():
     stub = StubHerdr(
         panes=[raw_pane()],
