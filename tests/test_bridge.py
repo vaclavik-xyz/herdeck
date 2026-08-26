@@ -909,9 +909,12 @@ async def test_send_text_fallback_rejects_invisible_answer(herdr, text):
     ],
 )
 async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
-    """U+2028/U+2029/U+0085 are isspace() but ord > 127, so an ord-based
-    control-char check waves them through; a terminal may treat them as a line
-    break, i.e. as a submit halfway through the answer."""
+    """Two reasons live on this side of the split. U+2028/U+2029/U+0085 are
+    isspace() but ord > 127, so an ord-based control-char check waves them
+    through, and a terminal may treat them as a line break — a submit halfway
+    through the answer, as TAB and DEL are keystrokes rather than text. A lone
+    surrogate is refused for an unrelated reason: nothing types it, and
+    re-encoding it for the herdr RPC yields JSON no strict parser reads."""
 
     async def blocked_send_text(pane_id, text):
         raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
@@ -941,10 +944,11 @@ async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
     ],
 )
 async def test_send_text_fallback_still_accepts_legible_answers(herdr, text):
-    """The guard must not swallow ordinary answers. Only characters a terminal
-    acts on (Cc/Zl/Zp) are refused; a non-ASCII space or a zero-width joiner
-    inside legible text is typed exactly as written, rather than being dropped
-    under a message that names neither the character nor the reason."""
+    """The guard must not swallow ordinary answers. Only what a terminal acts
+    on (Cc/Zl/Zp) and what cannot be encoded at all (Cs) are refused; a
+    non-ASCII space or a zero-width joiner inside legible text is typed exactly
+    as written, rather than being dropped under a message that names neither
+    the character nor the reason."""
 
     async def blocked_send_text(pane_id, text):
         raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
