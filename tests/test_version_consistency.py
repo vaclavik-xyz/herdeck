@@ -158,6 +158,22 @@ def test_check_truncates_an_enormous_matching_line_around_the_match(sandbox):
     assert VERSION in reported.split("hard-codes", 1)[1].split(":", 1)[1]
 
 
+def test_check_prints_a_short_line_in_full(sandbox):
+    # Windowing every match would clip a line that comfortably fits, making the
+    # ordinary report worse in the course of fixing the pathological one.
+    # ~110 characters with the match near the end: it fits the width budget, but
+    # a window of 40 characters before the match would clip the start away.
+    line = f"const banner = '{'a' * 80} herdeck v{VERSION}';"
+    write(sandbox, "desktop/src/Widget.ts", line + "\n")
+
+    result = run_script("--check", cwd=sandbox)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    reported = next(li for li in result.stdout.splitlines() if "Widget.ts:1" in li)
+    assert reported.endswith(line)
+    assert "..." not in reported
+
+
 def test_rerunning_the_current_version_repairs_manifests_despite_a_stray_literal(
     sandbox,
 ):
@@ -174,7 +190,7 @@ def test_rerunning_the_current_version_repairs_manifests_despite_a_stray_literal
 
     assert f'version = "{VERSION}"' in (sandbox / "pyproject.toml").read_text()
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "refusing to bump" not in result.stdout
+    assert "refusing to bump" not in result.stdout + result.stderr
     assert f"hard-codes {VERSION}" in result.stdout
 
 

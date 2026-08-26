@@ -193,6 +193,9 @@ def _excerpt(line: str, at: int, before: int = 40, after: int = 80) -> str:
     exists for, reliably print everything except the literal being complained
     about.
     """
+    text = line.strip()
+    if len(text) <= before + after:
+        return text  # already fits; windowing would only lose the beginning
     start = max(0, at - before)
     end = min(len(line), at + after)
     text = line[start:end].strip()
