@@ -943,6 +943,7 @@ async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
         "v\u00a0po\u0159\u00e1dku",  # NBSP, as Czech typography and rich-text pastes insert it
         "\U0001f469\u200d\U0001f4bb hotovo",  # U+200D joining an emoji sequence
         "yes\u200bno",  # invisible, but the answer still carries legible text
+        "1\ufe0f\u20e3",  # keycap emoji: its marks are kept, so it is typed whole
     ],
 )
 async def test_send_text_fallback_still_accepts_legible_answers(herdr, text):
@@ -975,7 +976,13 @@ async def test_send_text_fallback_still_accepts_legible_answers(herdr, text):
         ("1\u200b\n", "1"),  # rstrip() takes the newline and leaves the ZWSP behind
         ("\u200byes", "yes"),  # the legible run starts only after the invisible
         ("  yes  ", "yes"),
-        ("1\ufe0f\u20e3", "1"),  # keycap emoji off a phone keyboard: VS16 + U+20E3 are marks
+        ("\u0301yes", "yes"),  # a leading combining mark has no base character: noise
+        # …but a trailing one belongs to the character in front of it. Cutting
+        # at the last *legible* character would type "hotov", "\u0e43\u0e0a" and
+        # "\u0939" — an answer the dialog cannot match, then enter.
+        ("\ufeffhotov\u0301", "hotov\u0301"),
+        ("\ufeff\u0e43\u0e0a\u0e48", "\u0e43\u0e0a\u0e48"),  # Thai "ano", trailing Mn
+        ("\u200b\u0939\u093e\u0901", "\u0939\u093e\u0901"),  # Devanagari "ano", Mc + Mn
     ],
 )
 async def test_send_text_fallback_trims_edge_invisibles(herdr, text, typed):
@@ -1553,13 +1560,18 @@ async def test_socket_herdr_answer_blocked_trims_edge_invisibles():
         return {"result": {}}
 
     h._rpc = fake_rpc
-    for raw in ("\ufeff1", "1\u200b", "1\u200b\n", "  1  ", "1\ufe0f\u20e3"):
+    for raw in ("\ufeff1", "1\u200b", "1\u200b\n", "  1  ", "\u03011"):
         await h.answer_blocked("w1:p1", raw)
+    # a trailing mark is kept: it belongs to the base character before it
+    await h.answer_blocked("w1:p1", "\ufeff1\u0301")
 
     assert calls == [
         ("pane.send_text", {"pane_id": "w1:p1", "text": "1"}, False),
         ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
-    ] * 5
+    ] * 5 + [
+        ("pane.send_text", {"pane_id": "w1:p1", "text": "1\u0301"}, False),
+        ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
+    ]
 
 
 async def test_socket_herdr_answer_blocked_rejects_embedded_untypeable_char():

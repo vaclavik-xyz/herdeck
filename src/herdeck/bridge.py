@@ -321,11 +321,19 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
     paste is as empty as a bare newline — and every character in it must be
     one the pane primitives can type literally.
 
-    Illegible characters glued to the *edges* are then trimmed off, so a
+    Characters that type as nothing are then trimmed off the *edges*, so a
     BOM-prefixed paste answers `"1"` rather than typing `"﻿1"`, which a
     numbered dialog does not match — leaving the enter to confirm the default.
     Interior ones are left exactly as written: they are what makes
     `"v\xa0pořádku"` and a ZWJ emoji sequence the user's own answer.
+
+    The two edges use different predicates on purpose. A combining mark at the
+    front has no base character and is noise, so the leading cut looks for the
+    first legible character; a mark at the *end* belongs to the character in
+    front of it, and dropping it would rewrite the answer — Thai `"ใช่"` typed
+    as `"ใช"`, Devanagari `"हाँ"` as `"ह"` — which is precisely the
+    unmatched-answer-then-enter this trim exists to prevent. So the trailing cut
+    keeps anything printable and non-space, marks included.
 
     Residual, and deliberately not closed here, because no character property
     separates these from a legitimate answer:
@@ -334,6 +342,9 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
         yet sits between legible characters, so the edge trim cannot reach it;
       * a printable-but-blank code point (U+2800 BRAILLE PATTERN BLANK, the
         Hangul fillers) counts as legible;
+      * a keycap emoji off a phone keyboard (`"1️⃣"` = `"1"` + VS16 + U+20E3)
+        keeps its marks for the reason above, so it is typed whole rather than
+        answering as the `"1"` it looks like;
       * an answer that is legible and typed exactly as written but is not a
         valid option for *that* dialog — the enter still lands on the default.
         Closing that needs a read-back of the dialog, not a predicate.
@@ -346,8 +357,9 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
         return None, "empty_blocked_answer"
     if not all(_is_typeable(ch) for ch in normalized):
         return None, "untypeable_blocked_answer"
-    legible = [i for i, ch in enumerate(normalized) if _is_legible(ch)]
-    return normalized[legible[0] : legible[-1] + 1], None
+    start = next(i for i, ch in enumerate(normalized) if _is_legible(ch))
+    end = max(i for i, ch in enumerate(normalized) if ch.isprintable() and not ch.isspace())
+    return normalized[start : end + 1], None
 
 
 class HerdrClient(Protocol):
