@@ -404,6 +404,30 @@ def test_tile_status_text_falls_back_to_the_status_word():
     assert tile_status_text(_labelled(Status.IDLE, {}), lang="cs") == "NEČINNÝ"
 
 
+def test_tile_status_text_scrubs_variation_selector_off_vs16_emoji():
+    from herdeck.layout import tile_status_text
+
+    # A label spelled with the VS16 presentation selector ("⚠️" is U+26A0
+    # WARNING SIGN + U+FE0F): the emoji's base is dropped by the font-glyph
+    # filter, but U+FE0F alone is category Mn, which the filter otherwise
+    # keeps for scripts — so without special-casing it, the selector used to
+    # survive and draw as a leading tofu box even with the base gone.
+    agent = _labelled(Status.WAITING, {}, waiting_on="⚠️ ci")
+    label = tile_status_text(agent)
+    assert label == "CI"
+    assert "️" not in label
+
+
+def test_tile_status_text_keeps_combining_marks_needed_to_spell_a_word():
+    from herdeck.layout import tile_status_text
+
+    # Thai "ไม่ว่าง" (busy) ends in Mn combining marks that carry the tone —
+    # dropping them the way Me/variation selectors are dropped would truncate
+    # the word to a form no Thai reader would recognize.
+    agent = _labelled(Status.WAITING, {}, waiting_on="ไม่ว่าง")
+    assert tile_status_text(agent) == "ไม่ว่าง".upper()
+
+
 def test_tile_status_text_waiting_on_beats_state_label():
     from herdeck.layout import tile_status_text
 

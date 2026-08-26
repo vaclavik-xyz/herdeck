@@ -370,6 +370,12 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
     Returns (normalized_text, None) when usable, or (None, reason) where
     reason is the caller-facing skip-result message token.
     """
+    if not isinstance(text, str):
+        # A non-conforming client can put a JSON null or number in `text`;
+        # nothing here is typeable, so the answer is refused exactly like a
+        # string full of untypeable characters, rather than raising and
+        # leaving handle_client_message's caller to hang on a reqless error.
+        return None, "untypeable_blocked_answer"
     normalized = text.rstrip()
     if not any(_is_legible(ch) for ch in normalized):
         return None, "empty_blocked_answer"

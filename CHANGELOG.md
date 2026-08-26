@@ -107,7 +107,7 @@ Initial public release.
   runtime, Start at login support, and signed in-app updates.
 - Linux desktop packages for x86_64 and arm64 (AppImage, deb, and rpm).
 - Control panel for AI coding agents running under
-  [herdr](https://github.com/ogulcancelik/herdr).
+  [herdr](https://github.com/herdrdev/herdr).
 - Front-ends: Ulanzi D200 hardware deck, Elgato Stream Deck plugin, browser
   simulator, and a native Tauri + Svelte desktop app.
 - `herdeck-bridge` — token-authenticated WebSocket bridge over herdr's socket.

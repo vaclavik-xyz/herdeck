@@ -357,12 +357,25 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
 
 
 # Unicode categories the tile font cannot draw: pictographs and modifier
-# symbols, private use (powerline/Nerd Font icons), surrogates, unassigned, and
-# controls. This is a proxy for glyph coverage, not a guarantee of it — the
-# categories left in still admit plenty the font may lack (arrows, CJK), which
-# costs a tofu box, not a frame. Sm is left in for the ASCII math punctuation a
-# marker like "review +1" needs, not because the whole category is drawable.
-_UNDRAWABLE = frozenset({"So", "Sk", "Co", "Cs", "Cn", "Cc", "Cf"})
+# symbols, private use (powerline/Nerd Font icons), surrogates, unassigned,
+# controls, and enclosing marks (Me — a keycap-style combiner with no base
+# glyph of its own). This is a proxy for glyph coverage, not a guarantee of
+# it — the categories left in still admit plenty the font may lack (arrows,
+# CJK), which costs a tofu box, not a frame. Sm is left in for the ASCII math
+# punctuation a marker like "review +1" needs, not because the whole category
+# is drawable. Mn/Mc are left in too — a label in Thai, Devanagari or Hebrew
+# with niqqud needs them to spell a word — but the variation selectors are
+# category Mn and are dropped by codepoint alongside Me below: they decorate
+# a base character that already stands on its own, so without this a label
+# spelled with VS16 (e.g. "⚠️ ci") drops the emoji's base but keeps its
+# selector, which the font draws as a leading tofu box. Mirrors the same
+# distinction `_is_attached_mark` in bridge.py draws for answer text, though
+# the two rules answer different questions and are deliberately kept separate.
+_UNDRAWABLE = frozenset({"So", "Sk", "Co", "Cs", "Cn", "Cc", "Cf", "Me"})
+
+
+def _is_variation_selector(ch: str) -> bool:
+    return 0xFE00 <= ord(ch) <= 0xFE0F or 0xE0100 <= ord(ch) <= 0xE01EF
 
 
 def _short_status_label(text: str) -> str:
@@ -382,7 +395,12 @@ def _short_status_label(text: str) -> str:
         for ch in (text or "")
         # whitespace survives the filter so that words separated by a newline or
         # a tab stay separated once split() collapses the run to one space.
-        if ch.isspace() or (ord(ch) <= 0xFFFF and unicodedata.category(ch) not in _UNDRAWABLE)
+        if ch.isspace()
+        or (
+            ord(ch) <= 0xFFFF
+            and not _is_variation_selector(ch)
+            and unicodedata.category(ch) not in _UNDRAWABLE
+        )
     )
     return " ".join(kept.split()).upper()[:12]
 

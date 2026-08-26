@@ -62,6 +62,7 @@ def agent(
     terminal="t1",
     *,
     status=Status.BLOCKED,
+    state_labels=None,
 ):
     return AgentState(
         AgentKey(server, pane),
@@ -74,6 +75,7 @@ def agent(
         workspace="workspace",
         tab="tab",
         waiting_on="needs user",
+        state_labels=state_labels or {},
         terminal_id=terminal,
         title="SECRET PROMPT",
         work=WorkContext("github", "#28", "run-1", "https://example.test/28"),
@@ -128,6 +130,19 @@ def test_inventory_is_versioned_bounded_and_excludes_prompt_state():
     serialized = str(response.body)
     assert "SECRET PROMPT" not in serialized
     assert "prompt" not in serialized.lower()
+
+
+def test_inventory_exposes_state_labels_like_its_metadata_sibling():
+    # herdeck added state_labels to the wire and to AgentPane; the
+    # programmatic inventory record must expose it the same way it already
+    # exposes waiting_on, progress and metadata, or the semantic API drifts
+    # from herdeck's own wire.
+    agents = [agent(state_labels={"blocked": "needs review"})]
+    api, _ = make_api(agents)
+
+    row = api.inventory().body["agents"][0]
+
+    assert row["state_labels"] == {"blocked": "needs review"}
 
 
 def test_inventory_tracks_removal_and_terminal_replacement_without_stale_rows():

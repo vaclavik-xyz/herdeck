@@ -766,6 +766,27 @@ async def test_send_text_falls_back_to_answer_blocked_on_agent_blocked(herdr):
     assert herdr.sent == [("w1:p1", "continue")]
 
 
+async def test_send_text_fallback_skips_non_string_text_instead_of_hanging(herdr):
+    # A non-conforming client can put a JSON null (or number) in "text". That
+    # used to raise AttributeError out of _normalize_blocked_answer's
+    # text.rstrip(), which the connection's blanket handler turned into a
+    # bare {"type": "error"} with no "req" — leaving the caller's pending
+    # future to time out instead of getting this clean skip result.
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr, "workbox", '{"type":"send_text","req":"s2b","pane_id":"w1:p1","text":null}'
+    )
+
+    msg = json.loads(out)
+    assert msg["req"] == "s2b"
+    assert msg["data"] == {"skipped": True, "message": "untypeable_blocked_answer"}
+    assert herdr.sent == []
+
+
 async def test_send_text_propagates_non_agent_blocked_error(herdr):
     async def stalled_send_text(pane_id, text):
         raise HerdrRpcError("agent.prompt", "agent_prompt_stalled", "no state change")
