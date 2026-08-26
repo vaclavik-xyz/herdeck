@@ -358,7 +358,10 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
 
 # Unicode categories the tile font cannot draw: pictographs and modifier
 # symbols, private use (powerline/Nerd Font icons), surrogates, unassigned, and
-# controls. Math symbols (Sm) stay — a marker like "review +1" must survive.
+# controls. This is a proxy for glyph coverage, not a guarantee of it — the
+# categories left in still admit plenty the font may lack (arrows, CJK), which
+# costs a tofu box, not a frame. Sm is left in for the ASCII math punctuation a
+# marker like "review +1" needs, not because the whole category is drawable.
 _UNDRAWABLE = frozenset({"So", "Sk", "Co", "Cs", "Cn", "Cc", "Cf"})
 
 
