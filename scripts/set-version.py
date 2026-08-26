@@ -104,10 +104,14 @@ def set_version(version: str) -> None:
     # literal being stranded where --check would no longer look for it, and the
     # incoming one stops a bump that would rewrite twelve manifests and only then
     # fail the --check it runs itself.
+    # Only on a real bump. Re-running with the current version is the repair
+    # after a bad merge, where writing the manifests is the whole point — there
+    # the incoming version IS the current one, and check() reports any stray
+    # literal afterwards without blocking the repair.
     blockers = []
     if previous != version:
         blockers.append((f"the outgoing {previous}", stray_version_literals(previous)))
-    blockers.append((f"the incoming {version}", stray_version_literals(version)))
+        blockers.append((f"the incoming {version}", stray_version_literals(version)))
     reported = [(label, hits) for label, hits in blockers if hits]
     if reported:
         for label, hits in reported:
@@ -171,14 +175,28 @@ def _source_files():
         for path in sorted(root.rglob("*")):
             if path.suffix not in SOURCE_SUFFIXES or not path.is_file():
                 continue
-            relative = path.relative_to(ROOT).as_posix()
-            if SKIP_DIRECTORIES.intersection(path.relative_to(ROOT).parts):
+            relative_path = path.relative_to(ROOT)
+            if SKIP_DIRECTORIES.intersection(relative_path.parts):
                 continue
-            if any(relative.startswith(f"{d}/") for d in SKIP_RELATIVE_DIRECTORIES):
+            posix = relative_path.as_posix()
+            if any(posix.startswith(f"{d}/") for d in SKIP_RELATIVE_DIRECTORIES):
                 continue
             if any(marker in path.name for marker in TEST_MARKERS):
                 continue
             yield path
+
+
+def _excerpt(line: str, at: int, before: int = 40, after: int = 80) -> str:
+    """A short window around `at`, so the reported line is still evidence.
+
+    Cutting the first N characters instead would, on the very long line this
+    exists for, reliably print everything except the literal being complained
+    about.
+    """
+    start = max(0, at - before)
+    end = min(len(line), at + after)
+    text = line[start:end].strip()
+    return ("..." if start else "") + text + ("..." if end < len(line) else "")
 
 
 def stray_version_literals(expected: str) -> list[tuple[str, int, str]]:
@@ -202,12 +220,9 @@ def stray_version_literals(expected: str) -> list[tuple[str, int, str]]:
         if relative in VERSION_LITERAL_ALLOWLIST:
             continue
         for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
-            if pattern.search(line):
-                # A vendored bundle can be one 300 KB line; never print it whole.
-                text = line.strip()
-                if len(text) > 120:
-                    text = text[:117] + "..."
-                found.append((relative, number, text))
+            match = pattern.search(line)
+            if match:
+                found.append((relative, number, _excerpt(line, match.start())))
     return found
 
 

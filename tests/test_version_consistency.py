@@ -145,13 +145,37 @@ def test_check_ignores_vendored_bundles(sandbox):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_check_truncates_an_enormous_matching_line(sandbox):
-    write(sandbox, "desktop/src/Widget.ts", f"// {'x' * 5000} v{VERSION}\n")
+def test_check_truncates_an_enormous_matching_line_around_the_match(sandbox):
+    # Truncating from the start of the line would, on exactly the line this
+    # guards against, print everything except the literal being reported.
+    write(sandbox, "desktop/src/Widget.ts", f"// {'x' * 5000} v{VERSION} {'y' * 5000}\n")
 
     result = run_script("--check", cwd=sandbox)
 
     assert result.returncode == 1, result.stdout + result.stderr
-    assert max(len(line) for line in result.stdout.splitlines()) < 200
+    reported = next(li for li in result.stdout.splitlines() if "Widget.ts:1" in li)
+    assert len(reported) < 200
+    assert VERSION in reported.split("hard-codes", 1)[1].split(":", 1)[1]
+
+
+def test_rerunning_the_current_version_repairs_manifests_despite_a_stray_literal(
+    sandbox,
+):
+    # Re-running with the current version is the repair after a bad merge, so a
+    # stray literal must not block it — check() still reports the literal after.
+    write(sandbox, "desktop/src/Widget.svelte", f"<span>v{VERSION}</span>\n")
+    (sandbox / "pyproject.toml").write_text(
+        (sandbox / "pyproject.toml").read_text().replace(
+            f'version = "{VERSION}"', 'version = "0.0.1"'
+        )
+    )
+
+    result = run_script(VERSION, cwd=sandbox)
+
+    assert f'version = "{VERSION}"' in (sandbox / "pyproject.toml").read_text()
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "refusing to bump" not in result.stdout
+    assert f"hard-codes {VERSION}" in result.stdout
 
 
 def test_bump_refuses_to_strand_a_literal_of_the_outgoing_version(sandbox):
