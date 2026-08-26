@@ -47,15 +47,29 @@ deleted code with nothing to show for it. When a release removes files, clear
 the synced subtree first:
 
 ```bash
-ssh HOST 'rm -rf ~/path/to/herdeck/src/herdeck'
+ssh HOST 'mv ~/path/to/herdeck/src/herdeck ~/herdeck-src.old'
 git archive --format=tar main | ssh HOST 'tar -x -C ~/path/to/herdeck'
 ```
+
+Move it aside rather than deleting it, and stop the service for that window.
+The runtime imports lazily well after startup, so an import landing in the gap
+raises `ImportError` on a live process — and if the stream or the connection
+dies mid-transfer, the moved-aside copy is the rollback.
 
 **Do not delete the whole checkout.** The venv usually lives inside it and is
 installed editable, so the launchd unit's `ProgramArguments` points straight at
 `.venv/bin/python` — removing the tree breaks the service on what was supposed
-to be a routine sync. It would take `node_modules` with it too. `rsync -a
---delete --exclude .venv --exclude node_modules` works if you prefer one step.
+to be a routine sync. It would take `node_modules` with it too.
+
+`rsync` in one step is possible but is not the same thing: it ships your working
+tree, uncommitted edits included, rather than the committed state of `main`, and
+`--delete` will remove build artifacts the rest of this document reads. If you
+use it, exclude all of them:
+
+```bash
+rsync -a --delete --exclude .git --exclude .venv --exclude node_modules \
+  --exclude target --exclude desktop/build ./ HOST:~/path/to/herdeck/
+```
 
 **`git archive` does not carry `node_modules`.** If the release added a frontend
 dependency, the synced `package.json` will reference a package that is not
@@ -128,8 +142,8 @@ curl "$URL/health?token=$TOKEN"   # {"ok": true, "connected": true, ...}
 curl "$URL/state?token=$TOKEN"    # slots, panel, tile versions, agent summary
 ```
 
-A `version` that rises between two `/state` calls means the deck is painting,
-not merely connected — and on a default deck it should rise on its own. `time`
+A `version` that rises between two `/state` calls means the runtime is
+*rendering* — and on a default deck it should rise on its own. `time`
 is a default tile field, elapsed text steps every 5 seconds under a minute and
 every minute under an hour, and the periodic full refresh re-renders exactly so
 that advance reaches the deck. **So a version that has not moved for several
@@ -139,15 +153,35 @@ It genuinely holds static only with no agent tiles, with `time` removed from
 `[view].tile_fields`, or once every agent has sat in one status past the hour
 bucket.
 
+**A rising version does not mean the physical deck received anything.** The
+version is bumped when the frame lands in the HTTP buffer, before it is handed
+to the sinks, and a sink that raises is isolated and only logged. So a dark
+device with a rising version is a delivery problem, not a render stall — this
+repo has hit exactly that, with `/panel` and `/tile/N` correct while the device
+showed black. Look for `render sink ... failed to deliver a frame` in the log.
+
 Fetching the images tells you a frame exists, not that one is being made — the
 endpoints serve the bytes stored by the last successful refresh and never
 re-render on the request path, so a runtime whose ticker died after its first
 frame serves the same PNG forever:
 
 ```bash
-curl -s "$URL/panel?token=$TOKEN" | file -      # a frame exists
-curl -s "$URL/tile/0?token=$TOKEN" | shasum     # compare across a status change
+curl -sf "$URL/panel?token=$TOKEN" -o /tmp/panel.png && file /tmp/panel.png
+curl -sf "$URL/tile/0?token=$TOKEN" -o /tmp/t.png && shasum /tmp/t.png
 ```
+
+Fetch to a file and gate the check on `&&`. Piping into `shasum` hides the
+failure it is most likely to hit: on a 404 (no agents, or slot 0 empty) or a
+rejected token the body is empty, and an empty body always hashes to
+`da39a3ee5e6b4b0d3255bfef95601890afd80709`. Two such runs match, which reads as
+"not repainting" — a false stall on top of the check meant to find real ones.
+`--fail` alone does not save you here, because a pipeline reports `shasum`'s
+exit status, not `curl`'s.
+
+Two hashes about fifteen seconds apart are enough on a default deck: tile bytes
+carry the elapsed text, and the periodic full refresh comes round roughly every
+ten seconds. The same caveats as above apply — no agents, no `time` field, or
+everything past the hour bucket, and the bytes legitimately stop changing.
 
 On the bridge host, one established connection per client should be visible:
 
