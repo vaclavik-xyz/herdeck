@@ -356,29 +356,32 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
     return raw_lines, lines
 
 
+# Unicode categories the tile font cannot draw: pictographs and modifier
+# symbols, private use (powerline/Nerd Font icons), surrogates, unassigned, and
+# controls. Math symbols (Sm) stay — a marker like "review +1" must survive.
+_UNDRAWABLE = frozenset({"So", "Sk", "Co", "Cs", "Cn", "Cc", "Cf"})
+
+
 def _short_status_label(text: str) -> str:
     """Normalise a foreign label into the tile's status slot: uppercase like
     the built-in status words, clipped to what the slot fits.
 
     The label is not herdeck's text — a `waiting_on` marker or one of herdr's
     state labels, either of which any integration may write — so it is scrubbed
-    of what the tile cannot draw: pictographs (the hourglass herdwatch prefixes,
-    and anything else outside the tile font's glyphs, would render as tofu), and
-    embedded newlines, which raise out of Pillow's single-line text measurement
-    and would take the whole frame down with them.
+    of what the tile cannot draw: everything the font has no glyph for (the
+    hourglass herdwatch prefixes, emoji, the private-use area where powerline
+    and Nerd Font icons live, controls, anything past the BMP) would render as
+    a tofu box, and an embedded newline raises out of Pillow's single-line text
+    measurement and would take the whole frame down with it.
     """
     kept = "".join(
         ch
         for ch in (text or "")
-        if ord(ch) <= 0xFFFF and unicodedata.category(ch) not in ("So", "Cf")
+        # whitespace survives the filter so that words separated by a newline or
+        # a tab stay separated once split() collapses the run to one space.
+        if ch.isspace() or (ord(ch) <= 0xFFFF and unicodedata.category(ch) not in _UNDRAWABLE)
     )
     return " ".join(kept.split()).upper()[:12]
-
-
-def waiting_status_text(waiting_on: str, lang: str = "en") -> str:
-    """Tile status word for a WAITING agent: the holder's label ('⏳ ci' ->
-    'CI') beats a generic word."""
-    return _short_status_label(waiting_on) or tr(lang, "status.waiting")
 
 
 def tile_status_text(agent: AgentState, lang: str = "en", down: bool = False) -> str:

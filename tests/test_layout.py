@@ -361,14 +361,17 @@ def test_waiting_status_color_is_violet():
     assert status_color(Status.WAITING) == "violet"
 
 
-def test_waiting_status_text_uses_holder_label():
-    from herdeck.layout import waiting_status_text
+def test_waiting_tile_uses_holder_label():
+    from herdeck.layout import tile_status_text
 
-    assert waiting_status_text("⏳ ci") == "CI"
-    assert waiting_status_text("⏳ review +1") == "REVIEW +1"
-    assert waiting_status_text("") == "WAITING"  # fallback word
-    assert waiting_status_text("", lang="cs") == "V POZADÍ"
-    assert len(waiting_status_text("⏳ a-very-long-marker-name")) <= 12
+    def held(waiting_on):
+        return _labelled(Status.WAITING, {}, waiting_on=waiting_on)
+
+    assert tile_status_text(held("⏳ ci")) == "CI"
+    assert tile_status_text(held("⏳ review +1")) == "REVIEW +1"
+    assert tile_status_text(held("")) == "WAITING"  # fallback word
+    assert tile_status_text(held(""), lang="cs") == "V POZADÍ"
+    assert len(tile_status_text(held("⏳ a-very-long-marker-name"))) <= 12
 
 
 def _labelled(status, state_labels, waiting_on=""):
@@ -441,7 +444,11 @@ def test_tile_status_text_drops_pictographs_the_tile_font_cannot_draw():
 
     # state_labels is third-party text; the tile font has no emoji glyphs.
     assert tile_status_text(_labelled(Status.WORKING, {"working": "🔍 review"})) == "REVIEW"
-    # Plain punctuation is not a pictograph and must survive.
+    # A powerline/Nerd Font glyph from the private use area is tofu too.
+    assert tile_status_text(_labelled(Status.WORKING, {"working": "\ue0b0 ci"})) == "CI"
+    # So is a bare control character that str.split() would not remove.
+    assert tile_status_text(_labelled(Status.WORKING, {"working": "held\x00x"})) == "HELDX"
+    # Plain punctuation and math symbols are drawable and must survive.
     assert tile_status_text(_labelled(Status.WORKING, {"working": "review +1"})) == "REVIEW +1"
 
 
