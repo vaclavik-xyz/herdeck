@@ -308,6 +308,22 @@ def _is_legible(ch: str) -> bool:
     return ch.isprintable() and not ch.isspace() and unicodedata.category(ch)[0] != "M"
 
 
+def _is_attached_mark(ch: str) -> bool:
+    """True for a mark that is part of the character it follows.
+
+    Mn and Mc are what scripts need to spell a word — Thai `"ใช่"` ends in Mn,
+    Devanagari `"हाँ"` in Mc then Mn — so the trailing trim must keep them or
+    it rewrites the answer. Me (enclosing marks) and the variation selectors
+    are decoration on top of a character that already stands on its own, so a
+    keycap `"1️⃣"` off a phone keyboard answers as the `"1"` the dialog offers.
+    Only reached for a character that follows a legible one; a mark with no
+    base is noise and is trimmed at either edge.
+    """
+    if 0xFE00 <= ord(ch) <= 0xFE0F or 0xE0100 <= ord(ch) <= 0xE01EF:
+        return False
+    return unicodedata.category(ch) in ("Mn", "Mc")
+
+
 def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
     """Normalize and validate text bound for answer_blocked: the single rule
     both the handler and the SocketHerdr backstop must agree on, so it lives
@@ -327,13 +343,13 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
     Interior ones are left exactly as written: they are what makes
     `"v\xa0pořádku"` and a ZWJ emoji sequence the user's own answer.
 
-    The two edges use different predicates on purpose. A combining mark at the
-    front has no base character and is noise, so the leading cut looks for the
-    first legible character; a mark at the *end* belongs to the character in
-    front of it, and dropping it would rewrite the answer — Thai `"ใช่"` typed
-    as `"ใช"`, Devanagari `"हाँ"` as `"ह"` — which is precisely the
-    unmatched-answer-then-enter this trim exists to prevent. So the trailing cut
-    keeps anything printable and non-space, marks included.
+    Both cuts land on a legible character; the trailing one then extends over
+    the marks attached to it. A mark only belongs to the answer when it has a
+    base character in front of it: dropping an attached one rewrites the answer
+    — Thai `"ใช่"` typed as `"ใช"`, Devanagari `"हाँ"` as `"ह"`, which is
+    precisely the unmatched-answer-then-enter this trim exists to prevent —
+    while keeping an orphaned one (`"yes ́"`) types a stray accent the
+    dialog does not match either.
 
     Residual, and deliberately not closed here, because no character property
     separates these from a legitimate answer:
@@ -342,9 +358,6 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
         yet sits between legible characters, so the edge trim cannot reach it;
       * a printable-but-blank code point (U+2800 BRAILLE PATTERN BLANK, the
         Hangul fillers) counts as legible;
-      * a keycap emoji off a phone keyboard (`"1️⃣"` = `"1"` + VS16 + U+20E3)
-        keeps its marks for the reason above, so it is typed whole rather than
-        answering as the `"1"` it looks like;
       * an answer that is legible and typed exactly as written but is not a
         valid option for *that* dialog — the enter still lands on the default.
         Closing that needs a read-back of the dialog, not a predicate.
@@ -358,7 +371,9 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
     if not all(_is_typeable(ch) for ch in normalized):
         return None, "untypeable_blocked_answer"
     start = next(i for i, ch in enumerate(normalized) if _is_legible(ch))
-    end = max(i for i, ch in enumerate(normalized) if ch.isprintable() and not ch.isspace())
+    end = max(i for i, ch in enumerate(normalized) if _is_legible(ch))
+    while end + 1 < len(normalized) and _is_attached_mark(normalized[end + 1]):
+        end += 1
     return normalized[start : end + 1], None
 
 

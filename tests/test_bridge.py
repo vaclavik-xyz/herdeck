@@ -943,7 +943,6 @@ async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
         "v\u00a0po\u0159\u00e1dku",  # NBSP, as Czech typography and rich-text pastes insert it
         "\U0001f469\u200d\U0001f4bb hotovo",  # U+200D joining an emoji sequence
         "yes\u200bno",  # invisible, but the answer still carries legible text
-        "1\ufe0f\u20e3",  # keycap emoji: its marks are kept, so it is typed whole
     ],
 )
 async def test_send_text_fallback_still_accepts_legible_answers(herdr, text):
@@ -983,6 +982,14 @@ async def test_send_text_fallback_still_accepts_legible_answers(herdr, text):
         ("\ufeffhotov\u0301", "hotov\u0301"),
         ("\ufeff\u0e43\u0e0a\u0e48", "\u0e43\u0e0a\u0e48"),  # Thai "ano", trailing Mn
         ("\u200b\u0939\u093e\u0901", "\u0939\u093e\u0901"),  # Devanagari "ano", Mc + Mn
+        # An orphaned trailing mark is noise at this edge too: nothing precedes
+        # it to carry it, so keeping it (and the separator that orphaned it)
+        # types an answer the dialog cannot match.
+        ("yes \u0301", "yes"),
+        ("yes\u200b\u0301", "yes"),
+        # Presentation-only marks are dropped, so a keycap answers as its digit
+        ("1\ufe0f\u20e3", "1"),
+        ("1\u20e3", "1"),
     ],
 )
 async def test_send_text_fallback_trims_edge_invisibles(herdr, text, typed):
