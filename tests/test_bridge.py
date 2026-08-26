@@ -903,6 +903,9 @@ async def test_send_text_fallback_rejects_invisible_answer(herdr, text):
         "yes\u0085no",  # NEL (a C1 control: isspace(), but ord > 127)
         "yes\u007fno",  # DEL
         "yes\tno",  # TAB: a keystroke the dialog acts on, not literal text
+        # json.loads accepts a lone surrogate escape off the client socket; it
+        # cannot be typed and cannot be re-encoded for the herdr RPC either.
+        "yes\ud800",
     ],
 )
 async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
@@ -1510,7 +1513,7 @@ async def test_socket_herdr_answer_blocked_rejects_embedded_untypeable_char():
         return {"result": {}}
 
     h._rpc = fake_rpc
-    for text in ("yes\u2028no", "yes\u2029no", "yes\u0085no", "yes\u007fno", "yes\tno"):
+    for text in ("yes\u2028no", "yes\u2029no", "yes\u0085no", "yes\u007fno", "yes\tno", "yes\ud800"):
         with pytest.raises(ValueError, match="multiline_blocked_answer"):
             await h.answer_blocked("w1:p1", text)
 

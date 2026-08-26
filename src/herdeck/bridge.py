@@ -280,16 +280,19 @@ def _is_typeable(ch: str) -> bool:
     answer_blocked types raw keystrokes with no bracketed-paste framing, so
     anything a terminal acts on instead of drawing has to be refused: category
     Cc (the C0 controls incl. newline and tab, DEL, the C1 controls incl.
-    U+0085 NEL) and Zl/Zp (U+2028/U+2029 LINE and PARAGRAPH SEPARATOR). This
-    is broader than semantic_api's `ord(ch) < 32 or ord(ch) == 127` body check,
-    which is about JSON hygiene rather than about what a pane can type.
+    U+0085 NEL) and Zl/Zp (U+2028/U+2029 LINE and PARAGRAPH SEPARATOR). Cs
+    joins them because it cannot be typed at all: json.loads accepts a lone
+    `\\ud800` escape off the client socket, and re-encoding that surrogate for
+    the herdr RPC produces JSON no strict parser will read. This is broader
+    than semantic_api's `ord(ch) < 32 or ord(ch) == 127` body check, which is
+    about JSON hygiene rather than about what a pane can type.
 
     Everything else is typed exactly as the user wrote it — a non-ASCII space
     (U+00A0 after a Czech single-letter preposition) or the U+200D joining an
     emoji sequence is legible input, not a hazard. `_is_legible` is what stops
     an answer made only of such characters from reaching the confirming enter.
     """
-    return unicodedata.category(ch) not in ("Cc", "Zl", "Zp")
+    return unicodedata.category(ch) not in ("Cc", "Zl", "Zp", "Cs")
 
 
 def _is_legible(ch: str) -> bool:
