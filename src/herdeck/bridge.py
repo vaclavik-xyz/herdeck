@@ -219,6 +219,16 @@ async def _wait_until(awaitable, deadline: float, message: str):
         raise TimeoutError(message) from exc
 
 
+class HerdrRpcError(RuntimeError):
+    """A herdr RPC returned an error response."""
+
+    def __init__(self, method: str, code: str, message: str):
+        super().__init__(f"herdr RPC {method} failed: {message}")
+        self.method = method
+        self.code = code
+        self.message = message
+
+
 class HerdrClient(Protocol):
     async def snapshot(self) -> dict: ...
     async def get_pane(self, pane_id: str) -> dict: ...
@@ -226,6 +236,7 @@ class HerdrClient(Protocol):
     async def send_keys(self, pane_id: str, keys: list[str]) -> None: ...
     async def focus_agent(self, pane_id: str) -> None: ...
     async def send_text(self, pane_id: str, text: str) -> None: ...
+    async def answer_blocked(self, pane_id: str, text: str) -> None: ...
     async def start_agent(self, name: str, argv: list[str]) -> None: ...
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]: ...
 
@@ -385,6 +396,9 @@ class StubHerdr:
     async def send_text(self, pane_id: str, text: str) -> None:
         self.sent.append((pane_id, text))
 
+    async def answer_blocked(self, pane_id: str, text: str) -> None:
+        self.sent.append((pane_id, text))
+
     async def start_agent(self, name: str, argv: list[str]) -> None:
         self.started.append((name, argv))
 
@@ -423,7 +437,14 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     if kind == "send_text":
         if await _pane_identity_changed(herdr, msg):
             return _identity_changed_result(msg)
-        await herdr.send_text(msg["pane_id"], msg["text"])
+        try:
+            await herdr.send_text(msg["pane_id"], msg["text"])
+        except HerdrRpcError as exc:
+            if exc.code != "agent_blocked":
+                raise
+            # herdr >= 0.8.2 rejects agent.prompt on an already-blocked pane;
+            # fall back to the pane-level primitives, which carry no such guard.
+            await herdr.answer_blocked(msg["pane_id"], msg["text"])
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "choose_if_blocked":
         pane = await herdr.get_pane(msg["pane_id"])
@@ -472,7 +493,7 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
                     "data": {"skipped": True, "message": "stale_choice"},
                 }
             )
-        await herdr.send_text(msg["pane_id"], msg["choice"])
+        await herdr.answer_blocked(msg["pane_id"], msg["choice"])
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "start":
         await herdr.start_agent(msg["name"], msg["argv"])
@@ -1033,9 +1054,11 @@ class SocketHerdr:
                     err = res["error"]
                     if isinstance(err, dict):
                         message = err.get("message", str(err))
+                        code = err.get("code", "")
                     else:
                         message = str(err)
-                    raise RuntimeError(f"herdr RPC {method} failed: {message}")
+                        code = ""
+                    raise HerdrRpcError(method, code, message)
                 if not isinstance(res.get("result"), dict):
                     raise RuntimeError(f"herdr RPC {method} result must be an object")
                 return res
@@ -1110,10 +1133,27 @@ class SocketHerdr:
         if await self._protocol_version() >= 17:
             # Protocol 17 replaced agent.send with an atomic, bracketed-paste
             # aware prompt submission.
-            await self._rpc("agent.prompt", {"target": pane_id, "text": text}, retry=False)
+            try:
+                await self._rpc("agent.prompt", {"target": pane_id, "text": text}, retry=False)
+            except HerdrRpcError as exc:
+                if exc.code != "agent_prompt_stalled":
+                    raise
+                message = "herdr saw no state change within 5s after the prompt (agent_prompt_stalled)"
+                log.warning(message)
+                raise HerdrRpcError("agent.prompt", exc.code, message) from exc
             return
         # Protocol 16 agent.send types text without submitting it.
         await self._rpc("agent.send", {"target": pane_id, "text": text}, retry=False)
+        await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
+
+    async def answer_blocked(self, pane_id: str, text: str) -> None:
+        """Answer an agent sitting at an approval/question dialog.
+
+        herdr >= 0.8.2 rejects agent.prompt for a blocked agent with
+        `agent_blocked` before sending any input, so a dialog answer has to go
+        through the pane-level primitives, which carry no such guard.
+        """
+        await self._rpc("pane.send_text", {"pane_id": pane_id, "text": text}, retry=False)
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
 
     async def _close_created_tab(self, tab_id: str) -> None:

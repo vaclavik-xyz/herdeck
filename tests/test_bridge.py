@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from herdeck.bridge import (
+    HerdrRpcError,
     StubHerdr,
     _herdr_pane_to_wire,
     _is_agent_pane,
@@ -426,6 +427,77 @@ async def test_rpc_error_envelope_raises(monkeypatch):
         await h.read_pane("w1:p1", "detection")
 
 
+async def test_rpc_error_raises_herdr_rpc_error_with_code(monkeypatch):
+    import asyncio as _asyncio
+
+    from herdeck.bridge import SocketHerdr
+
+    class FakeWriter:
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            pass
+
+        async def wait_closed(self):
+            pass
+
+    class FakeReader:
+        async def readline(self):
+            return b'{"id":"b","error":{"code":"agent_blocked","message":"pane is blocked"}}\n'
+
+    async def fake_conn(path, **kwargs):
+        return FakeReader(), FakeWriter()
+
+    monkeypatch.setattr(_asyncio, "open_unix_connection", fake_conn)
+
+    h = SocketHerdr("/tmp/herdr.sock")
+    with pytest.raises(HerdrRpcError) as exc_info:
+        await h.read_pane("w1:p1", "detection")
+
+    exc = exc_info.value
+    assert exc.code == "agent_blocked"
+    assert exc.message == "pane is blocked"
+    assert str(exc) == "herdr RPC pane.read failed: pane is blocked"
+
+
+async def test_rpc_error_non_dict_error_yields_empty_code(monkeypatch):
+    import asyncio as _asyncio
+
+    from herdeck.bridge import SocketHerdr
+
+    class FakeWriter:
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            pass
+
+        async def wait_closed(self):
+            pass
+
+    class FakeReader:
+        async def readline(self):
+            return b'{"id":"b","error":"boom"}\n'
+
+    async def fake_conn(path, **kwargs):
+        return FakeReader(), FakeWriter()
+
+    monkeypatch.setattr(_asyncio, "open_unix_connection", fake_conn)
+
+    h = SocketHerdr("/tmp/herdr.sock")
+    with pytest.raises(HerdrRpcError) as exc_info:
+        await h.read_pane("w1:p1", "detection")
+
+    assert exc_info.value.code == ""
+
+
 async def test_rpc_has_absolute_timeout(monkeypatch):
     import asyncio as _asyncio
 
@@ -631,6 +703,33 @@ async def test_send_text_calls_herdr(herdr):
     assert herdr.sent == [("w1:p1", "continue")]
 
 
+async def test_send_text_falls_back_to_answer_blocked_on_agent_blocked(herdr):
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr, "workbox", '{"type":"send_text","req":"s2","pane_id":"w1:p1","text":"continue"}'
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    assert herdr.sent == [("w1:p1", "continue")]
+
+
+async def test_send_text_propagates_non_agent_blocked_error(herdr):
+    async def stalled_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_prompt_stalled", "no state change")
+
+    herdr.send_text = stalled_send_text
+
+    with pytest.raises(HerdrRpcError, match="no state change"):
+        await handle_client_message(
+            herdr, "workbox", '{"type":"send_text","req":"s3","pane_id":"w1:p1","text":"continue"}'
+        )
+    assert herdr.sent == []
+
+
 async def test_guarded_choice_rechecks_prompt_and_blocked_status_before_send(herdr):
     herdr.panes[0]["terminal_id"] = "term-1"
     prompt = "Choose:\n1. Continue\n2. Explain first"
@@ -648,6 +747,33 @@ async def test_guarded_choice_rechecks_prompt_and_blocked_status_before_send(her
                 "terminal_id": "term-1",
                 "choice": "2",
                 "decision_revision": revision,
+            }
+        ),
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    assert herdr.sent == [("w1:p1", "2")]
+
+
+async def test_choose_if_blocked_uses_answer_blocked_not_send_text(herdr):
+    async def fail_send_text(pane_id, text):
+        raise AssertionError("choose_if_blocked must use answer_blocked, not send_text")
+
+    herdr.send_text = fail_send_text
+
+    prompt = "Choose:\n1. Continue\n2. Explain first"
+    herdr.detection["w1:p1"] = prompt
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps(
+            {
+                "type": "choose_if_blocked",
+                "req": "c-ab",
+                "pane_id": "w1:p1",
+                "choice": "2",
+                "decision_revision": decision_revision("workbox", "w1:p1", "", prompt),
             }
         ),
     )
@@ -1062,6 +1188,25 @@ async def test_socket_herdr_send_text_uses_protocol_specific_agent_api(protocol,
     await h.send_text("w1:p1", "continue")
 
     assert calls == expected_calls
+
+
+async def test_socket_herdr_answer_blocked_sends_text_then_enter():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    await h.answer_blocked("w1:p1", "yes")
+
+    assert calls == [
+        ("pane.send_text", {"pane_id": "w1:p1", "text": "yes"}, False),
+        ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
+    ]
 
 
 async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow():
