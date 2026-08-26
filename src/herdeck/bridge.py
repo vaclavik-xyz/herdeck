@@ -24,9 +24,10 @@ log = logging.getLogger(__name__)
 # herdr agent_status values that mark a pane as worth showing on the deck.
 _AGENT_STATUSES = {"idle", "working", "blocked", "done"}
 
-# Hard floor: session.snapshot shipped in herdr 0.7.2; there is no fallback path.
+# Hard floor: session.snapshot shipped in herdr 0.7.2, but the metadata
+# `tokens` field that Status.WAITING derivation depends on shipped in 0.7.4.
 _SNAPSHOT_UNSUPPORTED = (
-    "herdeck requires herdr >= 0.7.2 (session.snapshot missing); run 'herdr update'"
+    "herdeck requires herdr >= 0.7.4 (session.snapshot missing); run 'herdr update'"
 )
 
 # Startup probe bound: a herdr that accepts but never answers (e.g. mid
@@ -64,6 +65,7 @@ _MANAGED_AGENT_KINDS = {
     "opencode",
     "pi",
     "qodercli",
+    "qwen",
 }
 _MANAGED_AGENT_EXECUTABLE_ALIASES = {"cursor-agent": "cursor"}
 
@@ -1138,7 +1140,13 @@ class SocketHerdr:
 
     async def read_pane(self, pane_id: str, source: str) -> str:
         res = await self._rpc("pane.read", {"pane_id": pane_id, "source": source})
-        return res.get("result", {}).get("read", {}).get("text", "")
+        read = res.get("result", {}).get("read", {})
+        if read.get("truncated"):
+            # herdr >= 0.8.0 omits older terminal rows from the returned
+            # window; surface it so a decision made on a clipped prompt is
+            # diagnosable instead of silently wrong.
+            log.warning("herdr pane.read %s truncated older rows (source=%s)", pane_id, source)
+        return read.get("text", "")
 
     async def send_keys(self, pane_id: str, keys: list[str]) -> None:
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": keys}, retry=False)
@@ -1435,7 +1443,7 @@ async def _serve_connection(
 
 
 async def _require_snapshot_support(herdr: HerdrClient) -> None:
-    """Fail fast when herdr predates session.snapshot (herdeck needs >= 0.7.2).
+    """Fail fast when herdr predates session.snapshot (herdeck needs >= 0.7.4).
 
     Only the version error is fatal: a herdr that is merely not up yet (or is
     mid live-handoff) must not kill the bridge — the stream retries those

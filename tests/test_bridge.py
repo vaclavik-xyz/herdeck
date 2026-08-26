@@ -1572,8 +1572,53 @@ async def test_socket_herdr_snapshot_maps_unknown_method_to_version_hint():
         )
 
     h._rpc = fake_rpc
-    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.4"):
         await h.snapshot()
+
+
+async def test_socket_herdr_read_pane_warns_on_truncated_response(caplog):
+    import logging
+
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        return {"result": {"read": {"text": "clipped prompt", "truncated": True}}}
+
+    h._rpc = fake_rpc
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        text = await h.read_pane("w1:p1", "detection")
+
+    assert text == "clipped prompt"
+    assert "w1:p1" in caplog.text
+    assert "truncated" in caplog.text
+
+
+async def test_socket_herdr_read_pane_no_warning_when_not_truncated(caplog):
+    import logging
+
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        return {"result": {"read": {"text": "full prompt", "truncated": False}}}
+
+    h._rpc = fake_rpc
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        text = await h.read_pane("w1:p1", "detection")
+
+    assert text == "full prompt"
+    assert caplog.text == ""
+
+
+def test_managed_agent_kinds_includes_qwen():
+    from herdeck.bridge import _MANAGED_AGENT_KINDS
+
+    assert "qwen" in _MANAGED_AGENT_KINDS
 
 
 async def test_stub_herdr_snapshot_composes_lists():
@@ -1709,7 +1754,7 @@ async def test_retained_lifecycle_event_only_resubscribes_after_real_topology_ch
     assert await events._topology_changed("pane_moved", subscribed) is True
 
 
-# --- herdr version gate (hard requirement: >= 0.7.2) ---
+# --- herdr version gate (hard requirement: >= 0.7.4) ---
 
 
 async def test_require_snapshot_support_rejects_old_herdr():
@@ -1719,7 +1764,7 @@ async def test_require_snapshot_support_rejects_old_herdr():
         async def snapshot(self):
             raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
 
-    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.4"):
         await _require_snapshot_support(OldHerdr())
 
 
@@ -1745,7 +1790,7 @@ async def test_start_local_bridge_probes_snapshot_support():
         async def snapshot(self):
             raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
 
-    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.4"):
         await start_local_bridge("/unused.sock", herdr=OldHerdr())
 
 
@@ -1774,7 +1819,7 @@ async def test_stream_surfaces_version_error_instead_of_retrying():
             raise RuntimeError(_SNAPSHOT_UNSUPPORTED)
 
     gen = HerdrEvents(OldHerdr(), poll_interval=0).stream()
-    with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+    with pytest.raises(RuntimeError, match="herdr >= 0.7.4"):
         await gen.__anext__()
 
 
@@ -1802,7 +1847,7 @@ async def test_start_local_bridge_logs_when_broadcast_dies_after_startup(caplog)
     )
     try:
         with caplog.at_level(logging.ERROR, logger="herdeck.bridge"):
-            with pytest.raises(RuntimeError, match="herdr >= 0.7.2"):
+            with pytest.raises(RuntimeError, match="herdr >= 0.7.4"):
                 await asyncio.wait_for(btask, timeout=1.0)
         assert "broadcast stopped" in caplog.text
     finally:
