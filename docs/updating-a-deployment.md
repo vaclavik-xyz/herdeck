@@ -18,9 +18,14 @@ to rendering (`layout.py`, `orchestrator.py`, `icons.py`) only take effect on th
 render host. `protocol.py` is neither: it is the shared wire module both sides
 import, so a change there has to reach both hosts together.
 
-Adding a field to the snapshot is safe to roll out one host at a time — older
-clients ignore fields they do not know. Changing `protocol.py`'s encode/decode
-contract is not, and that exemption does not cover it.
+Adding a field to the snapshot can be rolled out one host at a time, but only
+in one order: **bridge first**. An old render host ignores a key it does not
+know. The reverse runs new render code against an old snapshot, and
+`_pane_to_state` defaults every missing field to `""` or `{}` — so the new field
+renders blank, with no error and nothing in the log, until the bridge catches up.
+
+Changing `protocol.py`'s encode/decode contract has no safe order at all; both
+hosts move together.
 
 The desktop app is the exception: its frontend is compiled into the bundle, so
 it does **not** pick up changes from a source sync. It needs a rebuild.
@@ -38,8 +43,19 @@ Back the tree up first if the target has ever been hand-edited.
 
 `tar -x` only adds and overwrites — it never deletes. A module removed in the
 release stays on the target and stays importable, so the host can keep running
-deleted code with nothing to show for it. When a release removes files, delete
-the target tree and extract into an empty one, or remove them by hand.
+deleted code with nothing to show for it. When a release removes files, clear
+the synced subtree first:
+
+```bash
+ssh HOST 'rm -rf ~/path/to/herdeck/src/herdeck'
+git archive --format=tar main | ssh HOST 'tar -x -C ~/path/to/herdeck'
+```
+
+**Do not delete the whole checkout.** The venv usually lives inside it and is
+installed editable, so the launchd unit's `ProgramArguments` points straight at
+`.venv/bin/python` — removing the tree breaks the service on what was supposed
+to be a routine sync. It would take `node_modules` with it too. `rsync -a
+--delete --exclude .venv --exclude node_modules` works if you prefer one step.
 
 **`git archive` does not carry `node_modules`.** If the release added a frontend
 dependency, the synced `package.json` will reference a package that is not
@@ -113,14 +129,24 @@ curl "$URL/state?token=$TOKEN"    # slots, panel, tile versions, agent summary
 ```
 
 A `version` that rises between two `/state` calls means the deck is painting,
-not merely connected. It only bumps when tile or panel bytes actually change,
-though, so a quiet deck holds a static version indefinitely — that means
-"nothing to repaint", not "not painting". To be sure, either watch it across an
-agent status change, or fetch the images directly:
+not merely connected — and on a default deck it should rise on its own. `time`
+is a default tile field, elapsed text steps every 5 seconds under a minute and
+every minute under an hour, and the periodic full refresh re-renders exactly so
+that advance reaches the deck. **So a version that has not moved for several
+minutes on a deck with agents is a stall signature, not a quiet one.**
+
+It genuinely holds static only with no agent tiles, with `time` removed from
+`[view].tile_fields`, or once every agent has sat in one status past the hour
+bucket.
+
+Fetching the images tells you a frame exists, not that one is being made — the
+endpoints serve the bytes stored by the last successful refresh and never
+re-render on the request path, so a runtime whose ticker died after its first
+frame serves the same PNG forever:
 
 ```bash
-curl -s "$URL/panel?token=$TOKEN" | file -
-curl -s "$URL/tile/0?token=$TOKEN" | file -
+curl -s "$URL/panel?token=$TOKEN" | file -      # a frame exists
+curl -s "$URL/tile/0?token=$TOKEN" | shasum     # compare across a status change
 ```
 
 On the bridge host, one established connection per client should be visible:
