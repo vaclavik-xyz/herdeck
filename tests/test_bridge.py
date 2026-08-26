@@ -840,7 +840,7 @@ async def test_send_text_fallback_trims_trailing_newline_before_checking(herdr, 
     assert herdr.sent == [("w1:p1", "yes")]
 
 
-@pytest.mark.parametrize("text", ["\n", "\r\n\r\n", "   "])
+@pytest.mark.parametrize("text", ["\n", "\r\n\r\n", "   ", "\ue000"])
 async def test_send_text_fallback_rejects_empty_answer(herdr, text):
     """An empty normalised answer must never reach answer_blocked: typing
     nothing and pressing enter would silently confirm the blocked dialog's
@@ -965,6 +965,38 @@ async def test_send_text_fallback_still_accepts_legible_answers(herdr, text):
 
     assert json.loads(out)["data"] == {"sent": True}
     assert herdr.sent == [("w1:p1", text)]
+
+
+@pytest.mark.parametrize(
+    ("text", "typed"),
+    [
+        ("\ufeff1", "1"),  # BOM-prefixed paste answering a numbered dialog
+        ("1\u200b", "1"),
+        ("1\u200b\n", "1"),  # rstrip() takes the newline and leaves the ZWSP behind
+        ("\u200byes", "yes"),  # the legible run starts only after the invisible
+        ("  yes  ", "yes"),
+        ("1\ufe0f\u20e3", "1"),  # keycap emoji off a phone keyboard: VS16 + U+20E3 are marks
+    ],
+)
+async def test_send_text_fallback_trims_edge_invisibles(herdr, text, typed):
+    """An invisible glued to the edge of a real answer is worse than one on its
+    own: "\ufeff1" is legible enough to pass the empty check, gets typed, and
+    then a numbered dialog does not match it — so the enter confirms the
+    default. Trim the illegible edges instead, as with trailing whitespace."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s10", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    assert herdr.sent == [("w1:p1", typed)]
 
 
 async def test_guarded_choice_rechecks_prompt_and_blocked_status_before_send(herdr):
@@ -1499,11 +1531,35 @@ async def test_socket_herdr_answer_blocked_rejects_invisible_answer():
         return {"result": {}}
 
     h._rpc = fake_rpc
-    for invisible in ("\u200b", "\ufeff", "\u2060", "\u00ad", "\u180e", "\u0301", " \u200b\n"):
+    illegible = ("\u200b", "\ufeff", "\u2060", "\u00ad", "\u180e", "\u0301", " \u200b\n", "\ue000")
+    for invisible in illegible:
         with pytest.raises(ValueError, match="empty_blocked_answer"):
             await h.answer_blocked("w1:p1", invisible)
 
     assert calls == []  # rejected before any RPC
+
+
+async def test_socket_herdr_answer_blocked_trims_edge_invisibles():
+    """The backstop trims the same edges the handler does: choose_if_blocked
+    passes its choice key straight in, so a BOM-prefixed "1" would otherwise be
+    typed whole and leave the enter on the dialog's default."""
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    for raw in ("\ufeff1", "1\u200b", "1\u200b\n", "  1  ", "1\ufe0f\u20e3"):
+        await h.answer_blocked("w1:p1", raw)
+
+    assert calls == [
+        ("pane.send_text", {"pane_id": "w1:p1", "text": "1"}, False),
+        ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
+    ] * 5
 
 
 async def test_socket_herdr_answer_blocked_rejects_embedded_untypeable_char():

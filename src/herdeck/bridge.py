@@ -321,6 +321,23 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
     paste is as empty as a bare newline — and every character in it must be
     one the pane primitives can type literally.
 
+    Illegible characters glued to the *edges* are then trimmed off, so a
+    BOM-prefixed paste answers `"1"` rather than typing `"﻿1"`, which a
+    numbered dialog does not match — leaving the enter to confirm the default.
+    Interior ones are left exactly as written: they are what makes
+    `"v\xa0pořádku"` and a ZWJ emoji sequence the user's own answer.
+
+    Residual, and deliberately not closed here, because no character property
+    separates these from a legitimate answer:
+      * an interior format character that is not a joiner — a bidi override
+        (`"yes‮on"`) or a tag character reorders or hides what is typed,
+        yet sits between legible characters, so the edge trim cannot reach it;
+      * a printable-but-blank code point (U+2800 BRAILLE PATTERN BLANK, the
+        Hangul fillers) counts as legible;
+      * an answer that is legible and typed exactly as written but is not a
+        valid option for *that* dialog — the enter still lands on the default.
+        Closing that needs a read-back of the dialog, not a predicate.
+
     Returns (normalized_text, None) when usable, or (None, reason) where
     reason is the caller-facing skip-result message token.
     """
@@ -329,7 +346,8 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
         return None, "empty_blocked_answer"
     if not all(_is_typeable(ch) for ch in normalized):
         return None, "multiline_blocked_answer"
-    return normalized, None
+    legible = [i for i, ch in enumerate(normalized) if _is_legible(ch)]
+    return normalized[legible[0] : legible[-1] + 1], None
 
 
 class HerdrClient(Protocol):
