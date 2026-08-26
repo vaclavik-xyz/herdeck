@@ -626,12 +626,13 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
             return _identity_changed_result(msg)
         if not isinstance(msg.get("text"), str):
             # A non-conforming client can put a JSON null or number in
-            # "text". Reject before the RPC even goes out: on the common
-            # (not-yet-blocked) pane a non-str value would instead ride
-            # straight into herdr.send_text below and come back as some
-            # other HerdrRpcError code, which the branch below re-raises —
-            # the same reqless hang this skip result exists to avoid, just
-            # reached one call earlier.
+            # "text", or omit the key entirely — .get folds both into this
+            # skip rather than a KeyError. Reject before the RPC even goes
+            # out: on the common (not-yet-blocked) pane a non-str value would
+            # instead ride straight into herdr.send_text below and come back
+            # as some other HerdrRpcError code, which the branch below
+            # re-raises — the same reqless hang this skip result exists to
+            # avoid, just reached one call earlier.
             return encode(
                 {
                     "type": "result",
