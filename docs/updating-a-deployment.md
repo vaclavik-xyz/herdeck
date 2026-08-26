@@ -57,8 +57,16 @@ raises `ImportError` on a live process — and if the stream or the connection
 dies mid-transfer, the moved-aside copy is the rollback:
 
 ```bash
-ssh HOST 'rm -rf ~/path/to/herdeck/src/herdeck && mv ~/herdeck-src.old ~/path/to/herdeck/src/herdeck'
+ssh HOST 'test -d ~/herdeck-src.old \
+  && rm -rf ~/path/to/herdeck/src/herdeck \
+  && mv ~/herdeck-src.old ~/path/to/herdeck/src/herdeck'
 ```
+
+The `test -d` is load-bearing. Without it, a restore run where the backup is
+missing — the move-aside was skipped, or the restore already succeeded once —
+deletes the current tree and then fails, leaving no `src/herdeck` at all. That
+is worse than the deploy it was rolling back, reached by running the documented
+rollback under exactly the stress it is written for.
 
 Clear the destination in both directions. `mv` into a directory that already
 exists nests inside it instead of replacing it, so a second deploy would leave
@@ -180,10 +188,15 @@ curl -sf "$URL/tile/0?token=$TOKEN" -o /tmp/t.png && shasum /tmp/t.png
 ```
 
 Fetch to a file and gate the check on `&&`. Piping into `shasum` hides the
-failure it is most likely to hit: a 404 (no agents, or slot 0 empty) returns an
-empty body and a rejected token returns a constant error page, so either way two
-runs hash the same and it reads as "not repainting" — a false stall on top of
-the check meant to find real ones. Do not treat any particular hash as the tell.
+failure it is most likely to hit: a rejected token returns a constant error page
+and a 404 returns an empty body, so either way two runs hash the same and it
+reads as "not repainting" — a false stall on top of the check meant to find real
+ones. Do not treat any particular hash as the tell.
+
+Note which response means what. Every slot is rasterised on every render, empty
+ones included, so a deck with no agents answers `200` with blank bytes that hash
+the same every time — benign. A `404` means no refresh has ever completed (or
+the index is past `slots`), which is the stall you are hunting, not a quiet deck.
 `--fail` alone does not save you, because a pipeline reports `shasum`'s exit
 status, not `curl`'s; with `-sf` a failure prints nothing at all, so add
 `-w '%{http_code}'` when you need to tell a 403 from a 404.
@@ -193,11 +206,14 @@ carry the elapsed text, and the periodic full refresh comes round roughly every
 ten seconds. The same caveats as above apply — no agents, no `time` field, or
 everything past the hour bucket, and the bytes legitimately stop changing.
 
-One more is specific to this check: slot 0 only holds an agent tile in the
-overview. In a drill or a menu view it is a static option or label tile with no
-elapsed text, so a deck someone was poking at during the deploy gives two
-identical hashes while rendering perfectly. Fall back to `/state`'s `version`,
-which the panel drives too.
+One more applies to the whole section, not just this check. In a drill or a
+menu view **no** tile carries elapsed text and neither does the panel, so a deck
+someone was poking at during the deploy freezes the tile hash *and* `version`
+alike, while rendering perfectly. Do not read one as a cross-check on the other
+— they go still for the same reason.
+
+Put the deck back in the overview before comparing, or watch `/state`'s
+`summary` across an agent status change you cause yourself.
 
 On the bridge host, one established connection per client should be visible:
 
