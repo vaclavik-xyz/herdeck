@@ -785,6 +785,21 @@ async def test_send_text_skips_non_string_text_instead_of_hanging(herdr):
     assert herdr.sent == []
 
 
+async def test_send_text_skips_missing_text_key_instead_of_hanging(herdr):
+    # A message that omits "text" entirely is at least as likely from a
+    # non-conforming client as an explicit null, and msg["text"] would raise
+    # KeyError for it — the same reqless-hang class this branch's guard
+    # exists to close. msg.get("text") must fold this into the same skip.
+    out = await handle_client_message(
+        herdr, "workbox", '{"type":"send_text","req":"s2c","pane_id":"w1:p1"}'
+    )
+
+    msg = json.loads(out)
+    assert msg["req"] == "s2c"
+    assert msg["data"] == {"skipped": True, "message": "untypeable_blocked_answer"}
+    assert herdr.sent == []
+
+
 def test_normalize_blocked_answer_rejects_non_string_text():
     # The upfront guard on the send_text branch is the primary defence, but
     # _normalize_blocked_answer keeps its own isinstance check too — it is

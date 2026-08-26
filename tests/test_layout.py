@@ -423,7 +423,7 @@ def test_tile_status_text_drops_enclosing_keycap_mark():
 
     # A keycap off a phone keyboard ("1️⃣" = "1" + VS16 U+FE0F + the
     # enclosing mark U+20E3, category Me) exercises both halves of the fix at
-    # once: dropping only the variation selector while leaving Me in
+    # once: dropping only the variation selector while leaving Me out of
     # _UNDRAWABLE would still draw the enclosing mark as a tofu box.
     agent = _labelled(Status.WAITING, {}, waiting_on="1️⃣ ci")
     assert tile_status_text(agent) == "1 CI"

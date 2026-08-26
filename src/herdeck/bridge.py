@@ -624,7 +624,7 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
     if kind == "send_text":
         if await _pane_identity_changed(herdr, msg):
             return _identity_changed_result(msg)
-        if not isinstance(msg["text"], str):
+        if not isinstance(msg.get("text"), str):
             # A non-conforming client can put a JSON null or number in
             # "text". Reject before the RPC even goes out: on the common
             # (not-yet-blocked) pane a non-str value would instead ride
