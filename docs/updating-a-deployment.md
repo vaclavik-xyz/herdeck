@@ -151,8 +151,9 @@ restarted.
 
 ## Verifying without a display
 
-`~/.cache/herdeck/runtime.json` carries the runtime's URL and token. Auth is a
-**query parameter**, not a bearer header.
+`~/.cache/herdeck/runtime.json` carries the runtime's URL and token. The GET
+probes below take it as a **query parameter**, not a bearer header. The POST
+routes are different: `/press/N` wants it in an `X-Herdeck-Token` header.
 
 Three layers sit between a bridge push and a lit key, and each check below sees
 exactly one of them. Reading a check from the wrong layer is how a stalled deck
@@ -224,15 +225,35 @@ is a blank tile that hashes the same forever — it is only a meaningful probe
 while `summary`'s `agents` count is non-zero.
 
 To force the question, put the deck back in the overview and then cause an
-agent status change yourself. **Do it from the overview**: the launcher and the
-profile menu render no agent tiles and not the overview panel, and a drill view
-renders only the drilled agent's action tiles, so in any of them a status change
-moves nothing and a healthy deck looks stalled.
+agent status change yourself.
+
+Both halves are doable blind. `/state`'s `tile_sections` says which view is on
+screen — agent tiles report `view`, while a menu or drill reports `profiles`,
+`start_profiles` or `answer_profiles` — and the last slot is the Back tile every
+menu and drill reserves, so pressing it returns to the overview:
+
+```bash
+curl -X POST -H "X-Herdeck-Token: $TOKEN" "$URL/press/$((SLOTS-1))"
+```
+
+`SLOTS` is `/state`'s `slots`. Give it a few seconds before re-reading
+`tile_sections` — a press answers `204` before the next frame has been
+rendered, so an immediate re-read still shows the old view.
+
+**Do it from the overview**: the launcher and the profile menu render no agent
+tiles and not the overview panel, so a status change there moves nothing and a
+healthy deck looks stalled.
+
+A drill view is narrower rather than dead: the drilled agent's own status moves
+its panel and its action tiles, so forcing the change on *that* agent works.
+Forcing it on any other leaves the frame identical.
 
 From the overview, split what you expect. The panel carries the status counts,
 so `version` moves even when the agent that changed is paged off screen. The
-tile hash only moves if that agent is on the visible page — the deck pages, so
-`/tile/0` can stay byte-identical while the deck is working perfectly.
+tile hash may not: the deck pages, so `/tile/0` can stay byte-identical while
+the deck works perfectly — a frozen tile is not evidence of a stall. It is not a
+biconditional either, since a status change that alters an agent's rank can
+re-sort the display and pull a paged-off agent into view.
 
 `summary` proves only that the change reached the source. `summary` moving while
 `version` stays flat, with the deck in the overview, is the stall signature.
@@ -242,8 +263,12 @@ lands in the HTTP buffer, before it is handed to the sinks, and a sink that
 raises is isolated and only logged. A dark device with a rising version is a
 delivery problem — this repo has hit exactly that, with `/panel` and `/tile/N`
 correct while the device showed black. Look for `render sink ... failed to
-deliver a frame` in the runtime's log — the path is the `StandardErrorPath` of
-the launchd job you restarted above.
+deliver a frame` in the runtime's log — the `StandardErrorPath` of the launchd
+job you restarted above. Check that the key is actually there: the shipped
+`deploy/com.herdeck.app.plist` sets neither `StandardErrorPath` nor
+`StandardOutPath`, so a job copied from it discards the one piece of evidence
+this layer has. The generated web and bridge jobs use
+`~/Library/Logs/herdeck-<kind>.log`; follow that convention and add it.
 
 ### Checking what the built UI says
 
