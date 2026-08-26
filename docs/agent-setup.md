@@ -117,7 +117,8 @@ herdr session list --json
 tailscale status --json
 ```
 
-Required Herdr version is `0.7.2` or newer. `herdr status --json` checks the
+Required Herdr version is `0.7.4` or newer (the metadata tokens the waiting
+state is derived from shipped in 0.7.4). `herdr status --json` checks the
 default session; run `herdr --session <name> status --json` for each named
 session. Every selected live session must report a running,
 protocol-compatible server. `herdr session list --json` is the authoritative

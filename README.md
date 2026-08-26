@@ -11,14 +11,15 @@
 
 Turn an Ulanzi Stream Controller D200 (or an Elgato Stream Deck) into a control
 panel for AI coding agents running under
-[herdr](https://github.com/ogulcancelik/herdr). See blocked agents at a glance
+[herdr](https://github.com/herdrdev/herdr). See blocked agents at a glance
 and Approve / Deny / Stop / Continue with one press — on the hardware deck, a
 browser dashboard, or a native desktop window.
 
 > **What is herdr?** herdr runs your AI coding agents (Claude, Codex, Cursor,
 > Gemini, …) in managed terminal panes and exposes their live state over a local
-> socket. herdeck is a front-end for it and requires **herdr >= 0.7.2** (its
-> `session.snapshot` API; check with `herdr status`, upgrade with `herdr update`).
+> socket. herdeck is a front-end for it and requires **herdr >= 0.7.4** (the
+> metadata tokens its waiting state is derived from shipped in 0.7.4; check
+> with `herdr status`, upgrade with `herdr update`).
 > You install and run herdr separately; or use the mock path below to try
 > herdeck standalone.
 
@@ -102,7 +103,8 @@ D200 hardware control is currently verified only on macOS.
 ### Source installation requirements
 
 - Python 3.12 or 3.13.
-- [herdr](https://github.com/ogulcancelik/herdr) 0.7.2 or newer for live agents.
+- [herdr](https://github.com/herdrdev/herdr) 0.7.4 or newer for live agents
+  (the metadata tokens the waiting state is derived from shipped in 0.7.4).
 - Tailscale only when the Herdr host and the deck host are different machines.
 - For hardware: an Ulanzi D200 or an Elgato Stream Deck. Quit the vendor's app
   before using the D200 because it holds the USB device.
