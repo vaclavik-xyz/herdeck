@@ -24,18 +24,21 @@ log = logging.getLogger(__name__)
 # herdr agent_status values that mark a pane as worth showing on the deck.
 _AGENT_STATUSES = {"idle", "working", "blocked", "done"}
 
-# Hard floor: session.snapshot shipped in herdr 0.7.2, but the metadata
+# Recommended floor: session.snapshot shipped in herdr 0.7.2, but the metadata
 # `tokens` field that Status.WAITING derivation depends on shipped in 0.7.4.
-_SNAPSHOT_UNSUPPORTED = (
-    "herdeck requires herdr >= 0.7.4 (session.snapshot missing); run 'herdr update'"
-)
-
-# The probe above can only detect a herdr predating session.snapshot itself
-# (< 0.7.2) — it cannot fail startup on a herdr that answers but is still
-# below 0.7.4, since that would lock out users on a working 0.7.2/0.7.3.
+# The startup probe below can only detect a herdr predating session.snapshot
+# itself (< 0.7.2) — it cannot fail startup on a herdr that answers but is
+# still below 0.7.4, since that would lock out users on a working 0.7.2/0.7.3.
 # _require_snapshot_support instead compares session.snapshot's own `version`
-# field against this floor and logs a one-time warning.
+# field against this floor and logs a warning.
 _MIN_HERDR_VERSION = (0, 7, 4)
+_MIN_HERDR_VERSION_STR = ".".join(str(part) for part in _MIN_HERDR_VERSION)
+
+# Hard floor: session.snapshot itself is missing entirely (pre-0.7.2 herdr).
+_SNAPSHOT_UNSUPPORTED = (
+    f"herdeck requires herdr >= {_MIN_HERDR_VERSION_STR} "
+    "(session.snapshot missing); run 'herdr update'"
+)
 
 # Startup probe bound: a herdr that accepts but never answers (e.g. mid
 # live-handoff) must not block bridge startup; timeout = transient, not fatal.
@@ -1287,6 +1290,12 @@ class SocketHerdr:
                     # in _MANAGED_AGENT_KINDS rejects it here with no side
                     # effects on the tab/pane we already created. Fall back to
                     # raw pane input instead of aborting the whole launch.
+                    log.warning(
+                        "herdr rejected managed agent kind %s (unsupported_agent_kind); "
+                        "falling back to raw pane input on %s",
+                        kind,
+                        pane_id,
+                    )
                     await self._send_raw_argv(pane_id, argv)
             else:
                 # Keep custom wrappers and future agent executables working even
@@ -1496,9 +1505,9 @@ async def _require_snapshot_support(herdr: HerdrClient) -> None:
 
     Only the version error is fatal: a herdr that is merely not up yet (or is
     mid live-handoff) must not kill the bridge — the stream retries those
-    exactly as before. A herdr that answers but reports a version below 0.7.4
-    is not fatal either (it works, just without Status.WAITING) — logged as a
-    one-time warning instead."""
+    exactly as before. A herdr that answers but reports a version below the
+    recommended floor is not fatal either (it works, just without
+    Status.WAITING) — logged as a warning instead."""
     try:
         snapshot = await asyncio.wait_for(herdr.snapshot(), timeout=_PROBE_TIMEOUT)
     except RuntimeError as exc:
@@ -1507,12 +1516,15 @@ async def _require_snapshot_support(herdr: HerdrClient) -> None:
         return
     except Exception:
         return
-    version = _parse_herdr_version(snapshot.get("version"))
+    # snapshot is typed as dict by the HerdrClient protocol, but this check is
+    # purely advisory — never let a non-conforming client turn it fatal.
+    version = _parse_herdr_version(snapshot.get("version") if isinstance(snapshot, dict) else None)
     if version is not None and version < _MIN_HERDR_VERSION:
         log.warning(
-            "herdr reports version %s, below the recommended >= 0.7.4; "
+            "herdr reports version %s, below the recommended >= %s; "
             "session.snapshot's metadata `tokens` is unavailable, so Status.WAITING will never appear",
             snapshot.get("version"),
+            _MIN_HERDR_VERSION_STR,
         )
 
 

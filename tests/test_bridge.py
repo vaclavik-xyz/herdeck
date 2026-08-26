@@ -1378,11 +1378,14 @@ async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow(argv, expe
     assert params["name"].startswith(f"{expected_kind}-")
 
 
-async def test_socket_herdr_start_agent_falls_back_to_raw_pane_on_unsupported_kind():
+async def test_socket_herdr_start_agent_falls_back_to_raw_pane_on_unsupported_kind(caplog):
     """herdr rejects a kind it doesn't know yet (older herdr, newer herdeck
     _MANAGED_AGENT_KINDS entry) with `unsupported_agent_kind` before ever
     touching the pane, so the already-created tab is reused for raw pane
-    input instead of being torn down."""
+    input instead of being torn down. The degradation is logged so a user
+    whose qwen agent silently loses managed startup has a diagnosable trace."""
+    import logging
+
     from herdeck.bridge import HerdrRpcError, SocketHerdr
 
     h = SocketHerdr("/nonexistent")
@@ -1404,7 +1407,11 @@ async def test_socket_herdr_start_agent_falls_back_to_raw_pane_on_unsupported_ki
         return {"result": {}}
 
     h._rpc = fake_rpc
-    await h.start_agent("reviewer", ["qwen", "-m", "qwen-max"])
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        await h.start_agent("reviewer", ["qwen", "-m", "qwen-max"])
+
+    assert "qwen" in caplog.text
+    assert "w1:p2" in caplog.text
 
     methods = [call[0] for call in calls]
     assert methods == [
@@ -1893,35 +1900,35 @@ async def test_require_snapshot_support_tolerates_down_or_flaky_herdr():
     await _require_snapshot_support(FlakyHerdr())  # must not raise
 
 
-async def test_require_snapshot_support_warns_once_below_recommended_version(caplog):
+@pytest.mark.parametrize(
+    ("version", "expect_warning"),
+    [
+        ("0.7.3", True),  # below the floor
+        ("0.7.4", False),  # exactly at the floor: must not warn
+        ("0.8.2", False),  # above the floor
+    ],
+)
+async def test_require_snapshot_support_warns_only_below_recommended_version(
+    caplog, version, expect_warning
+):
     import logging
 
     from herdeck.bridge import _require_snapshot_support
 
-    class OldButWorkingHerdr:
+    class VersionedHerdr:
         async def snapshot(self):
-            return {"agents": [], "protocol": 18, "version": "0.7.3"}
+            return {"agents": [], "protocol": 18, "version": version}
 
     with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
-        await _require_snapshot_support(OldButWorkingHerdr())  # must not raise
+        await _require_snapshot_support(VersionedHerdr())  # must not raise
 
-    assert "0.7.3" in caplog.text
-    assert "0.7.4" in caplog.text
-
-
-async def test_require_snapshot_support_no_warning_at_or_above_recommended_version(caplog):
-    import logging
-
-    from herdeck.bridge import _require_snapshot_support
-
-    class CurrentHerdr:
-        async def snapshot(self):
-            return {"agents": [], "protocol": 20, "version": "0.8.2"}
-
-    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
-        await _require_snapshot_support(CurrentHerdr())
-
-    assert caplog.text == ""
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    if expect_warning:
+        assert len(warnings) == 1
+        assert version in caplog.text
+        assert "0.7.4" in caplog.text
+    else:
+        assert warnings == []
 
 
 async def test_require_snapshot_support_ignores_missing_or_malformed_version(caplog):
