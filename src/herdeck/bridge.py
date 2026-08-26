@@ -229,6 +229,13 @@ class HerdrRpcError(RuntimeError):
         self.message = message
 
 
+def _has_control_char(text: str) -> bool:
+    """Same predicate as semantic_api's text validation (control chars incl.
+    newlines are rejected there): answer_blocked types raw keystrokes with no
+    bracketed-paste framing, so an embedded newline would submit mid-typing."""
+    return any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+
+
 class HerdrClient(Protocol):
     async def snapshot(self) -> dict: ...
     async def get_pane(self, pane_id: str) -> dict: ...
@@ -397,6 +404,8 @@ class StubHerdr:
         self.sent.append((pane_id, text))
 
     async def answer_blocked(self, pane_id: str, text: str) -> None:
+        if _has_control_char(text):
+            raise ValueError("answer_blocked text must not contain control characters")
         self.sent.append((pane_id, text))
 
     async def start_agent(self, name: str, argv: list[str]) -> None:
@@ -444,7 +453,16 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
                 raise
             # herdr >= 0.8.2 rejects agent.prompt on an already-blocked pane;
             # fall back to the pane-level primitives, which carry no such guard.
-            await herdr.answer_blocked(msg["pane_id"], msg["text"])
+            try:
+                await herdr.answer_blocked(msg["pane_id"], msg["text"])
+            except ValueError:
+                return encode(
+                    {
+                        "type": "result",
+                        "req": msg["req"],
+                        "data": {"skipped": True, "message": "multiline_blocked_answer"},
+                    }
+                )
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "choose_if_blocked":
         pane = await herdr.get_pane(msg["pane_id"])
@@ -1139,7 +1157,9 @@ class SocketHerdr:
                 if exc.code != "agent_prompt_stalled":
                     raise
                 message = "herdr saw no state change within 5s after the prompt (agent_prompt_stalled)"
-                log.warning(message)
+                log.warning(
+                    "%s pane_id=%s herdr_message=%s", message, pane_id, exc.message
+                )
                 raise HerdrRpcError("agent.prompt", exc.code, message) from exc
             return
         # Protocol 16 agent.send types text without submitting it.
@@ -1151,8 +1171,13 @@ class SocketHerdr:
 
         herdr >= 0.8.2 rejects agent.prompt for a blocked agent with
         `agent_blocked` before sending any input, so a dialog answer has to go
-        through the pane-level primitives, which carry no such guard.
+        through the pane-level primitives, which carry no such guard. Those
+        primitives type raw keystrokes with no bracketed-paste framing, so an
+        embedded control character (a newline in particular) would submit
+        mid-typing instead of arriving as literal answer text.
         """
+        if _has_control_char(text):
+            raise ValueError("answer_blocked text must not contain control characters")
         await self._rpc("pane.send_text", {"pane_id": pane_id, "text": text}, retry=False)
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
 

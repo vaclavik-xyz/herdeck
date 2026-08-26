@@ -730,6 +730,39 @@ async def test_send_text_propagates_non_agent_blocked_error(herdr):
     assert herdr.sent == []
 
 
+async def test_send_text_multiline_fallback_is_skipped_not_typed(herdr):
+    """answer_blocked has no bracketed-paste framing: an embedded newline
+    would submit mid-typing (e.g. a two-line Telegram reply to a blocked
+    agent), so the multiline fallback must be rejected, not typed."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps(
+            {
+                "type": "send_text",
+                "req": "s4",
+                "pane_id": "w1:p1",
+                "text": "yes, approve\nsomething else entirely",
+            }
+        ),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "multiline_blocked_answer"}
+    assert herdr.sent == []  # never typed into the pane
+
+
+async def test_answer_blocked_rejects_control_characters(herdr):
+    with pytest.raises(ValueError, match="control characters"):
+        await herdr.answer_blocked("w1:p1", "line one\nline two")
+    assert herdr.sent == []
+
+
 async def test_guarded_choice_rechecks_prompt_and_blocked_status_before_send(herdr):
     herdr.panes[0]["terminal_id"] = "term-1"
     prompt = "Choose:\n1. Continue\n2. Explain first"
@@ -1207,6 +1240,69 @@ async def test_socket_herdr_answer_blocked_sends_text_then_enter():
         ("pane.send_text", {"pane_id": "w1:p1", "text": "yes"}, False),
         ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
     ]
+
+
+async def test_socket_herdr_answer_blocked_rejects_multiline_text():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    with pytest.raises(ValueError, match="control characters"):
+        await h.answer_blocked("w1:p1", "line one\nline two")
+
+    assert calls == []  # rejected before any RPC
+
+
+async def test_socket_herdr_send_text_maps_stalled_prompt_to_actionable_error(caplog):
+    import logging
+
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        raise HerdrRpcError("agent.prompt", "agent_prompt_stalled", "herdr says: no reply")
+
+    h._rpc = fake_rpc
+
+    with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
+        with pytest.raises(HerdrRpcError) as exc_info:
+            await h.send_text("w1:p1", "continue")
+
+    exc = exc_info.value
+    assert exc.code == "agent_prompt_stalled"
+    assert exc.message == (
+        "herdr saw no state change within 5s after the prompt (agent_prompt_stalled)"
+    )
+    assert "w1:p1" in caplog.text
+    assert "herdr says: no reply" in caplog.text  # herdr's own message, not just via __cause__
+
+
+async def test_socket_herdr_send_text_propagates_unrelated_error_code():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        if method == "session.snapshot":
+            return {"result": {"snapshot": {"agents": [], "protocol": 17}}}
+        raise HerdrRpcError("agent.prompt", "some_other_error", "boom")
+
+    h._rpc = fake_rpc
+
+    with pytest.raises(HerdrRpcError) as exc_info:
+        await h.send_text("w1:p1", "continue")
+
+    assert exc_info.value.code == "some_other_error"
+    assert exc_info.value.message == "boom"
 
 
 async def test_socket_herdr_start_agent_uses_managed_protocol_17_flow():
