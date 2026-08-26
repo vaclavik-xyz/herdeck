@@ -914,7 +914,7 @@ async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
     through, and a terminal may treat them as a line break: a submit halfway
     through the answer. TAB and DEL were always refused by the ord-based check
     and stay refused, because the dialog acts on them as keystrokes instead of
-    drawing them. A lone surrogate is refused for an unrelated reason again:
+    drawing them. A lone surrogate is refused for an unrelated reason:
     nothing types it, and re-encoding it for the herdr RPC yields JSON no
     strict parser reads."""
 
