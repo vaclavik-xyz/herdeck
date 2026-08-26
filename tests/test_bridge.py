@@ -1944,9 +1944,22 @@ async def test_require_snapshot_support_ignores_missing_or_malformed_version(cap
         async def snapshot(self):
             return {"agents": [], "protocol": 20, "version": "not-a-version"}
 
+    class NoneSnapshotHerdr:
+        # A non-conforming HerdrClient (stub, future implementation) that
+        # returns something other than a dict must not turn this advisory
+        # probe fatal.
+        async def snapshot(self):
+            return None
+
+    class ListSnapshotHerdr:
+        async def snapshot(self):
+            return []
+
     with caplog.at_level(logging.WARNING, logger="herdeck.bridge"):
         await _require_snapshot_support(NoVersionHerdr())
         await _require_snapshot_support(WeirdVersionHerdr())
+        await _require_snapshot_support(NoneSnapshotHerdr())  # must not raise
+        await _require_snapshot_support(ListSnapshotHerdr())  # must not raise
 
     assert caplog.text == ""
 

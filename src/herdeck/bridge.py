@@ -24,20 +24,22 @@ log = logging.getLogger(__name__)
 # herdr agent_status values that mark a pane as worth showing on the deck.
 _AGENT_STATUSES = {"idle", "working", "blocked", "done"}
 
-# Recommended floor: session.snapshot shipped in herdr 0.7.2, but the metadata
-# `tokens` field that Status.WAITING derivation depends on shipped in 0.7.4.
-# The startup probe below can only detect a herdr predating session.snapshot
-# itself (< 0.7.2) — it cannot fail startup on a herdr that answers but is
-# still below 0.7.4, since that would lock out users on a working 0.7.2/0.7.3.
-# _require_snapshot_support instead compares session.snapshot's own `version`
-# field against this floor and logs a warning.
+# Advisory floor: the metadata `tokens` field that Status.WAITING derivation
+# depends on shipped in herdr 0.7.4. _require_snapshot_support compares
+# session.snapshot's own `version` field against this and logs a warning
+# when it's lower — this is NOT the hard gate (see _SNAPSHOT_UNSUPPORTED
+# below), and must stay a separate constant: bumping this floor for a future
+# metadata field must not silently rewrite the hard-failure message.
 _MIN_HERDR_VERSION = (0, 7, 4)
 _MIN_HERDR_VERSION_STR = ".".join(str(part) for part in _MIN_HERDR_VERSION)
 
-# Hard floor: session.snapshot itself is missing entirely (pre-0.7.2 herdr).
+# Hard floor: session.snapshot itself is missing entirely (pre-0.7.2 herdr) —
+# the only thing the startup probe can actually detect. The message names
+# 0.7.4, not the bare 0.7.2 detection floor, so a user fixing a hard failure
+# lands on a herdr with Status.WAITING support too. Kept as a literal string,
+# independent of _MIN_HERDR_VERSION on purpose (see comment above it).
 _SNAPSHOT_UNSUPPORTED = (
-    f"herdeck requires herdr >= {_MIN_HERDR_VERSION_STR} "
-    "(session.snapshot missing); run 'herdr update'"
+    "herdeck requires herdr >= 0.7.4 (session.snapshot missing); run 'herdr update'"
 )
 
 # Startup probe bound: a herdr that accepts but never answers (e.g. mid
