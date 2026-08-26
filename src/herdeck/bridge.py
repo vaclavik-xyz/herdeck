@@ -316,8 +316,9 @@ def _is_attached_mark(ch: str) -> bool:
     it rewrites the answer. Me (enclosing marks) and the variation selectors
     are decoration on top of a character that already stands on its own, so a
     keycap `"1️⃣"` off a phone keyboard answers as the `"1"` the dialog offers.
-    Only reached for a character that follows a legible one; a mark with no
-    base is noise and is trimmed at either edge.
+    Only reached for a character that follows the legible one at the trailing
+    edge or the mark run already attached to it, so it always has a base
+    somewhere in front of it; a mark with no base is noise at either edge.
     """
     if 0xFE00 <= ord(ch) <= 0xFE0F or 0xE0100 <= ord(ch) <= 0xE01EF:
         return False
@@ -358,6 +359,9 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
         yet sits between legible characters, so the edge trim cannot reach it;
       * a printable-but-blank code point (U+2800 BRAILLE PATTERN BLANK, the
         Hangul fillers) counts as legible;
+      * a trailing variation selector is dropped as decoration, so an answer
+        written in emoji presentation (`"❤️"`) is typed in its bare form
+        (`"❤"`) — the tradeoff that lets a keycap answer as its digit;
       * an answer that is legible and typed exactly as written but is not a
         valid option for *that* dialog — the enter still lands on the default.
         Closing that needs a read-back of the dialog, not a predicate.
