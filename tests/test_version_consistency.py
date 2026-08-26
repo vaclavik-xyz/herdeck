@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+import inspect
 import shutil
 import subprocess
 import sys
@@ -43,6 +45,16 @@ def run_script(*args, cwd):
         text=True,
         check=False,
     )
+
+
+def load_script():
+    """Import set-version.py so tests can read the constants it actually uses."""
+    spec = importlib.util.spec_from_file_location(
+        "set_version_script", ROOT / "scripts/set-version.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def write(root: Path, relative: str, text: str) -> None:
@@ -161,9 +173,22 @@ def test_check_truncates_an_enormous_matching_line_around_the_match(sandbox):
 def test_check_prints_a_short_line_in_full(sandbox):
     # Windowing every match would clip a line that comfortably fits, making the
     # ordinary report worse in the course of fixing the pathological one.
-    # ~110 characters with the match near the end: it fits the width budget, but
-    # a window of 40 characters before the match would clip the start away.
-    line = f"const banner = '{'a' * 80} herdeck v{VERSION}';"
+    # The fixture has to satisfy two things at once: short enough that the whole
+    # line fits, yet with the match far enough in that windowing would clip the
+    # start. Both depend on _excerpt's own defaults, so read them rather than
+    # restate them — a restated constant is how the first version of this test
+    # went tautological.
+    defaults = inspect.signature(load_script()._excerpt).parameters
+    before = defaults["before"].default
+    after = defaults["after"].default
+
+    head = "const banner = '"
+    column = before + 20
+    line = head + "a" * (column - len(head)) + f"v{VERSION}';"
+
+    assert line.index(f"v{VERSION}") > before, "match must sit beyond the window start"
+    assert len(line) <= before + after, "line must fit, or it is the long-line case"
+
     write(sandbox, "desktop/src/Widget.ts", line + "\n")
 
     result = run_script("--check", cwd=sandbox)
