@@ -11,6 +11,7 @@ import shlex
 import shutil
 import stat
 import time
+import unicodedata
 from typing import Protocol
 
 import websockets
@@ -273,11 +274,30 @@ class HerdrRpcError(RuntimeError):
         self.message = message
 
 
-def _has_control_char(text: str) -> bool:
-    """Same predicate as semantic_api's text validation (control chars incl.
-    newlines are rejected there): answer_blocked types raw keystrokes with no
-    bracketed-paste framing, so an embedded newline would submit mid-typing."""
-    return any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+def _is_typeable(ch: str) -> bool:
+    """True for a character answer_blocked may type as literal keystrokes.
+
+    `str.isprintable()` is False for every Unicode Other and Separator except
+    the ASCII space, which is exactly the set that must not be typed raw (no
+    bracketed-paste framing): the C0 controls and DEL, which submit or edit
+    mid-typing; U+0085 NEL and U+2028/U+2029 LINE/PARAGRAPH SEPARATOR, which a
+    terminal may treat as a line break; and the zero-width format characters
+    (U+200B, U+FEFF, U+2060, U+00AD, U+180E, the bidi overrides), which type as
+    nothing at all. Non-ASCII spaces (U+00A0 &c.) are refused with them — the
+    refusal is reported to the caller, so a paste carrying one is retypeable,
+    whereas anything invisible that slips through is typed blind before enter.
+    """
+    return ch.isprintable()
+
+
+def _is_legible(ch: str) -> bool:
+    """True for a character that puts something legible in the dialog's input.
+
+    Whitespace does not qualify; neither does anything `_is_typeable` refuses;
+    neither do combining marks (categories Mn/Mc/Me), which render only on a
+    preceding base character and so form no answer on their own.
+    """
+    return _is_typeable(ch) and not ch.isspace() and unicodedata.category(ch)[0] != "M"
 
 
 def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
@@ -286,18 +306,20 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
     in exactly one place.
 
     Trailing whitespace (e.g. a pasted reply's trailing newline) is trimmed
-    rather than rejected. What remains must be non-empty — answer_blocked
-    types text then presses enter, so an empty answer would silently confirm
-    whatever the blocked dialog's default choice is — and free of control
-    characters, which would submit mid-typing (no bracketed-paste framing).
+    rather than rejected. What remains must carry at least one legible
+    character — answer_blocked types text then presses enter, so an answer
+    that types nothing visible would silently confirm whatever the blocked
+    dialog's default choice is, and a bare U+200B or U+FEFF off a rich-text
+    paste is as empty as a bare newline — and every character in it must be
+    one the pane primitives can type literally.
 
     Returns (normalized_text, None) when usable, or (None, reason) where
     reason is the caller-facing skip-result message token.
     """
     normalized = text.rstrip()
-    if not normalized:
+    if not any(_is_legible(ch) for ch in normalized):
         return None, "empty_blocked_answer"
-    if _has_control_char(normalized):
+    if not all(_is_typeable(ch) for ch in normalized):
         return None, "multiline_blocked_answer"
     return normalized, None
 
@@ -492,9 +514,12 @@ class StubHerdr:
         self.sent.append((pane_id, text))
 
     async def answer_blocked(self, pane_id: str, text: str) -> None:
-        # No control-char guard here: handle_client_message rejects a
-        # multiline/control-char answer before ever calling this (see
-        # SocketHerdr.answer_blocked for the real backstop).
+        # No guard here: handle_client_message runs _normalize_blocked_answer
+        # first, so anything empty, illegible (whitespace, U+200B, U+FEFF …) or
+        # carrying an untypeable character is rejected before ever reaching
+        # this (see SocketHerdr.answer_blocked for the real backstop). Tests
+        # that assert nothing was typed therefore pin the handler's guard, not
+        # a duplicate one here.
         self.sent.append((pane_id, text))
 
     async def start_agent(self, name: str, argv: list[str]) -> None:
@@ -1272,11 +1297,12 @@ class SocketHerdr:
         embedded control character (a newline in particular) would submit
         mid-typing instead of arriving as literal answer text.
 
-        handle_client_message already rejects this case before calling in via
-        _normalize_blocked_answer; this check is a defence-in-depth backstop
-        for any other caller, sharing that same helper so the two can't drift
-        apart on what counts as multiline, empty, or a trimmable trailing
-        newline.
+        handle_client_message's send_text fallback already rejects such an
+        answer via _normalize_blocked_answer before calling in, but
+        choose_if_blocked (and any other caller) reaches this method directly,
+        so the same helper runs here too — one shared rule, so the two paths
+        cannot drift apart on what counts as untypeable, illegible or a
+        trimmable trailing newline.
         """
         normalized_text, reject_reason = _normalize_blocked_answer(text)
         if reject_reason is not None:

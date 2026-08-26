@@ -810,7 +810,17 @@ async def test_send_text_multiline_fallback_is_skipped_not_typed(herdr, text):
     # of its own, so this only passes because handle_client_message checked first.
 
 
-async def test_send_text_fallback_trims_trailing_newline_before_checking(herdr):
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes\r\n",
+        # rstrip() (not rstrip("\r\n")) is what makes these two acceptable:
+        # a newline with trailing spaces after it, and a plain trailing space.
+        "yes\n  ",
+        "yes ",
+    ],
+)
+async def test_send_text_fallback_trims_trailing_newline_before_checking(herdr, text):
     """A lone trailing newline (e.g. a pasted Telegram reply) is common,
     legitimate input, not a multiline answer, and must not be dropped."""
 
@@ -820,11 +830,14 @@ async def test_send_text_fallback_trims_trailing_newline_before_checking(herdr):
     herdr.send_text = blocked_send_text
 
     out = await handle_client_message(
-        herdr, "workbox", '{"type":"send_text","req":"s5","pane_id":"w1:p1","text":"yes\\r\\n"}'
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s5", "pane_id": "w1:p1", "text": text}),
     )
 
     assert json.loads(out)["data"] == {"sent": True}
-    assert herdr.sent == [("w1:p1", "yes")]  # trailing CRLF trimmed before typing
+    # the *normalised* text is what gets typed, not the raw payload
+    assert herdr.sent == [("w1:p1", "yes")]
 
 
 @pytest.mark.parametrize("text", ["\n", "\r\n\r\n", "   "])
@@ -846,6 +859,90 @@ async def test_send_text_fallback_rejects_empty_answer(herdr, text):
 
     assert json.loads(out)["data"] == {"skipped": True, "message": "empty_blocked_answer"}
     assert herdr.sent == []  # nothing typed, no accidental "enter" against the default choice
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "\u200b",  # ZERO WIDTH SPACE
+        "\ufeff",  # BOM / ZERO WIDTH NO-BREAK SPACE
+        "\u2060",  # WORD JOINER
+        "\u00ad",  # SOFT HYPHEN
+        "\u180e",  # MONGOLIAN VOWEL SEPARATOR
+        "\u200d",  # ZERO WIDTH JOINER
+        "\u0301",  # COMBINING ACUTE ACCENT: printable, but no base to sit on
+        " \u200b\n",  # invisible plus real whitespace, as a paste would carry it
+    ],
+)
+async def test_send_text_fallback_rejects_invisible_answer(herdr, text):
+    """str.isspace() is False for U+200B/U+FEFF/U+2060/U+00AD/U+180E and they
+    are all >= 32, so rstrip() leaves them and an ord-based control-char check
+    waves them through — yet they type nothing, so the enter that follows
+    confirms the dialog's default. They are as empty as a bare newline."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s7", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "empty_blocked_answer"}
+    assert herdr.sent == []  # nothing typed, no accidental "enter" against the default choice
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes\u2028no",  # LINE SEPARATOR
+        "yes\u2029no",  # PARAGRAPH SEPARATOR
+        "yes\u0085no",  # NEL
+        "yes\u200bno",  # an invisible embedded in otherwise legible text
+    ],
+)
+async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
+    """These are isspace() but ord > 127 (or neither), so an ord-based
+    control-char check passes them; none of them types as literal answer
+    text, so the answer must be refused rather than typed blind."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s8", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"skipped": True, "message": "multiline_blocked_answer"}
+    assert herdr.sent == []
+
+
+@pytest.mark.parametrize("text", ["yes", "1", "ano, pokra\u010duj", "e\u0301clair \U0001f600"])
+async def test_send_text_fallback_still_accepts_legible_answers(herdr, text):
+    """The guard must not swallow ordinary answers: accented and non-Latin
+    letters, a combining mark on a base character, digits and emoji all type
+    fine."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr,
+        "workbox",
+        json.dumps({"type": "send_text", "req": "s9", "pane_id": "w1:p1", "text": text}),
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    assert herdr.sent == [("w1:p1", text)]
 
 
 async def test_guarded_choice_rechecks_prompt_and_blocked_status_before_send(herdr):
@@ -1365,6 +1462,48 @@ async def test_socket_herdr_answer_blocked_rejects_empty_answer():
     assert calls == []  # rejected before any RPC
 
 
+async def test_socket_herdr_answer_blocked_rejects_invisible_answer():
+    """The backstop matters on its own: choose_if_blocked calls answer_blocked
+    directly, never through handle_client_message's send_text branch. A bare
+    zero-width character types nothing, so the enter after it would confirm
+    the dialog's default."""
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    for invisible in ("\u200b", "\ufeff", "\u2060", "\u00ad", "\u180e", "\u0301", " \u200b\n"):
+        with pytest.raises(ValueError, match="empty_blocked_answer"):
+            await h.answer_blocked("w1:p1", invisible)
+
+    assert calls == []  # rejected before any RPC
+
+
+async def test_socket_herdr_answer_blocked_rejects_embedded_untypeable_char():
+    """isspace() but ord > 127 (U+2028/U+2029/U+0085), or invisible mid-word:
+    none of these types as literal answer text at the backstop either."""
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    for text in ("yes\u2028no", "yes\u2029no", "yes\u0085no", "yes\u200bno"):
+        with pytest.raises(ValueError, match="multiline_blocked_answer"):
+            await h.answer_blocked("w1:p1", text)
+
+    assert calls == []  # rejected before any RPC
+
+
 async def test_socket_herdr_answer_blocked_trims_trailing_newline():
     from herdeck.bridge import SocketHerdr
 
@@ -1376,12 +1515,15 @@ async def test_socket_herdr_answer_blocked_trims_trailing_newline():
         return {"result": {}}
 
     h._rpc = fake_rpc
-    await h.answer_blocked("w1:p1", "yes\r\n")
+    # "yes\n  " and "yes " only survive because the trim is rstrip(), not
+    # rstrip("\r\n") — and what gets typed is the normalised text.
+    for raw in ("yes\r\n", "yes\n  ", "yes "):
+        await h.answer_blocked("w1:p1", raw)
 
     assert calls == [
         ("pane.send_text", {"pane_id": "w1:p1", "text": "yes"}, False),
         ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
-    ]
+    ] * 3
 
 
 async def test_socket_herdr_send_text_maps_stalled_prompt_to_actionable_error(caplog):
