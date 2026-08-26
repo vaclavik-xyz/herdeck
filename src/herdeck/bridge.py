@@ -16,7 +16,7 @@ from typing import Protocol
 import websockets
 
 from .decisions import decision_choices, decision_revision
-from .model import WorkContext
+from .model import Status, WorkContext
 from .protocol import encode
 
 log = logging.getLogger(__name__)
@@ -53,10 +53,11 @@ _WIRE_PROTOCOL = 3
 # capability instead of bumping the protocol: an older bridge simply omits it.
 _WIRE_CAPABILITIES = ("work_context", "terminal_preview", "metadata_tokens", "state_labels")
 
-# Bound on herdr's native per-status label map. herdr's own schema caps the
-# sibling `tokens` map at 16 entries but leaves `state_labels` uncapped; the
-# deck only ever reads one entry per Status, so 16 is generous either way.
-_STATE_LABELS_MAX = 16
+# herdr's native per-status label map is bounded by the Status enum itself: the
+# deck only ever reads the entry for a pane's current status, so a key that is
+# not a status value can never reach a tile. Values are clipped like the other
+# free-text wire fields (the tile clips again, to its own slot width).
+_STATE_LABEL_VALUE_MAX = 160
 
 # Herdr protocol 17 made managed agent startup pane-first and restricted it to
 # known agent kinds. Existing Herdeck start profiles remain argv-based, so map
@@ -230,14 +231,11 @@ def _validate_snapshot(snapshot: object) -> dict:
                 raise RuntimeError("session.snapshot agent token keys must be strings")
             if not all(isinstance(value, str) for value in tokens.values()):
                 raise RuntimeError("session.snapshot agent token values must be strings")
-        state_labels = record.get("state_labels")
-        if state_labels is not None:
-            if not isinstance(state_labels, dict):
-                raise RuntimeError("session.snapshot agent state_labels must be an object")
-            if not all(isinstance(key, str) for key in state_labels):
-                raise RuntimeError("session.snapshot agent state_label keys must be strings")
-            if not all(isinstance(value, str) for value in state_labels.values()):
-                raise RuntimeError("session.snapshot agent state_label values must be strings")
+        # `state_labels` is deliberately NOT validated here, unlike its sibling
+        # `tokens`: it is cosmetic and any integration may write it, while a
+        # raise from this function degrades to `cur = None` in stream() — a deck
+        # frozen on its last frame, silently, until the bad value goes away.
+        # _wire_state_labels drops what it can't use instead.
     for record in snapshot.get("panes", []):
         pane_id = record.get("pane_id")
         if not isinstance(pane_id, str) or not pane_id:
@@ -343,18 +341,20 @@ def _wire_state_labels(raw: object) -> dict[str, str]:
 
     A pre-0.8.2 herdr omits the field entirely and a 0.8.2 one omits it until
     something sets it, so absence is the normal case and never a warning. The
-    labels are cosmetic, so anything malformed is dropped here rather than
-    surfaced (the snapshot-level contract is enforced by _validate_snapshot).
+    labels are cosmetic and open to any integration, so anything unusable is
+    dropped here rather than raised: a bad label must never cost a snapshot.
+
+    Only entries keyed by a real status value survive, which bounds the map
+    deterministically (the one key the tile reads can never be crowded out).
     """
     if not isinstance(raw, dict):
         return {}
-    labels: dict[str, str] = {}
-    for key, value in raw.items():
-        if len(labels) >= _STATE_LABELS_MAX:
-            break
-        if isinstance(key, str) and isinstance(value, str):
-            labels[key] = value
-    return labels
+    known = {status.value for status in Status}
+    return {
+        key: value[:_STATE_LABEL_VALUE_MAX]
+        for key, value in raw.items()
+        if key in known and isinstance(value, str)
+    }
 
 
 def _herdr_pane_to_wire(

@@ -103,14 +103,22 @@ def test_herdr_pane_to_wire_drops_malformed_state_label_entries():
     assert _herdr_pane_to_wire(raw)["state_labels"] == {"idle": "parked"}
 
 
-def test_herdr_pane_to_wire_caps_state_labels():
+def test_herdr_pane_to_wire_keeps_only_status_keyed_state_labels():
+    # The tile only ever reads the entry for the pane's own status, so unknown
+    # keys are dropped -- they can never crowd out the one that matters.
     raw = raw_pane()
-    raw["state_labels"] = {f"s{i}": f"L{i}" for i in range(40)}
+    raw["state_labels"] = dict(
+        {f"s{i}": f"L{i}" for i in range(40)}, working="probe", blocked="held"
+    )
 
-    labels = _herdr_pane_to_wire(raw)["state_labels"]
+    assert _herdr_pane_to_wire(raw)["state_labels"] == {"working": "probe", "blocked": "held"}
 
-    assert len(labels) == 16
-    assert labels["s0"] == "L0"
+
+def test_herdr_pane_to_wire_clips_a_long_state_label():
+    raw = raw_pane()
+    raw["state_labels"] = {"working": "x" * 500}
+
+    assert _herdr_pane_to_wire(raw)["state_labels"] == {"working": "x" * 160}
 
 
 def test_herdr_pane_to_wire_passes_terminal_identity_through():
@@ -1769,7 +1777,9 @@ async def test_socket_herdr_snapshot_rejects_malformed_tokens():
         await h.snapshot()
 
 
-async def test_socket_herdr_snapshot_rejects_malformed_state_labels():
+async def test_socket_herdr_snapshot_tolerates_malformed_state_labels():
+    # Any integration may write state_labels, and a snapshot exception degrades
+    # to a deck frozen on its last frame -- a cosmetic label must never do that.
     from herdeck.bridge import SocketHerdr
 
     h = SocketHerdr("/nonexistent")
@@ -1790,8 +1800,9 @@ async def test_socket_herdr_snapshot_rejects_malformed_state_labels():
 
     h._rpc = fake_rpc
 
-    with pytest.raises(RuntimeError, match="state_label values must be strings"):
-        await h.snapshot()
+    snapshot = await h.snapshot()
+
+    assert _herdr_pane_to_wire(snapshot["agents"][0])["state_labels"] == {}
 
 
 async def test_socket_herdr_snapshot_accepts_absent_state_labels():

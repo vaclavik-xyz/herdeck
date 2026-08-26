@@ -417,6 +417,34 @@ def test_tile_status_text_offline_beats_state_label():
     assert tile_status_text(agent, down=True) == "OFFLINE"
 
 
+def test_tile_status_text_waiting_falls_through_to_the_state_label():
+    from herdeck.layout import tile_status_text
+
+    # A pane whose wire status is literally "waiting" with no holder label:
+    # herdr's own label still beats the generic word.
+    assert tile_status_text(_labelled(Status.WAITING, {"waiting": "held"})) == "HELD"
+    assert tile_status_text(_labelled(Status.WAITING, {})) == "WAITING"
+
+
+def test_tile_status_text_flattens_a_multiline_state_label():
+    from herdeck.layout import tile_status_text
+
+    # A newline reaching the renderer raises out of Pillow's single-line text
+    # measurement and takes the whole frame with it.
+    text = tile_status_text(_labelled(Status.WORKING, {"working": "run\nning\t2"}))
+
+    assert text == "RUN NING 2"
+
+
+def test_tile_status_text_drops_pictographs_the_tile_font_cannot_draw():
+    from herdeck.layout import tile_status_text
+
+    # state_labels is third-party text; the tile font has no emoji glyphs.
+    assert tile_status_text(_labelled(Status.WORKING, {"working": "🔍 review"})) == "REVIEW"
+    # Plain punctuation is not a pictograph and must survive.
+    assert tile_status_text(_labelled(Status.WORKING, {"working": "review +1"})) == "REVIEW +1"
+
+
 def test_tile_status_text_clips_a_long_state_label():
     from herdeck.layout import tile_status_text
 

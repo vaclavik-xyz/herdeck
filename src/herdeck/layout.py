@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from .driver.base import PanelGauge, PanelView
@@ -357,9 +358,21 @@ def _detail_lines(text: str) -> tuple[list[str], list[str]]:
 
 def _short_status_label(text: str) -> str:
     """Normalise a foreign label into the tile's status slot: uppercase like
-    the built-in status words, clipped to what the slot fits. The hourglass is
-    stripped — the tile font has no emoji glyphs (it would render as tofu)."""
-    return (text or "").replace("⏳", "").strip().upper()[:12]
+    the built-in status words, clipped to what the slot fits.
+
+    The label is not herdeck's text — a `waiting_on` marker or one of herdr's
+    state labels, either of which any integration may write — so it is scrubbed
+    of what the tile cannot draw: pictographs (the hourglass herdwatch prefixes,
+    and anything else outside the tile font's glyphs, would render as tofu), and
+    embedded newlines, which raise out of Pillow's single-line text measurement
+    and would take the whole frame down with them.
+    """
+    kept = "".join(
+        ch
+        for ch in (text or "")
+        if ord(ch) <= 0xFFFF and unicodedata.category(ch) not in ("So", "Cf")
+    )
+    return " ".join(kept.split()).upper()[:12]
 
 
 def waiting_status_text(waiting_on: str, lang: str = "en") -> str:
@@ -380,7 +393,9 @@ def tile_status_text(agent: AgentState, lang: str = "en", down: bool = False) ->
     if down:
         return tr(lang, "status.offline")
     if agent.status is Status.WAITING:
-        return waiting_status_text(agent.waiting_on, lang)
+        held = _short_status_label(agent.waiting_on)
+        if held:
+            return held
     native = _short_status_label(agent.state_labels.get(agent.status.value, ""))
     if native:
         return native
