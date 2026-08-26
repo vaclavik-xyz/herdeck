@@ -805,7 +805,7 @@ async def test_send_text_multiline_fallback_is_skipped_not_typed(herdr, text):
         json.dumps({"type": "send_text", "req": "s4", "pane_id": "w1:p1", "text": text}),
     )
 
-    assert json.loads(out)["data"] == {"skipped": True, "message": "multiline_blocked_answer"}
+    assert json.loads(out)["data"] == {"skipped": True, "message": "untypeable_blocked_answer"}
     assert herdr.sent == []  # never typed into the pane; StubHerdr.answer_blocked has no guard
     # of its own, so this only passes because handle_client_message checked first.
 
@@ -929,7 +929,7 @@ async def test_send_text_fallback_rejects_embedded_untypeable_char(herdr, text):
         json.dumps({"type": "send_text", "req": "s8", "pane_id": "w1:p1", "text": text}),
     )
 
-    assert json.loads(out)["data"] == {"skipped": True, "message": "multiline_blocked_answer"}
+    assert json.loads(out)["data"] == {"skipped": True, "message": "untypeable_blocked_answer"}
     assert herdr.sent == []
 
 
@@ -1489,7 +1489,7 @@ async def test_socket_herdr_answer_blocked_rejects_multiline_text():
         return {"result": {}}
 
     h._rpc = fake_rpc
-    with pytest.raises(ValueError, match="multiline_blocked_answer"):
+    with pytest.raises(ValueError, match="untypeable_blocked_answer"):
         await h.answer_blocked("w1:p1", "line one\nline two")
 
     assert calls == []  # rejected before any RPC
@@ -1576,7 +1576,7 @@ async def test_socket_herdr_answer_blocked_rejects_embedded_untypeable_char():
 
     h._rpc = fake_rpc
     for text in ("yes\u2028no", "yes\u2029no", "yes\u0085no", "yes\u007fno", "yes\tno", "yes\ud800"):
-        with pytest.raises(ValueError, match="multiline_blocked_answer"):
+        with pytest.raises(ValueError, match="untypeable_blocked_answer"):
             await h.answer_blocked("w1:p1", text)
 
     assert calls == []  # rejected before any RPC

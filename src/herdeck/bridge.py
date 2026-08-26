@@ -345,7 +345,7 @@ def _normalize_blocked_answer(text: str) -> tuple[str | None, str | None]:
     if not any(_is_legible(ch) for ch in normalized):
         return None, "empty_blocked_answer"
     if not all(_is_typeable(ch) for ch in normalized):
-        return None, "multiline_blocked_answer"
+        return None, "untypeable_blocked_answer"
     legible = [i for i, ch in enumerate(normalized) if _is_legible(ch)]
     return normalized[legible[0] : legible[-1] + 1], None
 
