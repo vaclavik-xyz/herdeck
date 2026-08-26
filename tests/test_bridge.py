@@ -754,13 +754,25 @@ async def test_send_text_multiline_fallback_is_skipped_not_typed(herdr):
     )
 
     assert json.loads(out)["data"] == {"skipped": True, "message": "multiline_blocked_answer"}
-    assert herdr.sent == []  # never typed into the pane
+    assert herdr.sent == []  # never typed into the pane; StubHerdr.answer_blocked has no guard
+    # of its own, so this only passes because handle_client_message checked first.
 
 
-async def test_answer_blocked_rejects_control_characters(herdr):
-    with pytest.raises(ValueError, match="control characters"):
-        await herdr.answer_blocked("w1:p1", "line one\nline two")
-    assert herdr.sent == []
+async def test_send_text_fallback_trims_trailing_newline_before_checking(herdr):
+    """A lone trailing newline (e.g. a pasted Telegram reply) is common,
+    legitimate input, not a multiline answer, and must not be dropped."""
+
+    async def blocked_send_text(pane_id, text):
+        raise HerdrRpcError("agent.prompt", "agent_blocked", "pane is blocked")
+
+    herdr.send_text = blocked_send_text
+
+    out = await handle_client_message(
+        herdr, "workbox", '{"type":"send_text","req":"s5","pane_id":"w1:p1","text":"yes\\r\\n"}'
+    )
+
+    assert json.loads(out)["data"] == {"sent": True}
+    assert herdr.sent == [("w1:p1", "yes")]  # trailing CRLF trimmed before typing
 
 
 async def test_guarded_choice_rechecks_prompt_and_blocked_status_before_send(herdr):
@@ -1257,6 +1269,25 @@ async def test_socket_herdr_answer_blocked_rejects_multiline_text():
         await h.answer_blocked("w1:p1", "line one\nline two")
 
     assert calls == []  # rejected before any RPC
+
+
+async def test_socket_herdr_answer_blocked_trims_trailing_newline():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        return {"result": {}}
+
+    h._rpc = fake_rpc
+    await h.answer_blocked("w1:p1", "yes\r\n")
+
+    assert calls == [
+        ("pane.send_text", {"pane_id": "w1:p1", "text": "yes"}, False),
+        ("pane.send_keys", {"pane_id": "w1:p1", "keys": ["enter"]}, False),
+    ]
 
 
 async def test_socket_herdr_send_text_maps_stalled_prompt_to_actionable_error(caplog):

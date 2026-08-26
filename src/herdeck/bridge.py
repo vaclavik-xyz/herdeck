@@ -406,8 +406,9 @@ class StubHerdr:
         self.sent.append((pane_id, text))
 
     async def answer_blocked(self, pane_id: str, text: str) -> None:
-        if _has_control_char(text):
-            raise ValueError("answer_blocked text must not contain control characters")
+        # No control-char guard here: handle_client_message rejects a
+        # multiline/control-char answer before ever calling this (see
+        # SocketHerdr.answer_blocked for the real backstop).
         self.sent.append((pane_id, text))
 
     async def start_agent(self, name: str, argv: list[str]) -> None:
@@ -454,10 +455,13 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
             if exc.code != "agent_blocked":
                 raise
             # herdr >= 0.8.2 rejects agent.prompt on an already-blocked pane;
-            # fall back to the pane-level primitives, which carry no such guard.
-            try:
-                await herdr.answer_blocked(msg["pane_id"], msg["text"])
-            except ValueError:
+            # fall back to the pane-level primitives, which carry no such
+            # guard. Those primitives type raw keystrokes with no
+            # bracketed-paste framing, so reject embedded control characters
+            # (a lone trailing newline is normal input, e.g. a pasted Telegram
+            # reply, and is trimmed rather than rejected).
+            normalized_text = msg["text"].rstrip("\r\n")
+            if _has_control_char(normalized_text):
                 return encode(
                     {
                         "type": "result",
@@ -465,6 +469,7 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
                         "data": {"skipped": True, "message": "multiline_blocked_answer"},
                     }
                 )
+            await herdr.answer_blocked(msg["pane_id"], normalized_text)
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "choose_if_blocked":
         pane = await herdr.get_pane(msg["pane_id"])
@@ -1183,7 +1188,13 @@ class SocketHerdr:
         primitives type raw keystrokes with no bracketed-paste framing, so an
         embedded control character (a newline in particular) would submit
         mid-typing instead of arriving as literal answer text.
+
+        handle_client_message already rejects this case before calling in;
+        this check is a defence-in-depth backstop for any other caller. A
+        lone trailing newline (e.g. a pasted reply) is trimmed, not rejected,
+        so this agrees with the handler on what counts as multiline.
         """
+        text = text.rstrip("\r\n")
         if _has_control_char(text):
             raise ValueError("answer_blocked text must not contain control characters")
         await self._rpc("pane.send_text", {"pane_id": pane_id, "text": text}, retry=False)
