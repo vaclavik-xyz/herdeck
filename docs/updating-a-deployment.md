@@ -152,33 +152,51 @@ restarted.
 ## Verifying without a display
 
 `~/.cache/herdeck/runtime.json` carries the runtime's URL and token. Auth is a
-**query parameter**, not a bearer header:
+**query parameter**, not a bearer header.
+
+Three layers sit between a bridge push and a lit key, and each check below sees
+exactly one of them. Reading a check from the wrong layer is how a stalled deck
+gets declared healthy:
+
+| layer | what it is | what shows it |
+|---|---|---|
+| source | `LiveSource._agents`, fed by bridge pushes | `/state`'s `summary`, `/health`'s `connected` |
+| render | tiles and panel rasterised into the HTTP buffer | `/state`'s `version`, `/panel`, `/tile/N` |
+| delivery | the frame handed to each sink and written to the device | the log, and your eyes |
+
+**Source.** `/health` reports the runtime's own view of its bridge links, and
+`summary` is counted from the agent records at request time — neither touches
+the render pipeline:
 
 ```bash
 curl "$URL/health?token=$TOKEN"   # {"ok": true, "connected": true, ...}
 curl "$URL/state?token=$TOKEN"    # slots, panel, tile versions, agent summary
 ```
 
-A rising `version` between two `/state` calls means the runtime is rendering.
-On a default deck it rises on its own, because `time` is a default tile field
-and the periodic full refresh re-renders so the elapsed text advances. It bumps
-once per changed tile plus the panel, so the rate tracks how many tiles are
-moving, not a fixed cadence — a 28-agent deck measured ~20 in 12 seconds, while
-a healthy two-agent deck may only manage 2-4. Watch whether it moves, not how
-fast.
+From the bridge host, `lsof` is the other end of the same layer:
 
-**It does not mean the physical deck received anything.** The version is bumped
-when the frame lands in the HTTP buffer, before it is handed to the sinks, and a
-sink that raises is isolated and only logged. A dark device with a rising
-version is a delivery problem, not a render stall — this repo has hit exactly
-that, with `/panel` and `/tile/N` correct while the device showed black. Look
-for `render sink ... failed to deliver a frame` in the log.
+```bash
+lsof -a -p BRIDGE_PID -i -Pn | grep ESTABLISHED
+```
 
-The images tell you a frame exists, not that one is being made: the endpoints
-serve the bytes of the last successful refresh and never re-render on the
-request path, so a runtime whose ticker died after its first frame serves the
-same PNG forever. Compare two fetches instead of looking at one — spaced wider
-than the bucket the tiles are currently in:
+Neither view alone separates "nobody ever attached" from "the link died": both
+show zero established, and a half-open link can leave the bridge holding a
+socket the runtime has already given up on. It is the *disagreement* that tells
+you — agreement on zero means nothing attached; `/health` claiming connected
+while the bridge shows no socket, or the reverse, means one end has not noticed
+the link is gone.
+
+**Render.** A rising `version` means the runtime is rasterising. It bumps once
+per changed tile plus the panel, and only tiles on screen are versioned — the
+deck pages agents through its slots, so agents paged off contribute nothing and
+the rate tracks visible tiles, not agent count. A full 13-slot deck with most
+agents inside the 5-second bucket measured ~20 in 12 seconds; watch whether it
+moves, not how fast.
+
+The images are the same layer, and they are stored bytes rather than fresh
+renders — the endpoints never re-render on the request path, so a runtime whose
+ticker died after its first frame serves the same PNG forever. Compare two
+fetches spaced wider than the bucket the tiles are currently in:
 
 ```bash
 curl -sf "$URL/panel?token=$TOKEN" -o /tmp/panel.png && file /tmp/panel.png
@@ -187,36 +205,28 @@ curl -sf "$URL/tile/0?token=$TOKEN" -o /tmp/t.png && shasum /tmp/t.png
 
 Fetch to a file and gate on `&&`. Piping into `shasum` hides the failure it is
 most likely to hit: a rejected token returns a constant error page, so two runs
-hash the same and it reads as "not repainting" — a false stall on top of the
-check meant to find real ones. `--fail` alone does not save you, because a
-pipeline reports `shasum`'s exit status, not `curl`'s.
+hash the same and it reads as "not repainting". `--fail` alone does not save
+you, because a pipeline reports `shasum`'s exit status, not `curl`'s.
 
-**Before reading a frozen hash or a frozen version as a stall, check what the
-deck is showing.** Both are computed from rendered bytes, so anything static on
-screen holds them still legitimately.
+**Before calling a frozen hash or version a stall, check what the deck is
+showing.** Both are computed from rendered bytes, so anything static on screen
+holds them still legitimately. The elapsed bucket catches people out: it steps
+every 5 seconds under a minute, every minute under an hour, every hour beyond —
+so on a long-running deployment, exactly the deck you look at after a deploy, an
+agent showing `12m` changes its tile once a minute. A deck left in a drill or a
+menu view carries no elapsed text at all.
 
-The one that catches people out is the elapsed bucket. It steps every 5 seconds
-under a minute, every minute under an hour, and every hour beyond — so on a
-long-running deployment, which is exactly the deck you look at after a deploy,
-an agent showing `12m` changes its tile once a minute and one showing `3h` once
-an hour. Two fetches seconds apart hash identically on a perfectly healthy deck.
-Space them wider than the bucket you can see on the tiles.
+To force the question, cause an agent status change yourself. That changes the
+tile's status word, so **the tile hash and `version` must move** — `summary`
+only confirms the change reached the source. `summary` moving while `version`
+does not is the stall signature, not a reassurance.
 
-A deck left in a drill or a menu view carries no elapsed text on any tile at
-all, and a deck with no agents renders the same blank slots every time. Put it
-back in the overview first, or skip the waiting entirely: cause an agent status
-change yourself and watch `/state`'s `summary` move.
-
-From the bridge host, confirm the far end actually attached — `/health`'s
-`connections` is the runtime's own view, and this is what tells "the bridge is
-up but nobody is connected" apart from "the runtime lost the link":
-
-```bash
-lsof -a -p BRIDGE_PID -i -Pn | grep ESTABLISHED
-```
-
-Expect one established connection per client: each render host, plus any web
-cockpit.
+**Delivery is not covered by any of this.** The version is bumped when the frame
+lands in the HTTP buffer, before it is handed to the sinks, and a sink that
+raises is isolated and only logged. A dark device with a rising version is a
+delivery problem — this repo has hit exactly that, with `/panel` and `/tile/N`
+correct while the device showed black. Look for `render sink ... failed to
+deliver a frame` in the log.
 
 ### Checking what the built UI says
 
