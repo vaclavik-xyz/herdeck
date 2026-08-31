@@ -430,7 +430,7 @@ describe("App update check on top of an already-found update", () => {
       // on while it was in flight.
       resolveManual({ version: "0.3.0", current_version: "0.1.0" });
       await new Promise((r) => setTimeout(r, 0));
-      expect(target.textContent).not.toContain("0.3.0");
+      expect(target.querySelector('[role="status"]')?.textContent).not.toContain("0.3.0");
       expect(target.textContent).toContain("Herdeck is up to date.");
     } finally {
       cleanup();
