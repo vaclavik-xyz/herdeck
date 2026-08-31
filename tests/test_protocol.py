@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from herdeck.model import AgentKey, AgentState, Status, WorkContext
@@ -42,6 +44,42 @@ def test_decode_snapshot_preserves_repo_and_branch():
     assert isinstance(msg, Snapshot)
     assert msg.states[0].repo == "herdeck"
     assert msg.states[0].branch == "feat/clawpatch"
+
+
+def test_decode_snapshot_preserves_valid_native_order():
+    raw = (
+        '{"type":"snapshot","server_id":"workbox","panes":'
+        '[{"pane_id":"w1:p1","agent_type":"claude","label":"api",'
+        '"status":"idle","workspace_order":2,"tab_order":5}]}'
+    )
+
+    msg = decode_inbound(raw)
+
+    assert msg.states[0].workspace_order == 2
+    assert msg.states[0].tab_order == 5
+
+
+@pytest.mark.parametrize("value", [True, -1, 2.5, "2", None])
+def test_decode_snapshot_drops_malformed_native_order(value):
+    raw = json.dumps(
+        {
+            "type": "snapshot",
+            "server_id": "workbox",
+            "panes": [
+                {
+                    "pane_id": "w1:p1",
+                    "agent_type": "claude",
+                    "label": "api",
+                    "status": "idle",
+                    "workspace_order": value,
+                }
+            ],
+        }
+    )
+
+    msg = decode_inbound(raw)
+
+    assert msg.states[0].workspace_order is None
 
 
 def test_decode_snapshot_preserves_terminal_identity():

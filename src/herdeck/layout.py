@@ -98,13 +98,26 @@ def resolve_tile_lines(
     return primary, secondary
 
 
-def order_agents(agents, overview_order: list[str]) -> list[AgentState]:
+def order_agents(
+    agents, overview_order: list[str], agent_order: str = "status"
+) -> list[AgentState]:
     order = {sid: i for i, sid in enumerate(overview_order)}
+
+    def herdr_position(state: AgentState) -> tuple[int, int]:
+        if agent_order != "herdr":
+            return (0, 0)
+        missing = 2**31 - 1
+        return (
+            state.workspace_order if state.workspace_order is not None else missing,
+            state.tab_order if state.tab_order is not None else missing,
+        )
+
     return sorted(
         agents,
         key=lambda s: (
             _STATUS_PRIORITY.get(s.status, 9),
             order.get(s.key.server_id, 999),
+            *herdr_position(s),
             s.key.pane_id,
         ),
     )

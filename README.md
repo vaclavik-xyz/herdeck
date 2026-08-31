@@ -344,6 +344,10 @@ Herdr's default socket is `~/.config/herdr/herdr.sock` on macOS and Linux. The
 supported macOS system-service installer is shown under **Remote Herdr host**
 above; Linux uses [`deploy/herdeck-bridge.service`](deploy/herdeck-bridge.service).
 
+For pushing a new version to hosts that already run one — what needs updating
+where, rebuilding the desktop app, and how to verify a deploy landed without a
+display — see [docs/updating-a-deployment.md](docs/updating-a-deployment.md).
+
 Each remote Herdr instance runs one authenticated `herdeck-bridge` and appears
 as one `[[servers]]` entry. The config `id` is the authoritative routing ID on
 the deck; `HERDECK_SERVER_ID` is only the bridge's self-reported label. Keep
@@ -546,6 +550,9 @@ does not animate. By default
 the colour shows in the status word and a bottom accent bar; set
 `[view].tile_fill` to `tint` (whole tile a darkened shade of the colour) or
 `solid` (whole tile the full colour) for more at-a-glance visibility.
+Agents are always grouped by attention priority. Set `[view].agent_order` to
+`"herdr"` to mirror Herdr's workspace and tab positions within the same state
+and server; the default `"status"` uses stable pane ids as the tie-breaker.
 
 All rendered deck text (tile status words, the panel, the web simulator) and
 the desktop app UI speak `[view].language` — `"en"` (default) or `"cs"`; the

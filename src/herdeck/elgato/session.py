@@ -305,10 +305,14 @@ class ElgatoSession:
         return []
 
     def _page_blocked(self) -> None:
-        blocked = sorted(
-            (k for k, s in self._agents.items() if s.status is Status.BLOCKED),
-            key=lambda k: (self._server_rank(k.server_id), k.pane_id),
-        )
+        blocked = [
+            state.key
+            for state in layout.order_agents(
+                (state for state in self._agents.values() if state.status is Status.BLOCKED),
+                self.config.overview_order,
+                self.config.view.agent_order,
+            )
+        ]
         if not blocked:
             return
         cur = self.selected()
@@ -322,14 +326,12 @@ class ElgatoSession:
         self._release()
 
     # --- internals ---
-    def _server_rank(self, server_id: str) -> int:
-        try:
-            return self.config.overview_order.index(server_id)
-        except ValueError:
-            return len(self.config.overview_order)
-
     def _release(self) -> None:
-        ordered = sorted(self._agents.values(), key=lambda s: (self._server_rank(s.key.server_id), s.key.pane_id))
+        ordered = layout.order_agents(
+            self._agents.values(),
+            self.config.overview_order,
+            self.config.view.agent_order,
+        )
         self._leases.update([s.key for s in ordered])
 
     def _color(self, s: AgentState) -> str:

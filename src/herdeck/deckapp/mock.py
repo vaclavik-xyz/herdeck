@@ -108,7 +108,9 @@ class MockSource(StateSource):
             orch.set_connection(sid, True)
 
     def _ordered(self) -> list[AgentState]:
-        return layout.order_agents(self._agents, self._config.overview_order)
+        return layout.order_agents(
+            self._agents, self._config.overview_order, self._config.view.agent_order
+        )
 
     def press(self, index: int) -> None:
         ordered = self._ordered()

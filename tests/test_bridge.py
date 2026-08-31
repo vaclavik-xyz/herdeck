@@ -11,6 +11,7 @@ from herdeck.bridge import (
     StubHerdr,
     _herdr_pane_to_wire,
     _is_agent_pane,
+    _order_by_id,
     _tabs_by_id,
     _wire_panes,
     _workspaces_by_id,
@@ -56,6 +57,8 @@ def test_herdr_pane_to_wire_maps_fields():
         "branch": "",
         "workspace": "",
         "tab": "",
+        "workspace_order": None,
+        "tab_order": None,
         "waiting_on": "",
         "progress": "",
         "metadata": {},
@@ -204,6 +207,7 @@ async def test_list_returns_mapped_filtered_snapshot(herdr):
         "terminal_preview",
         "metadata_tokens",
         "state_labels",
+        "herdr_order",
     ]
     p = msg["panes"][0]
     assert p["pane_id"] == "w1:p1"
@@ -1206,6 +1210,16 @@ def test_herdr_pane_to_wire_adds_workspace_and_tab_labels():
     assert w["tab"] == "2"
 
 
+def test_herdr_pane_to_wire_adds_native_workspace_and_tab_order():
+    raw = raw_pane(agent="claude", status="working")
+    raw["workspace_id"] = "w2"
+    raw["tab_id"] = "w2:t3"
+    w = _herdr_pane_to_wire(raw, None, None, None, {"w2": 4}, {"w2:t3": 2})
+
+    assert w["workspace_order"] == 4
+    assert w["tab_order"] == 2
+
+
 def test_herdr_pane_to_wire_blank_workspace_tab_when_lookup_missing():
     raw = raw_pane(agent="claude", status="idle")
     raw["workspace_id"] = "w9"
@@ -1224,6 +1238,18 @@ def test_workspaces_and_tabs_by_id_index_label():
     assert _tabs_by_id([{"label": "x"}]) == {}
 
 
+def test_order_by_id_keeps_only_nonnegative_integer_numbers():
+    rows = [
+        {"workspace_id": "w1", "number": 0},
+        {"workspace_id": "w2", "number": 3},
+        {"workspace_id": "bad-bool", "number": True},
+        {"workspace_id": "bad-negative", "number": -1},
+        {"workspace_id": "legacy"},
+    ]
+
+    assert _order_by_id(rows, "workspace_id") == {"w1": 0, "w2": 3}
+
+
 async def test_list_snapshot_includes_workspace_and_tab():
     panes = [
         {
@@ -1238,13 +1264,15 @@ async def test_list_snapshot_includes_workspace_and_tab():
     ]
     herdr = StubHerdr(
         panes=panes,
-        workspaces=[{"workspace_id": "w2", "label": "herdeck"}],
-        tabs=[{"tab_id": "w2:t1", "label": "1"}],
+        workspaces=[{"workspace_id": "w2", "number": 4, "label": "herdeck"}],
+        tabs=[{"tab_id": "w2:t1", "number": 2, "label": "1"}],
     )
     out = await handle_client_message(herdr, "local", '{"type":"list"}')
     p = json.loads(out)["panes"][0]
     assert p["workspace"] == "herdeck"
     assert p["tab"] == "1"
+    assert p["workspace_order"] == 4
+    assert p["tab_order"] == 2
 
 
 # --- snapshot RPC concurrency + label caching (audit: bridge-parallel-rpcs) --
@@ -2224,8 +2252,11 @@ def test_listen_subscribes_to_label_and_worktree_events():
 
     assert set(_LABEL_EVENT_TYPES) == {
         "pane.updated",
+        "tab.moved",
         "tab.renamed",
+        "workspace.moved",
         "workspace.renamed",
+        "workspace.reordered",
         "workspace.updated",
         "workspace.metadata_updated",
         "worktree.created",

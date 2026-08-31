@@ -615,6 +615,19 @@ def test_view_config_rejects_unknown_tile_fill():
         _view_config({"tile_fill": "glow"})
 
 
+def test_view_config_parses_agent_order():
+    assert _view_config({"agent_order": "herdr"}).agent_order == "herdr"
+
+
+def test_view_config_defaults_agent_order_to_status():
+    assert _view_config({}).agent_order == "status"
+
+
+def test_view_config_rejects_unknown_agent_order():
+    with pytest.raises(ConfigError, match="unknown view.agent_order 'random'"):
+        _view_config({"agent_order": "random"})
+
+
 def test_profile_view_overlay_merges_tile_primary():
     data = {
         "view": {"tile_fields": ["repo"]},

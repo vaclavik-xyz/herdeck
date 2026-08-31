@@ -124,6 +124,47 @@ session. Every selected live session must report a running,
 protocol-compatible server. `herdr session list --json` is the authoritative
 list of conventional session names and socket paths.
 
+### Upgrading Herdr without dropping panes
+
+When Herdr needs an upgrade, inspect the selected session's live capability
+before choosing the update path:
+
+```bash
+STATUS="$(herdr --session SESSION status --json)"
+jq -e '.server.capabilities.live_handoff == true' <<<"$STATUS"
+```
+
+For an installation managed by Herdr's own updater, a true result permits the
+best-effort live path:
+
+```bash
+herdr --session SESSION update --handoff
+```
+
+Do one running session at a time. Live handoff preserves pane processes when it
+succeeds, but it deliberately interrupts socket clients, subscriptions, waits,
+and in-flight API calls. Do not start it while somebody is approving, denying,
+or answering an agent from Herdeck; the bridge reconnects automatically after
+the replacement server is ready.
+
+If `live_handoff` is absent or false, use plain `herdr --session SESSION update`
+and plan for the normal stop/restore path. Homebrew, mise, and Nix installations
+must be upgraded with their package manager; Herdr's self-updater, including
+`--handoff`, is disabled for them. Do not infer handoff support merely from a
+new client binary.
+
+After each path, re-run the JSON checks for that exact session and require the
+client and server versions to match, `compatible` to be true, and
+`restart_needed` to be false before moving to the next session or declaring the
+Herdeck connection restored:
+
+```bash
+herdr --session SESSION status --json | jq -e '
+  .client.version == .server.version and
+  .server.compatible == true and
+  .server.restart_needed == false'
+```
+
 For each remote host:
 
 ```bash

@@ -50,9 +50,15 @@ _HERDR_RPC_TIMEOUT = 10.0
 _HERDR_SUBSCRIBE_TIMEOUT = 10.0
 _HERDR_LINE_LIMIT = 1024 * 1024 + 1  # 1 MiB payload plus NDJSON newline
 _WIRE_PROTOCOL = 3
-# `state_labels` is additive on the pane wire record, so it is advertised as a
-# capability instead of bumping the protocol: an older bridge simply omits it.
-_WIRE_CAPABILITIES = ("work_context", "terminal_preview", "metadata_tokens", "state_labels")
+# Additive pane fields are advertised as capabilities instead of bumping the
+# protocol: an older bridge simply omits them.
+_WIRE_CAPABILITIES = (
+    "work_context",
+    "terminal_preview",
+    "metadata_tokens",
+    "state_labels",
+    "herdr_order",
+)
 
 # herdr's native per-status label map is bounded by the Status enum itself: the
 # deck only ever reads the entry for a pane's current status, so a key that is
@@ -422,6 +428,17 @@ def _tabs_by_id(tabs: list[dict]) -> dict[str, str]:
     return {t["tab_id"]: t.get("label", "") for t in (tabs or []) if t.get("tab_id")}
 
 
+def _order_by_id(rows: list[dict], id_key: str) -> dict[str, int]:
+    """Index native Herdr positions while ignoring legacy/malformed rows."""
+    return {
+        row[id_key]: row["number"]
+        for row in (rows or [])
+        if row.get(id_key)
+        and type(row.get("number")) is int
+        and row["number"] >= 0
+    }
+
+
 def _wire_state_labels(raw: object) -> dict[str, str]:
     """herdr 0.8.2's native ``{status: label}`` map, read defensively.
 
@@ -448,6 +465,8 @@ def _herdr_pane_to_wire(
     wt_by_ws: dict[str, dict] | None = None,
     ws_by_id: dict[str, str] | None = None,
     tab_by_id: dict[str, str] | None = None,
+    ws_order_by_id: dict[str, int] | None = None,
+    tab_order_by_id: dict[str, int] | None = None,
 ) -> dict:
     """Map a raw herdr pane to herdeck's wire pane schema.
 
@@ -474,6 +493,8 @@ def _herdr_pane_to_wire(
         "branch": branch,
         "workspace": (ws_by_id or {}).get(p.get("workspace_id", ""), ""),
         "tab": (tab_by_id or {}).get(p.get("tab_id", ""), ""),
+        "workspace_order": (ws_order_by_id or {}).get(p.get("workspace_id", "")),
+        "tab_order": (tab_order_by_id or {}).get(p.get("tab_id", "")),
         "waiting_on": tokens.get("waiting_on", ""),
         "progress": tokens.get("progress", ""),
         "metadata": tokens,
@@ -499,7 +520,20 @@ def _wire_panes(
     wt_by_ws = _worktrees_by_workspace(worktrees or [])
     ws_by_id = _workspaces_by_id(workspaces or [])
     tab_by_id = _tabs_by_id(tabs or [])
-    return [_herdr_pane_to_wire(p, wt_by_ws, ws_by_id, tab_by_id) for p in raw if _is_agent_pane(p)]
+    ws_order_by_id = _order_by_id(workspaces or [], "workspace_id")
+    tab_order_by_id = _order_by_id(tabs or [], "tab_id")
+    return [
+        _herdr_pane_to_wire(
+            p,
+            wt_by_ws,
+            ws_by_id,
+            tab_by_id,
+            ws_order_by_id,
+            tab_order_by_id,
+        )
+        for p in raw
+        if _is_agent_pane(p)
+    ]
 
 
 async def _fetch_worktrees(herdr: HerdrClient, workspace_ids: list[str]) -> list:
@@ -773,8 +807,11 @@ _FLEET_EVENT_NAMES = {
 # the cached worktree list (branch labels are not in the snapshot).
 _LABEL_EVENT_TYPES = (
     "pane.updated",
+    "tab.moved",
     "tab.renamed",
+    "workspace.moved",
     "workspace.renamed",
+    "workspace.reordered",
     "workspace.updated",
     "workspace.metadata_updated",
     "worktree.created",

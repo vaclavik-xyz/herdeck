@@ -318,7 +318,9 @@ class Orchestrator:
         hysteresis therefore damps only same-rank reshuffles. Removed agents
         drop out immediately; new agents append at the end until the next
         adoption."""
-        target = layout.order_agents(self._agents.values(), self.config.overview_order)
+        target = layout.order_agents(
+            self._agents.values(), self.config.overview_order, self.config.view.agent_order
+        )
         target_keys = [s.key for s in target]
         now = self._clock()
         if target_keys != self._target_keys:
@@ -596,7 +598,11 @@ class Orchestrator:
         if not display:
             display = [
                 s.key
-                for s in layout.order_agents(self._agents.values(), self.config.overview_order)
+                for s in layout.order_agents(
+                    self._agents.values(),
+                    self.config.overview_order,
+                    self.config.view.agent_order,
+                )
             ]
         shown, _ = layout.page([by_key[k] for k in display], self._page, self._agent_slots())
         return [i for i, s in enumerate(shown) if s.status is Status.WORKING]
