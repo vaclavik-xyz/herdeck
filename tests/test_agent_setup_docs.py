@@ -23,6 +23,9 @@ def test_agent_runbook_covers_setup_completion_and_safety_contracts():
 
     required = (
         "herdr session list --json",
+        "server.capabilities.live_handoff",
+        "update --handoff",
+        "restart_needed",
         "herdr_sessions",
         "HERDECK_MOCK",
         "onboarding.toml",
