@@ -1,6 +1,6 @@
 [package]
 name = "herdeck-desktop"
-version = "0.3.0"
+version = "0.3.1"
 description = "herdeck desktop app — floating Tauri shell (phase 1)"
 authors = ["Filip Vaclavik"]
 edition = "2021"
