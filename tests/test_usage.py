@@ -440,6 +440,8 @@ def test_codex_app_server_source_handshakes_and_reads_limits(monkeypatch):
         "account/read",
         "account/rateLimits/read",
     ]
+    account_read = next(message for message in sent if message["method"] == "account/read")
+    assert account_read["params"] == {"refreshToken": True}
     source.close()
 
 

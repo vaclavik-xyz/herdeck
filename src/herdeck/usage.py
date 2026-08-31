@@ -318,7 +318,7 @@ class CodexAppServerSource:
             account_id = self._next_id
             self._next_id += 1
             self._send(
-                {"method": "account/read", "id": account_id, "params": {"refreshToken": False}}
+                {"method": "account/read", "id": account_id, "params": {"refreshToken": True}}
             )
             try:
                 subscription, plan = parse_codex_account(self._read_response(account_id))
