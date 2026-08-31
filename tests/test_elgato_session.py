@@ -40,12 +40,29 @@ def test_slots_render_leased_agents_by_ordinal():
 
     rendered = sess.render_all()
 
-    # Reading-order: s1 (col 0) = ordinal 0 = alpha; s0 (col 1) = ordinal 1 = beta
+    # Reading-order follows attention priority: blocked beta, then working alpha.
     assert isinstance(rendered["s1"], KeyRender)
-    assert b"alpha" in rendered["s1"].image_png
-    assert b"green" in rendered["s1"].image_png  # working
-    assert b"beta" in rendered["s0"].image_png
-    assert b"amber" in rendered["s0"].image_png  # blocked
+    assert b"beta" in rendered["s1"].image_png
+    assert b"amber" in rendered["s1"].image_png  # blocked
+    assert b"alpha" in rendered["s0"].image_png
+    assert b"green" in rendered["s0"].image_png  # working
+
+
+def test_slots_honor_native_herdr_order_within_status():
+    cfg = make_config()
+    cfg.view.agent_order = "herdr"
+    sess = ElgatoSession(cfg, FakeIcons())
+    sess.set_slots([("s0", (0, 0)), ("s1", (1, 0))])
+    later = state("p1", Status.WORKING, "later")
+    earlier = state("p2", Status.WORKING, "earlier")
+    later.workspace_order, later.tab_order = 2, 1
+    earlier.workspace_order, earlier.tab_order = 1, 3
+
+    sess.apply_snapshot("dev", [later, earlier])
+
+    rendered = sess.render_all()
+    assert b"earlier" in rendered["s0"].image_png
+    assert b"later" in rendered["s1"].image_png
 
 
 def test_empty_slot_renders_blank():
@@ -316,6 +333,22 @@ def test_pager_advances_selection_through_blocked():
     first = sess.selected()
     sess.key_up("p")
     assert sess.selected() != first  # cycled to the other blocked agent
+
+
+def test_pager_honors_native_herdr_order():
+    cfg = make_config()
+    cfg.view.agent_order = "herdr"
+    sess = ElgatoSession(cfg, FakeIcons())
+    sess.set_action_keys([("p", "pager", (3, 2))])
+    later = state("p1", Status.BLOCKED)
+    earlier = state("p2", Status.BLOCKED)
+    later.workspace_order = 2
+    earlier.workspace_order = 1
+    sess.apply_snapshot("dev", [later, earlier])
+
+    sess.key_up("p")
+
+    assert sess.selected() == earlier.key
 
 
 def test_stop_confirm_after_timeout_rearms_instead_of_firing():
