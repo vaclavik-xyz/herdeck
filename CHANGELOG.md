@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-31
+
 ### Added
 - Optional `[view].agent_order = "herdr"` mirrors Herdr workspace and tab
   positions within each status/server group while preserving attention priority.
