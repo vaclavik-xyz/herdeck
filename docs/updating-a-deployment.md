@@ -227,18 +227,30 @@ while `summary`'s `agents` count is non-zero.
 To force the question, put the deck back in the overview and then cause an
 agent status change yourself.
 
-Both halves are doable blind. `/state`'s `tile_sections` says which view is on
-screen — agent tiles report `view`, while a menu or drill reports `profiles`,
-`start_profiles` or `answer_profiles` — and the last slot is the Back tile every
-menu and drill reserves, so pressing it returns to the overview:
+Both halves are doable blind while `summary` reports at least one agent. In that
+case, any `view` value in `/state`'s `tile_sections` proves that an agent tile is
+on screen and the deck is in the overview. The other section names do not prove
+the opposite: the overview's launcher and management tiles also report
+`start_profiles` or `profiles`.
+
+Only when agents exist and `tile_sections` contains no `view`, press the last
+slot. It is the Back tile in every menu and drill, but in the overview that same
+slot opens the launcher or another management action:
 
 ```bash
 curl -X POST -H "X-Herdeck-Token: $TOKEN" "$URL/press/$((SLOTS-1))"
 ```
 
-`SLOTS` is `/state`'s `slots`. Give it a few seconds before re-reading
-`tile_sections` — a press answers `204` before the next frame has been
-rendered, so an immediate re-read still shows the old view.
+`SLOTS` is `/state`'s `slots`. Re-read `tile_sections` after the `204`; the
+runtime has already refreshed that state before replying. Back from a profile
+menu can return to the launcher when the menu was opened there, so repeat the
+conditional check and press until a `view` entry appears. If the sections do
+not change after a press, the press did not do what you assumed — waiting will
+not make that state transition arrive later.
+
+With no agents, the overview has no `view` tile and cannot be distinguished
+from the launcher by section names alone. More importantly, there is no agent
+whose status can be changed, so this forced-change verification does not apply.
 
 **Do it from the overview**: the launcher and the profile menu render no agent
 tiles and not the overview panel, so a status change there moves nothing and a
