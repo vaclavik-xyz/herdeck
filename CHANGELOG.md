@@ -122,7 +122,8 @@ Initial public release.
   configurable tiles, themes, profiles, macros, and notifications
   (macOS + Telegram).
 
-[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/vaclavik-xyz/herdeck/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vaclavik-xyz/herdeck/releases/tag/v0.1.0
