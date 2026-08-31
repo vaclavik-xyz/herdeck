@@ -41,19 +41,19 @@ PINNED_ASSETS: dict[tuple[str, str], tuple[str, str]] = {
 # Current-protocol calls made by SocketHerdr. The protocol-16 agent.send and
 # agent.start(argv=...) branches are deliberately excluded: a 0.8.2 schema no
 # longer advertises that legacy surface, while Herdeck keeps it for old servers.
-REQUIRED_METHOD_PARAMS: dict[str, set[str]] = {
-    "agent.focus": {"target"},
-    "agent.prompt": {"target", "text"},
-    "agent.start": {"name", "kind", "pane_id", "args"},
-    "events.subscribe": {"subscriptions"},
-    "pane.list": set(),
-    "pane.read": {"pane_id", "source"},
-    "pane.send_keys": {"pane_id", "keys"},
-    "pane.send_text": {"pane_id", "text"},
-    "session.snapshot": set(),
-    "tab.close": {"tab_id"},
-    "tab.create": {"focus", "label"},
-    "worktree.list": {"workspace_id"},
+REQUIRED_METHOD_PARAM_VARIANTS: dict[str, tuple[frozenset[str], ...]] = {
+    "agent.focus": (frozenset({"target"}),),
+    "agent.prompt": (frozenset({"target", "text"}),),
+    "agent.start": (frozenset({"name", "kind", "pane_id", "args"}),),
+    "events.subscribe": (frozenset({"subscriptions"}),),
+    "pane.list": (frozenset(),),
+    "pane.read": (frozenset({"pane_id", "source"}),),
+    "pane.send_keys": (frozenset({"pane_id", "keys"}),),
+    "pane.send_text": (frozenset({"pane_id", "text"}),),
+    "session.snapshot": (frozenset(),),
+    "tab.close": (frozenset({"tab_id"}),),
+    "tab.create": (frozenset({"focus", "label"}),),
+    "worktree.list": (frozenset(), frozenset({"workspace_id"})),
 }
 
 REQUIRED_RESPONSE_FIELDS: dict[str, set[str]] = {
@@ -139,22 +139,23 @@ def validate_schema(schema: dict, *, bridge_path: Path = BRIDGE_PATH) -> str:
         errors.append(f"protocol is {schema.get('protocol')!r}, expected {PINNED_PROTOCOL}")
 
     methods = _request_methods(schema)
-    for method, sent_fields in sorted(REQUIRED_METHOD_PARAMS.items()):
+    for method, sent_variants in sorted(REQUIRED_METHOD_PARAM_VARIANTS.items()):
         params = methods.get(method)
         if params is None:
             errors.append(f"missing method {method}")
             continue
         accepted = set(params.get("properties", {}))
-        missing_fields = sent_fields - accepted
-        if missing_fields:
-            errors.append(f"{method} rejects fields: {', '.join(sorted(missing_fields))}")
         required = set(params.get("required", []))
-        unsent_required = required - sent_fields
-        if unsent_required:
-            errors.append(
-                f"{method} newly requires fields Herdeck does not send: "
-                + ", ".join(sorted(unsent_required))
-            )
+        for sent_fields in sent_variants:
+            missing_fields = sent_fields - accepted
+            if missing_fields:
+                errors.append(f"{method} rejects fields: {', '.join(sorted(missing_fields))}")
+            unsent_required = required - sent_fields
+            if unsent_required:
+                errors.append(
+                    f"{method} newly requires fields Herdeck does not send: "
+                    + ", ".join(sorted(unsent_required))
+                )
 
     schema_events = _subscription_events(schema)
     missing_events = bridge_subscription_events(bridge_path) - schema_events
@@ -173,7 +174,8 @@ def validate_schema(schema: dict, *, bridge_path: Path = BRIDGE_PATH) -> str:
     if errors:
         raise ContractError("Herdr API contract failed:\n- " + "\n- ".join(errors))
     return (
-        f"Herdr API protocol {PINNED_PROTOCOL} satisfies {len(REQUIRED_METHOD_PARAMS)} methods, "
+        f"Herdr API protocol {PINNED_PROTOCOL} satisfies "
+        f"{len(REQUIRED_METHOD_PARAM_VARIANTS)} methods, "
         f"{len(bridge_subscription_events(bridge_path))} subscriptions, and "
         f"{checked_fields} response fields"
     )

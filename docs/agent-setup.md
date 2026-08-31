@@ -147,10 +147,11 @@ and in-flight API calls. Do not start it while somebody is approving, denying,
 or answering an agent from Herdeck; the bridge reconnects automatically after
 the replacement server is ready.
 
-If `live_handoff` is absent or false, use plain `herdr update` and plan for the
-normal stop/restore path. Homebrew, mise, and Nix installations must be upgraded
-with their package manager; Herdr's self-updater, including `--handoff`, is
-disabled for them. Do not infer handoff support merely from a new client binary.
+If `live_handoff` is absent or false, use plain `herdr --session SESSION update`
+and plan for the normal stop/restore path. Homebrew, mise, and Nix installations
+must be upgraded with their package manager; Herdr's self-updater, including
+`--handoff`, is disabled for them. Do not infer handoff support merely from a
+new client binary.
 
 After each path, re-run the JSON checks for that exact session and require the
 client and server versions to match, `compatible` to be true, and

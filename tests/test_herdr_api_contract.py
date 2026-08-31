@@ -13,15 +13,19 @@ SPEC.loader.exec_module(contract)
 
 def _schema() -> dict:
     request_defs = {}
-    variants = []
-    for index, (method, fields) in enumerate(contract.REQUIRED_METHOD_PARAMS.items()):
+    request_variants = []
+    for index, (method, param_variants) in enumerate(
+        contract.REQUIRED_METHOD_PARAM_VARIANTS.items()
+    ):
         definition = f"Params{index}"
+        fields = set().union(*param_variants)
+        required = set.intersection(*(set(variant) for variant in param_variants))
         request_defs[definition] = {
             "type": "object",
             "properties": {field: {"type": "string"} for field in fields},
-            "required": sorted(fields),
+            "required": sorted(required),
         }
-        variants.append(
+        request_variants.append(
             {
                 "properties": {
                     "method": {"const": method},
@@ -44,7 +48,7 @@ def _schema() -> dict:
     return {
         "protocol": contract.PINNED_PROTOCOL,
         "schemas": {
-            "request": {"$defs": request_defs, "oneOf": variants},
+            "request": {"$defs": request_defs, "oneOf": request_variants},
             "success_response": {"$defs": response_defs},
         },
     }
@@ -85,6 +89,21 @@ def test_contract_reports_bridge_subscription_drift():
     ]
 
     with pytest.raises(contract.ContractError, match="pane.agent_status_changed"):
+        contract.validate_schema(schema)
+
+
+def test_contract_checks_unfiltered_worktree_list_variant():
+    schema = _schema()
+    definitions = schema["schemas"]["request"]["$defs"]
+    variant = next(
+        item
+        for item in schema["schemas"]["request"]["oneOf"]
+        if item["properties"]["method"]["const"] == "worktree.list"
+    )
+    definition = variant["properties"]["params"]["$ref"].rsplit("/", 1)[-1]
+    definitions[definition]["required"] = ["workspace_id"]
+
+    with pytest.raises(contract.ContractError, match="worktree.list newly requires"):
         contract.validate_schema(schema)
 
 
