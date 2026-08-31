@@ -17,6 +17,10 @@ def _status(value: str) -> Status:
         return Status.UNKNOWN
 
 
+def _order(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
 def _pane_to_state(server_id: str, pane: dict) -> AgentState:
     status = _status(pane.get("status", "unknown"))
     waiting_on = pane.get("waiting_on") or ""
@@ -43,6 +47,8 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         branch=pane.get("branch", ""),
         workspace=pane.get("workspace", ""),
         tab=pane.get("tab", ""),
+        workspace_order=_order(pane.get("workspace_order")),
+        tab_order=_order(pane.get("tab_order")),
         waiting_on=waiting_on,
         progress=pane.get("progress") or "",
         metadata={str(key): str(value) for key, value in metadata.items()},

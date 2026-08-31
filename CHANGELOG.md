@@ -7,6 +7,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Optional `[view].agent_order = "herdr"` mirrors Herdr workspace and tab
+  positions within each status/server group while preserving attention priority.
 - **Check for updates** in the tray. It opens the app window and answers either
   way — a newer release, "you are up to date", or the failure and its reason.
 - **Qwen Code** joins the agent kinds herdeck can launch through herdr's

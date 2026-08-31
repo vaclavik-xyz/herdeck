@@ -112,6 +112,26 @@ def test_order_stable_by_pane_within_status():
     assert [s.key.pane_id for s in order_agents(agents, ["dev"])] == ["p1", "p2"]
 
 
+def test_herdr_order_uses_workspace_then_tab_within_status():
+    agents = [a("p3", Status.WORKING), a("p1", Status.WORKING), a("p2", Status.WORKING)]
+    agents[0].workspace_order, agents[0].tab_order = 2, 1
+    agents[1].workspace_order, agents[1].tab_order = 1, 3
+    agents[2].workspace_order, agents[2].tab_order = 1, 2
+
+    ordered = order_agents(agents, ["dev"], "herdr")
+
+    assert [s.key.pane_id for s in ordered] == ["p2", "p1", "p3"]
+
+
+def test_herdr_order_preserves_status_priority_and_falls_back_to_pane_id():
+    agents = [a("p2", Status.WORKING), a("p3", Status.BLOCKED), a("p1", Status.WORKING)]
+    agents[0].workspace_order = 1
+
+    ordered = order_agents(agents, ["dev"], "herdr")
+
+    assert [s.key.pane_id for s in ordered] == ["p3", "p2", "p1"]
+
+
 def test_page_slices_and_counts():
     items = list(range(30))
     sl, pages = page(items, 0, 13)

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import (
+    AGENT_ORDERS,
     DEFAULT_MACROS,
     DEFAULT_PROFILES,
     DEFAULT_REQUIRE_CONFIRM,
@@ -206,6 +207,11 @@ def _view_config(raw: dict | None) -> ViewConfig:
     for key in ("management", "agent_slots"):
         if key in raw:
             setattr(view, key, raw[key])
+    if "agent_order" in raw:
+        val = raw["agent_order"]
+        if val not in AGENT_ORDERS:
+            raise ConfigError(f"unknown view.agent_order '{val}'; want one of {AGENT_ORDERS}")
+        view.agent_order = val
     if "bottom_row" in raw:
         view.bottom_row = list(raw["bottom_row"])
     if "tile_fields" in raw:

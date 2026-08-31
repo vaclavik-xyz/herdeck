@@ -18,6 +18,7 @@
 
   const SEC = "view";
   const MANAGEMENT = ["launcher_menu", "bottom_row"];
+  const AGENT_ORDERS = ["status", "herdr"];
   const WORKING_ANIMATIONS = ["spin", "comet", "pulse", "sweep", "none"];
   const UI_LANGUAGES = ["en", "cs"];
   const TILE_FILLS = ["none", "tint", "solid"];
@@ -58,6 +59,7 @@
   const lm = $derived(LM[locale.lang]);
 
   const management = $derived((getAt(payload, "base", SEC, "management") as string) ?? defaults.view.management);
+  const agentOrder = $derived((getAt(payload, "base", SEC, "agent_order") as string) ?? defaults.view.agent_order);
   const agentSlots = $derived((getAt(payload, "base", SEC, "agent_slots") as string) ?? defaults.view.agent_slots);
   const showProfile = $derived((getAt(payload, "base", SEC, "show_profile_on_panel") as boolean) ?? defaults.view.show_profile_on_panel);
   const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? defaults.view.working_animation);
@@ -111,6 +113,9 @@
     <OverrideField label="management" help={HELP.management} state={scState("management")} inheritedDisplay={hint("management")} onstate={(s) => setScState("management", s)}>
       <SelectField label="" value={String(scValue("management") ?? "")} options={MANAGEMENT} onchange={(v) => setSc("management", v)} />
     </OverrideField>
+    <OverrideField label="agent_order" help={HELP.agent_order} state={scState("agent_order")} inheritedDisplay={hint("agent_order")} onstate={(s) => setScState("agent_order", s)}>
+      <SelectField label="" value={String(scValue("agent_order") ?? "status")} options={AGENT_ORDERS} onchange={(v) => setSc("agent_order", v)} />
+    </OverrideField>
     <OverrideField label="language" help={HELP.language} state={scState("language")} inheritedDisplay={hint("language")} onstate={(s) => setScState("language", s)}>
       <SelectField label="" value={String(scValue("language") ?? "en")} options={UI_LANGUAGES} onchange={(v) => setSc("language", v)} />
     </OverrideField>
@@ -139,6 +144,7 @@
 {:else}
   <FieldGroup title={lm.layout}>
     <SelectField label="management" help={HELP.management} value={management} options={MANAGEMENT} onchange={(v) => set("management", v)} />
+    <SelectField label="agent_order" help={HELP.agent_order} value={agentOrder} options={AGENT_ORDERS} onchange={(v) => set("agent_order", v)} />
     <SelectField label="language" help={HELP.language} value={uiLanguage} options={UI_LANGUAGES} onchange={(v) => set("language", v)} />
     <details class="advanced-settings"><summary>{lm.advanced}</summary>
       <TextField label="agent_slots" help={HELP.agent_slots} value={agentSlots} oninput={(v) => set("agent_slots", v)} />

@@ -74,6 +74,7 @@ TILE_LINE_TOKENS: tuple[str, ...] = (
     "run",
 )
 WORKING_ANIMATIONS: tuple[str, ...] = ("spin", "comet", "pulse", "sweep", "none")
+AGENT_ORDERS: tuple[str, ...] = ("status", "herdr")
 # How an agent tile is filled with its status colour:
 #   none  = dark tile, colour only in the status word + bottom accent bar (default)
 #   tint  = whole tile a darkened shade of the status colour + a bright bottom edge
@@ -91,6 +92,7 @@ class ThemeConfig:
 @dataclass
 class ViewConfig:
     management: str = "launcher_menu"
+    agent_order: str = "status"
     bottom_row: list[str] = field(default_factory=lambda: list(DEFAULT_BOTTOM_ROW))
     show_profile_on_panel: bool = False
     agent_slots: str = "max"

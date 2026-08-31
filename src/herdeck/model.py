@@ -69,6 +69,10 @@ class AgentState:
     branch: str = ""  # git branch (from herdr worktree)
     workspace: str = ""  # herdr workspace label (workspace.list)
     tab: str = ""  # herdr tab label (tab.list)
+    # Native Herdr positions, available from protocol 20 snapshots. They are
+    # presentation hints only; None keeps older bridges fully compatible.
+    workspace_order: int | None = None
+    tab_order: int | None = None
     # Explicit Herdr 0.7.4 metadata tokens. ``waiting_on`` marks passive
     # background work; ``progress`` describes an actively working agent.
     waiting_on: str = ""

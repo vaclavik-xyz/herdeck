@@ -6,6 +6,26 @@ import { setLang } from "../i18n.svelte";
 import ViewSection from "./ViewSection.svelte";
 
 describe("ViewSection", () => {
+  it("offers native Herdr ordering without changing the default", () => {
+    setLang("en");
+    const payload = parseConfig({ base: { view: {} } })!;
+    const target = document.createElement("div");
+    const instance = mount(ViewSection, {
+      target,
+      props: { payload, onChange: () => {}, onError: () => {} },
+    });
+    try {
+      const field = Array.from(target.querySelectorAll("label.field")).find(
+        (item) => item.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === "agent_order",
+      );
+      const select = field?.querySelector<HTMLSelectElement>("select");
+      expect(select?.value).toBe("status");
+      expect(Array.from(select?.options ?? []).map((option) => option.value)).toEqual(["status", "herdr"]);
+    } finally {
+      unmount(instance);
+    }
+  });
+
   it("derives tile-line defaults from effective tile_fields", () => {
     setLang("en");
     const payload = parseConfig({ base: { view: { tile_fields: ["status"] } } })!;

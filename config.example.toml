@@ -23,6 +23,8 @@ offline = "red"
 
 [view]
 management = "launcher_menu"
+# Keep status priority; "herdr" mirrors workspace/tab order within each status.
+agent_order = "status"
 show_profile_on_panel = true
 agent_slots = "max"
 tile_fields = ["repo", "tab", "branch", "status", "time", "server"]

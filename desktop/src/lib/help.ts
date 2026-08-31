@@ -29,6 +29,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     },
     view: {
       management: "Controls layout: launcher_menu = a '+ New' tile with a menu, bottom_row = a bottom row of buttons.",
+      agent_order: "Orders equal-status agents by pane id (status) or by their Herdr workspace and tab position (herdr).",
       agent_slots: "Number of tiles reserved for agents ('max' = all free ones); not used by the app yet.",
       show_profile_on_panel: "Shows the active profile name on the status panel; not used when rendering yet.",
       working_animation: "Working-tile animation: pulse = calm slow breath (fewest repaints), spin/comet/sweep = per-tick motion, none = static.",
@@ -120,6 +121,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     },
     view: {
       management: "Rozložení ovládání: launcher_menu = dlaždice „+ New“ s menu, bottom_row = spodní řada tlačítek.",
+      agent_order: "Řadí agenty se stejným stavem podle ID panelu (status) nebo pozice workspace a tabu v Herdr (herdr).",
       agent_slots: "Počet dlaždic vyhrazených agentům („max“ = všechny volné); zatím se v aplikaci nepoužívá.",
       show_profile_on_panel: "Ukáže název aktivního profilu na stavovém panelu; zatím se při vykreslování nepoužívá.",
       working_animation: "Animace pracující dlaždice: pulse = klidný pomalý tep (nejméně překreslení), spin/comet/sweep = pohyb každý tick, none = staticky.",
