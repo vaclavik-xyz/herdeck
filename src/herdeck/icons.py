@@ -138,6 +138,11 @@ def _fingerprint_assets(assets_dir: str | None) -> str:
     return h.hexdigest()[:10]
 
 
+def _baked_glyph_png_name(svg_text: str) -> str:
+    """Content-addressed filename shared with the frozen asset baker."""
+    return hashlib.sha1(svg_text.encode("utf-8")).hexdigest() + ".png"
+
+
 # Every interactive agent kind advertised by Herdr 0.8.2. Keep this in sync with
 # ``herdr agent start --help``; the asset regression test makes missing marks a
 # deliberate decision instead of a silent letter-glyph downgrade.
@@ -616,11 +621,26 @@ class IconProvider:
         if img is None and self._assets_dir:
             asset = os.path.join(self._assets_dir, f"{_safe_name(agent_type)}.svg")
             if os.path.exists(asset):
+                svg = ""
                 try:
                     with open(asset, encoding="utf-8") as fh:
-                        img = self._rasterize(fh.read(), ICON_SIZE)
+                        svg = fh.read()
+                    img = self._rasterize(svg, ICON_SIZE)
                 except Exception:
-                    img = None  # e.g. cairosvg missing -> fall back to a letter
+                    img = None
+                # Source installs using the ``elgato`` extra intentionally omit
+                # CairoSVG. They can still consume the same committed baked PNGs
+                # as the frozen app instead of degrading a bundled mark to text.
+                if img is None and svg:
+                    baked_asset = os.path.join(
+                        self._assets_dir, _baked_glyph_png_name(svg)
+                    )
+                    try:
+                        img = Image.open(baked_asset).convert("RGBA").resize(
+                            (ICON_SIZE, ICON_SIZE), Image.LANCZOS
+                        )
+                    except OSError:
+                        img = None
             if img is None:
                 raster_asset = os.path.join(
                     self._assets_dir, f"{_safe_name(agent_type)}.png"

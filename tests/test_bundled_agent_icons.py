@@ -7,7 +7,13 @@ from PIL import Image
 from herdeck import frozen
 from herdeck.bridge import _MANAGED_AGENT_KINDS
 from herdeck.deckapp import server
-from herdeck.icons import _ASSETS_DIR, BUNDLED_AGENT_TYPES, ICON_SIZE
+from herdeck.icons import (
+    _ASSETS_DIR,
+    BUNDLED_AGENT_TYPES,
+    DEFAULT_AGENT_SLUGS,
+    ICON_SIZE,
+    IconProvider,
+)
 
 
 def test_bundled_marks_cover_every_managed_herdr_agent_kind():
@@ -66,3 +72,20 @@ def test_frozen_provider_renders_bundled_mark_not_letter(monkeypatch):
         assert glyph.tobytes() != letter.tobytes(), (
             f"{name}: asset branch missed -> degraded to letter glyph"
         )
+
+
+def test_source_provider_without_svg_rasterizer_uses_committed_baked_mark(tmp_path):
+    def unavailable_rasterizer(_svg, _size):
+        raise ImportError("cairosvg unavailable")
+
+    icons = IconProvider(
+        cache_dir=str(tmp_path),
+        slug_map=DEFAULT_AGENT_SLUGS,
+        fetch=lambda _slug: None,
+        rasterize=unavailable_rasterizer,
+        assets_dir=_ASSETS_DIR,
+    )
+
+    glyph = icons._base_glyph("qwen")
+    assert glyph.size == (ICON_SIZE, ICON_SIZE)
+    assert glyph.tobytes() != icons._letter_glyph("qwen").tobytes()
