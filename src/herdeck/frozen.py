@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import sys
 from collections.abc import Callable
 
 from PIL import Image
 
-from .icons import ICON_SIZE
+from .icons import ICON_SIZE, _baked_glyph_png_name
 
 BAKE_SIZE = ICON_SIZE
 
@@ -34,7 +33,7 @@ def glyph_png_name(svg_text: str) -> str:
     needs to know the agent type — keeping ``IconProvider``'s ``rasterize(svg,
     size)`` seam untouched.
     """
-    return hashlib.sha1(svg_text.encode("utf-8")).hexdigest() + ".png"
+    return _baked_glyph_png_name(svg_text)
 
 
 def make_png_rasterizer(baked_dir: str) -> Callable[[str, int], Image.Image]:

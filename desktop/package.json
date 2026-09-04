@@ -1,7 +1,7 @@
 {
   "name": "herdeck-desktop",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "description": "Herdeck desktop control room and compact deck overlay",
   "scripts": {
