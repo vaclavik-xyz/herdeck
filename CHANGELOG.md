@@ -6,6 +6,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-04
+
+### Added
+- Agent tiles now ship polished offline marks for every interactive agent kind
+  supported by Herdr 0.8.2: Amp, Antigravity, Claude, Cline, Codex, Copilot,
+  Cursor, Devin, Droid, Gemini, Grok, Hermes, Kilo, Kimi, Kiro, Maki, Mastra
+  Code, OMP, OpenCode, Pi, Qoder, and Qwen. Custom agent types retain the
+  generated-letter fallback and local PNG overrides.
+
+### Fixed
+- Source installations without CairoSVG now load the committed pre-rendered
+  agent marks instead of silently degrading bundled SVG brands to letters.
+
 ## [0.3.1] - 2026-08-31
 
 ### Fixed
@@ -129,7 +142,8 @@ Initial public release.
   configurable tiles, themes, profiles, macros, and notifications
   (macOS + Telegram).
 
-[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/vaclavik-xyz/herdeck/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.1.1...v0.2.0
