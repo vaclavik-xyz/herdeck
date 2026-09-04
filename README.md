@@ -679,6 +679,12 @@ Add it to the `[start_profiles]` section (base config) or override it per profil
 myagent = ["myagent", "--flag"]
 ```
 
+Herdeck bundles marks for every interactive agent kind supported by Herdr
+0.8.2: Amp, Antigravity, Claude, Cline, Codex, Copilot, Cursor, Devin, Droid,
+Gemini, Grok, Hermes, Kilo, Kimi, Kiro, Maki, Mastra Code, OMP, OpenCode, Pi,
+Qoder, and Qwen. A custom type uses a generated letter mark unless
+`local.icons_dir` contains a matching `<agent_type>.png` override.
+
 Custom `[answer_profiles.<name>]` sections can be defined in the base config and overridden per-profile via `[profiles.<name>.answer_profiles.<type>]`. The built-in `claude`, `codex`, and `default` types are always available for profile overrides even when omitted from the base config.
 
 ## Notifications
