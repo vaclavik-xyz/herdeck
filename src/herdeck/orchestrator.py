@@ -442,7 +442,12 @@ class Orchestrator:
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
                 down = s.key.server_id in self._down
-                tag = s.key.server_id[:3].upper() if show_server_tags else None
+                tag = ("T3" if s.backend == "t3" else "HERDR") if show_server_tags else None
+                # A T3 thread takes the place of a terminal tab. Give its title
+                # the whole secondary line by default; explicit layouts still win.
+                agent_secondary = secondary_tokens
+                if s.backend == "t3" and self.config.view.tile_secondary is None:
+                    agent_secondary = ["tab"] if "tab" in fields else []
                 accent = (
                     server_accent(s.key.server_id, self.config.theme.server_accents)
                     if show_server_tags
@@ -459,7 +464,7 @@ class Orchestrator:
                         working_animation=self.config.view.working_animation,
                         tile_fill=self.config.view.tile_fill,
                         repo=layout.compose_line(s, primary_tokens),
-                        branch=layout.compose_line(s, secondary_tokens),
+                        branch=layout.compose_line(s, agent_secondary),
                         status_text=layout.tile_status_text(
                             s, self.config.view.language, down
                         )

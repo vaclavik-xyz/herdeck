@@ -2,8 +2,9 @@ import asyncio
 
 import pytest
 
-from herdeck.config import ServerConfig
-from herdeck.model import Status
+from herdeck.config import Config, ServerConfig
+from herdeck.model import AgentKey, AgentState, Status
+from herdeck.orchestrator import Orchestrator
 from herdeck.t3 import T3Connector, T3Error, T3Http, thread_state
 
 
@@ -46,12 +47,13 @@ def test_endpoint_rejects_unsafe_or_ambiguous_urls(url):
 class FakeHttp:
     def __init__(self, t):
         self.thread = t
+        self.projects = []
         self.writes = []
         self.fail_write = False
 
     def get(self, path):
         if path.endswith("/shell"):
-            return {"projects": [], "threads": [self.thread]}
+            return {"projects": self.projects, "threads": [self.thread]}
         return {"thread": self.thread}
 
     def dispatch(self, command):
@@ -182,3 +184,31 @@ def test_http_transport_does_not_follow_redirect_or_echo_secret():
         server.shutdown()
         server.server_close()
         worker.join()
+
+
+@pytest.mark.asyncio
+async def test_project_and_thread_renames_reach_mixed_deck_tiles():
+    c, _ = connector(thread(title="Fix the checkout"))
+    c.http.projects = [{"id": "project-1", "title": "My shop",
+                        "workspaceRoot": "/Users/admin/projects/shop"}]
+    o = Orchestrator(Config(servers=[], profiles={}, overview_order=["t3", "local"], grid=(5, 3)), slots=13)
+    c._on_snapshot = o.apply_snapshot
+    o.apply_snapshot("local", [AgentState(AgentKey("local", "p1"), "codex", "api", Status.IDLE)])
+    await c.refresh()
+    tiles = [t for t in o.render().tiles if t.repo]
+    assert [(t.repo, t.branch, t.server_tag) for t in tiles] == [
+        ("My shop", "Fix the checkout", "T3"), ("api", "", "HERDR")]
+    c.http.projects[0]["title"] = "Renamed shop"
+    c.http.thread["title"] = "Checkout fixed"
+    await c.refresh()
+    tile = o.render().tiles[0]
+    assert (tile.repo, tile.branch) == ("Renamed shop", "Checkout fixed")
+    assert c.states["thread-1"].repo == "/Users/admin/projects/shop"
+
+
+def test_t3_tile_honors_explicit_secondary_layout():
+    cfg = Config(servers=[], profiles={}, overview_order=["t3"], grid=(5, 3))
+    cfg.view.tile_secondary = ["branch"]
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("t3", [thread_state("t3", thread(branch="feature/shop"), {}, "e")])
+    assert o.render().tiles[0].branch == "feature/shop"

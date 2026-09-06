@@ -776,3 +776,18 @@ def test_panel_save_failure_serves_stale_previous_panel(tmp_path, monkeypatch):
     finally:
         driver.close()
         os.chdir(before)
+
+
+def test_standard_writer_override_bypasses_fast_zip(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERDECK_D200_STANDARD_WRITER", "1")
+    dev = _FakeDev()
+    driver = _make_driver(tmp_path, dev)
+    try:
+        def unexpected_fast_write(*args, **kwargs):
+            pytest.fail("Standard writer override reached the fast path")
+        monkeypatch.setattr(driver, "_fast_set_buttons", unexpected_fast_write)
+        driver.render([TileView(0, "project", "blue")])
+        assert _wait_until(lambda: bool(dev.calls))
+        assert dev.calls[0][0][0]["icon"] == "icon_0.png"
+    finally:
+        driver.close()

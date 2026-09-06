@@ -937,7 +937,7 @@ class IconProvider:
         if tile.server_tag:
             chip_fill = _rgb_color(tile.server_accent or "", (95, 95, 105))
             fc = _font(14)
-            tag = _truncate(d, tile.server_tag, fc, 48)
+            tag = _truncate(d, tile.server_tag, fc, 80)
             text_w = d.textlength(tag, font=fc)
             bb = d.textbbox((0, 0), tag, font=fc)
             x, y, pad_x, chip_h = 12, ICON_SIZE - 40, 6, 22

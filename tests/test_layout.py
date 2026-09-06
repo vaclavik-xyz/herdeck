@@ -541,3 +541,11 @@ def test_panel_detail_leads_with_active_progress():
         AgentKey("dev", "p1"), "claude", "api", Status.WORKING, progress="2/5 Run tests"
     )
     assert panel_detail(agent, "").lines == ["2/5 Run tests"]
+
+
+def test_t3_project_fallback_does_not_display_workspace_path():
+    s = _astate(repo="/Users/admin/projects/herdeck")
+    s.backend = "t3"
+    assert compose_line(s, ["repo"]) == "herdeck"
+    s.repo = ""
+    assert compose_line(s, ["repo"]) == s.label

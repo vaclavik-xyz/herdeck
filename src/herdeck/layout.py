@@ -4,6 +4,7 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from .driver.base import PanelGauge, PanelView
 from .i18n import tr
@@ -61,13 +62,18 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
     parts: list[str] = []
     for token in tokens:
         if token == "repo":
-            value = state.repo or state.label
+            # T3 projects have editable display names; workspaceRoot is a path,
+            # not the project label shown in the T3 sidebar.
+            if state.backend == "t3":
+                value = state.project or PurePosixPath(state.repo).name or state.label
+            else:
+                value = state.repo or state.label
         elif token == "branch":
             value = state.branch
         elif token == "workspace":
             value = state.workspace
         elif token == "tab":
-            value = f"›{state.tab}" if state.tab else ""
+            value = state.title if state.backend == "t3" else (f"›{state.tab}" if state.tab else "")
         elif token == "agent":
             value = state.agent_type
         elif token == "source":

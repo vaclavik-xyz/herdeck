@@ -241,3 +241,19 @@ Herdeck desktop and runtime active. The test T3 instance is on HEADLESS-A3112.
 The user has been asked whether T3 should run on macBench or HEADLESS-A3112;
 the existing macBench runtime has not been interrupted, replaced or reconfigured.
 Remote T3 networking is not silently introduced to bridge this choice.
+
+### Physical follow-up (2026-09-06)
+
+The real T3 0.0.38 server now supplies macBench alongside Herdr. The initial
+optimized USB writer left the physical deck showing an old page even though
+runtime health and HID packet byte counts looked successful. The user confirmed
+that the physical display worked after selecting the standard strmdck writer in
+a source runtime. This confirms display delivery only; physical approval, Stop,
+and question handling still need separate acceptance. See the compatibility and
+connection-lifecycle notes in `agent-setup.md`.
+
+The follow-up tile correction uses T3's editable project name and thread title,
+updates both on subsequent snapshots, and labels backends `T3` / `HERDR` instead
+of abbreviating internal connection IDs. Focused tests cover snapshot renames,
+explicit secondary layouts, missing project-title fallback, and the standard
+writer override.

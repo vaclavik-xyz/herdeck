@@ -151,7 +151,9 @@ class D200Driver(DeckDriver):
         self._last_panel_key: tuple | None = None
         self._panel_names: tuple[str, ...] | None = None
         self._last_frame_buttons: dict[int, dict] | None = None
-        self._fast_path_ok = True
+        # Some firmware keeps a stale page despite successful fast-path HID
+        # writes. Allow the device-tested stock writer without a runtime patch.
+        self._fast_path_ok = os.environ.get("HERDECK_D200_STANDARD_WRITER") != "1"
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
         self._previous_cwd = os.getcwd()

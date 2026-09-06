@@ -688,3 +688,30 @@ questions use the provider's exact option value. Persistent approval, raw keys,
 terminal streaming and desktop thread navigation are not supported. An uncertain
 write is not retried; actions remain disabled until its exact effect is observed
 in T3 or the operator investigates and deliberately recreates the connection.
+
+### Physical D200 compatibility and T3 tile labels
+
+T3 overview tiles show the editable project title on the primary line and the
+thread title on the secondary line. They refresh with each T3 snapshot, including
+renames. If a project title is absent, only the workspace directory basename is
+used. The existing `repo` and `tab` tile-line tokens represent project and thread
+for T3; explicit secondary layouts still take precedence. Mixed-connection badges
+show `T3` or `HERDR`; connection-specific accent colors remain unchanged.
+
+On macBench's D200, the user confirmed recovery from a stale `Offline /
+Reconnecting` page after switching from the optimized ZIP writer to strmdck's
+standard writer (2026-09-06). Successful HID writes and `/health` were insufficient
+to prove a visible update. Set `HERDECK_D200_STANDARD_WRITER=1` in the runtime's
+launch environment to retain that compatibility path. This selects the existing
+standard writer and its two-cell panel fallback; it does not change other devices
+by default. The exact firmware rejection mechanism is still undiagnosed.
+
+The current macBench connection `t3-headless` uses the existing T3 application's
+SSH forward to HEADLESS-A3112's real T3 0.0.38 server. That forward belongs to the
+T3 application and may change port or disappear when it reconnects/exits. A future
+persistent connection must explicitly address that lifecycle; do not create new
+network infrastructure implicitly. The macBench setup backup is under
+`~/.config/herdeck/backup-t3-20260906-180428/`. Its runtime launcher reads the T3
+credential from Keychain using the setup interpreter before starting Herdeck, so
+the differently signed packaged executable does not block on Keychain access.
+No credential values belong in this runbook or the launcher.

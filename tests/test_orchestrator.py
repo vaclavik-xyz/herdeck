@@ -275,7 +275,7 @@ def test_multi_server_tiles_get_server_tag():
 
     tiles = [tile for tile in o.render().tiles if tile.repo]
 
-    assert [tile.server_tag for tile in tiles] == ["ALP", "BRA"]
+    assert [tile.server_tag for tile in tiles] == ["HERDR", "HERDR"]
     assert all(tile.server_accent for tile in tiles)
 
 
@@ -313,7 +313,7 @@ def test_multi_server_tags_stay_visible_on_single_server_page():
 
     tiles = [tile for tile in o.render().tiles if tile.repo]
 
-    assert [tile.server_tag for tile in tiles] == ["ALP", "ALP"]
+    assert [tile.server_tag for tile in tiles] == ["HERDR", "HERDR"]
     assert all(tile.server_accent for tile in tiles)
 
 
