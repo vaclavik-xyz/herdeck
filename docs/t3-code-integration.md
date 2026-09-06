@@ -1,6 +1,7 @@
 # T3 Code integration: design and implementation plan
 
-Status: implementation in progress on `feat/t3-code-integration`.
+Status: T3-01 through T3-05 implemented and verified. T3-06 software verification
+passed; the physical deck pilot awaits the user's choice of T3 host.
 Updated: 2026-09-06.
 
 ## Goal
@@ -10,7 +11,7 @@ interface. Show Herdr agents and T3 conversations together, with correct routing
 of every action to its owning backend. Existing Herdr workflows must continue
 to work when T3 is absent or disconnected.
 
-This document plans a new integration, not an existing configuration option.
+The integration is implemented on `feat/t3-code-integration`; it is not released.
 Implementation of T3-01 through T3-06 was subsequently authorized. Push, merge,
 deployment and infrastructure changes remain outside this work.
 
@@ -53,7 +54,7 @@ This replaces the proposed WebSocket transport. Full reconnect and action pilot
 evidence will be recorded below; no stable third-party API promise is assumed.
 Desktop thread navigation remains deferred because it has not been verified.
 
-## Proposed architecture
+## Architecture
 
 Keep the renderer and hardware output shared. Add a T3 adapter alongside the
 Herdr path, with backend-neutral state and semantic actions at their boundary:
@@ -71,9 +72,8 @@ command path. Do not implement T3 by pretending it is a terminal or by starting
 another Codex process for the same conversation. Prefer consuming T3's existing
 backend without a T3 fork; revisit only if T3-01 proves that insufficient.
 
-The exact Python transport versus a small TypeScript helper is decided in
-T3-01 after testing the RPC protocol and packaged-runtime requirements. A helper
-would need to ship with the desktop app; users must not install Node manually.
+The adapter uses Python HTTP polling. Thread reads request the latest three turns
+to bound history transfer. The packaged runtime has no Node helper dependency.
 
 ### Identity, state and capabilities
 
@@ -100,7 +100,7 @@ would need to ship with the desktop app; users must not install Node manually.
 | Approve / Deny | `thread.approval.respond` | Exact pending request and supported decision |
 | Answer question | `thread.user-input.respond` | Exact request and validated answer schema |
 | Continue / text macro | `thread.turn.start` | Idle thread, explicit text, preserved mode/model settings |
-| Open conversation | To be verified | Correct backend and thread; supported navigation only |
+| Open conversation | Deferred | No supported desktop navigation verified |
 
 Do not infer decisions from terminal key profiles. Do not silently implement
 “approve always” or force actions where T3 lacks a verified equivalent. Continue
@@ -114,8 +114,8 @@ timeout; reconcile backend state before reporting success or allowing a retry.
 
 ## Delivery plan
 
-All items below are planned. IDs are stable for later issue and PR references.
-Execute in order; each item must record evidence before being marked complete.
+IDs are stable for later issue and PR references. The tracking table below
+records implementation and live verification separately from the planned scope.
 
 | ID | Deliverable | Depends on | Acceptance evidence |
 | --- | --- | --- | --- |
@@ -186,9 +186,58 @@ Do not mark milestones complete based solely on implementation or mocked tests.
 
 | ID | Status | Issue / PR / evidence |
 | --- | --- | --- |
-| T3-01 | Planned | — |
-| T3-02 | Planned | — |
-| T3-03 | Planned | — |
-| T3-04 | Planned | — |
-| T3-05 | Planned | — |
-| T3-06 | Planned | — |
+| T3-01 | Verified | T3 0.0.31 live HTTP/auth/discovery and real restart probe; Python transport |
+| T3-02 | Verified | `2978baf`; mixed-backend routing, identity collision, disabled offline actions in `tests/test_t3.py` |
+| T3-03 | Verified | Live conversation, assistant reply and working/idle states; packaged mixed connections |
+| T3-04 | Verified | Live Continue and Stop; mode preservation and duplicate/stale-write tests |
+| T3-05 | Verified | Real Codex approval and single-choice question resolved via T3; `0e8ef3e` reconciles uncertain writes |
+| T3-06 | Software verified; hardware pending | `dcf4ae1`, `ea56a5e`; setup/keychain/doctor, clean install, desktop build, frozen mixed-runtime probe; physical host choice pending |
+
+## Verification record (2026-09-06)
+
+- Python suite: 1,505 tests passed before the final probe-cleanup change; two
+  additional credential-cleanup tests passed afterwards. The cleanup change does
+  not alter the runtime adapter.
+- Desktop: 168 focused configuration/help tests passed; production frontend
+  build passed. Editing connections preserves the T3 backend field.
+- Clean base-package installation under Python 3.13.13 successfully executes
+  `herdeck-t3-connect --help` without extras. Base dependencies now include
+  keyring and tomli-w.
+- Real T3 probes: assistant response `HERDECK_PILOT_OK`, working-to-idle state,
+  targeted Stop, approval resolution, and single-choice question resolution.
+- Real restart probe: same conversation IDs after server restart, offline state
+  observed and pre-reconnect action revisions invalidated.
+- Frozen macOS arm64 runtime: `source=live`, `connections={local: true,
+  t3-pilot: true}`. It starts without user-installed Node. The probe does not
+  write the shared runtime discovery file.
+- Setup tested against an isolated T3 data directory and dedicated test keychain
+  namespace; doctor passed. No installed Herdeck configuration was modified.
+
+Reproducible opt-in probes live in `tests/t3_live_probe.py` (reply/stop/approval/
+question scenarios), `tests/t3_reconnect_probe.py`, and
+`tests/t3_packaged_probe.py`. Run only against disposable T3 data as documented
+in their module docstrings. Probe sessions are revoked in `finally`.
+
+Review record: initial automatic jobs failed to initialize the configured ACP
+reviewer. Verified infrastructure-only retries used Codex with an available
+model. Review `23728` found one Medium (uncertain writes never unlock), fixed in
+`0e8ef3e`; verification `23730` found no issues. Review `23732` found two Mediums
+(base CLI dependencies and probe token cleanup), fixed in `ea56a5e`;
+verification `23734` found no issues.
+
+One Low is recorded without expanding the review-fix scope: doctor currently
+checks a T3 shell's `threads` array while the connector also requires `projects`.
+An incompatible server may therefore pass doctor but fail runtime connection;
+the mandatory runtime health check remains necessary.
+
+The branch exceeds the approximate 1,000-line review guideline because it
+includes transport, its shared action boundary, setup, tests and documentation
+for one feature. It remains together so a checkout is runnable; logical changes
+are separated into commits and reviewed individually. No repeated whole-branch
+review was requested or run.
+
+Physical pilot is not complete: Ulanzi is present on macBench, with the installed
+Herdeck desktop and runtime active. The test T3 instance is on HEADLESS-A3112.
+The user has been asked whether T3 should run on macBench or HEADLESS-A3112;
+the existing macBench runtime has not been interrupted, replaced or reconfigured.
+Remote T3 networking is not silently introduced to bridge this choice.
