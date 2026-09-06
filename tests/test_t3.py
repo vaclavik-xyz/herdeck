@@ -52,6 +52,8 @@ class FakeHttp:
         self.fail_write = False
 
     def get(self, path):
+        if path == "/.well-known/t3/environment":
+            return {"serverVersion": "0.0.38", "capabilities": {}}
         if path.endswith("/shell"):
             return {"projects": self.projects, "threads": [self.thread]}
         return {"thread": self.thread}
@@ -218,7 +220,7 @@ def test_t3_tile_honors_explicit_secondary_layout():
     ("completed", "2026-09-06T16:00:00Z", Status.DONE),
     ("completed", None, Status.IDLE),
     ("interrupted", "2026-09-06T16:00:00Z", Status.IDLE),
-    ("error", "2026-09-06T16:00:00Z", Status.IDLE),
+    ("error", "2026-09-06T16:00:00Z", Status.UNKNOWN),
     ("running", None, Status.IDLE),
 ])
 def test_done_requires_explicit_successful_turn(turn_state, completed_at, expected):

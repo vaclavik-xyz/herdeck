@@ -131,7 +131,7 @@ def order_agents(
     return sorted(
         agents,
         key=lambda s: (
-            _STATUS_PRIORITY.get(s.status, 9),
+            0 if s.attention == "error" else _STATUS_PRIORITY.get(s.status, 9),
             order.get(s.key.server_id, 999),
             *herdr_position(s),
             s.key.pane_id,
@@ -158,6 +158,8 @@ class Counts:
 def summary(agents) -> Counts:
     c = Counts(0, 0, 0, 0)
     for s in agents:
+        if s.lifecycle != "active":
+            continue
         if s.status is Status.BLOCKED:
             c.blocked += 1
         elif s.status is Status.WORKING:

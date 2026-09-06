@@ -323,7 +323,7 @@ class Orchestrator:
         drop out immediately; new agents append at the end until the next
         adoption."""
         target = layout.order_agents(
-            self._agents.values(), self.config.overview_order, self.config.view.agent_order
+            (s for s in self._agents.values() if s.lifecycle == "active"), self.config.overview_order, self.config.view.agent_order
         )
         target_keys = [s.key for s in target]
         now = self._clock()
@@ -364,7 +364,7 @@ class Orchestrator:
             return ordered
         pinned = set(self.pins.values())
         rest = iter(agent for agent in ordered if agent.key not in pinned)
-        size = max(len(ordered) + sum(key not in self._agents for key in pinned), max(self.pins) + 1)
+        size = max(sum(agent.key not in pinned for agent in ordered) + len(pinned), max(self.pins) + 1)
         return [self._agents.get(self.pins[i]) if i in self.pins else next(rest, None) for i in range(size)]
 
     def toggle_pin(self, key, position):
@@ -378,6 +378,10 @@ class Orchestrator:
     def _agent_color(self, s: AgentState) -> str:
         if s.key.server_id in self._down:
             return self.config.theme.colors.get("offline", "red")
+        if s.attention == "error":
+            return "red"
+        if s.lifecycle != "active":
+            return "grey"
         return self.config.theme.colors.get(s.status.value, layout.status_color(s.status))
 
     def _tile_field_enabled(self, name: str) -> bool:
@@ -541,7 +545,7 @@ class Orchestrator:
             self._page % pages,
             pages,
             self._down,
-            len(self._agents),
+            sum(s.lifecycle == "active" for s in self._agents.values()),
             spotlight,
             lang=self.config.view.language,
             usage_lines=layout.usage_summary_lines(self._usage) if self._usage else None,
@@ -634,7 +638,7 @@ class Orchestrator:
             display = [
                 s.key
                 for s in layout.order_agents(
-                    self._agents.values(),
+                    (s for s in self._agents.values() if s.lifecycle == "active"),
                     self.config.overview_order,
                     self.config.view.agent_order,
                 )
@@ -654,7 +658,9 @@ class Orchestrator:
         actions: list[dict] = []
         if agent is not None and agent.backend == "t3":
             for option in agent.backend_actions:
-                actions.append({"id": option["id"], "label": option["label"],
+                if option["id"] == "approve_always" and not self.config.safety.approve_always:
+                    continue
+                actions.append({"id": option["id"], "label": option["label"], "confirm": option.get("confirm", False),
                     "subtext": option.get("subtext", ""),
                     "confirm_key": agent.backend_revision + str(option["payload"]),
                     "make": lambda key, o=option, rev=agent.backend_revision: Command(
@@ -1021,7 +1027,7 @@ class Orchestrator:
         if index < len(actions):  # send option number or macro text
             action_id = actions[index].get("id")
             confirm_key = actions[index].get("confirm_key") or f"idx:{index}"
-            if action_id in self.config.safety.require_confirm_for and not self._confirm_armed(
+            if (actions[index].get("confirm") or action_id in self.config.safety.require_confirm_for) and not self._confirm_armed(
                 confirm_key, key
             ):
                 self._arm_confirm(confirm_key, key)  # (re-)arm; an expired arm never fires

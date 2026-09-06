@@ -188,7 +188,7 @@ class LiveSource(StateSource):
             agents = list(self._agents.values())
         counts = layout.summary(agents)
         return {
-            "agents": len(agents),
+            "agents": sum(a.lifecycle == "active" for a in agents),
             "blocked": counts.blocked,
             "working": counts.working,
             "idle": counts.idle,
