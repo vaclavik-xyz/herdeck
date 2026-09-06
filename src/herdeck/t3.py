@@ -11,6 +11,7 @@ import ipaddress
 import json
 import uuid
 from datetime import UTC, datetime
+from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -57,7 +58,7 @@ class T3Http:
                 return result
         except HTTPError as exc:
             raise T3Error(f"T3 HTTP {exc.code}") from None
-        except (URLError, OSError, ValueError):
+        except (URLError, OSError, ValueError, HTTPException):
             raise T3Error("T3 transport or response error") from None
 
     def get(self, path):
@@ -208,7 +209,7 @@ class T3Connector:
                 continue
             tid = summary["id"]
             detail = await asyncio.to_thread(self.http.get,
-                "/api/orchestration/threads/" + quote(tid, safe=""))
+                "/api/orchestration/threads/" + quote(tid, safe="") + "?turnLimit=3")
             t = {**summary, **detail["thread"]}
             threads[tid] = t
             states[tid] = thread_state(self.server.id, t, projects, self._epoch)

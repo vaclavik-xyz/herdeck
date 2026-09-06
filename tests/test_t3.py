@@ -133,3 +133,52 @@ def test_questions_use_provider_values_and_complex_forms_have_no_guessed_buttons
     assert a.backend_actions[0]["payload"]["answers"] == {"q1": "blue-id"}
     q["multiSelect"] = True
     assert thread_state("a", t, {}, "e").backend_actions == []
+
+
+def test_mixed_deck_routes_t3_choice_without_terminal_keys():
+    from herdeck.config import DEFAULT_PROFILES, Config
+    from herdeck.model import AgentKey, AgentState
+    from herdeck.orchestrator import Orchestrator
+    config = Config(servers=[ServerConfig("herdr", "ws://old", "x"),
+        ServerConfig("t3", "http://127.0.0.1:3773", "x", "t3")],
+        profiles=dict(DEFAULT_PROFILES), overview_order=["herdr", "t3"], grid=(5, 3))
+    orch = Orchestrator(config)
+    t3 = thread_state("t3", thread(activities=[{"kind": "approval.requested",
+        "payload": {"requestId": "req", "detail": "Approve?"}}]), {}, "e")
+    herdr = AgentState(AgentKey("herdr", "thread-1"), "codex", "Old", Status.IDLE)
+    orch.apply_snapshot("herdr", [herdr])
+    orch.apply_snapshot("t3", [t3])
+    orch._drill = t3.key
+    actions, _, _ = orch._drill_layout()
+    cmd = actions[0]["make"](t3.key)
+    assert cmd.kind == "backend_action" and cmd.server_id == "t3"
+    assert cmd.payload == {"requestId": "req", "decision": "accept"}
+    assert cmd.keys == [] and cmd.terminal_id is None
+    orch.set_connection("t3", False)
+    assert orch.on_press(0) == []
+
+
+def test_http_transport_does_not_follow_redirect_or_echo_secret():
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    class Handler(BaseHTTPRequestHandler):
+        paths = []
+        def do_GET(self):
+            self.paths.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", "/leak")
+            self.end_headers()
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with pytest.raises(T3Error, match="T3 HTTP 302") as error:
+            T3Http(f"http://127.0.0.1:{server.server_port}", "private-token").get("/shell")
+        assert "private-token" not in str(error.value)
+        assert Handler.paths == ["/shell"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join()

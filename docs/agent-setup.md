@@ -18,6 +18,11 @@ Do not claim completion after merely writing `config.toml`.
 
 ## Mental model
 
+T3 Code connections are supported by the opt-in HTTP adapter. See
+[the T3 implementation and pilot record](t3-code-integration.md) for the tested
+version and limits. T3 is a separate backend, not a Herdr managed agent kind.
+The T3-specific setup procedure is at the end of this runbook.
+
 Herdeck combines zero or more local Herdr sessions with zero or more remote
 Herdeck bridges:
 
@@ -614,3 +619,72 @@ Report concise, non-secret evidence:
 - backup paths and any known limitation.
 
 Never include token values or the sidecar loopback access token.
+
+## T3 Code setup
+
+Prerequisite: an existing running T3 server and its local CLI executable. Tested
+with npm `t3` version `0.0.31`. The desktop Herdeck runtime includes its Python
+HTTP adapter and needs neither Node nor a provider CLI to connect to T3.
+The one-time setup command uses T3's own CLI to issue a credential; it does not
+read or copy Codex/Claude credentials. T3's CLI currently issues administrative
+scopes, so this credential belongs only in the OS keychain.
+
+After the inventory and backups described above, run from this source checkout
+or an environment with the updated Herdeck CLI installed:
+
+```sh
+herdeck-t3-connect --id t3-local --binary /absolute/path/to/t3
+```
+
+Use `python -m herdeck.t3_setup` if the console entry point is not installed.
+`--base-dir` defaults to `~/.t3`. Discovery reads only
+`userdata/server-runtime.json`, then verifies the server using authenticated
+HTTP. `--url` may override discovery with an HTTP loopback/Tailscale origin or
+an HTTPS origin. No listener, proxy, tunnel or Tailscale rule is created.
+
+The command refuses duplicate IDs and existing credential names. It issues a
+30-day session into memory, verifies a shell snapshot, stores the token in the
+`herdeck` keychain namespace, backs up existing files, and writes a connection:
+
+```toml
+[[servers]]
+id = "t3-local"
+backend = "t3"
+url = "http://127.0.0.1:3773"
+token_env = "HERDECK_T3_T3_LOCAL_TOKEN"
+```
+
+This is a configuration example, not a browser link. The agent owns setup; the
+user should not transcribe this TOML or move tokens. `HERDECK_CONFIG`,
+`HERDECK_LOCAL_CONFIG`, `HERDECK_PROFILE` and env-first credential precedence
+remain effective. Setup preserves unrelated TOML values, but serialization may
+change comments/formatting; the timestamped backups retain their original form.
+Only the active profile's explicit selection is extended. A deliberate demo
+choice is refused. A local-only choice is backed up and removed while preserving
+the selected local Herdr sessions.
+
+Run `herdeck-doctor` against the resulting config and verify the actual runtime
+`connections` map contains both the intended Herdr IDs and `t3-local`. A passing
+setup command alone does not prove the desktop adopted the config. The printed
+session ID and expiry are non-secret; record them for rotation/revocation. T3
+authentication failures mark the connection offline. Before expiry, disconnect
+and create a new uniquely named connection; verify it before revoking the old
+session through `t3 auth session revoke SESSION_ID --base-dir PATH`.
+
+To remove the connection, keeping the credential available for rollback:
+
+```sh
+herdeck-t3-connect --id t3-local --disconnect
+```
+
+This removes only that T3 entry and its selection references, backs up the config,
+and preserves T3 history and Herdr settings. Verify the remaining runtime
+connections. Restore the backup to roll back removal. Revoke the retained T3
+session and remove its keychain entry only after rollback is no longer needed.
+
+For T3, the deck offers only supported semantic actions. Free-text/multiple
+questions and multi-select forms are displayed but answered in T3. Single-choice
+questions use the provider's exact option value. Persistent approval, raw keys,
+terminal streaming and desktop thread navigation are not supported. An uncertain
+write is not retried; actions remain disabled until its exact effect is observed
+in T3 or the operator investigates and deliberately recreates the connection.

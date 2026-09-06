@@ -343,6 +343,9 @@ def _target_error(args, exc: TargetError) -> int:
 
 
 def _direct_command_result(args, data: dict, success: str) -> int:
+    if data.get("uncertain"):
+        _emit(args, {"result": "uncertain", "message": data.get("message", "Check T3 before retrying")})
+        return EXIT_CONN
     if data.get("skipped"):
         message = data.get("message")
         payload = {"result": "skipped"}
@@ -408,6 +411,11 @@ async def dispatch(args, session) -> int:
         return _target_error(args, e)
 
     if args.cmd == "send":
+        if agent.backend == "t3":
+            data = await session.request(Command("backend_action", agent.key.server_id,
+                agent.key.pane_id, action="continue", text=args.text,
+                decision_revision=agent.backend_revision), timeout=args.timeout)
+            return _direct_command_result(args, data, "sent")
         data = await session.request(
             Command(
                 "send_text",
