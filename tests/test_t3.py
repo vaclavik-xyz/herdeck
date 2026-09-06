@@ -108,3 +108,28 @@ async def test_uncertain_delivery_is_not_replayed():
     await c.send(msg)
     assert len(c.http.writes) == 1
     assert any(r.get("uncertain") for r in results)
+
+
+@pytest.mark.asyncio
+async def test_uncertain_write_unlocks_only_when_its_effect_is_observed():
+    c, _ = connector(thread())
+    await c.refresh()
+    c.http.fail_write = True
+    await c.send({"type": "backend_action", "pane_id": "thread-1", "revision": c.states["thread-1"].backend_revision,
+                  "action": "continue", "text": "Continue", "req": "r"})
+    c._epoch = "reconnected"
+    c.http.thread["session"]["updatedAt"] = "later"
+    await c.refresh()
+    assert "continue" not in c.states["thread-1"].capabilities
+    c.http.thread["messages"].append({"role": "user", "id": c.http.writes[0]["message"]["messageId"]})
+    await c.refresh()
+    assert "continue" in c.states["thread-1"].capabilities
+
+
+def test_questions_use_provider_values_and_complex_forms_have_no_guessed_buttons():
+    q = {"id": "q1", "options": [{"label": "Blue", "value": "blue-id"}]}
+    t = thread(activities=[{"kind": "user-input.requested", "payload": {"requestId": "r", "questions": [q]}}])
+    a = thread_state("a", t, {}, "e")
+    assert a.backend_actions[0]["payload"]["answers"] == {"q1": "blue-id"}
+    q["multiSelect"] = True
+    assert thread_state("a", t, {}, "e").backend_actions == []

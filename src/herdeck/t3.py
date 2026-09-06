@@ -159,6 +159,20 @@ def thread_state(server_id, thread, projects, epoch):
         backend_revision=revision, backend_actions=actions, preview=preview[-12000:])
 
 
+def _observed_effect(thread, command):
+    """Reconcile an uncertain write using its exact message/turn/request identity.
+
+    A timestamp change or reconnect alone is insufficient evidence to unlock it.
+    """
+    kind = command["type"]
+    if kind == "thread.turn.start":
+        return any(m.get("id") == command["message"]["messageId"]
+                   for m in thread.get("messages", []))
+    if kind == "thread.turn.interrupt":
+        return (thread.get("session") or {}).get("activeTurnId") != command["turnId"]
+    return not any(p["requestId"] == command["requestId"] for p in pending_requests(thread))
+
+
 class T3Connector:
     protocol = 1
     capabilities = frozenset()
@@ -175,7 +189,7 @@ class T3Connector:
         self._threads = {}
         self._epoch = uuid.uuid4().hex
         self._consumed = set()
-        self._uncertain = set()
+        self._uncertain = {}
         self._lock = asyncio.Lock()
         self._stop = False
         self.last_connect_error = None
@@ -198,6 +212,9 @@ class T3Connector:
             t = {**summary, **detail["thread"]}
             threads[tid] = t
             states[tid] = thread_state(self.server.id, t, projects, self._epoch)
+            uncertain = self._uncertain.get(tid)
+            if uncertain and _observed_effect(t, uncertain):
+                self._uncertain.pop(tid)
             if tid in self._uncertain:
                 states[tid].capabilities = ("read",)
                 states[tid].backend_actions = []
@@ -268,7 +285,7 @@ class T3Connector:
                 try:
                     await asyncio.to_thread(self.http.dispatch, command)
                 except T3Error:
-                    self._uncertain.add(tid)
+                    self._uncertain[tid] = command
                     self._on_result(req, {"ok": False, "uncertain": True,
                         "message": "T3 delivery uncertain; inspect the conversation before retrying"})
                     return
