@@ -6,7 +6,7 @@ import pytest
 from herdeck import t3_renew
 
 
-@pytest.mark.parametrize("case", ["fresh", "renew", "verify_failure", "restart_failure", "env_override"])
+@pytest.mark.parametrize("case", ["fresh", "renew", "verify_failure", "restart_failure", "env_override", "missing_restart"])
 def test_renew_preserves_identity_and_old_access_on_failure(tmp_path, monkeypatch, capsys, case):
     path = tmp_path / "config.toml"
     original = '[[servers]]\nid="t3"\nbackend="t3"\nurl="http://127.0.0.1:3773"\ntoken_env="TEST_T3_TOKEN"\n'
@@ -31,14 +31,14 @@ def test_renew_preserves_identity_and_old_access_on_failure(tmp_path, monkeypatc
         if case == "restart_failure":
             raise OSError("launchd unavailable")
     monkeypatch.setattr(t3_renew.subprocess, "run", run)
-    args = argparse.Namespace(config=path, id="t3", restart_label="com.herdeck.app")
+    args = argparse.Namespace(config=path, id="t3", restart_label=None if case == "missing_restart" else "com.herdeck.app")
     if case == "env_override":
         monkeypatch.setenv("TEST_T3_TOKEN", "env-private")
-    if case.endswith("failure") or case == "env_override":
+    if case.endswith("failure") or case in ("env_override", "missing_restart"):
         with pytest.raises((t3_renew.T3Error, OSError, ValueError)):
             t3_renew.renew(args)
         assert secret["value"] == "old-private"
-        assert calls == ([] if case == "env_override" else ["issue", "revoke"])
+        assert calls == ([] if case in ("env_override", "missing_restart") else ["issue", "revoke"])
     else:
         t3_renew.renew(args)
         output = capsys.readouterr().out

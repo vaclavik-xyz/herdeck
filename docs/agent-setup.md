@@ -667,7 +667,7 @@ Run `herdeck-doctor` against the resulting config and verify the actual runtime
 `connections` map contains both the intended Herdr IDs and `t3-local`. A passing
 setup command alone does not prove the desktop adopted the config. The printed
 session ID and expiry are non-secret; record them for rotation/revocation. T3
-authentication failures mark the connection offline. Use `herdeck-t3-connect --id ID --renew` before expiry; renewal keeps the
+authentication failures mark the connection offline. Use `herdeck-t3-connect --id ID --renew --restart-label RUNTIME_LABEL` before expiry; renewal keeps the
 server ID, selections and pins. See the dedicated transport section below.
 
 To remove the connection, keeping the credential available for rollback:
@@ -772,7 +772,8 @@ python -m herdeck.t3_setup --id t3-headless --renew \
   --issuer-ssh admin@100.86.178.12 --restart-label com.herdeck.app
 ```
 
-Set PYTHONPATH to the deployed source's `src` directory in the renewal plist.
+The runtime restart label is required: replacing Keychain alone cannot update
+a running connector. Set PYTHONPATH to the deployed source's `src` directory in the renewal plist.
 Do not inject the bearer into the renewal environment. Renewal checks Keychain
 and session expiry, issues a new 30-day credential only within seven days of
 expiry (or after expiry), validates it against the configured server, then stores

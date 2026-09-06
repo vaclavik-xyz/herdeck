@@ -58,6 +58,8 @@ def renew(args):
     server = next((s for s in data.get("servers", []) if s["id"] == args.id and s.get("backend") == "t3"), None)
     if server is None:
         raise ValueError("No T3 connection with this ID")
+    if not args.restart_label:
+        raise ValueError("Renewal requires --restart-label so the running runtime adopts the new credential")
     env = server["token_env"]
     if os.environ.get(env):
         raise ValueError("Renewal requires Keychain credentials; remove the environment override")
