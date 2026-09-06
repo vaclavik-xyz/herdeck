@@ -9,6 +9,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from .app_control import RuntimeAgentControl
 from .bootstrap import (
@@ -40,6 +41,7 @@ from .notify import (
     make_telegram_sink,
 )
 from .orchestrator import Orchestrator
+from .pins import PinStore
 from .protocol import TermClosed, TermFrame
 from .secrets import get_secret
 from .telegram import TelegramBotClient, TelegramInteractor
@@ -216,6 +218,7 @@ class App:
         switch_profile: Callable[[str], Config | None] | None = None,
         update_connectors: Callable[[Config], object] | None = None,
         config_reloader: Callable[[], Config] | None = None,
+        pin_store: PinStore | None = None,
         runtime_control: RuntimeAgentControl | None = None,
         send_raw: Callable[[str, dict], bool] | None = None,
     ):
@@ -254,6 +257,8 @@ class App:
         self._notify_schedule = notify_schedule or _default_notify_schedule
         self._blocked_keys: set = set()
         self.orch = Orchestrator(config, slots=deck.slot_count())
+        self._pin_store = pin_store
+        self._load_pins()
         deck.on_press(self._on_press)
         on_terminal = getattr(deck, "on_terminal", None)
         if callable(on_terminal):
@@ -751,11 +756,30 @@ class App:
                 rs.panel.lines,
             )
         for cmd in cmds:
+            if cmd.kind == "toggle_pin":
+                old = dict(self.orch.pins)
+                self.orch.toggle_pin(AgentKey(cmd.server_id, cmd.pane_id), cmd.payload["position"])
+                try:
+                    if self._pin_store is not None:
+                        self._pin_store.save(self.config.meta.active_profile, self.orch.pins)
+                except (OSError, ValueError, KeyError, TypeError):
+                    self.orch.pins = old
+                    log.exception("Could not save deck pins")
+                    self._set_status_panel("Pin not saved", ["Try again"], "red")
+                continue
             if cmd.kind == "switch_profile":
                 self._handle_switch_profile(cmd.text or cmd.server_id)
                 return
             self._send(cmd)
         self._refresh()
+
+    def _load_pins(self):
+        if self._pin_store is not None:
+            try:
+                self.orch.pins = self._pin_store.load(self.config.meta.active_profile)
+            except (OSError, ValueError, KeyError, TypeError):
+                self.orch.pins = {}
+                log.exception("Could not load deck pins")
 
     def _handle_switch_profile(self, name: str) -> None:
         if self.config.meta.env_locked_profile or self._switch_profile is None:
@@ -786,6 +810,7 @@ class App:
         self._rebuild_blocked_runtime(new_config)
         self._adopt_usage_config(new_config)
         self.orch.update_config(new_config)
+        self._load_pins()
         allowed_servers = {s.id for s in new_config.servers}
         self._blocked_keys = {k for k in self._blocked_keys if k.server_id in allowed_servers}
         restarted = set(self._update_connectors(new_config) or [])
@@ -1174,6 +1199,7 @@ async def _run(
         update_connectors=lambda cfg: manager.update(cfg.servers),
         config_reloader=config_reloader,
         send_raw=send_raw,
+        pin_store=PinStore(Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "herdeck" / "pins.json"),
     )
 
     async def runtime_send(cmd: Command, req: str) -> None:

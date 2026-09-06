@@ -88,6 +88,8 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
             value = ""
         if value:
             parts.append(value)
+    if not parts and tokens == ["tab"]:
+        return compose_line(state, ["repo"])
     return " · ".join(parts)
 
 

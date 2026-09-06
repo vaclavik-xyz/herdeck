@@ -6,6 +6,28 @@ import { setLang } from "../i18n.svelte";
 import ViewSection from "./ViewSection.svelte";
 
 describe("ViewSection", () => {
+  it.each([undefined, "night"])("switches the prominent heading and preserves unrelated fields (%s)", (editProfile) => {
+    setLang("en");
+    const payload = parseConfig({ base: { view: { tile_fields: ["repo", "tab", "server"] } }, profiles: { night: { view: {} } } })!;
+    const target = document.createElement("div");
+    let changes = 0;
+    const instance = mount(ViewSection, { target, props: { payload, editProfile, onChange: () => changes++, onError: () => {} } });
+    try {
+      const select = Array.from(target.querySelectorAll("label.field")).find(item => item.textContent?.includes("Emphasize"))?.querySelector<HTMLSelectElement>("select")!;
+      const values = (key: string) => Array.from(Array.from(target.querySelectorAll(".tristate")).find(item => item.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === key)!.querySelectorAll<HTMLInputElement>("input")).map(input => input.value);
+      expect(select.value).toBe("Project");
+      flushSync(() => { select.value = "Thread"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(values("tile_primary")).toEqual(["tab"]);
+      expect(values("tile_secondary")).toEqual(["repo"]);
+      expect(changes).toBe(1);
+      flushSync(() => { select.value = "Project"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(values("tile_primary")).toEqual(["repo"]);
+      expect(values("tile_secondary")).toEqual(["tab", "branch"]);
+      expect(payload.base.view.tile_fields).toEqual(["repo", "tab", "server"]);
+      if (editProfile) expect(payload.base.view.tile_primary).toBeUndefined();
+    } finally { unmount(instance); }
+  });
+
   it.each([undefined, "night"])("toggles backend labels while preserving other fields (%s)", (editProfile) => {
     setLang("en");
     const payload = parseConfig({ base: { view: { tile_fields: ["repo", "status", "server", "profile"] } }, profiles: { night: { view: {} } } })!;

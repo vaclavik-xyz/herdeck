@@ -245,7 +245,7 @@ _font_cache: dict[tuple[int, bool], object] = {}  # (size, bold) -> font
 #    D200 sends it as ONE 3_2 background icon instead of two stretched cells.
 # 10: the usage panel uses a lighter slate palette and shows reset hints in the
 #     overview cards.
-TILE_VERSION = 12
+TILE_VERSION = 13
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -737,6 +737,7 @@ class IconProvider:
         spinner = _anim_phase(tile.spinner, animation)
         sig_parts = [
             TILE_VERSION,
+            getattr(tile, "pinned", False),
             self._asset_fp,
             tile.color,
             tile.label,
@@ -941,6 +942,11 @@ class IconProvider:
             fc = _font(12, bold=False)
             tag = _truncate(d, tile.server_tag, fc, 80)
             d.text((12, 168), tag, font=fc, fill=time_fill)
+        if getattr(tile, "pinned", False):
+            # Small pin silhouette, independent of optional backend labels.
+            d.line((172, 170, 172, 182), fill=time_fill, width=2)
+            d.rectangle((169, 168, 175, 173), fill=time_fill)
+            d.line((167, 175, 177, 175), fill=time_fill, width=2)
         # bottom accent bar. "sweep" is a moving segment along the bottom edge; it
         # must stay visible on any fill, so its colours adapt — on a solid tile
         # (background already = accent) it uses a dark base + a bright segment; on

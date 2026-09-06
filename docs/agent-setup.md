@@ -728,3 +728,23 @@ profile). It controls the existing `server` entry in `view.tile_fields`, preserv
 other fields. Labels are small unboxed text, including with a single connection.
 Project names use bold type; thread descriptions use regular type with extra
 vertical spacing so even two-line project names remain visually distinct.
+
+### Pinning and prominent thread titles on the D200
+
+Open an agent tile and press **Pin here** (the button immediately before Stop).
+The agent keeps its current overview position and page despite status sorting.
+The same button becomes **Unpin**. A small pin mark appears at the bottom right
+of its overview tile, independently of backend-label visibility.
+
+An absent agent leaves a reserved **Pinned · offline** tile. Press that tile to
+release the reservation. Reconnecting with the same server/agent identity restores
+the pinned tile. Changing a thread or project title does not affect its pin.
+Pins are local to this deck host and saved per active profile in
+`$XDG_CONFIG_HOME/herdeck/pins.json` (default `~/.config/herdeck/pins.json`).
+Restarting the runtime preserves them. Positions refer to the current overview
+capacity; changing the number of agent slots can move a pin to another page.
+
+In desktop **View → Emphasize**, choose **Project** or **Thread**. This sets the
+existing `tile_primary` / `tile_secondary` fields together, supports profile
+overrides, and leaves all other fields intact. Custom line layouts remain
+available. A thread without a title falls back to the project name.
