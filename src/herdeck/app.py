@@ -23,7 +23,7 @@ from .bootstrap import (
 )
 from .commands import Command, command_to_msg
 from .config import Config, ConfigError, ServerConfig
-from .connector import Connector
+from .connector import Connector, create_connector
 from .driver.base import DeckDriver, PanelView
 from .driver.fake import FakeRenderer
 from .i18n import tr
@@ -1139,7 +1139,7 @@ async def _run(
         epoch = connector_epochs.get(server.id, 0) + 1
         connector_epochs[server.id] = epoch
         app.expect_connection(server.id, epoch)
-        return Connector(
+        return create_connector(
             server,
             on_snapshot=lambda sid, st, epoch=epoch: loop.call_soon_threadsafe(
                 app.handle_snapshot, sid, st, epoch

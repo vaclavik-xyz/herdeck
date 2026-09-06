@@ -617,6 +617,21 @@ class Orchestrator:
         agent = self._agents.get(self._drill)
         stop_i, back_i = self.slots - 2, self.slots - 1
         actions: list[dict] = []
+        if agent is not None and agent.backend == "t3":
+            for option in agent.backend_actions:
+                actions.append({"id": option["id"], "label": option["label"],
+                    "subtext": option.get("subtext", ""),
+                    "confirm_key": agent.backend_revision + str(option["payload"]),
+                    "make": lambda key, o=option, rev=agent.backend_revision: Command(
+                        "backend_action", key.server_id, key.pane_id, action=o["id"],
+                        payload=o["payload"], decision_revision=rev)})
+            if "continue" in agent.capabilities:
+                for macro in self.config.macros:
+                    actions.append({"label": macro.label[:_OPTION_LABEL_MAX],
+                        "make": lambda key, text=macro.text, rev=agent.backend_revision: Command(
+                            "backend_action", key.server_id, key.pane_id, action="continue",
+                            text=text, decision_revision=rev)})
+            return actions[:stop_i], stop_i, back_i
         if agent is not None and agent.status is Status.BLOCKED:
             options = layout.parse_options(self._detection)
             if options:
@@ -748,15 +763,16 @@ class Orchestrator:
                 )
             elif i == stop_i:
                 stop_label = self._tr("sure") if armed == "act_force" else self._tr("stop")
+                unavailable = agent is not None and agent.backend == "t3" and "stop" not in agent.capabilities
                 tiles.append(
-                    TileView(i, stop_label, "grey" if down else "red", section="answer_profiles")
+                    TileView(i, stop_label, "grey" if down or unavailable else "red", section="answer_profiles")
                 )
             elif i == back_i:
                 tiles.append(TileView(i, self._tr("back"), "grey"))
             else:
                 tiles.append(TileView(i, "", "empty"))
         panel = (
-            layout.panel_detail(agent, self._detection, lang=self.config.view.language)
+            layout.panel_detail(agent, agent.preview if agent.backend == "t3" else self._detection, lang=self.config.view.language)
             if agent is not None
             else PanelView("", [], "grey")
         )
@@ -855,6 +871,9 @@ class Orchestrator:
             self._detection = ""
             self._pending_confirm = None
             self._resettle()  # returning from drill re-sorts anyway
+            if selected.backend == "t3":
+                self._detection = selected.preview
+                return [Command("read", key.server_id, key.pane_id)]
             # Focus the agent in the on-screen herdr session AND read its prompt.
             return [
                 Command(
@@ -928,6 +947,9 @@ class Orchestrator:
             # Back (handled above) works until the server reconnects.
             return []
         if index == stop_i:  # Stop — always, unconditional
+            target = self._agents[key]
+            if target.backend == "t3" and "stop" not in target.capabilities:
+                return []
             action = "act_force"
             if action in self.config.safety.require_confirm_for and not self._confirm_armed(
                 action, key
@@ -943,6 +965,9 @@ class Orchestrator:
                 keys=self._profile_for(key).stop,
                 terminal_id=target.terminal_id or None,
             )
+            if target.backend == "t3":
+                cmd = Command("backend_action", key.server_id, key.pane_id,
+                              action="stop", decision_revision=target.backend_revision)
             self._note_sent(key)
             self._drill = None  # return to the fleet overview
             self._resettle()

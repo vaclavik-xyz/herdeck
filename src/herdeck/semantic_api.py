@@ -58,6 +58,8 @@ def _agent_record(agent: AgentState, *, available: bool) -> dict:
         "status": status,
         "available": available,
         "agent_type": _bounded(agent.agent_type, 64),
+        "backend": agent.backend,
+        "capabilities": list(agent.capabilities),
         "label": _bounded(agent.label, 160),
         "waiting_on": _bounded(agent.waiting_on, 80),
         "progress": _bounded(agent.progress, 80),

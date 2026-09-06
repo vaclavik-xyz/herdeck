@@ -10,7 +10,7 @@ from collections.abc import Callable
 from .bootstrap import _discover_config_path, resolve_mode, resolve_runtime_config
 from .commands import Command, build_action_command, command_to_msg, profile_for
 from .config import Config, ConfigError, load_config
-from .connector import Connector
+from .connector import Connector, create_connector
 from .model import AgentKey, AgentState, Status
 
 
@@ -41,7 +41,7 @@ class CtlSession:
         config: Config,
         *,
         server_filter: str | None = None,
-        connector_factory: Callable[..., Connector] = Connector,
+        connector_factory: Callable[..., Connector] = create_connector,
     ):
         self.config = config
         self.servers = [s for s in config.servers if server_filter in (None, s.id)]
@@ -222,6 +222,8 @@ class CtlSession:
         profile = profile_for(self.config, agent.agent_type)
         cmd = build_action_command(action, agent, profile, force=force, always=always)
         data = await self.request(cmd, timeout=request_timeout)
+        if data.get("uncertain"):
+            raise RuntimeError(data.get("message", "T3 delivery uncertain"))
         if data.get("skipped"):
             return {"result": "skipped", "settled": True}
         settled = True

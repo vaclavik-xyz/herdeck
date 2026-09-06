@@ -187,7 +187,16 @@ def _server_config(raw: dict) -> ServerConfig:
     token = get_secret(env)
     if not token:
         raise ConfigError(f"env var '{env}' for server '{raw['id']}' is not set")
-    return ServerConfig(raw["id"], raw["url"], token)
+    backend = raw.get("backend", "herdr")
+    if backend not in ("herdr", "t3"):
+        raise ConfigError("unsupported server backend")
+    if backend == "t3":
+        from .t3 import T3Http
+        try:
+            T3Http(raw["url"], token)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from None
+    return ServerConfig(raw["id"], raw["url"], token, backend)
 
 
 def _theme_config(raw: dict | None) -> ThemeConfig:

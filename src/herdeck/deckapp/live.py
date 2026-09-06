@@ -28,7 +28,7 @@ import threading
 
 from ..commands import Command, command_to_msg
 from ..config import Config, ServerConfig
-from ..connector import Connector
+from ..connector import Connector, create_connector
 from ..model import AgentKey, AgentState, Status
 from ..orchestrator import Orchestrator
 from .source import StateSource
@@ -552,7 +552,7 @@ def build_live_source(
     config: Config,
     server: ServerConfig | None = None,
     *,
-    connector_factory=Connector,
+    connector_factory=create_connector,
     runner_factory=ConnectorRunner,
 ) -> LiveSource:
     """Wire a LiveSource to one Connector + runner per selected server.

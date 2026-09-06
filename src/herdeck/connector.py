@@ -23,6 +23,13 @@ from .protocol import (
 log = logging.getLogger("herdeck.connector")
 
 
+def create_connector(server, **kwargs):
+    if server.backend == "t3":
+        from .t3 import T3Connector
+        return T3Connector(server, **kwargs)
+    return Connector(server, **kwargs)
+
+
 def _describe_connect_error(exc: Exception) -> str:
     """Human-readable reason for a failed connect. An HTTP 401/403 handshake
     rejection means a bad token — that must read differently from a dead

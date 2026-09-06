@@ -756,6 +756,8 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   and are ignored by the orchestrator.
 
 ## Known follow-ups
+
+- [T3 Code integration](docs/t3-code-integration.md): implementation and pilot tracking.
 - Confirm exact approve/deny key sequences per agent against live prompts
   (config-only changes).
 - Drill-in shows the read prompt text on a spare tile; richer prompt display is
