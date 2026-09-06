@@ -667,9 +667,8 @@ Run `herdeck-doctor` against the resulting config and verify the actual runtime
 `connections` map contains both the intended Herdr IDs and `t3-local`. A passing
 setup command alone does not prove the desktop adopted the config. The printed
 session ID and expiry are non-secret; record them for rotation/revocation. T3
-authentication failures mark the connection offline. Before expiry, disconnect
-and create a new uniquely named connection; verify it before revoking the old
-session through `t3 auth session revoke SESSION_ID --base-dir PATH`.
+authentication failures mark the connection offline. Use `herdeck-t3-connect --id ID --renew` before expiry; renewal keeps the
+server ID, selections and pins. See the dedicated transport section below.
 
 To remove the connection, keeping the credential available for rollback:
 
@@ -684,8 +683,9 @@ session and remove its keychain entry only after rollback is no longer needed.
 
 For T3, the deck offers only supported semantic actions. Free-text/multiple
 questions and multi-select forms are displayed but answered in T3. Single-choice
-questions use the provider's exact option value. Persistent approval, raw keys,
-terminal streaming and desktop thread navigation are not supported. An uncertain
+questions use the provider's exact option value. Persistent approvals use exact provider options and require two presses. Always
+grants additionally require the safety setting. Raw keys, terminal streaming
+and desktop thread navigation are not supported. An uncertain
 write is not retried; actions remain disabled until its exact effect is observed
 in T3 or the operator investigates and deliberately recreates the connection.
 
@@ -707,11 +707,8 @@ the panel as one native 458x196 image (`SmallViewMode=2`). It does not change ot
 devices by default. The original two-cell stock fallback stretched the panel and
 is no longer used by this override. The exact firmware rejection mechanism is still undiagnosed.
 
-The current macBench connection `t3-headless` uses the existing T3 application's
-SSH forward to HEADLESS-A3112's real T3 0.0.38 server. That forward belongs to the
-T3 application and may change port or disappear when it reconnects/exits. A future
-persistent connection must explicitly address that lifecycle; do not create new
-network infrastructure implicitly. The macBench setup backup is under
+The initial macBench setup used a T3 desktop-owned SSH forward. The dedicated
+transport below replaces that dependency. The original setup backup is under
 `~/.config/herdeck/backup-t3-20260906-180428/`. Its runtime launcher reads the T3
 credential from Keychain using the setup interpreter before starting Herdeck, so
 the differently signed packaged executable does not block on Keychain access.
@@ -748,3 +745,56 @@ In desktop **View → Emphasize**, choose **Project** or **Thread**. This sets t
 existing `tile_primary` / `tile_secondary` fields together, supports profile
 overrides, and leaves all other fields intact. Custom line layouts remain
 available. A thread without a title falls back to the project name.
+
+
+### Dedicated T3 transport and renewal (macOS)
+
+Use an already authorized SSH account on the T3 host. Check noninteractive SSH
+and verify the destination's actual loopback port first. A user LaunchAgent
+`com.herdeck.t3-forward` owns this command on macBench:
+
+```sh
+/usr/bin/ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=8 \
+  -L 127.0.0.1:13773:127.0.0.1:3773 admin@100.86.178.12
+```
+
+Its plist uses RunAtLoad, KeepAlive and ThrottleInterval=10. Bind only loopback;
+reuse existing SSH keys and tailnet membership. `t3-headless` points to this
+stable local port; its ID and token_env remain unchanged. Preserve a config backup
+before changing the URL. This is an application transport, not a new public route.
+
+`com.herdeck.t3-renew` runs every hour (StartInterval=3600, RunAtLoad=true) in the
+same GUI user domain and with the same Python interpreter as the runtime:
+
+```sh
+python -m herdeck.t3_setup --id t3-headless --renew \
+  --issuer-ssh admin@100.86.178.12 --restart-label com.herdeck.app
+```
+
+Set PYTHONPATH to the deployed source's `src` directory in the renewal plist.
+Do not inject the bearer into the renewal environment. Renewal checks Keychain
+and session expiry, issues a new 30-day credential only within seven days of
+expiry (or after expiry), validates it against the configured server, then stores
+it under the same Keychain account and restarts the runtime to adopt it. An
+environment credential override is refused rather than silently superseded.
+The issuer uses its installed boot-service version, not a moving npm download.
+A failed validation preserves the old credential and revokes the newly issued
+one. The previous credential expires naturally to retain a rollback window.
+The setup command never prints tokens or puts them in subprocess arguments.
+
+Check both LaunchAgents after installation, including their exit status. Verify
+runtime `connections`, not just an SSH listener. Sleep/offline periods are recovered
+by launchd retry and the next renewal interval. Update PYTHONPATH when deploying
+a new source release; keep the runtime helper and renewal agent on the same source.
+
+### T3 lifecycle controls
+
+Settled, snoozed, archived and deleted threads are excluded from active overview
+and counts. An existing deck pin still shows the known lifecycle rather than a
+misleading Done/offline tile. T3 pinning remains independent of deck position.
+**Mark seen** acknowledges one completion locally; it does not mark it read on a
+phone. **Implement plan** uses its proposal identity and exits plan mode.
+**Stop session** is a separate confirmed control for background provider work.
+Settle/reopen and one-hour snooze/wake controls depend on advertised server support.
+Unknown API version families are read-only and explain why in the preview.

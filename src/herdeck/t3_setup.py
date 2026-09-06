@@ -142,9 +142,17 @@ def main():
     p.add_argument("--url", help="Override discovered T3 HTTP origin")
     p.add_argument("--id", default="t3-local")
     p.add_argument("--disconnect", action="store_true", help="Remove the connection; retain its credential for rollback")
+    p.add_argument("--renew", action="store_true", help="Renew the existing ID within seven days of expiry")
+    p.add_argument("--issuer-ssh", help="Existing SSH host of the T3 boot service")
+    p.add_argument("--restart-label", help="Restart this GUI launchd runtime after successful renewal")
     args = p.parse_args()
     try:
-        if args.disconnect:
+        if args.renew and args.disconnect:
+            raise ValueError("Choose either renewal or disconnect")
+        if args.renew:
+            from .t3_renew import renew
+            renew(args)
+        elif args.disconnect:
             disconnect(args)
         else:
             connect(args)
