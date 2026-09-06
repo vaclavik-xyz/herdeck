@@ -212,3 +212,45 @@ def test_t3_tile_honors_explicit_secondary_layout():
     o = Orchestrator(cfg, slots=13)
     o.apply_snapshot("t3", [thread_state("t3", thread(branch="feature/shop"), {}, "e")])
     assert o.render().tiles[0].branch == "feature/shop"
+
+
+@pytest.mark.parametrize("turn_state,completed_at,expected", [
+    ("completed", "2026-09-06T16:00:00Z", Status.DONE),
+    ("completed", None, Status.IDLE),
+    ("interrupted", "2026-09-06T16:00:00Z", Status.IDLE),
+    ("error", "2026-09-06T16:00:00Z", Status.IDLE),
+    ("running", None, Status.IDLE),
+])
+def test_done_requires_explicit_successful_turn(turn_state, completed_at, expected):
+    s = thread_state("t3", thread(latestTurn={"state": turn_state, "completedAt": completed_at}), {}, "e")
+    assert s.status == expected
+
+
+def test_active_turn_and_pending_requests_override_previous_completion():
+    completed = {"state": "completed", "completedAt": "2026-09-06T16:00:00Z"}
+    assert thread_state("t3", thread(latestTurn=completed,
+        session={"status": "running", "activeTurnId": "new-turn"}), {}, "e").status == Status.WORKING
+    assert thread_state("t3", thread(latestTurn=completed,
+        hasPendingApprovals=True), {}, "e").status == Status.BLOCKED
+    assert thread_state("t3", thread(latestTurn=completed,
+        session={"status": "error"}), {}, "e").status == Status.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_keeps_continue_available():
+    c, results = connector(thread(latestTurn={"state": "completed",
+        "turnId": "finished-turn", "completedAt": "2026-09-06T16:00:00Z"}))
+    await c.refresh()
+    s = c.states["thread-1"]
+    assert s.status == Status.DONE
+    await c.send({"type": "backend_action", "pane_id": "thread-1", "revision": s.backend_revision,
+                  "action": "continue", "text": "Next step", "req": "next"})
+    assert results[-1]["accepted"] and len(c.http.writes) == 1
+
+
+@pytest.mark.parametrize("liveness,expected", [("working", Status.WORKING), ("monitoring", Status.WAITING)])
+def test_background_work_overrides_completed_foreground_turn(liveness, expected):
+    s = thread_state("t3", thread(latestTurn={"state": "completed",
+        "completedAt": "2026-09-06T16:00:00Z"}, backgroundLiveness=liveness), {}, "e")
+    assert s.status == expected
+    assert "continue" not in s.capabilities

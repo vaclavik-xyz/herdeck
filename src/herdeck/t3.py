@@ -123,6 +123,7 @@ def _actions(pending):
 
 def thread_state(server_id, thread, projects, epoch):
     session = thread.get("session") or {}
+    latest_turn = thread.get("latestTurn") or {}
     pending = pending_requests(thread)
     state = session.get("status")
     if pending or thread.get("hasPendingApprovals") or thread.get("hasPendingUserInput"):
@@ -130,14 +131,23 @@ def thread_state(server_id, thread, projects, epoch):
     elif state in ("running", "starting") or session.get("activeTurnId"):
         status = Status.WORKING
     elif state in (None, "idle", "ready", "interrupted", "stopped"):
-        status = Status.IDLE
+        # A ready session is also the normal result of a successful turn. Use
+        # T3's explicit completion record, never inactivity alone, for DONE.
+        if thread.get("backgroundLiveness") == "working":
+            status = Status.WORKING
+        elif thread.get("backgroundLiveness") == "monitoring":
+            status = Status.WAITING
+        else:
+            status = (Status.DONE if state != "interrupted"
+                      and latest_turn.get("state") == "completed"
+                      and latest_turn.get("completedAt") else Status.IDLE)
     else:
         status = Status.UNKNOWN
     actions = _actions(pending)
     capabilities = ["read"]
     if session.get("activeTurnId"):
         capabilities.append("stop")
-    if status == Status.IDLE and thread.get("runtimeMode") and thread.get("interactionMode"):
+    if status in (Status.IDLE, Status.DONE) and thread.get("runtimeMode") and thread.get("interactionMode"):
         capabilities.append("continue")
     capabilities.extend(a["id"] for a in actions)
     # Message streaming does not change an action's identity. A new user message,

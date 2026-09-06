@@ -257,3 +257,14 @@ updates both on subsequent snapshots, and labels backends `T3` / `HERDR` instead
 of abbreviating internal connection IDs. Focused tests cover snapshot renames,
 explicit secondary layouts, missing project-title fallback, and the standard
 writer override.
+
+### Completion status
+
+T3 `session.status=ready` describes an inactive provider session, including after
+successful work. Herdeck displays `DONE` only when the latest turn explicitly has
+`state=completed` and a completion timestamp. Active work or pending requests take
+precedence; interrupted/error turns and newly opened threads do not become Done.
+T3 background work/monitoring also prevents a premature Done tile. Continue remains
+available after completion. The T3 client's per-device last-visited timestamp is
+not in the server snapshot, so Herdeck shows the completed turn until new work
+starts rather than mirroring that client's unread/visited badge.

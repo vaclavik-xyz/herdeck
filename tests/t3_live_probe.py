@@ -85,7 +85,7 @@ async def pilot(args, token):
                         "dispatch": results[-1]}))
                     return
             break
-        if "HERDECK_PILOT_OK" in state.preview and state.status.value == "idle":
+        if "HERDECK_PILOT_OK" in state.preview and state.status.value == "done":
             messages = c._threads[state.key.pane_id].get("messages", [])
             if any(m.get("role") == "assistant" and "HERDECK_PILOT_OK" in m.get("text", "") for m in messages):
                 print(json.dumps({"assistant_reply_verified": True, "states": sorted(seen)}))
