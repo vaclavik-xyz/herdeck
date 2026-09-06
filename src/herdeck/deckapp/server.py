@@ -7,10 +7,13 @@ import os
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..config import ConfigError
+from ..model import AgentKey
 from ..orchestrator import Orchestrator
+from ..pins import PinStore
 from .sinks import RenderFrame
 from .source import StateSource
 
@@ -61,6 +64,7 @@ class DeckApp:
         tick_interval: float = 0.0,
         config_service=None,
         reloader=None,
+        pin_store=None,
     ):
         self._serve_enabled = serve
         self._source = source
@@ -73,7 +77,10 @@ class DeckApp:
         self._clock = clock or (lambda: 0.0)
         # A fixed clock keeps the mock fully deterministic (stable elapsed text,
         # so repeated /state polls do not churn tile versions).
+        config_path = getattr(config_service, "_config_path", None)
+        self._pin_store = pin_store or (PinStore(Path(config_path).with_name("pins.json")) if config_path else None)
         self._orch = Orchestrator(config, slots=self._slots, clock=self._clock)
+        self._load_pins(self._orch)
         self._owns_icons = icon_provider is None
         self._icons_dir = config.hardware.icons_dir
         self._icons = (
@@ -350,10 +357,27 @@ class DeckApp:
         if 0 <= index < self._slots + 2:
             with self._lock:
                 local_commands = self._source.press(index) or []
+                for command in local_commands:
+                    if command.kind == "toggle_pin":
+                        old = dict(self._orch.pins)
+                        self._orch.toggle_pin(AgentKey(command.server_id, command.pane_id), command.payload["position"])
+                        try:
+                            if self._pin_store is not None:
+                                self._pin_store.save(self._source.config.meta.active_profile, self._orch.pins)
+                        except (OSError, ValueError, KeyError, TypeError):
+                            self._orch.pins = old
+                            log.warning("deck pin save failed", exc_info=True)
                 self._refresh_locked()
         for command in local_commands:
             if command.kind == "switch_profile":
                 self._switch_profile_from_deck(command.text or command.server_id)
+
+    def _load_pins(self, orch):
+        if self._pin_store is not None:
+            try:
+                orch.pins = self._pin_store.load(orch.config.meta.active_profile)
+            except (OSError, ValueError, KeyError, TypeError):
+                log.warning("deck pin load failed", exc_info=True)
 
     def _switch_profile_from_deck(self, name: str) -> None:
         """Persist and immediately apply a profile selected on the physical deck."""
@@ -465,6 +489,7 @@ class DeckApp:
         cols, rows = new_source.config.grid
         slots = cols * rows - 2
         orch = Orchestrator(new_source.config, slots=slots, clock=clk)
+        self._load_pins(orch)
         icons_dir = new_source.config.hardware.icons_dir
         icons = (
             _default_icons(icons_dir)
