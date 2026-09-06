@@ -702,9 +702,10 @@ On macBench's D200, the user confirmed recovery from a stale `Offline /
 Reconnecting` page after switching from the optimized ZIP writer to strmdck's
 standard writer (2026-09-06). Successful HID writes and `/health` were insufficient
 to prove a visible update. Set `HERDECK_D200_STANDARD_WRITER=1` in the runtime's
-launch environment to retain that compatibility path. This selects the existing
-standard writer and its two-cell panel fallback; it does not change other devices
-by default. The exact firmware rejection mechanism is still undiagnosed.
+launch environment to retain that compatibility path. This selects disk-backed ZIP creation with standard file metadata while keeping
+the panel as one native 458x196 image (`SmallViewMode=2`). It does not change other
+devices by default. The original two-cell stock fallback stretched the panel and
+is no longer used by this override. The exact firmware rejection mechanism is still undiagnosed.
 
 The current macBench connection `t3-headless` uses the existing T3 application's
 SSH forward to HEADLESS-A3112's real T3 0.0.38 server. That forward belongs to the
@@ -715,3 +716,9 @@ network infrastructure implicitly. The macBench setup backup is under
 credential from Keychain using the setup interpreter before starting Herdeck, so
 the differently signed packaged executable does not block on Keychain access.
 No credential values belong in this runbook or the launcher.
+
+
+Project names on agent tiles use a 31px font when they fit, shrink to 18px for
+longer names, then wrap into two lines. Extremely long names still end in an
+ellipsis rather than becoming unreadably small. This applies to both backends;
+thread/branch text retains its own rows.

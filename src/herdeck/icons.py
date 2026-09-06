@@ -239,7 +239,7 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 #    D200 sends it as ONE 3_2 background icon instead of two stretched cells.
 # 10: the usage panel uses a lighter slate palette and shows reset hints in the
 #     overview cards.
-TILE_VERSION = 10
+TILE_VERSION = 11
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -538,6 +538,23 @@ def _truncate(draw, text, font, max_w):
     while text and draw.textlength(text + "…", font=font) > max_w:
         text = text[:-1]
     return text + "…"
+
+
+def _fit_project_name(draw, text, max_w):
+    """Keep short names prominent; shrink, then wrap without microscopic text."""
+    for size in range(31, 17, -1):
+        font = _font(size)
+        if draw.textlength(text, font=font) <= max_w:
+            return font, [text]
+    # Two 18px lines fit above the thread/branch text. Split long identifiers
+    # too, preferring a nearby word or path/name boundary when available.
+    cut = 0
+    while cut < len(text) and draw.textlength(text[:cut + 1], font=font) <= max_w:
+        cut += 1
+    boundaries = [i + 1 for i, c in enumerate(text[:cut]) if c in " -_/" and i >= cut // 2]
+    if boundaries:
+        cut = boundaries[-1]
+    return font, [text[:cut].rstrip(), _truncate(draw, text[cut:].lstrip(), font, max_w)]
 
 
 def _wrap(draw, text, font, max_w, max_lines=2):
@@ -921,13 +938,10 @@ class IconProvider:
         # repo (primary) + branch (secondary, wrapped) — spread down the tile
         # so the composition is optically centred between the logo row and the
         # accent bar instead of leaving a dead band across the bottom third.
-        fr = _font(31)
-        d.text(
-            (12, 74),
-            _truncate(d, tile.repo or "", fr, ICON_SIZE - 24),
-            font=fr,
-            fill=repo_fill,
-        )
+        fr, project_lines = _fit_project_name(d, tile.repo or "", ICON_SIZE - 24)
+        for i, line in enumerate(project_lines):
+            d.text((12, 74 if len(project_lines) == 1 else 70 + i * 20),
+                   line, font=fr, fill=repo_fill)
         if tile.branch:
             fb = _font(18)
             y = 112
