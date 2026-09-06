@@ -7,18 +7,21 @@ prompt to the first thread in this disposable instance.
 import argparse
 import asyncio
 import json
-import subprocess
 import uuid
 from datetime import UTC, datetime
+
+from t3_probe_auth import session_token
 
 from herdeck.config import ServerConfig
 from herdeck.t3 import T3Connector
 
 
 async def main(args):
-    token = subprocess.check_output([args.binary, "auth", "session", "issue", "--base-dir",
-        args.base_dir, "--token-only", "--ttl", "1h", "--label", "Herdeck disposable pilot"],
-        text=True, stderr=subprocess.DEVNULL, timeout=30).strip()
+    with session_token(args.binary, args.base_dir) as token:
+        await pilot(args, token)
+
+
+async def pilot(args, token):
     results = []
     c = T3Connector(ServerConfig("t3-pilot", args.url, token, "t3"),
         on_snapshot=lambda *a: None, on_event=lambda *a: None, on_connection=lambda *a: None,

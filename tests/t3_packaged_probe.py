@@ -13,13 +13,11 @@ import urllib.request
 from pathlib import Path
 
 import tomli_w
+from t3_probe_auth import session_token
 
 
 def main(args):
-    token = subprocess.check_output([args.t3_binary, "auth", "session", "issue",
-        "--base-dir", args.base_dir, "--token-only", "--ttl", "1h", "--label", "Herdeck packaged pilot"],
-        text=True, stderr=subprocess.DEVNULL, timeout=30).strip()
-    with tempfile.TemporaryDirectory(prefix="herdeck-t3-package-") as folder:
+    with session_token(args.t3_binary, args.base_dir) as token, tempfile.TemporaryDirectory(prefix="herdeck-t3-package-") as folder:
         config = Path(folder) / "config.toml"
         config.write_text(tomli_w.dumps({"servers": [{"id": "t3-pilot", "url": args.url,
             "backend": "t3", "token_env": "HERDECK_T3_PILOT_TOKEN"}]}))

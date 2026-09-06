@@ -22,7 +22,7 @@ classifiers = [
   "Operating System :: MacOS",
   "Operating System :: POSIX",
 ]
-dependencies = ["websockets>=14"]
+dependencies = ["websockets>=14", "keyring", "tomli-w"]
 
 [project.urls]
 Homepage = "https://github.com/vaclavik-xyz/herdeck"
