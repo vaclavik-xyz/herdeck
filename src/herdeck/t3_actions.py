@@ -50,7 +50,7 @@ def semantic_command(action, payload, thread):
         if action in ("unsettle", "unsnooze"):
             command["reason"] = "user"
         elif action == "snooze":
-            command["snoozedUntil"] = datetime.fromtimestamp(datetime.now(UTC).timestamp() + 3600, UTC).isoformat()
+            command["snoozedUntil"] = datetime.fromtimestamp(datetime.now(UTC).timestamp() + 3600, UTC).isoformat(timespec="milliseconds")
         return command
     if action == "session_stop":
         return {"type": "thread.session.stop"}

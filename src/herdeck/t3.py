@@ -22,7 +22,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 from .model import AgentKey, AgentState, Status
 from .t3_actions import extend_actions, semantic_command
 from .t3_seen import SeenStore
-from .t3_state import lifecycle, queued_start
+from .t3_state import lifecycle, queued_start, timestamp
 
 
 class T3Error(Exception):
@@ -229,7 +229,8 @@ def _observed_effect(thread, command):
     if kind == "thread.unsettle":
         return thread.get("settledOverride") == "active"
     if kind == "thread.snooze":
-        return thread.get("snoozedUntil") == command["snoozedUntil"]
+        actual, expected = timestamp(thread.get("snoozedUntil")), timestamp(command["snoozedUntil"])
+        return actual is not None and expected is not None and actual == expected
     if kind == "thread.unsnooze":
         return thread.get("snoozedUntil") is None
     if kind == "thread.session.stop":

@@ -173,3 +173,14 @@ def test_unknown_contract_is_read_only():
     features = negotiated_features(dict(serverVersion="1.0.0", capabilities=dict(threadSettlement=True)))
     s = thread_state("t3", thread(), {}, "e", features=features)
     assert s.capabilities == ("read",) and not s.backend_actions
+
+
+def test_uncertain_snooze_reconciles_equivalent_iso_timestamps():
+    from herdeck.t3 import _observed_effect
+    from herdeck.t3_actions import semantic_command
+    command = {"type": "thread.snooze", "snoozedUntil": "2026-09-06T13:00:00.123+00:00"}
+    assert _observed_effect({"snoozedUntil": "2026-09-06T13:00:00.123Z"}, command)
+    assert not _observed_effect({"snoozedUntil": "2026-09-06T13:00:00.124Z"}, command)
+    assert not _observed_effect({"snoozedUntil": None}, command)
+    sent = semantic_command("snooze", {}, {})["snoozedUntil"]
+    assert len(sent.split(".")[1].split("+")[0]) == 3
