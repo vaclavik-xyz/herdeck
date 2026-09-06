@@ -45,6 +45,7 @@
       appearance: "Tile appearance",
       content: "Tile content",
       advanced: "Advanced panel settings",
+      backend_labels: "Show T3 / HERDR labels",
     },
     cs: {
       none: "(nic)",
@@ -54,6 +55,7 @@
       appearance: "Vzhled dlaždice",
       content: "Obsah dlaždice",
       advanced: "Pokročilé nastavení panelu",
+      backend_labels: "Zobrazovat štítky T3 / HERDR",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -67,6 +69,16 @@
   const uiLanguage = $derived((getAt(payload, "base", SEC, "language") as string) ?? defaults.view.language);
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
+  const visibleTileFields = $derived((overlay
+    ? overrideValue(payload, prof, SEC, "tile_fields") ?? inheritedFor(payload, prof, SEC, "tile_fields")
+    : getAt(payload, "base", SEC, "tile_fields")) as string[] | undefined);
+  const backendLabels = $derived((visibleTileFields ?? VIEW_LIST_DEFAULTS.tile_fields).includes("server"));
+  function setBackendLabels(enabled: boolean): void {
+    const fields = (visibleTileFields ?? VIEW_LIST_DEFAULTS.tile_fields).filter((field) => field !== "server");
+    if (enabled) fields.push("server");
+    if (overlay) setOvList("tile_fields", fields.length ? "custom" : "empty", fields);
+    else setBaseTri("tile_fields", fields.length ? "custom" : "empty", fields);
+  }
 
   // --- overlay mode helpers ---
   function lineFallback(key: string, fields: string[]): string[] {
@@ -129,6 +141,7 @@
     </details>
   </FieldGroup>
   <FieldGroup title={lm.appearance}>
+    <BooleanField label={lm.backend_labels} help={HELP.backend_labels} value={backendLabels} onchange={setBackendLabels} />
     <OverrideField label="working_animation" help={HELP.working_animation} state={scState("working_animation")} inheritedDisplay={hint("working_animation")} onstate={(s) => setScState("working_animation", s)}>
       <SelectField label="" value={String(scValue("working_animation") ?? "spin")} options={WORKING_ANIMATIONS} onchange={(v) => setSc("working_animation", v)} />
     </OverrideField>
@@ -152,6 +165,7 @@
     </details>
   </FieldGroup>
   <FieldGroup title={lm.appearance}>
+    <BooleanField label={lm.backend_labels} help={HELP.backend_labels} value={backendLabels} onchange={setBackendLabels} />
     <SelectField label="working_animation" help={HELP.working_animation} value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
     <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
   </FieldGroup>

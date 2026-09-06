@@ -317,13 +317,13 @@ def test_multi_server_tags_stay_visible_on_single_server_page():
     assert all(tile.server_accent for tile in tiles)
 
 
-def test_single_server_tiles_have_no_tag():
+def test_single_server_tiles_respect_enabled_backend_labels():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
 
     tiles = [tile for tile in o.render().tiles if tile.repo]
 
-    assert all(tile.server_tag is None and tile.server_accent is None for tile in tiles)
+    assert all(tile.server_tag == "HERDR" and tile.server_accent for tile in tiles)
 
 
 def test_server_accent_returns_stable_palette_color():

@@ -418,7 +418,7 @@ class Orchestrator:
         primary_tokens, secondary_tokens = layout.resolve_tile_lines(
             self.config.view, fb_primary, fb_secondary
         )
-        show_server_tags = "server" in fields and len({s.key.server_id for s in ordered}) > 1
+        show_server_tags = "server" in fields
         management = self._management_indices()
         management_mode = self.config.view.management == "bottom_row"
         tiles: list[TileView] = []

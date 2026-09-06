@@ -176,7 +176,7 @@ def test_agent_tile_with_server_tag_renders(tmp_path):
     assert p.render_tile_bytes(base) != p.render_tile_bytes(tagged)
 
 
-def test_theme_server_accent_color_renders(tmp_path):
+def test_backend_label_is_plain_text_without_server_accent_box(tmp_path):
     from herdeck.driver.base import TileView
 
     p = make_provider(tmp_path)
@@ -204,7 +204,7 @@ def test_theme_server_accent_color_renders(tmp_path):
     )
 
     assert p.render_tile_bytes(tile)[:4] == b"\x89PNG"
-    assert p.render_tile_bytes(tile) != p.render_tile_bytes(other)
+    assert p.render_tile_bytes(tile) == p.render_tile_bytes(other)
 
 
 def test_theme_status_color_name_renders_distinct_from_dim(tmp_path):

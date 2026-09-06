@@ -722,3 +722,9 @@ Project names on agent tiles use a 31px font when they fit, shrink to 18px for
 longer names, then wrap into two lines. Extremely long names still end in an
 ellipsis rather than becoming unreadably small. This applies to both backends;
 thread/branch text retains its own rows.
+
+The View settings include a **Show T3 / HERDR labels** switch (also available per
+profile). It controls the existing `server` entry in `view.tile_fields`, preserving
+other fields. Labels are small unboxed text, including with a single connection.
+Project names use bold type; thread descriptions use regular type with extra
+vertical spacing so even two-line project names remain visually distinct.

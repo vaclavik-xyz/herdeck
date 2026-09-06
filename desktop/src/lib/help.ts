@@ -28,6 +28,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tick_interval: "How often, in seconds, the deck redraws (clock, elapsed time, animations); default 0.4 s.",
     },
     view: {
+      backend_labels: "Show a small T3 or HERDR label on agent tiles. In a profile, changes apply only to that profile.",
       management: "Controls layout: launcher_menu = a '+ New' tile with a menu, bottom_row = a bottom row of buttons.",
       agent_order: "Orders equal-status agents by pane id (status) or by their Herdr workspace and tab position (herdr).",
       agent_slots: "Number of tiles reserved for agents ('max' = all free ones); not used by the app yet.",
@@ -120,6 +121,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tick_interval: "Jak často v sekundách se deck překresluje (hodiny, uplynulý čas, animace); výchozí 0,4 s.",
     },
     view: {
+      backend_labels: "Zobrazí malý štítek T3 nebo HERDR na dlaždicích agentů. V profilu se změna týká jen tohoto profilu.",
       management: "Rozložení ovládání: launcher_menu = dlaždice „+ New“ s menu, bottom_row = spodní řada tlačítek.",
       agent_order: "Řadí agenty se stejným stavem podle ID panelu (status) nebo pozice workspace a tabu v Herdr (herdr).",
       agent_slots: "Počet dlaždic vyhrazených agentům („max“ = všechny volné); zatím se v aplikaci nepoužívá.",
