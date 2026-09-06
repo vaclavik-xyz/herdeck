@@ -474,6 +474,7 @@ class Orchestrator:
                 agent_secondary = secondary_tokens
                 if s.backend == "t3" and self.config.view.tile_secondary is None:
                     agent_secondary = ["tab"] if "tab" in fields else []
+                primary, secondary = layout.compose_tile_lines(s, primary_tokens, agent_secondary)
                 accent = (
                     server_accent(s.key.server_id, self.config.theme.server_accents)
                     if show_server_tags
@@ -489,8 +490,8 @@ class Orchestrator:
                         spinner=phase,
                         working_animation=self.config.view.working_animation,
                         tile_fill=self.config.view.tile_fill,
-                        repo=layout.compose_line(s, primary_tokens),
-                        branch=layout.compose_line(s, agent_secondary),
+                        repo=primary,
+                        branch=secondary,
                         status_text=layout.tile_status_text(
                             s, self.config.view.language, down
                         )

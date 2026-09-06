@@ -88,3 +88,12 @@ def test_thread_title_preset_keeps_t3_project_as_secondary():
     assert (tile.repo, tile.branch) == ("Fix sign in", "My App")
     o.apply_snapshot("dev", [replace(a, title="Renamed thread")])
     assert o.render().tiles[0].repo == "Renamed thread"
+
+
+def test_unnamed_thread_preset_shows_project_only_once():
+    from herdeck import layout
+    agent = AgentState(AgentKey("dev", "a"), "codex", "/projects/app", Status.IDLE,
+                       backend="t3", project="My App", title="")
+    assert layout.compose_tile_lines(agent, ["tab"], ["repo"]) == ("My App", "")
+    # Explicitly hidden titles and secondary-only tab fields stay hidden.
+    assert layout.compose_tile_lines(agent, [], ["tab"]) == ("", "")

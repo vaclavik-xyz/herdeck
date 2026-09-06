@@ -88,9 +88,17 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
             value = ""
         if value:
             parts.append(value)
-    if not parts and tokens == ["tab"]:
-        return compose_line(state, ["repo"])
     return " · ".join(parts)
+
+
+def compose_tile_lines(state: AgentState, primary_tokens: list[str], secondary_tokens: list[str]) -> tuple[str, str]:
+    primary = compose_line(state, primary_tokens)
+    secondary = compose_line(state, secondary_tokens)
+    if not primary and primary_tokens == ["tab"]:
+        primary = compose_line(state, ["repo"])
+        if secondary == primary:
+            secondary = ""
+    return primary, secondary
 
 
 def resolve_tile_lines(
