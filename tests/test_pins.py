@@ -22,7 +22,7 @@ def test_pins_survive_rank_changes_missing_agents_and_restart(tmp_path):
     assert o.render().tiles[1].repo == "B"
     assert o.render().tiles[1].pinned
     o.apply_snapshot("dev", [a])
-    assert "offline" in o.render().tiles[1].label
+    assert "missing" in o.render().tiles[1].label
     assert o.tick() == []
     o.confirm_rendered_preview()
     assert o.agent_for_preview(1) is None

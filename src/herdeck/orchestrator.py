@@ -509,7 +509,9 @@ class Orchestrator:
                     )
                 )
             elif (self._page % pages) * agent_slots + i in self.pins:
-                tiles.append(TileView(i, self._tr("pinned_absent"), "grey", subtext=self._tr("unpin")))
+                key = self.pins[(self._page % pages) * agent_slots + i]
+                label = "pinned_absent" if key.server_id in self._down else "pinned_missing"
+                tiles.append(TileView(i, self._tr(label), "grey", subtext=self._tr("unpin")))
             else:
                 tiles.append(TileView(i, "", "empty"))
         spotlight = self._blocked_spotlight()

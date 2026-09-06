@@ -184,3 +184,16 @@ def test_uncertain_snooze_reconciles_equivalent_iso_timestamps():
     assert not _observed_effect({"snoozedUntil": None}, command)
     sent = semantic_command("snooze", {}, {})["snoozedUntil"]
     assert len(sent.split(".")[1].split("+")[0]) == 3
+
+
+def test_missing_pinned_thread_is_distinct_from_offline_server():
+    from herdeck.model import AgentKey
+    cfg = Config(servers=[], profiles={}, overview_order=["t3"], grid=(5, 3))
+    cfg.view.language = "en"
+    orch = Orchestrator(cfg, slots=13)
+    orch.pins = {0: AgentKey("t3", "deleted-thread")}
+    orch.apply_snapshot("t3", [])
+    orch.set_connection("t3", True)
+    assert orch.render().tiles[0].label == "Pinned · missing"
+    orch.set_connection("t3", False)
+    assert orch.render().tiles[0].label == "Pinned · offline"

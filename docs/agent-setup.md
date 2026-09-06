@@ -733,7 +733,9 @@ The agent keeps its current overview position and page despite status sorting.
 The same button becomes **Unpin**. A small pin mark appears at the bottom right
 of its overview tile, independently of backend-label visibility.
 
-An absent agent leaves a reserved **Pinned · offline** tile. Press that tile to
+An absent agent leaves a reserved **Pinned · missing** tile while its source is
+online, or **Pinned · offline** during a connection outage. T3 omits deleted
+threads from its shell entirely, so absence is not presented as a transport error. Press that tile to
 release the reservation. Reconnecting with the same server/agent identity restores
 the pinned tile. Changing a thread or project title does not affect its pin.
 Pins are local to this deck host and saved per active profile in
