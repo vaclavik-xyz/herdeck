@@ -581,3 +581,26 @@ def test_inactive_t3_threads_do_not_occupy_elgato_slots():
         hidden.append(a)
     sess.apply_snapshot('dev', [*hidden, state('active', Status.IDLE, 'visible')])
     assert b'visible' in sess.render_all()['s0'].image_png
+
+
+def test_t3_stop_confirmation_cannot_cross_turn_revision():
+    from dataclasses import replace
+
+    for update in ("snapshot", "event"):
+        sess = ElgatoSession(make_config(), FakeIcons())
+        sess.set_slots([("s0", (0, 0))])
+        sess.set_action_keys([("t", "stop", (1, 2))])
+        first = state("p1", Status.WORKING)
+        first.backend, first.backend_revision, first.capabilities = "t3", "turn-1", ("stop",)
+        sess.apply_snapshot("dev", [first])
+        sess.select(first.key)
+        assert sess.key_up("t") == [] and sess.is_armed()
+        second = replace(first, backend_revision="turn-2")
+        if update == "snapshot":
+            sess.apply_snapshot("dev", [second])
+        else:
+            sess.apply_event("dev", second)
+        assert not sess.is_armed()
+        assert sess.key_up("t") == []  # a fresh first press, not a stop
+        command = sess.key_up("t")[0]
+        assert command.action == "stop" and command.decision_revision == "turn-2"

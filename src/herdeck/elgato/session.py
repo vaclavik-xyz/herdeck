@@ -36,6 +36,7 @@ class ElgatoSession:
         self._pending_act: AgentKey | None = None  # an act is in flight for this agent
         self._armed_for: AgentKey | None = None
         self._armed_at: float = 0.0
+        self._armed_revision: tuple[str, str] | None = None
         self._last_bytes: dict[str, bytes] = {}
 
     # --- inbound agent state ---
@@ -119,11 +120,19 @@ class ElgatoSession:
     def _arm(self) -> None:
         self._armed_for = self.selected()
         self._armed_at = self._clock()
+        self._armed_revision = self._target_revision()
+
+    def _target_revision(self) -> tuple[str, str] | None:
+        target = self._target()
+        if target is None:
+            return None
+        return (target.backend, target.backend_revision if target.backend == "t3" else target.terminal_id)
 
     def is_armed(self) -> bool:
         return (
             self._armed_for is not None
             and self._armed_for == self.selected()
+            and self._armed_revision == self._target_revision()
             and (self._clock() - self._armed_at) <= self._arm_timeout
         )
 
@@ -134,6 +143,7 @@ class ElgatoSession:
         if self._armed_for is not None and (
             self._armed_for != self.selected()
             or self._armed_for.server_id in self._down
+            or self._armed_revision != self._target_revision()
         ):
             self._armed_for = None
 
