@@ -1,11 +1,55 @@
 import { describe, expect, it } from "vitest";
-import { mount, unmount } from "svelte";
+import { flushSync, mount, unmount } from "svelte";
 
 import { parseConfig } from "../configClient";
 import { setLang } from "../i18n.svelte";
 import ViewSection from "./ViewSection.svelte";
 
 describe("ViewSection", () => {
+  it.each([undefined, "night"])("switches the prominent heading and preserves unrelated fields (%s)", (editProfile) => {
+    setLang("en");
+    const payload = parseConfig({ base: { view: { tile_fields: ["repo", "tab", "server"] } }, profiles: { night: { view: {} } } })!;
+    const target = document.createElement("div");
+    let changes = 0;
+    const instance = mount(ViewSection, { target, props: { payload, editProfile, onChange: () => changes++, onError: () => {} } });
+    try {
+      const select = Array.from(target.querySelectorAll("label.field")).find(item => item.textContent?.includes("Emphasize"))?.querySelector<HTMLSelectElement>("select")!;
+      const values = (key: string) => Array.from(Array.from(target.querySelectorAll(".tristate")).find(item => item.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === key)!.querySelectorAll<HTMLInputElement>("input")).map(input => input.value);
+      expect(select.value).toBe("Project");
+      flushSync(() => { select.value = "Thread"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(values("tile_primary")).toEqual(["tab"]);
+      expect(values("tile_secondary")).toEqual(["repo"]);
+      expect(changes).toBe(1);
+      flushSync(() => { select.value = "Project"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(values("tile_primary")).toEqual(["repo"]);
+      expect(values("tile_secondary")).toEqual(["tab", "branch"]);
+      expect(payload.base.view.tile_fields).toEqual(["repo", "tab", "server"]);
+      if (editProfile) expect(payload.base.view.tile_primary).toBeUndefined();
+    } finally { unmount(instance); }
+  });
+
+  it.each([undefined, "night"])("toggles backend labels while preserving other fields (%s)", (editProfile) => {
+    setLang("en");
+    const payload = parseConfig({ base: { view: { tile_fields: ["repo", "status", "server", "profile"] } }, profiles: { night: { view: {} } } })!;
+    const target = document.createElement("div");
+    let changes = 0;
+    const instance = mount(ViewSection, { target, props: { payload, editProfile, onChange: () => changes++, onError: () => {} } });
+    try {
+      const toggle = Array.from(target.querySelectorAll("label.field")).find(item => item.textContent?.includes("Show T3 / HERDR labels"))?.querySelector<HTMLInputElement>("input")!;
+      expect(toggle.checked).toBe(true);
+      const tileFields = () => Array.from(target.querySelectorAll(".tristate")).find(item => item.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === "tile_fields")!;
+      const values = () => Array.from(tileFields().querySelectorAll<HTMLInputElement>('input')).map(input => input.value);
+      flushSync(() => { toggle.checked = false; toggle.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(values()).toEqual(["repo", "status", "profile"]);
+      expect(toggle.checked).toBe(false);
+      flushSync(() => { toggle.checked = true; toggle.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(values()).toEqual(["repo", "status", "profile", "server"]);
+      expect(changes).toBe(2);
+      // A profile edit must never mutate its inherited base configuration.
+      if (editProfile) expect(payload.base.view.tile_fields).toEqual(["repo", "status", "server", "profile"]);
+    } finally { unmount(instance); }
+  });
+
   it("offers native Herdr ordering without changing the default", () => {
     setLang("en");
     const payload = parseConfig({ base: { view: {} } })!;

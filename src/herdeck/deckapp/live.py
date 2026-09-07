@@ -28,7 +28,7 @@ import threading
 
 from ..commands import Command, command_to_msg
 from ..config import Config, ServerConfig
-from ..connector import Connector
+from ..connector import Connector, create_connector
 from ..model import AgentKey, AgentState, Status
 from ..orchestrator import Orchestrator
 from .source import StateSource
@@ -158,7 +158,7 @@ class LiveSource(StateSource):
                 # Local-only commands are handed back to DeckApp. It executes
                 # them after releasing the render lock, because a profile switch
                 # swaps the source and needs to acquire that same lock.
-                if cmd.kind == "switch_profile":
+                if cmd.kind in ("switch_profile", "toggle_pin"):
                     local_commands.append(cmd)
                 continue
             runner = self._runners.get(cmd.server_id)
@@ -188,7 +188,7 @@ class LiveSource(StateSource):
             agents = list(self._agents.values())
         counts = layout.summary(agents)
         return {
-            "agents": len(agents),
+            "agents": sum(a.lifecycle == "active" for a in agents),
             "blocked": counts.blocked,
             "working": counts.working,
             "idle": counts.idle,
@@ -552,7 +552,7 @@ def build_live_source(
     config: Config,
     server: ServerConfig | None = None,
     *,
-    connector_factory=Connector,
+    connector_factory=create_connector,
     runner_factory=ConnectorRunner,
 ) -> LiveSource:
     """Wire a LiveSource to one Connector + runner per selected server.

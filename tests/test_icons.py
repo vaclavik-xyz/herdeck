@@ -176,7 +176,7 @@ def test_agent_tile_with_server_tag_renders(tmp_path):
     assert p.render_tile_bytes(base) != p.render_tile_bytes(tagged)
 
 
-def test_theme_server_accent_color_renders(tmp_path):
+def test_backend_label_is_plain_text_without_server_accent_box(tmp_path):
     from herdeck.driver.base import TileView
 
     p = make_provider(tmp_path)
@@ -204,7 +204,7 @@ def test_theme_server_accent_color_renders(tmp_path):
     )
 
     assert p.render_tile_bytes(tile)[:4] == b"\x89PNG"
-    assert p.render_tile_bytes(tile) != p.render_tile_bytes(other)
+    assert p.render_tile_bytes(tile) == p.render_tile_bytes(other)
 
 
 def test_theme_status_color_name_renders_distinct_from_dim(tmp_path):
@@ -711,3 +711,32 @@ def test_pulse_is_a_slow_low_churn_animation(tmp_path):
     # the whole cycle uses exactly PULSE_STATES distinct frames
     distinct = {name(p) for p in range(PULSE_SLOWDOWN * PULSE_STATES * 2)}
     assert len(distinct) == PULSE_STATES
+
+
+def test_project_name_shrinks_before_truncating():
+    from herdeck.icons import _fit_project_name
+    draw = ImageDraw.Draw(Image.new("RGB", (196, 196)))
+    short_font, short_lines = _fit_project_name(draw, "herdeck", 172)
+    assert short_font.size == 31 and short_lines == ["herdeck"]
+    font, lines = _fit_project_name(draw, "macdoktor-crm", 172)
+    assert 18 <= font.size < 31
+    assert lines == ["macdoktor-crm"]
+    assert draw.textlength(lines[0], font=font) <= 172
+
+
+def test_project_name_wraps_long_identifiers_without_losing_the_suffix():
+    from herdeck.icons import _fit_project_name
+    draw = ImageDraw.Draw(Image.new("RGB", (196, 196)))
+    name = "macdoktor-crm-production"
+    font, lines = _fit_project_name(draw, name, 172)
+    assert font.size == 18 and len(lines) == 2
+    assert "".join(lines) == name
+    assert all(draw.textlength(line, font=font) <= 172 for line in lines)
+
+
+def test_extreme_project_names_keep_a_readable_minimum_and_ellipsis():
+    from herdeck.icons import _fit_project_name
+    draw = ImageDraw.Draw(Image.new("RGB", (196, 196)))
+    font, lines = _fit_project_name(draw, "W" * 100, 172)
+    assert font.size == 18 and len(lines) == 2 and lines[-1].endswith("…")
+    assert all(draw.textlength(line, font=font) <= 172 for line in lines)

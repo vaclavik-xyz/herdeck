@@ -10,7 +10,7 @@ from collections.abc import Callable
 from .bootstrap import _discover_config_path, resolve_mode, resolve_runtime_config
 from .commands import Command, build_action_command, command_to_msg, profile_for
 from .config import Config, ConfigError, load_config
-from .connector import Connector
+from .connector import Connector, create_connector
 from .model import AgentKey, AgentState, Status
 
 
@@ -41,7 +41,7 @@ class CtlSession:
         config: Config,
         *,
         server_filter: str | None = None,
-        connector_factory: Callable[..., Connector] = Connector,
+        connector_factory: Callable[..., Connector] = create_connector,
     ):
         self.config = config
         self.servers = [s for s in config.servers if server_filter in (None, s.id)]
@@ -222,6 +222,8 @@ class CtlSession:
         profile = profile_for(self.config, agent.agent_type)
         cmd = build_action_command(action, agent, profile, force=force, always=always)
         data = await self.request(cmd, timeout=request_timeout)
+        if data.get("uncertain"):
+            raise RuntimeError(data.get("message", "T3 delivery uncertain"))
         if data.get("skipped"):
             return {"result": "skipped", "settled": True}
         settled = True
@@ -341,6 +343,9 @@ def _target_error(args, exc: TargetError) -> int:
 
 
 def _direct_command_result(args, data: dict, success: str) -> int:
+    if data.get("uncertain"):
+        _emit(args, {"result": "uncertain", "message": data.get("message", "Check T3 before retrying")})
+        return EXIT_CONN
     if data.get("skipped"):
         message = data.get("message")
         payload = {"result": "skipped"}
@@ -406,6 +411,11 @@ async def dispatch(args, session) -> int:
         return _target_error(args, e)
 
     if args.cmd == "send":
+        if agent.backend == "t3":
+            data = await session.request(Command("backend_action", agent.key.server_id,
+                agent.key.pane_id, action="continue", text=args.text,
+                decision_revision=agent.backend_revision), timeout=args.timeout)
+            return _direct_command_result(args, data, "sent")
         data = await session.request(
             Command(
                 "send_text",

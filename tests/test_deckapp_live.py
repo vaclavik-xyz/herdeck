@@ -1218,3 +1218,30 @@ def test_reconnect_reissues_prereads_for_still_blocked_panes():
     src._on_snapshot(server.id, [agent(server.id, "p1", Status.BLOCKED)])
     reads = [m for m in runner.sent if m.get("type") == "read"]
     assert len(reads) == 2  # no double-issue for the same episode
+
+
+def test_converged_runtime_pins_are_local_persisted_and_reloaded(tmp_path):
+    from herdeck.pins import PinStore
+    config, server = live_config()
+    source = LiveSource(config, server)
+    runner = FakeRunner()
+    source.attach_runner(runner)
+    store = PinStore(tmp_path / 'pins.json')
+    app = DeckApp(source, serve=False, icon_provider=StubIcons(), pin_store=store)
+    try:
+        key = AgentKey(server.id, 'pin-test')
+        agent = AgentState(key, 'codex', 'Pin project', Status.IDLE)
+        source._on_snapshot(server.id, [agent])
+        app.press(0)
+        before = len(runner.sent)
+        app.press(10)
+        assert len(runner.sent) == before
+        assert store.load('default') == {0: key}
+        # Source replacement is the same orchestrator rebuild used by reload.
+        replacement = LiveSource(config, server)
+        app.swap_source(replacement)
+        assert app._orch.pins == {0: key}
+        app.press(0)  # absent pinned tile releases its reservation
+        assert store.load('default') == {}
+    finally:
+        app.close()

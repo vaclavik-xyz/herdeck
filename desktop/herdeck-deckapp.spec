@@ -33,6 +33,7 @@ a = Analysis(
         "herdeck.bridge",
         "herdeck.bootstrap",
         "herdeck.connector",
+        "herdeck.t3",
         "herdeck.driver.d200",
         "strmdck",
         "strmdck.devices.ulanzi_d200",

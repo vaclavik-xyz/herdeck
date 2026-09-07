@@ -78,6 +78,8 @@ class Orchestrator:
         self._since: dict[AgentKey, tuple[Status, float]] = {}  # status start time
         self._down: set[str] = set()
         self._drill: AgentKey | None = None
+        self.pins: dict[int, AgentKey] = {}
+        self._drill_position = 0
         self._detection: str = ""
         self._page: int = 0
         self._phase: int = 0
@@ -94,6 +96,7 @@ class Orchestrator:
         self._usage_detail_page: int = 0
         # Ordering hysteresis state (see _ordered).
         self._display_order: list[AgentKey] = []
+        self._placed_order: list[AgentKey | None] = []
         self._display_ranks: dict = {}
         self._target_keys: list[AgentKey] = []
         self._target_since: float = 0.0
@@ -262,9 +265,9 @@ class Orchestrator:
         elif self._drill is not None and self._drill in self._agents:
             rendered = {index: self._drill for index in range(self.slots)}
         else:
-            ordered = [self._agents[key] for key in self._display_order if key in self._agents]
+            ordered = self._place_pins([self._agents[key] for key in self._display_order if key in self._agents])
             shown, _ = layout.page(ordered, self._page, self._agent_slots())
-            rendered = {index: agent.key for index, agent in enumerate(shown)}
+            rendered = {index: agent.key for index, agent in enumerate(shown) if agent is not None}
 
         now = self._clock()
         for index in self._rendered_preview_slots.keys() | rendered.keys():
@@ -284,7 +287,7 @@ class Orchestrator:
         the overview re-sorts on exit anyway."""
         if self._drill is not None or self._launcher or self._profile_menu:
             return
-        if self._page % max(1, -(-len(self._agents) // self._agent_slots())) != 0:
+        if self._page != 0:
             # The jump swaps every visible tile even when the ORDER is
             # unchanged (e.g. the blocker already sorted first), which the
             # display-diff guard cannot see — guard the whole first page.
@@ -299,9 +302,10 @@ class Orchestrator:
         """Adopt the fresh sort on the next render — view transitions (paging,
         entering/leaving drill or menus) are safe moments to move tiles."""
         self._display_order = []
+        self._placed_order = []
         self._slot_changed_at.clear()
 
-    def _ordered(self) -> list[AgentState]:
+    def _ordered(self) -> list[AgentState | None]:
         """Agents in DISPLAY order: the status-priority sort with hysteresis.
 
         A live re-sort on every event shuffles tiles under the user's finger —
@@ -319,7 +323,7 @@ class Orchestrator:
         drop out immediately; new agents append at the end until the next
         adoption."""
         target = layout.order_agents(
-            self._agents.values(), self.config.overview_order, self.config.view.agent_order
+            (s for s in self._agents.values() if s.lifecycle == "active"), self.config.overview_order, self.config.view.agent_order
         )
         target_keys = [s.key for s in target]
         now = self._clock()
@@ -341,17 +345,43 @@ class Orchestrator:
         else:
             display = [k for k in self._display_order if k in by_key]
             display += [k for k in target_keys if k not in display]
-        if display != self._display_order:
-            old = self._display_order
-            for i, key in enumerate(display):
-                if i < len(old) and old[i] != key:
-                    self._slot_changed_at[i] = now  # repopulated under a possible finger
-            self._display_order = display
-        return [by_key[k] for k in display]
+        self._display_order = display
+        placed = self._place_pins([by_key[k] for k in display])
+        keys = [agent.key if agent else None for agent in placed]
+        for i, key in enumerate(keys):
+            if i < len(self._placed_order) and self._placed_order[i] != key:
+                self._slot_changed_at[i] = now
+        self._placed_order = keys
+        return placed
+
+    def _place_pins(self, ordered):
+        """Absolute overview positions, including holes for temporarily absent agents.
+
+        Pin placement is shared by rendering, presses, animation and previews.
+        Status sorting may only fill unreserved positions.
+        """
+        if not self.pins:
+            return ordered
+        pinned = set(self.pins.values())
+        rest = iter(agent for agent in ordered if agent.key not in pinned)
+        size = max(sum(agent.key not in pinned for agent in ordered) + len(pinned), max(self.pins) + 1)
+        return [self._agents.get(self.pins[i]) if i in self.pins else next(rest, None) for i in range(size)]
+
+    def toggle_pin(self, key, position):
+        old = next((i for i, value in self.pins.items() if value == key), None)
+        if old is not None:
+            del self.pins[old]
+        else:
+            self.pins[position] = key
+        self._resettle()
 
     def _agent_color(self, s: AgentState) -> str:
         if s.key.server_id in self._down:
             return self.config.theme.colors.get("offline", "red")
+        if s.attention == "error":
+            return "red"
+        if s.lifecycle != "active":
+            return "grey"
         return self.config.theme.colors.get(s.status.value, layout.status_color(s.status))
 
     def _tile_field_enabled(self, name: str) -> bool:
@@ -418,7 +448,7 @@ class Orchestrator:
         primary_tokens, secondary_tokens = layout.resolve_tile_lines(
             self.config.view, fb_primary, fb_secondary
         )
-        show_server_tags = "server" in fields and len({s.key.server_id for s in ordered}) > 1
+        show_server_tags = "server" in fields
         management = self._management_indices()
         management_mode = self.config.view.management == "bottom_row"
         tiles: list[TileView] = []
@@ -438,11 +468,17 @@ class Orchestrator:
                 tiles.append(
                     TileView(i, self._tr("new_agent"), "launcher", section="start_profiles")
                 )
-            elif i < len(shown):
+            elif i < len(shown) and shown[i] is not None:
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
                 down = s.key.server_id in self._down
-                tag = s.key.server_id[:3].upper() if show_server_tags else None
+                tag = ("T3" if s.backend == "t3" else "HERDR") if show_server_tags else None
+                # A T3 thread takes the place of a terminal tab. Give its title
+                # the whole secondary line by default; explicit layouts still win.
+                agent_secondary = secondary_tokens
+                if s.backend == "t3" and self.config.view.tile_secondary is None:
+                    agent_secondary = ["tab"] if "tab" in fields else []
+                primary, secondary = layout.compose_tile_lines(s, primary_tokens, agent_secondary)
                 accent = (
                     server_accent(s.key.server_id, self.config.theme.server_accents)
                     if show_server_tags
@@ -458,19 +494,24 @@ class Orchestrator:
                         spinner=phase,
                         working_animation=self.config.view.working_animation,
                         tile_fill=self.config.view.tile_fill,
-                        repo=layout.compose_line(s, primary_tokens),
-                        branch=layout.compose_line(s, secondary_tokens),
+                        repo=primary,
+                        branch=secondary,
                         status_text=layout.tile_status_text(
                             s, self.config.view.language, down
                         )
                         if "status" in fields
                         else None,
                         time_text=self._elapsed_text(s.key) if "time" in fields else None,
+                        pinned=s.key in self.pins.values(),
                         server_tag=tag,
                         server_accent=accent,
                         section="view",
                     )
                 )
+            elif (self._page % pages) * agent_slots + i in self.pins:
+                key = self.pins[(self._page % pages) * agent_slots + i]
+                label = "pinned_absent" if key.server_id in self._down else "pinned_missing"
+                tiles.append(TileView(i, self._tr(label), "grey", subtext=self._tr("unpin")))
             else:
                 tiles.append(TileView(i, "", "empty"))
         spotlight = self._blocked_spotlight()
@@ -502,11 +543,11 @@ class Orchestrator:
             )
             return RenderState(tiles, panel)
         panel = layout.panel_overview(
-            layout.summary(ordered),
+            layout.summary(self._agents.values()),
             self._page % pages,
             pages,
             self._down,
-            len(ordered),
+            sum(s.lifecycle == "active" for s in self._agents.values()),
             spotlight,
             lang=self.config.view.language,
             usage_lines=layout.usage_summary_lines(self._usage) if self._usage else None,
@@ -599,13 +640,13 @@ class Orchestrator:
             display = [
                 s.key
                 for s in layout.order_agents(
-                    self._agents.values(),
+                    (s for s in self._agents.values() if s.lifecycle == "active"),
                     self.config.overview_order,
                     self.config.view.agent_order,
                 )
             ]
-        shown, _ = layout.page([by_key[k] for k in display], self._page, self._agent_slots())
-        return [i for i, s in enumerate(shown) if s.status is Status.WORKING]
+        shown, _ = layout.page(self._place_pins([by_key[k] for k in display]), self._page, self._agent_slots())
+        return [i for i, s in enumerate(shown) if s is not None and s.status is Status.WORKING]
 
     def _drill_layout(self) -> tuple[list, int, int]:
         """Drill action tiles plus the fixed Stop/Back indices.
@@ -617,6 +658,23 @@ class Orchestrator:
         agent = self._agents.get(self._drill)
         stop_i, back_i = self.slots - 2, self.slots - 1
         actions: list[dict] = []
+        if agent is not None and agent.backend == "t3":
+            for option in agent.backend_actions:
+                if option["id"] == "approve_always" and not self.config.safety.approve_always:
+                    continue
+                actions.append({"id": option["id"], "label": option["label"], "confirm": option.get("confirm", False),
+                    "subtext": option.get("subtext", ""),
+                    "confirm_key": agent.backend_revision + str(option["payload"]),
+                    "make": lambda key, o=option, rev=agent.backend_revision: Command(
+                        "backend_action", key.server_id, key.pane_id, action=o["id"],
+                        payload=o["payload"], decision_revision=rev)})
+            if "continue" in agent.capabilities:
+                for macro in self.config.macros:
+                    actions.append({"label": macro.label[:_OPTION_LABEL_MAX],
+                        "make": lambda key, text=macro.text, rev=agent.backend_revision: Command(
+                            "backend_action", key.server_id, key.pane_id, action="continue",
+                            text=text, decision_revision=rev)})
+            return actions[:max(0, stop_i - 1)], stop_i, back_i
         if agent is not None and agent.status is Status.BLOCKED:
             options = layout.parse_options(self._detection)
             if options:
@@ -691,7 +749,7 @@ class Orchestrator:
                         ),
                     }
                 )
-        return actions[:stop_i], stop_i, back_i
+        return actions[:max(0, stop_i - 1)], stop_i, back_i
 
     def _armed_action(self) -> str | None:
         """The armed (fresh, for the drilled agent) confirm action id, or None."""
@@ -746,17 +804,21 @@ class Orchestrator:
                         section="answer_profiles",
                     )
                 )
+            elif i == stop_i - 1 and agent is not None:
+                label = self._tr("unpin") if agent.key in self.pins.values() else self._tr("pin")
+                tiles.append(TileView(i, label, "grey"))
             elif i == stop_i:
                 stop_label = self._tr("sure") if armed == "act_force" else self._tr("stop")
+                unavailable = agent is not None and agent.backend == "t3" and "stop" not in agent.capabilities
                 tiles.append(
-                    TileView(i, stop_label, "grey" if down else "red", section="answer_profiles")
+                    TileView(i, stop_label, "grey" if down or unavailable else "red", section="answer_profiles")
                 )
             elif i == back_i:
                 tiles.append(TileView(i, self._tr("back"), "grey"))
             else:
                 tiles.append(TileView(i, "", "empty"))
         panel = (
-            layout.panel_detail(agent, self._detection, lang=self.config.view.language)
+            layout.panel_detail(agent, agent.preview if agent.backend == "t3" else self._detection, lang=self.config.view.language)
             if agent is not None
             else PanelView("", [], "grey")
         )
@@ -842,7 +904,7 @@ class Orchestrator:
         agent_slots = self._agent_slots()
         ordered = self._ordered()
         shown, pages = layout.page(ordered, self._page, agent_slots)
-        if index < len(shown):
+        if 0 <= index < len(shown):
             # The occupant of this slot changed a moment ago — the press was
             # almost certainly aimed at the previous occupant. Swallow it; the
             # user sees the new tile and can press again deliberately.
@@ -850,11 +912,20 @@ class Orchestrator:
             if self._clock() - self._slot_changed_at.get(pos, float("-inf")) < _SLOT_PRESS_GUARD_S:
                 return []
             selected = shown[index]
+            if selected is None:
+                if pos in self.pins:
+                    key = self.pins[pos]
+                    return [Command("toggle_pin", key.server_id, key.pane_id, payload={"position": pos})]
+                return []
+            self._drill_position = pos
             key = selected.key
             self._drill = key
             self._detection = ""
             self._pending_confirm = None
             self._resettle()  # returning from drill re-sorts anyway
+            if selected.backend == "t3":
+                self._detection = selected.preview
+                return [Command("read", key.server_id, key.pane_id)]
             # Focus the agent in the on-screen herdr session AND read its prompt.
             return [
                 Command(
@@ -923,11 +994,16 @@ class Orchestrator:
             self._pending_confirm = None
             self._resettle()
             return []
+        if index == stop_i - 1:
+            return [Command("toggle_pin", key.server_id, key.pane_id, payload={"position": self._drill_position})]
         if self._drill_down():
             # The connector is down: a command would be dropped silently. Only
             # Back (handled above) works until the server reconnects.
             return []
         if index == stop_i:  # Stop — always, unconditional
+            target = self._agents[key]
+            if target.backend == "t3" and "stop" not in target.capabilities:
+                return []
             action = "act_force"
             if action in self.config.safety.require_confirm_for and not self._confirm_armed(
                 action, key
@@ -943,6 +1019,9 @@ class Orchestrator:
                 keys=self._profile_for(key).stop,
                 terminal_id=target.terminal_id or None,
             )
+            if target.backend == "t3":
+                cmd = Command("backend_action", key.server_id, key.pane_id,
+                              action="stop", decision_revision=target.backend_revision)
             self._note_sent(key)
             self._drill = None  # return to the fleet overview
             self._resettle()
@@ -950,7 +1029,7 @@ class Orchestrator:
         if index < len(actions):  # send option number or macro text
             action_id = actions[index].get("id")
             confirm_key = actions[index].get("confirm_key") or f"idx:{index}"
-            if action_id in self.config.safety.require_confirm_for and not self._confirm_armed(
+            if (actions[index].get("confirm") or action_id in self.config.safety.require_confirm_for) and not self._confirm_armed(
                 confirm_key, key
             ):
                 self._arm_confirm(confirm_key, key)  # (re-)arm; an expired arm never fires

@@ -7,7 +7,7 @@ from collections.abc import Callable
 
 from ..commands import Command, command_to_msg
 from ..config import Config, ConfigError
-from ..connector import Connector
+from ..connector import Connector, create_connector
 from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
 from ..model import AgentKey
 from .frozen import baked_assets_dir as _baked_assets_dir
@@ -193,7 +193,7 @@ async def serve_elgato(config: Config, *, socket_path: str, token: str, make_ses
 
     connectors: dict[str, Connector] = {}
     for sc in config.servers:
-        conn = Connector(
+        conn = create_connector(
             sc,
             on_snapshot=lambda sid, st: loop.call_soon_threadsafe(_apply, session.apply_snapshot, sid, st),
             on_event=lambda sid, s: loop.call_soon_threadsafe(_apply, session.apply_event, sid, s),

@@ -7,9 +7,11 @@ import io
 import json
 import logging
 import os
+import tempfile
 import time
 import zipfile
 from collections.abc import Callable
+from pathlib import Path
 
 from PIL import Image
 
@@ -108,6 +110,36 @@ def build_button_zip(manifest_bytes: bytes, icons: dict[str, bytes], *, rand=os.
         dummy += binascii.hexlify(rand(4 * retries))
 
 
+def build_standard_button_zip(manifest_bytes: bytes, icons: dict[str, bytes]) -> bytes:
+    """Use strmdck's disk-backed ZIP metadata while retaining our native panel.
+
+    Stock set_buttons drops SmallViewMode and forces the stretched two-cell
+    fallback. Keep its ZipFile.write path, but serialize our complete manifest.
+    The temporary directory belongs to this one upload, not the shared cache.
+    """
+    with tempfile.TemporaryDirectory(prefix="herdeck-d200-") as directory:
+        root = Path(directory)
+        (root / "icons").mkdir()
+        (root / "manifest.json").write_bytes(manifest_bytes)
+        for name, blob in icons.items():
+            (root / "icons" / name).write_bytes(blob)
+        dummy = b""
+        for attempt in range(65):
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
+                if dummy:
+                    (root / "dummy.txt").write_bytes(dummy)
+                    z.write(root / "dummy.txt", "dummy.txt")
+                z.write(root / "manifest.json", "manifest.json")
+                for name in icons:
+                    z.write(root / "icons" / name, f"icons/{name}")
+            data = buf.getvalue()
+            if _zip_chunk_bytes_valid(data):
+                return data
+            dummy += binascii.hexlify(os.urandom(4 * (attempt + 1)))
+        raise RuntimeError("could not build a firmware-safe standard button zip")
+
+
 def split_panel(img: Image.Image) -> tuple[Image.Image, Image.Image]:
     """Split a composed panel into two square cell images (the legacy two-cell
     path: the stock-strmdck fallback and the Elgato driver). A 392px compose
@@ -151,6 +183,9 @@ class D200Driver(DeckDriver):
         self._last_panel_key: tuple | None = None
         self._panel_names: tuple[str, ...] | None = None
         self._last_frame_buttons: dict[int, dict] | None = None
+        # Some firmware keeps a stale page despite successful fast-path HID
+        # writes. Allow the device-tested stock writer without a runtime patch.
+        self._standard_writer = os.environ.get("HERDECK_D200_STANDARD_WRITER") == "1"
         self._fast_path_ok = True
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")
@@ -328,6 +363,10 @@ class D200Driver(DeckDriver):
     def _set_buttons(self, buttons: dict[int, dict], *, update_only: bool) -> None:
         """Prefer the in-memory zip build; on ANY failure fall back (permanently)
         to strmdck's stock disk-based set_buttons, which is slow but proven."""
+        if self._standard_writer:
+            self._fast_set_buttons(buttons, update_only=update_only,
+                                   zip_builder=build_standard_button_zip)
+            return
         if self._fast_path_ok:
             try:
                 self._fast_set_buttons(buttons, update_only=update_only)
@@ -370,7 +409,8 @@ class D200Driver(DeckDriver):
         out[_PANEL_RIGHT_INDEX] = {"name": "", "icon": names[1]}
         return out
 
-    def _fast_set_buttons(self, buttons: dict[int, dict], *, update_only: bool) -> None:
+    def _fast_set_buttons(self, buttons: dict[int, dict], *, update_only: bool,
+                          zip_builder=None) -> None:
         """strmdck's set_buttons rebuilt in memory: identical manifest/zip layout
         and packet framing, none of the per-frame rmtree/copyfile/rezip disk churn
         (the measured 280-530ms per frame that made the deck stutter)."""
@@ -398,7 +438,7 @@ class D200Driver(DeckDriver):
         manifest_bytes = json.dumps(
             manifest, sort_keys=True, separators=(",", ":"), indent=2
         ).encode()
-        data = build_button_zip(manifest_bytes, icons)
+        data = (zip_builder or build_button_zip)(manifest_bytes, icons)
         command = (
             CommandProtocol.OUT_PARTIALLY_UPDATE_BUTTONS
             if update_only

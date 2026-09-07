@@ -36,6 +36,7 @@ class ElgatoSession:
         self._pending_act: AgentKey | None = None  # an act is in flight for this agent
         self._armed_for: AgentKey | None = None
         self._armed_at: float = 0.0
+        self._armed_revision: tuple[str, str] | None = None
         self._last_bytes: dict[str, bytes] = {}
 
     # --- inbound agent state ---
@@ -119,11 +120,19 @@ class ElgatoSession:
     def _arm(self) -> None:
         self._armed_for = self.selected()
         self._armed_at = self._clock()
+        self._armed_revision = self._target_revision()
+
+    def _target_revision(self) -> tuple[str, str] | None:
+        target = self._target()
+        if target is None:
+            return None
+        return (target.backend, target.backend_revision if target.backend == "t3" else target.terminal_id)
 
     def is_armed(self) -> bool:
         return (
             self._armed_for is not None
             and self._armed_for == self.selected()
+            and self._armed_revision == self._target_revision()
             and (self._clock() - self._armed_at) <= self._arm_timeout
         )
 
@@ -134,6 +143,7 @@ class ElgatoSession:
         if self._armed_for is not None and (
             self._armed_for != self.selected()
             or self._armed_for.server_id in self._down
+            or self._armed_revision != self._target_revision()
         ):
             self._armed_for = None
 
@@ -189,6 +199,7 @@ class ElgatoSession:
         return [
             k for k, s in self._agents.items()
             if s.status is Status.BLOCKED
+            and s.backend != "t3"
             and k.server_id not in self._down
             and k not in self._detection
         ]
@@ -214,6 +225,12 @@ class ElgatoSession:
         target = self._target()
         if target is None or target.key.server_id in self._down:
             return False
+        if target.lifecycle != "active":
+            return False
+        if target.backend == "t3":
+            return kind in target.capabilities and (
+                kind == "stop" or any(a["id"] == kind for a in target.backend_actions)
+            )
         if kind == "stop":
             return True
         if kind in ("approve", "deny"):
@@ -267,6 +284,8 @@ class ElgatoSession:
         if key is not None:
             self.select(key)
             agent = self._agents[key]
+            if agent.backend == "t3":
+                return [Command("read", key.server_id, key.pane_id)]
             return [
                 Command(
                     "focus",
@@ -308,7 +327,7 @@ class ElgatoSession:
         blocked = [
             state.key
             for state in layout.order_agents(
-                (state for state in self._agents.values() if state.status is Status.BLOCKED),
+                (state for state in self._agents.values() if state.status is Status.BLOCKED and state.lifecycle == "active"),
                 self.config.overview_order,
                 self.config.view.agent_order,
             )
@@ -328,7 +347,7 @@ class ElgatoSession:
     # --- internals ---
     def _release(self) -> None:
         ordered = layout.order_agents(
-            self._agents.values(),
+            (s for s in self._agents.values() if s.lifecycle == "active"),
             self.config.overview_order,
             self.config.view.agent_order,
         )
@@ -349,8 +368,7 @@ class ElgatoSession:
         primary_tokens, secondary_tokens = layout.resolve_tile_lines(
             self.config.view, ["repo"], ["tab", "branch"]
         )
-        primary = layout.compose_line(s, primary_tokens)
-        secondary = layout.compose_line(s, secondary_tokens)
+        primary, secondary = layout.compose_tile_lines(s, primary_tokens, secondary_tokens)
         if key == self.selected():
             # Mark the first non-empty line so the act target stays identifiable
             # without turning an explicitly-empty line into a bare "* ".

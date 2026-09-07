@@ -139,6 +139,12 @@ class RuntimeAgentControl:
         agent = self.current_agent(key)
         if agent is None:
             return ActionResult(False, message="agent is no longer available")
+        if agent.backend == "t3":
+            if "continue" not in agent.capabilities:
+                return ActionResult(False, message="T3 conversation is not ready for a message")
+            return self._action_result(await self._request(Command(
+                "backend_action", key.server_id, key.pane_id, action="continue",
+                text=text, decision_revision=agent.backend_revision), timeout=timeout))
         data = await self._request(
             Command(
                 "send_text",

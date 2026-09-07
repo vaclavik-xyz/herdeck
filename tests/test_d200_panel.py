@@ -619,7 +619,10 @@ def test_frame_with_failed_panel_compose_never_blanks_the_panel(tmp_path, monkey
         os.chdir(before)
 
 
-def test_fast_path_manifest_marks_panel_slot_as_background(tmp_path, monkeypatch):
+@pytest.mark.parametrize("standard", [False, True])
+def test_native_manifest_marks_panel_slot_as_background(tmp_path, monkeypatch, standard):
+    if standard:
+        monkeypatch.setenv("HERDECK_D200_STANDARD_WRITER", "1")
     # The panel rides the 3_2 slot as ONE native 458x196 icon with
     # SmallViewMode=2 (background): the firmware then gives the slot the small
     # window's full width and displays the icon 1:1 — no stretched text. The
@@ -653,6 +656,7 @@ def test_fast_path_manifest_marks_panel_slot_as_background(tmp_path, monkeypatch
         return b"zipdata"
 
     monkeypatch.setattr(d200mod, "build_button_zip", fake_zip)
+    monkeypatch.setattr(d200mod, "build_standard_button_zip", fake_zip)
 
     class _FastDev(_FakeDev):
         BUTTON_COLS = 5
@@ -776,3 +780,28 @@ def test_panel_save_failure_serves_stale_previous_panel(tmp_path, monkeypatch):
     finally:
         driver.close()
         os.chdir(before)
+
+
+
+def test_standard_zip_preserves_manifest_and_disk_file_metadata(monkeypatch):
+    import io
+    import json
+    import stat
+    import zipfile
+
+    import herdeck.driver.d200 as d200mod
+
+    manifest = b'{"3_2":{"SmallViewMode":2}}'
+    checks = []
+    valid = d200mod._zip_chunk_bytes_valid
+    def reject_first(data):
+        checks.append(data)
+        return len(checks) > 1 and valid(data)
+    monkeypatch.setattr(d200mod, "_zip_chunk_bytes_valid", reject_first)
+    data = d200mod.build_standard_button_zip(manifest, {"panel.png": b"image"})
+    assert valid(data)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        assert z.namelist() == ["dummy.txt", "manifest.json", "icons/panel.png"]
+        assert json.loads(z.read("manifest.json"))["3_2"]["SmallViewMode"] == 2
+        assert stat.S_ISREG(z.getinfo("icons/panel.png").external_attr >> 16)
+        assert z.read("icons/panel.png") == b"image"

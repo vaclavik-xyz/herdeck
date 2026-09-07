@@ -16,6 +16,7 @@ class ServerConfig:
     id: str
     url: str
     token: str
+    backend: str = "herdr"
 
 
 @dataclass

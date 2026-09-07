@@ -38,7 +38,7 @@ class _StoredResult:
 class _ActionChallenge:
     caller: str
     action: str
-    target: tuple[str, str, str]
+    target: tuple[str, str, str, str]
     expires_at: float
     generation: object
 
@@ -58,6 +58,9 @@ def _agent_record(agent: AgentState, *, available: bool) -> dict:
         "status": status,
         "available": available,
         "agent_type": _bounded(agent.agent_type, 64),
+        "backend": agent.backend,
+        "backend_revision": _bounded(agent.backend_revision, 256),
+        "capabilities": list(agent.capabilities),
         "label": _bounded(agent.label, 160),
         "waiting_on": _bounded(agent.waiting_on, 80),
         "progress": _bounded(agent.progress, 80),
@@ -151,6 +154,7 @@ class SemanticAPI:
             "server_id",
             "pane_id",
             "terminal_id",
+            "backend_revision",
             "idempotency_key",
             "action",
             "confirmation",
@@ -183,6 +187,8 @@ class SemanticAPI:
                     return agent
                 if not self._server_available(agent.key.server_id):
                     return self._outcome(503, "unavailable_target", "target server is offline")
+                if agent.backend == "t3" and action not in agent.capabilities:
+                    return self._outcome(409, "unsupported_action", "action is not available")
                 if action in {"approve", "deny"} and agent.status is not Status.BLOCKED:
                     response = self._outcome(200, "skipped", "agent is not blocked")
                     self._remember(caller, idempotency_key, fingerprint, response)
@@ -234,7 +240,7 @@ class SemanticAPI:
     async def send_text(self, caller: str, payload: object) -> SemanticResponse:
         if not isinstance(payload, dict):
             return self._validation("request body must be a JSON object")
-        allowed = {"server_id", "pane_id", "terminal_id", "idempotency_key", "text"}
+        allowed = {"server_id", "pane_id", "terminal_id", "backend_revision", "idempotency_key", "text"}
         if set(payload) - allowed:
             return self._validation("unknown fields are not allowed")
         target = self._target(payload)
@@ -288,6 +294,9 @@ class SemanticAPI:
             return agent
         if not self._server_available(agent.key.server_id):
             return self._outcome(503, "unavailable_target", "target server is offline")
+        if agent.backend == "t3":
+            return SemanticResponse(200, {"api_version": API_VERSION,
+                "outcome": "no_choices", "choices": []})
         if agent.status is not Status.BLOCKED:
             return SemanticResponse(
                 200,
@@ -315,7 +324,7 @@ class SemanticAPI:
             {
                 "api_version": API_VERSION,
                 "outcome": "ready" if choices else "no_choices",
-                "decision_revision": decision_revision(*target, prompt),
+                "decision_revision": decision_revision(*target[:3], prompt),
                 "choices": choices,
             },
         )
@@ -327,6 +336,7 @@ class SemanticAPI:
             "server_id",
             "pane_id",
             "terminal_id",
+            "backend_revision",
             "idempotency_key",
             "choice",
             "decision_revision",
@@ -377,7 +387,7 @@ class SemanticAPI:
         self,
         caller: str,
         action: str,
-        target: tuple[str, str, str],
+        target: tuple[str, str, str, str],
         payload: dict,
         requires_confirmation: bool,
     ) -> SemanticResponse:
@@ -386,6 +396,8 @@ class SemanticAPI:
             return agent
         if not self._server_available(agent.key.server_id):
             return self._outcome(503, "unavailable_target", "target server is offline")
+        if agent.backend == "t3" and action not in agent.capabilities:
+            return self._outcome(409, "unsupported_action", "action is not available")
         if action in {"approve", "deny"} and agent.status is not Status.BLOCKED:
             return self._outcome(200, "skipped", "agent is not blocked")
         if requires_confirmation:
@@ -409,7 +421,7 @@ class SemanticAPI:
             return self._outcome(502, "backend_failure", "backend request failed")
         return self._action_response(result)
 
-    async def _execute_text(self, target: tuple[str, str, str], text: str) -> SemanticResponse:
+    async def _execute_text(self, target: tuple[str, str, str, str], text: str) -> SemanticResponse:
         agent = self._resolve_target(target)
         if isinstance(agent, SemanticResponse):
             return agent
@@ -426,13 +438,15 @@ class SemanticAPI:
         return self._action_response(result)
 
     async def _execute_choice(
-        self, target: tuple[str, str, str], choice: str, revision: str
+        self, target: tuple[str, str, str, str], choice: str, revision: str
     ) -> SemanticResponse:
         agent = self._resolve_target(target)
         if isinstance(agent, SemanticResponse):
             return agent
         if not self._server_available(agent.key.server_id):
             return self._outcome(503, "unavailable_target", "target server is offline")
+        if agent.backend == "t3":
+            return self._outcome(409, "unsupported_action", "numeric terminal choices are not supported for T3")
         if agent.status is not Status.BLOCKED:
             return self._outcome(409, "not_blocked", "agent is no longer blocked")
         try:
@@ -452,12 +466,16 @@ class SemanticAPI:
     def invalidate_challenges(self) -> None:
         self._challenges.clear()
 
-    def _resolve_target(self, target: tuple[str, str, str]) -> AgentState | SemanticResponse:
-        server_id, pane_id, terminal_id = target
+    def _resolve_target(self, target: tuple[str, str, str, str]) -> AgentState | SemanticResponse:
+        server_id, pane_id, terminal_id, revision = target
         agent = self._control.current_agent(AgentKey(server_id, pane_id))
         if agent is None:
             return self._outcome(404, "unavailable_target", "target agent was not found")
-        if not agent.terminal_id or agent.terminal_id != terminal_id:
+        if agent.backend == "t3":
+            if terminal_id or not revision or revision != agent.backend_revision:
+                return self._outcome(409, "stale_identity", "thread revision is stale")
+            return agent
+        if revision or not agent.terminal_id or agent.terminal_id != terminal_id:
             return self._outcome(409, "stale_identity", "terminal identity is stale")
         return agent
 
@@ -466,7 +484,7 @@ class SemanticAPI:
         confirmation: object,
         caller: str,
         action: str,
-        target: tuple[str, str, str],
+        target: tuple[str, str, str, str],
     ) -> SemanticResponse | None:
         if not isinstance(confirmation, str) or not confirmation:
             return self._validation("confirmation must be a non-empty string")
@@ -483,19 +501,25 @@ class SemanticAPI:
             return self._outcome(409, "confirmation_expired", "confirmation is invalid")
         return None
 
-    def _target(self, payload: dict) -> tuple[str, str, str] | SemanticResponse:
+    def _target(self, payload: dict) -> tuple[str, str, str, str] | SemanticResponse:
         values = []
-        for field, limit in (("server_id", 128), ("pane_id", 256), ("terminal_id", 256)):
+        for field, limit in (("server_id", 128), ("pane_id", 256)):
             value = payload.get(field)
             if not isinstance(value, str) or not value or len(value) > limit:
                 return self._validation(f"{field} must be a non-empty string", field=field)
             values.append(value)
-        return values[0], values[1], values[2]
+        terminal = payload.get("terminal_id", "")
+        revision = payload.get("backend_revision", "")
+        if (not isinstance(terminal, str) or not isinstance(revision, str)
+                or len(terminal) > 256 or len(revision) > 256
+                or bool(terminal) == bool(revision)):
+            return self._validation("provide exactly one terminal_id or backend_revision")
+        return values[0], values[1], terminal, revision
 
-    def _decision_target(self, payload: object) -> tuple[str, str, str] | SemanticResponse:
+    def _decision_target(self, payload: object) -> tuple[str, str, str, str] | SemanticResponse:
         if not isinstance(payload, dict):
             return self._validation("request body must be a JSON object")
-        allowed = {"server_id", "pane_id", "terminal_id"}
+        allowed = {"server_id", "pane_id", "terminal_id", "backend_revision"}
         if set(payload) - allowed:
             return self._validation("unknown fields are not allowed")
         return self._target(payload)

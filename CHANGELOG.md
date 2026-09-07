@@ -6,6 +6,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-07
+
+### Added
+- T3 Code connections alongside Herdr, with project and thread titles,
+  completion states, and capability-aware thread controls.
+- CLI connection setup and credential renewal that preserve connection identity
+  and verify adoption by the running runtime.
+- Persistent deck pins, a choice of prominent project or thread titles, and
+  a setting to show or hide source labels.
+- Optional local T3 desktop read-state synchronization on the deck host. This
+  temporary bridge requires LevelDB and does not synchronize other devices.
+
+### Fixed
+- T3 lifecycle handling for completed, settled, archived, and snoozed threads;
+  uncertain actions are reconciled without blindly replaying writes.
+- Long project names fit tiles better, with distinct title typography and
+  smaller source labels.
+- D200 status panels retain their native proportions.
+- Missing pinned threads are distinguished from unavailable servers.
+
 ## [0.4.0] - 2026-09-04
 
 ### Added
@@ -142,7 +162,8 @@ Initial public release.
   configurable tiles, themes, profiles, macros, and notifications
   (macOS + Telegram).
 
-[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/vaclavik-xyz/herdeck/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.2.0...v0.3.0

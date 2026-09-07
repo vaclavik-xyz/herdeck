@@ -194,6 +194,7 @@ export interface ServerRecord {
   id: string;
   url: string;
   token_env: string;
+  backend?: string;
 }
 
 export interface LocalSessionRecord {
@@ -232,7 +233,8 @@ export function serversOf(payload: ConfigPayload): ServerRecord[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((s) => {
     const r = obj(s);
-    return { id: str(r.id), url: str(r.url), token_env: str(r.token_env) };
+    return { id: str(r.id), url: str(r.url), token_env: str(r.token_env),
+      ...(typeof r.backend === "string" ? { backend: r.backend } : {}) };
   });
 }
 

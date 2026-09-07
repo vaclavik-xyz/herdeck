@@ -18,6 +18,11 @@ Do not claim completion after merely writing `config.toml`.
 
 ## Mental model
 
+T3 Code connections are supported by the opt-in HTTP adapter. See
+[the T3 implementation and pilot record](t3-code-integration.md) for the tested
+version and limits. T3 is a separate backend, not a Herdr managed agent kind.
+The T3-specific setup procedure is at the end of this runbook.
+
 Herdeck combines zero or more local Herdr sessions with zero or more remote
 Herdeck bridges:
 
@@ -614,3 +619,233 @@ Report concise, non-secret evidence:
 - backup paths and any known limitation.
 
 Never include token values or the sidecar loopback access token.
+
+## T3 Code setup
+
+Prerequisite: an existing running T3 server and its local CLI executable. Tested
+with npm `t3` version `0.0.31`. The desktop Herdeck runtime includes its Python
+HTTP adapter and needs neither Node nor a provider CLI to connect to T3.
+The one-time setup command uses T3's own CLI to issue a credential; it does not
+read or copy Codex/Claude credentials. T3's CLI currently issues administrative
+scopes, so this credential belongs only in the OS keychain.
+
+After the inventory and backups described above, run from this source checkout
+or an environment with the updated Herdeck CLI installed:
+
+```sh
+herdeck-t3-connect --id t3-local --binary /absolute/path/to/t3
+```
+
+Use `python -m herdeck.t3_setup` if the console entry point is not installed.
+`--base-dir` defaults to `~/.t3`. Discovery reads only
+`userdata/server-runtime.json`, then verifies the server using authenticated
+HTTP. `--url` may override discovery with an HTTP loopback/Tailscale origin or
+an HTTPS origin. No listener, proxy, tunnel or Tailscale rule is created.
+
+The command refuses duplicate IDs and existing credential names. It issues a
+30-day session into memory, verifies a shell snapshot, stores the token in the
+`herdeck` keychain namespace, backs up existing files, and writes a connection:
+
+```toml
+[[servers]]
+id = "t3-local"
+backend = "t3"
+url = "http://127.0.0.1:3773"
+token_env = "HERDECK_T3_T3_LOCAL_TOKEN"
+```
+
+This is a configuration example, not a browser link. The agent owns setup; the
+user should not transcribe this TOML or move tokens. `HERDECK_CONFIG`,
+`HERDECK_LOCAL_CONFIG`, `HERDECK_PROFILE` and env-first credential precedence
+remain effective. Setup preserves unrelated TOML values, but serialization may
+change comments/formatting; the timestamped backups retain their original form.
+Only the active profile's explicit selection is extended. A deliberate demo
+choice is refused. A local-only choice is backed up and removed while preserving
+the selected local Herdr sessions.
+
+Run `herdeck-doctor` against the resulting config and verify the actual runtime
+`connections` map contains both the intended Herdr IDs and `t3-local`. A passing
+setup command alone does not prove the desktop adopted the config. The printed
+session ID and expiry are non-secret; record them for rotation/revocation. T3
+authentication failures mark the connection offline. Use `herdeck-t3-connect --id ID --renew --restart-label RUNTIME_LABEL` before expiry; renewal keeps the
+server ID, selections and pins. See the dedicated transport section below.
+
+To remove the connection, keeping the credential available for rollback:
+
+```sh
+herdeck-t3-connect --id t3-local --disconnect
+```
+
+This removes only that T3 entry and its selection references, backs up the config,
+and preserves T3 history and Herdr settings. Verify the remaining runtime
+connections. Restore the backup to roll back removal. Revoke the retained T3
+session and remove its keychain entry only after rollback is no longer needed.
+
+For T3, the deck offers only supported semantic actions. Free-text/multiple
+questions and multi-select forms are displayed but answered in T3. Single-choice
+questions use the provider's exact option value. Persistent approvals use exact provider options and require two presses. Always
+grants additionally require the safety setting. Raw keys, terminal streaming
+and desktop thread navigation are not supported. An uncertain
+write is not retried; actions remain disabled until its exact effect is observed
+in T3 or the operator investigates and deliberately recreates the connection.
+
+### Physical D200 compatibility and T3 tile labels
+
+T3 overview tiles show the editable project title on the primary line and the
+thread title on the secondary line. They refresh with each T3 snapshot, including
+renames. If a project title is absent, only the workspace directory basename is
+used. The existing `repo` and `tab` tile-line tokens represent project and thread
+for T3; explicit secondary layouts still take precedence. Mixed-connection badges
+show `T3` or `HERDR`; connection-specific accent colors remain unchanged.
+
+On macBench's D200, the user confirmed recovery from a stale `Offline /
+Reconnecting` page after switching from the optimized ZIP writer to strmdck's
+standard writer (2026-09-06). Successful HID writes and `/health` were insufficient
+to prove a visible update. Set `HERDECK_D200_STANDARD_WRITER=1` in the runtime's
+launch environment to retain that compatibility path. This selects disk-backed ZIP creation with standard file metadata while keeping
+the panel as one native 458x196 image (`SmallViewMode=2`). It does not change other
+devices by default. The original two-cell stock fallback stretched the panel and
+is no longer used by this override. The exact firmware rejection mechanism is still undiagnosed.
+
+The initial macBench setup used a T3 desktop-owned SSH forward. The dedicated
+transport below replaces that dependency. The original setup backup is under
+`~/.config/herdeck/backup-t3-20260906-180428/`. Its runtime launcher reads the T3
+credential from Keychain using the setup interpreter before starting Herdeck, so
+the differently signed packaged executable does not block on Keychain access.
+No credential values belong in this runbook or the launcher.
+
+
+Project names on agent tiles use a 31px font when they fit, shrink to 18px for
+longer names, then wrap into two lines. Extremely long names still end in an
+ellipsis rather than becoming unreadably small. This applies to both backends;
+thread/branch text retains its own rows.
+
+The View settings include a **Show T3 / HERDR labels** switch (also available per
+profile). It controls the existing `server` entry in `view.tile_fields`, preserving
+other fields. Labels are small unboxed text, including with a single connection.
+Project names use bold type; thread descriptions use regular type with extra
+vertical spacing so even two-line project names remain visually distinct.
+
+### Pinning and prominent thread titles on the D200
+
+Open an agent tile and press **Pin here** (the button immediately before Stop).
+The agent keeps its current overview position and page despite status sorting.
+The same button becomes **Unpin**. A small pin mark appears at the bottom right
+of its overview tile, independently of backend-label visibility.
+
+An absent agent leaves a reserved **Pinned · missing** tile while its source is
+online, or **Pinned · offline** during a connection outage. T3 omits deleted
+threads from its shell entirely, so absence is not presented as a transport error. Press that tile to
+release the reservation. Reconnecting with the same server/agent identity restores
+the pinned tile. Changing a thread or project title does not affect its pin.
+Pins are local to this deck host and saved per active profile in
+`$XDG_CONFIG_HOME/herdeck/pins.json` (default `~/.config/herdeck/pins.json`).
+Restarting the runtime preserves them. Positions refer to the current overview
+capacity; changing the number of agent slots can move a pin to another page.
+
+In desktop **View → Emphasize**, choose **Project** or **Thread**. This sets the
+existing `tile_primary` / `tile_secondary` fields together, supports profile
+overrides, and leaves all other fields intact. Custom line layouts remain
+available. A thread without a title falls back to the project name.
+
+
+### Dedicated T3 transport and renewal (macOS)
+
+Use an already authorized SSH account on the T3 host. Check noninteractive SSH
+and verify the destination's actual loopback port first. A user LaunchAgent
+`com.herdeck.t3-forward` owns this command on macBench:
+
+```sh
+/usr/bin/ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=8 \
+  -L 127.0.0.1:13773:127.0.0.1:3773 admin@100.86.178.12
+```
+
+Its plist uses RunAtLoad, KeepAlive and ThrottleInterval=10. Bind only loopback;
+reuse existing SSH keys and tailnet membership. `t3-headless` points to this
+stable local port; its ID and token_env remain unchanged. Preserve a config backup
+before changing the URL. This is an application transport, not a new public route.
+
+`com.herdeck.t3-renew` runs every hour (StartInterval=3600, RunAtLoad=true) in the
+same GUI user domain and with the same Python interpreter as the runtime:
+
+```sh
+python -m herdeck.t3_setup --id t3-headless --renew \
+  --issuer-ssh admin@100.86.178.12 --restart-label com.herdeck.app
+```
+
+The runtime restart label is required: replacing Keychain alone cannot update
+a running connector. Set PYTHONPATH to the deployed source's `src` directory in the renewal plist.
+Do not inject the bearer into the renewal environment. Renewal checks Keychain
+and session expiry, issues a new 30-day credential only within seven days of
+expiry (or after expiry), validates it against the configured server, then stores
+it under the same Keychain account and restarts the runtime to adopt it. An
+environment credential override is refused rather than silently superseded.
+The issuer uses its installed boot-service version, not a moving npm download.
+A failed validation preserves the old credential and revokes the newly issued
+one. The previous credential expires naturally to retain a rollback window.
+The setup command never prints tokens or puts them in subprocess arguments.
+
+Check both LaunchAgents after installation, including their exit status. Verify
+runtime `connections`, not just an SSH listener. Sleep/offline periods are recovered
+by launchd retry and the next renewal interval. Update PYTHONPATH when deploying
+a new source release; keep the runtime helper and renewal agent on the same source.
+
+### T3 lifecycle controls
+
+Settled, snoozed, archived and deleted threads are excluded from active overview
+and counts. An existing deck pin still shows the known lifecycle rather than a
+misleading Done/offline tile. T3 pinning remains independent of deck position.
+**Mark seen** acknowledges one completion locally; it does not mark it read on a
+phone. **Implement plan** uses its proposal identity and exits plan mode.
+**Stop session** is a separate confirmed control for background provider work.
+Settle/reopen and one-hour snooze/wake controls depend on advertised server support.
+Unknown API version families are read-only and explain why in the preview.
+
+
+### Temporary local T3 desktop read-state sync (MacBench)
+
+Until upstream PR #9124 ships shared viewedAt state, the MacBench runtime helper
+sets `HERDECK_T3_DESKTOP_READ_STATE=1`. This reads the same machine's T3 0.0.38
+Electron UI state (`t3code:ui-state:v1`, origin `t3code://app`) and compares the
+scoped environment/thread visit timestamp to the latest completion. Opening a
+completed thread in that T3 desktop clears the deck's Done. New unread completions
+and desktop Mark unread remain Done. Never-visited history matches the desktop's
+existing rule: it is not treated as unread. No timeout is enabled.
+
+Install the native LevelDB library (`brew install leveldb`) on the opted-in host.
+The reader uses its stable C API through ctypes. It opens only a private temporary
+copy; it never opens, locks, repairs or writes the live T3 database. CURRENT and
+manifest/SST/WAL files resolve the current record, including compaction and
+deletions. Before/after file signatures reject snapshots taken during a write;
+unchanged files reuse the decoded visit map. Only the expected UI key is read,
+and only visit timestamps leave the reader. Snapshot files are removed after use.
+The copy is limited to 64 MiB and the UI record to 8 MiB. A missing, unsupported,
+or unreadable store falls back to the existing deck behavior and reports the
+condition in the thread preview; it does not silently clear Done.
+
+`HERDECK_T3_DESKTOP_STORAGE` can override the default
+`~/Library/Application Support/t3code/Local Storage/leveldb` directory.
+`HERDECK_LEVELDB_LIBRARY` can select the library; default locations cover Apple
+Silicon/Intel Homebrew and the system library search. Neither contains secrets.
+While desktop read sync is healthy, the competing local Mark seen action is
+hidden. Existing manual acknowledgments remain available as fallback when the
+reader is unavailable. This is local to MacBench: visits on a phone or another
+computer are not observed. It does not modify T3, require a fork, or send read
+commands to the server. Remove the opt-in when shared read state is integrated.
+
+### T3 targets in the semantic API
+
+For T3 inventory records, pass `server_id`, `pane_id`, and `backend_revision`
+back to semantic action/text endpoints; omit `terminal_id` or leave it empty.
+Herdr continues to require `terminal_id`. Exactly one identity marker is accepted.
+A changed T3 revision invalidates stale actions and stop confirmations. Numeric
+terminal-choice endpoints do not parse T3 previews: they return no choices or
+an unsupported-action response. Use supported approve/deny/stop and text actions;
+structured T3 question choices remain available through the native deck controls.
+
+Elgato overview excludes inactive T3 lifecycle states. Its fixed Approve, Deny,
+and Stop keys follow advertised capabilities, without terminal prompt inference.
+Setup, renewal, doctor, and the runtime all require both shell `threads` and
+`projects` arrays before accepting a T3 connection. Explicit HTTP client rejection
+releases the dispatch guard; timeouts and ambiguous server failures remain guarded.

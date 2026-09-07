@@ -4,6 +4,7 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from .driver.base import PanelGauge, PanelView
 from .i18n import tr
@@ -61,13 +62,18 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
     parts: list[str] = []
     for token in tokens:
         if token == "repo":
-            value = state.repo or state.label
+            # T3 projects have editable display names; workspaceRoot is a path,
+            # not the project label shown in the T3 sidebar.
+            if state.backend == "t3":
+                value = state.project or PurePosixPath(state.repo).name or state.label
+            else:
+                value = state.repo or state.label
         elif token == "branch":
             value = state.branch
         elif token == "workspace":
             value = state.workspace
         elif token == "tab":
-            value = f"›{state.tab}" if state.tab else ""
+            value = state.title if state.backend == "t3" else (f"›{state.tab}" if state.tab else "")
         elif token == "agent":
             value = state.agent_type
         elif token == "source":
@@ -83,6 +89,16 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
         if value:
             parts.append(value)
     return " · ".join(parts)
+
+
+def compose_tile_lines(state: AgentState, primary_tokens: list[str], secondary_tokens: list[str]) -> tuple[str, str]:
+    primary = compose_line(state, primary_tokens)
+    secondary = compose_line(state, secondary_tokens)
+    if not primary and primary_tokens == ["tab"]:
+        primary = compose_line(state, ["repo"])
+        if secondary == primary:
+            secondary = ""
+    return primary, secondary
 
 
 def resolve_tile_lines(
@@ -115,7 +131,7 @@ def order_agents(
     return sorted(
         agents,
         key=lambda s: (
-            _STATUS_PRIORITY.get(s.status, 9),
+            0 if s.attention == "error" else _STATUS_PRIORITY.get(s.status, 9),
             order.get(s.key.server_id, 999),
             *herdr_position(s),
             s.key.pane_id,
@@ -142,6 +158,8 @@ class Counts:
 def summary(agents) -> Counts:
     c = Counts(0, 0, 0, 0)
     for s in agents:
+        if s.lifecycle != "active":
+            continue
         if s.status is Status.BLOCKED:
             c.blocked += 1
         elif s.status is Status.WORKING:

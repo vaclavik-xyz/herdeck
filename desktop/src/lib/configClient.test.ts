@@ -280,6 +280,12 @@ describe("secretFlag", () => {
 import { serversOf, addServer, removeServer, updateServer } from "./configClient";
 
 describe("server mutations", () => {
+  it("preserves the T3 backend while editing and adding connections", () => {
+    const p = parseConfig(rawConfig())!;
+    p.base.servers = [{ id: "t3", url: "http://127.0.0.1:3773", token_env: "T3", backend: "t3" }];
+    const next = addServer(updateServer(p, 0, "id", "renamed"));
+    expect(serversOf(next)[0].backend).toBe("t3");
+  });
   it("serversOf returns the base server list or []", () => {
     expect(serversOf(parseConfig(rawConfig())!)).toEqual([
       { id: "local", url: "ws://x", token_env: "TOK" },

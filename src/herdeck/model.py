@@ -88,3 +88,12 @@ class AgentState:
     title: str = ""
     display_agent: str = ""
     work: WorkContext = field(default_factory=WorkContext)
+    backend: str = "herdr"
+    capabilities: tuple[str, ...] = ()
+    backend_revision: str = ""
+    backend_actions: list[dict] = field(default_factory=list)
+    preview: str = ""
+    lifecycle: str = "active"
+    activity: str = ""
+    attention: str = ""
+    completed_at: str = ""

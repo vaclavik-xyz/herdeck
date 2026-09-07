@@ -45,6 +45,8 @@
       appearance: "Tile appearance",
       content: "Tile content",
       advanced: "Advanced panel settings",
+      backend_labels: "Show T3 / HERDR labels",
+      heading: "Emphasize", project: "Project", thread: "Thread", custom: "Custom", heading_help: "Choose the bold tile heading. The other name appears underneath. Threads without a name show their project.",
     },
     cs: {
       none: "(nic)",
@@ -54,6 +56,8 @@
       appearance: "Vzhled dlaždice",
       content: "Obsah dlaždice",
       advanced: "Pokročilé nastavení panelu",
+      backend_labels: "Zobrazovat štítky T3 / HERDR",
+      heading: "Zvýraznit", project: "Projekt", thread: "Thread", custom: "Vlastní", heading_help: "Vyberte tučný nadpis dlaždice. Druhý název se zobrazí pod ním. Thread bez názvu zobrazí projekt.",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -67,6 +71,33 @@
   const uiLanguage = $derived((getAt(payload, "base", SEC, "language") as string) ?? defaults.view.language);
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
+  const visibleTileFields = $derived((overlay
+    ? overrideValue(payload, prof, SEC, "tile_fields") ?? inheritedFor(payload, prof, SEC, "tile_fields")
+    : getAt(payload, "base", SEC, "tile_fields")) as string[] | undefined);
+  const backendLabels = $derived((visibleTileFields ?? VIEW_LIST_DEFAULTS.tile_fields).includes("server"));
+  function setBackendLabels(enabled: boolean): void {
+    const fields = (visibleTileFields ?? VIEW_LIST_DEFAULTS.tile_fields).filter((field) => field !== "server");
+    if (enabled) fields.push("server");
+    if (overlay) setOvList("tile_fields", fields.length ? "custom" : "empty", fields);
+    else setBaseTri("tile_fields", fields.length ? "custom" : "empty", fields);
+  }
+
+  function lineValue(key: string): unknown {
+    return overlay ? overrideValue(payload, prof, SEC, key) ?? inheritedFor(payload, prof, SEC, key) : getAt(payload, "base", SEC, key);
+  }
+  const heading = $derived(JSON.stringify(lineValue("tile_primary")) === '["tab"]' && JSON.stringify(lineValue("tile_secondary")) === '["repo"]'
+    ? lm.thread : (lineValue("tile_primary") == null && lineValue("tile_secondary") == null) || (JSON.stringify(lineValue("tile_primary")) === '["repo"]' && JSON.stringify(lineValue("tile_secondary")) === '["tab","branch"]') ? lm.project : lm.custom);
+  function setHeading(value: string): void {
+    if (value === lm.custom) return;
+    const primary = value === lm.thread ? ["tab"] : ["repo"];
+    const secondary = value === lm.thread ? ["repo"] : ["tab", "branch"];
+
+    // Set both lines in a single update so previews never see half a preset.
+    payload = overlay
+      ? { ...payload, profiles: setOverride(setOverride(payload.profiles, prof, SEC, "tile_primary", primary), prof, SEC, "tile_secondary", secondary) }
+      : setListField(setListField(payload, "base", SEC, "tile_primary", "custom", primary), "base", SEC, "tile_secondary", "custom", secondary);
+    onChange();
+  }
 
   // --- overlay mode helpers ---
   function lineFallback(key: string, fields: string[]): string[] {
@@ -129,6 +160,8 @@
     </details>
   </FieldGroup>
   <FieldGroup title={lm.appearance}>
+    <SelectField label={lm.heading} help={lm.heading_help} value={heading} options={[lm.project, lm.thread, lm.custom]} onchange={setHeading} />
+    <BooleanField label={lm.backend_labels} help={HELP.backend_labels} value={backendLabels} onchange={setBackendLabels} />
     <OverrideField label="working_animation" help={HELP.working_animation} state={scState("working_animation")} inheritedDisplay={hint("working_animation")} onstate={(s) => setScState("working_animation", s)}>
       <SelectField label="" value={String(scValue("working_animation") ?? "spin")} options={WORKING_ANIMATIONS} onchange={(v) => setSc("working_animation", v)} />
     </OverrideField>
@@ -152,6 +185,8 @@
     </details>
   </FieldGroup>
   <FieldGroup title={lm.appearance}>
+    <SelectField label={lm.heading} help={lm.heading_help} value={heading} options={[lm.project, lm.thread, lm.custom]} onchange={setHeading} />
+    <BooleanField label={lm.backend_labels} help={HELP.backend_labels} value={backendLabels} onchange={setBackendLabels} />
     <SelectField label="working_animation" help={HELP.working_animation} value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
     <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
   </FieldGroup>

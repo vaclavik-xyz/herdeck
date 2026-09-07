@@ -16,12 +16,18 @@ class Command:
     text: str | None = None  # for send_text (macros) / start (agent name)
     terminal_id: str | None = None  # expected stable identity for pane-bound commands
     decision_revision: str | None = None
+    action: str | None = None
+    payload: dict = field(default_factory=dict)
 
 
 def command_to_msg(cmd: Command, req: str | None) -> dict:
     """Encode a Command into the bridge wire message. `req` is ignored for `list`."""
     if cmd.kind == "list":
         return {"type": "list"}
+    if cmd.kind == "backend_action":
+        return {"type": "backend_action", "req": req, "pane_id": cmd.pane_id,
+                "action": cmd.action, "payload": cmd.payload, "text": cmd.text,
+                "revision": cmd.decision_revision}
     def with_identity(message: dict) -> dict:
         if cmd.terminal_id:
             message["terminal_id"] = cmd.terminal_id
@@ -69,6 +75,13 @@ def build_action_command(
     action: str, agent: AgentState, profile: AnswerProfile, *, force: bool, always: bool
 ) -> Command:
     """Map a high-level action (approve/deny/stop) + agent + profile -> Command."""
+    if agent.backend == "t3":
+        if always or (force and action != "stop") or action not in agent.capabilities:
+            raise ValueError("T3 action is not available")
+        option = next((a for a in agent.backend_actions if a["id"] == action), {})
+        return Command("backend_action", agent.key.server_id, agent.key.pane_id,
+                       action=action, payload=option.get("payload", {}),
+                       decision_revision=agent.backend_revision)
     if action == "approve":
         keys = profile.approve_always if always else profile.approve
         kind = "act_force" if force else "act_if_blocked"

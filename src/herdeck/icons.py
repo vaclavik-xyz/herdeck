@@ -222,8 +222,14 @@ _FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
 )
+_REGULAR_FONT_CANDIDATES = (
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/System/Library/Fonts/HelveticaNeue.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+)
 _GLYPH_FONT_SIZE = 120
-_font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default)
+_font_cache: dict[tuple[int, bool], object] = {}  # (size, bold) -> font
 
 # Bump when tile composition changes so stale cached tile PNGs are ignored.
 # 2: tile_fill (none/tint/solid) — solid contrast + solid-sweep composition.
@@ -239,7 +245,7 @@ _font_cache: dict[int, object] = {}  # size -> font (a TrueType or sized default
 #    D200 sends it as ONE 3_2 background icon instead of two stretched cells.
 # 10: the usage panel uses a lighter slate palette and shows reset hints in the
 #     overview cards.
-TILE_VERSION = 10
+TILE_VERSION = 13
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
@@ -287,32 +293,15 @@ def _tile_text_colors(fill, bg_col, accent):
     return (255, 255, 255), (180, 180, 188), (165, 165, 170), accent  # none / tint
 
 
-SERVER_CHIP_COLORS: dict[str, tuple[int, int, int]] = {
-    "teal": (24, 150, 145),
-    "violet": (135, 100, 235),
-    "orange": (220, 115, 35),
-    "pink": (215, 80, 135),
-    "lime": (125, 175, 45),
-}
-
-
-def _rgb_color(name: str, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
-    if isinstance(name, str) and name.startswith("#") and len(name) == 7:
-        try:
-            return tuple(int(name[i : i + 2], 16) for i in (1, 3, 5))
-        except ValueError:
-            return fallback
-    return SERVER_CHIP_COLORS.get(name, fallback)
-
-
-def _font(size: int):
+def _font(size: int, *, bold: bool = True):
     """A scalable font at the given size; None only if nothing is available."""
-    if size in _font_cache:
-        return _font_cache[size]
+    key = (size, bold)
+    if key in _font_cache:
+        return _font_cache[key]
     from PIL import ImageFont
 
     font = None
-    for path in _FONT_CANDIDATES:
+    for path in _FONT_CANDIDATES if bold else _REGULAR_FONT_CANDIDATES:
         try:
             font = ImageFont.truetype(path, size)
             break
@@ -323,7 +312,7 @@ def _font(size: int):
             font = ImageFont.load_default(size=size)
         except Exception:
             font = None
-    _font_cache[size] = font
+    _font_cache[key] = font
     return font
 
 
@@ -540,6 +529,23 @@ def _truncate(draw, text, font, max_w):
     return text + "…"
 
 
+def _fit_project_name(draw, text, max_w):
+    """Keep short names prominent; shrink, then wrap without microscopic text."""
+    for size in range(31, 17, -1):
+        font = _font(size)
+        if draw.textlength(text, font=font) <= max_w:
+            return font, [text]
+    # Two 18px lines fit above the thread/branch text. Split long identifiers
+    # too, preferring a nearby word or path/name boundary when available.
+    cut = 0
+    while cut < len(text) and draw.textlength(text[:cut + 1], font=font) <= max_w:
+        cut += 1
+    boundaries = [i + 1 for i, c in enumerate(text[:cut]) if c in " -_/" and i >= cut // 2]
+    if boundaries:
+        cut = boundaries[-1]
+    return font, [text[:cut].rstrip(), _truncate(draw, text[cut:].lstrip(), font, max_w)]
+
+
 def _wrap(draw, text, font, max_w, max_lines=2):
     """Wrap text (splitting on '/' too, for branch names) to <= max_lines.
 
@@ -731,6 +737,7 @@ class IconProvider:
         spinner = _anim_phase(tile.spinner, animation)
         sig_parts = [
             TILE_VERSION,
+            getattr(tile, "pinned", False),
             self._asset_fp,
             tile.color,
             tile.label,
@@ -921,30 +928,25 @@ class IconProvider:
         # repo (primary) + branch (secondary, wrapped) — spread down the tile
         # so the composition is optically centred between the logo row and the
         # accent bar instead of leaving a dead band across the bottom third.
-        fr = _font(31)
-        d.text(
-            (12, 74),
-            _truncate(d, tile.repo or "", fr, ICON_SIZE - 24),
-            font=fr,
-            fill=repo_fill,
-        )
+        fr, project_lines = _fit_project_name(d, tile.repo or "", ICON_SIZE - 24)
+        for i, line in enumerate(project_lines):
+            d.text((12, 74 if len(project_lines) == 1 else 70 + i * 20),
+                   line, font=fr, fill=repo_fill)
         if tile.branch:
-            fb = _font(18)
-            y = 112
+            fb = _font(18, bold=False)
+            y = 116
             for line in _wrap(d, tile.branch, fb, ICON_SIZE - 24, 2):
                 d.text((12, y), line, font=fb, fill=branch_fill)
                 y += 22
         if tile.server_tag:
-            chip_fill = _rgb_color(tile.server_accent or "", (95, 95, 105))
-            fc = _font(14)
-            tag = _truncate(d, tile.server_tag, fc, 48)
-            text_w = d.textlength(tag, font=fc)
-            bb = d.textbbox((0, 0), tag, font=fc)
-            x, y, pad_x, chip_h = 12, ICON_SIZE - 40, 6, 22
-            chip_w = int(text_w + pad_x * 2)
-            d.rounded_rectangle([x, y, x + chip_w, y + chip_h], radius=4, fill=chip_fill)
-            text_y = y + (chip_h - (bb[3] - bb[1])) / 2 - bb[1]
-            d.text((x + pad_x, text_y), tag, font=fc, fill=(255, 255, 255))
+            fc = _font(12, bold=False)
+            tag = _truncate(d, tile.server_tag, fc, 80)
+            d.text((12, 168), tag, font=fc, fill=time_fill)
+        if getattr(tile, "pinned", False):
+            # Small pin silhouette, independent of optional backend labels.
+            d.line((172, 170, 172, 182), fill=time_fill, width=2)
+            d.rectangle((169, 168, 175, 173), fill=time_fill)
+            d.line((167, 175, 177, 175), fill=time_fill, width=2)
         # bottom accent bar. "sweep" is a moving segment along the bottom edge; it
         # must stay visible on any fill, so its colours adapt — on a solid tile
         # (background already = accent) it uses a dark base + a bright segment; on
