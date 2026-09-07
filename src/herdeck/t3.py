@@ -131,7 +131,7 @@ def _actions(pending):
     return actions
 
 
-def thread_state(server_id, thread, projects, epoch, *, now=None, acknowledged=None, features=None):
+def thread_state(server_id, thread, projects, epoch, *, now=None, acknowledged=None, features=None, done_ttl=0):
     now = datetime.now(UTC).timestamp() if now is None else now
     session = thread.get("session") or {}
     latest_turn = thread.get("latestTurn") or {}
@@ -140,6 +140,9 @@ def thread_state(server_id, thread, projects, epoch, *, now=None, acknowledged=N
     life = lifecycle(thread, pending, now)
     activity, attention, label = state or "idle", "", ""
     completed = latest_turn.get("completedAt") or ""
+    completed_time = timestamp(completed)
+    # Optional temporary display policy, not a shared T3 read receipt.
+    completion_expired = done_ttl > 0 and completed_time is not None and now - completed_time >= done_ttl
     if life != "active":
         status, label = Status.IDLE, life.upper()
     elif pending or thread.get("hasPendingApprovals") or thread.get("hasPendingUserInput"):
@@ -164,7 +167,7 @@ def thread_state(server_id, thread, projects, epoch, *, now=None, acknowledged=N
             status, label = Status.WAITING, "MONITORING"
         else:
             status = (Status.DONE if state != "interrupted" and latest_turn.get("state") == "completed"
-                      and completed and completed != acknowledged else Status.IDLE)
+                      and completed and completed != acknowledged and not completion_expired else Status.IDLE)
             attention = "completion" if status == Status.DONE else ""
     else:
         status = Status.UNKNOWN
@@ -182,7 +185,7 @@ def thread_state(server_id, thread, projects, epoch, *, now=None, acknowledged=N
                 thread.get("runtimeMode"), thread.get("interactionMode"), thread.get("modelSelection"),
                 [m.get("id") for m in thread.get("messages", []) if m.get("role") == "user"],
                 {k: thread.get(k) for k in ("settledOverride", "settledAt", "snoozedUntil", "snoozedAt",
-                    "archivedAt", "deletedAt", "latestUserMessageAt", "hasActionableProposedPlan", "proposedPlans", "backgroundLiveness")}, life, acknowledged, features or {}]
+                    "archivedAt", "deletedAt", "latestUserMessageAt", "hasActionableProposedPlan", "proposedPlans", "backgroundLiveness")}, life, acknowledged, features or {}, status.value]
     revision = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     project = projects.get(thread.get("projectId"), {})
     preview = "\n".join(str(p.get("detail") or p.get("questions") or "Approval requested") for p in pending)
@@ -259,6 +262,7 @@ class T3Connector:
         self._stop = False
         self.last_connect_error = None
         self._features = None
+        self._done_ttl = max(0, int(os.environ.get("HERDECK_T3_DONE_TTL_SECONDS", "0")))
         self._cache = {}
         config = Path(os.environ.get("HERDECK_CONFIG", str(Path.home() / ".config/herdeck/config.toml")))
         self._seen = kwargs.get("seen_store") or SeenStore(config.parent / "t3-seen", server.id)
@@ -308,7 +312,7 @@ class T3Connector:
             t = {**detail, **summary}
             threads[tid] = t
             states[tid] = thread_state(self.server.id, t, projects, self._epoch,
-                acknowledged=self._seen.get(tid), features=self._features)
+                acknowledged=self._seen.get(tid), features=self._features, done_ttl=self._done_ttl)
             uncertain = self._uncertain.get(tid)
             if uncertain and not stale and _observed_effect(t, uncertain):
                 self._uncertain.pop(tid)

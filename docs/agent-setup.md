@@ -801,3 +801,16 @@ phone. **Implement plan** uses its proposal identity and exits plan mode.
 **Stop session** is a separate confirmed control for background provider work.
 Settle/reopen and one-hour snooze/wake controls depend on advertised server support.
 Unknown API version families are read-only and explain why in the preview.
+
+
+### Temporary T3 Done display timeout
+
+Until upstream shared read receipts ship (T3 PR #9124), macBench uses
+`HERDECK_T3_DONE_TTL_SECONDS=300` in its runtime helper. Successful completions
+remain Done for five minutes from completedAt, then display Idle. Old completions
+expire immediately on startup; restarting does not start a new timeout. Approval,
+input, plan, error, running and background states retain priority. The policy
+never writes T3 state or local Mark seen records. It is a display timeout, not
+proof the result was read. Zero/unset disables it. Remove it when integrating
+upstream threadViewState/viewedAt; mobile and desktop reading are not synchronized
+by this workaround.
