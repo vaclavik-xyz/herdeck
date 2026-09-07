@@ -158,3 +158,15 @@ async def test_valid_empty_visit_map_matches_desktop_never_visited_semantics(db_
     write(encoded({ENV + ':' + TID: '2026-09-07T01:20:20.902Z'}))
     await c.refresh()
     assert c.states[TID].status == Status.DONE
+
+
+def test_incompatible_native_library_preserves_fallback(tmp_path, monkeypatch):
+    (tmp_path / 'CURRENT').write_text('MANIFEST-000001\n')
+    monkeypatch.setenv('HERDECK_LEVELDB_LIBRARY', 'incompatible-library')
+    monkeypatch.setattr(C, 'CDLL', lambda path: object())
+    reader = DesktopSeen(tmp_path)
+    reader._visits = {ENV + ':' + TID: COMPLETED}
+    reader.refresh()
+    assert reader.last_error
+    assert reader.get(ENV, TID) is None
+    assert reader._signature is None

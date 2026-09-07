@@ -51,7 +51,10 @@ class LevelDb:
             "free": (None, [ptr]),
         }
         for name, (result, args) in signatures.items():
-            func = getattr(self.lib, 'leveldb_' + name)
+            try:
+                func = getattr(self.lib, 'leveldb_' + name)
+            except AttributeError:
+                raise DesktopReadError("Incompatible LevelDB library") from None
             func.restype, func.argtypes = result, args
             setattr(self, name, func)
 
