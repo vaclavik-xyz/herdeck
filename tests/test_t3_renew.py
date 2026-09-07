@@ -6,7 +6,7 @@ import pytest
 from herdeck import t3_renew
 
 
-@pytest.mark.parametrize("case", ["fresh", "renew", "verify_failure", "restart_failure", "env_override", "missing_restart"])
+@pytest.mark.parametrize("case", ["fresh", "renew", "verify_failure", "contract_failure", "restart_failure", "env_override", "missing_restart"])
 def test_renew_preserves_identity_and_old_access_on_failure(tmp_path, monkeypatch, capsys, case):
     path = tmp_path / "config.toml"
     original = '[[servers]]\nid="t3"\nbackend="t3"\nurl="http://127.0.0.1:3773"\ntoken_env="TEST_T3_TOKEN"\n'
@@ -25,7 +25,7 @@ def test_renew_preserves_identity_and_old_access_on_failure(tmp_path, monkeypatc
             return dict(expiresAt="2099-01-01T00:00:00Z" if case == "fresh" else "2020-01-01T00:00:00Z")
         if case == "verify_failure":
             raise t3_renew.T3Error("Rejected", 401)
-        return dict(threads=[])
+        return dict(threads=[]) if case == "contract_failure" else dict(threads=[], projects=[])
     monkeypatch.setattr(t3_renew.T3Http, "get", get)
     def run(*a, **kw):
         if case == "restart_failure":

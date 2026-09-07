@@ -89,9 +89,10 @@ def check_servers(servers, probe) -> list[Check]:
     for server in servers:
         try:
             if server.backend == "t3":
-                from .t3 import T3Http
+                from .t3 import T3Http, validate_shell
                 snapshot = T3Http(server.url, server.token).get("/api/orchestration/shell")
-                error = None if isinstance(snapshot.get("threads"), list) else "unsupported T3 snapshot"
+                validate_shell(snapshot)
+                error = None
             else:
                 error = probe(server.url, server.token)
         except Exception as exc:

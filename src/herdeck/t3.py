@@ -34,6 +34,13 @@ class T3Error(Exception):
         self.code = code
 
 
+def validate_shell(snapshot):
+    if not isinstance(snapshot, dict) or any(
+        not isinstance(snapshot.get(field), list) for field in ("threads", "projects")
+    ):
+        raise T3Error("Unsupported T3 shell contract")
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -279,8 +286,7 @@ class T3Connector:
             self._features = negotiated_features(descriptor)
             self._environment_id = descriptor.get("environmentId")
         shell = await asyncio.to_thread(self.http.get, "/api/orchestration/shell")
-        if not isinstance(shell.get("threads"), list) or not isinstance(shell.get("projects"), list):
-            raise T3Error("Unsupported T3 shell contract")
+        validate_shell(shell)
         if self._desktop_seen:
             await asyncio.to_thread(self._desktop_seen.refresh)
         projects = {p["id"]: p for p in shell["projects"]}
@@ -415,7 +421,13 @@ class T3Connector:
                 self._consumed.add(state.backend_revision)
                 try:
                     await asyncio.to_thread(self.http.dispatch, command)
-                except T3Error:
+                except T3Error as exc:
+                    # An explicit client rejection did not accept the command.
+                    # Request timeout (408) can still leave delivery ambiguous.
+                    if exc.code is not None and 400 <= exc.code < 500 and exc.code != 408:
+                        self._consumed.discard(state.backend_revision)
+                        self._on_result(req, {"ok": False, "rejected": True, "message": str(exc)})
+                        return
                     self._uncertain[tid] = command
                     self._on_result(req, {"ok": False, "uncertain": True,
                         "message": "T3 delivery uncertain; inspect the conversation before retrying"})

@@ -20,7 +20,7 @@ import tomli_w
 
 from .secrets import clear_secret, get_secret, peek_keychain, set_secret
 from .settings import SettingsSnapshot, _merged_sections, resolve_profile
-from .t3 import T3Http
+from .t3 import T3Http, validate_shell
 
 
 def discover(base_dir: Path) -> str:
@@ -102,8 +102,7 @@ def connect(args):
     stored = False
     try:
         snapshot = T3Http(url, token).get("/api/orchestration/shell")
-        if not isinstance(snapshot.get("threads"), list):
-            raise ValueError("Unsupported T3 server")
+        validate_shell(snapshot)
         set_secret(env, token)
         stored = True
         resolved = resolve_profile(SettingsSnapshot(path, local_path, proposed, local, os.environ.get("HERDECK_PROFILE")))

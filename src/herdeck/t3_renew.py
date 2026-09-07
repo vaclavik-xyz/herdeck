@@ -12,7 +12,7 @@ import tomllib
 from datetime import UTC, datetime
 
 from .secrets import peek_keychain, set_secret
-from .t3 import T3Error, T3Http
+from .t3 import T3Error, T3Http, validate_shell
 from .t3_state import timestamp
 
 # Read the installed boot-service version instead of downloading a moving npm tag.
@@ -82,8 +82,7 @@ def renew(args):
     stored = False
     try:
         snapshot = T3Http(server["url"], issued["token"]).get("/api/orchestration/shell")
-        if not isinstance(snapshot.get("threads"), list):
-            raise ValueError("New T3 credential failed verification")
+        validate_shell(snapshot)
         if args.config.read_text() != original:
             raise ValueError("Configuration changed concurrently")
         if peek_keychain(env) != old:

@@ -547,3 +547,37 @@ def test_waiting_slot_shows_holder_label_not_generic_word():
     slot = sess._slot_tile(0)
     assert slot.status_text == "CI"  # holder label, not "WAITING"
     assert slot.color == "violet"
+
+
+def test_t3_actions_use_capabilities_not_terminal_detection():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([('s0', (0, 0))])
+    sess.set_action_keys([('a', 'approve', (0, 2)), ('t', 'stop', (1, 2))])
+    a = state('p1', Status.BLOCKED)
+    a.backend, a.backend_revision = 't3', 'rev'
+    a.capabilities = ('read', 'answer')
+    sess.apply_snapshot('dev', [a])
+    sess.set_detection(a.key, 'Proceed? (y/n)')
+    assert not sess.action_enabled('approve') and not sess.action_enabled('stop')
+    assert sess.key_up('a') == [] and sess.key_up('t') == []
+    assert sess.blocked_without_detection() == []
+    assert [c.kind for c in sess.key_up('s0')] == ['read']
+    a.capabilities = ('read', 'approve')
+    a.backend_actions = [{'id': 'approve', 'payload': {'requestId': 'r', 'decision': 'accept'}}]
+    sess.apply_snapshot('dev', [a])
+    assert sess.action_enabled('approve')
+    command = sess.key_up('a')[0]
+    assert command.kind == 'backend_action' and command.decision_revision == 'rev'
+    assert command.payload['requestId'] == 'r'
+
+
+def test_inactive_t3_threads_do_not_occupy_elgato_slots():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([('s0', (0, 0))])
+    hidden = []
+    for lifecycle in ('settled', 'snoozed', 'archived', 'deleted'):
+        a = state(lifecycle, Status.BLOCKED, lifecycle)
+        a.backend, a.lifecycle = 't3', lifecycle
+        hidden.append(a)
+    sess.apply_snapshot('dev', [*hidden, state('active', Status.IDLE, 'visible')])
+    assert b'visible' in sess.render_all()['s0'].image_png

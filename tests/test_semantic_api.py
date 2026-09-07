@@ -563,3 +563,44 @@ async def test_timeout_and_backend_failure_are_structured_and_redacted():
     assert timeout.status == 504 and timeout.body["outcome"] == "timeout"
     assert failed.status == 503 and failed.body["outcome"] == "backend_failure"
     assert "secret-token" not in str(timeout.body) + str(failed.body)
+
+
+@pytest.mark.asyncio
+async def test_t3_semantic_identity_uses_revision_and_rejects_stale_clients():
+    a = agent(terminal='', status=Status.IDLE)
+    a.backend, a.backend_revision, a.capabilities = 't3', 'revision-1', ('continue',)
+    api, control = make_api([a])
+    assert api.inventory().body['agents'][0]['backend_revision'] == 'revision-1'
+    payload = target(terminal_id='', backend_revision='revision-1', text='Continue')
+    result = await api.send_text('test', payload)
+    assert result.status == 200 and control.calls == [('text', a.key, 'Continue')]
+    a.backend_revision = 'revision-2'
+    result = await api.send_text('test', {**payload, 'idempotency_key': 'new'})
+    assert result.status == 409 and result.body['outcome'] == 'stale_identity'
+    assert len(control.calls) == 1
+    result = await api.send_text('test', target(terminal_id='fake-terminal', text='Continue'))
+    assert result.status == 409
+
+
+@pytest.mark.asyncio
+async def test_t3_semantic_decisions_never_parse_preview_as_terminal_choices():
+    a = agent(terminal='')
+    a.backend, a.backend_revision = 't3', 'revision-1'
+    api, control = make_api([a])
+    response = await api.decisions({'server_id': 'local', 'pane_id': 'p1', 'backend_revision': 'revision-1'})
+    assert response.body['choices'] == []
+    assert control.calls == []
+
+
+@pytest.mark.asyncio
+async def test_t3_stop_confirmation_is_bound_to_thread_revision():
+    a = agent(terminal='', status=Status.WORKING)
+    a.backend, a.backend_revision, a.capabilities = 't3', 'revision-1', ('stop',)
+    api, control = make_api([a])
+    payload = target(terminal_id='', backend_revision='revision-1', action='stop')
+    challenge = await api.action('test', payload)
+    assert challenge.body['outcome'] == 'confirmation_required'
+    a.backend_revision = 'revision-2'
+    response = await api.action('test', {**payload, 'idempotency_key': 'confirm',
+        'confirmation': challenge.body['confirmation']})
+    assert response.status == 409 and not control.calls

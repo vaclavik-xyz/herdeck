@@ -5,6 +5,7 @@ import tomllib
 import pytest
 
 from herdeck import t3_setup
+from herdeck.t3 import T3Error
 
 
 def test_config_preserves_unknown_keys_and_inherited_selections():
@@ -20,7 +21,7 @@ def test_config_preserves_unknown_keys_and_inherited_selections():
         t3_setup.updated_config(result, "t3", "http://127.0.0.1:3773", "NEW")
 
 
-@pytest.mark.parametrize("fail_write", [False, True])
+@pytest.mark.parametrize("fail_write", [False, True, "contract"])
 def test_setup_keychain_backup_and_rollback(tmp_path, monkeypatch, capsys, fail_write):
     path = tmp_path / "config.toml"
     path.write_text('[custom]\nkeep = true\n')
@@ -39,14 +40,14 @@ def test_setup_keychain_backup_and_rollback(tmp_path, monkeypatch, capsys, fail_
     monkeypatch.setattr(t3_setup.subprocess, "check_output", lambda *a, **kw:
         json.dumps({"token": secret, "sessionId": "session", "expiresAt": "later"}))
     monkeypatch.setattr(t3_setup.subprocess, "run", lambda *a, **kw: revoked.append(a))
-    monkeypatch.setattr(t3_setup.T3Http, "get", lambda *a: {"threads": []})
+    monkeypatch.setattr(t3_setup.T3Http, "get", lambda *a: {"threads": []} if fail_write == "contract" else {"threads": [], "projects": []})
     if fail_write:
         real = t3_setup.atomic_write
         monkeypatch.setattr(t3_setup, "atomic_write", lambda p, text:
             (_ for _ in ()).throw(OSError("full disk")) if p == local_path else real(p, text))
     args = argparse.Namespace(config=path, base_dir=tmp_path, url="http://127.0.0.1:3773", id="pilot", binary="t3")
     if fail_write:
-        with pytest.raises(OSError):
+        with pytest.raises((OSError, T3Error)):
             t3_setup.connect(args)
         assert path.read_text() == old and not secrets and revoked
     else:

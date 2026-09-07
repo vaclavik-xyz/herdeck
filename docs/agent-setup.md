@@ -833,3 +833,19 @@ hidden. Existing manual acknowledgments remain available as fallback when the
 reader is unavailable. This is local to MacBench: visits on a phone or another
 computer are not observed. It does not modify T3, require a fork, or send read
 commands to the server. Remove the opt-in when shared read state is integrated.
+
+### T3 targets in the semantic API
+
+For T3 inventory records, pass `server_id`, `pane_id`, and `backend_revision`
+back to semantic action/text endpoints; omit `terminal_id` or leave it empty.
+Herdr continues to require `terminal_id`. Exactly one identity marker is accepted.
+A changed T3 revision invalidates stale actions and stop confirmations. Numeric
+terminal-choice endpoints do not parse T3 previews: they return no choices or
+an unsupported-action response. Use supported approve/deny/stop and text actions;
+structured T3 question choices remain available through the native deck controls.
+
+Elgato overview excludes inactive T3 lifecycle states. Its fixed Approve, Deny,
+and Stop keys follow advertised capabilities, without terminal prompt inference.
+Setup, renewal, doctor, and the runtime all require both shell `threads` and
+`projects` arrays before accepting a T3 connection. Explicit HTTP client rejection
+releases the dispatch guard; timeouts and ambiguous server failures remain guarded.

@@ -256,3 +256,24 @@ def test_background_work_overrides_completed_foreground_turn(liveness, expected)
         "completedAt": "2026-09-06T16:00:00Z"}, backgroundLiveness=liveness), {}, "e")
     assert s.status == expected
     assert "continue" not in s.capabilities
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('code', [400, 401, 403, 409, 422, 429, 408, 500, None])
+async def test_rejected_dispatch_is_retryable_but_ambiguous_delivery_is_locked(code):
+    c, results = connector(thread())
+    await c.refresh()
+    calls = []
+    def dispatch(command):
+        calls.append(command)
+        raise T3Error('sanitized rejection', code)
+    c.http.dispatch = dispatch
+    msg = {'type': 'backend_action', 'pane_id': 'thread-1',
+           'revision': c.states['thread-1'].backend_revision,
+           'action': 'continue', 'text': 'Continue', 'req': 'r'}
+    await c.send(msg)
+    await c.send(msg)
+    ambiguous = code in (408, 500, None)
+    assert len(calls) == (1 if ambiguous else 2)
+    assert bool(c._uncertain) == ambiguous
+    assert results[0].get('uncertain' if ambiguous else 'rejected') is True
