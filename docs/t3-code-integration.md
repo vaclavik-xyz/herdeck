@@ -1,8 +1,9 @@
 # T3 Code integration: design and implementation plan
 
-Status: T3-01 through T3-05 implemented and verified. T3-06 software verification
-passed; the physical deck pilot awaits the user's choice of T3 host.
-Updated: 2026-09-06.
+Status: Implemented; physical display and local desktop Done-to-Idle behavior
+verified by the user on MacBench. Physical approval, Stop, and question handling
+remain separate acceptance items. Prepared for release 0.5.0.
+Updated: 2026-09-07.
 
 ## Goal
 
@@ -11,9 +12,10 @@ interface. Show Herdr agents and T3 conversations together, with correct routing
 of every action to its owning backend. Existing Herdr workflows must continue
 to work when T3 is absent or disconnected.
 
-The integration is implemented on `feat/t3-code-integration`; it is not released.
-Implementation of T3-01 through T3-06 was subsequently authorized. Push, merge,
-deployment and infrastructure changes remain outside this work.
+The integration is implemented on `feat/t3-code-integration`. Publication through
+a PR and a new release was authorized on 2026-09-07. The implementation history
+below retains earlier verification boundaries; current setup is documented in
+`agent-setup.md`.
 
 ## Evidence and compatibility baseline
 
@@ -265,6 +267,9 @@ successful work. Herdeck displays `DONE` only when the latest turn explicitly ha
 `state=completed` and a completion timestamp. Active work or pending requests take
 precedence; interrupted/error turns and newly opened threads do not become Done.
 T3 background work/monitoring also prevents a premature Done tile. Continue remains
-available after completion. The T3 client's per-device last-visited timestamp is
-not in the server snapshot, so Herdeck shows the completed turn until new work
-starts rather than mirroring that client's unread/visited badge.
+available after completion. The T3 client's per-device last-visited timestamp is not in the server snapshot.
+By default, Herdeck retains Done until acknowledged or superseded. MacBench now
+opts into the local desktop read-state bridge described in `agent-setup.md`: it
+reads a private copy of T3 desktop Local Storage and mirrors its visited boundary.
+The user verified Done-to-Idle by opening this thread on MacBench on 2026-09-07.
+Other devices are not synchronized, and no completion timeout is enabled.
