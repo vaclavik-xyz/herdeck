@@ -801,3 +801,35 @@ phone. **Implement plan** uses its proposal identity and exits plan mode.
 **Stop session** is a separate confirmed control for background provider work.
 Settle/reopen and one-hour snooze/wake controls depend on advertised server support.
 Unknown API version families are read-only and explain why in the preview.
+
+
+### Temporary local T3 desktop read-state sync (MacBench)
+
+Until upstream PR #9124 ships shared viewedAt state, the MacBench runtime helper
+sets `HERDECK_T3_DESKTOP_READ_STATE=1`. This reads the same machine's T3 0.0.38
+Electron UI state (`t3code:ui-state:v1`, origin `t3code://app`) and compares the
+scoped environment/thread visit timestamp to the latest completion. Opening a
+completed thread in that T3 desktop clears the deck's Done. New unread completions
+and desktop Mark unread remain Done. Never-visited history matches the desktop's
+existing rule: it is not treated as unread. No timeout is enabled.
+
+Install the native LevelDB library (`brew install leveldb`) on the opted-in host.
+The reader uses its stable C API through ctypes. It opens only a private temporary
+copy; it never opens, locks, repairs or writes the live T3 database. CURRENT and
+manifest/SST/WAL files resolve the current record, including compaction and
+deletions. Before/after file signatures reject snapshots taken during a write;
+unchanged files reuse the decoded visit map. Only the expected UI key is read,
+and only visit timestamps leave the reader. Snapshot files are removed after use.
+The copy is limited to 64 MiB and the UI record to 8 MiB. A missing, unsupported,
+or unreadable store falls back to the existing deck behavior and reports the
+condition in the thread preview; it does not silently clear Done.
+
+`HERDECK_T3_DESKTOP_STORAGE` can override the default
+`~/Library/Application Support/t3code/Local Storage/leveldb` directory.
+`HERDECK_LEVELDB_LIBRARY` can select the library; default locations cover Apple
+Silicon/Intel Homebrew and the system library search. Neither contains secrets.
+While desktop read sync is healthy, the competing local Mark seen action is
+hidden. Existing manual acknowledgments remain available as fallback when the
+reader is unavailable. This is local to MacBench: visits on a phone or another
+computer are not observed. It does not modify T3, require a fork, or send read
+commands to the server. Remove the opt-in when shared read state is integrated.

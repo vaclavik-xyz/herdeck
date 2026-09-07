@@ -21,6 +21,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 from .model import AgentKey, AgentState, Status
 from .t3_actions import extend_actions, semantic_command
+from .t3_desktop_seen import DesktopSeen
 from .t3_seen import SeenStore
 from .t3_state import lifecycle, queued_start, timestamp
 
@@ -140,6 +141,8 @@ def thread_state(server_id, thread, projects, epoch, *, now=None, acknowledged=N
     life = lifecycle(thread, pending, now)
     activity, attention, label = state or "idle", "", ""
     completed = latest_turn.get("completedAt") or ""
+    completed_time, seen_time = timestamp(completed), timestamp(acknowledged)
+    is_seen = completed == acknowledged or (completed_time is not None and seen_time is not None and completed_time <= seen_time)
     if life != "active":
         status, label = Status.IDLE, life.upper()
     elif pending or thread.get("hasPendingApprovals") or thread.get("hasPendingUserInput"):
@@ -164,7 +167,7 @@ def thread_state(server_id, thread, projects, epoch, *, now=None, acknowledged=N
             status, label = Status.WAITING, "MONITORING"
         else:
             status = (Status.DONE if state != "interrupted" and latest_turn.get("state") == "completed"
-                      and completed and completed != acknowledged else Status.IDLE)
+                      and completed and not is_seen else Status.IDLE)
             attention = "completion" if status == Status.DONE else ""
     else:
         status = Status.UNKNOWN
@@ -259,6 +262,9 @@ class T3Connector:
         self._stop = False
         self.last_connect_error = None
         self._features = None
+        self._environment_id = None
+        self._desktop_seen = (DesktopSeen(os.environ.get("HERDECK_T3_DESKTOP_STORAGE"))
+                              if os.environ.get("HERDECK_T3_DESKTOP_READ_STATE") == "1" else None)
         self._cache = {}
         config = Path(os.environ.get("HERDECK_CONFIG", str(Path.home() / ".config/herdeck/config.toml")))
         self._seen = kwargs.get("seen_store") or SeenStore(config.parent / "t3-seen", server.id)
@@ -271,9 +277,12 @@ class T3Connector:
             descriptor = await asyncio.to_thread(self.http.get, "/.well-known/t3/environment")
             from .t3_actions import negotiated_features
             self._features = negotiated_features(descriptor)
+            self._environment_id = descriptor.get("environmentId")
         shell = await asyncio.to_thread(self.http.get, "/api/orchestration/shell")
         if not isinstance(shell.get("threads"), list) or not isinstance(shell.get("projects"), list):
             raise T3Error("Unsupported T3 shell contract")
+        if self._desktop_seen:
+            await asyncio.to_thread(self._desktop_seen.refresh)
         projects = {p["id"]: p for p in shell["projects"]}
         threads, states = {}, {}
         now = time.monotonic()
@@ -307,8 +316,24 @@ class T3Connector:
             # Summary is fresher than cached detail and owns lifecycle/attention.
             t = {**detail, **summary}
             threads[tid] = t
+            local_seen = self._seen.get(tid)
+            desktop_ready = self._desktop_seen and not self._desktop_seen.last_error and self._environment_id
+            if desktop_ready:
+                # Match T3's hasUnseenCompletion: a never-visited thread is not
+                # unread. This applies only to a successfully read current UI
+                # record; missing/unreadable storage must not hide completions.
+                local_seen = self._desktop_seen.get(self._environment_id, tid)
+                if local_seen is None:
+                    local_seen = (t.get("latestTurn") or {}).get("completedAt")
             states[tid] = thread_state(self.server.id, t, projects, self._epoch,
-                acknowledged=self._seen.get(tid), features=self._features)
+                acknowledged=local_seen, features=self._features)
+            if desktop_ready:
+                # Desktop read/unread owns the marker while this opt-in bridge
+                # is healthy; do not offer a competing local acknowledgment.
+                states[tid].capabilities = tuple(a for a in states[tid].capabilities if a != "acknowledge")
+                states[tid].backend_actions = [a for a in states[tid].backend_actions if a["id"] != "acknowledge"]
+            elif self._desktop_seen and self._desktop_seen.last_error:
+                states[tid].preview = self._desktop_seen.last_error + "\n" + states[tid].preview
             uncertain = self._uncertain.get(tid)
             if uncertain and not stale and _observed_effect(t, uncertain):
                 self._uncertain.pop(tid)
