@@ -240,6 +240,17 @@ async def test_list_advertises_title_refresh_only_when_plugin_action_exists():
     assert msg["panes"][0]["capabilities"] == []
 
 
+@pytest.mark.parametrize("agent", ["codex", "claude", "hermes"])
+def test_title_refresh_is_advertised_for_plugin_supported_agents(agent):
+    pane = _herdr_pane_to_wire(raw_pane(agent=agent), can_refresh_title=True)
+    assert pane["capabilities"] == ["refresh_title"]
+
+
+def test_title_refresh_is_hidden_for_unsupported_agents():
+    pane = _herdr_pane_to_wire(raw_pane(agent="gemini"), can_refresh_title=True)
+    assert pane["capabilities"] == []
+
+
 async def test_refresh_title_invokes_plugin_for_selected_pane(herdr):
     raw = json.dumps(
         {"type": "refresh_title", "req": "r-title", "pane_id": "w1:p1"}
