@@ -6,6 +6,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Agent tiles now show a non-empty Herdr pane title on their secondary line,
+  falling back to the existing tab and branch context when no title is set.
+  `title` is also available as an explicit tile-line token.
+
 ## [0.5.0] - 2026-09-07
 
 ### Added

@@ -68,6 +68,8 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
                 value = state.project or PurePosixPath(state.repo).name or state.label
             else:
                 value = state.repo or state.label
+        elif token == "title":
+            value = state.title
         elif token == "branch":
             value = state.branch
         elif token == "workspace":

@@ -478,6 +478,13 @@ class Orchestrator:
                 agent_secondary = secondary_tokens
                 if s.backend == "t3" and self.config.view.tile_secondary is None:
                     agent_secondary = ["tab"] if "tab" in fields else []
+                elif (
+                    s.backend == "herdr"
+                    and self.config.view.tile_secondary is None
+                    and "title" in fields
+                    and s.title
+                ):
+                    agent_secondary = ["title"]
                 primary, secondary = layout.compose_tile_lines(s, primary_tokens, agent_secondary)
                 accent = (
                     server_accent(s.key.server_id, self.config.theme.server_accents)

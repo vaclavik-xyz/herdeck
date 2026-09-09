@@ -405,6 +405,50 @@ def test_overview_default_secondary_shows_tab_before_branch():
     assert tile.branch == "›codex · main"
 
 
+def test_overview_default_secondary_prefers_session_title():
+    cfg = make_config()
+    o = Orchestrator(cfg, slots=13)
+    s = AgentState(AgentKey("dev", "w2:p1"), "codex", "herdeck", Status.WORKING)
+    s.repo, s.branch, s.tab = "herdeck", "main", "codex"
+    s.title = "Add AI session titles"
+    o.apply_snapshot("dev", [s])
+
+    tile = o.render().tiles[0]
+
+    assert tile.repo == "herdeck"
+    assert tile.branch == "Add AI session titles"
+
+
+def test_overview_explicit_secondary_is_not_replaced_by_session_title():
+    cfg = make_config()
+    cfg.view.tile_secondary = ["tab", "branch"]
+    o = Orchestrator(cfg, slots=13)
+    s = AgentState(AgentKey("dev", "w2:p1"), "codex", "herdeck", Status.WORKING)
+    s.branch, s.tab, s.title = "main", "codex", "Add AI session titles"
+    o.apply_snapshot("dev", [s])
+
+    assert o.render().tiles[0].branch == "›codex · main"
+
+
+def test_overview_t3_default_keeps_thread_title_behavior():
+    cfg = make_config()
+    o = Orchestrator(cfg, slots=13)
+    s = AgentState(
+        AgentKey("t3", "thread-1"),
+        "codex",
+        "/projects/app",
+        Status.WORKING,
+        backend="t3",
+        project="My App",
+        title="Fix sign in",
+    )
+    o.apply_snapshot("t3", [s])
+
+    tile = o.render().tiles[0]
+
+    assert (tile.repo, tile.branch) == ("My App", "Fix sign in")
+
+
 def test_overview_tile_lines_fall_back_to_tile_fields():
     # No explicit line config: tile_fields=["repo"] still hides tab and branch.
     cfg = make_multi_config()
