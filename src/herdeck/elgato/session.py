@@ -368,6 +368,8 @@ class ElgatoSession:
         primary_tokens, secondary_tokens = layout.resolve_tile_lines(
             self.config.view, ["repo"], ["tab", "branch"]
         )
+        if self.config.view.tile_secondary is None and s.backend == "herdr" and s.title:
+            secondary_tokens = ["title"]
         primary, secondary = layout.compose_tile_lines(s, primary_tokens, secondary_tokens)
         if key == self.selected():
             # Mark the first non-empty line so the act target stays identifiable

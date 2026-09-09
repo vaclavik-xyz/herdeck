@@ -445,6 +445,31 @@ def test_slot_tile_fallback_is_fixed_repo_tab_branch_ignoring_tile_fields():
     assert tile.branch == "›review · feat/x"
 
 
+def test_slot_tile_default_secondary_prefers_session_title():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    s = state("p1", Status.WORKING, "api")
+    s.branch, s.tab, s.title = "feat/x", "codex", "Add AI session titles"
+    sess.apply_snapshot("dev", [s])
+
+    tile = sess._slot_tile(0)
+
+    assert tile.repo == "api"
+    assert tile.branch == "Add AI session titles"
+
+
+def test_slot_tile_t3_default_keeps_thread_title_behavior():
+    sess = ElgatoSession(make_config(), FakeIcons())
+    sess.set_slots([("s0", (0, 0))])
+    s = state("thread-1", Status.WORKING, "/projects/app")
+    s.backend, s.project, s.title = "t3", "My App", "Fix sign in"
+    sess.apply_snapshot("dev", [s])
+
+    tile = sess._slot_tile(0)
+
+    assert (tile.repo, tile.branch) == ("My App", "Fix sign in")
+
+
 def test_slot_tile_keeps_selected_marker_on_primary():
     sess = ElgatoSession(make_config(), FakeIcons())
     sess.set_slots([("s0", (0, 0))])

@@ -19,6 +19,7 @@ def _astate(
 ):
     s = AgentState(AgentKey("dev", "w2:p1"), agent, label, Status.WORKING)
     s.repo, s.branch, s.workspace, s.tab = repo, branch, workspace, tab
+    s.title = "Add AI session titles"
     s.work = WorkContext(source="github", item="repo#123", run="run-42")
     return s
 
@@ -44,6 +45,10 @@ def test_compose_line_repo_falls_back_to_label():
 
 def test_compose_line_renders_optional_work_context_tokens():
     assert compose_line(_astate(), ["source", "work_item", "run"]) == ("github · repo#123 · run-42")
+
+
+def test_compose_line_renders_session_title():
+    assert compose_line(_astate(), ["title"]) == "Add AI session titles"
 
 
 def test_compose_line_renders_dynamic_metadata_tokens():

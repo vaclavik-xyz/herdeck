@@ -505,6 +505,11 @@ render the context. Any Herdr token can be rendered with `$name`, for example
 `$summary`, `$model`, `$waiting_on`, or `$progress`. Interactive Telegram alerts
 include `work_item` when set.
 
+Herdr's display-only pane `title` is also available as the built-in `title`
+tile token. With the default layout, a non-empty title replaces the compact
+`tab · branch` secondary line; panes without a title keep the existing fallback.
+An explicit `view.tile_secondary` always wins.
+
 **Headless.** `HERDECK_FAKE_DECK=1 python -m herdeck.app` uses an in-memory
 renderer (no UI). `scripts/e2e_verify.py` connects the pipeline to a bridge and
 prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).
