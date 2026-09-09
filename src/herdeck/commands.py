@@ -39,6 +39,8 @@ def command_to_msg(cmd: Command, req: str | None) -> dict:
         )
     if cmd.kind == "focus":
         return with_identity({"type": "focus", "req": req, "pane_id": cmd.pane_id})
+    if cmd.kind == "refresh_title":
+        return with_identity({"type": "refresh_title", "req": req, "pane_id": cmd.pane_id})
     if cmd.kind == "send_text":
         return with_identity(
             {"type": "send_text", "req": req, "pane_id": cmd.pane_id, "text": cmd.text}

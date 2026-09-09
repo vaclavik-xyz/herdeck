@@ -166,6 +166,16 @@ def test_decode_legacy_snapshot_defaults_capabilities_and_work_context():
     assert msg.states[0].work == WorkContext()
 
 
+def test_decode_snapshot_preserves_pane_capabilities():
+    msg = decode_inbound(
+        '{"type":"snapshot","server_id":"workbox","panes":'
+        '[{"pane_id":"w1:p1","agent_type":"codex","label":"api",'
+        '"status":"idle","capabilities":["refresh_title",7]}]}'
+    )
+
+    assert msg.states[0].capabilities == ("refresh_title",)
+
+
 def test_decode_event_to_state():
     raw = (
         '{"type":"event","server_id":"workbox","pane":'

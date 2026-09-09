@@ -111,6 +111,32 @@ def test_non_blocked_shows_macros_not_parsed_options():
     assert rs.tiles[0].label == "continue"  # macros are shown instead
 
 
+def test_non_blocked_title_refresh_action_precedes_macros_when_available():
+    o = Orchestrator(make_config(), slots=13)
+    agent = st("p1", Status.IDLE)
+    agent.capabilities = ("refresh_title",)
+    o.apply_snapshot("dev", [agent])
+    o.on_press(0)
+
+    rs = o.render()
+
+    assert rs.tiles[0].label == "Retitle"
+    assert rs.tiles[1].label == "continue"
+    assert o.on_press(0) == [Command("refresh_title", "dev", "p1")]
+    assert not o.is_drilling()
+
+
+def test_blocked_agent_keeps_decision_actions_ahead_of_title_refresh():
+    o = Orchestrator(make_config(), slots=13)
+    agent = st("p1", Status.BLOCKED)
+    agent.capabilities = ("refresh_title",)
+    o.apply_snapshot("dev", [agent])
+    o.on_press(0)
+    o.set_detection(PROMPT)
+
+    assert [tile.label for tile in o.render().tiles[:3]] == ["1", "2", "3"]
+
+
 def test_stop_works_even_when_not_blocked_and_returns_to_overview():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.WORKING)])

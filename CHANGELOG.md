@@ -10,6 +10,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Agent tiles now show a non-empty Herdr pane title on their secondary line,
   falling back to the existing tab and branch context when no title is set.
   `title` is also available as an explicit tile-line token.
+- Non-blocked Herdr agent details now offer a **Retitle** action when the
+  `zhangzujian.auto-session-title` plugin advertises its pane refresh action.
 
 ## [0.5.0] - 2026-09-07
 
