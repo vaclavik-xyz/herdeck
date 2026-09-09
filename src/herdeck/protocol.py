@@ -31,6 +31,12 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
     metadata = pane.get("metadata") if isinstance(pane.get("metadata"), dict) else {}
     state_labels = pane.get("state_labels") if isinstance(pane.get("state_labels"), dict) else {}
     wire_work = pane.get("work") if isinstance(pane.get("work"), dict) else {}
+    raw_capabilities = pane.get("capabilities")
+    capabilities = (
+        tuple(value for value in raw_capabilities if isinstance(value, str))
+        if isinstance(raw_capabilities, list)
+        else ()
+    )
     work_tokens = {
         "work_source": wire_work.get("source", ""),
         "work_item": wire_work.get("item", ""),
@@ -63,6 +69,7 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         title=pane.get("title") or "",
         display_agent=pane.get("display_agent") or "",
         work=WorkContext.from_tokens(work_tokens),
+        capabilities=capabilities,
     )
 
 

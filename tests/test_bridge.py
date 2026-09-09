@@ -66,6 +66,7 @@ def test_herdr_pane_to_wire_maps_fields():
         "terminal_id": "",
         "title": "",
         "display_agent": "",
+        "capabilities": [],
         "work": {"source": "", "item": "", "run": "", "url": ""},
     }
 
@@ -226,6 +227,45 @@ async def test_read_returns_result(herdr):
     assert msg["req"] == "r1"
     assert msg["data"]["text"] == "Allow edit to config.py?"
     assert msg["data"]["pane_id"] == "w1:p1"
+
+
+async def test_list_advertises_title_refresh_only_when_plugin_action_exists():
+    available = StubHerdr(panes=[raw_pane()])
+    available.title_refresh_available = True
+    msg = json.loads(await handle_client_message(available, "workbox", '{"type":"list"}'))
+    assert msg["panes"][0]["capabilities"] == ["refresh_title"]
+
+    unavailable = StubHerdr(panes=[raw_pane()])
+    msg = json.loads(await handle_client_message(unavailable, "workbox", '{"type":"list"}'))
+    assert msg["panes"][0]["capabilities"] == []
+
+
+async def test_refresh_title_invokes_plugin_for_selected_pane(herdr):
+    raw = json.dumps(
+        {"type": "refresh_title", "req": "r-title", "pane_id": "w1:p1"}
+    )
+
+    msg = json.loads(await handle_client_message(herdr, "workbox", raw))
+
+    assert msg == {"type": "result", "req": "r-title", "data": {"refreshed": True}}
+    assert herdr.refreshed_titles == ["w1:p1"]
+
+
+async def test_refresh_title_rejects_a_reused_pane_identity(herdr):
+    herdr.panes[0]["terminal_id"] = "term-current"
+    raw = json.dumps(
+        {
+            "type": "refresh_title",
+            "req": "r-title",
+            "pane_id": "w1:p1",
+            "terminal_id": "term-stale",
+        }
+    )
+
+    msg = json.loads(await handle_client_message(herdr, "workbox", raw))
+
+    assert msg["data"] == {"skipped": True, "message": "agent identity changed"}
+    assert herdr.refreshed_titles == []
 
 
 async def test_act_sends_keys_when_blocked(herdr):
@@ -1507,6 +1547,66 @@ async def test_socket_herdr_snapshot_returns_snapshot():
     snap = await h.snapshot()
     assert calls == [("session.snapshot", {})]
     assert snap == {"agents": [], "workspaces": [], "tabs": []}
+
+
+async def test_socket_herdr_discovers_and_invokes_title_plugin_action():
+    from herdeck.bridge import SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+    calls = []
+
+    async def fake_rpc(method, params, *, retry=True):
+        calls.append((method, params, retry))
+        if method == "plugin.action.list":
+            return {
+                "result": {
+                    "actions": [
+                        {
+                            "plugin_id": "zhangzujian.auto-session-title",
+                            "action_id": "refresh",
+                            "contexts": ["pane"],
+                        }
+                    ]
+                }
+            }
+        return {"result": {"status": "updated"}}
+
+    h._rpc = fake_rpc
+
+    assert await h.can_refresh_title() is True
+    await h.refresh_title("w1:p4")
+    assert calls == [
+        (
+            "plugin.action.list",
+            {"plugin_id": "zhangzujian.auto-session-title"},
+            True,
+        ),
+        (
+            "plugin.action.invoke",
+            {
+                "plugin_id": "zhangzujian.auto-session-title",
+                "action_id": "refresh",
+                "context": {
+                    "focused_pane_id": "w1:p4",
+                    "invocation_source": "herdeck",
+                },
+            },
+            False,
+        ),
+    ]
+
+
+async def test_socket_herdr_title_refresh_discovery_degrades_when_plugin_is_absent():
+    from herdeck.bridge import HerdrRpcError, SocketHerdr
+
+    h = SocketHerdr("/nonexistent")
+
+    async def fake_rpc(method, params, *, retry=True):
+        raise HerdrRpcError(method, "plugin_not_found", "plugin not found")
+
+    h._rpc = fake_rpc
+
+    assert await h.can_refresh_title() is False
 
 
 @pytest.mark.parametrize(

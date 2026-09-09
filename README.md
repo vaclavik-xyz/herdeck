@@ -510,6 +510,13 @@ tile token. With the default layout, a non-empty title replaces the compact
 `tab · branch` secondary line; panes without a title keep the existing fallback.
 An explicit `view.tile_secondary` always wins.
 
+When Herdr exposes the pane-scoped `refresh` action from the
+`zhangzujian.auto-session-title` plugin, a non-blocked agent's detail view also
+shows **Retitle** (Czech: **Nový název**). Pressing it asks the plugin to
+generate a fresh title for that exact pane. The action stays hidden when the
+plugin is missing or disabled and while approval controls take priority on a
+blocked agent.
+
 **Headless.** `HERDECK_FAKE_DECK=1 python -m herdeck.app` uses an in-memory
 renderer (no UI). `scripts/e2e_verify.py` connects the pipeline to a bridge and
 prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).

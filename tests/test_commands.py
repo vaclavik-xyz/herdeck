@@ -16,6 +16,14 @@ def test_command_to_msg_list_has_no_req():
     assert command_to_msg(Command("list", "dev"), None) == {"type": "list"}
 
 
+def test_command_to_msg_refresh_title_targets_pane():
+    assert command_to_msg(Command("refresh_title", "dev", "p1"), "r1") == {
+        "type": "refresh_title",
+        "req": "r1",
+        "pane_id": "p1",
+    }
+
+
 def test_command_to_msg_read():
     m = command_to_msg(Command("read", "dev", "p1", source="detection"), "r1")
     assert m == {"type": "read", "req": "r1", "pane_id": "p1", "source": "detection"}

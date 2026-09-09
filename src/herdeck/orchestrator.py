@@ -741,6 +741,21 @@ class Orchestrator:
                         }
                     )
         elif agent is not None:
+            if "refresh_title" in agent.capabilities:
+                actions.append(
+                    {
+                        "id": "refresh_title",
+                        "label": self._tr("refresh_title"),
+                        "make": (
+                            lambda key, terminal_id=agent.terminal_id: Command(
+                                "refresh_title",
+                                key.server_id,
+                                key.pane_id,
+                                terminal_id=terminal_id or None,
+                            )
+                        ),
+                    }
+                )
             for m in self.config.macros:
                 actions.append(
                     {

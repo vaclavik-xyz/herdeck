@@ -60,6 +60,10 @@ _WIRE_CAPABILITIES = (
     "herdr_order",
 )
 
+_TITLE_PLUGIN_ID = "zhangzujian.auto-session-title"
+_TITLE_ACTION_ID = "refresh"
+_TITLE_REFRESH_CACHE_TTL_S = 30.0
+
 # herdr's native per-status label map is bounded by the Status enum itself: the
 # deck only ever reads the entry for a pane's current status, so a key that is
 # not a status value can never reach a tile. Values are clipped like the other
@@ -404,6 +408,8 @@ class HerdrClient(Protocol):
     async def answer_blocked(self, pane_id: str, text: str) -> None: ...
     async def start_agent(self, name: str, argv: list[str]) -> None: ...
     async def worktrees(self, workspace_ids: list[str] | None = None) -> list[dict]: ...
+    async def can_refresh_title(self) -> bool: ...
+    async def refresh_title(self, pane_id: str) -> None: ...
 
 
 def _is_agent_pane(p: dict) -> bool:
@@ -467,6 +473,8 @@ def _herdr_pane_to_wire(
     tab_by_id: dict[str, str] | None = None,
     ws_order_by_id: dict[str, int] | None = None,
     tab_order_by_id: dict[str, int] | None = None,
+    *,
+    can_refresh_title: bool = False,
 ) -> dict:
     """Map a raw herdr pane to herdeck's wire pane schema.
 
@@ -502,6 +510,7 @@ def _herdr_pane_to_wire(
         "terminal_id": p.get("terminal_id") or "",
         "title": (p.get("title") or p.get("terminal_title_stripped") or "")[:160],
         "display_agent": (p.get("display_agent") or "")[:160],
+        "capabilities": ["refresh_title"] if can_refresh_title else [],
         "work": {
             "source": work.source,
             "item": work.item,
@@ -516,6 +525,8 @@ def _wire_panes(
     worktrees: list[dict] | None = None,
     workspaces: list[dict] | None = None,
     tabs: list[dict] | None = None,
+    *,
+    can_refresh_title: bool = False,
 ) -> list[dict]:
     wt_by_ws = _worktrees_by_workspace(worktrees or [])
     ws_by_id = _workspaces_by_id(workspaces or [])
@@ -530,6 +541,7 @@ def _wire_panes(
             tab_by_id,
             ws_order_by_id,
             tab_order_by_id,
+            can_refresh_title=can_refresh_title,
         )
         for p in raw
         if _is_agent_pane(p)
@@ -562,7 +574,21 @@ async def _wired_snapshot(herdr: HerdrClient) -> list[dict]:
     snap = await herdr.snapshot()
     raw = snap.get("agents", [])
     worktrees = await _fetch_worktrees(herdr, _agent_workspace_ids(raw))
-    return _wire_panes(raw, worktrees, snap.get("workspaces", []), snap.get("tabs", []))
+    can_refresh_title = False
+    capability_check = getattr(herdr, "can_refresh_title", None)
+    if callable(capability_check):
+        try:
+            can_refresh_title = await capability_check()
+        except Exception:
+            # Optional plugin discovery must never make the fleet disappear.
+            pass
+    return _wire_panes(
+        raw,
+        worktrees,
+        snap.get("workspaces", []),
+        snap.get("tabs", []),
+        can_refresh_title=can_refresh_title,
+    )
 
 
 class StubHerdr:
@@ -583,6 +609,8 @@ class StubHerdr:
         self.sent: list[tuple[str, list[str]]] = []
         self.focused: list[str] = []
         self.started: list[tuple[str, list[str]]] = []
+        self.title_refresh_available = False
+        self.refreshed_titles: list[str] = []
 
     async def snapshot(self) -> dict:
         return {
@@ -623,6 +651,12 @@ class StubHerdr:
     async def start_agent(self, name: str, argv: list[str]) -> None:
         self.started.append((name, argv))
 
+    async def can_refresh_title(self) -> bool:
+        return self.title_refresh_available
+
+    async def refresh_title(self, pane_id: str) -> None:
+        self.refreshed_titles.append(pane_id)
+
 
 async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) -> str:
     msg = json.loads(raw)
@@ -655,6 +689,11 @@ async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) ->
             return _identity_changed_result(msg)
         await herdr.focus_agent(msg["pane_id"])
         return encode({"type": "result", "req": msg["req"], "data": {"focused": True}})
+    if kind == "refresh_title":
+        if await _pane_identity_changed(herdr, msg):
+            return _identity_changed_result(msg)
+        await herdr.refresh_title(msg["pane_id"])
+        return encode({"type": "result", "req": msg["req"], "data": {"refreshed": True}})
     if kind == "send_text":
         if await _pane_identity_changed(herdr, msg):
             return _identity_changed_result(msg)
@@ -1264,6 +1303,7 @@ class SocketHerdr:
         self._path = socket_path
         self._timeout = timeout
         self._line_limit = line_limit
+        self._title_refresh_cache: tuple[float, bool] | None = None
 
     async def _rpc(self, method: str, params: dict, *, retry: bool = True) -> dict:
         # herdr closes the unix socket after each request (one-shot), so we open
@@ -1403,6 +1443,42 @@ class SocketHerdr:
         # Protocol 16 agent.send types text without submitting it.
         await self._rpc("agent.send", {"target": pane_id, "text": text}, retry=False)
         await self._rpc("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, retry=False)
+
+    async def can_refresh_title(self) -> bool:
+        now = time.monotonic()
+        cached = self._title_refresh_cache
+        if cached is not None and now - cached[0] < _TITLE_REFRESH_CACHE_TTL_S:
+            return cached[1]
+        try:
+            res = await self._rpc(
+                "plugin.action.list", {"plugin_id": _TITLE_PLUGIN_ID}
+            )
+            actions = res.get("result", {}).get("actions", [])
+            available = any(
+                isinstance(action, dict)
+                and action.get("plugin_id") == _TITLE_PLUGIN_ID
+                and action.get("action_id") == _TITLE_ACTION_ID
+                and "pane" in action.get("contexts", [])
+                for action in actions
+            )
+        except Exception:
+            return False
+        self._title_refresh_cache = (now, available)
+        return available
+
+    async def refresh_title(self, pane_id: str) -> None:
+        await self._rpc(
+            "plugin.action.invoke",
+            {
+                "plugin_id": _TITLE_PLUGIN_ID,
+                "action_id": _TITLE_ACTION_ID,
+                "context": {
+                    "focused_pane_id": pane_id,
+                    "invocation_source": "herdeck",
+                },
+            },
+            retry=False,
+        )
 
     async def answer_blocked(self, pane_id: str, text: str) -> None:
         """Answer an agent sitting at an approval/question dialog.
