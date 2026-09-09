@@ -491,9 +491,11 @@ def _herdr_pane_to_wire(
     branch = wt.get("branch") or ""
     tokens = p.get("tokens") if isinstance(p.get("tokens"), dict) else {}
     work = WorkContext.from_tokens(tokens)
+    agent_type = p.get("agent", "default")
+    title_refresh_supported = agent_type in {"codex", "claude", "hermes"}
     return {
         "pane_id": p["pane_id"],
-        "agent_type": p.get("agent", "default"),
+        "agent_type": agent_type,
         "label": label,
         "status": p.get("agent_status", "unknown"),
         "project": label,
@@ -510,7 +512,7 @@ def _herdr_pane_to_wire(
         "terminal_id": p.get("terminal_id") or "",
         "title": (p.get("title") or p.get("terminal_title_stripped") or "")[:160],
         "display_agent": (p.get("display_agent") or "")[:160],
-        "capabilities": ["refresh_title"] if can_refresh_title else [],
+        "capabilities": ["refresh_title"] if can_refresh_title and title_refresh_supported else [],
         "work": {
             "source": work.source,
             "item": work.item,
