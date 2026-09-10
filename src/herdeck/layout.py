@@ -53,6 +53,15 @@ def status_color(status: Status) -> str:
     return STATUS_COLOR.get(status, "grey")
 
 
+def project_name(state: AgentState) -> str:
+    """Editable backend name for display; repository and routing identity stay intact."""
+    if state.backend == "t3":
+        candidates = (state.project, PurePosixPath(state.repo).name, state.label)
+    else:
+        candidates = (state.workspace, state.repo, state.label)
+    return next((value.strip() for value in candidates if value.strip()), "")
+
+
 def compose_line(state: AgentState, tokens: list[str]) -> str:
     """Render an agent-tile text line from a token list.
 
@@ -61,7 +70,9 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
     """
     parts: list[str] = []
     for token in tokens:
-        if token == "repo":
+        if token == "project":
+            value = project_name(state)
+        elif token == "repo":
             # T3 projects have editable display names; workspaceRoot is a path,
             # not the project label shown in the T3 sidebar.
             if state.backend == "t3":
@@ -97,7 +108,7 @@ def compose_tile_lines(state: AgentState, primary_tokens: list[str], secondary_t
     primary = compose_line(state, primary_tokens)
     secondary = compose_line(state, secondary_tokens)
     if not primary and primary_tokens == ["tab"]:
-        primary = compose_line(state, ["repo"])
+        primary = compose_line(state, ["project"])
         if secondary == primary:
             secondary = ""
     return primary, secondary

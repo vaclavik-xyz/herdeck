@@ -441,7 +441,8 @@ class Orchestrator:
         agent_slots = self._agent_slots()
         shown, pages = layout.page(ordered, self._page, agent_slots)
         fields = self.config.view.tile_fields
-        fb_primary = ["repo"] if "repo" in fields else []
+        # Keep the legacy visibility switch; explicit repo tokens still show the repository.
+        fb_primary = ["project"] if "repo" in fields else []
         # The compact second line identifies the Herdr tab first; branch is
         # useful context but may be ellipsized when the physical tile is tight.
         fb_secondary = [token for token in ("tab", "branch") if token in fields]

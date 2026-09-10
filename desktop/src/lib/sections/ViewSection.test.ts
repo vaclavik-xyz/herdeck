@@ -18,10 +18,10 @@ describe("ViewSection", () => {
       expect(select.value).toBe("Project");
       flushSync(() => { select.value = "Thread"; select.dispatchEvent(new Event("change", { bubbles: true })); });
       expect(values("tile_primary")).toEqual(["tab"]);
-      expect(values("tile_secondary")).toEqual(["repo"]);
+      expect(values("tile_secondary")).toEqual(["project"]);
       expect(changes).toBe(1);
       flushSync(() => { select.value = "Project"; select.dispatchEvent(new Event("change", { bubbles: true })); });
-      expect(values("tile_primary")).toEqual(["repo"]);
+      expect(values("tile_primary")).toEqual(["project"]);
       expect(values("tile_secondary")).toEqual(["tab", "branch"]);
       expect(payload.base.view.tile_fields).toEqual(["repo", "tab", "server"]);
       if (editProfile) expect(payload.base.view.tile_primary).toBeUndefined();
@@ -114,7 +114,7 @@ describe("ViewSection", () => {
     }
   });
 
-  it("shows the Elgato plugin's fixed repo and tab-plus-branch fallbacks", () => {
+  it("shows the Elgato plugin's fixed project and tab-plus-branch fallbacks", () => {
     setLang("en");
     const payload = parseConfig({
       base: { view: { tile_fields: ["status"] } },
@@ -133,7 +133,7 @@ describe("ViewSection", () => {
       const secondary = fields.find(
         (item) => item.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === "tile_secondary",
       );
-      expect(primary?.querySelector(".hint")?.textContent).toContain("repo");
+      expect(primary?.querySelector(".hint")?.textContent).toContain("project");
       expect(secondary?.querySelector(".hint")?.textContent).toContain("tab");
       expect(secondary?.querySelector(".hint")?.textContent).toContain("branch");
     } finally {
