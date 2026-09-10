@@ -85,12 +85,12 @@
   function lineValue(key: string): unknown {
     return overlay ? overrideValue(payload, prof, SEC, key) ?? inheritedFor(payload, prof, SEC, key) : getAt(payload, "base", SEC, key);
   }
-  const heading = $derived(JSON.stringify(lineValue("tile_primary")) === '["tab"]' && JSON.stringify(lineValue("tile_secondary")) === '["repo"]'
-    ? lm.thread : (lineValue("tile_primary") == null && lineValue("tile_secondary") == null) || (JSON.stringify(lineValue("tile_primary")) === '["repo"]' && JSON.stringify(lineValue("tile_secondary")) === '["tab","branch"]') ? lm.project : lm.custom);
+  const heading = $derived(JSON.stringify(lineValue("tile_primary")) === '["tab"]' && JSON.stringify(lineValue("tile_secondary")) === '["project"]'
+    ? lm.thread : (lineValue("tile_primary") == null && lineValue("tile_secondary") == null) || (JSON.stringify(lineValue("tile_primary")) === '["project"]' && JSON.stringify(lineValue("tile_secondary")) === '["tab","branch"]') ? lm.project : lm.custom);
   function setHeading(value: string): void {
     if (value === lm.custom) return;
-    const primary = value === lm.thread ? ["tab"] : ["repo"];
-    const secondary = value === lm.thread ? ["repo"] : ["tab", "branch"];
+    const primary = value === lm.thread ? ["tab"] : ["project"];
+    const secondary = value === lm.thread ? ["project"] : ["tab", "branch"];
 
     // Set both lines in a single update so previews never see half a preset.
     payload = overlay
@@ -102,10 +102,10 @@
   // --- overlay mode helpers ---
   function lineFallback(key: string, fields: string[]): string[] {
     if (payload.runtimeDeck === "elgato-plugin") {
-      if (key === "tile_primary") return ["repo"];
+      if (key === "tile_primary") return ["project"];
       if (key === "tile_secondary") return ["tab", "branch"];
     }
-    if (key === "tile_primary") return fields.includes("repo") ? ["repo"] : [];
+    if (key === "tile_primary") return fields.includes("repo") ? ["project"] : [];
     if (key === "tile_secondary") return ["tab", "branch"].filter((token) => fields.includes(token));
     return VIEW_LIST_DEFAULTS[key] ?? [];
   }

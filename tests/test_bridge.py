@@ -2338,22 +2338,27 @@ def test_note_event_stales_worktrees_and_flags_fleet_changes():
     assert ev._worktrees_stale is False
 
 
-async def test_tab_rename_wake_delivers_fresh_labels_without_worktree_refetch():
+@pytest.mark.parametrize("field", ["tab", "workspace"])
+async def test_rename_wake_delivers_fresh_labels_without_worktree_refetch(field):
     import asyncio
 
     from herdeck.bridge import HerdrEvents
 
     pane = raw_pane("w1:p1", agent="claude", status="idle")
     pane["tab_id"] = "w1:t1"
-    stub = StubHerdr(panes=[pane], tabs=[{"tab_id": "w1:t1", "label": "1"}])
+    stub = StubHerdr(
+        panes=[pane], tabs=[{"tab_id": "w1:t1", "label": "1"}],
+        workspaces=[{"workspace_id": "w1", "label": "1"}],
+    )
     ev = HerdrEvents(stub, poll_interval=100)
     gen = ev.stream()
     first = await gen.__anext__()
-    assert first[0]["tab"] == "1"
-    stub._tabs = [{"tab_id": "w1:t1", "label": "review"}]  # herdr-side rename
-    ev._wake.set()  # what a tab.renamed push event does
+    assert first[0][field] == "1"
+    rows = stub._tabs if field == "tab" else stub._workspaces
+    rows[0]["label"] = "review"  # herdr-side rename
+    ev._wake.set()  # what a tab.renamed/workspace.renamed push event does
     second = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
-    assert second[0]["tab"] == "review"
+    assert second[0][field] == "review"
     assert stub.worktree_queries == [["w1"]]  # worktrees were NOT refetched
     await gen.aclose()
 

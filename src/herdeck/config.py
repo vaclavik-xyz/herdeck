@@ -65,6 +65,7 @@ DEFAULT_STATUS_COLORS: dict[str, str] = {
 DEFAULT_SERVER_ACCENTS: list[str] = ["teal", "violet", "orange", "pink", "lime"]
 DEFAULT_TILE_FIELDS: list[str] = ["repo", "title", "tab", "branch", "status", "time", "server"]
 TILE_LINE_TOKENS: tuple[str, ...] = (
+    "project",
     "repo",
     "title",
     "branch",

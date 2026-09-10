@@ -366,7 +366,7 @@ class ElgatoSession:
         down = s.key.server_id in self._down
         # Elgato never honored tile_fields -> fixed compact fallback.
         primary_tokens, secondary_tokens = layout.resolve_tile_lines(
-            self.config.view, ["repo"], ["tab", "branch"]
+            self.config.view, ["project"], ["tab", "branch"]
         )
         if self.config.view.tile_secondary is None and s.backend == "herdr" and s.title:
             secondary_tokens = ["title"]

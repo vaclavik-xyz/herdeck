@@ -510,6 +510,15 @@ tile token. With the default layout, a non-empty title replaces the compact
 `tab · branch` secondary line; panes without a title keep the existing fallback.
 An explicit `view.tile_secondary` always wins.
 
+The default primary line uses `project`: the editable Herdr workspace name or
+T3 project title, falling back to the repository name when absent. Renaming a
+workspace updates its tiles without changing their session titles or identities.
+Custom `tile_primary` / `tile_secondary` lists can use `project` too; explicit
+`repo` tokens retain their previous behavior (repository/worktree label for
+Herdr, project title for T3). The legacy `tile_fields` entry `repo` still controls
+whether the default primary line is visible. `workspace` is the raw Herdr label
+and is empty for T3; use `project` for a mixed overview.
+
 When Herdr exposes the pane-scoped `refresh` action from the
 `zhangzujian.auto-session-title` plugin, a non-blocked agent's detail view also
 shows **Retitle** (Czech: **Nový název**). Pressing it asks the plugin to
