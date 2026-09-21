@@ -99,7 +99,12 @@ struct AppState {
     /// runtime keeps posting plain osascript alerts instead of double-firing
     /// nothing (a silent shell would swallow both banner and sound).
     notify_permission: Arc<AtomicBool>,
+    /// Rate-limiter for `rediscover_runtime` (last attempt timestamp).
+    rediscover_last: Arc<Mutex<Option<std::time::Instant>>>,
 }
+
+/// Minimum interval between on-disk re-discovery attempts.
+const REDISCOVER_MIN_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Default timeout for the Rust-side sidecar proxy calls.
 const SIDECAR_TIMEOUT: Duration = Duration::from_secs(3);
@@ -216,6 +221,32 @@ fn current_discovery(state: &tauri::State<'_, AppState>) -> Result<Discovery, St
         .ok_or_else(|| "sidecar not ready".to_string())
 }
 
+/// Re-read `runtime.json` from disk and, when it describes a LIVE runtime
+/// (`/health` probe passes), adopt it as the current discovery. An external
+/// sidecar (launchd) picks a fresh port on every restart; a shell holding the
+/// stale port would silently drift into osascript fallbacks (the user sees
+/// duplicated alerts) while the deck keeps rendering from cached state.
+/// Called on `/state` fetch failures. Returns the adopted discovery, or `None`
+/// when the file is absent/unhealthy. Rate-limited to one attempt per
+/// `REDISCOVER_MIN_INTERVAL`.
+fn rediscover_runtime(state: &tauri::State<'_, AppState>) -> Option<Discovery> {
+    {
+        let mut last = state.rediscover_last.lock().unwrap();
+        if let Some(t) = *last {
+            if t.elapsed() < REDISCOVER_MIN_INTERVAL {
+                return None;
+            }
+        }
+        *last = Some(std::time::Instant::now());
+    }
+    let d = sidecar::read_runtime_discovery(&sidecar::runtime_file_path())?;
+    if sidecar::decide_runtime_attach(Some(d.clone()), probe_runtime_health).is_none() {
+        return None;
+    }
+    *state.discovery.lock().unwrap() = Some(d.clone());
+    Some(d)
+}
+
 /// Run a blocking sidecar HTTP call off the invoking thread. The proxy commands
 /// are `async fn`s (so Tauri dispatches them on its async runtime instead of the
 /// main thread) and push their blocking TCP I/O onto the runtime's dedicated
@@ -274,10 +305,25 @@ async fn deck_state(
 ) -> Result<serde_json::Value, String> {
     let d = current_discovery(&state)?;
     let claim = state.notify_permission.load(Ordering::Relaxed);
-    let body = run_blocking(move || {
+    let body = match run_blocking(move || {
         http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT, claim, Some(&shell_gen()))
     })
-    .await?;
+    .await
+    {
+        Ok(body) => body,
+        Err(first_err) => {
+            // Stale external sidecar (launchd restart → fresh port): re-read
+            // runtime.json once and retry against the live runtime.
+            if rediscover_runtime(&state).is_none() {
+                return Err(first_err);
+            }
+            let d = current_discovery(&state)?;
+            run_blocking(move || {
+                http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT, claim, Some(&shell_gen()))
+            })
+            .await?
+        }
+    };
     serde_json::from_str(&body).map_err(|e| format!("invalid /state JSON from sidecar: {e}"))
 }
 
@@ -324,7 +370,12 @@ fn start_notify_heartbeat(app: tauri::AppHandle) {
             Some(&shell_gen()),
         ) {
             Ok(body) => body,
-            Err(_) => continue,
+            Err(_) => {
+                // Stale port after a runtime restart: try re-discovering from
+                // runtime.json so the claim (and native banners) survive.
+                let _ = rediscover_runtime(&state);
+                continue;
+            }
         };
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
             post_new_notifications(&app, &parsed, &state.notify_last_seq);
@@ -2328,6 +2379,7 @@ pub fn run() {
         deck_always_on_top: Arc::new(Mutex::new(deck_always_on_top)),
         notify_last_seq: Arc::new(Mutex::new(0)),
         notify_permission: Arc::new(AtomicBool::new(false)),
+        rediscover_last: Arc::new(Mutex::new(None)),
     };
     let notify_permission = state.notify_permission.clone();
 
