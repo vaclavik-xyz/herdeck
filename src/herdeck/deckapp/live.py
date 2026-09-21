@@ -26,12 +26,18 @@ from __future__ import annotations
 import asyncio
 import threading
 
+from ..app import NOTIFY_EVENT_STATUSES, _build_notifier, event_notification_body, newly_entered
 from ..commands import Command, command_to_msg
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
 from ..model import AgentKey, AgentState, Status
 from ..orchestrator import Orchestrator
 from .source import StateSource
+
+
+def _thread_notify_schedule(fn) -> None:
+    """Run a notification off the connector loop thread (osascript latency)."""
+    threading.Thread(target=fn, daemon=True, name="herdeck-notify").start()
 
 
 class LiveSource(StateSource):
@@ -49,11 +55,20 @@ class LiveSource(StateSource):
 
     source_name = "live"
 
-    def __init__(self, config: Config, server: ServerConfig | None = None):
+    def __init__(
+        self, config: Config, server: ServerConfig | None = None, *, notify_schedule=None
+    ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
         # when it carries a fleet, every selected server participates.
         self._config = config
+        # Event notifications, same engine as herdeck/app.py App._maybe_notify
+        # (newly_entered bookkeeping per event). Plain sinks only — the
+        # interactive blocked chain (Telegram approve buttons) is an app.py
+        # runtime feature and is deliberately not wired here.
+        self._notify_keys: dict[str, set] = {event: set() for event in NOTIFY_EVENT_STATUSES}
+        self._notify_schedule = notify_schedule or _thread_notify_schedule
+        self._notifier = _build_notifier(config) if config.notifications.enabled else None
         self._servers = {item.id: item for item in config.servers}
         if not self._servers and server is not None:
             self._servers = {server.id: server}
@@ -202,8 +217,32 @@ class LiveSource(StateSource):
         self._runners.clear()
 
     # --- connector callbacks (run on the connector's loop thread) ---
+    def _fire_notify(self, event: str, agent: AgentState) -> None:
+        """Schedule one event alert (never raises, never blocks the loop)."""
+        if self._notifier is None:
+            return
+        n = self._config.notifications
+        if event not in n.on:
+            return
+        sound = False if not n.sound else n.sounds.get(event, True)
+        multi = len(self._config.overview_order) > 1
+        title = f"{agent.agent_type} {event}"
+        body = event_notification_body(agent, multi_server=multi)
+        self._notify_schedule(lambda: self._notifier.notify(title, body, sound))
+
+    def _notify_entered(self, event: str, states: list[AgentState], scope: set) -> None:
+        """Notify keys that just entered `event`'s status within `scope`."""
+        if self._notifier is None or event not in self._config.notifications.on:
+            return
+        tracked = self._notify_keys[event]
+        to, entered_here = newly_entered(NOTIFY_EVENT_STATUSES[event], tracked & scope, states)
+        self._notify_keys[event] = (tracked - scope) | entered_here
+        for s in (x for x in states if x.key in to):
+            self._fire_notify(event, s)
+
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         new_by_key = {s.key: s for s in states}
+        prev_keys = {key for key in self._agents if key.server_id == server_id}
 
         def mutate():
             with self._lock:
@@ -233,6 +272,19 @@ class LiveSource(StateSource):
             return True
 
         self._apply(mutate)
+        # Notifications reconcile AFTER the buffer update: `scope` is every key
+        # this snapshot is authoritative for (previous + current), matching
+        # App.handle_snapshot's server-scoped reconciliation.
+        self._notify_all(server_id, states, prev_keys)
+
+    def _notify_all(self, server_id: str, states: list[AgentState], prev_keys: set) -> None:
+        scope = set(prev_keys) | {s.key for s in states}
+        for event in NOTIFY_EVENT_STATUSES:
+            self._notify_entered(event, states, scope)
+
+    def _notify_all_events(self, states: list[AgentState], scope: set) -> None:
+        for event in NOTIFY_EVENT_STATUSES:
+            self._notify_entered(event, states, scope)
 
     def _on_event(self, server_id: str, state: AgentState) -> None:
         def mutate():
@@ -258,6 +310,7 @@ class LiveSource(StateSource):
             return True
 
         self._apply(mutate)
+        self._notify_all_events([state], {state.key})
 
     @staticmethod
     def _terminal_identity_changed(

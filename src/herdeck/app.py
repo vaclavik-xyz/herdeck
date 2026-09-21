@@ -80,6 +80,15 @@ def newly_entered(status, prev, states):
     return to_notify, entered_now
 
 
+def event_notification_body(agent: AgentState, *, multi_server: bool) -> str:
+    """One-line notification body for an event alert (shared app + deckapp)."""
+    label = agent.repo or agent.label
+    parts = [
+        part for part in (agent.branch, agent.key.server_id if multi_server else None) if part
+    ]
+    return f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
+
+
 # Agent states that can fire a notification, mapped to their Status. Keys must
 # match [notifications] `on` entries (validated against config.NOTIFY_EVENTS).
 NOTIFY_EVENT_STATUSES: dict[str, Status] = {
@@ -469,11 +478,7 @@ class App:
         )
 
     def _event_notification_body(self, agent: AgentState, *, multi_server: bool) -> str:
-        label = agent.repo or agent.label
-        parts = [
-            part for part in (agent.branch, agent.key.server_id if multi_server else None) if part
-        ]
-        return f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
+        return event_notification_body(agent, multi_server=multi_server)
 
     def _rearm_interactive_blocked_alerts(self) -> None:
         if not self.config.notifications.enabled:

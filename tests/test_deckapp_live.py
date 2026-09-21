@@ -1245,3 +1245,114 @@ def test_converged_runtime_pins_are_local_persisted_and_reloaded(tmp_path):
         assert store.load('default') == {}
     finally:
         app.close()
+
+
+# --- event notifications (shared engine with herdeck/app.py) -----------------
+
+
+class RecordingNotifier:
+    def __init__(self):
+        self.calls = []
+
+    def notify(self, title, body, sound=False):
+        self.calls.append((title, body, sound))
+
+
+def make_notifying_live(config, server):
+    src = LiveSource(config, server, notify_schedule=lambda fn: fn())
+    notifier = RecordingNotifier()
+    src._notifier = notifier
+    return src, notifier
+
+
+def notify_config(on=("blocked", "done"), *, sound=True, sounds=None):
+    config, server = live_config()
+    config.notifications.enabled = True
+    config.notifications.on = list(on)
+    config.notifications.sound = sound
+    if sounds is not None:
+        config.notifications.sounds = dict(sounds)
+    return config, server
+
+
+def test_done_snapshot_fires_notification_once():
+    config, server = notify_config()
+    src, notifier = make_notifying_live(config, server)
+
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    assert notifier.calls == []
+
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    assert notifier.calls == [("codex done", "p0 · main", "Hero")]
+
+    # Still done on the next snapshot -> no duplicate.
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    assert len(notifier.calls) == 1
+
+
+def test_done_rearms_after_leaving_the_state():
+    config, server = notify_config()
+    src, notifier = make_notifying_live(config, server)
+
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    assert len(notifier.calls) == 2
+
+
+def test_blocked_event_uses_glass_sound():
+    config, server = notify_config()
+    src, notifier = make_notifying_live(config, server)
+
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.BLOCKED)])
+    assert notifier.calls == [("claude blocked", "p1 · main", "Glass")]
+
+
+def test_event_not_in_on_list_is_silent():
+    config, server = notify_config(on=("blocked",))
+    src, notifier = make_notifying_live(config, server)
+
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE)])
+    assert notifier.calls == []
+
+
+def test_sound_master_toggle_off_makes_alerts_silent():
+    config, server = notify_config(sound=False)
+    src, notifier = make_notifying_live(config, server)
+
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    assert notifier.calls == [("codex done", "p0 · main", False)]
+
+
+def test_event_fires_from_single_state_event_too():
+    config, server = notify_config()
+    src, notifier = make_notifying_live(config, server)
+
+    src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
+    assert notifier.calls == [("codex done", "p0 · main", "Hero")]
+
+    # Same done state re-delivered -> no duplicate; then leaving re-arms.
+    src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
+    assert len(notifier.calls) == 1
+    src._on_event(server.id, agent(server.id, "p0", Status.WORKING))
+    src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
+    assert len(notifier.calls) == 2
+
+
+def test_notifications_disabled_builds_no_notifier():
+    config, server = live_config()  # notifications.enabled defaults False
+    src = LiveSource(config, server)
+    assert src._notifier is None
+
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE)])
+    assert src._notify_keys["done"] == set()
+
+
+def test_multi_server_body_includes_server_id():
+    config, server = notify_config()
+    local = ServerConfig(id="local", url="ws://127.0.0.1:8765", token="local-token")
+    config.overview_order = [server.id, local.id]
+    src, notifier = make_notifying_live(config, server)
+
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    assert notifier.calls[0][1] == "p0 · main · prod"
