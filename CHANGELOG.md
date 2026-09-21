@@ -6,6 +6,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-21
+
+### Fixed
+- The desktop shell now re-reads the runtime's `runtime.json` when its `/state`
+  calls fail (health-checked, rate-limited): an externally managed runtime
+  picks a fresh port on every restart, and a shell holding the stale port went
+  silent — the runtime never saw the shell's banner claim, so event alerts
+  fell back to plain `osascript` banners alongside the native ones
+  (duplicated notifications). Native banners and the deck UI now survive
+  runtime restarts without relaunching the app.
+
 ## [0.7.0] - 2026-09-21
 
 ### Added
@@ -199,7 +210,8 @@ Initial public release.
   configurable tiles, themes, profiles, macros, and notifications
   (macOS + Telegram).
 
-[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/vaclavik-xyz/herdeck/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.4.0...v0.5.0

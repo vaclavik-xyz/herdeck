@@ -101,6 +101,10 @@ struct AppState {
     notify_permission: Arc<AtomicBool>,
     /// Rate-limiter for `rediscover_runtime` (last attempt timestamp).
     rediscover_last: Arc<Mutex<Option<std::time::Instant>>>,
+    /// True only when this shell ATTACHED to an external runtime discovered
+    /// through runtime.json (not env override, not self-spawned) — the only
+    /// case where on-disk re-discovery may repoint the shell.
+    attached_from_runtime_json: Arc<AtomicBool>,
 }
 
 /// Minimum interval between on-disk re-discovery attempts.
@@ -230,6 +234,11 @@ fn current_discovery(state: &tauri::State<'_, AppState>) -> Result<Discovery, St
 /// when the file is absent/unhealthy. Rate-limited to one attempt per
 /// `REDISCOVER_MIN_INTERVAL`.
 fn rediscover_runtime(state: &tauri::State<'_, AppState>) -> Option<Discovery> {
+    if !state.attached_from_runtime_json.load(Ordering::Relaxed) {
+        // Env-override or self-spawned sidecar: on-disk re-discovery must not
+        // silently repoint the shell at a different runtime.
+        return None;
+    }
     {
         let mut last = state.rediscover_last.lock().unwrap();
         if let Some(t) = *last {
@@ -361,20 +370,38 @@ fn start_notify_heartbeat(app: tauri::AppHandle) {
             Some(d) => d,
             None => continue,
         };
-        let body = match http::fetch_state(
+        let fetched = http::fetch_state(
             &d.host,
             d.port,
             &d.token,
             SIDECAR_TIMEOUT,
             true,
             Some(&shell_gen()),
-        ) {
+        );
+        let body = match fetched {
             Ok(body) => body,
             Err(_) => {
-                // Stale port after a runtime restart: try re-discovering from
-                // runtime.json so the claim (and native banners) survive.
-                let _ = rediscover_runtime(&state);
-                continue;
+                // Stale port after a runtime restart: re-discover from
+                // runtime.json and CLAIM+FETCH immediately (waiting for the
+                // next tick would leave a 10 s osascript-fallback window).
+                if rediscover_runtime(&state).is_none() {
+                    continue;
+                }
+                let d = match state.discovery.lock().unwrap().clone() {
+                    Some(d) => d,
+                    None => continue,
+                };
+                match http::fetch_state(
+                    &d.host,
+                    d.port,
+                    &d.token,
+                    SIDECAR_TIMEOUT,
+                    true,
+                    Some(&shell_gen()),
+                ) {
+                    Ok(body) => body,
+                    Err(_) => continue,
+                }
             }
         };
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
@@ -626,7 +653,7 @@ fn config_post_json(
 /// How the sidecar is obtained: either an externally-managed one (dev override
 /// via env, no spawn) or a child process we spawn and supervise.
 enum SidecarPlan {
-    External(Discovery),
+    External(Discovery, bool),
     Spawn(CommandSpec),
 }
 
@@ -681,7 +708,7 @@ where
 {
     if build_channel::shared_runtime_attach_enabled_for(channel) {
         if let Some(discovery) = sidecar::decide_runtime_attach(runtime_discovery, healthy) {
-            return SidecarPlan::External(discovery);
+            return SidecarPlan::External(discovery, true);
         }
     }
     SidecarPlan::Spawn(sidecar::choose_spawn(resource_dir, repo_root))
@@ -699,13 +726,16 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
             let (host, port) = parse_host_port(&url);
             let source =
                 env::var("HERDECK_DECKAPP_SOURCE").unwrap_or_else(|_| "external".to_string());
-            return SidecarPlan::External(Discovery {
-                url,
-                host,
-                port,
-                token,
-                source,
-            });
+            return SidecarPlan::External(
+                Discovery {
+                    url,
+                    host,
+                    port,
+                    token,
+                    source,
+                },
+                false,
+            );
         }
     }
     // Attach to an already-running headless runtime (herdeck.runtime) when its
@@ -1064,7 +1094,26 @@ mod plan_tests {
             SidecarPlan::Spawn(spec) => {
                 assert!(spec.program.ends_with("/.venv/bin/python"));
             }
-            SidecarPlan::External(_) => panic!("dev build attached the stable runtime"),
+            SidecarPlan::External(..) => panic!("dev build attached the stable runtime"),
+        }
+    }
+
+    #[test]
+    fn stable_plan_attaches_with_the_runtime_json_flag_set() {
+        let plan = resolve_automatic_plan(
+            "stable",
+            None,
+            Path::new("/repo"),
+            Some(stable_runtime()),
+            |_| true,
+        );
+
+        match plan {
+            // The bool is the whole re-discovery safety gate: only this path
+            // may ever be repointed by a re-read runtime.json (review LOW — a
+            // polarity regression here would reintroduce the hijack).
+            SidecarPlan::External(_, true) => {}
+            _ => panic!("stable build must attach from runtime.json with flag=true"),
         }
     }
 
@@ -2307,9 +2356,14 @@ fn start_sidecar(
         executable.as_deref(),
     );
     match resolve_plan(resource_dir) {
-        SidecarPlan::External(d) => {
+        SidecarPlan::External(d, from_runtime_json) => {
             let view = DiscoveryView::from(&d);
             register_toggle_hotkey(app.handle(), &d);
+            if let Some(state) = app.try_state::<AppState>() {
+                state
+                    .attached_from_runtime_json
+                    .store(from_runtime_json, Ordering::Relaxed);
+            }
             *discovery.lock().unwrap() = Some(d);
             let _ = app.handle().emit("discovery", view); // token-free
         }
@@ -2380,6 +2434,7 @@ pub fn run() {
         notify_last_seq: Arc::new(Mutex::new(0)),
         notify_permission: Arc::new(AtomicBool::new(false)),
         rediscover_last: Arc::new(Mutex::new(None)),
+        attached_from_runtime_json: Arc::new(AtomicBool::new(false)),
     };
     let notify_permission = state.notify_permission.clone();
 
