@@ -6,6 +6,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-21
+
+### Added
+- Event notifications now speak with Herdeck's own voice on macOS: the deck
+  shell (Tauri) requests macOS notification permission at startup and posts
+  the runtime's event alerts as native **Herdeck banners** (app name + icon),
+  replacing the anonymous `osascript` banners whenever the shell is running.
+- A notification heartbeat inside the shell keeps the claim (and the banner
+  posting) alive even when both deck windows sit hidden in the tray.
+- New `[notifications.sounds]` per-event system sounds keep playing from the
+  runtime itself (audio is not app-attributed), and the per-event Telegram
+  notifications keep working exactly as configured in
+  `[notifications.backends]`.
+
+### Changed
+- The runtime records every event alert in a notification feed (`notify` in
+  `/state`) instead of shelling out to `osascript` unconditionally; when no
+  shell claims banner duty (older shell version, or the app is closed), the
+  historical plain-AppleScript banner remains as a fallback.
+- Handshake: shell polls carry `X-Herdeck-Shell` + per-process
+  `X-Herdeck-Shell-Gen` headers; a new generation (app relaunch) resets the
+  runtime's feed so already-delivered alerts are never replayed.
+
 ## [0.6.0] - 2026-09-21
 
 ### Added
@@ -176,7 +199,8 @@ Initial public release.
   configurable tiles, themes, profiles, macros, and notifications
   (macOS + Telegram).
 
-[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/vaclavik-xyz/herdeck/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vaclavik-xyz/herdeck/compare/v0.3.1...v0.4.0
