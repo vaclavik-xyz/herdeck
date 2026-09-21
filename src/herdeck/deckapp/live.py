@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 
-from ..app import NOTIFY_EVENT_STATUSES, _build_notifier, event_notification_body, newly_entered
+from ..app import NOTIFY_EVENT_STATUSES, event_notification_body, newly_entered
 from ..commands import Command, command_to_msg
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
 from ..model import AgentKey, AgentState, Status
+from ..notify import NotificationFeed, Notifier, deckapp_sink
 from ..orchestrator import Orchestrator
 from .source import StateSource
 
@@ -56,7 +58,12 @@ class LiveSource(StateSource):
     source_name = "live"
 
     def __init__(
-        self, config: Config, server: ServerConfig | None = None, *, notify_schedule=None
+        self,
+        config: Config,
+        server: ServerConfig | None = None,
+        *,
+        notify_schedule=None,
+        notify_sink_factory=None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -65,10 +72,21 @@ class LiveSource(StateSource):
         # Event notifications, same engine as herdeck/app.py App._maybe_notify
         # (newly_entered bookkeeping per event). Plain sinks only — the
         # interactive blocked chain (Telegram approve buttons) is an app.py
-        # runtime feature and is deliberately not wired here.
+        # runtime feature and is deliberately not wired here. The sink records
+        # every alert into the feed (the deck shell posts the banner under its
+        # own identity) and plays the event sound itself; a plain osascript
+        # notification is only the fallback while no shell is attached.
         self._notify_keys: dict[str, set] = {event: set() for event in NOTIFY_EVENT_STATUSES}
         self._notify_schedule = notify_schedule or _thread_notify_schedule
-        self._notifier = _build_notifier(config) if config.notifications.enabled else None
+        self._notify_feed = NotificationFeed()
+        self._notify_gate: Callable[[], bool] = lambda: False
+        if config.notifications.enabled:
+            factory = notify_sink_factory or (
+                lambda feed, gate: deckapp_sink(feed, gate, self._config)
+            )
+            self._notifier = Notifier(sink=factory(self._notify_feed, lambda: self._notify_gate()))
+        else:
+            self._notifier = None
         self._servers = {item.id: item for item in config.servers}
         if not self._servers and server is not None:
             self._servers = {server.id: server}
@@ -215,6 +233,21 @@ class LiveSource(StateSource):
         for runner in list(self._runners.values()):
             runner.close()
         self._runners.clear()
+
+    # --- notification plumbing (consumed by the deck shell via /state) -------
+
+    def set_notify_gate(self, gate: Callable[[], bool]) -> None:
+        """Set the "a shell can post banners" predicate.
+
+        True -> the runtime leaves the banner to the shell and only plays the
+        event sound; False -> alerts fall back to a plain osascript banner.
+        The DeckApp wires this to its shell-claim heartbeat.
+        """
+        self._notify_gate = gate
+
+    def notifications_feed_state(self) -> dict:
+        """Recent event notifications for the shell to post natively."""
+        return self._notify_feed.state()
 
     # --- connector callbacks (run on the connector's loop thread) ---
     def _fire_notify(self, event: str, agent: AgentState) -> None:

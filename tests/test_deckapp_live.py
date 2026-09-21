@@ -1356,3 +1356,129 @@ def test_multi_server_body_includes_server_id():
 
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
     assert notifier.calls[0][1] == "p0 · main · prod"
+
+
+# --- shell claim + notify feed -----------------------------------------------
+
+
+def test_state_exposes_notify_feed_and_shell_claim_toggles():
+    config, server = notify_config()
+
+    def silent_sink(feed, gate):
+        # Deterministic sink: no afplay, no osascript in tests.
+        return notify_mod.runtime_sink(
+            feed, gate, sound_player=lambda name: True, fallback=lambda t, b, s: None
+        )
+
+    import herdeck.notify as notify_mod
+
+    src = LiveSource(config, server, notify_sink_factory=silent_sink)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    src.set_notify_gate(app.shell_claims_banners)  # create_live_app wires this
+    src._notifier.notify("codex done", "p0", "Hero")
+    st = app._state()
+    assert st["notify"]["seq"] == 1
+    assert st["notify"]["items"][0]["title"] == "codex done"
+
+    # No shell claim yet -> the runtime gate stays closed (osascript fallback).
+    assert src._notify_gate() is False
+    assert app.shell_claims_banners() is False
+
+    app.note_shell_claim()
+    assert app.shell_claims_banners() is True
+    assert src._notify_gate() is True
+    app.close()
+
+
+def test_runtime_sink_suppresses_osascript_while_shell_claims(monkeypatch):
+    import herdeck.notify as notify_mod
+
+    # Drive the REAL notifier (feed + gate + sink) via notify_sink_factory;
+    # only the subprocess boundaries are spied out.
+    scripted = []
+    monkeypatch.setattr(notify_mod, "_macos_sink", lambda t, b, s: scripted.append((t, b, s)))
+    config, server = notify_config()
+
+    def spying_sink(feed, gate):
+        return notify_mod.runtime_sink(
+            feed,
+            gate,
+            sound_player=lambda name: True,
+            fallback=notify_mod._macos_sink,
+        )
+
+    src = LiveSource(config, server, notify_sink_factory=spying_sink)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    src.set_notify_gate(app.shell_claims_banners)
+
+    # No shell claim yet -> gate closed -> osascript fallback fires.
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    assert scripted == [("codex done", "p0 · main", "Hero")]
+
+    # After the shell claims, the banner is the shell's job: no more osascript,
+    # the alert goes through the feed instead.
+    app.note_shell_claim()
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.WORKING)])
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.DONE, agent_type="codex")])
+    assert len(scripted) == 1
+    assert src._notify_feed.state()["items"][-1]["title"] == "codex done"
+    app.close()
+
+
+def test_new_shell_claim_resets_stale_feed():
+    config, server = notify_config()
+
+    def silent_sink(feed, gate):
+        import herdeck.notify as notify_mod
+
+        return notify_mod.runtime_sink(
+            feed, gate, sound_player=lambda name: True, fallback=lambda t, b, s: None
+        )
+
+    src = LiveSource(config, server, notify_sink_factory=silent_sink)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    src.set_notify_gate(app.shell_claims_banners)
+
+    src._notifier.notify("codex done", "p0", "Hero")
+    src._notifier.notify("claude blocked", "p1", "Glass")
+    assert src._notify_feed.state()["seq"] == 2
+
+    # First claim: banners are the shell's job from here, feed restarts so the
+    # fresh shell never replays the two already-delivered alerts.
+    app.note_shell_claim("gen-1")
+    assert src._notify_feed.state()["seq"] == 0
+    assert src._notify_feed.state()["items"] == []
+
+    # Alerts arriving while the shell is alive keep normal seqs.
+    src._notifier.notify("codex done", "p2", "Hero")
+    assert src._notify_feed.state()["seq"] == 1
+    app.note_shell_claim("gen-1")  # same shell, claim refresh: no reset
+    assert src._notify_feed.state()["seq"] == 1
+
+    # A NEW generation (relaunched shell) resets the feed even within the TTL.
+    app.note_shell_claim("gen-2")
+    assert src._notify_feed.state()["seq"] == 0
+    app.close()
+
+
+def test_genless_claim_after_ttl_gap_still_resets():
+    config, server = notify_config()
+
+    def silent_sink(feed, gate):
+        import herdeck.notify as notify_mod
+
+        return notify_mod.runtime_sink(
+            feed, gate, sound_player=lambda name: True, fallback=lambda t, b, s: None
+        )
+
+    src = LiveSource(config, server, notify_sink_factory=silent_sink)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    src.set_notify_gate(app.shell_claims_banners)
+
+    app.note_shell_claim()  # legacy shell, no generation header: first claim resets
+    assert src._notify_feed.state()["seq"] == 0
+    src._notifier.notify("claude blocked", "p1", "Glass")
+    # Still claiming (fresh, same gen-less shell) -> no reset.
+    app.note_shell_claim()
+    assert src._notify_feed.state()["seq"] == 1
+    app.close()

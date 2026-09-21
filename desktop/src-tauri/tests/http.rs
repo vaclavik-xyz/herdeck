@@ -7,7 +7,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use herdeck_desktop_lib::http::{fetch_image, fetch_setup, fetch_state, http_delete, http_get, http_post_json, post_setup_connect, send_press};
+use herdeck_desktop_lib::http::{
+    fetch_image, fetch_setup, fetch_state, http_delete, http_get, http_post_json,
+    post_setup_connect, send_press,
+};
 
 /// Bind a loopback listener and, on one connection, reply with `response` then
 /// close. Returns the bound port (already listening before we return).
@@ -55,7 +58,12 @@ fn http_get_returns_body_on_200() {
 #[test]
 fn http_get_errors_on_403() {
     let port = serve_once("HTTP/1.0 403 Forbidden\r\n\r\nnope");
-    let r = http_get("127.0.0.1", port, "/health?token=bad", Duration::from_secs(2));
+    let r = http_get(
+        "127.0.0.1",
+        port,
+        "/health?token=bad",
+        Duration::from_secs(2),
+    );
     assert!(r.is_err());
     assert!(r.unwrap_err().contains("403"));
 }
@@ -74,7 +82,15 @@ fn fetch_state_injects_token_as_query_param() {
     let (port, rx) = serve_once_capture(
         b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"version\":7}".to_vec(),
     );
-    let body = fetch_state("127.0.0.1", port, "SECRET123", Duration::from_secs(2)).unwrap();
+    let body = fetch_state(
+        "127.0.0.1",
+        port,
+        "SECRET123",
+        Duration::from_secs(2),
+        false,
+        None,
+    )
+    .unwrap();
     assert!(body.contains("\"version\":7"));
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(
@@ -122,22 +138,36 @@ fn http_post_json_sends_body_and_returns_status_and_body() {
     assert_eq!(code, 200);
     assert_eq!(body, "{\"errors\":[]}");
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(req.starts_with("POST /config HTTP/1.0"), "request was: {req:?}");
-    assert!(req.contains("X-Herdeck-Token: HDR\r\n"), "request was: {req:?}");
+    assert!(
+        req.starts_with("POST /config HTTP/1.0"),
+        "request was: {req:?}"
+    );
+    assert!(
+        req.contains("X-Herdeck-Token: HDR\r\n"),
+        "request was: {req:?}"
+    );
     assert!(req.ends_with("{\"base\":{}}"), "request was: {req:?}");
 }
 
 #[test]
 fn http_post_json_returns_400_status_with_body() {
     let (port, _rx) = serve_once_capture(b"HTTP/1.0 400 Bad Request\r\n\r\nbad".to_vec());
-    let (code, _body) =
-        http_post_json("127.0.0.1", port, "/config", ("X-Herdeck-Token", "H"), "{", Duration::from_secs(2)).unwrap();
+    let (code, _body) = http_post_json(
+        "127.0.0.1",
+        port,
+        "/config",
+        ("X-Herdeck-Token", "H"),
+        "{",
+        Duration::from_secs(2),
+    )
+    .unwrap();
     assert_eq!(code, 400);
 }
 
 #[test]
 fn http_delete_sends_token_header_and_returns_status() {
-    let (port, rx) = serve_once_capture(b"HTTP/1.0 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec());
+    let (port, rx) =
+        serve_once_capture(b"HTTP/1.0 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec());
     let code = http_delete(
         "127.0.0.1",
         port,
@@ -148,8 +178,14 @@ fn http_delete_sends_token_header_and_returns_status() {
     .unwrap();
     assert_eq!(code, 204);
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(req.starts_with("DELETE /secret/TOK HTTP/1.0"), "request was: {req:?}");
-    assert!(req.contains("X-Herdeck-Token: HDR\r\n"), "request was: {req:?}");
+    assert!(
+        req.starts_with("DELETE /secret/TOK HTTP/1.0"),
+        "request was: {req:?}"
+    );
+    assert!(
+        req.contains("X-Herdeck-Token: HDR\r\n"),
+        "request was: {req:?}"
+    );
 }
 
 #[test]
@@ -177,7 +213,10 @@ fn fetch_setup_injects_token_as_query_param() {
     let body = fetch_setup("127.0.0.1", port, "SECRET", Duration::from_secs(2)).unwrap();
     assert!(body.contains("\"reason\":\"first_run\""));
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(req.starts_with("GET /setup?token=SECRET HTTP/1.0"), "request was: {req:?}");
+    assert!(
+        req.starts_with("GET /setup?token=SECRET HTTP/1.0"),
+        "request was: {req:?}"
+    );
 }
 
 #[test]
@@ -186,13 +225,26 @@ fn post_setup_connect_sends_header_token_and_body() {
         b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true,\"connected\":true}".to_vec(),
     );
     let (code, body) = post_setup_connect(
-        "127.0.0.1", port, "HDR", "{\"choice\":\"demo\"}", Duration::from_secs(2),
+        "127.0.0.1",
+        port,
+        "HDR",
+        "{\"choice\":\"demo\"}",
+        Duration::from_secs(2),
     )
     .unwrap();
     assert_eq!(code, 200);
     assert!(body.contains("\"ok\":true"));
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(req.starts_with("POST /setup/connect HTTP/1.0"), "request was: {req:?}");
-    assert!(req.contains("X-Herdeck-Token: HDR\r\n"), "request was: {req:?}");
-    assert!(req.ends_with("{\"choice\":\"demo\"}"), "request was: {req:?}");
+    assert!(
+        req.starts_with("POST /setup/connect HTTP/1.0"),
+        "request was: {req:?}"
+    );
+    assert!(
+        req.contains("X-Herdeck-Token: HDR\r\n"),
+        "request was: {req:?}"
+    );
+    assert!(
+        req.ends_with("{\"choice\":\"demo\"}"),
+        "request was: {req:?}"
+    );
 }

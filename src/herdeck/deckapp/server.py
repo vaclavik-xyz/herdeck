@@ -6,6 +6,7 @@ import logging
 import os
 import secrets
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -574,6 +575,37 @@ class DeckApp:
                 self._reloader()
 
     # --- state snapshots ---
+    # --- deck-shell notification claim (banner identity lives in the shell) --
+
+    _SHELL_CLAIM_TTL_S = 60.0
+
+    def note_shell_claim(self, shell_gen: str | None = None) -> None:
+        """A shell GET /state with X-Herdeck-Shell means "I post the banners".
+
+        A NEW shell generation (fresh process after relaunch) resets the feed
+        regardless of the TTL — the fresh shell's counter starts at 0, so
+        without the reset it would replay already-delivered alerts. A claim
+        after a TTL gap with no generation header is treated as a new shell
+        too (legacy shells never send the header).
+        """
+        stale = not self.shell_claims_banners()
+        gen_changed = (
+            shell_gen is not None
+            and getattr(self, "_shell_gen", None) is not None
+            and shell_gen != self._shell_gen
+        )
+        if stale or gen_changed:
+            feed = getattr(self._source, "_notify_feed", None)
+            if feed is not None:
+                feed.reset()
+        if shell_gen is not None:
+            self._shell_gen = shell_gen
+        self._shell_last_seen = time.monotonic()
+
+    def shell_claims_banners(self) -> bool:
+        """True while a shell polled /state recently (within the claim TTL)."""
+        return time.monotonic() - getattr(self, "_shell_last_seen", -1e9) < self._SHELL_CLAIM_TTL_S
+
     def _state(self) -> dict:
         with self._lock:
             state = {
@@ -587,6 +619,11 @@ class DeckApp:
                 "source": self._source.source_name,
                 "connected": self._source.connected,
                 "language": getattr(self._source, "language", "en"),
+                "notify": (
+                    self._source.notifications_feed_state()
+                    if hasattr(self._source, "notifications_feed_state")
+                    else {"seq": 0, "items": []}
+                ),
             }
             connections = getattr(self._source, "connections", None)
             if isinstance(connections, dict):
@@ -729,6 +766,8 @@ class DeckApp:
                 if path == "/state":
                     if not self._require_query_token(url):
                         return
+                    if self.headers.get("X-Herdeck-Shell") == "1":
+                        app.note_shell_claim(self.headers.get("X-Herdeck-Shell-Gen"))
                     self._send(200, json.dumps(app._state()).encode(), "application/json")
                 elif path == "/health":
                     if not self._require_query_token(url):
@@ -1133,6 +1172,11 @@ def create_live_app(
     )
     if local_runners:
         app._set_local_bridges(local_runners)
+    if hasattr(source, "set_notify_gate"):
+        # The shell claims banner duty only while it polls /state with a
+        # granted notification permission; otherwise the runtime falls back
+        # to plain osascript alerts.
+        source.set_notify_gate(app.shell_claims_banners)
     return app
 
 

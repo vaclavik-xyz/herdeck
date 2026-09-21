@@ -90,10 +90,24 @@ struct AppState {
     /// (rather than re-read from config) so a failed persist can revert the
     /// checkbox to what is ACTUALLY in effect, not to stale config text.
     deck_always_on_top: Arc<Mutex<bool>>,
+    /// Highest `notify.seq` already posted as a native banner. The sidecar's
+    /// feed resets to 0 on every config reload / source swap, so a SMALLER
+    /// value means "reset" and the counter simply adopts it.
+    notify_last_seq: Arc<Mutex<u64>>,
+    /// True once the sidecar-side notification permission is GRANTED. Until
+    /// then the `/state` polls omit the `X-Herdeck-Shell` claim header, so the
+    /// runtime keeps posting plain osascript alerts instead of double-firing
+    /// nothing (a silent shell would swallow both banner and sound).
+    notify_permission: Arc<AtomicBool>,
 }
 
 /// Default timeout for the Rust-side sidecar proxy calls.
 const SIDECAR_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Period of the notification heartbeat thread. The deck windows may sit
+/// hidden in the tray (no WebView polls), but banner duty must keep being
+/// claimed — otherwise the runtime quietly falls back to osascript banners.
+const POLL_HEARTBEAT_S: Duration = Duration::from_secs(10);
 
 /// `/setup/connect` runs, inside the sidecar, the whole remote transaction: a probe
 /// (≈4 s) THEN build + render-prepare + keychain/config snapshots + write + swap. The
@@ -250,16 +264,117 @@ async fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::V
 }
 
 /// Proxy `GET /state` (token injected Rust-side) → its JSON. This is the deck's
-/// poll endpoint; the WebView never sees the token.
+/// poll endpoint; the WebView never sees the token. The poll carries the
+/// banner-claim headers (`X-Herdeck-Shell`/`-Gen`, only with a granted
+/// permission) — a claim is just liveness; the actual posting of feed entries
+/// lives in `start_notify_heartbeat` (single poster by design).
 #[tauri::command]
-async fn deck_state(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn deck_state(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
     let d = current_discovery(&state)?;
-    run_blocking(move || {
-        let body = http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT)?;
-        serde_json::from_str::<serde_json::Value>(&body)
-            .map_err(|e| format!("invalid /state JSON from sidecar: {e}"))
+    let claim = state.notify_permission.load(Ordering::Relaxed);
+    let body = run_blocking(move || {
+        http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT, claim, Some(&shell_gen()))
     })
-    .await
+    .await?;
+    serde_json::from_str(&body).map_err(|e| format!("invalid /state JSON from sidecar: {e}"))
+}
+
+/// Per-process shell identity for the banner claim. A fresh shell process
+/// carries a new generation, so the runtime can reset its feed even after a
+/// crash-relaunch shorter than the claim TTL (no stale-banner replay).
+fn shell_gen() -> String {
+    use std::sync::OnceLock;
+    static GEN: OnceLock<String> = OnceLock::new();
+    GEN.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{}-{:x}", std::process::id(), nanos)
+    })
+    .clone()
+}
+
+/// Heartbeat + notification pump, independent of WebView visibility: the deck
+/// polls `/state` every POLL_HEARTBEAT_S for the whole app lifetime, claims
+/// banner duty, and posts new sidecar feed entries natively. This is the ONLY
+/// poster (the frontend-facing `deck_state` command never posts), so no
+/// double banners; the claim dying with hidden windows was the reason this
+/// moved off the WebView-driven poll.
+fn start_notify_heartbeat(app: tauri::AppHandle) {
+    let permission = app.state::<AppState>().notify_permission.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(POLL_HEARTBEAT_S);
+        if !permission.load(Ordering::Relaxed) {
+            continue;
+        }
+        let state = app.state::<AppState>();
+        let d = match state.discovery.lock().unwrap().clone() {
+            Some(d) => d,
+            None => continue,
+        };
+        let body = match http::fetch_state(
+            &d.host,
+            d.port,
+            &d.token,
+            SIDECAR_TIMEOUT,
+            true,
+            Some(&shell_gen()),
+        ) {
+            Ok(body) => body,
+            Err(_) => continue,
+        };
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+            post_new_notifications(&app, &parsed, &state.notify_last_seq);
+        }
+    });
+}
+
+/// Post every sidecar feed entry above `last` as a native Herdeck banner (no
+/// sound — the runtime plays the per-event system sound itself via afplay).
+/// A feed seq smaller than `last` is a reset (source swap): adopt it silently.
+fn post_new_notifications(
+    app: &tauri::AppHandle,
+    state_json: &serde_json::Value,
+    last_seq: &Mutex<u64>,
+) {
+    use tauri_plugin_notification::NotificationExt;
+
+    let feed_seq = state_json
+        .pointer("/notify/seq")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let mut last = last_seq.lock().unwrap();
+    if feed_seq < *last {
+        *last = feed_seq;
+        return;
+    }
+    if let Some(items) = state_json.pointer("/notify/items").and_then(|v| v.as_array()) {
+        for item in items {
+            let seq = item.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
+            if seq <= *last {
+                continue;
+            }
+            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let body = item.get("body").and_then(|v| v.as_str()).unwrap_or("");
+            match app.notification().builder().title(title).body(body).show() {
+                Err(err) => {
+                    // Most likely the user revoked notification permission
+                    // mid-run: stop claiming banner duty so the runtime's
+                    // osascript fallback takes over (and keeps advancing its
+                    // own bookkeeping) instead of double-silencing alerts.
+                    eprintln!("herdeck: native notification failed: {err}");
+                    app.state::<AppState>()
+                        .notify_permission
+                        .store(false, Ordering::Relaxed);
+                }
+                Ok(()) => {}
+            }
+            *last = seq;
+        }
+    }
 }
 
 /// Proxy `GET /tile/{index}` → a `data:image/png;base64,…` URL (or `None` if the
@@ -2211,12 +2326,16 @@ pub fn run() {
         discovery,
         window_state: Arc::new(Mutex::new(startup)),
         deck_always_on_top: Arc::new(Mutex::new(deck_always_on_top)),
+        notify_last_seq: Arc::new(Mutex::new(0)),
+        notify_permission: Arc::new(AtomicBool::new(false)),
     };
+    let notify_permission = state.notify_permission.clone();
 
     tauri::Builder::default()
         .manage(state)
         .manage(TrayHandles::default())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -2249,6 +2368,22 @@ pub fn run() {
             show_deck_context_menu
         ])
         .setup(move |app| {
+            // Mark banner duty as claimed up-front (the desktop plugin's
+            // permission model is synchronous and defaults to granted on
+            // macOS); the runtime stops its osascript fallback as soon as the
+            // first /state poll with the claim header arrives.
+            {
+                use tauri_plugin_notification::{NotificationExt, PermissionState};
+                let granted = app
+                    .notification()
+                    .request_permission()
+                    .map(|state| state == PermissionState::Granted)
+                    .unwrap_or(false);
+                notify_permission.store(granted, Ordering::Relaxed);
+            }
+            // The notification pump runs for the whole app lifetime, detached
+            // from WebView visibility (deck windows may hide into the tray).
+            start_notify_heartbeat(app.handle().clone());
             // NEITHER window is declared in tauri.conf.json: both are built here
             // so both get an initialization script, which stamps the window's
             // role on `<html>` before its first paint. The frontend routes its

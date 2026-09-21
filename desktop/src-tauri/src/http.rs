@@ -22,12 +22,25 @@ use std::time::Duration;
 /// Build an HTTP/1.0 GET request. `Connection: close` means the response ends at
 /// EOF, so we can read it whole without parsing `Content-Length`.
 pub fn build_get_request(host: &str, path_and_query: &str) -> String {
-    format!(
+    build_get_request_with_headers(host, path_and_query, &[])
+}
+
+/// Same as `build_get_request` with extra headers (`(name, value)` pairs).
+pub fn build_get_request_with_headers(
+    host: &str,
+    path_and_query: &str,
+    headers: &[(&str, &str)],
+) -> String {
+    let mut req = format!(
         "GET {path_and_query} HTTP/1.0\r\n\
          Host: {host}\r\n\
-         Accept: application/json\r\n\
-         Connection: close\r\n\r\n"
-    )
+         Accept: application/json\r\n"
+    );
+    for (name, value) in headers {
+        req.push_str(&format!("{name}: {value}\r\n"));
+    }
+    req.push_str("Connection: close\r\n\r\n");
+    req
 }
 
 /// Split a raw HTTP response into (status_code, body).
@@ -293,8 +306,7 @@ pub fn percent_encode_segment(s: &str) -> String {
 /// Standard base64 (with padding). Inline to avoid a new crate dependency; used
 /// to frame proxied PNG bytes as a `data:` URL the WebView `<img>` can render.
 pub fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -320,9 +332,52 @@ pub fn base64_encode(input: &[u8]) -> String {
 // --- token-injecting proxy layer (the sidecar token is added here, never in JS) ---
 
 /// Proxy `GET /state`, returning the JSON body. The token is injected as a query
-/// param exactly as the sidecar (and web.py) expects.
-pub fn fetch_state(host: &str, port: u16, token: &str, timeout: Duration) -> Result<String, String> {
-    http_get(host, port, &format!("/state?token={token}"), timeout)
+/// param exactly as the sidecar (and web.py) expects. `claim` adds the
+/// `X-Herdeck-Shell` header — the shell's "I post the banners" heartbeat.
+pub fn fetch_state(
+    host: &str,
+    port: u16,
+    token: &str,
+    timeout: Duration,
+    claim: bool,
+    shell_gen: Option<&str>,
+) -> Result<String, String> {
+    let mut headers: Vec<(&str, String)> = Vec::new();
+    if claim {
+        headers.push(("X-Herdeck-Shell", "1".to_string()));
+        if let Some(gen) = shell_gen {
+            headers.push(("X-Herdeck-Shell-Gen", gen.to_string()));
+        }
+    }
+    let owned: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let req = build_get_request_with_headers(host, &format!("/state?token={token}"), &owned);
+    http_get_request(host, port, &req, timeout)
+}
+
+/// Issue an already-built GET request and return the body.
+pub fn http_get_request(
+    host: &str,
+    port: u16,
+    req: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let addr = format!("{host}:{port}");
+    let mut stream = TcpStream::connect(&addr).map_err(|e| format!("connect {addr}: {e}"))?;
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("write to sidecar: {e}"))?;
+    let mut raw = String::new();
+    stream
+        .read_to_string(&mut raw)
+        .map_err(|e| format!("read from sidecar: {e}"))?;
+    let (code, body) = parse_http_response(&raw)?;
+    if (200..300).contains(&code) {
+        Ok(body)
+    } else {
+        Err(format!("sidecar returned HTTP {code}"))
+    }
 }
 
 /// Proxy a PNG endpoint (`/tile/{i}` or `/panel`) and frame it as a `data:` URL.
@@ -346,7 +401,12 @@ pub fn fetch_image(
 }
 
 /// Proxy `GET /setup`, injecting the token as a query param. Returns the JSON body.
-pub fn fetch_setup(host: &str, port: u16, token: &str, timeout: Duration) -> Result<String, String> {
+pub fn fetch_setup(
+    host: &str,
+    port: u16,
+    token: &str,
+    timeout: Duration,
+) -> Result<String, String> {
     http_get(host, port, &format!("/setup?token={token}"), timeout)
 }
 
@@ -360,7 +420,14 @@ pub fn post_setup_connect(
     body: &str,
     timeout: Duration,
 ) -> Result<(u16, String), String> {
-    http_post_json(host, port, "/setup/connect", ("X-Herdeck-Token", token), body, timeout)
+    http_post_json(
+        host,
+        port,
+        "/setup/connect",
+        ("X-Herdeck-Token", token),
+        body,
+        timeout,
+    )
 }
 
 /// Proxy `POST /press/{index}` with the token in the `X-Herdeck-Token` header,
@@ -384,6 +451,17 @@ pub fn send_press(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_get_request_with_headers_appends_custom_headers() {
+        let req = build_get_request_with_headers(
+            "127.0.0.1",
+            "/state?token=abc",
+            &[("X-Herdeck-Shell", "1")],
+        );
+        assert!(req.contains("X-Herdeck-Shell: 1\r\n"));
+        assert!(req.ends_with("Connection: close\r\n\r\n"));
+    }
 
     #[test]
     fn build_get_request_has_request_line_and_close() {
@@ -435,7 +513,13 @@ mod tests {
 
     #[test]
     fn build_post_json_request_carries_body_headers_and_length() {
-        let req = build_post_json_request("127.0.0.1", "/config", "X-Herdeck-Token", "tok", "{\"a\":1}");
+        let req = build_post_json_request(
+            "127.0.0.1",
+            "/config",
+            "X-Herdeck-Token",
+            "tok",
+            "{\"a\":1}",
+        );
         assert!(req.starts_with("POST /config HTTP/1.0\r\n"));
         assert!(req.contains("X-Herdeck-Token: tok\r\n"));
         assert!(req.contains("Content-Type: application/json\r\n"));

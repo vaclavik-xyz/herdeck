@@ -133,6 +133,65 @@ def test_state_has_required_shape():
     assert set(summ) == {"agents", "blocked", "working", "idle", "done", "waiting"}
 
 
+# --- shell notification claim + notify feed (live source) --------------------
+
+# The feed/claim integration lives in tests/test_deckapp_live.py (needs a
+# LiveSource); the plain notify-module behaviour is covered here.
+
+
+def test_runtime_sink_records_feed_and_plays_sound_when_shell_claims(monkeypatch):
+    import herdeck.notify as notify_mod
+
+    played, scripted = [], []
+    feed = notify_mod.NotificationFeed()
+    sink = notify_mod.runtime_sink(
+        feed,
+        lambda: True,
+        sound_player=lambda name: played.append(name) or True,
+        fallback=lambda t, b, s: scripted.append((t, b, s)),
+    )
+    sink("codex done", "p0", "Hero")
+    sink("t", "b", False)
+    assert [i["title"] for i in feed.state()["items"]] == ["codex done", "t"]
+    assert played == ["Hero"]
+    assert scripted == []
+
+
+def test_runtime_sink_falls_back_to_osascript_without_shell(monkeypatch):
+    import herdeck.notify as notify_mod
+
+    played, scripted = [], []
+    feed = notify_mod.NotificationFeed()
+    sink = notify_mod.runtime_sink(
+        feed,
+        lambda: False,
+        sound_player=lambda name: played.append(name) or True,
+        fallback=lambda t, b, s: scripted.append((t, b, s)),
+    )
+    sink("claude blocked", "p1", "Glass")
+    assert scripted == [("claude blocked", "p1", "Glass")]
+    assert played == []
+    assert feed.state()["seq"] == 1
+
+
+def test_play_sound_file_rejects_unknown_names(monkeypatch, tmp_path):
+    import herdeck.notify as notify_mod
+
+    # Redirect the sound dir to a fake tree: the test must be OS-independent
+    # (Linux CI has no /System/Library/Sounds).
+    sounds = tmp_path / "Sounds"
+    sounds.mkdir()
+    (sounds / "Hero.aiff").write_bytes(b"id3")
+    monkeypatch.setattr(notify_mod, "_SOUND_DIR", sounds)
+
+    runs = []
+    monkeypatch.setattr(notify_mod.subprocess, "run", lambda cmd, **kw: runs.append(cmd))
+    assert notify_mod.play_sound_file("Nonexistent") is False
+    assert runs == []
+    assert notify_mod.play_sound_file("Hero") is True
+    assert runs[0][1].endswith("Hero.aiff")
+
+
 def test_state_maps_local_session_names_to_collision_safe_runtime_ids():
     app = make_app()
     runner = type("Runner", (), {"_herdeck_session_name": "default"})()

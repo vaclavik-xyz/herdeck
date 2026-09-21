@@ -117,6 +117,81 @@ def test_telegram_sink_includes_topic_when_configured():
     assert sent[0]["message_thread_id"] == "456"
 
 
+def test_deckapp_sink_honors_backends_and_disabled():
+    import types
+
+    from herdeck import notify as notify_mod
+
+    feed = notify_mod.NotificationFeed()
+
+    def make_config(backends, enabled=True, token="tok", chat="chat"):
+        tg = types.SimpleNamespace(token_env="T", chat_id=chat, message_thread_id=None)
+        return types.SimpleNamespace(
+            notifications=types.SimpleNamespace(
+                enabled=enabled, backends=list(backends), telegram=tg
+            )
+        )
+
+    def make_feed():
+        return notify_mod.NotificationFeed()
+
+    # notifications disabled: nothing fires at all.
+    calls = []
+    feed = make_feed()
+    sink = notify_mod.deckapp_sink(
+        feed,
+        lambda: True,
+        make_config(["macos"], enabled=False),
+        sound_player=lambda name: calls.append(("sound", name)) or True,
+        getenv=lambda name: "tok",
+        telegram_factory=lambda *a, **kw: (lambda t, b, s: calls.append(("tg", t))),
+    )
+    sink("t", "b", "Glass")
+    assert calls == [] and feed.state()["items"] == []
+
+    # macos only: feed + sound, no telegram.
+    calls = []
+    feed = make_feed()
+    sink = notify_mod.deckapp_sink(
+        feed,
+        lambda: True,
+        make_config(["macos"]),
+        sound_player=lambda name: calls.append(("sound", name)) or True,
+        getenv=lambda name: "tok",
+        telegram_factory=lambda *a, **kw: (lambda t, b, s: calls.append(("tg", t))),
+    )
+    sink("t", "b", "Glass")
+    assert calls == [("sound", "Glass")] and feed.state()["items"]
+
+    # telegram only: telegram fires, no sound, no feed recording.
+    calls = []
+    feed = make_feed()
+    sink = notify_mod.deckapp_sink(
+        feed,
+        lambda: True,
+        make_config(["telegram"]),
+        sound_player=lambda name: calls.append(("sound", name)) or True,
+        getenv=lambda name: "tok",
+        telegram_factory=lambda *a, **kw: (lambda t, b, s: calls.append(("tg", t))),
+    )
+    sink("t", "b", "Glass")
+    assert calls == [("tg", "t")] and feed.state()["items"] == []
+
+    # both: sound + telegram.
+    calls = []
+    feed = make_feed()
+    sink = notify_mod.deckapp_sink(
+        feed,
+        lambda: True,
+        make_config(["macos", "telegram"]),
+        sound_player=lambda name: calls.append(("sound", name)) or True,
+        getenv=lambda name: "tok",
+        telegram_factory=lambda *a, **kw: (lambda t, b, s: calls.append(("tg", t))),
+    )
+    sink("t", "b", "Glass")
+    assert calls == [("sound", "Glass"), ("tg", "t")]
+
+
 def test_composite_sink_calls_all_even_if_one_raises():
     from herdeck.notify import composite_sink
 
