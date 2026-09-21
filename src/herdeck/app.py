@@ -81,12 +81,31 @@ def newly_entered(status, prev, states):
 
 
 def event_notification_body(agent: AgentState, *, multi_server: bool) -> str:
-    """One-line notification body for an event alert (shared app + deckapp)."""
-    label = agent.repo or agent.label
-    parts = [
-        part for part in (agent.branch, agent.key.server_id if multi_server else None) if part
-    ]
-    return f"{label}" + (f" · {' · '.join(parts)}" if parts else "")
+    """One-line notification body for an event alert (shared app + deckapp).
+
+    Leads with the Herdr workspace label the user actually sees (editable in
+    Herdr), then the tab and the session title — not the raw server/pane ids.
+    Falls back to the repo/pane label, and to the branch when no tab/title
+    context exists (older bridges). The server id is appended only in
+    multi-server setups.
+    """
+    head = (agent.workspace or agent.repo or agent.label).strip()
+    parts = [head]
+    for candidate in (agent.tab.strip(), agent.title.strip()):
+        if not candidate:
+            continue
+        cf = candidate.casefold()
+        # Drop only a candidate already CONTAINED in a kept part (a tab/title
+        # duplicating the workspace). The reverse (head being a prefix of the
+        # candidate) must NOT drop it: "monitor: log watcher" vs head
+        # "monitor" is the session's only distinguishing detail.
+        if not any(cf in p.casefold() for p in parts):
+            parts.append(candidate)
+    if len(parts) == 1 and agent.branch and agent.branch.strip() != head:
+        parts.append(agent.branch.strip())
+    if multi_server:
+        parts.append(agent.key.server_id)
+    return " · ".join(parts)
 
 
 # Agent states that can fire a notification, mapped to their Status. Keys must

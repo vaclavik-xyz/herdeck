@@ -1358,6 +1358,56 @@ def test_multi_server_body_includes_server_id():
     assert notifier.calls[0][1] == "p0 · main · prod"
 
 
+def test_body_respects_workspace_tab_and_title():
+    from herdeck.app import event_notification_body
+    from herdeck.model import AgentKey
+
+    def st(sid, pane, *, workspace="", tab="", title="", repo="", branch="", label=None):
+        return AgentState(
+            AgentKey(sid, pane),
+            "codex",
+            label or pane,
+            Status.DONE,
+            repo=repo,
+            branch=branch,
+            workspace=workspace,
+            tab=tab,
+            title=title,
+        )
+
+    # Herdr names win over raw ids, tab and session title follow.
+    s = st("srv", "p0", workspace="GB10 monitoring", tab="main", title="Log watcher", repo="tmp", branch="dev")
+    assert event_notification_body(s, multi_server=False) == "GB10 monitoring · main · Log watcher"
+
+    # No tab/title -> branch keeps the context (legacy bridge shape).
+    s = st("srv", "p0", repo="tmp", branch="dev")
+    assert event_notification_body(s, multi_server=False) == "tmp · dev"
+
+    # Tab duplicating the workspace head is dropped; branch only as fallback.
+    s = st("srv", "p0", workspace="tmp", tab="tmp", title="", repo="tmp", branch="dev")
+    assert event_notification_body(s, multi_server=False) == "tmp · dev"
+
+    # Whitespace-padded Herdr fields normalize; equal tab/title collapse.
+    s = st("srv", "p0", workspace=" GB10 ", tab=" GB10 ", title=" GB10 ", repo="tmp", branch="dev")
+    assert event_notification_body(s, multi_server=False) == "GB10 · dev"
+
+    # A tab dedupes against an already-appended candidate; distinct title stays.
+    s = st("srv", "p0", workspace="GB10", tab="main", title="main", repo="tmp", branch="dev")
+    assert event_notification_body(s, multi_server=False) == "GB10 · main"
+
+    # A title that only CONTAINS the head is kept (it adds real detail).
+    s = st("srv", "p0", workspace="monitor", tab="", title="monitor: log watcher", repo="tmp")
+    assert event_notification_body(s, multi_server=False) == "monitor · monitor: log watcher"
+
+    # Branch equal to the head must not duplicate.
+    s = st("srv", "p0", workspace="tmp", tab="", title="", repo="tmp", branch="tmp")
+    assert event_notification_body(s, multi_server=False) == "tmp"
+
+    # Multi-server keeps the server id last.
+    s = st("srv", "p0", workspace="GB10 monitoring", tab="main", title="x", repo="tmp", branch="dev")
+    assert event_notification_body(s, multi_server=True).endswith(" · srv")
+
+
 # --- shell claim + notify feed -----------------------------------------------
 
 
