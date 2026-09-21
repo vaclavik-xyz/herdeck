@@ -654,18 +654,18 @@ def test_command_to_msg_start():
     assert m["type"] == "start" and m["name"] == "claude" and m["argv"] == ["claude"]
 
 
-def test_newly_blocked_detects_transition_and_avoids_dup():
-    from herdeck.app import newly_blocked
+def test_newly_entered_detects_transition_and_avoids_dup():
+    from herdeck.app import newly_entered
     from herdeck.model import AgentKey, AgentState, Status
 
     k = AgentKey("s", "p1")
     s_block = [AgentState(k, "claude", "api", Status.BLOCKED)]
     s_work = [AgentState(k, "claude", "api", Status.WORKING)]
-    to, seen = newly_blocked(set(), s_block)  # first time -> notify
+    to, seen = newly_entered(Status.BLOCKED, set(), s_block)  # first time -> notify
     assert k in to and k in seen
-    to2, seen2 = newly_blocked(seen, s_block)  # same blocked -> no dup
+    to2, seen2 = newly_entered(Status.BLOCKED, seen, s_block)  # same blocked -> no dup
     assert to2 == set() and seen2 == seen
-    to3, seen3 = newly_blocked(seen2, s_work)  # left blocked -> reset
+    to3, seen3 = newly_entered(Status.BLOCKED, seen2, s_work)  # left blocked -> reset
     assert to3 == set() and k not in seen3
 
 
@@ -734,7 +734,7 @@ def test_app_blocked_notifier_receives_agent_state_and_metadata():
         [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)],
     )
 
-    assert calls == [(AgentKey("dev", "p1"), "claude", "api", True, False)]
+    assert calls == [(AgentKey("dev", "p1"), "claude", "api", "Glass", False)]
 
 
 async def test_app_default_blocked_notification_scheduler_works_inside_running_loop():
@@ -759,7 +759,7 @@ async def test_app_default_blocked_notification_scheduler_works_inside_running_l
     )
     await asyncio.sleep(0)
 
-    assert calls == [(AgentKey("dev", "p1"), "api", True, False)]
+    assert calls == [(AgentKey("dev", "p1"), "api", "Glass", False)]
 
 
 async def test_app_direct_blocked_notifier_exception_is_consumed_by_default_scheduler():
@@ -889,8 +889,8 @@ def test_apply_config_rearms_current_blocked_agents_for_interactive_runtime_only
     )
 
     assert calls == [
-        ("legacy", "default", AgentKey("dev", "p1"), "api", True, False),
-        ("interactive", "mobile", AgentKey("dev", "p1"), "api", True, False),
+        ("legacy", "default", AgentKey("dev", "p1"), "api", "Glass", False),
+        ("interactive", "mobile", AgentKey("dev", "p1"), "api", "Glass", False),
     ]
 
 
@@ -928,7 +928,7 @@ def test_apply_config_does_not_rearm_interactive_when_blocked_notifications_disa
     new_cfg.notifications.on = []
     app._apply_config(new_cfg)
 
-    assert calls == [(AgentKey("dev", "p1"), "api", True, False)]
+    assert calls == [(AgentKey("dev", "p1"), "api", "Glass", False)]
 
 
 def test_apply_config_preserves_direct_blocked_notifier():
@@ -1002,6 +1002,114 @@ def test_app_does_not_notify_when_blocked_not_in_on():
     )
     app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED)])
     assert calls == []
+
+
+def test_app_notifies_on_done_transition_with_done_sound():
+    from herdeck.notify import Notifier
+
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.on = ["blocked", "done"]
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: calls.append((t, b, s))),
+    )
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.DONE)])
+    assert calls == [("claude done", "api", "Hero")]  # default done sound
+    # Still done -> no duplicate; leaving done re-arms.
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.DONE)])
+    assert len(calls) == 1
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.DONE)])
+    assert len(calls) == 2
+
+
+def test_app_done_not_notified_unless_enabled_in_on():
+    from herdeck.notify import Notifier
+
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True  # on stays ["blocked"]
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: calls.append((t, b, s))),
+    )
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.DONE)])
+    assert calls == []
+
+
+def test_app_sound_switch_overrides_per_event_sounds():
+    from herdeck.notify import Notifier
+
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.on = ["blocked", "done"]
+    cfg.notifications.sounds = {"blocked": "Basso", "done": "Pop"}
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: calls.append((t, b, s))),
+    )
+    app.handle_snapshot(
+        "dev",
+        [
+            AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED),
+            AgentState(AgentKey("dev", "p2"), "codex", "web", Status.DONE),
+        ],
+    )
+    assert calls == [("claude", "api", "Basso"), ("codex done", "web", "Pop")]
+    cfg.notifications.sound = False
+    app.handle_snapshot(
+        "dev",
+        [
+            AgentState(AgentKey("dev", "p3"), "claude", "api3", Status.BLOCKED),
+            AgentState(AgentKey("dev", "p4"), "codex", "web4", Status.DONE),
+        ],
+    )
+    assert calls[-2:] == [("claude", "api3", False), ("codex done", "web4", False)]
+
+
+def test_app_done_bypasses_blocked_notifier_chain():
+    from herdeck.notify import Notifier
+
+    class CaptureBlocked:
+        def __init__(self):
+            self.calls = []
+
+        async def notify_blocked(
+            self, agent, *, body, sound: bool | str, multi_server: bool
+        ) -> None:
+            self.calls.append((agent.key, body, sound, multi_server))
+
+    blocked_calls = []
+    capture = CaptureBlocked()
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.on = ["blocked", "done"]
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: blocked_calls.append((t, b, s))),
+        blocked_notifier=capture,
+    )
+    app.handle_snapshot(
+        "dev",
+        [
+            AgentState(AgentKey("dev", "p1"), "claude", "api", Status.BLOCKED),
+            AgentState(AgentKey("dev", "p2"), "codex", "web", Status.DONE),
+        ],
+    )
+    assert [(key.pane_id, body) for key, body, *_ in capture.calls] == [("p1", "api")]
+    assert blocked_calls == [("codex done", "web", "Hero")]
 
 
 def test_build_notifier_respects_config():

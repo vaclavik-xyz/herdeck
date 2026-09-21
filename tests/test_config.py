@@ -234,6 +234,27 @@ def test_notifications_parsed(tmp_path):
     assert cfg.notifications.on == ["blocked", "done"]
 
 
+def test_notifications_sounds_default_differ_per_event(tmp_path):
+    cfg = load_config(_write(tmp_path, '[deck]\ngrid="5x3"\n'))
+    assert cfg.notifications.sounds == {"blocked": "Glass", "done": "Hero"}
+
+
+def test_notifications_sounds_override_merges_over_defaults(tmp_path):
+    cfg = load_config(
+        _write(tmp_path, '[notifications]\nsounds={ blocked = "Basso" }\n')
+    )
+    assert cfg.notifications.sounds == {"blocked": "Basso", "done": "Hero"}
+
+
+def test_notifications_sounds_reject_unknown_event_and_blank_name(tmp_path):
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, '[notifications]\nsounds={ idle = "Glass" }\n'))
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, '[notifications]\nsounds={ done = "" }\n'))
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, '[notifications]\nsounds="Glass"\n'))
+
+
 def test_notifications_backends_default_macos(tmp_path):
     cfg = load_config(_write(tmp_path, '[deck]\ngrid="5x3"\n'))
     assert cfg.notifications.backends == ["macos"]

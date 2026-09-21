@@ -709,16 +709,23 @@ Qoder, and Qwen. A custom type uses a generated letter mark unless
 Custom `[answer_profiles.<name>]` sections can be defined in the base config and overridden per-profile via `[profiles.<name>.answer_profiles.<type>]`. The built-in `claude`, `codex`, and `default` types are always available for profile overrides even when omitted from the base config.
 
 ## Notifications
-Get notified when an agent enters the **blocked** state, so you don't have to
-watch the deck. Configure notifications inline in the base config or as a profile
+Get notified when an agent enters the **blocked** state (waiting for your input)
+or the **done** state (task finished), so you don't have to watch the deck.
+Configure notifications inline in the base config or as a profile
 overlay:
 
 ```toml
 [notifications]
 enabled = true
 backends = ["macos", "telegram"]   # run both, or just one
-on = ["blocked"]
+on = ["blocked", "done"]
 sound = true
+
+# Optional: which macOS system sound plays per event. A missing key falls
+# back to the default (Glass for "blocked", Hero for "done").
+[notifications.sounds]
+blocked = "Basso"
+done = "Hero"
 
 # Only needed when "telegram" is a backend:
 [notifications.telegram]
@@ -754,8 +761,10 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   to send text to that specific agent. Herdeck accepts inbound actions only from
   `allowed_user_ids`, only in the configured `chat_id`, and only in `message_thread_id`
   when one is configured.
-- Notifications fire once per blocked episode (re-arming after the agent leaves
-  `blocked`) and never block the UI loop.
+- Notifications fire once per event episode (re-arming after the agent leaves
+  the notified state) and never block the UI loop. **done** alerts are plain
+  one-way notifications (no Telegram approve buttons); the sound differs per
+  event by default (Glass for blocked, Hero for done).
 
 ## Security
 - The bridge WebSocket is authenticated with a bearer token (constant-time

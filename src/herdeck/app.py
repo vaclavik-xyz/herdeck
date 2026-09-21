@@ -72,12 +72,20 @@ def _now() -> float:
 log = logging.getLogger("herdeck")
 
 
-def newly_blocked(prev, states):
-    """Keys that just entered BLOCKED (vs prev), and the updated blocked set.
-    Eligibility resets when a key leaves BLOCKED, so a re-block notifies again."""
-    blocked_now = {s.key for s in states if s.status is Status.BLOCKED}
-    to_notify = blocked_now - prev
-    return to_notify, blocked_now
+def newly_entered(status, prev, states):
+    """Keys that just entered `status` (vs prev), and the updated seen set.
+    Eligibility resets when a key leaves the status, so re-entry notifies again."""
+    entered_now = {s.key for s in states if s.status is status}
+    to_notify = entered_now - prev
+    return to_notify, entered_now
+
+
+# Agent states that can fire a notification, mapped to their Status. Keys must
+# match [notifications] `on` entries (validated against config.NOTIFY_EVENTS).
+NOTIFY_EVENT_STATUSES: dict[str, Status] = {
+    "blocked": Status.BLOCKED,
+    "done": Status.DONE,
+}
 
 
 def _build_notifier(
@@ -255,7 +263,7 @@ class App:
                 BlockedNotificationRuntime(LegacyBlockedNotifier(self.notifier))
             )
         self._notify_schedule = notify_schedule or _default_notify_schedule
-        self._blocked_keys: set = set()
+        self._notify_keys: dict[str, set] = {event: set() for event in NOTIFY_EVENT_STATUSES}
         self.orch = Orchestrator(config, slots=deck.slot_count())
         self._pin_store = pin_store
         self._load_pins()
@@ -407,39 +415,60 @@ class App:
             self._invalidate_read()
 
     def _maybe_notify(self, states: list[AgentState], scope: set) -> None:
-        """Fire notifications for keys that just entered BLOCKED.
+        """Fire notifications for keys that just entered a notified state.
 
         `scope` is the set of tracked keys these `states` are authoritative for
         (a whole server for snapshots, a single key for events) — only that
-        scope is reconciled, so other servers' blocked keys are never dropped.
+        scope is reconciled, so other servers' keys are never dropped.
         """
         if not self.config.notifications.enabled:
             return
-        if "blocked" not in self.config.notifications.on:
-            return
-        prev_here = self._blocked_keys & scope
-        to, blocked_here = newly_blocked(prev_here, states)
-        self._blocked_keys = (self._blocked_keys - scope) | blocked_here
-        multi = len(self.config.overview_order) > 1
-        sound = self.config.notifications.sound
-        for s in (x for x in states if x.key in to):
-            self._schedule_blocked_notify(
-                s,
-                self._blocked_notification_body(s, multi_server=multi),
-                sound,
-                multi,
-            )
+        for event, status in NOTIFY_EVENT_STATUSES.items():
+            if event not in self.config.notifications.on:
+                continue
+            tracked = self._notify_keys[event]
+            to, entered_here = newly_entered(status, tracked & scope, states)
+            self._notify_keys[event] = (tracked - scope) | entered_here
+            multi = len(self.config.overview_order) > 1
+            sound = self._event_sound(event)
+            for s in (x for x in states if x.key in to):
+                self._schedule_notify(
+                    event,
+                    s,
+                    self._event_notification_body(s, multi_server=multi),
+                    sound,
+                    multi,
+                )
 
-    def _schedule_blocked_notify(
-        self, agent: AgentState, body: str, sound: bool, multi_server: bool
+    def _event_sound(self, event: str) -> bool | str:
+        """Sound for an event: False (silent) or the sound name to play."""
+        if not self.config.notifications.sound:
+            return False
+        return self.config.notifications.sounds.get(event, True)
+
+    def _schedule_notify(
+        self,
+        event: str,
+        agent: AgentState,
+        body: str,
+        sound: bool | str,
+        multi_server: bool,
     ) -> None:
-        self._notify_schedule(
-            self.blocked_notifier.notify_blocked(
-                agent, body=body, sound=sound, multi_server=multi_server
+        if event == "blocked":
+            self._notify_schedule(
+                self.blocked_notifier.notify_blocked(
+                    agent, body=body, sound=sound, multi_server=multi_server
+                )
             )
+            return
+        # Other events (done) are simple one-way alerts: the interactive
+        # blocked chain (Telegram approve buttons, prompt reads) makes no
+        # sense for them, so they go straight to the plain sinks.
+        self._notify_schedule(
+            asyncio.to_thread(self.notifier.notify, f"{agent.agent_type} done", body, sound)
         )
 
-    def _blocked_notification_body(self, agent: AgentState, *, multi_server: bool) -> str:
+    def _event_notification_body(self, agent: AgentState, *, multi_server: bool) -> str:
         label = agent.repo or agent.label
         parts = [
             part for part in (agent.branch, agent.key.server_id if multi_server else None) if part
@@ -455,13 +484,13 @@ class App:
         if not callable(notify):
             return
         multi = len(self.config.overview_order) > 1
-        sound = self.config.notifications.sound
+        sound = self._event_sound("blocked")
         for agent in self.orch.agents():
             if agent.status is Status.BLOCKED:
                 self._notify_schedule(
                     notify(
                         agent,
-                        body=self._blocked_notification_body(agent, multi_server=multi),
+                        body=self._event_notification_body(agent, multi_server=multi),
                         sound=sound,
                         multi_server=multi,
                     )
@@ -492,7 +521,8 @@ class App:
             for state in states
             if self._terminal_identity_changed(self.orch.get_agent(state.key), state)
         }
-        self._blocked_keys.difference_update(recycled)
+        for keys in self._notify_keys.values():
+            keys.difference_update(recycled)
         self._semantic_ready_servers.add(server_id)
         key = self.orch.drill_key()
         self.orch.apply_snapshot(server_id, states)
@@ -501,7 +531,13 @@ class App:
                 self._invalidate_read()
             else:
                 self._invalidate_read_if_unblocked(key)
-        self._maybe_notify(states, {k for k in self._blocked_keys if k.server_id == server_id})
+        tracked_scope = {
+            k
+            for keys in self._notify_keys.values()
+            for k in keys
+            if k.server_id == server_id
+        }
+        self._maybe_notify(states, tracked_scope)
         self._refresh()
 
     def handle_event(self, server_id: str, state: AgentState, epoch: int | None = None) -> None:
@@ -514,7 +550,8 @@ class App:
             self._bump_semantic_targets((state.key,))
         recycled = self._terminal_identity_changed(previous, state)
         if recycled:
-            self._blocked_keys.discard(state.key)
+            for keys in self._notify_keys.values():
+                keys.discard(state.key)
         self.orch.apply_event(server_id, state)
         if self.orch.is_drill_pane(server_id, state.key.pane_id):
             if recycled:
@@ -812,7 +849,10 @@ class App:
         self.orch.update_config(new_config)
         self._load_pins()
         allowed_servers = {s.id for s in new_config.servers}
-        self._blocked_keys = {k for k in self._blocked_keys if k.server_id in allowed_servers}
+        self._notify_keys = {
+            event: {k for k in keys if k.server_id in allowed_servers}
+            for event, keys in self._notify_keys.items()
+        }
         restarted = set(self._update_connectors(new_config) or [])
         affected = (old_servers - allowed_servers) | restarted
         for server_id in affected:
@@ -821,7 +861,10 @@ class App:
             self._close_server_terminals(server_id)
         if restarted:
             self.orch.clear_server_state(restarted)
-            self._blocked_keys = {k for k in self._blocked_keys if k.server_id not in restarted}
+            self._notify_keys = {
+                event: {k for k in keys if k.server_id not in restarted}
+                for event, keys in self._notify_keys.items()
+            }
         for server_id in restarted:
             self.orch.set_connection(server_id, False)
         self._rearm_interactive_blocked_alerts()

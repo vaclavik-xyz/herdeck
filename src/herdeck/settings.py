@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .config import (
     AGENT_ORDERS,
+    DEFAULT_EVENT_SOUNDS,
     DEFAULT_MACROS,
     DEFAULT_PROFILES,
     DEFAULT_REQUIRE_CONFIRM,
@@ -31,6 +32,7 @@ from .config import (
     _parse_grid,
     _parse_profile,
     _parse_telegram_config,
+    validate_event_sounds,
 )
 from .i18n import LANGUAGES
 
@@ -267,6 +269,7 @@ def _notifications_config(raw: dict | None) -> Notifications:
         on=list(raw.get("on", ["blocked"])),
         sound=raw.get("sound", True),
         backends=list(raw.get("backends", ["macos"])),
+        sounds={**DEFAULT_EVENT_SOUNDS, **validate_event_sounds(raw.get("sounds"))},
         telegram=telegram,
     )
 

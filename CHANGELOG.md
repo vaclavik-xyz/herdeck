@@ -7,6 +7,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Notifications can now fire on the **done** state too (`on = ["blocked", "done"]`).
+  Each event plays its own macOS system sound by default (Glass for blocked,
+  Hero for done), overridable per event via a new `[notifications.sounds]` table.
+  Done alerts stay one-way (no Telegram approve buttons).
 - Agent tiles now show a non-empty Herdr pane title on their secondary line,
   falling back to the existing tab and branch context when no title is set.
   `title` is also available as an explicit tile-line token.

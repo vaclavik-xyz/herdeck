@@ -33,6 +33,12 @@ class Macro:
     text: str  # text sent to the agent (via herdr agent.send)
 
 
+# Agent states that can trigger a notification ([notifications] `on`), and the
+# default macOS system sound played for each (override via [notifications.sounds]).
+NOTIFY_EVENTS: tuple[str, ...] = ("blocked", "done")
+DEFAULT_EVENT_SOUNDS: dict[str, str] = {"blocked": "Glass", "done": "Hero"}
+
+
 @dataclass
 class TelegramConfig:
     token_env: str  # env var holding the bot token (never the token itself)
@@ -49,6 +55,11 @@ class Notifications:
     on: list[str] = field(default_factory=lambda: ["blocked"])
     sound: bool = True
     backends: list[str] = field(default_factory=lambda: ["macos"])
+    # Per-event sound name (a macOS system sound played with the alert); the
+    # `sound` switch stays the master toggle. Defaults are in
+    # DEFAULT_EVENT_SOUNDS; an explicit [notifications.sounds] table merges
+    # over them, so one key can be overridden without retyping the rest.
+    sounds: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_EVENT_SOUNDS))
     telegram: TelegramConfig | None = None
 
 
@@ -277,14 +288,48 @@ def _parse_telegram_config(tg_raw: dict) -> TelegramConfig | None:
     )
 
 
+def validate_event_sounds(raw) -> dict[str, str]:
+    """Validate an explicit [notifications.sounds] table (event → sound name).
+
+    Returns only the explicitly configured entries; callers merge them over
+    DEFAULT_EVENT_SOUNDS. Shared by the TOML loader and the GUI config service
+    so both reject the same malformed payloads.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError("notifications.sounds must be a table of event = sound name")
+    unknown = sorted(k for k in raw if k not in NOTIFY_EVENTS)
+    if unknown:
+        raise ConfigError(
+            f"notifications.sounds has unknown event(s) {unknown}; want {list(NOTIFY_EVENTS)}"
+        )
+    bad = [k for k, v in raw.items() if not isinstance(v, str) or not v.strip()]
+    if bad:
+        raise ConfigError(
+            f"notifications.sounds.{bad[0]} must be a non-empty sound name"
+            " (a macOS system sound, e.g. Glass, Hero, Basso)"
+        )
+    return dict(raw)
+
+
 def parse_notifications(n: dict) -> Notifications:
     tg_raw = n.get("telegram")
     telegram = _parse_telegram_config(tg_raw) if isinstance(tg_raw, dict) else None
+    on = list(n.get("on", ["blocked"]))
+    unknown_events = [e for e in on if e not in NOTIFY_EVENTS]
+    if unknown_events:
+        log.warning(
+            "unknown [notifications] on event(s) %s; supported: %s",
+            unknown_events,
+            list(NOTIFY_EVENTS),
+        )
     return Notifications(
         enabled=n.get("enabled", False),
-        on=list(n.get("on", ["blocked"])),
+        on=on,
         sound=n.get("sound", True),
         backends=list(n.get("backends", ["macos"])),
+        sounds={**DEFAULT_EVENT_SOUNDS, **validate_event_sounds(n.get("sounds"))},
         telegram=telegram,
     )
 

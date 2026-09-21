@@ -62,8 +62,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     },
     notifications: {
       enabled: "Master switch for notifications. When off, no notifications are sent (default: off).",
-      sound: "Whether notifications also play a sound; when off, macOS gets a silent notification and Telegram a silent message.",
-      on: "Which agent states trigger a notification; only 'blocked' (agent waiting for your input) works for now.",
+      sound: "Whether a sound plays with the alert; off = silent. Per-event sounds (default Glass/Hero) live in [notifications.sounds] in the TOML.",
+      on: "Which agent states trigger a notification: 'blocked' (agent waiting for your input) and/or 'done' (agent finished its task).",
       backends: "Where notifications go: macos (Notification Center) and/or telegram (a bot message, e.g. to your phone).",
       token: "Name under which the Telegram bot token is stored (env var or keychain), not the token itself.",
       chat_id: "Numeric ID of the Telegram chat or group where the bot sends blocked-agent notifications.",
@@ -155,8 +155,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     },
     notifications: {
       enabled: "Hlavní vypínač upozornění. Když je vypnutý, žádná oznámení se neposílají (výchozí: vypnuto).",
-      sound: "Zda upozornění zazní i zvukem; při vypnutí přijde na macOS tiché oznámení a na Telegram tichá zpráva.",
-      on: "Které stavy agenta spustí upozornění; zatím funguje jen „blocked“ (agent čeká na váš vstup).",
+      sound: "Zda oznámení zazní i zvukem; vypnuto = ticho. Zvuky per event (výchozí Glass/Hero) se nastaví v [notifications.sounds] v TOML.",
+      on: "Které stavy agenta spustí upozornění: „blocked“ (agent čeká na váš vstup) a/nebo „done“ (agent dokončil úkol).",
       backends: "Kam se upozornění doručí: macos (oznamovací centrum) a/nebo telegram (zpráva botem, třeba na mobil).",
       token: "Název, pod kterým je uložen token Telegram bota (proměnná prostředí či klíčenka), ne token samotný.",
       chat_id: "Číselné ID Telegram chatu či skupiny, kam bot posílá upozornění na zablokované agenty.",

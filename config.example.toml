@@ -40,8 +40,13 @@ language = "en"
 [notifications]
 enabled = false
 backends = ["macos"]
-on = ["blocked"]
+on = ["blocked"]         # events that alert you: "blocked" and/or "done"
 sound = true
+# Per-event macOS system sound (played with the alert). A missing key falls
+# back to the default: Glass for "blocked", Hero for "done".
+# [notifications.sounds]
+# blocked = "Basso"
+# done = "Ping"
 
 [safety]
 approve_always = true

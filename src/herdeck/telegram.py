@@ -261,7 +261,7 @@ class TelegramInteractor:
         return self._inbound_disabled
 
     async def notify_blocked(
-        self, agent: AgentState, *, body: str, sound: bool, multi_server: bool
+        self, agent: AgentState, *, body: str, sound: bool | str, multi_server: bool
     ) -> None:
         record = self._store.reserve(agent.key, terminal_id=agent.terminal_id)
         reset_confirmation = getattr(self._control, "reset_confirmation", None)
@@ -282,7 +282,7 @@ class TelegramInteractor:
                 self._client.send_message,
                 chat_id=self._chat_id,
                 text=text,
-                sound=sound,
+                sound=bool(sound),
                 message_thread_id=self._message_thread_id,
                 reply_markup=markup,
             )

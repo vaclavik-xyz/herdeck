@@ -762,3 +762,17 @@ def test_usage_config_rejects_blank_or_malformed_provider_ids():
         "alibaba-coding-plan",
         "zai",
     ]
+
+
+def test_notifications_payload_sounds_merged_and_validated():
+    from herdeck.settings import _notifications_config
+
+    assert _notifications_config({"enabled": True}).sounds == {"blocked": "Glass", "done": "Hero"}
+    assert _notifications_config({"sounds": {"done": "Pop"}}).sounds == {
+        "blocked": "Glass",
+        "done": "Pop",
+    }
+    with pytest.raises(ConfigError, match="notifications.sounds"):
+        _notifications_config({"sounds": {"idle": "Glass"}})
+    with pytest.raises(ConfigError, match="notifications.sounds"):
+        _notifications_config({"sounds": {"done": ""}})

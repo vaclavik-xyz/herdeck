@@ -5,6 +5,19 @@ def test_escape_applescript_quotes_and_backslashes():
     assert escape_applescript('a"b\\c') == 'a\\"b\\\\c'
 
 
+def test_macos_sink_sound_name_and_switch(monkeypatch):
+    import herdeck.notify as notify_mod
+
+    scripts = []
+    monkeypatch.setattr(notify_mod.subprocess, "run", lambda cmd, **kw: scripts.append(cmd[2]))
+    notify_mod._macos_sink("claude done", "api", "Hero")
+    notify_mod._macos_sink("t", "b", True)
+    notify_mod._macos_sink("t", "b", False)
+    assert scripts[0] == 'display notification "api" with title "claude done" sound name "Hero"'
+    assert 'sound name "Glass"' in scripts[1]  # True keeps the historical default
+    assert "sound name" not in scripts[2]
+
+
 def test_noop_notifier_never_raises():
     NoopNotifier().notify("t", "b", sound=True)  # no exception, no side effect
 

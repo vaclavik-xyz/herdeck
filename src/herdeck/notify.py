@@ -43,11 +43,14 @@ def escape_applescript(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _macos_sink(title: str, body: str, sound: bool) -> None:
+def _macos_sink(title: str, body: str, sound: bool | str) -> None:
     t, b = escape_applescript(title), escape_applescript(body)
     script = f'display notification "{b}" with title "{t}"'
+    # `sound` is either a macOS system sound name or a plain on/off switch
+    # (True keeps the historical "Glass" default).
     if sound:
-        script += ' sound name "Glass"'
+        name = sound if isinstance(sound, str) else "Glass"
+        script += f' sound name "{escape_applescript(name)}"'
     subprocess.run(
         ["osascript", "-e", script],
         timeout=5,
@@ -69,11 +72,11 @@ def make_telegram_sink(
     message_thread_id: int | None = None,
     *,
     post: Callable[[str, dict[str, str]], None] = _http_post,
-) -> Callable[[str, str, bool], None]:
+) -> Callable[[str, str, bool | str], None]:
     """Sink that posts the alert to a Telegram chat via the Bot API."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
-    def sink(title: str, body: str, sound: bool) -> None:
+    def sink(title: str, body: str, sound: bool | str) -> None:
         fields = {
             "chat_id": str(chat_id),
             "text": f"{title}\n{body}",
@@ -88,11 +91,11 @@ def make_telegram_sink(
 
 
 def composite_sink(
-    sinks: list[Callable[[str, str, bool], None]],
-) -> Callable[[str, str, bool], None]:
+    sinks: list[Callable[[str, str, bool | str], None]],
+) -> Callable[[str, str, bool | str], None]:
     """Fan out to multiple sinks; one failing sink never stops the others."""
 
-    def sink(title: str, body: str, sound: bool) -> None:
+    def sink(title: str, body: str, sound: bool | str) -> None:
         for s in sinks:
             try:
                 s(title, body, sound)
@@ -105,10 +108,10 @@ def composite_sink(
 class Notifier:
     """Fires notifications via an injectable sink; never raises."""
 
-    def __init__(self, sink: Callable[[str, str, bool], None] = _macos_sink):
+    def __init__(self, sink: Callable[[str, str, bool | str], None] = _macos_sink):
         self._sink = sink
 
-    def notify(self, title: str, body: str, sound: bool = False) -> None:
+    def notify(self, title: str, body: str, sound: bool | str = False) -> None:
         try:
             self._sink(title, body, sound)
         except Exception as exc:
@@ -122,7 +125,12 @@ class NoopNotifier(Notifier):
 
 class BlockedAlertNotifier(Protocol):
     async def notify_blocked(
-        self, agent: AgentState, *, body: str, sound: bool, multi_server: bool
+        self,
+        agent: AgentState,
+        *,
+        body: str,
+        sound: bool | str,
+        multi_server: bool,
     ) -> None: ...
 
 
@@ -140,7 +148,12 @@ class BlockedNotificationRuntime:
 
 class NoopBlockedNotifier:
     async def notify_blocked(
-        self, agent: AgentState, *, body: str, sound: bool, multi_server: bool
+        self,
+        agent: AgentState,
+        *,
+        body: str,
+        sound: bool | str,
+        multi_server: bool,
     ) -> None:
         return None
 
@@ -150,7 +163,12 @@ class LegacyBlockedNotifier:
         self._notifier = notifier
 
     async def notify_blocked(
-        self, agent: AgentState, *, body: str, sound: bool, multi_server: bool
+        self,
+        agent: AgentState,
+        *,
+        body: str,
+        sound: bool | str,
+        multi_server: bool,
     ) -> None:
         await asyncio.to_thread(self._notifier.notify, agent.agent_type, body, sound)
 
@@ -160,7 +178,12 @@ class CompositeBlockedNotifier:
         self._notifiers = notifiers
 
     async def notify_blocked(
-        self, agent: AgentState, *, body: str, sound: bool, multi_server: bool
+        self,
+        agent: AgentState,
+        *,
+        body: str,
+        sound: bool | str,
+        multi_server: bool,
     ) -> None:
         for notifier in self._notifiers:
             try:
