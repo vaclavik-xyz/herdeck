@@ -63,6 +63,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     notifications: {
       enabled: "Master switch for notifications. When off, no notifications are sent (default: off).",
       sound: "Whether a sound plays with the alert; off = silent. Per-event sounds (default Glass/Hero) live in [notifications.sounds] in the TOML.",
+      sounds_blocked: "macOS system sound for a blocked agent; empty = default Glass. Names like Basso, Funk, Ping, Submarine.",
+      sounds_done: "macOS system sound for a finished agent; empty = default Hero. Names like Pop, Purr, Sosumi, Tink.",
       on: "Which agent states trigger a notification: 'blocked' (agent waiting for your input) and/or 'done' (agent finished its task).",
       backends: "Where notifications go: macos (Notification Center) and/or telegram (a bot message, e.g. to your phone).",
       token: "Name under which the Telegram bot token is stored (env var or keychain), not the token itself.",
@@ -156,6 +158,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     notifications: {
       enabled: "Hlavní vypínač upozornění. Když je vypnutý, žádná oznámení se neposílají (výchozí: vypnuto).",
       sound: "Zda oznámení zazní i zvukem; vypnuto = ticho. Zvuky per event (výchozí Glass/Hero) se nastaví v [notifications.sounds] v TOML.",
+      sounds_blocked: "Systémový zvuk macOS při zablokovaném agentovi; prázdné = výchozí Glass. Názvy jako Basso, Funk, Ping, Submarine.",
+      sounds_done: "Systémový zvuk macOS po dokončení úkolu; prázdné = výchozí Hero. Názvy jako Pop, Purr, Sosumi, Tink.",
       on: "Které stavy agenta spustí upozornění: „blocked“ (agent čeká na váš vstup) a/nebo „done“ (agent dokončil úkol).",
       backends: "Kam se upozornění doručí: macos (oznamovací centrum) a/nebo telegram (zpráva botem, třeba na mobil).",
       token: "Název, pod kterým je uložen token Telegram bota (proměnná prostředí či klíčenka), ne token samotný.",

@@ -142,4 +142,114 @@ describe("NotificationsSection", () => {
       unmount(instance);
     }
   });
+
+  it("edits base per-event sounds and reverts blank fields to defaults", () => {
+    const target = document.createElement("div");
+    const instance = mount(NotificationsSectionHarness, {
+      target,
+      props: { initial: parseConfig({})! },
+    });
+    try {
+      const done = inputFor(target, "sounds_done");
+      done.value = "Pop";
+      done.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+
+      const blocked = inputFor(target, "sounds_blocked");
+      blocked.value = "Basso";
+      blocked.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+
+      expect(JSON.parse(target.querySelector(".sounds-payload")?.textContent ?? "null")).toEqual({
+        done: "Pop",
+        blocked: "Basso",
+      });
+
+      // Clearing a field removes the key so the backend default applies again.
+      blocked.value = "";
+      blocked.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      expect(JSON.parse(target.querySelector(".sounds-payload")?.textContent ?? "null")).toEqual({
+        done: "Pop",
+      });
+
+      // Clearing the remaining field too drops the sounds key entirely (the
+      // backend treats a present table as an explicit override).
+      done.value = "";
+      done.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      expect(target.querySelector(".sounds-payload")?.textContent).toBe("");
+    } finally {
+      unmount(instance);
+    }
+  });
+
+  it("keeps profile sound overrides as strings and clears them on blank input", () => {
+    const target = document.createElement("div");
+    const instance = mount(NotificationsSectionHarness, {
+      target,
+      props: {
+        initial: parseConfig({
+          profiles: { night: {} },
+        })!,
+        editProfile: "night",
+      },
+    });
+    try {
+      const done = overrideFor(target, "sounds_done");
+      (done.querySelector(".seg button:nth-child(2)") as HTMLButtonElement).click();
+      flushSync();
+      const doneInput = done.querySelector("input") as HTMLInputElement;
+      expect(doneInput.value).toBe("Hero"); // seeded with the inherited default
+      doneInput.value = "Tink";
+      doneInput.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+
+      const draft = JSON.parse(target.querySelector(".profile-sounds")?.textContent ?? "null");
+      expect(draft).toEqual({ done: "Tink" });
+
+      // Whitespace is trimmed so the osascript sound name stays valid.
+      doneInput.value = " Tink ";
+      doneInput.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      expect(
+        JSON.parse(target.querySelector(".profile-sounds")?.textContent ?? "null"),
+      ).toEqual({ done: "Tink" });
+
+      // A whitespace-only input counts as blank and clears the override.
+      // an emptied sounds map drops out of the profile payload entirely.
+      doneInput.value = "";
+      doneInput.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      expect(target.querySelector(".profile-sounds")?.textContent).toBe("");
+    } finally {
+      unmount(instance);
+    }
+  });
+
+  it("seeds a sound override from the inherited base value, not just defaults", () => {
+    const target = document.createElement("div");
+    const instance = mount(NotificationsSectionHarness, {
+      target,
+      props: {
+        initial: parseConfig({
+          base: { notifications: { sounds: { done: "Pop" } } },
+          profiles: { night: {} },
+        })!,
+        editProfile: "night",
+      },
+    });
+    try {
+      const done = overrideFor(target, "sounds_done");
+      // Inherit state shows the base value, not the Glass/Hero default.
+      expect(done.textContent).toContain("Pop");
+      // Toggling to override seeds the input with the inherited value.
+      (done.querySelector(".seg button:nth-child(2)") as HTMLButtonElement).click();
+      flushSync();
+      const doneInput = done.querySelector("input") as HTMLInputElement;
+      expect(doneInput.value).toBe("Pop");
+    } finally {
+      unmount(instance);
+    }
+  });
 });

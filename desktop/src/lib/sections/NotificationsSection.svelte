@@ -7,7 +7,7 @@
   import TokenSecretField from "../fields/TokenSecretField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import {
-    commandTransport as cfgTransport, getAt, setAt, listFieldState, setListField,
+    commandTransport as cfgTransport, getAt, setAt, removeAt, listFieldState, setListField,
     secretFlag, type ListFieldState, type ConfigPayload,
     inheritedFor, inheritedForPath, overrideValue, overrideValuePath, overrideState,
     setOverride, clearOverride, setOverridePath, clearOverridePath, updateBaseTelegram,
@@ -33,6 +33,7 @@
     backends: [...defaults.notifications.backends],
   };
   const TELEGRAM_DEFAULTS: Record<string, unknown> = defaults.notifications.telegram;
+  const SOUNDS_DEFAULTS: Record<string, string> = defaults.notifications.sounds as Record<string, string>;
 
   // Tooltips for every field (current language) — required for each labelled
   // field (enforced by sections.help.test.ts); catalog lives in help.ts.
@@ -41,6 +42,11 @@
   const LM = defineMessages({
     en: {
       group_telegram: "Telegram bot",
+      group_sounds: "Per-event sounds",
+      sounds_hint:
+        "Empty = default (blocked: Glass, done: Hero). Any macOS system sound name, e.g. Basso, Funk, Ping, Submarine.",
+      sounds_hint_overlay:
+        "Empty = inherit the base/default value. Any macOS system sound name, e.g. Basso, Funk, Ping, Submarine.",
       tg_hint: "Empty field = inherit (a token is never saved blank).",
       none: "(none)",
       origin_own: "custom",
@@ -51,6 +57,11 @@
     },
     cs: {
       group_telegram: "Telegram bot",
+      group_sounds: "Zvuky dle stavu",
+      sounds_hint:
+        "Prázdné = výchozí (blocked: Glass, done: Hero). Libovolný systémový zvuk macOS, např. Basso, Funk, Ping, Submarine.",
+      sounds_hint_overlay:
+        "Prázdné = zdědit z base/výchozí. Libovolný systémový zvuk macOS, např. Basso, Funk, Ping, Submarine.",
       tg_hint: "Prázdné pole = zdědit (token se nikdy neuloží prázdný).",
       none: "(nic)",
       origin_own: "vlastní",
@@ -68,6 +79,26 @@
   const onState = $derived(listFieldState(payload, "base", "notifications", "on"));
   const backends = $derived((getAt(payload, "base", "notifications", "backends") as string[]) ?? NOTIF_LIST_DEFAULTS.backends);
   const backendsState = $derived(listFieldState(payload, "base", "notifications", "backends"));
+
+  // Per-event sound names ([notifications.sounds]); empty field = the default.
+  const sounds = $derived(((): { blocked: string; done: string } => {
+    const v = getAt(payload, "base", "notifications", "sounds");
+    const s = v != null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+    // Trim hand-written TOML values too — whitespace would silently kill the sound.
+    return { blocked: String(s.blocked ?? "").trim(), done: String(s.done ?? "").trim() };
+  })());
+
+  function setSounds(key: "blocked" | "done", v: string): void {
+    const s = { ...((getAt(payload, "base", "notifications", "sounds") as Record<string, unknown> | undefined) ?? {}) };
+    if (v.trim() === "") delete s[key]; // blank field reverts to the default sound
+    else s[key] = v.trim(); // a stray space would silently kill the osascript sound
+    // An emptied map is absent rather than `{}` — the backend treats a present
+    // table as an explicit override, mirroring updateBaseTelegram's pruning.
+    payload = Object.keys(s).length === 0
+      ? removeAt(payload, "base", "notifications", "sounds")
+      : setAt(payload, "base", "notifications", "sounds", s);
+    onChange();
+  }
 
   const telegram = $derived(((): {
     token_env: string;
@@ -222,6 +253,46 @@
   function setTgAllowedUsers(raw: string): void {
     setTgScalar("allowed_user_ids", parseIntegerList(raw));
   }
+
+  // --- overlay per-event sounds (nested dict, per-subfield via path) ---
+  function soPath(k: string): string[] {
+    return [SEC, "sounds", k];
+  }
+  function soValue(k: string): string {
+    const v = overrideValuePath(payload, prof, soPath(k));
+    return v !== undefined ? String(v).trim() : String(inheritedForPath(payload, prof, soPath(k)) ?? "").trim();
+  }
+  function soInheritedRaw(k: string): unknown {
+    return inheritedForPath(payload, prof, soPath(k)) ?? SOUNDS_DEFAULTS[k];
+  }
+  function soState(k: string): "inherit" | "override" {
+    return overrideValuePath(payload, prof, soPath(k)) === undefined ? "inherit" : "override";
+  }
+  function soInheritedDisplay(k: string): string {
+    const value = soInheritedRaw(k);
+    return value == null ? "" : String(value);
+  }
+  function setSo(k: string, v: string): void {
+    const clean = v.trim(); // whitespace would silently kill the osascript sound
+    payload = {
+      ...payload,
+      profiles:
+        clean === ""
+          ? clearOverridePath(payload.profiles, prof, soPath(k))
+          : setOverridePath(payload.profiles, prof, soPath(k), clean),
+    };
+    onChange();
+  }
+  function setSoState(k: string, state: "inherit" | "override"): void {
+    payload = {
+      ...payload,
+      profiles:
+        state === "inherit"
+          ? clearOverridePath(payload.profiles, prof, soPath(k))
+          : setOverridePath(payload.profiles, prof, soPath(k), soInheritedRaw(k)),
+    };
+    onChange();
+  }
 </script>
 
 {#if overlay}
@@ -233,6 +304,15 @@
   </OverrideField>
   <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} customSeed={effectiveList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} resetKey={`${prof}:${reloadRev}:notifications:on`} onchange={(s, l) => setOvList("on", s, l)} />
   <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} customSeed={effectiveList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} resetKey={`${prof}:${reloadRev}:notifications:backends`} onchange={(s, l) => setOvList("backends", s, l)} />
+  <FieldGroup title={lm.group_sounds}>
+    <p class="hint">{lm.sounds_hint_overlay}</p>
+    <OverrideField label="sounds_blocked" help={HELP.sounds_blocked} state={soState("blocked")} inheritedDisplay={soInheritedDisplay("blocked")} onstate={(s) => setSoState("blocked", s)}>
+      <TextField label="" value={soValue("blocked")} oninput={(v) => setSo("blocked", v)} />
+    </OverrideField>
+    <OverrideField label="sounds_done" help={HELP.sounds_done} state={soState("done")} inheritedDisplay={soInheritedDisplay("done")} onstate={(s) => setSoState("done", s)}>
+      <TextField label="" value={soValue("done")} oninput={(v) => setSo("done", v)} />
+    </OverrideField>
+  </FieldGroup>
   <FieldGroup title={lm.group_telegram}>
     <p class="hint">{lm.tg_hint}</p>
     <TokenSecretField
@@ -263,6 +343,11 @@
   <BooleanField label="sound" help={HELP.sound} value={sound} onchange={(v) => set("sound", v)} />
   <TriStateListField label="on" help={HELP.on} state={onState} list={on} customSeed={NOTIF_LIST_DEFAULTS.on} defaultHint={NOTIF_LIST_DEFAULTS.on.join(" · ")} resetKey={`base:${reloadRev}:notifications:on`} onchange={(s, l) => setTri("on", s, l)} />
   <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} resetKey={`base:${reloadRev}:notifications:backends`} onchange={(s, l) => setTri("backends", s, l)} />
+  <FieldGroup title={lm.group_sounds}>
+    <p class="hint">{lm.sounds_hint}</p>
+    <TextField label="sounds_blocked" help={HELP.sounds_blocked} value={sounds.blocked} oninput={(v) => setSounds("blocked", v)} />
+    <TextField label="sounds_done" help={HELP.sounds_done} value={sounds.done} oninput={(v) => setSounds("done", v)} />
+  </FieldGroup>
   <FieldGroup title={lm.group_telegram}>
     <TokenSecretField label="token_env" help={HELP.token} value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />
     <TextField label="chat_id" help={HELP.chat_id} value={telegram.chat_id} oninput={(v) => setTelegram("chat_id", v)} />

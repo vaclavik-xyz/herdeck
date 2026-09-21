@@ -45,6 +45,7 @@
     "enabled": false,
     "on": ["blocked"],
     "sound": true,
+    "sounds": { "blocked": "Glass", "done": "Hero" },
     "backends": ["macos"],
     "telegram": {
       "message_thread_id": 0,
