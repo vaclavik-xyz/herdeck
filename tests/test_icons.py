@@ -1160,3 +1160,72 @@ def test_monogram_for_an_evicted_hash_is_not_pinned_in_the_render_caches(tmp_pat
     assert name != fallback
     with open(os.path.join(str(tmp_path / "cache"), name), "rb") as f:
         assert _close(_px(f.read(), (35, 35)), RED[:3])
+
+
+def _zero_png(side):
+    buf = _io.BytesIO()
+    Image.new("L", (side, side), 0).save(buf, "PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _png_ico(png, side_byte=0):
+    import struct
+
+    header = struct.pack("<HHH", 0, 1, 1)
+    entry = struct.pack("<BBBBHHII", side_byte, side_byte, 0, 0, 1, 32, len(png), 6 + 16)
+    return header + entry + png
+
+
+def _spy_on_load(monkeypatch):
+    from PIL import ImageFile
+
+    calls = []
+    real = ImageFile.ImageFile.load
+
+    def spy(self):
+        calls.append(self.size)
+        return real(self)
+
+    monkeypatch.setattr(ImageFile.ImageFile, "load", spy)
+    return calls
+
+
+def test_decompression_bomb_png_falls_back_without_decoding(tmp_path, monkeypatch, caplog):
+    from herdeck.icons import PROJECT_ICON_MAX_SIDE
+
+    side = PROJECT_ICON_MAX_SIDE * 4  # far over the cap, still a tiny file
+    data = _zero_png(side)
+    assert len(data) < 256 * 1024
+    store = ProjectIconStore()
+    h = _stored(store, data)
+    p = _project_provider(tmp_path, store)
+    calls = _spy_on_load(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="herdeck.icons"):
+        assert p._decode_project_icon(h, store.get(h)) is None
+    assert calls == []  # rejected from the header, pixels never decoded
+    monkeypatch.undo()
+    broken = p.render_tile_bytes(_project_tile(project_icon=h))
+    mono = p.render_tile_bytes(_project_tile(project_icon=None))
+    assert Image.open(_io.BytesIO(broken)).tobytes() == Image.open(_io.BytesIO(mono)).tobytes()
+    assert sum("could not be decoded" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_decompression_bomb_inside_an_ico_frame_is_rejected(tmp_path, monkeypatch):
+    from herdeck.icons import PROJECT_ICON_MAX_SIDE
+
+    # The ICO directory claims 256x256 but the embedded PNG frame is huge.
+    data = _png_ico(_zero_png(PROJECT_ICON_MAX_SIDE * 2))
+    assert len(data) < 256 * 1024
+    store = ProjectIconStore()
+    h = _stored(store, data, "image/x-icon")
+    p = _project_provider(tmp_path, store)
+    calls = _spy_on_load(monkeypatch)
+    assert p._decode_project_icon(h, store.get(h)) is None
+    assert calls == []
+
+
+def test_png_icon_within_the_pixel_cap_still_decodes(tmp_path):
+    store = ProjectIconStore()
+    h = _stored(store, _png_ico(_img_bytes(RED, size=(64, 64)), side_byte=64), "image/x-icon")
+    p = _project_provider(tmp_path, store)
+    assert p._decode_project_icon(h, store.get(h)) is not None

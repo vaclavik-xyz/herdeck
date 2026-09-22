@@ -6,11 +6,12 @@ import logging
 import math
 import os
 import re
+import struct
 import time
 from collections import OrderedDict
 from collections.abc import Callable
 
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageStat
 
 from .driver.base import COLORS, PanelView
 from .project_icons import ProjectIconStore, StoredIcon, default_store
@@ -335,8 +336,6 @@ def _is_light_monochrome(img: Image.Image) -> bool:
     """Is this glyph a white/near-white mark on transparency (the shape every
     built-in mark has)? A full-colour user override must NOT be flattened to a
     dark silhouette by the solid-fill contrast flip."""
-    from PIL import ImageStat
-
     alpha = img.getchannel("A")
     mask = alpha.point(lambda v: 255 if v > 32 else 0)
     if not mask.getbbox():
@@ -531,9 +530,60 @@ def _monogram_image(name: str) -> Image.Image:
     return _round_corners(img)
 
 
-def _mean_rgb(img: Image.Image) -> tuple[int, int, int] | None:
-    from PIL import ImageStat
+# Largest project icon decoded (per side, as a w*h pixel budget). Favicons are
+# tiny; anything bigger is refused from its header and shows the monogram.
+PROJECT_ICON_MAX_SIDE = 2048
+PROJECT_ICON_MAX_PIXELS = PROJECT_ICON_MAX_SIDE * PROJECT_ICON_MAX_SIDE
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_ICO_MAGIC = b"\x00\x00\x01\x00"
 
+
+def _check_dims(size: tuple[int, int]) -> None:
+    w, h = size
+    if w * h > PROJECT_ICON_MAX_PIXELS:
+        raise ValueError(f"image is {w}x{h}, over the {PROJECT_ICON_MAX_PIXELS}-pixel cap")
+
+
+def _ico_frame_dims(data: bytes) -> list[tuple[int, int]]:
+    """Real sizes of an ICO's frames, read from each frame's own header. The
+    ICO directory caps at 256x256 but an embedded PNG frame can be any size,
+    and Pillow decodes a frame inside ``Image.open`` itself, so this parses
+    the directory by hand."""
+    dims = []
+    if len(data) < 6:
+        return dims
+    count = struct.unpack("<H", data[4:6])[0]
+    for i in range(count):
+        entry = data[6 + 16 * i : 22 + 16 * i]
+        if len(entry) < 16:
+            break
+        offset = struct.unpack("<I", entry[12:16])[0]
+        head = data[offset : offset + 24]
+        if head[:8] == _PNG_MAGIC and len(head) >= 24:
+            dims.append(struct.unpack(">II", head[16:24]))
+        elif len(head) >= 12:  # BITMAPINFOHEADER: height covers XOR + AND mask
+            w, h = struct.unpack("<ii", head[4:12])
+            dims.append((abs(w), abs(h) // 2))
+    return dims
+
+
+def _open_project_icon(data: bytes) -> Image.Image:
+    """``Image.open`` that refuses an oversized image before any pixel is
+    decoded (a 78 KB PNG can declare 9000x9000: >1 GB and 0.5 s to decode
+    inside the raster lock / on the Elgato loop)."""
+    if data[:4] == _ICO_MAGIC:
+        for size in _ico_frame_dims(data):
+            _check_dims(size)
+    im = Image.open(io.BytesIO(data))  # PNG/JPEG/...: header only
+    try:
+        _check_dims(im.size)
+    except Exception:
+        im.close()
+        raise
+    return im
+
+
+def _mean_rgb(img: Image.Image) -> tuple[int, int, int] | None:
     mask = img.getchannel("A").point(lambda v: 255 if v > 32 else 0)
     if not mask.getbbox():
         return None
@@ -1324,8 +1374,9 @@ class IconProvider:
                 # both raise for an SVG they cannot render -> monogram.
                 raw = self._rasterize(stored.data.decode("utf-8"), ICON_SIZE)
             else:
-                with Image.open(io.BytesIO(stored.data)) as im:
+                with _open_project_icon(stored.data) as im:
                     im.load()  # ICO: Pillow loads the largest frame
+                    _check_dims(im.size)  # the frame actually decoded
                     raw = im.convert("RGBA")
             return _normalize_project_image(raw)
         except Exception as exc:
