@@ -6,6 +6,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-09-22
+
+### Fixed
+- Runtime notification acknowledgements now include queue-to-delivery latency,
+  so delayed or duplicated desktop alerts can be diagnosed from the persistent
+  MacBench log even when the desktop app is launched by LaunchServices.
+
 ## [0.7.6] - 2026-09-22
 
 ### Fixed
