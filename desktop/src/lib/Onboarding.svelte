@@ -13,7 +13,7 @@
   import CheckCircle from "phosphor-svelte/lib/CheckCircle";
   import CloudArrowUp from "phosphor-svelte/lib/CloudArrowUp";
   import GearSix from "phosphor-svelte/lib/GearSix";
-  import { connectErrorMessage, hasConnectionInventory, shouldAutoReconnect } from "./onboardingClient";
+  import { autoReconnectDelayMs, connectErrorMessage, hasConnectionInventory, shouldAutoReconnect } from "./onboardingClient";
   import { defineMessages, fmt, locale } from "./i18n.svelte";
 
   let {
@@ -61,6 +61,8 @@
       sessions_h: "Connections",
       sessions_hint: "Choose the local sessions and saved bridge Herdeck should monitor.",
       saved_remote: "Saved remote bridge",
+      saved_remote_hint: "from your config",
+      select_one: "Select at least one connection.",
       apply_connections: "Save and connect",
       running: "running",
       stopped: "not running",
@@ -89,6 +91,8 @@
       sessions_h: "Připojení",
       sessions_hint: "Vyber lokální sessions a uložený bridge, které má Herdeck sledovat.",
       saved_remote: "Uložený vzdálený bridge",
+      saved_remote_hint: "z tvého configu",
+      select_one: "Vyber alespoň jedno připojení.",
       apply_connections: "Uložit a připojit",
       running: "běží",
       stopped: "neběží",
@@ -113,6 +117,7 @@
   const savedAvailable = $derived(status?.savedRemoteAvailable === true);
   const localSessions = $derived(status?.localSessions ?? []);
   const hasInventory = $derived(hasConnectionInventory(status));
+  const nothingSelected = $derived(selectedSessions.length === 0 && !includeSaved);
 
   $effect(() => {
     if (!status || seededSessions) return;
@@ -138,6 +143,26 @@
   // could ever fire. A manual re-onboarding session (onDismiss present) is
   // the user's explicit request to change things — never auto-connect there.
   let autoReconnectTried = $state(false);
+  // Re-arm on every herdr false->true transition (the promised "I'll reconnect
+  // automatically once it's up" must hold for the SECOND restart too), with a
+  // growing delay between automatic attempts so a flapping socket is not
+  // hammered. Plain (non-reactive) bookkeeping: only `autoReconnectTried`
+  // drives the effect below.
+  let autoAttempts = 0;
+  let lastAutoAttempt = 0;
+  let wasLocalAvailable = false;
+  let rearmTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const available = localAvailable;
+    if (available && !wasLocalAvailable && autoReconnectTried) {
+      const wait = autoReconnectDelayMs(autoAttempts) - (Date.now() - lastAutoAttempt);
+      clearTimeout(rearmTimer);
+      if (wait <= 0) autoReconnectTried = false;
+      else rearmTimer = setTimeout(() => { if (localAvailable) autoReconnectTried = false; }, wait);
+    }
+    wasLocalAvailable = available;
+  });
+  $effect(() => () => clearTimeout(rearmTimer));
   $effect(() => {
     if (
       shouldAutoReconnect({
@@ -150,6 +175,8 @@
       })
     ) {
       autoReconnectTried = true;
+      autoAttempts += 1;
+      lastAutoAttempt = Date.now();
       const remembered = status?.localSessions
         .filter((session) => session.selected)
         .map((session) => session.name) ?? [];
@@ -178,7 +205,7 @@
     if (r.ok) {
       onConnected();
     } else {
-      error = connectErrorMessage(r.error, status?.socketPath, locale.lang);
+      error = connectErrorMessage(r.error, status?.socketPath, locale.lang, r.code);
     }
   }
 
@@ -208,6 +235,7 @@
       : selectedSessions.filter((item) => item !== name);
   }
   function applyConnections(): void {
+    if (nothingSelected) return;
     void run(
       {
         choice: "sessions",
@@ -306,12 +334,17 @@
           <label>
             <input type="checkbox" bind:checked={includeSaved} />
             <span class:online={status?.mode === "remote" || status?.mode === "mixed"} class="dot"></span>
-            <span><strong>{lm.saved_remote}</strong><small>Tailscale</small></span>
+            <span><strong>{lm.saved_remote}</strong><small>{lm.saved_remote_hint}</small></span>
           </label>
         {/if}
       </div>
       <div class="session-actions">
-        <button class="primary" disabled={busy} onclick={applyConnections}>
+        <button
+          class="primary"
+          disabled={busy || nothingSelected}
+          title={nothingSelected ? lm.select_one : undefined}
+          onclick={applyConnections}
+        >
           {label(lm.apply_connections, "sessions")}
         </button>
         <button class="ghost remote-toggle" disabled={busy} onclick={() => (showRemote = !showRemote)}>
