@@ -877,6 +877,10 @@ class IconProvider:
         self._project_icons = project_icons if project_icons is not None else default_store()
         self._project_cache: OrderedDict[tuple[str, str], Image.Image] = OrderedDict()
         self._project_failed: set[str] = set()
+        # Set by _project_layer when a tile's icon bytes were missing (evicted
+        # between resolve() and the render): that frame is a monogram and must
+        # not be cached under the real icon's tile name (see _compose_checked).
+        self._render_uncacheable = False
 
     def _base_glyph(self, agent_type: str) -> Image.Image:
         """A monochrome mark for an agent type.
@@ -1012,9 +1016,10 @@ class IconProvider:
         img.alpha_composite(self._comet_overlay(ICON_SIZE, phase, RING_INSET, RING_WIDTH))
 
     # --- rich tile rendering (full tile incl. text; device label left empty) ---
-    def _static_sig(self, tile) -> list:
+    def _static_sig(self, tile, *, drop_icon: bool = False) -> list:
         """Every TileView input that shapes the STATIC part of a tile (all but
-        the animation phase/style)."""
+        the animation phase/style). ``drop_icon`` keys the tile as its monogram
+        (no icon hash) — where a fallback render for a missing icon belongs."""
         parts = [
             TILE_VERSION,
             getattr(tile, "pinned", False),
@@ -1033,19 +1038,22 @@ class IconProvider:
         parts.append(mode)
         if mode != "agent":
             parts.extend(
-                [getattr(tile, "project_icon", None) or "", getattr(tile, "project_name", "") or ""]
+                [
+                    "" if drop_icon else getattr(tile, "project_icon", None) or "",
+                    getattr(tile, "project_name", "") or "",
+                ]
             )
         if tile.server_tag or tile.server_accent:
             parts.extend([tile.server_tag, tile.server_accent])
         return parts
 
-    def _tile_name(self, tile) -> tuple[str, int | None]:
+    def _tile_name(self, tile, *, drop_icon: bool = False) -> tuple[str, int | None]:
         """The content-addressed cache filename for a TileView (and its bounded
         spinner phase). The rotation phase is bounded to SPINNER_FRAMES so the
         cache reuses a fixed set of frames instead of minting a new PNG per tick."""
         animation = _effective_animation(tile)
         spinner = _anim_phase(tile.spinner, animation)
-        sig_parts = self._static_sig(tile) + [spinner]
+        sig_parts = self._static_sig(tile, drop_icon=drop_icon) + [spinner]
         if spinner is not None:
             sig_parts.append(animation)
         sig = "|".join(str(x) for x in sig_parts)
@@ -1057,6 +1065,20 @@ class IconProvider:
         if tile.repo is not None:
             return self._compose_agent_tile(tile, spinner)
         return self._compose_label_tile(tile)
+
+    def _compose_checked(self, tile, spinner, name: str) -> tuple[Image.Image, str]:
+        """Compose a tile and return it with the name it may be cached under.
+
+        When the tile's project icon bytes were missing at render time (the
+        store evicted them after resolve()), the frame shows the monogram: it is
+        filed under the monogram's name (the hash dropped from the signature),
+        never under the real icon's, so the favicon appears as soon as its
+        bytes return instead of the fallback sticking in the render caches."""
+        self._render_uncacheable = False
+        img = self._compose(tile, spinner)
+        if self._render_uncacheable:
+            name = self._tile_name(tile, drop_icon=True)[0]
+        return img, name
 
     def render_tile(self, tile) -> str:
         """Render a full TileView (logo, repo, branch, status, time) to a cached
@@ -1079,7 +1101,9 @@ class IconProvider:
                 except OSError:
                     pass
             return name
-        self._compose(tile, spinner).convert("RGB").save(path)
+        img, name = self._compose_checked(tile, spinner, name)
+        path = os.path.join(self._cache_dir, name)
+        img.convert("RGB").save(path)
         self._writes_since_prune += 1
         if self._writes_since_prune >= _PRUNE_EVERY_WRITES:
             self._writes_since_prune = 0
@@ -1097,8 +1121,9 @@ class IconProvider:
         if cached is not None:
             self._bytes_cache.move_to_end(name)
             return cached
+        img, name = self._compose_checked(tile, spinner, name)
         buf = io.BytesIO()
-        self._compose(tile, spinner).convert("RGB").save(buf, "PNG")
+        img.convert("RGB").save(buf, "PNG")
         data = buf.getvalue()
         self._bytes_cache[name] = data
         while len(self._bytes_cache) > _BYTES_CACHE_MAX:
@@ -1323,6 +1348,8 @@ class IconProvider:
         if hit is not None:
             return hit
         base, cacheable = self._project_base(icon_hash, name)
+        if not cacheable:
+            self._render_uncacheable = True
         plate = _plate_for(base, bg_col)
         out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         if plate is not None:

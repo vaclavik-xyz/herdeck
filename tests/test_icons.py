@@ -1140,3 +1140,23 @@ def test_both_mode_keeps_the_agent_mark_and_adds_a_badge(tmp_path):
     box = (12, 12, 36, 36)  # the part of the logo box the badge does not cover
     assert agent.crop(box).tobytes() == both.crop(box).tobytes()
     assert _close(both.convert("RGB").getpixel((50, 50)), RED[:3])  # badge centre
+
+
+def test_monogram_for_an_evicted_hash_is_not_pinned_in_the_render_caches(tmp_path):
+    # the bytes can be LRU-evicted between resolve() and the render: the
+    # monogram drawn then must not stick under the real icon's tile name
+    data = _img_bytes(RED)
+    h = icon_hash(data)
+    store = ProjectIconStore()
+    p = _project_provider(tmp_path, store)
+    tile = _project_tile(project_icon=h)
+    assert not _close(_px(p.render_tile_bytes(tile), (35, 35)), RED[:3])
+    fallback = p.render_tile(tile)
+    # the fallback frame is filed under the monogram's name, not the icon's
+    assert fallback == p.render_tile(_project_tile(project_icon=None))
+    store.put(h, "image/png", data)
+    assert _close(_px(p.render_tile_bytes(tile), (35, 35)), RED[:3])
+    name = p.render_tile(tile)
+    assert name != fallback
+    with open(os.path.join(str(tmp_path / "cache"), name), "rb") as f:
+        assert _close(_px(f.read(), (35, 35)), RED[:3])
