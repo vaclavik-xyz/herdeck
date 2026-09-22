@@ -327,34 +327,91 @@ async fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::V
 /// banner-claim headers (`X-Herdeck-Shell`/`-Gen`, only with a granted
     /// permission) — a claim is just liveness; the actual posting of feed entries
 /// lives in `start_notify_pump` (single poster by design).
+///
+/// Long poll (C2): with `after` (JS `after`, the last `version` seen) the
+/// runtime holds the request until the version moves or `waitMs` (JS key; clamped
+/// to 25 s) passes. The HTTP read timeout then outlasts the wait by 6 s.
+///
+/// The body is handed to the WebView as the raw JSON text (`ipc::Response`), not
+/// parsed into a `Value` and re-serialised. One typed pass still validates it —
+/// never forward unchecked text as JSON — and reads the blocked-agent count for
+/// the tray tooltip on the way.
 #[tauri::command]
 async fn deck_state(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
+    after: Option<u64>,
+    wait_ms: Option<u64>,
+) -> Result<tauri::ipc::Response, String> {
     let d = current_discovery(&state)?;
     // The dedicated long-poll pump owns the claim. UI state polling must not
     // compete with it or keep a failed native-notification claim alive.
     let claim = false;
-    let body = match run_blocking(move || {
-        http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT, claim, Some(&shell_gen()))
-    })
-    .await
-    {
+    let timeout = state_request_timeout(after, wait_ms);
+    let fetch = move |d: Discovery| {
+        run_blocking(move || {
+            http::fetch_state_poll(
+                &d.host,
+                d.port,
+                &d.token,
+                timeout,
+                claim,
+                Some(&shell_gen()),
+                after,
+                wait_ms,
+            )
+        })
+    };
+    let body = match fetch(d).await {
         Ok(body) => body,
         Err(first_err) => {
             // Stale external sidecar (launchd restart → fresh port): re-read
             // runtime.json once and retry against the live runtime.
-            if rediscover_runtime(&state).is_none() {
+            let Some(d) = rediscover_runtime(&state) else {
                 return Err(first_err);
-            }
-            let d = current_discovery(&state)?;
-            run_blocking(move || {
-                http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT, claim, Some(&shell_gen()))
-            })
-            .await?
+            };
+            fetch(d).await?
         }
     };
-    serde_json::from_str(&body).map_err(|e| format!("invalid /state JSON from sidecar: {e}"))
+    let peek = peek_state(&body)?;
+    update_tray_blocked(&app, peek.blocked());
+    Ok(tauri::ipc::Response::new(body))
+}
+
+/// HTTP read timeout for a `/state` request: the plain proxy timeout, or — for
+/// a long poll — the (clamped) wait plus 6 s of transport headroom (C2).
+fn state_request_timeout(after: Option<u64>, wait_ms: Option<u64>) -> Duration {
+    match after {
+        Some(_) => {
+            let wait = wait_ms.unwrap_or(0).min(http::STATE_MAX_WAIT_MS);
+            SIDECAR_TIMEOUT.max(Duration::from_millis(wait) + Duration::from_secs(6))
+        }
+        None => SIDECAR_TIMEOUT,
+    }
+}
+
+/// The only `/state` fields the shell itself reads. Deserialising into this
+/// validates the whole document without building a `serde_json::Value`.
+#[derive(serde::Deserialize)]
+struct StatePeek {
+    #[serde(default)]
+    summary: Option<SummaryPeek>,
+}
+
+#[derive(serde::Deserialize)]
+struct SummaryPeek {
+    #[serde(default)]
+    blocked: Option<u64>,
+}
+
+impl StatePeek {
+    fn blocked(&self) -> Option<u64> {
+        self.summary.as_ref().and_then(|s| s.blocked)
+    }
+}
+
+fn peek_state(body: &str) -> Result<StatePeek, String> {
+    serde_json::from_str(body).map_err(|e| format!("invalid /state JSON from sidecar: {e}"))
 }
 
 /// Per-process shell identity for the banner claim. A fresh shell process
@@ -940,6 +997,75 @@ async fn deck_tile(
     .await
 }
 
+/// Custom URI scheme that serves tile/panel PNGs to the WebView straight from
+/// the discovered runtime, token injected here in Rust — no base64 `data:` URLs
+/// over IPC. The frontend builds image URLs in exactly this form:
+///
+/// - macOS / Linux: `herdeck://localhost/tile/<i>?v=<ver>` and
+///   `herdeck://localhost/panel?v=<ver>`
+/// - Windows (WebView2 maps custom schemes onto http): `http://herdeck.localhost/tile/<i>?v=<ver>`
+///   and `http://herdeck.localhost/panel?v=<ver>`
+///
+/// `v` is the tile/panel version from `/state`; it only makes the URL change
+/// when the image does and is not forwarded. A missing tile/panel is a 404
+/// (the `<img>` fires `error`), no discovery yet a 503, an unreachable runtime
+/// a 502. `deck_tile`/`deck_panel` stay as the fallback transport.
+const IMAGE_SCHEME: &str = "herdeck";
+
+/// Map a request path on the image scheme to the runtime endpoint it proxies —
+/// only `/panel` and `/tile/<index>` (decimal) are served, nothing else.
+fn image_proxy_path(uri_path: &str) -> Option<String> {
+    if uri_path == "/panel" {
+        return Some("/panel".to_string());
+    }
+    let index = uri_path.strip_prefix("/tile/")?;
+    if index.is_empty() || index.len() > 4 || !index.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    index.parse::<u32>().ok().map(|i| format!("/tile/{i}"))
+}
+
+fn image_response(status: u16, png: Vec<u8>) -> tauri::http::Response<Vec<u8>> {
+    let mut builder = tauri::http::Response::builder().status(status);
+    if status == 200 {
+        // Versions restart from zero when the runtime restarts, so the same
+        // `?v=` can name a different image later: revalidate rather than trust
+        // a cached copy. An unchanged `src` is never re-requested by the <img>
+        // anyway, which is where the saving is.
+        builder = builder
+            .header("Content-Type", "image/png")
+            .header("Cache-Control", "no-cache");
+    } else {
+        builder = builder.header("Cache-Control", "no-store");
+    }
+    builder.body(png).unwrap_or_else(|_| {
+        let mut resp = tauri::http::Response::new(Vec::new());
+        *resp.status_mut() = tauri::http::StatusCode::INTERNAL_SERVER_ERROR;
+        resp
+    })
+}
+
+/// Serve one image-scheme request (blocking — runs on the blocking pool).
+fn serve_image_request(app: &tauri::AppHandle, uri_path: &str) -> tauri::http::Response<Vec<u8>> {
+    let Some(path) = image_proxy_path(uri_path) else {
+        return image_response(404, Vec::new());
+    };
+    let Some(d) = app
+        .try_state::<AppState>()
+        .and_then(|s| s.discovery.lock().unwrap().clone())
+    else {
+        return image_response(503, Vec::new());
+    };
+    match http::fetch_png(&d.host, d.port, &path, &d.token, SIDECAR_TIMEOUT) {
+        Ok(Some(png)) => image_response(200, png),
+        Ok(None) => image_response(404, Vec::new()),
+        Err(err) => {
+            eprintln!("herdeck: image proxy {path}: {err}");
+            image_response(502, Vec::new())
+        }
+    }
+}
+
 /// Proxy `GET /panel` → a `data:` PNG URL (or `None` if there is no panel yet).
 #[tauri::command]
 async fn deck_panel(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
@@ -1365,6 +1491,67 @@ mod plan_tests {
         assert_ne!(en_b, cs_b);
         // Unknown languages fall back to English.
         assert_eq!(test_notification_texts("de"), (en_t, en_b));
+    }
+
+    #[test]
+    fn a_long_poll_state_request_outlasts_its_wait() {
+        assert_eq!(state_request_timeout(None, None), SIDECAR_TIMEOUT);
+        assert_eq!(state_request_timeout(None, Some(20_000)), SIDECAR_TIMEOUT);
+        // C2: read timeout must exceed wait_ms + 5 s.
+        assert!(state_request_timeout(Some(3), Some(20_000)) > Duration::from_millis(25_000));
+        // The runtime clamps to 25 s; so does the timeout, instead of hanging on.
+        assert_eq!(
+            state_request_timeout(Some(3), Some(600_000)),
+            state_request_timeout(Some(3), Some(25_000))
+        );
+        assert!(state_request_timeout(Some(3), Some(0)) >= SIDECAR_TIMEOUT);
+    }
+
+    #[test]
+    fn state_peek_validates_and_reads_the_blocked_count() {
+        let peek = peek_state(r#"{"version":3,"summary":{"blocked":2,"working":1},"tiles":{}}"#)
+            .unwrap();
+        assert_eq!(peek.blocked(), Some(2));
+        assert_eq!(peek_state(r#"{"version":3}"#).unwrap().blocked(), None);
+        assert!(peek_state("{\"version\":").is_err());
+        assert!(peek_state("not json").is_err());
+    }
+
+    #[test]
+    fn tray_tooltip_names_blocked_agents_in_both_languages() {
+        assert_eq!(tray_tooltip("en", "Herdeck", None), "Herdeck");
+        assert_eq!(tray_tooltip("en", "Herdeck", Some(0)), "Herdeck");
+        assert_eq!(tray_tooltip("en", "Herdeck", Some(3)), "Herdeck — 3 blocked");
+        assert_eq!(tray_tooltip("cs", "Herdeck", Some(3)), "Herdeck — zablokováno: 3");
+        assert_ne!(tray_blocked_label("en", 1), tray_blocked_label("cs", 1));
+    }
+
+    #[test]
+    fn tray_left_click_opens_the_menu_on_macos() {
+        assert_eq!(tray_menu_on_left_click(), cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn the_image_scheme_only_proxies_tiles_and_the_panel() {
+        assert_eq!(image_proxy_path("/panel").as_deref(), Some("/panel"));
+        assert_eq!(image_proxy_path("/tile/0").as_deref(), Some("/tile/0"));
+        assert_eq!(image_proxy_path("/tile/14").as_deref(), Some("/tile/14"));
+        assert_eq!(image_proxy_path("/tile/007").as_deref(), Some("/tile/7"));
+        for bad in ["/", "/state", "/config", "/tile/", "/tile/-1", "/tile/1/x", "/tile/99999", "/panel/x", "/tile/1%2F"] {
+            assert_eq!(image_proxy_path(bad), None, "{bad} must not be proxied");
+        }
+    }
+
+    #[test]
+    fn image_responses_carry_type_and_cache_policy() {
+        let ok = image_response(200, vec![1, 2]);
+        assert_eq!(ok.status(), 200);
+        assert_eq!(ok.headers()["Content-Type"], "image/png");
+        assert_eq!(ok.headers()["Cache-Control"], "no-cache");
+        assert_eq!(ok.body(), &vec![1, 2]);
+        let missing = image_response(404, Vec::new());
+        assert_eq!(missing.status(), 404);
+        assert_eq!(missing.headers()["Cache-Control"], "no-store");
     }
 
     #[test]
@@ -2596,6 +2783,27 @@ fn tray_labels(lang: &str) -> [&'static str; 8] {
     }
 }
 
+/// The tray icon's id, for `tray_by_id` lookups after `build_tray`.
+const TRAY_ID: &str = "herdeck-tray";
+
+/// The blocked-agent part of the tray tooltip. A count-first "label: n" form in
+/// Czech sidesteps plural agreement.
+fn tray_blocked_label(lang: &str, blocked: u64) -> String {
+    match lang {
+        "cs" => format!("zablokováno: {blocked}"),
+        _ => format!("{blocked} blocked"),
+    }
+}
+
+/// The tray tooltip: the app's display name, plus how many agents are blocked
+/// when any are (the count the deck's own `/state` poll just reported).
+fn tray_tooltip(lang: &str, name: &str, blocked: Option<u64>) -> String {
+    match blocked {
+        Some(n) if n > 0 => format!("{name} — {}", tray_blocked_label(lang, n)),
+        _ => name.to_string(),
+    }
+}
+
 /// Which text the `toggle_deck` tray item (and its hotkey-driven refresh)
 /// shows: it depends on both the language and whether the deck is currently
 /// visible. Pulled out of `TrayMenuItems::retitle` as a pure function — the
@@ -2669,6 +2877,9 @@ struct TrayMenuItems {
     /// run from every path that shows or hides the deck) can pick the right
     /// string without its caller having to track the language too.
     lang: Mutex<String>,
+    /// The blocked-agent count the tooltip last showed, so the tooltip is only
+    /// touched when it actually changes (`/state` is polled many times a second).
+    blocked: Mutex<Option<u64>>,
 }
 
 impl TrayMenuItems {
@@ -2711,7 +2922,37 @@ fn tray_set_language(app: tauri::AppHandle, lang: String, handles: tauri::State<
     let deck_visible = deck_is_visible(&app);
     if let Some(items) = handles.0.lock().unwrap().as_ref() {
         items.retitle(&lang, deck_visible);
+        let blocked = *items.blocked.lock().unwrap();
+        set_tray_tooltip(&app, &lang, blocked);
     }
+}
+
+fn set_tray_tooltip(app: &tauri::AppHandle, lang: &str, blocked: Option<u64>) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let text = tray_tooltip(lang, &build_channel::display_name(), blocked);
+        let _ = tray.set_tooltip(Some(text));
+    }
+}
+
+/// Record the blocked-agent count from a `/state` response and retitle the
+/// tray tooltip — only when the count changed.
+fn update_tray_blocked(app: &tauri::AppHandle, blocked: Option<u64>) {
+    let Some(handles) = app.try_state::<TrayHandles>() else {
+        return;
+    };
+    let lang = {
+        let guard = handles.0.lock().unwrap();
+        let Some(items) = guard.as_ref() else {
+            return;
+        };
+        let mut last = items.blocked.lock().unwrap();
+        if *last == blocked {
+            return;
+        }
+        *last = blocked;
+        items.current_lang()
+    };
+    set_tray_tooltip(app, &lang, blocked);
 }
 
 /// Build the deck's right-click context menu fresh for every popup, so its
@@ -2792,6 +3033,13 @@ fn show_deck_context_menu(
     menu.popup(webview.window()).map_err(|e| e.to_string())
 }
 
+/// Whether a left click on the tray icon opens its menu. Left click with the
+/// menu disabled and no click handler did NOTHING on macOS, where the menu bar
+/// has no right-click habit to fall back on.
+fn tray_menu_on_left_click() -> bool {
+    cfg!(target_os = "macos")
+}
+
 /// Build the tray icon. `deck_always_on_top` and `deck_visible` are the
 /// values `run()` already resolved at startup (config text + window state) —
 /// handed in rather than re-read here, so the tray's initial checkbox and
@@ -2853,13 +3101,31 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
             check_update: check_update.clone(),
             quit: quit.clone(),
             lang: Mutex::new("en".to_string()),
+            blocked: Mutex::new(None),
         });
     }
 
-    let mut builder = TrayIconBuilder::with_id("herdeck-tray")
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(build_channel::display_name())
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        // macOS convention: a menu-bar extra opens its menu on a left click
+        // too. Elsewhere the right click opens the menu and a left click
+        // toggles the deck (see `on_tray_icon_event`).
+        .show_menu_on_left_click(tray_menu_on_left_click())
+        .on_tray_icon_event(|tray, event| {
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+            if tray_menu_on_left_click() {
+                return;
+            }
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                toggle_deck_window(tray.app_handle());
+            }
+        })
         .on_menu_event(move |app, event| match event.id.as_ref() {
             MENU_ID_SHOW_APP => {
                 // Also the deck context menu's "Open Herdeck" item
@@ -3051,6 +3317,14 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .manage(TrayHandles::default())
+        .register_asynchronous_uri_scheme_protocol(IMAGE_SCHEME, |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_string();
+            // Never block the WebView's scheme thread on loopback I/O.
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(serve_image_request(&app, &path));
+            });
+        })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
