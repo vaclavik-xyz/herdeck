@@ -325,3 +325,12 @@ export function autoReconnectDelayMs(attempts: number): number {
   if (attempts <= 0) return 0;
   return Math.min(60_000, 2_000 * 2 ** (attempts - 1));
 }
+
+/** How often the window re-reads /setup: quickly until there is a status and
+ *  while an onboarding card is showing (a herdr socket appearing must flip the
+ *  card promptly), slowly once the deck is connected — then the poll only has
+ *  to notice a dropped connection, and every 2.5s forever was pure waste. */
+export function setupPollMs(status: SetupStatus | null, view: OnboardingView): number {
+  if (status == null) return 600;
+  return view === "deck" ? 20_000 : 2_500;
+}

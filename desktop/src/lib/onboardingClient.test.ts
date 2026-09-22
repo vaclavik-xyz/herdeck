@@ -8,6 +8,7 @@ import {
   hasConnectionInventory,
   shouldAutoReconnect,
   autoReconnectDelayMs,
+  setupPollMs,
 } from "./onboardingClient";
 
 const full = {
@@ -352,5 +353,18 @@ describe("autoReconnectDelayMs", () => {
     expect(autoReconnectDelayMs(1)).toBe(2_000);
     expect(autoReconnectDelayMs(2)).toBe(4_000);
     expect(autoReconnectDelayMs(10)).toBe(60_000);
+  });
+});
+
+describe("setupPollMs", () => {
+  const status = parseSetupStatus({ mode: "local", connected: true })!;
+  it("polls fast until there is a status and while onboarding shows", () => {
+    expect(setupPollMs(null, "deck")).toBe(600);
+    expect(setupPollMs(status, "welcome")).toBe(2_500);
+    expect(setupPollMs(status, "reconnect")).toBe(2_500);
+  });
+  it("slows down once the deck is connected", () => {
+    expect(setupPollMs(status, "deck")).toBeGreaterThanOrEqual(15_000);
+    expect(setupPollMs(status, "deck")).toBeLessThanOrEqual(30_000);
   });
 });
