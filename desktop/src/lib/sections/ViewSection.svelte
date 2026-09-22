@@ -160,8 +160,8 @@
     </details>
   </FieldGroup>
   <FieldGroup title={lm.appearance}>
-    <SelectField label={lm.heading} help={lm.heading_help} value={heading} options={[lm.project, lm.thread, lm.custom]} onchange={setHeading} />
-    <BooleanField label={lm.backend_labels} help={HELP.backend_labels} value={backendLabels} onchange={setBackendLabels} />
+    <SelectField label={lm.heading} help={lm.heading_help} configKey="tile_primary · tile_secondary" value={heading} options={[lm.project, lm.thread, lm.custom]} onchange={setHeading} />
+    <BooleanField label={lm.backend_labels} help={HELP.backend_labels} configKey="tile_fields" value={backendLabels} onchange={setBackendLabels} />
     <OverrideField label="working_animation" help={HELP.working_animation} state={scState("working_animation")} inheritedDisplay={hint("working_animation")} onstate={(s) => setScState("working_animation", s)}>
       <SelectField label="" value={String(scValue("working_animation") ?? "spin")} options={WORKING_ANIMATIONS} onchange={(v) => setSc("working_animation", v)} />
     </OverrideField>
@@ -185,8 +185,8 @@
     </details>
   </FieldGroup>
   <FieldGroup title={lm.appearance}>
-    <SelectField label={lm.heading} help={lm.heading_help} value={heading} options={[lm.project, lm.thread, lm.custom]} onchange={setHeading} />
-    <BooleanField label={lm.backend_labels} help={HELP.backend_labels} value={backendLabels} onchange={setBackendLabels} />
+    <SelectField label={lm.heading} help={lm.heading_help} configKey="tile_primary · tile_secondary" value={heading} options={[lm.project, lm.thread, lm.custom]} onchange={setHeading} />
+    <BooleanField label={lm.backend_labels} help={HELP.backend_labels} configKey="tile_fields" value={backendLabels} onchange={setBackendLabels} />
     <SelectField label="working_animation" help={HELP.working_animation} value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
     <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
   </FieldGroup>
@@ -200,6 +200,6 @@
 <style>
   /* see UsageSection: the preceding field already draws the separating rule */
   .advanced-settings { margin: var(--s5) 0 0; }
-  .advanced-settings summary { color: var(--text-dim); cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
+  .advanced-settings summary { color: var(--text-dim); cursor: pointer; font: var(--t-label); user-select: none; }
   .advanced-settings[open] summary { color: var(--text); margin-bottom: var(--s2); }
 </style>

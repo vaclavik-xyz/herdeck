@@ -80,4 +80,10 @@
     .setrow input { flex: 1 1 100%; min-width: 0; }
     button { min-height: 32px; padding: 0 var(--s3); }
   }
+  @container settings-form (max-width: 600px) {
+    .field { grid-template-columns: minmax(0, 1fr) auto; }
+    .field > input { grid-column: 1 / -1; grid-row: auto; }
+    .setrow { flex-wrap: wrap; margin-left: 0; }
+    .setrow input { flex: 1 1 100%; min-width: 0; }
+  }
 </style>

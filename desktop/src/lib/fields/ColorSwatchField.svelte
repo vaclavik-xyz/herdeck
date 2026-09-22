@@ -150,4 +150,13 @@
        chip keeps its own auto width from the base rule and only grows taller. */
     .swatch { width: 32px; height: 32px; }
   }
+  /* Same stacking inside a narrow settings column (the Deck workbench puts the
+     form beside the live preview, so the viewport is wide but the form is not). */
+  @container settings-form (max-width: 600px) {
+    .field { grid-template-columns: minmax(0, 1fr); }
+    .swatches { grid-column: 1; grid-row: auto; }
+    /* a 26px square is a mouse target, not a thumb target. The "(default)"
+       chip keeps its own auto width from the base rule and only grows taller. */
+    .swatch { width: 32px; height: 32px; }
+  }
 </style>

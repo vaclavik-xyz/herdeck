@@ -7,7 +7,10 @@
   import { fieldValidationKey } from "../validationIssues";
   import { FIELD_VALIDATION_CONTEXT, type FieldValidationMessages } from "../validationContext";
 
-  let { label, help = "", owner = null }: { label: string; help?: string; owner?: string | null } = $props();
+  // `configKey` names the TOML key(s) a field writes when its label is prose
+  // rather than a config key (e.g. a preset select driving two list keys), so
+  // it still gets the same key chip as every other field.
+  let { label, help = "", owner = null, configKey = "" }: { label: string; help?: string; owner?: string | null; configKey?: string } = $props();
   const presentation = $derived(fieldPresentation(label, locale.lang));
   const validations = getContext<FieldValidationMessages>(FIELD_VALIDATION_CONTEXT) ?? readable<Record<string, string[]>>({});
   const messages = $derived(presentation.configKey ? ($validations[fieldValidationKey(presentation.configKey, owner)] ?? []) : []);
@@ -22,7 +25,7 @@
 >
   <span>{presentation.label}</span>
   {#if presentation.status}<span class="status">{presentation.status}</span>{/if}
-  {#if presentation.configKey}<code>{presentation.configKey}</code>{/if}
+  {#if presentation.configKey}<code>{presentation.configKey}</code>{:else if configKey}<code>{configKey}</code>{/if}
 </span>
 {#if help}<small class="fieldhelp">{help}</small>{/if}
 {#if messages.length > 0}<small class="fielderror" role="alert">{messages[0]}</small>{/if}
@@ -72,6 +75,11 @@
      not 3: the control is auto-placed and would otherwise be pushed past the
      message, which then reads above its own field — the reverse of desktop. */
   @media (max-width: 760px) {
+    .fielderror { grid-column: 1 / -1; grid-row: 4; }
+  }
+  /* Same stacking inside a narrow settings column (the Deck workbench puts the
+     form beside the live preview, so the viewport is wide but the form is not). */
+  @container settings-form (max-width: 600px) {
     .fielderror { grid-column: 1 / -1; grid-row: 4; }
   }
 </style>
