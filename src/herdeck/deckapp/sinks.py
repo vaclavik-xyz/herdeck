@@ -10,7 +10,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol, runtime_checkable
 
 log = logging.getLogger(__name__)
@@ -69,6 +69,12 @@ class D200Sink:
         self._slots = slots
         self._on_disconnect = on_disconnect
         self._closing = threading.Event()
+        # The physical D200 cannot update a spinner/elapsed label without a
+        # full-page upload, which visibly blinks. Keep the first rendered view
+        # for an otherwise identical tile; the driver then sees byte-identical
+        # frames and safely suppresses the USB write. A real status/title/layout
+        # change replaces the cached view and still repaints immediately.
+        self._stable_tiles: dict[int, tuple[object, object]] = {}
         driver.on_press(on_press)
         self._reader_thread: threading.Thread | None = None
         if start_reader:
@@ -87,7 +93,9 @@ class D200Sink:
         # that the strmdck retry sleep is neutralized. `frame.working` is ignored (the
         # animating tiles carry their new spinner phase in the full set anyway).
         rs = frame.render
-        tiles = [t for t in rs.tiles if t.index < self._slots]
+        tiles = self._stabilize_volatile_tiles(
+            [t for t in rs.tiles if t.index < self._slots]
+        )
         render_frame = getattr(self._driver, "render_frame", None)
         if render_frame is not None:
             # One combined tiles+panel set: atomic (no panel blink), half the
@@ -97,9 +105,27 @@ class D200Sink:
             self._driver.render(tiles)
             self._driver.render_panel(rs.panel)
 
+    def _stabilize_volatile_tiles(self, tiles: list) -> list:
+        stable = []
+        current: dict[int, tuple[object, object]] = {}
+        for tile in tiles:
+            try:
+                semantic = replace(tile, spinner=None, time_text=None)
+                display = replace(tile)
+            except TypeError:  # lightweight non-dataclass test doubles
+                semantic = display = tile
+            previous = self._stable_tiles.get(tile.index)
+            if previous is not None and previous[0] == semantic:
+                display = previous[1]
+            current[tile.index] = (semantic, display)
+            stable.append(display)
+        self._stable_tiles = current
+        return stable
+
     def set_slots(self, slots: int) -> None:
         """Adopt a new profile/grid geometry for subsequent frames."""
         self._slots = slots
+        self._stable_tiles.clear()
 
     def _run_reader(self) -> None:
         try:

@@ -3,6 +3,7 @@ import threading
 import time
 
 from herdeck.deckapp.sinks import D200Sink, ReconnectingD200Sink, RenderFrame
+from herdeck.driver.base import PanelView, TileView
 
 
 class _Tile:
@@ -154,6 +155,34 @@ def test_sink_prefers_the_combined_frame_write():
     sink.deliver(RenderFrame(render=rs, working=None, full=True))
     assert drv.frames == [([0, 1], "P")]  # one combined call, slots-clipped
     assert drv.full_renders == [] and drv.panels == []  # legacy path untouched
+
+
+def test_non_ticker_snapshots_freeze_only_spinner_and_elapsed_text():
+    class CapturingDriver(FrameDriver):
+        def __init__(self):
+            super().__init__()
+            self.tile_views = []
+
+        def render_frame(self, tiles, panel):
+            self.tile_views.append(tiles)
+
+    driver = CapturingDriver()
+    sink = _sink(driver, start_reader=False)
+    panel = PanelView("Agents")
+
+    first = TileView(0, "api", "blue", spinner=1, time_text="5s", status_text="WORKING")
+    sink.deliver(RenderFrame(_RS([first], panel), working=None, full=True))
+    volatile_only = TileView(
+        0, "api", "blue", spinner=2, time_text="10s", status_text="WORKING"
+    )
+    sink.deliver(RenderFrame(_RS([volatile_only], panel), working=None, full=True))
+    changed = TileView(0, "api", "green", spinner=3, time_text="0s", status_text="DONE")
+    sink.deliver(RenderFrame(_RS([changed], panel), working=None, full=True))
+
+    assert driver.tile_views[1][0].spinner == 1
+    assert driver.tile_views[1][0].time_text == "5s"
+    assert driver.tile_views[2][0].spinner == 3
+    assert driver.tile_views[2][0].status_text == "DONE"
 
 
 def test_reconnecting_sink_retries_initially_missing_device_and_paints_latest_frame():
