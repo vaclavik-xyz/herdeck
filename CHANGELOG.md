@@ -6,6 +6,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-09-22
+
+### Fixed
+- Native macOS notification delivery now stays active while Herdeck is in the
+  background, preventing the AppleScript fallback and its generic icon after
+  the desktop app has been idle.
+
 ## [0.7.7] - 2026-09-22
 
 ### Fixed
