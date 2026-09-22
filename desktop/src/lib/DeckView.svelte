@@ -6,14 +6,48 @@
   import { onMount, untrack } from "svelte";
   import {
     DeckDiffer,
+    LONG_POLL_MS,
+    OfflineDebounce,
+    nextPollDelay,
     stepDeck,
     initialView,
     summaryLabel,
     type DeckTransport,
     type DeckViewModel,
+    type PressResult,
   } from "./deckClient";
-  import { locale, setLang } from "./i18n.svelte";
+  import { defineMessages, fmt, locale, setLang } from "./i18n.svelte";
   import { visibilityGatedLoop, type GatedLoop } from "./pollGate";
+
+  const M = defineMessages({
+    en: {
+      tile: "tile {n}",
+      panel: "status panel",
+      offline_title: "Waiting for the runtime",
+      offline_body: "The deck appears here as soon as the local Herdeck runtime answers.",
+      status_offline: "offline · reconnecting…",
+      status_mock: "mock",
+      status_live: "live",
+      status_disconnected: "live · disconnected",
+      press_failed: "Press didn't reach the runtime",
+      press_forbidden: "Press refused: the runtime's access token changed",
+      press_rejected: "The runtime rejected the press (HTTP {status})",
+    },
+    cs: {
+      tile: "dlaždice {n}",
+      panel: "stavový panel",
+      offline_title: "Čekám na runtime",
+      offline_body: "Deck se zobrazí, jakmile odpoví lokální Herdeck runtime.",
+      status_offline: "offline · připojuji znovu…",
+      status_mock: "mock",
+      status_live: "live",
+      status_disconnected: "live · odpojeno",
+      press_failed: "Stisk se nedostal k runtime",
+      press_forbidden: "Stisk odmítnut: změnil se přístupový token runtime",
+      press_rejected: "Runtime stisk odmítl (HTTP {status})",
+    },
+  });
+  const m = $derived(M[locale.lang]);
 
   let {
     transport,
@@ -25,6 +59,10 @@
     // Live transport (built from the sidecar url + token via sidecar.ts). Null
     // until the shell reports both; the deck then renders its offline state.
     transport: DeckTransport | null;
+    // Retry / fallback interval. Normally the deck long-polls /state (the
+    // runtime answers the moment its version moves); this cadence applies
+    // while failing, while an image retry is pending, and against a runtime
+    // that ignores the long-poll params.
     pollMs?: number;
     onJump?: (section: string) => void;
     onView?: (view: DeckViewModel) => void;
@@ -34,35 +72,101 @@
   let view = $state<DeckViewModel>(initialView());
   let active = $state<number | null>(null); // last-pressed cell, for the outline
   let differ = new DeckDiffer();
+  let offline = new OfflineDebounce();
   let loop: GatedLoop | null = null; // the poll loop handle (kick after a press)
+  let nextDelay = 0; // set by each step: when the loop runs the next one
 
   async function step(): Promise<void> {
-    if (!transport) {
-      view = { ...view, online: false };
+    const t = transport;
+    const d = differ;
+    if (!t) {
+      nextDelay = pollMs;
+      if (view.online) view = { ...view, online: false };
       onView?.(view);
       return;
     }
-    view = await stepDeck(transport, differ, view);
+    const before = d.syncedVersion;
+    const longPolled = before >= 0;
+    const started = Date.now();
+    const next = await stepDeck(t, d, view, {
+      waitMs: longPolled ? LONG_POLL_MS : 0,
+      offline,
+    });
+    // A long-poll can outlive its transport (sidecar restart) or the component;
+    // its answer belongs to the old runtime's version space — drop it.
+    if (!alive || t !== transport || d !== differ) {
+      nextDelay = 0;
+      return;
+    }
+    nextDelay = nextPollDelay({
+      pollMs,
+      failing: offline.failing,
+      longPolled,
+      before,
+      after: d.syncedVersion,
+      elapsedMs: Date.now() - started,
+    });
+    view = next;
     onView?.(view);
     // The deck's [view].language leads; the window follows so tiles and chrome
-    // always speak the same language.
-    setLang(view.language);
+    // always speak the same language. Only a real /state carries it: an offline
+    // model's `language` is initialView's "en" placeholder, and applying it
+    // would override the editor's configured language until the runtime answers.
+    if (view.online) setLang(view.language);
+  }
+
+  // Scheme image failed to load (an older shell without the `herdeck` URI
+  // scheme, or a transient miss): switch the transport to its base64 command
+  // path and swap in the replacement, unless a newer frame already replaced it.
+  async function imageFailed(which: number | "panel", failedSrc: string): Promise<void> {
+    const t = transport;
+    const fb = t?.imageFallback;
+    if (!fb || failedSrc.startsWith("data:")) return;
+    let src: string | null;
+    try {
+      src = which === "panel" ? await fb.panel() : await fb.tile(which);
+    } catch {
+      return; // the next version's poll retries through the fallback path
+    }
+    if (!alive || t !== transport) return;
+    if (which === "panel") {
+      if (view.panel === failedSrc) view = { ...view, panel: src };
+      return;
+    }
+    if (view.tiles[which] !== failedSrc) return;
+    const tiles = { ...view.tiles };
+    if (src) tiles[which] = src;
+    else delete tiles[which];
+    view = { ...view, tiles };
   }
 
   // One press path for clicks and keys: POST the press, outline the cell. The
   // panel uses index === slots (no button), matching web.py's press(slotCount).
   async function press(i: number): Promise<void> {
     if (!transport) return;
-    let r;
+    let r: PressResult | null;
     try {
       r = await transport.press(i);
     } catch {
-      return;
+      r = null; // network / proxy failure (e.g. the runtime moved ports)
     }
     // The component can be torn down (window-mode switch, quit) while the POST
     // is in flight; without this the resolving press installs a timer that
     // teardown has already run past, and writes state on a dead component.
-    if (!r.ok || !alive) return;
+    if (!alive) return;
+    if (!r || !r.ok) {
+      // A press that did nothing used to be silent — indistinguishable from a
+      // deck that ignored the click. Say so, briefly, on the cell itself.
+      flashFailure(
+        i,
+        !r
+          ? m.press_failed
+          : r.forbidden
+            ? m.press_forbidden
+            : fmt(m.press_rejected, { status: r.status }),
+      );
+      return;
+    }
     flashActive(i);
     // The sidecar re-renders synchronously inside the POST handler, so the
     // updated frame already exists — show it now instead of waiting out the
@@ -85,6 +189,7 @@
 
   function flashActive(i: number): void {
     if (activeTimer) clearTimeout(activeTimer);
+    clearFailure();
     active = i;
     pressParity = !pressParity;
     activeTimer = setTimeout(() => {
@@ -97,6 +202,31 @@
     if (activeTimer) clearTimeout(activeTimer);
     activeTimer = undefined;
     active = null;
+    clearFailure();
+  }
+
+  // Failed-press feedback: the cell gets a red ring + title, and a short
+  // message (role=status) says why. Cleared after FAILED_MS or on the next press.
+  const FAILED_MS = 2500;
+  let failed = $state<{ index: number; message: string } | null>(null);
+  let failedTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function flashFailure(i: number, message: string): void {
+    if (failedTimer) clearTimeout(failedTimer);
+    if (activeTimer) clearTimeout(activeTimer);
+    activeTimer = undefined;
+    active = null;
+    failed = { index: i, message };
+    failedTimer = setTimeout(() => {
+      failedTimer = undefined;
+      failed = null;
+    }, FAILED_MS);
+  }
+
+  function clearFailure(): void {
+    if (failedTimer) clearTimeout(failedTimer);
+    failedTimer = undefined;
+    failed = null;
   }
 
   // Config-window preview passes onJump → "jump mode": a tile click switches the editor
@@ -129,8 +259,12 @@
       untrack(() => {
         lastTransport = transport;
         differ = new DeckDiffer();
+        offline = new OfflineDebounce();
         view = initialView(view.slots);
         clearActive();
+        // Don't wait out the old transport's poll (a long-poll can hold for
+        // LONG_POLL_MS): run a step on the new one as soon as it returns.
+        loop?.kick();
       });
     }
   });
@@ -141,7 +275,9 @@
     // never overlap), and the loop parks entirely while the window is hidden —
     // the deck lives in the tray, so hidden webviews must not keep polling and
     // refetching tile PNGs nobody sees. One immediate step fires on show.
-    loop = visibilityGatedLoop(step, () => pollMs);
+    // Each step picks the next delay: 0 to re-arm a long-poll, `pollMs` when
+    // retrying or when the runtime does not hold long-polls.
+    loop = visibilityGatedLoop(step, () => nextDelay);
     window.addEventListener("keydown", onKey);
     return () => {
       alive = false;
@@ -153,21 +289,17 @@
   });
 
   const cells = $derived(Array.from({ length: view.slots }, (_, i) => i));
-  const offlineTitle = $derived(
-    locale.lang === "cs" ? "Čekám na runtime" : "Waiting for the runtime",
-  );
+  // `online` is already debounced (OfflineDebounce), so this footer text — and
+  // with it the aria-live announcement — only changes on a real state change,
+  // not on every transient poll failure.
   const statusText = $derived(
     !view.online
-      ? locale.lang === "cs"
-        ? "offline · připojuji znovu…"
-        : "offline · reconnecting…"
+      ? m.status_offline
       : view.source === "mock"
-        ? "mock"
+        ? m.status_mock
         : view.connected
-          ? "live"
-          : locale.lang === "cs"
-            ? "live · odpojeno"
-            : "live · disconnected",
+          ? m.status_live
+          : m.status_disconnected,
   );
 </script>
 
@@ -175,35 +307,45 @@
   <div class="stage">
   <div class="grid">
     {#each cells as i (i)}
+      {@const src = view.tiles[i]}
       <button
         class="cell"
         class:active={active === i}
         class:alt={pressParity}
+        class:failed={failed?.index === i}
+        title={failed?.index === i ? failed.message : undefined}
         onclick={() => clickTile(i)}
-        aria-label={locale.lang === "cs" ? `dlaždice ${i + 1}` : `tile ${i + 1}`}
+        aria-label={view.labels[i] ?? fmt(m.tile, { n: i + 1 })}
       >
-        {#if view.tiles[i]}<img src={view.tiles[i]} alt="" />{/if}
+        {#if src}<img {src} alt="" onerror={() => void imageFailed(i, src)} />{/if}
       </button>
     {/each}
     <button
       class="panel"
       class:active={active === view.slots}
       class:alt={pressParity}
+      class:failed={failed?.index === view.slots}
+      title={failed?.index === view.slots ? failed.message : undefined}
       onclick={() => { if (!onJump) void press(view.slots); }}
-      aria-label={locale.lang === "cs" ? "stavový panel" : "status panel"}
+      aria-label={m.panel}
     >
-      {#if view.panel}<img src={view.panel} alt="" />{/if}
+      {#if view.panel}{@const psrc = view.panel}<img
+          src={psrc}
+          alt=""
+          onerror={() => void imageFailed("panel", psrc)}
+        />{/if}
     </button>
   </div>
   {#if !view.online}
     <div class="deck-offline" class:mini={compact}>
-      <strong>{offlineTitle}</strong>
+      <strong>{m.offline_title}</strong>
       {#if !compact}
-        <p>{locale.lang === "cs"
-          ? "Deck se zobrazí, jakmile odpoví lokální Herdeck runtime."
-          : "The deck appears here as soon as the local Herdeck runtime answers."}</p>
+        <p>{m.offline_body}</p>
       {/if}
     </div>
+  {/if}
+  {#if failed}
+    <div class="press-error" role="status">{failed.message}</div>
   {/if}
   </div>
 
@@ -242,10 +384,10 @@
   .deck-offline.mini {
     padding: var(--s2);
     background: color-mix(in srgb, var(--canvas) 62%, transparent);
-    /* A single failed poll flips `online` false, so on the floating deck this
-       overlay appears for ~300ms at a time over a deck that still actuates.
-       The pill is informational; it must not swallow those presses (the desktop
-       card, which offers a full explanation instead of a live deck, still may). */
+    /* `online` is debounced (3 failed polls or ~1s), but a flaky runtime can
+       still raise this over a deck that actuates between failures. The pill is
+       informational; it must not swallow those presses (the desktop card,
+       which offers a full explanation instead of a live deck, still may). */
     pointer-events: none;
   }
   .deck-offline.mini strong {
@@ -292,6 +434,30 @@
   .panel {
     grid-column: 4 / 6;
     position: relative;
+  }
+  /* Failed press: a red ring that holds for the message's lifetime. Declared
+     before .active so a successful re-press (which clears `failed`) wins. */
+  .cell.failed,
+  .panel.failed {
+    outline: 2px solid var(--st-blocked);
+    outline-offset: -2px;
+  }
+  .press-error {
+    position: absolute;
+    left: 50%;
+    bottom: 6px;
+    transform: translateX(-50%);
+    max-width: calc(100% - 16px);
+    padding: 4px 10px;
+    border: 1px solid var(--st-blocked);
+    border-radius: 999px;
+    background: var(--panel-raised);
+    color: var(--text);
+    font: var(--t-label);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
   }
   .cell.active,
   .panel.active {
