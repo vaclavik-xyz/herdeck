@@ -38,7 +38,7 @@ SHARED_TOKENS: dict[str, str] = {
     "--accent-soft": "rgb(91 147 245 / .14)",
     "--accent-ring": "rgb(91 147 245 / .38)",
     "--font-ui": '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
-    "--font-mono": '"SF Mono", ui-monospace, SFMono-Regular, monospace',
+    "--font-mono": '"SF Mono", SFMono-Regular, ui-monospace, Menlo, Monaco, monospace',
     "--r-control": "7px",
     "--r-panel": "12px",
     "--r-stage": "16px",
