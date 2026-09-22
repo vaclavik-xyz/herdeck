@@ -1,13 +1,17 @@
+import base64
 import json
 
 import pytest
 
 from herdeck.model import AgentKey, AgentState, Status, WorkContext
+from herdeck.project_icon_discovery import MAX_ICON_BYTES, icon_hash
 from herdeck.protocol import (
     Error,
     Event,
+    ProjectIcon,
     Result,
     Snapshot,
+    Unknown,
     decode_inbound,
     encode,
 )
@@ -310,3 +314,71 @@ def test_decode_malformed_terminal_frame_closes_only_its_request(field, value):
         + "}"
     )
     assert decode_inbound(raw) == TermClosed("t1", "invalid terminal frame", stop_remote=True)
+
+
+def _icon_frame(payload=b"\x89PNG-bytes", **over):
+    # ``payload`` (not ``data``): ``over`` may itself override the "data" key.
+    msg = {
+        "type": "project_icon",
+        "server_id": "workbox",
+        "hash": icon_hash(payload),
+        "mime": "image/png",
+        "data": base64.b64encode(payload).decode(),
+    }
+    msg.update(over)
+    return json.dumps(msg)
+
+
+def test_decode_project_icon_frame():
+    data = b"\x89PNG-bytes"
+    assert decode_inbound(_icon_frame(data)) == ProjectIcon(
+        "workbox", icon_hash(data), "image/png", data
+    )
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"hash": "XYZ"},
+        {"hash": "0" * 16},  # well-formed but does not match the bytes
+        {"mime": "text/html"},
+        {"mime": ["image/png"]},
+        {"data": "not base64!!"},
+        {"data": ""},
+        {"data": 5},
+        {"server_id": None},
+    ],
+)
+def test_decode_malformed_project_icon_raises(over):
+    with pytest.raises(ValueError, match="project_icon"):
+        decode_inbound(_icon_frame(**over))
+
+
+def test_decode_project_icon_rejects_oversized_payload():
+    with pytest.raises(ValueError, match="project_icon"):
+        decode_inbound(_icon_frame(b"x" * (MAX_ICON_BYTES + 1)))
+
+
+def test_decode_unknown_type_is_tolerated():
+    assert decode_inbound('{"type":"future_frame","x":1}') == Unknown("future_frame")
+
+
+def test_snapshot_carries_project_icon_hash():
+    h = icon_hash(b"a")
+    raw = json.dumps(
+        {
+            "type": "snapshot",
+            "server_id": "s",
+            "panes": [{"pane_id": "p", "status": "idle", "project_icon": h}],
+        }
+    )
+    assert decode_inbound(raw).states[0].project_icon == h
+
+
+@pytest.mark.parametrize("value", [None, "", "nothex!!", 12, "A" * 16])
+def test_snapshot_project_icon_defaults_to_empty(value):
+    pane = {"pane_id": "p", "status": "idle"}
+    if value is not None:
+        pane["project_icon"] = value
+    raw = json.dumps({"type": "snapshot", "server_id": "s", "panes": [pane]})
+    assert decode_inbound(raw).states[0].project_icon == ""

@@ -97,3 +97,6 @@ class AgentState:
     activity: str = ""
     attention: str = ""
     completed_at: str = ""
+    # Content hash of the project's favicon (bridge discovery), "" when none or
+    # when the bridge predates the "project_icon" capability.
+    project_icon: str = ""

@@ -329,6 +329,24 @@ def test_dispatch_exposes_negotiated_bridge_capabilities():
     assert conn.capabilities == frozenset({"work_context", "terminal_preview"})
 
 
+def test_dispatch_ignores_unknown_frame_types():
+    # A newer bridge's frame type must not reach on_error (ctl would fail
+    # every pending request on it) nor any other callback.
+    seen = []
+    conn = Connector(
+        ServerConfig("dev", "ws://x", "t"),
+        on_snapshot=lambda sid, states: seen.append("snapshot"),
+        on_event=lambda sid, state: seen.append("event"),
+        on_connection=lambda sid, up: seen.append("connection"),
+        on_error=seen.append,
+        on_term=lambda sid, msg: seen.append("term"),
+    )
+
+    conn._dispatch('{"type":"future_frame","x":1}')
+
+    assert seen == []
+
+
 def test_dispatch_rekey_preserves_workspace_and_tab():
     cfg = ServerConfig("dev", "ws://x", "t")
     seen = {}
