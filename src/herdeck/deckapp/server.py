@@ -94,6 +94,7 @@ class DeckApp:
         self._local_bridges: dict[str, object] = {}
         self._suppress_reload = False  # set by the onboarding commit to mute the watcher
         self._setup_lock = threading.RLock()  # shared mutation lock (/setup/connect + config-write routes + reload); RLock because the config routes call reload() while holding it
+        self._shell_claim_lock = threading.Lock()
 
         # Provider usage poller (a daemon thread; None when [usage] is off).
         # Renders read its latest snapshot; no render ever blocks on the CLI.
@@ -332,7 +333,9 @@ class DeckApp:
             working = self._orch.tick()
             self._ticks += 1
             hold_expired = self._orch.consume_expired_panel_hold()
-            if self._ticks % self.FULL_REFRESH_TICKS == 0 or hold_expired:
+            if hold_expired:
+                self._refresh_locked(working=None, full=True)
+            elif self._ticks % self.FULL_REFRESH_TICKS == 0:
                 self._refresh_locked(working=None, full=True, ticker=True)
             elif working:
                 self._refresh_locked(working=working, full=False, ticker=True)
@@ -586,21 +589,36 @@ class DeckApp:
         shell never resets pending runtime state. This method tracks liveness
         only; resetting here used to race fallback and duplicate/drop alerts.
         """
-        if shell_gen is not None:
-            self._shell_gen = shell_gen
-        self._shell_last_seen = time.monotonic()
+        with self._shell_claim_lock:
+            if shell_gen is not None:
+                self._shell_gen = shell_gen
+            self._shell_last_seen = time.monotonic()
 
     def shell_claims_banners(self) -> bool:
         """True while a shell polled /state recently (within the claim TTL)."""
-        return time.monotonic() - getattr(self, "_shell_last_seen", -1e9) < self._SHELL_CLAIM_TTL_S
+        with self._shell_claim_lock:
+            return (
+                time.monotonic() - getattr(self, "_shell_last_seen", -1e9)
+                < self._SHELL_CLAIM_TTL_S
+            )
+
+    def shell_owns_claim(self, shell_gen: str | None) -> bool:
+        with self._shell_claim_lock:
+            return (
+                shell_gen is not None
+                and shell_gen == getattr(self, "_shell_gen", None)
+                and time.monotonic() - getattr(self, "_shell_last_seen", -1e9)
+                < self._SHELL_CLAIM_TTL_S
+            )
 
     def release_shell_claim(self, shell_gen: str | None) -> bool:
         """Release banner duty only for the shell that currently owns it."""
-        current = getattr(self, "_shell_gen", None)
-        if shell_gen is not None and current is not None and shell_gen != current:
-            return False
-        self._shell_last_seen = -1e9
-        return True
+        with self._shell_claim_lock:
+            current = getattr(self, "_shell_gen", None)
+            if shell_gen is not None and current is not None and shell_gen != current:
+                return False
+            self._shell_last_seen = -1e9
+            return True
 
     def _state(self) -> dict:
         with self._lock:
@@ -772,8 +790,9 @@ class DeckApp:
                     if not callable(wait):
                         self._send(404)
                         return
+                    shell_gen = self.headers.get("X-Herdeck-Shell-Gen")
                     if self.headers.get("X-Herdeck-Shell") == "1":
-                        app.note_shell_claim(self.headers.get("X-Herdeck-Shell-Gen"))
+                        app.note_shell_claim(shell_gen)
                     params = parse_qs(url.query)
                     generation = params.get("generation", [None])[0] or None
                     try:
@@ -783,6 +802,9 @@ class DeckApp:
                         self._send(400)
                         return
                     state = wait(generation, after, timeout=wait_ms / 1000.0)
+                    if shell_gen is not None and not app.shell_owns_claim(shell_gen):
+                        self._send(409)
+                        return
                     self._send(200, json.dumps(state).encode(), "application/json")
                 elif path == "/health":
                     if not self._require_query_token(url):
@@ -907,7 +929,7 @@ class DeckApp:
                     ):
                         self._send(400)
                         return
-                    if not app.release_shell_claim(shell_gen):
+                    if not app.shell_owns_claim(shell_gen):
                         self._send(409)
                         return
                     try:
@@ -924,6 +946,7 @@ class DeckApp:
                     if not delivered:
                         self._send(409)
                         return
+                    app.release_shell_claim(shell_gen)
                     self._send(204)
                 elif path == "/setup/connect":
                     if not self._require_header_token():

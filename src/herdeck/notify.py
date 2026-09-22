@@ -80,6 +80,7 @@ class NotificationFeed:
         self._generation = uuid.uuid4().hex
         self._seq = 0
         self._acked_seq = 0
+        self._fallback_seq: int | None = None
         self._changed = threading.Condition()
 
     def push(self, title: str, body: str, sound: bool | str) -> dict:
@@ -111,6 +112,7 @@ class NotificationFeed:
             self._generation = uuid.uuid4().hex
             self._seq = 0
             self._acked_seq = 0
+            self._fallback_seq = None
             self._changed.notify_all()
 
     def state(self) -> dict:
@@ -131,7 +133,11 @@ class NotificationFeed:
                 self._acked_seq = max(self._acked_seq, after_seq)
             self._changed.wait_for(
                 lambda: generation != self._generation
-                or self._seq > max(after_seq, self._acked_seq),
+                or any(
+                    item["seq"] > max(after_seq, self._acked_seq)
+                    and item["seq"] != self._fallback_seq
+                    for item in self._items
+                ),
                 timeout=max(0.0, timeout),
             )
             floor = self._acked_seq
@@ -141,12 +147,21 @@ class NotificationFeed:
                 "generation": self._generation,
                 "seq": self._seq,
                 "acked_seq": self._acked_seq,
-                "items": [item for item in self._items if item["seq"] > floor],
+                "items": [
+                    item
+                    for item in self._items
+                    if item["seq"] > floor and item["seq"] != self._fallback_seq
+                ],
             }
 
     def ack(self, generation: str, seq: int) -> bool:
         with self._changed:
-            if generation != self._generation or seq < 0 or seq > self._seq:
+            if (
+                generation != self._generation
+                or seq < 0
+                or seq > self._seq
+                or seq == self._fallback_seq
+            ):
                 return False
             self._acked_seq = max(self._acked_seq, seq)
             return True
@@ -159,15 +174,31 @@ class NotificationFeed:
     ) -> bool:
         """Deliver one pending item through the runtime fallback, then ACK it."""
         with self._changed:
-            if generation != self._generation or seq <= self._acked_seq:
+            if (
+                generation != self._generation
+                or seq <= self._acked_seq
+                or self._fallback_seq is not None
+            ):
                 return False
             item = next((item for item in self._items if item["seq"] == seq), None)
             if item is None:
                 return False
             payload = (item["title"], item["body"], item["sound"])
-        deliver(*payload)
-        if not self.ack(generation, seq):
-            return False
+            self._fallback_seq = seq
+            self._changed.notify_all()
+        try:
+            deliver(*payload)
+        except Exception:
+            with self._changed:
+                self._fallback_seq = None
+                self._changed.notify_all()
+            raise
+        with self._changed:
+            if generation != self._generation or self._fallback_seq != seq:
+                return False
+            self._acked_seq = max(self._acked_seq, seq)
+            self._fallback_seq = None
+            self._changed.notify_all()
         log.info("notification fallback delivered id=%s:%s", generation, seq)
         return True
 

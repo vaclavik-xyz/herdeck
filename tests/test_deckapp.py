@@ -704,6 +704,31 @@ def test_zero_tick_interval_parks_running_ticker():
         app.close()
 
 
+def test_expired_panel_hold_is_a_semantic_frame_not_a_ticker_frame():
+    app = make_app()
+
+    class Sink:
+        def __init__(self):
+            self.frames = []
+
+        def deliver(self, frame):
+            self.frames.append(frame)
+
+        def close(self):
+            pass
+
+    sink = Sink()
+    app.add_sink(sink)
+    sink.frames.clear()
+    app._orch.tick = lambda: []
+    app._orch.consume_expired_panel_hold = lambda: True
+
+    app._tick_once()
+
+    assert len(sink.frames) == 1
+    assert sink.frames[0].ticker is False
+
+
 def test_swap_source_rebuilds_owned_icons_before_render(monkeypatch):
     from herdeck.deckapp import server as server_module
 

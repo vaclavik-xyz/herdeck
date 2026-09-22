@@ -74,6 +74,31 @@ def test_notification_feed_long_poll_cursor_repairs_lost_ack():
     assert state["items"] == []
 
 
+def test_notification_feed_hides_item_while_fallback_is_in_flight():
+    from herdeck.notify import NotificationFeed
+
+    feed = NotificationFeed()
+    item = feed.push("done", "p1", "Hero")
+    delivering = threading.Event()
+    release = threading.Event()
+
+    def deliver(*_args):
+        delivering.set()
+        assert release.wait(1)
+
+    thread = threading.Thread(
+        target=lambda: feed.fallback(item["generation"], item["seq"], deliver)
+    )
+    thread.start()
+    assert delivering.wait(0.2)
+    state = feed.wait(item["generation"], 0, timeout=0)
+    assert state["items"] == []
+    release.set()
+    thread.join(timeout=0.2)
+    assert not thread.is_alive()
+    assert feed.state()["acked_seq"] == 1
+
+
 def test_noop_notifier_never_raises():
     NoopNotifier().notify("t", "b", sound=True)  # no exception, no side effect
 

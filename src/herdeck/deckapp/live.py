@@ -78,9 +78,9 @@ class LiveSource(StateSource):
         # (newly_entered bookkeeping per event). Plain sinks only — the
         # interactive blocked chain (Telegram approve buttons) is an app.py
         # runtime feature and is deliberately not wired here. The sink records
-        # every alert into the feed (the deck shell posts the banner under its
-        # own identity) and plays the event sound itself; a plain osascript
-        # notification is only the fallback while no shell is attached.
+        # every alert into the feed; the deck shell posts both the banner and
+        # sound under one acknowledged delivery. A plain osascript notification
+        # is only the fallback while no shell is attached.
         self._notify_keys: dict[str, set] = {event: set() for event in NOTIFY_EVENT_STATUSES}
         self._notify_baselined_servers: set[str] = set()
         self._notify_schedule = notify_schedule or _thread_notify_schedule
@@ -246,8 +246,8 @@ class LiveSource(StateSource):
     def set_notify_gate(self, gate: Callable[[], bool]) -> None:
         """Set the "a shell can post banners" predicate.
 
-        True -> the runtime leaves the banner to the shell and only plays the
-        event sound; False -> alerts fall back to a plain osascript banner.
+        True -> the runtime leaves both banner and sound to the shell; False ->
+        alerts fall back to a plain osascript banner carrying the sound.
         The DeckApp wires this to its shell-claim heartbeat.
         """
         self._notify_gate = gate

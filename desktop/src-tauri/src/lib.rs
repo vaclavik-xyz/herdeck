@@ -329,7 +329,9 @@ async fn deck_state(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let d = current_discovery(&state)?;
-    let claim = state.notify_permission.load(Ordering::Relaxed);
+    // The dedicated long-poll pump owns the claim. UI state polling must not
+    // compete with it or keep a failed native-notification claim alive.
+    let claim = false;
     let body = match run_blocking(move || {
         http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT, claim, Some(&shell_gen()))
     })
