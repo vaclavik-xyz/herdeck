@@ -21,16 +21,22 @@ def test_macos_sink_sound_name_and_switch(monkeypatch):
     assert "sound name" not in scripts[2]
 
 
-def test_notification_feed_generation_ack_and_reset_cursor():
+def test_notification_feed_generation_ack_and_reset_cursor(caplog, monkeypatch):
     from herdeck.notify import NotificationFeed
+
+    caplog.set_level("INFO", logger="herdeck.notify")
+    now_ns = 1_000_000_000
+    monkeypatch.setattr("herdeck.notify.time.time_ns", lambda: now_ns)
 
     feed = NotificationFeed()
     first = feed.state()["generation"]
 
     item = feed.push("codex done", "api", "Hero")
     assert item["id"] == f"{first}:1"
+    now_ns += 37_000_000
     assert feed.ack(first, 1) is True
     assert feed.state()["acked_seq"] == 1
+    assert f"notification acknowledged id={first}:1 latency_ms=37" in caplog.text
 
     feed.reset()
     state = feed.state()

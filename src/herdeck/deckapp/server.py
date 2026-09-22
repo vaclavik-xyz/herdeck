@@ -895,7 +895,6 @@ class DeckApp:
                     if not ack(generation, seq):
                         self._send(409)
                         return
-                    log.info("notification acknowledged id=%s:%s", generation, seq)
                     self._send(204)
                 elif path == "/notifications/fallback":
                     if not self._require_header_token():

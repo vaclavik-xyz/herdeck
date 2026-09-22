@@ -169,8 +169,20 @@ class NotificationFeed:
                 or self._fallback_seq is not None
             ):
                 return False
+            item = next((item for item in self._items if item["seq"] == seq), None)
             self._acked_seq = max(self._acked_seq, seq)
-            return True
+        latency_ms = (
+            max(0, time.time_ns() // 1_000_000 - item["created_at_ms"])
+            if item is not None
+            else None
+        )
+        log.info(
+            "notification acknowledged id=%s:%s latency_ms=%s",
+            generation,
+            seq,
+            latency_ms if latency_ms is not None else "unknown",
+        )
+        return True
 
     def fallback(
         self,
