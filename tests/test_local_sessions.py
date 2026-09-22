@@ -138,3 +138,62 @@ def test_failed_session_runner_is_closed():
         _start_local_session_bridges([session], runner_factory=_FailingRunner)
 
     assert _FailingRunner.instance.closed is True
+
+
+def _short_home():
+    # AF_UNIX paths are limited to ~104 bytes; pytest's tmp_path is too long.
+    import tempfile
+
+    return tempfile.mkdtemp(prefix="hd", dir="/tmp")
+
+
+def test_stale_socket_file_after_crash_is_not_available():
+    import shutil
+    import socket
+    from pathlib import Path
+
+    home = Path(_short_home())
+    try:
+        path = home / ".config/herdr/herdr.sock"
+        path.parent.mkdir(parents=True)
+        dead = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        dead.bind(str(path))
+        dead.close()  # the socket file stays behind, nobody listens
+        assert path.exists()
+
+        sessions = discover_local_sessions(home=home, getenv={}.get)
+
+        default = next(item for item in sessions if item.name == "default")
+        assert default.available is False
+        assert selected_local_sessions(home=home, getenv={}.get) == []
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_listening_socket_is_available():
+    import shutil
+    import socket
+    from pathlib import Path
+
+    from herdeck.deckapp.sessions import socket_alive
+
+    home = Path(_short_home())
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        path = home / ".config/herdr/herdr.sock"
+        path.parent.mkdir(parents=True)
+        server.bind(str(path))
+        server.listen(16)
+
+        assert socket_alive(path) is True
+        sessions = discover_local_sessions(home=home, getenv={}.get)
+        assert next(item for item in sessions if item.name == "default").available is True
+    finally:
+        server.close()
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_socket_alive_missing_path_is_false(tmp_path):
+    from herdeck.deckapp.sessions import socket_alive
+
+    assert socket_alive(tmp_path / "absent.sock") is False

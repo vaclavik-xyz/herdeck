@@ -1431,12 +1431,12 @@ def _resolve_source_kind():
     """Gather the facts and apply select_source_kind."""
     from ..bootstrap import resolve_saved_socket_path
     from .onboarding import read_choice
-    from .sessions import selected_local_sessions
+    from .sessions import selected_local_sessions, socket_alive
 
     config_path, local_path = _default_config_paths()
     socket_path = resolve_saved_socket_path(config_path)
     choice = read_choice(config_path)
-    socket_exists = os.path.exists(socket_path)
+    socket_exists = socket_alive(socket_path)  # a stale socket after a crash is not "local"
     exact_session_override = any(
         os.environ.get(name)
         for name in ("HERDR_SOCKET", "HERDR_SOCKET_PATH", "HERDR_SESSION")
@@ -1942,6 +1942,73 @@ def build_live_source_for_connect(config, server=None, **kwargs):
     return build_live_source(config, server, **kwargs)
 
 
+# Stable machine-readable ids for /setup* failures (contract C3). Every
+# {"ok": False} response keeps its human "error" message and adds one of these
+# as "code"; the desktop maps known codes to localized text and falls back to
+# the raw message. Keep this list in sync with the _fail() call sites:
+#   demo_switch_failed          switching to the demo deck failed
+#   unknown_local_session       a requested local session name does not exist
+#   no_session_selected         nothing running selected and no saved connection
+#   connections_build_failed    starting the selected local/saved connections failed
+#   config_read_failed          config.toml / local.toml could not be read
+#   selection_save_failed       persisting the session selection failed
+#   herdr_socket_not_found      no live herdr socket at the resolved path
+#   herdr_too_old               herdr lacks session.snapshot (run `herdr update`)
+#   local_start_failed          the embedded local bridge could not start
+#   token_env_conflict          HERDECK_<ID>_TOKEN in the env shadows the typed token
+#   bad_token                   the bridge rejected the token (probe)
+#   bridge_unreachable          the bridge URL did not answer (probe)
+#   config_unreadable           the existing config is not valid TOML
+#   config_malformed            the existing config has a malformed [[servers]] list
+#   token_env_in_use            the derived token env name is used elsewhere
+#   server_not_in_profile       the active profile does not include this server
+#   remote_build_failed         building the remote live source failed
+#   token_read_failed           the keychain could not be read
+#   token_store_failed          the keychain could not store the token
+#   config_write_failed         writing config.toml failed
+#   config_invalid              the merged config failed validation
+#   onboarding_finalize_failed  clearing the onboarding marker failed
+#   no_saved_connection         "use saved" but no resolvable saved server
+#   saved_restore_failed        reconnecting the saved server failed
+SETUP_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "demo_switch_failed",
+        "unknown_local_session",
+        "no_session_selected",
+        "connections_build_failed",
+        "config_read_failed",
+        "selection_save_failed",
+        "herdr_socket_not_found",
+        "herdr_too_old",
+        "local_start_failed",
+        "token_env_conflict",
+        "bad_token",
+        "bridge_unreachable",
+        "config_unreadable",
+        "config_malformed",
+        "token_env_in_use",
+        "server_not_in_profile",
+        "remote_build_failed",
+        "token_read_failed",
+        "token_store_failed",
+        "config_write_failed",
+        "config_invalid",
+        "onboarding_finalize_failed",
+        "no_saved_connection",
+        "saved_restore_failed",
+    }
+)
+
+
+def _fail(code: str, error: str) -> dict:
+    """A /setup* failure body: human message + stable ``code`` (C3)."""
+    assert code in SETUP_ERROR_CODES, code
+    return {"ok": False, "error": error, "code": code}
+
+
+_PROBE_CODES = {"bad_token": "bad_token", "unreachable": "bridge_unreachable"}
+
+
 def connect(app, body) -> dict | None:
     """Run the onboarding connect flow. Returns the response dict, or None for a
     malformed body (the route maps None -> HTTP 400). Live swaps follow
@@ -1967,7 +2034,7 @@ def connect(app, body) -> dict | None:
         except Exception:
             _restore_choice(config_path, prior_choice)
             new_source.close()
-            return {"ok": False, "error": "could not switch to demo"}
+            return _fail("demo_switch_failed", "could not switch to demo")
         app._commit_swap(new_source, prepared)  # assignment-only
         app._set_local_bridge(None)
         app._reloader = _reloader_for(app, ("mock",), _select_source)  # mock/remote reloads resume
@@ -1988,7 +2055,7 @@ def connect(app, body) -> dict | None:
         by_name = {session.name: session for session in discovered}
         unknown = [name for name in names if name not in by_name]
         if unknown:
-            return {"ok": False, "error": f"unknown local session: {unknown[0]}"}
+            return _fail("unknown_local_session", f"unknown local session: {unknown[0]}")
         selected_sessions = [
             by_name[name] for name in dict.fromkeys(names) if by_name[name].available
         ]
@@ -2012,17 +2079,17 @@ def connect(app, body) -> dict | None:
                 new_source = MockSource(_device_local_hardware(app._config_service))
                 prepared = app._prepare_swap(new_source)
             else:
-                return {
-                    "ok": False,
-                    "error": "select a running local session or include the saved connection",
-                }
+                return _fail(
+                    "no_session_selected",
+                    "select a running local session or include the saved connection",
+                )
             if live_selection:
                 new_source = build_live_source_for_connect(config, config.servers[0])
                 prepared = app._prepare_swap(new_source, clock=time.monotonic)
         except Exception:
             for runner in runners.values():
                 runner.close()
-            return {"ok": False, "error": "could not build the selected connections"}
+            return _fail("connections_build_failed", "could not build the selected connections")
 
         prior_choice = read_choice(config_path)
         try:
@@ -2031,7 +2098,7 @@ def connect(app, body) -> dict | None:
             new_source.close()
             for runner in runners.values():
                 runner.close()
-            return {"ok": False, "error": "could not read config"}
+            return _fail("config_read_failed", "could not read config")
         app._suppress_reload = True
         try:
             app._config_service.set_local_sessions(list(dict.fromkeys(names)))
@@ -2046,7 +2113,7 @@ def connect(app, body) -> dict | None:
             new_source.close()
             for runner in runners.values():
                 runner.close()
-            return {"ok": False, "error": "could not save the selected connections"}
+            return _fail("selection_save_failed", "could not save the selected connections")
         finally:
             watcher = getattr(app, "_watcher", None)
             if watcher is not None:
@@ -2067,15 +2134,17 @@ def connect(app, body) -> dict | None:
         from ..bridge import _SNAPSHOT_UNSUPPORTED
 
         socket_path = resolve_saved_socket_path(config_path)
-        if not os.path.exists(socket_path):
-            return {"ok": False, "error": f"herdr socket not found at {socket_path}"}
+        from .sessions import socket_alive
+
+        if not socket_alive(socket_path):
+            return _fail("herdr_socket_not_found", f"herdr socket not found at {socket_path}")
         new_source = None
         runner = None
         prior_choice = read_choice(config_path)  # snapshot the marker for rollback
         try:
             prior_config, prior_local = _snapshot_config(app._config_service)
         except OSError:
-            return {"ok": False, "error": "could not read config"}
+            return _fail("config_read_failed", "could not read config")
         try:
             config, server, runner = _start_local_bridge(socket_path)  # may raise (bridge bind)
             new_source = build_live_source_for_connect(config, server)  # build ...
@@ -2104,8 +2173,9 @@ def connect(app, body) -> dict | None:
             # The bridge's hard version floor (herdr < 0.7.2, no session.snapshot) carries
             # actionable guidance ('run herdr update') that must reach the desktop user
             # verbatim, not the generic message below.
-            error = str(exc) if str(exc) == _SNAPSHOT_UNSUPPORTED else "could not start local source"
-            return {"ok": False, "error": error}
+            if str(exc) == _SNAPSHOT_UNSUPPORTED:
+                return _fail("herdr_too_old", str(exc))
+            return _fail("local_start_failed", "could not start local source")
         app._commit_swap(new_source, prepared)  # non-failing: all fallible work done; sets the live clock
         server_id = getattr(server, "id", "local")
         app._set_local_bridges({server_id: runner})  # adopt new bridge (closes old ones)
@@ -2123,17 +2193,17 @@ def connect(app, body) -> dict | None:
         # persisted config would NOT resolve to the typed token. Reject before doing anything.
         env_token = os.environ.get(token_env)
         if env_token is not None and env_token != token:
-            return {
-                "ok": False,
-                "error": f"{token_env} is set in the environment and would override the saved token; unset it or connect with that value",
-            }
+            return _fail(
+                "token_env_conflict",
+                f"{token_env} is set in the environment and would override the saved token; unset it or connect with that value",
+            )
         result = _probe_sync(url, token)
         if not result.ok:
-            return {"ok": False, "error": result.reason}
+            return _fail(_PROBE_CODES.get(result.reason, "bridge_unreachable"), result.reason)
         try:
             data = app._config_service.read()  # a malformed/unreadable existing config must not 500
         except (OSError, tomllib.TOMLDecodeError):
-            return {"ok": False, "error": "existing config is unreadable — fix it in Settings"}
+            return _fail("config_unreadable", "existing config is unreadable — fix it in Settings")
         payload = {
             "base": dict(data.get("base") or {}),
             "profiles": data.get("profiles") or {},
@@ -2142,7 +2212,7 @@ def connect(app, body) -> dict | None:
         existing = payload["base"].get("servers")
         if existing is not None and not (isinstance(existing, list) and all(isinstance(s, dict) for s in existing)):
             # parseable TOML but a wrong shape (e.g. `servers = ["bad"]`) would crash the upsert
-            return {"ok": False, "error": "existing config is malformed (servers) — fix it in Settings"}
+            return _fail("config_malformed", "existing config is malformed (servers) — fix it in Settings")
         entry = {"id": server_id, "url": url, "token_env": token_env}
         rebuilt = []
         replaced = False
@@ -2174,10 +2244,10 @@ def connect(app, body) -> dict | None:
         ConfigService._collect_token_envs(base_wo_ours, in_use)
         ConfigService._collect_token_envs(data.get("profiles") or {}, in_use)
         if token_env in in_use:
-            return {
-                "ok": False,
-                "error": f"token env {token_env} is already used elsewhere in the config — pick a different id",
-            }
+            return _fail(
+                "token_env_in_use",
+                f"token env {token_env} is already used elsewhere in the config — pick a different id",
+            )
         # BUILD-BEFORE-PERSIST: resolve the merged payload (placeholder tokens) to confirm
         # selection, then build the live source with the REAL token baked into the chosen
         # ServerConfig — all BEFORE mutating keychain/config, so any selection / validation
@@ -2188,10 +2258,10 @@ def connect(app, body) -> dict | None:
             None,
         )
         if config is None or selected_server is None:
-            return {
-                "ok": False,
-                "error": "the active profile does not include this server (check overview_order / profile servers) — fix it in Settings",
-            }
+            return _fail(
+                "server_not_in_profile",
+                "the active profile does not include this server (check overview_order / profile servers) — fix it in Settings",
+            )
         config = dataclasses.replace(
             config,
             servers=[
@@ -2206,7 +2276,7 @@ def connect(app, body) -> dict | None:
                 config_service=app._config_service,
             )
         except Exception:
-            return {"ok": False, "error": "could not build the remote source"}
+            return _fail("remote_build_failed", "could not build the remote source")
         # Persist + swap as one watcher-suppressed transaction (see _commit_remote).
         return _commit_remote(
             app,
@@ -2227,7 +2297,7 @@ def connect(app, body) -> dict | None:
         # PRESENCE, not validity; the live source dials async, so connected may be False).
         remote = select_live()  # (config, server) from disk + keychain, or None
         if remote is None:
-            return {"ok": False, "error": "no saved connection"}
+            return _fail("no_saved_connection", "no saved connection")
         config, server = remote
         prior_choice = read_choice(config_path)
         new_source = None
@@ -2245,7 +2315,7 @@ def connect(app, body) -> dict | None:
                 new_source.close()
             for runner in local_runners.values():
                 runner.close()
-            return {"ok": False, "error": "could not restore saved connection"}
+            return _fail("saved_restore_failed", "could not restore saved connection")
         app._commit_swap(new_source, prepared)  # assignment-only, non-failing
         app._set_local_bridges(local_runners)
         app._reloader = _reloader_for(app, ("remote",), _select_source)
@@ -2289,7 +2359,7 @@ def _commit_remote(
             prepared = app._prepare_swap(new_source, clock=time.monotonic)  # live clock
         except Exception:
             _close_new()
-            return {"ok": False, "error": "could not build the remote source"}
+            return _fail("remote_build_failed", "could not build the remote source")
         # Snapshot the prior keychain value AND the on-disk config BEFORE any mutation, so a
         # read fault can't strand a secret, and a partial write (config ok, local faults) is
         # undone — never leaving a serverful-but-tokenless config or a destroyed prior token.
@@ -2299,19 +2369,19 @@ def _commit_remote(
             prior_secret = secret_store.peek_keychain(token_env)
         except Exception:
             _close_new()
-            return {"ok": False, "error": "could not read the existing token — check the keychain"}
+            return _fail("token_read_failed", "could not read the existing token — check the keychain")
         svc = app._config_service
         try:
             prior_config, prior_local = _snapshot_config(svc)
         except OSError:
             _close_new()  # nothing mutated yet
-            return {"ok": False, "error": "could not read config"}
+            return _fail("config_read_failed", "could not read config")
         try:
             secret_store.set_secret(token_env, token)
         except Exception:
             _restore_secret(token_env, prior_secret)  # set may have partially overwritten
             _close_new()
-            return {"ok": False, "error": "could not store token"}
+            return _fail("token_store_failed", "could not store token")
 
         def _rollback():
             _restore_file(svc._config_path, prior_config)
@@ -2323,10 +2393,10 @@ def _commit_remote(
             errors = svc.write(payload)
         except OSError:  # atomic write can fault, possibly after a partial write
             _rollback()
-            return {"ok": False, "error": "could not write config"}
+            return _fail("config_write_failed", "could not write config")
         if errors:  # structural validation runs before any write, so nothing was written
             _rollback()
-            return {"ok": False, "error": "; ".join(errors)}
+            return _fail("config_invalid", "; ".join(errors))
         # Clear the stale local/demo marker as PART OF THE COMMIT: remote == a usable config,
         # no opt-in marker. If the unlink faults, roll everything back so a later-removed
         # config falls to first_run (the card), never to a stale marker that would mask it.
@@ -2334,7 +2404,7 @@ def _commit_remote(
             clear_choice(config_path)
         except OSError:
             _rollback()
-            return {"ok": False, "error": "could not finalize onboarding"}
+            return _fail("onboarding_finalize_failed", "could not finalize onboarding")
         app._commit_swap(new_source, prepared)  # non-failing: all fallible work done; sets the live clock
         app._set_local_bridges(local_runners)
         app._reloader = _reloader_for(app, ("remote",), _select_source)  # config-edit reloads resume
