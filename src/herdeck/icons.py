@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import math
 import os
 import re
@@ -9,9 +10,12 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from .driver.base import COLORS, PanelView
+from .project_icons import ProjectIconStore, StoredIcon, default_store
+
+log = logging.getLogger(__name__)
 
 ICON_SIZE = 196
 # The D200 small window's NATIVE resolution (one 3_2-slot background icon,
@@ -252,7 +256,9 @@ _font_cache: dict[tuple[int, bool], object] = {}  # (size, bold) -> font
 #     white ink on solid + label tiles), no spaces around '/' when wrapping,
 #     branch left-truncation, bigger status word + 16px bottom band (tag/pin),
 #     repo min 20px, dark comet ring on bright solid fills, neutral gauge labels.
-TILE_VERSION = 14
+# 15: tile_icon (agent/project/both) — a project favicon or monogram in the
+#     logo box or as a corner badge; spin renders as comet around a favicon.
+TILE_VERSION = 15
 # The status word / elapsed time column: right of the logo box incl. the comet
 # ring (x < 66), inside the 12px right margin.
 STATUS_MAX_W = ICON_SIZE - 12 - 70
@@ -446,6 +452,102 @@ def _anim_phase(raw_phase, animation: str):
     if animation == "pulse":
         return (raw_phase // PULSE_SLOWDOWN) % PULSE_STATES
     return raw_phase % SPINNER_FRAMES
+
+
+# --- project favicons ([view].tile_icon) ---
+PROJECT_BADGE = 24  # badge edge in px; overlaps the 46px logo box's corner
+PROJECT_BADGE_XY = 38  # badge top-left: box (12..58) bottom-right corner, overhanging
+PROJECT_RADIUS = 0.2  # rounded-corner radius as a fraction of the edge
+_PLATE_MIN_CONTRAST = 2.2  # below this vs the tile background an icon gets a plate
+_PLATE_LIGHT = (236, 236, 240)
+_PLATE_DARK = (22, 22, 26)
+_PROJECT_CACHE_MAX = 64
+MONOGRAM_PALETTE: tuple[tuple[int, int, int], ...] = (
+    (66, 133, 244),
+    (219, 68, 55),
+    (244, 160, 0),
+    (15, 157, 88),
+    (171, 71, 188),
+    (0, 172, 193),
+    (255, 112, 67),
+    (92, 107, 192),
+)
+
+
+def _effective_animation(tile) -> str:
+    """The working animation actually drawn: a favicon never rotates, so
+    ``spin`` becomes a comet ring around it in project mode. Used by both the
+    cache signature and the composition (one source of truth)."""
+    anim = getattr(tile, "working_animation", "spin")
+    if anim == "spin" and getattr(tile, "tile_icon", "agent") == "project":
+        return "comet"
+    return anim
+
+
+def _pulse_size(phase: int) -> int:
+    """Edge of the pulsing mark (~0.82x..1.0x of the 46px box) at a slow phase."""
+    f = 0.82 + 0.18 * (0.5 + 0.5 * math.sin(2 * math.pi * phase / PULSE_STATES))
+    return max(1, round(46 * f))
+
+
+def _round_corners(img: Image.Image) -> Image.Image:
+    w, h = img.size
+    mask = Image.new("L", img.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [0, 0, w - 1, h - 1], radius=round(min(w, h) * PROJECT_RADIUS), fill=255
+    )
+    img.putalpha(ImageChops.multiply(img.getchannel("A"), mask))
+    return img
+
+
+def _normalize_project_image(img: Image.Image) -> Image.Image:
+    """Any decoded favicon -> ICON_SIZE RGBA square: centred on transparent
+    padding (aspect kept), LANCZOS-resized, corners rounded."""
+    img = img.convert("RGBA")
+    w, h = img.size
+    side = max(w, h, 1)
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    canvas.paste(img, ((side - w) // 2, (side - h) // 2))
+    return _round_corners(canvas.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS))
+
+
+def _monogram_image(name: str) -> Image.Image:
+    """Fallback project mark: a rounded square coloured from sha1(repo) with
+    the repo's first alphanumeric character, inked for contrast."""
+    color = MONOGRAM_PALETTE[hashlib.sha1(name.encode("utf-8")).digest()[0] % len(MONOGRAM_PALETTE)]
+    ch = next((c for c in name if c.isalnum()), "?").upper()
+    img = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), color + (255,))
+    d = ImageDraw.Draw(img)
+    font = _font(118)
+    kw = {"font": font} if font is not None else {}
+    bbox = d.textbbox((0, 0), ch, **kw)
+    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    d.text(
+        ((ICON_SIZE - w) // 2 - bbox[0], (ICON_SIZE - h) // 2 - bbox[1]),
+        ch,
+        fill=_ink_for(color) + (255,),
+        **kw,
+    )
+    return _round_corners(img)
+
+
+def _mean_rgb(img: Image.Image) -> tuple[int, int, int] | None:
+    from PIL import ImageStat
+
+    mask = img.getchannel("A").point(lambda v: 255 if v > 32 else 0)
+    if not mask.getbbox():
+        return None
+    return tuple(round(c) for c in ImageStat.Stat(img.convert("RGB"), mask=mask).mean)
+
+
+def _plate_for(img: Image.Image, bg) -> tuple[int, int, int] | None:
+    """A plate colour when the icon's average colour would vanish on ``bg``
+    (a black favicon on the dark tile, a white one on a bright solid fill);
+    the plate is whichever of light/dark contrasts more with the icon."""
+    mean = _mean_rgb(img)
+    if mean is None or _contrast(mean, tuple(bg)) >= _PLATE_MIN_CONTRAST:
+        return None
+    return max((_PLATE_LIGHT, _PLATE_DARK), key=lambda plate: _contrast(plate, mean))
 
 
 def compose_panel(panel: PanelView, width: int = PANEL_W) -> Image.Image:
@@ -747,6 +849,7 @@ class IconProvider:
         fetch: Callable[[str], str | None] = _default_fetch,
         rasterize: Callable[[str, int], Image.Image] = _default_rasterize,
         assets_dir: str | None = _ASSETS_DIR,
+        project_icons: ProjectIconStore | None = None,
     ):
         self._cache_dir = cache_dir
         self._slug_map = slug_map
@@ -769,6 +872,11 @@ class IconProvider:
         self._base_cache: OrderedDict[tuple, Image.Image] = OrderedDict()
         self._layer_cache: dict[tuple, Image.Image] = {}
         self._light_glyph: dict[str, bool] = {}
+        # Favicon bytes arrive through the connector into this (shared) store;
+        # decoded, normalised images are cached per hash + repo name.
+        self._project_icons = project_icons if project_icons is not None else default_store()
+        self._project_cache: OrderedDict[tuple[str, str], Image.Image] = OrderedDict()
+        self._project_failed: set[str] = set()
 
     def _base_glyph(self, agent_type: str) -> Image.Image:
         """A monochrome mark for an agent type.
@@ -921,6 +1029,12 @@ class IconProvider:
             tile.time_text,
             getattr(tile, "tile_fill", "none"),
         ]
+        mode = getattr(tile, "tile_icon", "agent")
+        parts.append(mode)
+        if mode != "agent":
+            parts.extend(
+                [getattr(tile, "project_icon", None) or "", getattr(tile, "project_name", "") or ""]
+            )
         if tile.server_tag or tile.server_accent:
             parts.extend([tile.server_tag, tile.server_accent])
         return parts
@@ -929,7 +1043,7 @@ class IconProvider:
         """The content-addressed cache filename for a TileView (and its bounded
         spinner phase). The rotation phase is bounded to SPINNER_FRAMES so the
         cache reuses a fixed set of frames instead of minting a new PNG per tick."""
-        animation = getattr(tile, "working_animation", "spin")
+        animation = _effective_animation(tile)
         spinner = _anim_phase(tile.spinner, animation)
         sig_parts = self._static_sig(tile) + [spinner]
         if spinner is not None:
@@ -1063,7 +1177,7 @@ class IconProvider:
         """Compose an agent tile in two layers: the static base (background,
         text, bar — cached by the signature WITHOUT the animation phase) and
         the per-frame motion (logo, comet ring, sweep segment)."""
-        anim = getattr(tile, "working_animation", "spin")
+        anim = _effective_animation(tile)
         sweep = spinner is not None and anim == "sweep"
         key = (*self._static_sig(tile), sweep)
         base = self._base_cache.get(key)
@@ -1153,34 +1267,138 @@ class IconProvider:
             )
         return hit
 
+    def _project_base(self, icon_hash: str, name: str) -> tuple[Image.Image, bool]:
+        """(normalised ICON_SIZE image, cacheable) for a tile's project mark.
+        A hash whose bytes are not in the store (evicted) renders the monogram
+        but is not cached, so the icon shows as soon as its bytes return."""
+        key = (icon_hash, name)
+        hit = self._project_cache.get(key)
+        if hit is not None:
+            self._project_cache.move_to_end(key)
+            return hit, True
+        img: Image.Image | None = None
+        cacheable = True
+        if icon_hash:
+            stored = self._project_icons.get(icon_hash)
+            if stored is None:
+                cacheable = False
+            else:
+                img = self._decode_project_icon(icon_hash, stored)
+        if img is None:
+            img = _monogram_image(name)
+        if cacheable:
+            self._project_cache[key] = img
+            while len(self._project_cache) > _PROJECT_CACHE_MAX:
+                self._project_cache.popitem(last=False)
+        return img, cacheable
+
+    def _decode_project_icon(self, icon_hash: str, stored: StoredIcon) -> Image.Image | None:
+        try:
+            if stored.mime == "image/svg+xml":
+                # cairosvg (source installs) or the frozen baked-PNG lookup;
+                # both raise for an SVG they cannot render -> monogram.
+                raw = self._rasterize(stored.data.decode("utf-8"), ICON_SIZE)
+            else:
+                with Image.open(io.BytesIO(stored.data)) as im:
+                    im.load()  # ICO: Pillow loads the largest frame
+                    raw = im.convert("RGBA")
+            return _normalize_project_image(raw)
+        except Exception as exc:
+            if icon_hash not in self._project_failed:
+                self._project_failed.add(icon_hash)
+                log.warning(
+                    "project icon %s (%s) could not be decoded, showing a monogram: %s",
+                    icon_hash,
+                    stored.mime,
+                    exc,
+                )
+            return None
+
+    def _project_layer(self, tile, size: int, bg_col) -> Image.Image:
+        """The project mark at ``size`` px on its contrast plate (if needed)."""
+        icon_hash = getattr(tile, "project_icon", None) or ""
+        name = getattr(tile, "project_name", "") or ""
+        key = ("proj", icon_hash, name, size, tuple(bg_col))
+        hit = self._layer_cache.get(key)
+        if hit is not None:
+            return hit
+        base, cacheable = self._project_base(icon_hash, name)
+        plate = _plate_for(base, bg_col)
+        out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        if plate is not None:
+            ImageDraw.Draw(out).rounded_rectangle(
+                [0, 0, size - 1, size - 1], radius=round(size * PROJECT_RADIUS), fill=plate + (255,)
+            )
+            pad = max(2, size // 12)
+            inner = max(1, size - 2 * pad)
+            out.alpha_composite(base.resize((inner, inner), Image.LANCZOS), (pad, pad))
+        else:
+            out.alpha_composite(base.resize((size, size), Image.LANCZOS))
+        if cacheable:
+            self._remember_layer(key, out)
+        return out
+
+    def _draw_project_mark(self, img, tile, spinner, anim, dark_fill, bg_col) -> None:
+        """tile_icon = project: the favicon in the 46px logo box. It never
+        rotates (spin arrives here as comet); pulse scales it."""
+        working = spinner is not None
+        if working and anim == "pulse":
+            s = _pulse_size(spinner)
+            off = 12 + (46 - s) // 2
+            img.alpha_composite(self._project_layer(tile, s, bg_col), (off, off))
+            return
+        img.alpha_composite(self._project_layer(tile, 46, bg_col), (12, 12))
+        if working and anim == "comet":
+            ring = DARK_INK if dark_fill else LIGHT_INK
+            img.alpha_composite(self._comet_overlay(62, spinner, 2, 4, ring), (4, 4))
+
+    def _draw_project_badge(self, img, tile, bg_col) -> None:
+        """tile_icon = both: a static badge on the logo box's bottom-right
+        corner, ringed in the tile colour so it reads apart from the mark."""
+        x = PROJECT_BADGE_XY
+        ImageDraw.Draw(img).rounded_rectangle(
+            [x - 2, x - 2, x + PROJECT_BADGE + 1, x + PROJECT_BADGE + 1],
+            radius=round((PROJECT_BADGE + 4) * PROJECT_RADIUS),
+            fill=tuple(bg_col) + (255,),
+        )
+        img.alpha_composite(self._project_layer(tile, PROJECT_BADGE, bg_col), (x, x))
+
     def _draw_agent_motion(self, img: Image.Image, tile, spinner, anim) -> None:
         """The per-frame layer: the logo (top-left; animated while working per
-        the chosen style), the comet ring and the sweep segment."""
+        the chosen style), the comet ring and the sweep segment. With
+        tile_icon = project the favicon takes the mark's place; with both, the
+        static project badge is drawn LAST so neither the mark nor the ring
+        covers it (the mark is composited here, above the cached base)."""
         fill, accent, bg_col = self._tile_bg(tile)
         working = spinner is not None
         agent = tile.agent_type or "default"
+        mode = getattr(tile, "tile_icon", "agent")
         # A white mark / ring washes out on bright solid fills (amber 2.1:1,
         # cyan 2.0:1 — below the 3:1 non-text minimum) while the text correctly
         # flips dark: recolour them to the same dark ink. Full-colour user
         # overrides are left as supplied (the flip would flatten them).
         dark_fill = fill == "solid" and _ink_for(bg_col) == DARK_INK
-        dark_logo = dark_fill and self._is_light_glyph(agent)
-        if working and anim == "pulse":
-            # slow "breath": scale the mark between ~0.82x and 1.0x across the
-            # PULSE_STATES frames (the spinner here is already the SLOW phase
-            # from _anim_phase — one step per PULSE_SLOWDOWN ticks)
-            f = 0.82 + 0.18 * (0.5 + 0.5 * math.sin(2 * math.pi * spinner / PULSE_STATES))
-            s = max(1, round(46 * f))
-            off = 12 + (46 - s) // 2  # keep the smaller mark centred in its 46px box
-            img.alpha_composite(self._logo(agent, dark_logo, s), (off, off))
+        if mode == "project":
+            self._draw_project_mark(img, tile, spinner, anim, dark_fill, bg_col)
         else:
-            rotation = spinner * SPIN_DEG if working and anim == "spin" else 0
-            img.alpha_composite(self._logo(agent, dark_logo, 46, rotation), (12, 12))
-            if working and anim == "comet":
-                # thin comet ring orbiting the static mark; the 62px overlay is
-                # centred over the 46px logo box at (12,12) -> composite at (4,4)
-                ring = DARK_INK if dark_fill else LIGHT_INK
-                img.alpha_composite(self._comet_overlay(62, spinner, 2, 4, ring), (4, 4))
+            dark_logo = dark_fill and self._is_light_glyph(agent)
+            if working and anim == "pulse":
+                # slow "breath": scale the mark between ~0.82x and 1.0x across the
+                # PULSE_STATES frames (the spinner here is already the SLOW phase
+                # from _anim_phase — one step per PULSE_SLOWDOWN ticks)
+                s = _pulse_size(spinner)
+                off = 12 + (46 - s) // 2  # keep the smaller mark centred in its 46px box
+                img.alpha_composite(self._logo(agent, dark_logo, s), (off, off))
+            else:
+                rotation = spinner * SPIN_DEG if working and anim == "spin" else 0
+                img.alpha_composite(self._logo(agent, dark_logo, 46, rotation), (12, 12))
+                if working and anim == "comet":
+                    # thin comet ring orbiting the static mark; the 62px overlay is
+                    # centred over the 46px logo box at (12,12) -> composite at (4,4)
+                    ring = DARK_INK if dark_fill else LIGHT_INK
+                    img.alpha_composite(self._comet_overlay(62, spinner, 2, 4, ring), (4, 4))
+            if mode == "both":
+                self._draw_project_badge(img, tile, bg_col)
         # "sweep" is a moving segment along the bottom edge; it must stay
         # visible on any fill, so its colours adapt — on a solid tile
         # (background already = accent) a dark base + a bright segment; on
