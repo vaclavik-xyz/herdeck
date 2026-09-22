@@ -259,7 +259,9 @@ _font_cache: dict[tuple[int, bool], object] = {}  # (size, bold) -> font
 #     repo min 20px, dark comet ring on bright solid fills, neutral gauge labels.
 # 15: tile_icon (agent/project/both) — a project favicon or monogram in the
 #     logo box or as a corner badge; spin renders as comet around a favicon.
-TILE_VERSION = 15
+# 16: invalidates on-disk tiles an intermediate build may have written with a
+#     missing-icon monogram under the real icon's tile name.
+TILE_VERSION = 16
 # The status word / elapsed time column: right of the logo box incl. the comet
 # ring (x < 66), inside the 12px right margin.
 STATUS_MAX_W = ICON_SIZE - 12 - 70
