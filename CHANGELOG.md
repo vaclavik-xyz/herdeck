@@ -6,6 +6,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-09-22
+
+### Fixed
+- Repeated bridge snapshots no longer leak the latest spinner phase and elapsed
+  label into physical D200 frames. Volatile-only updates stay byte-identical and
+  are suppressed by the driver, while real working/status/content transitions
+  still repaint immediately.
+
 ## [0.7.5] - 2026-09-22
 
 ### Fixed
