@@ -497,6 +497,11 @@ def _herdr_pane_to_wire(
     work = WorkContext.from_tokens(tokens)
     # Favicon discovery is cached per repo root and never raises (see
     # ProjectIconIndex.hash_for); without an index the field stays empty.
+    # Known trade-off: discovery stats the pane's cwd/worktree on the event
+    # loop. The per-root/per-cwd cache (RESTAT_INTERVAL_S = 60 s) bounds how
+    # often, but a hung network mount could still block the loop here. It runs
+    # regardless of [view].tile_icon: the bridge always builds the index and
+    # the runtime opts in to icon frames whenever it has a consumer.
     project_icon = (
         icons.hash_for(worktree_path=wt.get("path") or "", cwd=cwd) if icons is not None else ""
     )

@@ -73,6 +73,9 @@ class ProjectIconStore:
                 return False
             self._icons[icon_hash_] = StoredIcon(mime, bytes(data))
             self._bytes += len(data)
+            # Known limitation: a wire icon evicted here is not re-sent until
+            # the next reconnect (the bridge sends each hash once per
+            # connection); its tiles show the monogram (uncached) meanwhile.
             while self._icons and (
                 len(self._icons) > self._max_entries or self._bytes > self._max_bytes
             ):
@@ -146,7 +149,7 @@ class ProjectIconStore:
         if first_failure:
             log.warning(
                 "project icon override %s is missing, over %d bytes or not PNG/ICO/SVG; "
-                "using the discovered icon",
+                "falling back to the discovered icon or monogram",
                 path,
                 MAX_ICON_BYTES,
             )
