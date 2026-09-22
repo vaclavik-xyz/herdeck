@@ -96,6 +96,7 @@ describe("DeckDiffer — transactional version gate + per-tile diff", () => {
     panel: 0,
     tiles: {},
     sections: {},
+    labels: {},
     connections: {},
     localConnections: {},
     summary: emptySummary(),
@@ -195,21 +196,21 @@ describe("commandTransport — talks to the token-free Tauri proxy commands", ()
     const { invoke, calls } = fakeInvoke({
       deck_tile: (args) => `data:image/png;base64,T${args?.index}`,
     });
-    const t = commandTransport(invoke);
+    const t = commandTransport(invoke, { imageScheme: false });
     expect(await t.tileImage(5, 9)).toBe("data:image/png;base64,T5");
     expect(calls).toEqual([{ cmd: "deck_tile", args: { index: 5 } }]);
   });
 
   it("panelImage invokes deck_panel and passes the data URL through", async () => {
     const { invoke, calls } = fakeInvoke({ deck_panel: () => "data:image/png;base64,P" });
-    const t = commandTransport(invoke);
+    const t = commandTransport(invoke, { imageScheme: false });
     expect(await t.panelImage(2)).toBe("data:image/png;base64,P");
     expect(calls).toEqual([{ cmd: "deck_panel", args: undefined }]);
   });
 
   it("tileImage / panelImage return null when the command yields no image (404)", async () => {
     const { invoke } = fakeInvoke({ deck_tile: () => null, deck_panel: () => null });
-    const t = commandTransport(invoke);
+    const t = commandTransport(invoke, { imageScheme: false });
     expect(await t.tileImage(0, 1)).toBeNull();
     expect(await t.panelImage(1)).toBeNull();
   });
