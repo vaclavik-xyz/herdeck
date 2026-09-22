@@ -110,7 +110,13 @@ class D200Sink:
         current: dict[int, tuple[object, object]] = {}
         for tile in tiles:
             try:
-                semantic = replace(tile, spinner=None, time_text=None)
+                # Spinner phase is volatile, spinner presence is a real
+                # WORKING/non-working transition and must stay in the key.
+                semantic = replace(
+                    tile,
+                    spinner=0 if getattr(tile, "spinner", None) is not None else None,
+                    time_text=None,
+                )
                 display = replace(tile)
             except TypeError:  # lightweight non-dataclass test doubles
                 semantic = display = tile

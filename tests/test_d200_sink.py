@@ -185,6 +185,37 @@ def test_non_ticker_snapshots_freeze_only_spinner_and_elapsed_text():
     assert driver.tile_views[2][0].status_text == "DONE"
 
 
+def test_spinner_disappearing_is_a_semantic_d200_change():
+    class CapturingDriver(FrameDriver):
+        def __init__(self):
+            super().__init__()
+            self.tile_views = []
+
+        def render_frame(self, tiles, panel):
+            self.tile_views.append(tiles)
+
+    driver = CapturingDriver()
+    sink = _sink(driver, start_reader=False)
+    panel = PanelView("Agents")
+    sink.deliver(
+        RenderFrame(
+            _RS([TileView(0, "api", "blue", spinner=2, time_text="5s")], panel),
+            working=None,
+            full=True,
+        )
+    )
+    sink.deliver(
+        RenderFrame(
+            _RS([TileView(0, "api", "blue", spinner=None, time_text="10s")], panel),
+            working=None,
+            full=True,
+        )
+    )
+
+    assert driver.tile_views[1][0].spinner is None
+    assert driver.tile_views[1][0].time_text == "10s"
+
+
 def test_reconnecting_sink_retries_initially_missing_device_and_paints_latest_frame():
     class ConnectedDriver(FrameDriver):
         def __init__(self):
