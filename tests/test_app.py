@@ -1004,7 +1004,7 @@ def test_app_does_not_notify_when_blocked_not_in_on():
     assert calls == []
 
 
-def test_app_notifies_on_done_transition_with_done_sound():
+def test_app_notifies_on_done_transition_with_done_sound(monkeypatch):
     from herdeck.notify import Notifier
 
     calls = []
@@ -1019,13 +1019,54 @@ def test_app_notifies_on_done_transition_with_done_sound():
     )
     app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
     app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.DONE)])
-    assert calls == [("claude done", "api", "Hero")]  # default done sound
+    assert calls == [("claude · done", "api", "Hero")]  # default done sound
     # Still done -> no duplicate; leaving done re-arms.
     app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.DONE)])
     assert len(calls) == 1
+    import herdeck.app as app_mod
+
+    later = app_mod._now() + 61  # past the per-agent "done" cooldown
+    monkeypatch.setattr(app_mod, "_monotonic", lambda: later)
     app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
     app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.DONE)])
     assert len(calls) == 2
+
+
+def test_app_done_flapping_within_cooldown_notifies_once():
+    from herdeck.notify import Notifier
+
+    calls = []
+    cfg = make_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.on = ["done"]
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: calls.append((t, b, s))),
+    )
+    for status in (Status.WORKING, Status.DONE) * 3:
+        app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", status)])
+    assert len(calls) == 1
+
+
+def test_app_done_titles_are_localized():
+    from herdeck.notify import Notifier
+
+    calls = []
+    cfg = make_config()
+    cfg.view.language = "cs"
+    cfg.notifications.enabled = True
+    cfg.notifications.on = ["done"]
+    app = App(
+        cfg,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: calls.append(t)),
+    )
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WORKING)])
+    app.handle_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.DONE)])
+    assert calls == ["claude · hotovo"]
 
 
 def test_app_done_not_notified_unless_enabled_in_on():
@@ -1065,7 +1106,7 @@ def test_app_sound_switch_overrides_per_event_sounds():
             AgentState(AgentKey("dev", "p2"), "codex", "web", Status.DONE),
         ],
     )
-    assert calls == [("claude", "api", "Basso"), ("codex done", "web", "Pop")]
+    assert calls == [("claude · needs input", "api", "Basso"), ("codex · done", "web", "Pop")]
     cfg.notifications.sound = False
     app.handle_snapshot(
         "dev",
@@ -1074,7 +1115,10 @@ def test_app_sound_switch_overrides_per_event_sounds():
             AgentState(AgentKey("dev", "p4"), "codex", "web4", Status.DONE),
         ],
     )
-    assert calls[-2:] == [("claude", "api3", False), ("codex done", "web4", False)]
+    assert calls[-2:] == [
+        ("claude · needs input", "api3", False),
+        ("codex · done", "web4", False),
+    ]
 
 
 def test_app_done_bypasses_blocked_notifier_chain():
@@ -1109,7 +1153,7 @@ def test_app_done_bypasses_blocked_notifier_chain():
         ],
     )
     assert [(key.pane_id, body) for key, body, *_ in capture.calls] == [("p1", "api")]
-    assert blocked_calls == [("codex done", "web", "Hero")]
+    assert blocked_calls == [("codex · done", "web", "Hero")]
 
 
 def test_build_notifier_respects_config():
@@ -1201,7 +1245,7 @@ def test_build_blocked_notifier_preserves_macos_with_interactive_telegram():
 
     assert calls == [
         ("factory", "TOK", "-1001"),
-        ("macos", "codex", "herdeck · main", True),
+        ("macos", "codex · needs input", "herdeck · main", True),
         ("interactive", AgentKey("local", "p1"), "herdeck · main", True, False),
         ("poll", 5),
     ]
@@ -1246,7 +1290,7 @@ def test_build_blocked_runtime_keeps_one_way_telegram_when_interactive_incomplet
     )
 
     assert runtime.poller is None
-    assert calls == [("telegram", "TOK", "-1001", 456, "codex", "herdeck · main", True)]
+    assert calls == [("telegram", "TOK", "-1001", 456, "codex · needs input", "herdeck · main", True)]
 
 
 def test_build_blocked_runtime_keeps_one_way_telegram_until_interactor_can_poll():
@@ -1289,7 +1333,7 @@ def test_build_blocked_runtime_keeps_one_way_telegram_until_interactor_can_poll(
     )
 
     assert runtime.poller is None
-    assert calls == [("telegram", "TOK", "-1001", 456, "codex", "herdeck · main", True)]
+    assert calls == [("telegram", "TOK", "-1001", 456, "codex · needs input", "herdeck · main", True)]
 
 
 def test_install_telegram_runtime_sets_factory_poller_and_control():

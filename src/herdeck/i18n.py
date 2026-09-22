@@ -44,6 +44,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "offline_reconnecting": "OFFLINE — reconnecting…",
         "press_to_confirm": "press again to confirm",
         "sent": "sent › {label}",
+        # notification titles (banner / Telegram headline)
+        "notify.title_blocked": "{agent} · needs input",
+        "notify.title_done": "{agent} · done",
         # Elgato plugin action keys
         "act.approve": "Approve",
         "act.deny": "Deny",
@@ -114,6 +117,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "offline_reconnecting": "OFFLINE — připojuji…",
         "press_to_confirm": "stiskni znovu pro potvrzení",
         "sent": "posláno › {label}",
+        "notify.title_blocked": "{agent} · čeká na tebe",
+        "notify.title_done": "{agent} · hotovo",
         "act.approve": "Schválit",
         "act.deny": "Zamítnout",
         "act.stop": "Stop",

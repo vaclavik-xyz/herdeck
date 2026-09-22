@@ -624,11 +624,9 @@ class DeckApp:
                 "source": self._source.source_name,
                 "connected": self._source.connected,
                 "language": getattr(self._source, "language", "en"),
-                "notify": (
-                    self._source.notifications_feed_state()
-                    if hasattr(self._source, "notifications_feed_state")
-                    else {"seq": 0, "items": []}
-                ),
+                # Notifications are NOT part of /state: the shell long-polls
+                # /notifications (acknowledged feed). The old "notify" mirror
+                # had no consumer and copied the whole feed on every poll.
             }
             connections = getattr(self._source, "connections", None)
             if isinstance(connections, dict):
