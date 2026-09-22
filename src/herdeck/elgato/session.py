@@ -9,6 +9,7 @@ from ..config import Config
 from ..driver.base import TileView
 from ..i18n import tr
 from ..model import AgentKey, AgentState, Status
+from ..project_icons import ProjectIconStore, tile_icon_fields
 from .slots import SlotLeases
 
 
@@ -19,9 +20,18 @@ class KeyRender:
 
 
 class ElgatoSession:
-    def __init__(self, config: Config, icons, *, clock=None, arm_timeout: float = 3.0) -> None:
+    def __init__(
+        self,
+        config: Config,
+        icons,
+        *,
+        clock=None,
+        arm_timeout: float = 3.0,
+        project_icons: ProjectIconStore | None = None,
+    ) -> None:
         self.config = config
         self._icons = icons
+        self._project_icons = project_icons
         self._clock = clock or time.monotonic
         self._arm_timeout = arm_timeout
         self._agents: dict[AgentKey, AgentState] = {}
@@ -387,6 +397,7 @@ class ElgatoSession:
             repo=primary,
             branch=secondary,
             status_text=layout.tile_status_text(s, self.config.view.language, down),
+            **tile_icon_fields(self.config.view, s, self._project_icons),
         )
 
     # --- render ---

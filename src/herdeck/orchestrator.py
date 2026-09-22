@@ -9,6 +9,7 @@ from .config import Config
 from .driver.base import PanelView, TileView
 from .i18n import tr
 from .model import AgentKey, AgentState, Status
+from .project_icons import ProjectIconStore, tile_icon_fields
 
 _OPTION_LABEL_MAX = 14
 # An armed destructive-action confirmation expires after this long, so a stale
@@ -71,13 +72,20 @@ class RenderState:
 
 
 class Orchestrator:
-    def __init__(self, config: Config, slots: int | None = None, clock=None):
+    def __init__(
+        self,
+        config: Config,
+        slots: int | None = None,
+        clock=None,
+        project_icons: ProjectIconStore | None = None,
+    ):
         import time
 
         self.config = config
         cols, rows = config.grid
         self.slots = slots if slots is not None else cols * rows
         self._clock = clock or time.monotonic
+        self._project_icons = project_icons  # None -> the process-wide store
         self._agents: dict[AgentKey, AgentState] = {}
         self._since: dict[AgentKey, tuple[Status, float]] = {}  # status start time
         self._down: set[str] = set()
@@ -545,6 +553,7 @@ class Orchestrator:
                         server_tag=tag,
                         server_accent=accent,
                         section="view",
+                        **tile_icon_fields(self.config.view, s, self._project_icons),
                     )
                 )
             elif (self._page % pages) * agent_slots + i in self.pins:
