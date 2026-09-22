@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import math
 import os
 import re
@@ -40,6 +41,8 @@ CACHE_VERSION = 3
 PRUNE_MAX_AGE_S = 3600.0
 _PRUNE_EVERY_WRITES = 4096  # opportunistic prune cadence for long-running processes
 _BYTES_CACHE_MAX = 512  # in-memory PNG-bytes LRU entries (~a few MB)
+_BASE_CACHE_MAX = 48  # static agent-tile bases (196x196 RGBA, ~150 KB each)
+_LAYER_CACHE_MAX = 512  # small per-frame logo/comet layers
 
 
 def prune_generated(cache_dir: str, max_age_s: float = PRUNE_MAX_AGE_S) -> int:
@@ -245,14 +248,81 @@ _font_cache: dict[tuple[int, bool], object] = {}  # (size, bold) -> font
 #    D200 sends it as ONE 3_2 background icon instead of two stretched cells.
 # 10: the usage panel uses a lighter slate palette and shows reset hints in the
 #     overview cards.
-TILE_VERSION = 13
+# 14: WCAG-contrast inks (status word/subtext lightened on none/tint, black or
+#     white ink on solid + label tiles), no spaces around '/' when wrapping,
+#     branch left-truncation, bigger status word + 16px bottom band (tag/pin),
+#     repo min 20px, dark comet ring on bright solid fills, neutral gauge labels.
+TILE_VERSION = 14
+# The status word / elapsed time column: right of the logo box incl. the comet
+# ring (x < 66), inside the 12px right margin.
+STATUS_MAX_W = ICON_SIZE - 12 - 70
 TILE_BG = (26, 26, 30)  # dark agent-tile background
 SPIN_DEG = 360 / SPINNER_FRAMES  # degrees per rotation phase
 
 
-def _lum(c: tuple[int, int, int]) -> float:
-    """Perceived luminance (Rec. 601) of an RGB colour, on a 0-255 scale."""
-    return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+# Text ink for coloured backgrounds. Pure black (not a soft near-black) is what
+# guarantees the flip below always reaches WCAG AA: with black/white as the two
+# candidates, the worse background (the mid-tone where both tie) still gives
+# 4.58:1. A softer (18,18,22) ink left violet/grey solid tiles under 4.5:1.
+DARK_INK = (0, 0, 0)
+LIGHT_INK = (255, 255, 255)
+# Minimum WCAG contrast every text colour on an agent/label tile aims for.
+TEXT_CONTRAST = 4.5
+
+
+def _rel_lum(c: tuple[int, int, int]) -> float:
+    """WCAG 2 relative luminance (0..1) of an sRGB colour."""
+
+    def lin(v: int) -> float:
+        x = v / 255
+        return x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+
+
+def _contrast(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+    """WCAG 2 contrast ratio between two colours (1..21)."""
+    la, lb = _rel_lum(a), _rel_lum(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _ink_for(bg: tuple[int, int, int]) -> tuple[int, int, int]:
+    """The ink (black or white) with the higher WCAG contrast on ``bg``.
+
+    Replaces the old Rec.601 ``> 120`` threshold, which put violet (126) and
+    grey (120) on the wrong side: their elapsed time read at ~2.9-3.1:1."""
+    return DARK_INK if _contrast(DARK_INK, bg) > _contrast(LIGHT_INK, bg) else LIGHT_INK
+
+
+def _mix(a, b, t: float) -> tuple[int, int, int]:
+    """``a`` moved ``t`` (0..1) of the way toward ``b``."""
+    return tuple(round(ca + (cb - ca) * t) for ca, cb in zip(a, b, strict=True))
+
+
+def _readable(color, bg, target: float = TEXT_CONTRAST) -> tuple[int, int, int]:
+    """``color`` lightened toward white just enough to reach ``target`` contrast
+    on ``bg`` (a dark background). Keeps the hue where it already passes — green
+    on the dark tile stays green — and only washes the dim ones (blue, violet,
+    grey, red) as far as legibility needs."""
+    for step in range(21):
+        c = _mix(color, LIGHT_INK, step / 20)
+        if _contrast(c, bg) >= target:
+            return c
+    return LIGHT_INK
+
+
+def _soften(ink, bg, target: float = TEXT_CONTRAST, max_mix: float = 0.3):
+    """``ink`` blended up to ``max_mix`` toward ``bg`` (a quieter secondary
+    tone) while it still keeps ``target`` contrast. Returns ``ink`` itself when
+    there is no headroom (violet/grey solids)."""
+    best = ink
+    for step in range(1, int(max_mix * 20) + 1):
+        c = _mix(ink, bg, step / 20)
+        if _contrast(c, bg) < target:
+            break
+        best = c
+    return best
 
 
 def _is_light_monochrome(img: Image.Image) -> bool:
@@ -276,21 +346,35 @@ def _tint_bg(accent: tuple[int, int, int]) -> tuple[int, int, int]:
     return tuple(int(c * 0.34) for c in accent)
 
 
+_TEXT_COLORS_CACHE: dict[tuple, tuple] = {}
+
+
 def _tile_text_colors(fill, bg_col, accent):
     """(repo, branch, time, status-word) colours for an agent tile, picked for
-    contrast against the fill background.
+    WCAG contrast (>= TEXT_CONTRAST) against the fill background.
 
-    none/tint sit on a dark background -> white repo + dim-grey subtext, and the
-    status word keeps the accent colour. A solid fill flips by background
-    brightness: a bright colour (green/amber/cyan) takes dark text; a darker
-    colour (e.g. blue) keeps light text but with a near-white subtext so the
-    branch + elapsed time stay readable on the colour instead of washing out."""
-    solid = fill == "solid"
-    if solid and _lum(bg_col) > 120:  # bright colour -> dark text
-        return (18, 18, 22), (45, 45, 50), (55, 55, 60), (18, 18, 22)
-    if solid:  # darker colour -> light text, brighter subtext than on the dark bg
-        return (255, 255, 255), (230, 230, 236), (215, 215, 222), (255, 255, 255)
-    return (255, 255, 255), (180, 180, 188), (165, 165, 170), accent  # none / tint
+    none/tint sit on a dark background -> white repo, grey subtext and the
+    status word in the accent colour, each lightened toward white only as far
+    as needed (blue IDLE / violet WAITING / grey UNKNOWN / red OFFLINE read at
+    3.1-4.2:1 in the raw accent). A solid fill takes whichever ink (black or
+    white) contrasts more with the colour; the repo, status word and elapsed
+    time use that ink, the branch a slightly quieter blend of it."""
+    key = (fill, tuple(bg_col), tuple(accent))
+    hit = _TEXT_COLORS_CACHE.get(key)
+    if hit is not None:
+        return hit
+    if fill == "solid":
+        ink = _ink_for(bg_col)
+        out = (ink, _soften(ink, bg_col), ink, ink)
+    else:  # none / tint
+        out = (
+            LIGHT_INK,
+            _readable((180, 180, 188), bg_col),
+            _readable((165, 165, 170), bg_col),
+            _readable(accent, bg_col),
+        )
+    _TEXT_COLORS_CACHE[key] = out
+    return out
 
 
 def _font(size: int, *, bold: bool = True):
@@ -398,6 +482,10 @@ _GAUGE_CARD = (66, 73, 85)
 _GAUGE_LINE = (104, 112, 126)
 _GAUGE_MUTED = (200, 205, 215)
 _GAUGE_TEXT = (251, 252, 253)
+# Gauge labels are neutral: the palette colour (violet 'CLAUDE 5h' read at
+# 2.2:1 on the card) lives only in the rail, which also shifts to amber/red as
+# the limit nears — a coloured label then disagreed with its own bar.
+_GAUGE_LABEL = _GAUGE_MUTED
 
 
 def _gauge_tone(color: str, used_percent: int) -> tuple[int, int, int]:
@@ -461,12 +549,12 @@ def _compose_gauge_panel(panel: PanelView, width: int) -> Image.Image:
             label_font = _font(16)
             value_font = _font(31)
             hint_font = _font(13)
-            label = f"{gauge.label.upper()} · {gauge.window}"
+            label = f"{gauge.label} · {gauge.window}".upper()
             draw.text(
                 (x0 + 10, y0 + 9),
                 _truncate(draw, label, label_font, cell_w - 20),
                 font=label_font,
-                fill=COLORS.get(gauge.color, _GAUGE_MUTED),
+                fill=_GAUGE_LABEL,
             )
             draw.text(
                 (x0 + 10, y0 + 34), f"{gauge.used_percent}%", font=value_font, fill=_GAUGE_TEXT
@@ -484,13 +572,13 @@ def _compose_gauge_panel(panel: PanelView, width: int) -> Image.Image:
             label_font = _font(16 if roomy else 14)
             value_font = _font(36 if roomy else 22)
             hint_font = _font(14 if roomy else 12)
-            label = f"{gauge.label.upper()}  {gauge.window}"
+            label = f"{gauge.label}  {gauge.window}".upper()
             label_space = cell_w - 18 if roomy else cell_w - 62
             draw.text(
                 (x0 + 9, y0 + (10 if roomy else 7)),
                 _truncate(draw, label, label_font, label_space),
                 font=label_font,
-                fill=COLORS.get(gauge.color, _GAUGE_MUTED),
+                fill=_GAUGE_LABEL,
             )
             value = f"{gauge.used_percent}%"
             if roomy:
@@ -529,13 +617,28 @@ def _truncate(draw, text, font, max_w):
     return text + "…"
 
 
+def _fit_font(draw, text, max_w, largest, smallest, *, bold=True):
+    """The largest font in [smallest, largest] that fits ``text`` into ``max_w``
+    (``smallest`` when none does — the caller truncates)."""
+    for size in range(largest, smallest - 1, -1):
+        font = _font(size, bold=bold)
+        if draw.textlength(text, font=font) <= max_w:
+            return font
+    return _font(smallest, bold=bold)
+
+
+# The repo name never drops below this: at 18px it matched the branch line and
+# the tile lost its primary/secondary hierarchy.
+PROJECT_MIN_PX = 20
+
+
 def _fit_project_name(draw, text, max_w):
     """Keep short names prominent; shrink, then wrap without microscopic text."""
-    for size in range(31, 17, -1):
+    for size in range(31, PROJECT_MIN_PX - 1, -1):
         font = _font(size)
         if draw.textlength(text, font=font) <= max_w:
             return font, [text]
-    # Two 18px lines fit above the thread/branch text. Split long identifiers
+    # Two PROJECT_MIN_PX lines fit above the branch text. Split long identifiers
     # too, preferring a nearby word or path/name boundary when available.
     cut = 0
     while cut < len(text) and draw.textlength(text[:cut + 1], font=font) <= max_w:
@@ -546,38 +649,86 @@ def _fit_project_name(draw, text, max_w):
     return font, [text[:cut].rstrip(), _truncate(draw, text[cut:].lstrip(), font, max_w)]
 
 
-def _wrap(draw, text, font, max_w, max_lines=2):
-    """Wrap text (splitting on '/' too, for branch names) to <= max_lines.
+def _wrap_tokens(text: str, break_after: str) -> list[tuple[str, bool]]:
+    """Split text into (piece, space_before) tokens for wrapping.
+
+    Words split on whitespace (space_before=True: a line may break there and
+    the space is kept otherwise). Inside a word a line may also break AFTER any
+    ``break_after`` char — the char stays glued to the piece before it and no
+    space is ever inserted, so ``/tmp/build`` stays ``/tmp/build`` on one line
+    and breaks as ``/tmp/`` + ``build`` across two."""
+    cls = re.escape(break_after)
+    piece_re = re.compile(f"[{cls}]*[^{cls}]+[{cls}]*|[{cls}]+")
+    tokens: list[tuple[str, bool]] = []
+    for word in text.split():
+        pieces = piece_re.findall(word) if break_after else [word]
+        for j, piece in enumerate(pieces):
+            tokens.append((piece, j == 0))
+    return tokens
+
+
+def _wrap(draw, text, font, max_w, max_lines=2, break_after="/"):
+    """Wrap text to <= max_lines lines no wider than ``max_w``.
+
+    Lines break at spaces and after any ``break_after`` char (so paths and
+    branch names wrap), and never gain characters: the old ``' / '`` split made
+    an approval read ``rm -rf / tmp / build``. A piece wider than a whole line
+    is split by characters rather than overflowing the tile.
 
     A cut-off tail is ALWAYS marked with an ellipsis: silently dropping words
     turned e.g. the drill option "…don't ask again for rm commands in
     /home/user/projects" into an apparent approval for "rm commands in /"."""
-    words = text.replace("/", " / ").split()
+    tokens = _wrap_tokens(text, break_after)
     lines: list[str] = []
     cur = ""
     truncated = False
-    for w in words:
-        test = (cur + " " + w).strip()
+    i = 0
+    while i < len(tokens):
+        piece, space = tokens[i]
+        test = (cur + " " + piece if space else cur + piece) if cur else piece
         if draw.textlength(test, font=font) <= max_w:
             cur = test
+            i += 1
+            continue
+        if cur:
+            lines.append(cur)
+            cur = ""
         else:
-            if cur:
-                lines.append(cur)
-            cur = w
+            # the piece alone is wider than a line: hard-split it
+            cut = 1
+            while cut < len(piece) and draw.textlength(piece[: cut + 1], font=font) <= max_w:
+                cut += 1
+            lines.append(piece[:cut])
+            tokens[i] = (piece[cut:], False)
         if len(lines) == max_lines:
-            truncated = True  # cur (and any remaining words) no longer fit
+            truncated = True  # tokens[i] (and anything after it) no longer fit
             break
-    if cur and len(lines) < max_lines:
-        lines.append(cur)
-    if lines:
-        if truncated:
-            last = lines[-1]
-            while last and draw.textlength(last + "…", font=font) > max_w:
-                last = last[:-1]
-            lines[-1] = last + "…"
-        else:
-            lines[-1] = _truncate(draw, lines[-1], font, max_w)
+    if cur:
+        lines.append(cur)  # loop ended normally -> room for it
+    if lines and truncated:
+        last = lines[-1].rstrip()
+        while last and draw.textlength(last + "…", font=font) > max_w:
+            last = last[:-1]
+        lines[-1] = last + "…"
     return lines[:max_lines]
+
+
+def _fit_branch(draw, branch, font, max_w):
+    """Branch lines (<= 2) for an agent tile.
+
+    A branch that fits is shown whole on one line. Otherwise the leading path
+    segments give way to ``…/`` so the distinctive leaf leads — wrapping
+    ``feature/very-long-name`` spent its whole first line on ``feature /``.
+    A leaf still too long for one line wraps (at ``-``, ``_``, ``.`` too) onto
+    a second, with an ellipsis if even that is cut."""
+    if draw.textlength(branch, font=font) <= max_w:
+        return [branch]
+    head, sep, leaf = branch.rpartition("/")
+    if sep and head and leaf:
+        branch = "…/" + leaf
+        if draw.textlength(branch, font=font) <= max_w:
+            return [branch]
+    return _wrap(draw, branch, font, max_w, 2, break_after="/-_.")
 
 
 class IconProvider:
@@ -611,6 +762,13 @@ class IconProvider:
         self._glyph_cache: dict[str, Image.Image] = {}
         self._bytes_cache: OrderedDict[str, bytes] = OrderedDict()
         self._writes_since_prune = 0
+        # Layered render caches (all bounded): the static part of an agent tile
+        # keyed by its signature WITHOUT the animation phase, so a working
+        # tile's 8 frames compose the background/text once and only paste the
+        # moving logo / sweep per frame; plus the small per-frame layers.
+        self._base_cache: OrderedDict[tuple, Image.Image] = OrderedDict()
+        self._layer_cache: dict[tuple, Image.Image] = {}
+        self._light_glyph: dict[str, bool] = {}
 
     def _base_glyph(self, agent_type: str) -> Image.Image:
         """A monochrome mark for an agent type.
@@ -706,12 +864,20 @@ class IconProvider:
         bg.convert("RGB").save(path)
         return name
 
-    def _comet_overlay(self, size: int, phase: int, inset: int, width: int) -> Image.Image:
+    def _comet_overlay(
+        self, size: int, phase: int, inset: int, width: int, color=LIGHT_INK
+    ) -> Image.Image:
         """A transparent ``size``×``size`` overlay holding an anti-aliased comet
         ring — a bright head with a fading tail — at rotation ``phase``, drawn
         supersampled then downscaled. ``inset`` and ``width`` are in final
-        (pre-supersample) pixels. Shared by the full-tile spinner (``icon_for``)
-        and the per-logo comet animation (``_compose_agent_tile``)."""
+        (pre-supersample) pixels; ``color`` is the ring ink (dark on bright
+        solid fills, where a white ring all but vanished). Shared by the
+        full-tile spinner (``icon_for``) and the per-logo comet animation
+        (``_compose_agent_tile``); cached, it is by far the costliest layer."""
+        key = ("comet", size, phase, inset, width, tuple(color))
+        hit = self._layer_cache.get(key)
+        if hit is not None:
+            return hit
         z = size * _SS
         ov = Image.new("RGBA", (z, z), (0, 0, 0, 0))
         d = ImageDraw.Draw(ov)
@@ -721,21 +887,27 @@ class IconProvider:
         step = 4
         for i in range(0, RING_SPAN, step):
             alpha = int(235 * (1 - i / RING_SPAN))
-            d.arc(box, head - i - step, head - i, fill=(255, 255, 255, alpha), width=w)
-        return ov.resize((size, size), Image.LANCZOS)
+            d.arc(box, head - i - step, head - i, fill=tuple(color) + (alpha,), width=w)
+        out = ov.resize((size, size), Image.LANCZOS)
+        self._remember_layer(key, out)
+        return out
+
+    def _remember_layer(self, key, img) -> None:
+        # a handful of agents x inks x styles x 8 phases; the cap only guards
+        # against an unbounded stream of distinct agent types
+        if len(self._layer_cache) >= _LAYER_CACHE_MAX:
+            self._layer_cache.clear()
+        self._layer_cache[key] = img
 
     def _draw_spinner(self, img: Image.Image, phase: int) -> None:
         """Composite the full-tile comet ring used by ``icon_for``."""
         img.alpha_composite(self._comet_overlay(ICON_SIZE, phase, RING_INSET, RING_WIDTH))
 
     # --- rich tile rendering (full tile incl. text; device label left empty) ---
-    def _tile_name(self, tile) -> tuple[str, int | None]:
-        """The content-addressed cache filename for a TileView (and its bounded
-        spinner phase). The rotation phase is bounded to SPINNER_FRAMES so the
-        cache reuses a fixed set of frames instead of minting a new PNG per tick."""
-        animation = getattr(tile, "working_animation", "spin")
-        spinner = _anim_phase(tile.spinner, animation)
-        sig_parts = [
+    def _static_sig(self, tile) -> list:
+        """Every TileView input that shapes the STATIC part of a tile (all but
+        the animation phase/style)."""
+        parts = [
             TILE_VERSION,
             getattr(tile, "pinned", False),
             self._asset_fp,
@@ -743,24 +915,39 @@ class IconProvider:
             tile.label,
             tile.subtext,
             tile.agent_type,
-            spinner,
             tile.repo,
             tile.branch,
             tile.status_text,
             tile.time_text,
             getattr(tile, "tile_fill", "none"),
         ]
+        if tile.server_tag or tile.server_accent:
+            parts.extend([tile.server_tag, tile.server_accent])
+        return parts
+
+    def _tile_name(self, tile) -> tuple[str, int | None]:
+        """The content-addressed cache filename for a TileView (and its bounded
+        spinner phase). The rotation phase is bounded to SPINNER_FRAMES so the
+        cache reuses a fixed set of frames instead of minting a new PNG per tick."""
+        animation = getattr(tile, "working_animation", "spin")
+        spinner = _anim_phase(tile.spinner, animation)
+        sig_parts = self._static_sig(tile) + [spinner]
         if spinner is not None:
             sig_parts.append(animation)
-        if tile.server_tag or tile.server_accent:
-            sig_parts.extend([tile.server_tag, tile.server_accent])
         sig = "|".join(str(x) for x in sig_parts)
         return "tile_" + hashlib.sha1(sig.encode()).hexdigest()[:16] + ".png", spinner
 
+    def _compose(self, tile, spinner) -> Image.Image:
+        """Agent tiles (tile.repo set) get the rich layout; control tiles render
+        their centred label on a colour."""
+        if tile.repo is not None:
+            return self._compose_agent_tile(tile, spinner)
+        return self._compose_label_tile(tile)
+
     def render_tile(self, tile) -> str:
         """Render a full TileView (logo, repo, branch, status, time) to a cached
-        PNG and return its filename. Agent tiles (tile.repo set) get the rich
-        layout; control tiles render their centred label on a colour."""
+        PNG FILE and return its filename — for consumers that read the icon by
+        name (strmdck/D200). HTTP surfaces use ``render_tile_bytes``."""
         name, spinner = self._tile_name(tile)
         path = os.path.join(self._cache_dir, name)
         try:
@@ -778,12 +965,7 @@ class IconProvider:
                 except OSError:
                     pass
             return name
-        img = (
-            self._compose_agent_tile(tile, spinner)
-            if tile.repo is not None
-            else self._compose_label_tile(tile)
-        )
-        img.convert("RGB").save(path)
+        self._compose(tile, spinner).convert("RGB").save(path)
         self._writes_since_prune += 1
         if self._writes_since_prune >= _PRUNE_EVERY_WRITES:
             self._writes_since_prune = 0
@@ -793,16 +975,17 @@ class IconProvider:
     def render_tile_bytes(self, tile) -> bytes:
         """Render a tile and return its PNG bytes (web simulator / HTTP state).
 
-        Served from a small in-memory LRU so the per-tick full-frame render
-        never touches the filesystem for tiles it has already produced."""
-        name, _ = self._tile_name(tile)
+        Encoded in memory and served from a small in-memory LRU: the HTTP path
+        never needs a file, so it no longer writes a PNG to disk only to read
+        it straight back."""
+        name, spinner = self._tile_name(tile)
         cached = self._bytes_cache.get(name)
         if cached is not None:
             self._bytes_cache.move_to_end(name)
             return cached
-        name = self.render_tile(tile)
-        with open(os.path.join(self._cache_dir, name), "rb") as fh:
-            data = fh.read()
+        buf = io.BytesIO()
+        self._compose(tile, spinner).convert("RGB").save(buf, "PNG")
+        data = buf.getvalue()
         self._bytes_cache[name] = data
         while len(self._bytes_cache) > _BYTES_CACHE_MAX:
             self._bytes_cache.popitem(last=False)
@@ -827,21 +1010,24 @@ class IconProvider:
                 fill=COLORS["green"],
             )
             return bg
-        bg = Image.new(
-            "RGBA", (ICON_SIZE, ICON_SIZE), COLORS.get(tile.color, COLORS["dim"]) + (255,)
-        )
+        bg_col = COLORS.get(tile.color, COLORS["dim"])
+        bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), bg_col + (255,))
+        # Always-white text read at 2.1:1 on amber and 2.0:1 on cyan (a drill
+        # choice on an amber approval tile); take the higher-contrast ink.
+        ink = _ink_for(bg_col)
         if tile.subtext:
             # Drill choice tile: big number (label) up top, small wrapped choice
             # text underneath — readable instead of a truncated "1 Yes…" line.
             d = ImageDraw.Draw(bg)
             nf = _font(58)
             nw = d.textlength(tile.label, font=nf)
-            d.text(((ICON_SIZE - nw) / 2, 16), tile.label, font=nf, fill=(255, 255, 255))
+            d.text(((ICON_SIZE - nw) / 2, 16), tile.label, font=nf, fill=ink)
             sf = _font(22)
+            sub_fill = _soften(ink, bg_col, max_mix=0.1)
             y = 92
             for line in _wrap(d, tile.subtext, sf, ICON_SIZE - 16, 3):
                 lw = d.textlength(line, font=sf)
-                d.text(((ICON_SIZE - lw) / 2, y), line, font=sf, fill=(235, 235, 240))
+                d.text(((ICON_SIZE - lw) / 2, y), line, font=sf, fill=sub_fill)
                 y += 26
         elif tile.label:
             d = ImageDraw.Draw(bg)
@@ -853,107 +1039,155 @@ class IconProvider:
                 ((ICON_SIZE - w) / 2, (ICON_SIZE - (bb[3] - bb[1])) / 2 - bb[1]),
                 t,
                 font=f,
-                fill=(255, 255, 255),
+                fill=ink,
             )
         return bg
 
-    def _compose_agent_tile(self, tile, spinner=None) -> Image.Image:
+    @staticmethod
+    def _tile_bg(tile) -> tuple[str, tuple, tuple]:
+        """(fill, accent, background colour) for an agent tile.
+
+        tile_fill: how much of the tile the status colour covers.
+          none  -> dark background (colour lives in the word + bottom bar)
+          tint  -> whole tile a darkened shade of the colour + bright bottom edge
+          solid -> whole tile the full colour"""
         accent = COLORS.get(tile.color, COLORS["dim"])
-        # tile_fill: how much of the tile the status colour covers.
-        #   none  -> dark background (colour lives in the word + bottom bar)
-        #   tint  -> whole tile a darkened shade of the colour + bright bottom edge
-        #   solid -> whole tile the full colour
         fill = getattr(tile, "tile_fill", "none")
         if fill == "solid":
-            bg_col = accent
-        elif fill == "tint":
-            bg_col = _tint_bg(accent)
+            return fill, accent, accent
+        if fill == "tint":
+            return fill, accent, _tint_bg(accent)
+        return fill, accent, TILE_BG
+
+    def _compose_agent_tile(self, tile, spinner=None) -> Image.Image:
+        """Compose an agent tile in two layers: the static base (background,
+        text, bar — cached by the signature WITHOUT the animation phase) and
+        the per-frame motion (logo, comet ring, sweep segment)."""
+        anim = getattr(tile, "working_animation", "spin")
+        sweep = spinner is not None and anim == "sweep"
+        key = (*self._static_sig(tile), sweep)
+        base = self._base_cache.get(key)
+        if base is None:
+            base = self._compose_agent_base(tile, static_bar=not sweep)
+            self._base_cache[key] = base
+            while len(self._base_cache) > _BASE_CACHE_MAX:
+                self._base_cache.popitem(last=False)
         else:
-            bg_col = TILE_BG
+            self._base_cache.move_to_end(key)
+        img = base.copy()
+        self._draw_agent_motion(img, tile, spinner, anim)
+        return img
+
+    def _compose_agent_base(self, tile, *, static_bar: bool) -> Image.Image:
+        fill, accent, bg_col = self._tile_bg(tile)
         bg = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), bg_col + (255,))
         d = ImageDraw.Draw(bg)
         # text colours chosen for contrast against the fill (see _tile_text_colors)
         repo_fill, branch_fill, time_fill, word_fill = _tile_text_colors(fill, bg_col, accent)
-        anim = getattr(tile, "working_animation", "spin")
+        right = ICON_SIZE - 12
+        # status word + elapsed time, top-right, beside the logo box (x < 66,
+        # incl. the comet ring). Sized for a ~25mm physical key, where the old
+        # 19px word shrank to ~7px at the D200's 72px key.
+        if tile.status_text:
+            fs = _fit_font(d, tile.status_text, STATUS_MAX_W, 24, 17)
+            word = _truncate(d, tile.status_text, fs, STATUS_MAX_W)
+            d.text((right - d.textlength(word, font=fs), 10), word, font=fs, fill=word_fill)
+        if tile.time_text:
+            ft = _fit_font(d, tile.time_text, STATUS_MAX_W, 20, 16)
+            t = _truncate(d, tile.time_text, ft, STATUS_MAX_W)
+            d.text((right - d.textlength(t, font=ft), 40), t, font=ft, fill=time_fill)
+        # repo (primary) + branch (secondary) — spread down the tile so the
+        # composition is optically centred between the logo row and the bottom
+        # band instead of leaving a dead band across the bottom third.
+        fr, project_lines = _fit_project_name(d, tile.repo or "", ICON_SIZE - 24)
+        for i, line in enumerate(project_lines):
+            d.text((12, 72 if len(project_lines) == 1 else 66 + i * 23),
+                   line, font=fr, fill=repo_fill)
+        if tile.branch:
+            fb = _font(18, bold=False)
+            y = 116
+            for line in _fit_branch(d, tile.branch, fb, ICON_SIZE - 24):
+                d.text((12, y), line, font=fb, fill=branch_fill)
+                y += 22
+        # bottom band: backend tag (left) + pin (right), at a size that still
+        # reads on a 72px key (the old 12px tag / 12px pin vanished there).
+        pinned = getattr(tile, "pinned", False)
+        if tile.server_tag:
+            fc = _font(16, bold=False)
+            tag = _truncate(d, tile.server_tag, fc, ICON_SIZE - 24 - (26 if pinned else 0))
+            d.text((12, 164), tag, font=fc, fill=time_fill)
+        if pinned:
+            # pin silhouette (head, collar, needle), independent of backend labels
+            cx, top = ICON_SIZE - 20, 163
+            d.rectangle((cx - 5, top, cx + 5, top + 8), fill=time_fill)
+            d.line((cx - 8, top + 10, cx + 8, top + 10), fill=time_fill, width=3)
+            d.line((cx, top + 11, cx, top + 22), fill=time_fill, width=2)
+        # the plain static bottom bar — only when the fill isn't solid (on
+        # solid it would be invisible) and no sweep is drawn over it per frame
+        if static_bar and fill != "solid":
+            d.rectangle([0, ICON_SIZE - 8, ICON_SIZE, ICON_SIZE], fill=accent)
+        return bg
+
+    def _logo(self, agent_type: str, dark: bool, size: int, rotation: float = 0) -> Image.Image:
+        """The agent mark at ``size`` px (dark-recoloured and/or rotated), cached."""
+        key = ("logo", agent_type, dark, size, rotation)
+        hit = self._layer_cache.get(key)
+        if hit is not None:
+            return hit
+        glyph = self._base_glyph(agent_type)
+        if dark:
+            ink = Image.new("RGBA", glyph.size, DARK_INK + (0,))
+            ink.putalpha(glyph.getchannel("A"))
+            glyph = ink
+        out = glyph.resize((size, size), Image.LANCZOS)
+        if rotation:
+            out = out.rotate(-rotation, resample=Image.BICUBIC)
+        self._remember_layer(key, out)
+        return out
+
+    def _is_light_glyph(self, agent_type: str) -> bool:
+        hit = self._light_glyph.get(agent_type)
+        if hit is None:
+            hit = self._light_glyph[agent_type] = _is_light_monochrome(
+                self._base_glyph(agent_type)
+            )
+        return hit
+
+    def _draw_agent_motion(self, img: Image.Image, tile, spinner, anim) -> None:
+        """The per-frame layer: the logo (top-left; animated while working per
+        the chosen style), the comet ring and the sweep segment."""
+        fill, accent, bg_col = self._tile_bg(tile)
         working = spinner is not None
-        # logo top-left; while working it animates per the chosen style
-        base_logo = self._base_glyph(tile.agent_type or "default")
-        if fill == "solid" and _lum(bg_col) > 120 and _is_light_monochrome(base_logo):
-            # A white mark washes out on bright solid fills (amber 2.1:1, cyan
-            # 2.0:1 — below the 3:1 non-text minimum) while the text correctly
-            # flips dark. Recolour it via its alpha mask to the same dark ink.
-            # Full-colour user overrides are left as supplied (the flip would
-            # flatten them to a silhouette).
-            dark = Image.new("RGBA", base_logo.size, (18, 18, 22, 0))
-            dark.putalpha(base_logo.getchannel("A"))
-            base_logo = dark
+        agent = tile.agent_type or "default"
+        # A white mark / ring washes out on bright solid fills (amber 2.1:1,
+        # cyan 2.0:1 — below the 3:1 non-text minimum) while the text correctly
+        # flips dark: recolour them to the same dark ink. Full-colour user
+        # overrides are left as supplied (the flip would flatten them).
+        dark_fill = fill == "solid" and _ink_for(bg_col) == DARK_INK
+        dark_logo = dark_fill and self._is_light_glyph(agent)
         if working and anim == "pulse":
             # slow "breath": scale the mark between ~0.82x and 1.0x across the
             # PULSE_STATES frames (the spinner here is already the SLOW phase
             # from _anim_phase — one step per PULSE_SLOWDOWN ticks)
             f = 0.82 + 0.18 * (0.5 + 0.5 * math.sin(2 * math.pi * spinner / PULSE_STATES))
             s = max(1, round(46 * f))
-            logo = base_logo.resize((s, s), Image.LANCZOS)
             off = 12 + (46 - s) // 2  # keep the smaller mark centred in its 46px box
-            bg.alpha_composite(logo, (off, off))
+            img.alpha_composite(self._logo(agent, dark_logo, s), (off, off))
         else:
-            logo = base_logo.resize((46, 46), Image.LANCZOS)
-            if working and anim == "spin":
-                logo = logo.rotate(-spinner * SPIN_DEG, resample=Image.BICUBIC)
-            bg.alpha_composite(logo, (12, 12))
+            rotation = spinner * SPIN_DEG if working and anim == "spin" else 0
+            img.alpha_composite(self._logo(agent, dark_logo, 46, rotation), (12, 12))
             if working and anim == "comet":
                 # thin comet ring orbiting the static mark; the 62px overlay is
                 # centred over the 46px logo box at (12,12) -> composite at (4,4)
-                bg.alpha_composite(self._comet_overlay(62, spinner, 2, 4), (4, 4))
-        # status word + elapsed time, top-right. Sizes were tuned for a screen,
-        # not a ~25mm physical key: the old 23px repo (~2.9mm cap height) and
-        # 15-16px sub-labels were legible only when leaning in, while the
-        # bottom ~40% of the tile sat empty.
-        if tile.status_text:
-            fs = _font(19)
-            d.text(
-                (ICON_SIZE - 12 - d.textlength(tile.status_text, font=fs), 13),
-                tile.status_text,
-                font=fs,
-                fill=word_fill,
-            )
-        if tile.time_text:
-            ft = _font(18)
-            d.text(
-                (ICON_SIZE - 12 - d.textlength(tile.time_text, font=ft), 38),
-                tile.time_text,
-                font=ft,
-                fill=time_fill,
-            )
-        # repo (primary) + branch (secondary, wrapped) — spread down the tile
-        # so the composition is optically centred between the logo row and the
-        # accent bar instead of leaving a dead band across the bottom third.
-        fr, project_lines = _fit_project_name(d, tile.repo or "", ICON_SIZE - 24)
-        for i, line in enumerate(project_lines):
-            d.text((12, 74 if len(project_lines) == 1 else 70 + i * 20),
-                   line, font=fr, fill=repo_fill)
-        if tile.branch:
-            fb = _font(18, bold=False)
-            y = 116
-            for line in _wrap(d, tile.branch, fb, ICON_SIZE - 24, 2):
-                d.text((12, y), line, font=fb, fill=branch_fill)
-                y += 22
-        if tile.server_tag:
-            fc = _font(12, bold=False)
-            tag = _truncate(d, tile.server_tag, fc, 80)
-            d.text((12, 168), tag, font=fc, fill=time_fill)
-        if getattr(tile, "pinned", False):
-            # Small pin silhouette, independent of optional backend labels.
-            d.line((172, 170, 172, 182), fill=time_fill, width=2)
-            d.rectangle((169, 168, 175, 173), fill=time_fill)
-            d.line((167, 175, 177, 175), fill=time_fill, width=2)
-        # bottom accent bar. "sweep" is a moving segment along the bottom edge; it
-        # must stay visible on any fill, so its colours adapt — on a solid tile
-        # (background already = accent) it uses a dark base + a bright segment; on
-        # none/tint a dimmed base + the accent segment. The plain static bar is
-        # drawn only when the fill isn't solid (on solid it would be invisible).
-        y0 = ICON_SIZE - 8
+                ring = DARK_INK if dark_fill else LIGHT_INK
+                img.alpha_composite(self._comet_overlay(62, spinner, 2, 4, ring), (4, 4))
+        # "sweep" is a moving segment along the bottom edge; it must stay
+        # visible on any fill, so its colours adapt — on a solid tile
+        # (background already = accent) a dark base + a bright segment; on
+        # none/tint a dimmed base + the accent segment.
         if working and anim == "sweep":
+            d = ImageDraw.Draw(img)
+            y0 = ICON_SIZE - 8
             if fill == "solid":
                 base = tuple(int(c * 0.45) for c in accent)
                 seg_col = tuple(min(255, c + 90) for c in accent)
@@ -966,6 +1200,3 @@ class IconProvider:
             d.rectangle([left, y0, min(left + seg_w, ICON_SIZE), ICON_SIZE], fill=seg_col)
             if left + seg_w > ICON_SIZE:  # wrap the bright segment past the right edge
                 d.rectangle([0, y0, (left + seg_w) - ICON_SIZE, ICON_SIZE], fill=seg_col)
-        elif fill != "solid":
-            d.rectangle([0, y0, ICON_SIZE, ICON_SIZE], fill=accent)
-        return bg
