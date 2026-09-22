@@ -132,6 +132,10 @@ const SIDECAR_TIMEOUT: Duration = Duration::from_secs(3);
 /// The runtime holds a long poll for 25 s; leave transport headroom around it.
 const NOTIFY_POLL_TIMEOUT: Duration = Duration::from_secs(30);
 const NOTIFY_RETRY_DELAY: Duration = Duration::from_millis(500);
+/// A source without a notification feed (demo/mock) answers `/notifications`
+/// with 404. That will not change until the shell is pointed at a different
+/// runtime, so the pump sleeps this long — or until discovery changes.
+const NOTIFY_UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(30);
 
 /// `/setup/connect` runs, inside the sidecar, the whole remote transaction: a probe
 /// (≈4 s) THEN build + render-prepare + keychain/config snapshots + write + swap. The
@@ -463,54 +467,112 @@ fn prevent_notification_pump_app_nap() {
 #[cfg(not(target_os = "macos"))]
 fn prevent_notification_pump_app_nap() {}
 
+/// What the pump does with the result of one `/notifications` round trip.
+#[derive(Debug, PartialEq, Eq)]
+enum NotifyPoll {
+    /// A 2xx feed snapshot to deliver from.
+    Deliver(String),
+    /// 404: this runtime's source has no feed (demo/mock). Not an outage —
+    /// re-discovery would find the very same runtime — so back off instead of
+    /// hammering it twice a second.
+    Unsupported,
+    /// Transport failure or any other status: retry, possibly re-discovering.
+    Failed,
+}
+
+fn classify_notify_poll(result: Result<(u16, String), String>) -> NotifyPoll {
+    match result {
+        Ok((code, body)) if (200..300).contains(&code) => NotifyPoll::Deliver(body),
+        Ok((404, _)) => NotifyPoll::Unsupported,
+        _ => NotifyPoll::Failed,
+    }
+}
+
+/// The runtime the pump should poll right now, or how long to idle first.
+/// Both "no permission yet" and "sidecar not discovered yet" must SLEEP: a bare
+/// `continue` there spun a core at 100% through every sidecar boot, and forever
+/// while a crashing sidecar never reported in.
+fn notify_target(permission: bool, discovery: Option<Discovery>) -> Result<Discovery, Duration> {
+    match (permission, discovery) {
+        (true, Some(d)) => Ok(d),
+        _ => Err(NOTIFY_RETRY_DELAY),
+    }
+}
+
+/// Identity of a discovered runtime, for "has the shell been repointed?".
+fn discovery_key(d: &Discovery) -> (String, u16, String) {
+    (d.host.clone(), d.port, d.token.clone())
+}
+
+/// Sleep up to `max`, in `NOTIFY_RETRY_DELAY` steps, returning early as soon as
+/// `changed()` reports true. Returns whether it woke early.
+fn backoff_until(max: Duration, changed: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + max;
+    loop {
+        if changed() {
+            return true;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep(NOTIFY_RETRY_DELAY.min(deadline - now));
+    }
+}
+
 /// Generation-aware long-poll notification pump. The blocking request itself
 /// keeps banner duty claimed and wakes immediately when the runtime queues an
 /// event. Only a successfully shown banner is acknowledged.
 fn start_notify_pump(app: tauri::AppHandle) {
     let permission = app.state::<AppState>().notify_permission.clone();
     std::thread::spawn(move || loop {
-        if !permission.load(Ordering::Relaxed) {
-            std::thread::sleep(NOTIFY_RETRY_DELAY);
-            continue;
-        }
         let state = app.state::<AppState>();
-        let d = match state.discovery.lock().unwrap().clone() {
-            Some(d) => d,
-            None => continue,
+        let d = match notify_target(
+            permission.load(Ordering::Relaxed),
+            state.discovery.lock().unwrap().clone(),
+        ) {
+            Ok(d) => d,
+            Err(delay) => {
+                std::thread::sleep(delay);
+                continue;
+            }
         };
-        let cursor = state.notify_cursor.lock().unwrap().clone();
-        let fetched = http::fetch_notifications(
-            &d.host,
-            d.port,
-            &d.token,
-            NOTIFY_POLL_TIMEOUT,
-            cursor.generation.as_deref(),
-            cursor.seq,
-            &shell_gen(),
-        );
-        let (body, active_discovery) = match fetched {
-            Ok(body) => (body, d),
-            Err(_) => {
-                if rediscover_runtime(&state).is_none() {
+        let poll = |d: &Discovery| {
+            let cursor = state.notify_cursor.lock().unwrap().clone();
+            classify_notify_poll(http::fetch_notifications_status(
+                &d.host,
+                d.port,
+                &d.token,
+                NOTIFY_POLL_TIMEOUT,
+                cursor.generation.as_deref(),
+                cursor.seq,
+                &shell_gen(),
+            ))
+        };
+        let unsupported_backoff = |d: &Discovery| {
+            let key = discovery_key(d);
+            backoff_until(NOTIFY_UNSUPPORTED_BACKOFF, || {
+                state.discovery.lock().unwrap().as_ref().map(discovery_key) != Some(key.clone())
+            });
+        };
+        let (body, active_discovery) = match poll(&d) {
+            NotifyPoll::Deliver(body) => (body, d),
+            NotifyPoll::Unsupported => {
+                unsupported_backoff(&d);
+                continue;
+            }
+            NotifyPoll::Failed => {
+                let Some(d) = rediscover_runtime(&state) else {
                     std::thread::sleep(NOTIFY_RETRY_DELAY);
                     continue;
-                }
-                let d = match state.discovery.lock().unwrap().clone() {
-                    Some(d) => d,
-                    None => continue,
                 };
-                let cursor = state.notify_cursor.lock().unwrap().clone();
-                match http::fetch_notifications(
-                    &d.host,
-                    d.port,
-                    &d.token,
-                    NOTIFY_POLL_TIMEOUT,
-                    cursor.generation.as_deref(),
-                    cursor.seq,
-                    &shell_gen(),
-                ) {
-                    Ok(body) => (body, d),
-                    Err(_) => {
+                match poll(&d) {
+                    NotifyPoll::Deliver(body) => (body, d),
+                    NotifyPoll::Unsupported => {
+                        unsupported_backoff(&d);
+                        continue;
+                    }
+                    NotifyPoll::Failed => {
                         std::thread::sleep(NOTIFY_RETRY_DELAY);
                         continue;
                     }
@@ -955,6 +1017,51 @@ mod plan_tests {
         });
         let (_, _, items) = notification_batch(&state, &cursor).unwrap();
         assert!(items.is_empty());
+    }
+
+    fn discovery_on(port: u16) -> Discovery {
+        Discovery {
+            url: format!("http://127.0.0.1:{port}"),
+            host: "127.0.0.1".into(),
+            port,
+            token: "t".into(),
+            source: "mock".into(),
+        }
+    }
+
+    // A bare `continue` on either of these spun the pump thread at 100% CPU
+    // for as long as the sidecar had not reported in.
+    #[test]
+    fn the_pump_idles_instead_of_spinning_without_permission_or_discovery() {
+        assert_eq!(notify_target(true, None), Err(NOTIFY_RETRY_DELAY));
+        assert_eq!(notify_target(false, Some(discovery_on(1))), Err(NOTIFY_RETRY_DELAY));
+        assert_eq!(notify_target(false, None), Err(NOTIFY_RETRY_DELAY));
+        assert!(NOTIFY_RETRY_DELAY > Duration::ZERO);
+        assert_eq!(notify_target(true, Some(discovery_on(1))), Ok(discovery_on(1)));
+    }
+
+    #[test]
+    fn a_feedless_source_is_unsupported_not_a_failure() {
+        assert_eq!(
+            classify_notify_poll(Ok((200, "{}".into()))),
+            NotifyPoll::Deliver("{}".into())
+        );
+        assert_eq!(classify_notify_poll(Ok((404, String::new()))), NotifyPoll::Unsupported);
+        assert_eq!(classify_notify_poll(Ok((409, String::new()))), NotifyPoll::Failed);
+        assert_eq!(classify_notify_poll(Err("down".into())), NotifyPoll::Failed);
+        assert!(NOTIFY_UNSUPPORTED_BACKOFF >= Duration::from_secs(30));
+    }
+
+    #[test]
+    fn the_unsupported_backoff_wakes_when_discovery_changes() {
+        let start = std::time::Instant::now();
+        assert!(backoff_until(Duration::from_secs(30), || true));
+        assert!(start.elapsed() < Duration::from_secs(1));
+        // And it does wait out the full period when nothing changes.
+        let start = std::time::Instant::now();
+        assert!(!backoff_until(Duration::from_millis(30), || false));
+        assert!(start.elapsed() >= Duration::from_millis(30));
+        assert_ne!(discovery_key(&discovery_on(1)), discovery_key(&discovery_on(2)));
     }
 
     #[test]
