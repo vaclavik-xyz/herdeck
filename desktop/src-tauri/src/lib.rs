@@ -443,6 +443,26 @@ fn play_notification_sound(sound: &serde_json::Value) {
 #[cfg(not(target_os = "macos"))]
 fn play_notification_sound(_sound: &serde_json::Value) {}
 
+/// Keep the time-sensitive long-poll pump out of App Nap while this process is
+/// responsible for native banners. The allowing-idle-system-sleep option keeps
+/// the Mac itself free to sleep; it only prevents macOS from throttling this
+/// background app and letting the runtime's osascript fallback win the race.
+#[cfg(target_os = "macos")]
+fn prevent_notification_pump_app_nap() {
+    use objc2_foundation::{ns_string, NSActivityOptions, NSProcessInfo};
+
+    let activity = NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+        NSActivityOptions::UserInitiatedAllowingIdleSystemSleep,
+        ns_string!("Deliver Herdeck agent notifications"),
+    );
+    // Banner duty lasts for the process lifetime. Leaking the opaque activity
+    // token intentionally mirrors ending it only during process teardown.
+    std::mem::forget(activity);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn prevent_notification_pump_app_nap() {}
+
 /// Generation-aware long-poll notification pump. The blocking request itself
 /// keeps banner duty claimed and wakes immediately when the runtime queues an
 /// event. Only a successfully shown banner is acknowledged.
@@ -2664,6 +2684,9 @@ pub fn run() {
                     .map(|state| state == PermissionState::Granted)
                     .unwrap_or(false);
                 notify_permission.store(granted, Ordering::Relaxed);
+                if granted {
+                    prevent_notification_pump_app_nap();
+                }
             }
             // The notification pump runs for the whole app lifetime, detached
             // from WebView visibility (deck windows may hide into the tray).
