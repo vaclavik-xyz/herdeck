@@ -94,10 +94,9 @@ struct AppState {
     deck_always_on_top: Arc<Mutex<bool>>,
     /// Generation-scoped cursor acknowledged only after native delivery.
     notify_cursor: Arc<Mutex<NotifyCursor>>,
-    /// True once the sidecar-side notification permission is GRANTED. Until
-    /// then the `/state` polls omit the `X-Herdeck-Shell` claim header, so the
-    /// runtime keeps posting plain osascript alerts instead of double-firing
-    /// nothing (a silent shell would swallow both banner and sound).
+    /// True once macOS notification permission is GRANTED. Until then the
+    /// dedicated pump does not claim delivery, so the runtime keeps using its
+    /// osascript fallback instead of swallowing both banner and sound.
     notify_permission: Arc<AtomicBool>,
     /// Rate-limiter for `rediscover_runtime` (last attempt timestamp).
     rediscover_last: Arc<Mutex<Option<std::time::Instant>>>,
@@ -322,7 +321,7 @@ async fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::V
 /// Proxy `GET /state` (token injected Rust-side) → its JSON. This is the deck's
 /// poll endpoint; the WebView never sees the token. The poll carries the
 /// banner-claim headers (`X-Herdeck-Shell`/`-Gen`, only with a granted
-/// permission) — a claim is just liveness; the actual posting of feed entries
+    /// permission) — a claim is just liveness; the actual posting of feed entries
 /// lives in `start_notify_pump` (single poster by design).
 #[tauri::command]
 async fn deck_state(
@@ -531,7 +530,6 @@ fn start_notify_pump(app: tauri::AppHandle) {
                     &shell_gen(),
                 );
                 if code == Ok(204) {
-                    permission.store(false, Ordering::Relaxed);
                     let mut cursor = state.notify_cursor.lock().unwrap();
                     cursor.generation = Some(item.generation.clone());
                     cursor.seq = cursor.seq.max(item.seq);

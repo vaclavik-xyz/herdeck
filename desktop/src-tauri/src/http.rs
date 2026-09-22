@@ -405,8 +405,8 @@ pub fn ack_notification(
     Ok(code)
 }
 
-/// Ask the runtime to deliver exactly one queued alert through osascript and
-/// release this shell's claim after native notification delivery failed.
+/// Ask the runtime to deliver exactly one queued alert through osascript after
+/// native notification delivery failed. The shell keeps pumping later alerts.
 pub fn fallback_notification(
     host: &str,
     port: u16,

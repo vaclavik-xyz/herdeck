@@ -99,6 +99,8 @@ def test_notification_feed_hides_item_while_fallback_is_in_flight():
     thread.join(timeout=0.2)
     assert not thread.is_alive()
     assert feed.state()["acked_seq"] == 1
+    pending = feed.wait(item["generation"], 1, timeout=0)
+    assert [queued["seq"] for queued in pending["items"]] == [2]
 
 
 def test_failed_fallback_does_not_let_newer_item_skip_it():

@@ -1611,7 +1611,7 @@ def test_notification_long_poll_wakes_and_acknowledges_delivery():
     app.close()
 
 
-def test_notification_native_failure_uses_one_fallback_and_releases_claim():
+def test_notification_native_failure_uses_one_fallback_and_keeps_pump_claim():
     import herdeck.notify as notify_mod
 
     delivered = []
@@ -1646,5 +1646,5 @@ def test_notification_native_failure_uses_one_fallback_and_releases_claim():
 
     assert delivered == [("codex done", "p1", "Hero")]
     assert src._notify_feed.state()["acked_seq"] == 1
-    assert app.shell_claims_banners() is False
+    assert app.shell_claims_banners() is True
     app.close()

@@ -611,15 +611,6 @@ class DeckApp:
                 < self._SHELL_CLAIM_TTL_S
             )
 
-    def release_shell_claim(self, shell_gen: str | None) -> bool:
-        """Release banner duty only for the shell that currently owns it."""
-        with self._shell_claim_lock:
-            current = getattr(self, "_shell_gen", None)
-            if shell_gen is not None and current is not None and shell_gen != current:
-                return False
-            self._shell_last_seen = -1e9
-            return True
-
     def _state(self) -> dict:
         with self._lock:
             state = {
@@ -946,7 +937,6 @@ class DeckApp:
                     if not delivered:
                         self._send(409)
                         return
-                    app.release_shell_claim(shell_gen)
                     self._send(204)
                 elif path == "/setup/connect":
                     if not self._require_header_token():
