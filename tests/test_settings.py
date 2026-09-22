@@ -776,3 +776,57 @@ def test_notifications_payload_sounds_merged_and_validated():
         _notifications_config({"sounds": {"idle": "Glass"}})
     with pytest.raises(ConfigError, match="notifications.sounds"):
         _notifications_config({"sounds": {"done": ""}})
+
+
+def test_view_config_parses_tile_icon():
+    assert _view_config({"tile_icon": "project"}).tile_icon == "project"
+    assert _view_config({"tile_icon": "both"}).tile_icon == "both"
+
+
+def test_view_config_defaults_tile_icon_to_agent():
+    view = _view_config({})
+    assert view.tile_icon == "agent"
+    assert view.project_icons == {}
+
+
+def test_view_config_rejects_unknown_tile_icon():
+    with pytest.raises(ConfigError, match="unknown view.tile_icon 'logo'"):
+        _view_config({"tile_icon": "logo"})
+
+
+def test_view_config_parses_project_icons():
+    view = _view_config({"project_icons": {"herdeck": "~/icons/herdeck.png"}})
+    assert view.project_icons == {"herdeck": "~/icons/herdeck.png"}
+
+
+@pytest.mark.parametrize(
+    ("raw", "match"),
+    [
+        ("~/x.png", "must be a table"),
+        ({"": "~/x.png"}, "non-empty repo names"),
+        ({"  ": "~/x.png"}, "non-empty repo names"),
+        ({"api": 3}, "view.project_icons.api"),
+        ({"api": ""}, "view.project_icons.api"),
+    ],
+)
+def test_view_config_rejects_malformed_project_icons(raw, match):
+    with pytest.raises(ConfigError, match=match):
+        _view_config({"project_icons": raw})
+
+
+def test_project_icons_overlay_merges_per_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    text = (
+        OVERLAY_CONFIG.replace(
+            '[view]\nmanagement = "launcher_menu"\n',
+            '[view]\nmanagement = "launcher_menu"\n\n'
+            '[view.project_icons]\napi = "~/a.png"\nweb = "~/w.png"\n',
+        )
+        + '\n[profiles.mobile.view.project_icons]\nweb = "~/w2.png"\n'
+    )
+    snap = load_settings(_write(tmp_path, text))
+    assert resolve_profile(snap).config.view.project_icons == {"api": "~/a.png", "web": "~/w.png"}
+    assert resolve_profile(snap, "mobile").config.view.project_icons == {
+        "api": "~/a.png",
+        "web": "~/w2.png",
+    }

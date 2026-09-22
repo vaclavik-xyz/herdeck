@@ -94,6 +94,11 @@ AGENT_ORDERS: tuple[str, ...] = ("status", "herdr")
 #   tint  = whole tile a darkened shade of the status colour + a bright bottom edge
 #   solid = whole tile the full status colour (text contrast flips on bright colours)
 TILE_FILLS: tuple[str, ...] = ("none", "tint", "solid")
+# What an agent tile's logo box shows:
+#   agent   = the agent's mark (default)
+#   project = the project's favicon instead of the mark (a monogram when none)
+#   both    = the agent's mark plus a small project badge on its corner
+TILE_ICONS: tuple[str, ...] = ("agent", "project", "both")
 DEFAULT_BOTTOM_ROW: list[str] = ["profiles", "notifications", "safety", "theme", "new_agent"]
 
 
@@ -118,6 +123,10 @@ class ViewConfig:
     tile_secondary: list[str] | None = None
     working_animation: str = "spin"
     tile_fill: str = "none"
+    tile_icon: str = "agent"
+    # Repo name -> icon file on the RUNTIME machine ("~" is expanded when the
+    # file is read); overrides the favicon the bridge discovers in the repo.
+    project_icons: dict[str, str] = field(default_factory=dict)
     # Language of RENDERED deck text (tiles, panel, websim) and the desktop UI.
     language: str = "en"
 

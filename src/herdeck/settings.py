@@ -16,6 +16,7 @@ from .config import (
     DEFAULT_REQUIRE_CONFIRM,
     DEFAULT_START_PROFILES,
     TILE_FILLS,
+    TILE_ICONS,
     TILE_LINE_TOKENS,
     WORKING_ANIMATIONS,
     Config,
@@ -248,6 +249,13 @@ def _view_config(raw: dict | None) -> ViewConfig:
         if val not in TILE_FILLS:
             raise ConfigError(f"unknown view.tile_fill '{val}'; want one of {TILE_FILLS}")
         view.tile_fill = val
+    if "tile_icon" in raw:
+        val = raw["tile_icon"]
+        if val not in TILE_ICONS:
+            raise ConfigError(f"unknown view.tile_icon '{val}'; want one of {TILE_ICONS}")
+        view.tile_icon = val
+    if "project_icons" in raw:
+        view.project_icons = _project_icons(raw["project_icons"])
     if "show_profile_on_panel" in raw:
         view.show_profile_on_panel = bool(raw["show_profile_on_panel"])
     if "language" in raw:
@@ -256,6 +264,21 @@ def _view_config(raw: dict | None) -> ViewConfig:
             raise ConfigError(f"unknown view.language '{val}'; want one of {LANGUAGES}")
         view.language = val
     return view
+
+
+def _project_icons(raw) -> dict[str, str]:
+    """[view.project_icons]: repo name -> icon path. Paths stay as written (the
+    runtime expands "~" when it reads the file) so the editor round-trips them."""
+    if not isinstance(raw, dict):
+        raise ConfigError('view.project_icons must be a table of repo = "path" entries')
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ConfigError("view.project_icons keys must be non-empty repo names")
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"view.project_icons.{key} must be a non-empty path string")
+        out[key] = value
+    return out
 
 
 def _notifications_config(raw: dict | None) -> Notifications:

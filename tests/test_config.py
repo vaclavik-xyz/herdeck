@@ -509,3 +509,11 @@ def test_runtime_customization_defaults_on_config():
     assert cfg.meta.active_profile == "default"
     assert cfg.meta.profile_names == ["default"]
     assert cfg.meta.env_locked_profile is False
+
+
+def test_example_config_documents_tile_icon(monkeypatch):
+    monkeypatch.setenv("HERDECK_WORKBOX_TOKEN", "secret123")
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    cfg = load_config(path)
+    assert cfg.view.tile_icon == "agent"
+    assert "[view.project_icons]" in path.read_text()

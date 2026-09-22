@@ -574,6 +574,15 @@ does not animate. By default
 the colour shows in the status word and a bottom accent bar; set
 `[view].tile_fill` to `tint` (whole tile a darkened shade of the colour) or
 `solid` (whole tile the full colour) for more at-a-glance visibility.
+Set `[view].tile_icon` to `project` to show the project's favicon in place of
+the agent mark, or `both` to keep the agent mark with a small project badge on
+its corner. The bridge finds the favicon in the pane's repository
+(`favicon.png`, `public/favicon.png`, `app/icon.png`, … then `.ico`, then
+`.svg`; at most 256 KiB) and sends it to the deck once; a project without one
+gets a coloured letter badge. Override it per repository with
+`[view.project_icons]` (`myrepo = "~/icons/myrepo.png"`, a path on the machine
+running the deck). SVG icons render only where CairoSVG is installed (not in
+the packaged app or the Elgato plugin), so prefer PNG or ICO there.
 Agents are always grouped by attention priority. Set `[view].agent_order` to
 `"herdr"` to mirror Herdr's workspace and tab positions within the same state
 and server; the default `"status"` uses stable pane ids as the tie-breaker.

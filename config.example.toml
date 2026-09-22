@@ -36,6 +36,14 @@ tile_fields = ["repo", "title", "tab", "branch", "status", "time", "server"]
 # Language of rendered deck text (tiles/panel/websim) AND the desktop app UI.
 # "en" (default) or "cs".
 language = "en"
+# Tile icon: "agent" (default) = the agent's logo, "project" = the project's
+# favicon (found in the repo by the bridge; a coloured letter when none),
+# "both" = the agent's logo with a small project badge.
+tile_icon = "agent"
+# Per-repo icon file on the machine running the deck ("~" expanded); overrides
+# the discovered favicon. PNG/ICO (<= 256 KiB); SVG only in source installs.
+# [view.project_icons]
+# herdeck = "~/icons/herdeck.png"
 
 [notifications]
 enabled = false
