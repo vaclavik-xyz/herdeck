@@ -1372,3 +1372,53 @@ def test_tile_accessible_label_shapes_and_language():
     assert tile_accessible_label(TileView(4, "", "empty"), "cs") == "prázdná dlaždice 5"
     choice = TileView(1, "1", "green", subtext="Yes, proceed")
     assert tile_accessible_label(choice) == "1 · Yes, proceed"
+
+
+def test_state_only_change_bumps_version_without_image_change():
+    # A /state field can change while every PNG stays byte-identical (a bridge
+    # dropping, an off-screen agent unblocking while drilled): the version must
+    # still move, or long-poll waiters sit on stale data until their timeout.
+    app = make_app()
+    v = app._state()["version"]
+    tiles, panel = dict(app._tiles), app._panel
+    base = app._source.summary()
+    app._source.summary = lambda: {**base, "blocked": base["blocked"] + 1}
+    with app._lock:
+        app._refresh_locked()
+    assert app._tiles == tiles and app._panel == panel  # no image changed
+    st = app._state()
+    assert st["version"] > v
+    assert st["summary"]["blocked"] == base["blocked"] + 1
+
+
+def test_unchanged_state_and_images_do_not_bump_version():
+    app = make_app()
+    v = app._state()["version"]
+    with app._lock:
+        app._refresh_locked()
+    assert app._version == v
+
+
+def test_long_poll_state_wakes_on_connection_flip_without_image_change():
+    import threading
+
+    class FlakySource(MockSource):
+        up = True
+
+        @property
+        def connected(self):
+            return self.up
+
+    source = FlakySource()
+    app = DeckApp(source, serve=False, icon_provider=StubIcons())
+    v = app._state()["version"]
+    got = []
+    waiter = threading.Thread(target=lambda: got.append(app._wait_state(v, 10_000)))
+    waiter.start()
+    time.sleep(0.05)
+    source.up = False  # the bridge drops; the rendered frame is unchanged
+    with app._lock:
+        app._refresh_locked()
+    waiter.join(timeout=2)
+    assert got and got[0]["version"] > v
+    assert got[0]["connected"] is False

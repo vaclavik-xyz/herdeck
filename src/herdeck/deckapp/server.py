@@ -146,6 +146,13 @@ class DeckApp:
         # Long-poll /state waiters block on this; every version bump notifies
         # (it shares self._lock, so waiting releases the render lock).
         self._state_changed = threading.Condition(self._lock)
+        # Digest of the /state fields that are NOT image versions (summary,
+        # connection flags, sections, labels, language). Some changes leave
+        # every PNG byte-identical (a bridge dropping, an off-screen agent
+        # unblocking while drilled), so _apply_rendered_locked bumps the
+        # version on a digest change too — else long-poll waiters sleep on
+        # stale data until their timeout.
+        self._state_digest: str | None = None
         # Rasterization (IconProvider + Pillow) is not thread-safe, but it must
         # not hold self._lock either: the ticker rasterizes OUTSIDE the state
         # lock under this one. Lock order is always self._lock -> _raster_lock.
@@ -323,6 +330,44 @@ class DeckApp:
         if self._panel != panel_png:
             self._panel = panel_png
             self._panel_ver = self._bump()
+        digest = self._state_digest_locked()
+        if digest != self._state_digest:
+            self._state_digest = digest
+            self._bump()
+
+    def _state_meta_locked(self) -> dict:
+        """The /state fields derived from the source/bridges rather than from
+        rendered images. Callers hold self._lock."""
+        meta = {
+            "summary": self._source.summary(),
+            "source": self._source.source_name,
+            "connected": self._source.connected,
+            "language": getattr(self._source, "language", "en"),
+        }
+        connections = getattr(self._source, "connections", None)
+        if isinstance(connections, dict):
+            meta["connections"] = connections
+        local_connections = {
+            session_name: server_id
+            for server_id, runner in getattr(self, "_local_bridges", {}).items()
+            if isinstance(
+                session_name := getattr(runner, "_herdeck_session_name", None),
+                str,
+            )
+            and session_name
+        }
+        if local_connections:
+            meta["local_connections"] = local_connections
+        return meta
+
+    def _state_digest_locked(self) -> str:
+        return repr(
+            (
+                sorted(self._state_meta_locked().items()),
+                sorted(self._tile_sections.items()),
+                sorted(self._tile_labels.items()),
+            )
+        )
 
     def _refresh_locked(self, *, working=None, full=True, ticker=False) -> None:
         rs, tiles, panel_png, sections, labels = self._render_locked(
@@ -790,28 +835,11 @@ class DeckApp:
                 "tile_labels": {
                     i: label for i, label in self._tile_labels.items() if i in self._tile_ver
                 },
-                "summary": self._source.summary(),
-                "source": self._source.source_name,
-                "connected": self._source.connected,
-                "language": getattr(self._source, "language", "en"),
                 # Notifications are NOT part of /state: the shell long-polls
                 # /notifications (acknowledged feed). The old "notify" mirror
                 # had no consumer and copied the whole feed on every poll.
             }
-            connections = getattr(self._source, "connections", None)
-            if isinstance(connections, dict):
-                state["connections"] = connections
-            local_connections = {
-                session_name: server_id
-                for server_id, runner in self._local_bridges.items()
-                if isinstance(
-                    session_name := getattr(runner, "_herdeck_session_name", None),
-                    str,
-                )
-                and session_name
-            }
-            if local_connections:
-                state["local_connections"] = local_connections
+            state.update(self._state_meta_locked())
             return state
 
     def _health(self) -> dict:
