@@ -2453,35 +2453,28 @@ fn persist_deck_always_on_top(state: &AppState, target: bool) -> Result<(), Stri
 }
 
 /// (Re)register the deck-toggle global shortcut from the sidecar's `/config`.
-/// Best-effort: any failure is logged and leaves the deck usable without a hotkey.
-fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) {
+/// A failure leaves the deck usable without a hotkey; it is returned as a
+/// message so `reload_hotkey` can surface it in the settings UI (C4). When the
+/// configured accelerator cannot be registered the default is tried instead,
+/// and the error still says the configured one failed.
+fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
 
-    let body = match http::http_get(
+    let body = http::http_get(
         &d.host,
         d.port,
         &format!("/config?token={}", d.token),
         SIDECAR_TIMEOUT,
-    ) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("hotkey: /config fetch failed: {e}");
-            return;
-        }
-    };
-    let cfg: serde_json::Value = match serde_json::from_str(&body) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("hotkey: invalid /config JSON: {e}");
-            return;
-        }
-    };
+    )
+    .map_err(|e| format!("hotkey: /config fetch failed: {e}"))?;
+    let cfg: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("hotkey: invalid /config JSON: {e}"))?;
     let accel = match hotkey::toggle_deck_accelerator(&cfg) {
         Some(a) => a,
-        None => return, // explicitly disabled
+        None => return Ok(()), // explicitly disabled
     };
 
     let app_for_cb = app.clone();
@@ -2490,35 +2483,45 @@ fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) {
             toggle_deck_window(&app_for_cb);
         }
     };
-    if let Err(e) = gs.on_shortcut(accel.as_str(), handler) {
-        eprintln!("hotkey: register '{accel}' failed: {e}");
-        if accel != hotkey::DEFAULT_TOGGLE_DECK {
-            let app_for_fb = app.clone();
-            let _ = gs.on_shortcut(
-                hotkey::DEFAULT_TOGGLE_DECK,
-                move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
-                    if event.state == ShortcutState::Pressed {
-                        toggle_deck_window(&app_for_fb);
-                    }
-                },
-            );
+    let Err(e) = gs.on_shortcut(accel.as_str(), handler) else {
+        return Ok(());
+    };
+    let mut msg = format!("could not register the deck hotkey '{accel}': {e}");
+    if accel != hotkey::DEFAULT_TOGGLE_DECK {
+        let app_for_fb = app.clone();
+        let fallback = gs.on_shortcut(
+            hotkey::DEFAULT_TOGGLE_DECK,
+            move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
+                if event.state == ShortcutState::Pressed {
+                    toggle_deck_window(&app_for_fb);
+                }
+            },
+        );
+        if fallback.is_ok() {
+            msg.push_str(&format!(" (using the default '{}' instead)", hotkey::DEFAULT_TOGGLE_DECK));
         }
+    }
+    Err(format!("hotkey: {msg}"))
+}
+
+/// Startup/discovery-time registration: nobody is waiting for the result, so a
+/// failure is only logged (the settings UI learns it from `reload_hotkey`).
+fn register_toggle_hotkey_logged(app: &tauri::AppHandle, d: &Discovery) {
+    if let Err(e) = register_toggle_hotkey(app, d) {
+        eprintln!("{e}");
     }
 }
 
 /// Re-read `/config` and re-register the deck-toggle hotkey (the editor calls
 /// this after a successful config write so a changed accelerator takes effect).
+/// `Err` carries the registration failure for the settings UI to show.
 #[tauri::command]
 async fn reload_hotkey(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let d = current_discovery(&state)?;
-    run_blocking(move || {
-        register_toggle_hotkey(&app, &d);
-        Ok(())
-    })
-    .await
+    run_blocking(move || register_toggle_hotkey(&app, &d)).await
 }
 
 /// The always-on-top value a live re-read should apply, or `None` when the
@@ -2965,7 +2968,7 @@ fn start_sidecar(
     match resolve_plan(resource_dir) {
         SidecarPlan::External(d, from_runtime_json) => {
             let view = DiscoveryView::from(&d);
-            register_toggle_hotkey(app.handle(), &d);
+            register_toggle_hotkey_logged(app.handle(), &d);
             if let Some(state) = app.try_state::<AppState>() {
                 state
                     .attached_from_runtime_json
@@ -2988,7 +2991,7 @@ fn start_sidecar(
             std::thread::spawn(move || {
                 supervise(SupervisorConfig::new(spec), child, stop, move |d| {
                     let view = DiscoveryView::from(&d);
-                    register_toggle_hotkey(&handle, &d);
+                    register_toggle_hotkey_logged(&handle, &d);
                     if let Some(state) = handle.try_state::<AppState>() {
                         *state.discovery.lock().unwrap() = Some(d);
                     }
