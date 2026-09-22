@@ -5,15 +5,16 @@
   import BooleanField from "../fields/BooleanField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
+  import ProjectIconsField from "../fields/ProjectIconsField.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import defaults from "../configDefaults.json";
   import {
-    getAt, setAt, listFieldState, setListField,
+    getAt, setAt, removeAt, listFieldState, setListField,
     inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
     type ListFieldState, type ConfigPayload,
   } from "../configClient";
 
-  let { payload = $bindable(), onChange, reloadRev = 0, editProfile = null }:
+  let { payload = $bindable(), onChange, onError, reloadRev = 0, editProfile = null }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
 
   const SEC = "view";
@@ -22,6 +23,7 @@
   const WORKING_ANIMATIONS = ["spin", "comet", "pulse", "sweep", "none"];
   const UI_LANGUAGES = ["en", "cs"];
   const TILE_FILLS = ["none", "tint", "solid"];
+  const TILE_ICONS = ["agent", "project", "both"];
   const LIST_KEYS = ["bottom_row", "tile_fields", "tile_primary", "tile_secondary"] as const;
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
@@ -68,6 +70,7 @@
   const showProfile = $derived((getAt(payload, "base", SEC, "show_profile_on_panel") as boolean) ?? defaults.view.show_profile_on_panel);
   const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? defaults.view.working_animation);
   const tileFill = $derived((getAt(payload, "base", SEC, "tile_fill") as string) ?? defaults.view.tile_fill);
+  const tileIcon = $derived((getAt(payload, "base", SEC, "tile_icon") as string) ?? defaults.view.tile_icon);
   const uiLanguage = $derived((getAt(payload, "base", SEC, "language") as string) ?? defaults.view.language);
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
@@ -137,6 +140,37 @@
     payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, state === "empty" ? [] : list) };
     onChange();
   }
+
+  // --- project_icons: a free-key map (repo -> icon path); the backend merges
+  // profile overlays per repo, so an overlay edits only its own entries ---
+  function stringMap(v: unknown): Record<string, string> {
+    if (v == null || typeof v !== "object" || Array.isArray(v)) return {};
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).filter(([, p]) => typeof p === "string"),
+    ) as Record<string, string>;
+  }
+  const sameMap = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  function setProjectIcons(map: Record<string, string> | undefined): void {
+    if (sameMap(getAt(payload, "base", SEC, "project_icons"), map)) return;
+    payload = map ? setAt(payload, "base", SEC, "project_icons", map) : removeAt(payload, "base", SEC, "project_icons");
+    onChange();
+  }
+  function setOvProjectIcons(map: Record<string, string> | undefined): void {
+    if (sameMap(overrideValue(payload, prof, SEC, "project_icons"), map)) return;
+    payload = {
+      ...payload,
+      profiles: map
+        ? setOverride(payload.profiles, prof, SEC, "project_icons", map)
+        : clearOverride(payload.profiles, prof, SEC, "project_icons"),
+    };
+    onChange();
+  }
+  function inheritedIconsHint(): string {
+    const entries = Object.entries(stringMap(inheritedFor(payload, prof, SEC, "project_icons")));
+    return entries.length
+      ? fmt(lm.inherited_hint, { value: entries.map(([repo, path]) => `${repo} → ${path}`).join(" · ") })
+      : "";
+  }
 </script>
 
 {#if overlay}
@@ -168,6 +202,10 @@
     <OverrideField label="tile_fill" help={HELP.tile_fill} state={scState("tile_fill")} inheritedDisplay={hint("tile_fill")} onstate={(s) => setScState("tile_fill", s)}>
       <SelectField label="" value={String(scValue("tile_fill") ?? "none")} options={TILE_FILLS} onchange={(v) => setSc("tile_fill", v)} />
     </OverrideField>
+    <OverrideField label="tile_icon" help={HELP.tile_icon} state={scState("tile_icon")} inheritedDisplay={hint("tile_icon")} onstate={(s) => setScState("tile_icon", s)}>
+      <SelectField label="" value={String(scValue("tile_icon") ?? "agent")} options={TILE_ICONS} onchange={(v) => setSc("tile_icon", v)} />
+    </OverrideField>
+    <ProjectIconsField label="project_icons" help={HELP.project_icons} entries={stringMap(overrideValue(payload, prof, SEC, "project_icons"))} inheritedHint={inheritedIconsHint()} resetKey={`${prof}:${reloadRev}:view:project_icons`} onchange={setOvProjectIcons} {onError} />
   </FieldGroup>
   <FieldGroup title={lm.content}>
     {#each LIST_KEYS as key}
@@ -189,6 +227,8 @@
     <BooleanField label={lm.backend_labels} help={HELP.backend_labels} configKey="tile_fields" value={backendLabels} onchange={setBackendLabels} />
     <SelectField label="working_animation" help={HELP.working_animation} value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
     <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
+    <SelectField label="tile_icon" help={HELP.tile_icon} value={tileIcon} options={TILE_ICONS} onchange={(v) => set("tile_icon", v)} />
+    <ProjectIconsField label="project_icons" help={HELP.project_icons} entries={stringMap(getAt(payload, "base", SEC, "project_icons"))} resetKey={`base:${reloadRev}:view:project_icons`} onchange={setProjectIcons} {onError} />
   </FieldGroup>
   <FieldGroup title={lm.content}>
     {#each LIST_KEYS as key}

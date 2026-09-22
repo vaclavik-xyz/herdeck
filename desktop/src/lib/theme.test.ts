@@ -102,6 +102,7 @@ const CONVERTED = [
   "lib/fields/ListField.svelte",
   "lib/fields/OverrideField.svelte",
   "lib/fields/TriStateListField.svelte",
+  "lib/fields/ProjectIconsField.svelte",
   "lib/fields/TokenSecretField.svelte",
   "lib/fields/ProviderPicker.svelte",
   "lib/fields/ConfirmRemoveButton.svelte",
