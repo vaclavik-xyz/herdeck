@@ -50,8 +50,8 @@
   {#each cells as cell (cell.status)}
     <div class="cell" class:zero={cell.count === 0} data-status={cell.status} style={`--cell:var(--st-${cell.tone})`}>
       <span class="dot" aria-hidden="true"></span>
-      <strong>{cell.count}</strong>
       <span class="eyebrow">{cell.label}</span>
+      <strong>{cell.count}</strong>
     </div>
   {/each}
 </div>
@@ -80,8 +80,11 @@
     column-gap: var(--s3);
   }
   .runtime .eyebrow, .runtime strong { grid-column: 2; }
-  .cell { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; column-gap: var(--s2); }
+  /* Every cell reads label-above-value, like Runtime and Agents: the dot sits
+     beside its label, the count spans underneath. */
+  .cell { grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: var(--s2); }
   .cell .eyebrow { grid-column: 2; }
+  .cell strong { grid-column: 1 / -1; }
   .dot {
     width: 8px;
     height: 8px;

@@ -309,3 +309,42 @@ describe("ConfigApp sidebar version", () => {
     expect(line).not.toMatch(/v\d+\.\d+\.\d+/);
   });
 });
+
+describe("ConfigApp status chrome and navigation a11y", () => {
+  it("marks the active section with aria-current", () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      const current = () => Array.from(target.querySelectorAll<HTMLButtonElement>(".sidebar button[aria-current='page']"));
+      expect(current().map((b) => b.textContent?.trim())).toEqual(["Overview"]);
+      Array.from(target.querySelectorAll<HTMLButtonElement>(".sidebar button"))
+        .find((b) => b.textContent?.includes("Window"))!.click();
+      flushSync();
+      expect(current().map((b) => b.textContent?.trim())).toEqual(["Window"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("shows no remote-servers pill for a local-only setup", async () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await new Promise((r) => setTimeout(r, 0));
+      flushSync();
+      // The runtime pill is there; the remote one would only read "0/0 · not ready".
+      expect(target.querySelector(".topbar .status-pill")).not.toBeNull();
+      expect(target.querySelector(".secondary-status")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("gives the overview's icon-only connections button a title", () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      const button = target.querySelector<HTMLButtonElement>(".connection-card .icon-button");
+      expect(button?.title).toBe("Open connections");
+    } finally {
+      cleanup();
+    }
+  });
+});
