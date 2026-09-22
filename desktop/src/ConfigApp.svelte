@@ -385,7 +385,7 @@
     PROFILE_SCOPED.has(active) && (validationEditProfile !== undefined || editProfile != null),
   );
   const validationIssues = $derived(classifyValidationErrors(errors, payload ?? undefined));
-  const validationSections = $derived(new Set(validationIssues.flatMap((entry) => entry.section ? [entry.section] : [])));
+  const validationSections = $derived(new Set<string>(validationIssues.flatMap((entry) => entry.section ? [entry.section] : [])));
   $effect(() => fieldValidationMessages.set(messagesForSection(
     validationIssues,
     active,

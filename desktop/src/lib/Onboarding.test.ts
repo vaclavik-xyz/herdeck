@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { flushSync, mount, unmount } from "svelte";
+import { flushSync, mount, unmount, type ComponentProps } from "svelte";
 
 import Onboarding from "./Onboarding.svelte";
 import { setLang } from "./i18n.svelte";
@@ -44,7 +44,7 @@ function render(props: Record<string, unknown>) {
   const target = document.createElement("div");
   document.body.appendChild(target);
   const props$ = reactiveProps<Record<string, unknown>>({ onConnected: () => {}, transport: fakeTransport(), ...props });
-  const instance = mount(Onboarding, { target, props: props$ });
+  const instance = mount(Onboarding, { target, props: props$ as unknown as ComponentProps<typeof Onboarding> });
   flushSync();
   cleanup = () => { unmount(instance); target.remove(); };
   return { target, props: props$ };
