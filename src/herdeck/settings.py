@@ -275,6 +275,17 @@ def _project_icons(raw) -> dict[str, str]:
     for key, value in raw.items():
         if not isinstance(key, str) or not key.strip():
             raise ConfigError("view.project_icons keys must be non-empty repo names")
+        if isinstance(value, dict):
+            # An unquoted dotted key (vaclavik.xyz = "...") parses as a nested
+            # table; rebuild the dotted name for the hint.
+            dotted = key
+            while isinstance(value, dict) and len(value) == 1:
+                sub, value = next(iter(value.items()))
+                dotted = f"{dotted}.{sub}"
+            raise ConfigError(
+                f"view.project_icons.{key} is a table, not a path; quote the repo name "
+                f'if it contains a dot, e.g. "{dotted}" = "~/icons/{dotted}.png"'
+            )
         if not isinstance(value, str) or not value.strip():
             raise ConfigError(f"view.project_icons.{key} must be a non-empty path string")
         out[key] = value

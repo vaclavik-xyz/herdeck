@@ -814,6 +814,15 @@ def test_view_config_rejects_malformed_project_icons(raw, match):
         _view_config({"project_icons": raw})
 
 
+def test_unquoted_dotted_repo_name_hints_to_quote_it():
+    import tomllib
+
+    # vaclavik.xyz unquoted parses as a nested table {"vaclavik": {"xyz": ...}}
+    raw = tomllib.loads('[view.project_icons]\nvaclavik.xyz = "~/x.png"\n')["view"]
+    with pytest.raises(ConfigError, match=r'quote the repo name.*"vaclavik\.xyz"'):
+        _view_config(raw)
+
+
 def test_project_icons_overlay_merges_per_repo(tmp_path, monkeypatch):
     monkeypatch.setenv("TOK", "secret")
     text = (
