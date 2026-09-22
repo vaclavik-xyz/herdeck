@@ -1818,3 +1818,28 @@ def test_apply_config_adopts_usage_changes(monkeypatch):
     assert poller._thread is None  # the old thread was stopped, not orphaned
     app._refresh()
     assert app.orch._usage == []  # stale usage cleared from the panel
+
+
+def test_project_icon_arrival_rerenders_waiting_tiles():
+    from herdeck.project_icon_discovery import icon_hash
+    from herdeck.project_icons import default_store
+    from herdeck.protocol import ProjectIcon
+
+    default_store().clear()
+    try:
+        cfg = make_config()
+        cfg.view.tile_icon = "project"
+        deck = FakeRenderer(13)
+        app = App(cfg, deck, send=lambda c: None)
+        data = b"\x89PNG-api"
+        h = icon_hash(data)
+        s = blocked("p1")
+        s.repo, s.project_icon = "api", h
+        app.handle_snapshot("dev", [s])
+        assert deck.last[0].project_icon is None  # frame follows the snapshot
+        app.handle_project_icon("dev", ProjectIcon("dev", h, "image/png", data))
+        assert deck.last[0].project_icon == h
+        app.handle_project_icon("other", ProjectIcon("other", h, "image/png", data))  # ignored
+    finally:
+        default_store().clear()
+
