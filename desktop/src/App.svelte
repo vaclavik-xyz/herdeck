@@ -27,14 +27,21 @@
     type FloatingScaleCommand,
   } from "./lib/floatingScale";
   import {
+    setupPollMs,
     setupTransport,
     shouldOnboard,
     type SetupStatus,
   } from "./lib/onboardingClient";
-  import { locale } from "./lib/i18n.svelte";
+  import { defineMessages, locale } from "./lib/i18n.svelte";
   import { visibilityGatedLoop } from "./lib/pollGate";
   import UpdateBanner from "./lib/UpdateBanner.svelte";
-  import { asUpdateCheckState, reasonOf, runUpdateCheck, updateTransport } from "./lib/updateClient";
+  import {
+    asUpdateCheckState,
+    reasonOf,
+    runUpdateCheck,
+    UPDATE_RECHECK_MS,
+    updateTransport,
+  } from "./lib/updateClient";
   import {
     applyAvailableBroadcast,
     applyCheckResult,
@@ -42,6 +49,7 @@
     beginCheck,
     initialUpdateState,
     isDismissableNotice,
+    visibleUpdate,
     type UpdateState,
   } from "./lib/updateState";
 
@@ -75,6 +83,10 @@
   // updateState says, and must outrank it in UpdateBanner regardless of which
   // check produced it.
   let updateError = $state("");
+  // "Later" on an available update hides THAT version for this session (per
+  // window). A manual tray check clears it: the user asked explicitly.
+  let dismissedUpdateVersion = $state<string | null>(null);
+  const shownUpdate = $derived(visibleUpdate(updateState.availableUpdate, dismissedUpdateVersion));
   let installingUpdate = $state(false);
   let floatingScrollable = $state(false);
   let floatingContentHeight = $state(300);
@@ -148,6 +160,7 @@
   async function checkForUpdate(manual: boolean): Promise<void> {
     const { state, seq } = beginCheck(updateState, manual);
     updateState = state;
+    if (manual) dismissedUpdateVersion = null;
     const result = await runUpdateCheck(() => updater.check());
     // Dropped outright if a LATER check or an install resolution has already
     // moved the epoch on since this one started — no comparison needed, and
@@ -219,19 +232,9 @@
     return () => clearTimeout(timer);
   });
 
-  // installError outranks both `notice` and `availableUpdate` in UpdateBanner
-  // and is otherwise cleared only by installUpdate's own entry (a retry
-  // click) — ignored, it would pin a red bar for the rest of the process's
-  // life, masking any later state and permanently stealing content-fit
-  // height on the deck. Same 8s window as the effect above, tracked
-  // separately since installError changes independently of updateState.
-  $effect(() => {
-    if (!updateError) return;
-    const timer = setTimeout(() => {
-      updateError = "";
-    }, 8000);
-    return () => clearTimeout(timer);
-  });
+  // installError is NOT swept on a timer: it used to vanish after 8s, often
+  // before anyone read it. It stays until the user dismisses it (UpdateBanner's
+  // Dismiss) or retries the install.
 
   // Content-fit: size the borderless window to the intrinsic content height. Skips
   // redundant calls via fitDecision's anti-feedback guard. No-op (try/catch) when
@@ -429,14 +432,21 @@
     // still DISPLAY a found update — it just never runs a second check of
     // its own, learning the result from `updateResultListener` instead.
     if (surface === "desktop") void checkForUpdate(false);
+    // …and again every few hours while it keeps running: the app lives in the
+    // tray for days, so a start-only check would miss every later release.
+    const recheckTimer = surface === "desktop"
+      ? setInterval(() => void checkForUpdate(false), UPDATE_RECHECK_MS)
+      : undefined;
 
     // Visibility-gated: the setup poll parks while the window is hidden (the
-    // deck lives in the tray) and refreshes immediately on show.
+    // deck lives in the tray) and refreshes immediately on show. Fast only
+    // while setup matters (no status yet, or the onboarding card is up); once
+    // connected it just watches for a dropped connection.
     const setupPoll = visibilityGatedLoop(
       async () => {
         if (setup) status = await setup.status();
       },
-      () => (status ? 2500 : 600),
+      () => setupPollMs(status, view),
     );
 
     // Borderless content-fit: observe the shell's intrinsic height and resize the
@@ -466,21 +476,24 @@
       window.removeEventListener("keydown", onFloatingScaleKey);
       window.removeEventListener("contextmenu", onDeckContextMenu);
       setupPoll.stop();
+      if (recheckTimer !== undefined) clearInterval(recheckTimer);
       ro?.disconnect();
     };
   });
 
-  const connectionSetupLabel = $derived(
-    locale.lang === "cs" ? "Nastavení připojení" : "Connection setup",
-  );
-  const connectionIntroTitle = $derived(
-    locale.lang === "cs" ? "Vyber, kde agenti běží" : "Choose where agents run",
-  );
-  const connectionIntroBody = $derived(
-    locale.lang === "cs"
-      ? "Připoj lokální herdr sessions, uložený vzdálený bridge, nebo obojí. Později to můžeš změnit v Připojeních."
-      : "Connect local herdr sessions, a saved remote bridge, or both. You can change this later in Connections.",
-  );
+  const LM = defineMessages({
+    en: {
+      connection_setup: "Connection setup",
+      intro_title: "Choose where agents run",
+      intro_body: "Connect local herdr sessions, a saved remote bridge, or both. You can change this later in Connections.",
+    },
+    cs: {
+      connection_setup: "Nastavení připojení",
+      intro_title: "Vyber, kde agenti běží",
+      intro_body: "Připoj lokální herdr sessions, uložený vzdálený bridge, nebo obojí. Později to můžeš změnit v Připojeních.",
+    },
+  });
+  const lm = $derived(LM[locale.lang]);
 
   // The tray menu is native (Rust) — retitle its items whenever the language
   // the deck reports changes (DeckView feeds `locale` from /state).
@@ -496,6 +509,10 @@
     })();
   }
 
+  function laterUpdate(): void {
+    dismissedUpdateVersion = updateState.availableUpdate?.version ?? null;
+  }
+
   function openDesktopSettings(): void {
     reonboard = false;
     desktopSetupHidden = true;
@@ -506,11 +523,13 @@
   <div class="desktop-app">
     <div class="desktop-banner">
       <UpdateBanner
-        availableUpdate={updateState.availableUpdate}
+        availableUpdate={shownUpdate}
         notice={updateState.notice}
         installError={updateError}
         installing={installingUpdate}
         onInstall={installUpdate}
+        onDismissError={() => (updateError = "")}
+        onLater={laterUpdate}
       />
     </div>
     <div class="desktop-control-room" inert={showDesktopSetup} aria-hidden={showDesktopSetup}>
@@ -520,6 +539,10 @@
       <div
         class="desktop-setup-overlay"
         bind:this={desktopSetupOverlay}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connection-setup-title"
+        aria-describedby="connection-setup-body"
         tabindex="-1"
       >
         <header class="desktop-topbar">
@@ -527,13 +550,13 @@
             <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
             <strong>Herdeck</strong>
           </div>
-          <span>{connectionSetupLabel}</span>
+          <span>{lm.connection_setup}</span>
         </header>
         <div class="desktop-setup-stage">
           <aside class="setup-intro">
             <span class="setup-icon" aria-hidden="true"><PlugsConnected size={28} weight="regular" /></span>
-            <h2>{connectionIntroTitle}</h2>
-            <p>{connectionIntroBody}</p>
+            <h2 id="connection-setup-title">{lm.intro_title}</h2>
+            <p id="connection-setup-body">{lm.intro_body}</p>
           </aside>
           <Onboarding
             variant="desktop"
@@ -570,11 +593,13 @@
       </div>
     {/if}
     <UpdateBanner
-      availableUpdate={updateState.availableUpdate}
+      availableUpdate={shownUpdate}
       notice={updateState.notice}
       installError={updateError}
       installing={installingUpdate}
       onInstall={installUpdate}
+      onDismissError={() => (updateError = "")}
+      onLater={laterUpdate}
     />
     {#if view === "deck"}
       <DeckView {transport} compact />

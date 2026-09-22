@@ -96,3 +96,13 @@ export async function runUpdateCheck(
     return { kind: "failed", reason: reasonOf(error) };
   }
 }
+
+/** GitHub release page for a version (tags are `v<version>`); the CHANGELOG
+ *  section for that release is what the page shows. */
+export function releaseNotesUrl(version: string): string {
+  const tag = version.startsWith("v") ? version : `v${version}`;
+  return `https://github.com/vaclavik-xyz/herdeck/releases/tag/${encodeURIComponent(tag)}`;
+}
+
+/** How often a running app window re-checks for updates on its own. */
+export const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000;

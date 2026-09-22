@@ -1,14 +1,14 @@
 <script lang="ts">
   import FieldCopy from "./FieldCopy.svelte";
-  let { label, value, options, onchange, help = "", owner = null }:
-    { label: string; value: string; options: string[]; onchange: (v: string) => void; help?: string; owner?: string | null } = $props();
+  let { label, value, options, onchange, help = "", owner = null, configKey = "" }:
+    { label: string; value: string; options: string[]; onchange: (v: string) => void; help?: string; owner?: string | null; configKey?: string } = $props();
 
   // Surface an unknown stored value rather than silently snapping to options[0].
   const choices = $derived(options.includes(value) ? options : [value, ...options]);
 </script>
 
 <label class="field" class:unlabelled={!label}>
-  {#if label}<FieldCopy {label} {help} {owner} />{/if}
+  {#if label}<FieldCopy {label} {help} {owner} {configKey} />{/if}
   <select value={value} onchange={(e) => onchange((e.target as HTMLSelectElement).value)}>
     {#each choices as o}<option value={o}>{o}</option>{/each}
   </select>
@@ -43,6 +43,12 @@
   select:hover { border-color: var(--accent-ring); }
   .field.unlabelled select { grid-column: 1; grid-row: auto; }
   @media (max-width: 760px) {
+    .field { grid-template-columns: minmax(0, 1fr); }
+    select { grid-column: 1; grid-row: auto; max-width: none; }
+  }
+  /* Same stacking inside a narrow settings column (the Deck workbench puts the
+     form beside the live preview, so the viewport is wide but the form is not). */
+  @container settings-form (max-width: 600px) {
     .field { grid-template-columns: minmax(0, 1fr); }
     select { grid-column: 1; grid-row: auto; max-width: none; }
   }

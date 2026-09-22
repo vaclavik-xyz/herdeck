@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   asUpdateCheckState,
+  releaseNotesUrl,
   asUpdateInfo,
   reasonOf,
   runUpdateCheck,
@@ -149,5 +150,12 @@ describe("asUpdateCheckState", () => {
     expect(asUpdateCheckState({ kind: "available" })).toBeNull();
     expect(asUpdateCheckState({ kind: "available", info: { version: 2 } })).toBeNull();
     expect(asUpdateCheckState({ kind: "available", info: null })).toBeNull();
+  });
+});
+
+describe("releaseNotesUrl", () => {
+  it("points at the GitHub release tag for the version", () => {
+    expect(releaseNotesUrl("0.7.9")).toBe("https://github.com/vaclavik-xyz/herdeck/releases/tag/v0.7.9");
+    expect(releaseNotesUrl("v0.7.9")).toBe("https://github.com/vaclavik-xyz/herdeck/releases/tag/v0.7.9");
   });
 });

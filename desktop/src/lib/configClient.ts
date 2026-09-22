@@ -74,7 +74,35 @@ export function parseConfig(raw: unknown): ConfigPayload | null {
 export function parseValidate(raw: unknown): string[] {
   const v = obj(raw);
   if (!Array.isArray(v.errors)) return [];
-  return v.errors.filter((e): e is string => typeof e === "string");
+  return v.errors.flatMap((e) => {
+    const message = issueMessage(e);
+    return message == null ? [] : [message];
+  });
+}
+
+/** One validation issue's message: a plain string, or (C3) an object carrying
+ *  `message`/`error` plus a stable `code`. Anything else is dropped. */
+function issueMessage(e: unknown): string | null {
+  if (typeof e === "string") return e;
+  if (e == null || typeof e !== "object") return null;
+  const row = e as Record<string, unknown>;
+  const message = typeof row.message === "string" ? row.message : row.error;
+  return typeof message === "string" ? message : null;
+}
+
+/** message -> stable code for the issues that carry one (C3). The messages
+ *  stay the routing key (validationIssues.ts matches on them); the code only
+ *  picks a localized DISPLAY text. */
+export function parseValidateCodes(raw: unknown): Record<string, string> {
+  const v = obj(raw);
+  const out: Record<string, string> = {};
+  if (!Array.isArray(v.errors)) return out;
+  for (const e of v.errors) {
+    const message = issueMessage(e);
+    const code = e != null && typeof e === "object" ? (e as Record<string, unknown>).code : undefined;
+    if (message != null && typeof code === "string" && code !== "") out[message] = code;
+  }
+  return out;
 }
 
 /** The Tauri `invoke` shape, injected so configClient stays framework-free. */

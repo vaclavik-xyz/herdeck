@@ -158,4 +158,17 @@ describe("ViewSection", () => {
       unmount(instance);
     }
   });
+  it("shows the TOML key chip on prose-labelled fields", () => {
+    setLang("en");
+    const payload = parseConfig({ base: { view: {} }, profiles: {} })!;
+    const target = document.createElement("div");
+    const instance = mount(ViewSection, { target, props: { payload, onChange: () => {}, onError: () => {} } });
+    try {
+      const chip = (text: string) => Array.from(target.querySelectorAll("label.field"))
+        .find(item => item.textContent?.includes(text))?.querySelector(".fieldlabel code")?.textContent;
+      expect(chip("Emphasize")).toBe("tile_primary · tile_secondary");
+      expect(chip("Show T3 / HERDR labels")).toBe("tile_fields");
+      expect(chip("Controls layout")).toBe("management");
+    } finally { unmount(instance); }
+  });
 });

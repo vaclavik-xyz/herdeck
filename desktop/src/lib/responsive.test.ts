@@ -28,7 +28,11 @@ function styleBlock(source: string): string {
  *  and is how a guard quietly stops guarding. `unconditional()` therefore
  *  asserts a post-condition rather than trusting this regex — if you widen it,
  *  keep that assertion able to detect whatever you still miss. */
-const MEDIA_BLOCK = /@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g;
+const MEDIA_BLOCK = /@(?:media|container)[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g;
+
+/** The named container every settings form card declares (ConfigApp .form-card):
+ *  fields stack inside a narrow column even when the viewport is wide. */
+const NARROW_FORM = "@container settings-form";
 
 /** The at-rules that can HIDE a rule from a desktop viewport. @keyframes,
  *  @font-face and an "@" inside a url() cannot, and must not send the next
@@ -50,9 +54,9 @@ function unconditional(css: string): string {
 }
 
 /** The body of the phone media block, or "" when there is none. */
-function phoneBlock(css: string): string {
+function phoneBlock(css: string, prefix: string = MOBILE_BREAKPOINT): string {
   for (const block of css.match(MEDIA_BLOCK) ?? []) {
-    if (block.startsWith(MOBILE_BREAKPOINT)) return block;
+    if (block.startsWith(prefix)) return block;
   }
   return "";
 }
@@ -86,8 +90,8 @@ describe("the media stripper", () => {
       "@media (max-width: 760px) { @keyframes spin { from { opacity: 0 } } }"],
     ["@supports", "a top-level @supports",
       "@supports (display: grid) { .field { color: blue; } }"],
-    ["@container", "a top-level @container",
-      "@container (min-width: 400px) { .field { color: blue; } }"],
+    ["@container", "a container block it cannot parse",
+      "@container (min-width: 400px) { @keyframes spin { from { opacity: 0 } } }"],
   ])("refuses to guess at %s in %s", (at, _name, css) => {
     expect(() => unconditional(css)).toThrow(new RegExp(`^${at} survived stripping`));
   });
@@ -125,7 +129,10 @@ describe("responsive field layout", () => {
   // fixed track. Anchor to the root: the selector that declares the track.
   const TRACK = /grid-template-columns:\s*([^;}]+)/;
 
-  it.each(labelled)("%s collapses its label track on a phone", (file) => {
+  it.each(labelled.flatMap((file) => [
+    [file, "on a phone", MOBILE_BREAKPOINT],
+    [file, "in a narrow settings column", NARROW_FORM],
+  ]))("%s collapses its label track %s", (file, _where, prefix) => {
     const css = styleBlock(read(`./fields/${file}`));
     const root = rules(unconditional(css)).find(
       ([, body]) => body.includes("var(--field-label-w") && TRACK.test(body),
@@ -133,7 +140,7 @@ describe("responsive field layout", () => {
     expect(root, "no rule declares the fixed label track — update this guard").toBeDefined();
 
     const [selector] = root!;
-    const collapsed = rules(phoneBlock(css))
+    const collapsed = rules(phoneBlock(css, prefix))
       .filter(([sel]) => sel === selector)
       .map(([, body]) => body.match(TRACK)?.[1])
       .filter((v): v is string => v != null);

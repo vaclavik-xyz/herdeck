@@ -22,7 +22,7 @@
   import Banner from "./Banner.svelte";
   import { defineMessages, fmt, locale } from "./i18n.svelte";
   import type { Notice } from "./updateState";
-  import type { UpdateInfo } from "./updateClient";
+  import { releaseNotesUrl, type UpdateInfo } from "./updateClient";
 
   let {
     availableUpdate = null,
@@ -30,12 +30,19 @@
     installError = "",
     installing = false,
     onInstall,
+    onDismissError = undefined,
+    onLater = undefined,
   }: {
     availableUpdate?: UpdateInfo | null;
     notice?: Notice | null;
     installError?: string;
     installing?: boolean;
     onInstall: () => void;
+    // An install failure stays until the user closes it (it used to vanish
+    // after 8s, before anyone had read it).
+    onDismissError?: () => void;
+    // Hide an available update for the rest of this session (per version).
+    onLater?: () => void;
   } = $props();
 
   const LM = defineMessages({
@@ -46,6 +53,9 @@
       failed: "Update check failed: {reason}",
       install: "Install and restart",
       installing: "Installing…",
+      later: "Later",
+      dismiss: "Dismiss",
+      release_notes: "Release notes",
     },
     cs: {
       available: "Je dostupný Herdeck {version}.",
@@ -54,6 +64,9 @@
       failed: "Kontrola aktualizací selhala: {reason}",
       install: "Nainstalovat a restartovat",
       installing: "Instaluji…",
+      later: "Později",
+      dismiss: "Zavřít",
+      release_notes: "Poznámky k vydání",
     },
   });
   const m = $derived(LM[locale.lang]);
@@ -64,11 +77,22 @@
     message: string;
     actionLabel?: string;
     onAction?: () => void;
+    dismissLabel?: string;
+    onDismiss?: () => void;
+    linkLabel?: string;
+    linkHref?: string;
   };
 
   const view = $derived.by((): Presentation => {
     if (installError) {
-      return { kind: "error", message: installError, actionLabel: installAction, onAction: onInstall };
+      return {
+        kind: "error",
+        message: installError,
+        actionLabel: installAction,
+        onAction: onInstall,
+        dismissLabel: onDismissError ? m.dismiss : undefined,
+        onDismiss: onDismissError,
+      };
     }
     switch (notice?.kind) {
       case "checking":
@@ -84,10 +108,23 @@
         message: fmt(m.available, { version: availableUpdate.version }),
         actionLabel: installAction,
         onAction: onInstall,
+        dismissLabel: onLater ? m.later : undefined,
+        onDismiss: onLater,
+        linkLabel: m.release_notes,
+        linkHref: releaseNotesUrl(availableUpdate.version),
       };
     }
     return { kind: "warning", message: "" };
   });
 </script>
 
-<Banner kind={view.kind} message={view.message} actionLabel={view.actionLabel} onAction={view.onAction} />
+<Banner
+  kind={view.kind}
+  message={view.message}
+  actionLabel={view.actionLabel}
+  onAction={view.onAction}
+  dismissLabel={view.dismissLabel}
+  onDismiss={view.onDismiss}
+  linkLabel={view.linkLabel}
+  linkHref={view.linkHref}
+/>

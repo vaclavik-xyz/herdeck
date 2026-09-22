@@ -8,6 +8,7 @@ import {
   applyResolvedAway,
   beginCheck,
   initialUpdateState,
+  visibleUpdate,
   isDismissableNotice,
   type Notice,
   type UpdateState,
@@ -156,5 +157,15 @@ describe("isDismissableNotice", () => {
   // unlike this repo's tests, never ran tsc): still `true`, not stranded.
   it("still answers true for a kind the type system doesn't know about (the ill-typed-but-shipped fallback)", () => {
     expect(isDismissableNotice({ kind: "future" } as unknown as Notice)).toBe(true);
+  });
+});
+
+describe("visibleUpdate", () => {
+  const info = { version: "0.2.0", current_version: "0.1.0" };
+  it("hides only the version the user put off with 'Later'", () => {
+    expect(visibleUpdate(info, null)).toBe(info);
+    expect(visibleUpdate(info, "0.2.0")).toBeNull();
+    expect(visibleUpdate({ ...info, version: "0.3.0" }, "0.2.0")?.version).toBe("0.3.0");
+    expect(visibleUpdate(null, null)).toBeNull();
   });
 });

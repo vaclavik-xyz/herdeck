@@ -123,7 +123,7 @@
 <style>
   /* see UsageSection: the preceding field already draws the separating rule */
   .advanced-settings { margin: var(--s5) 0 0; }
-  .advanced-settings summary { color: var(--text-dim); cursor: pointer; font-size: 10px; font-weight: 620; user-select: none; }
+  .advanced-settings summary { color: var(--text-dim); cursor: pointer; font: var(--t-label); user-select: none; }
   .advanced-settings[open] summary { color: var(--text); margin-bottom: var(--s2); }
   .advanced-fields { display: contents; }
 </style>

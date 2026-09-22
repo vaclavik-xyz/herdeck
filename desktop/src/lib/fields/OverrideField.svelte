@@ -92,4 +92,10 @@
     .override { grid-template-columns: minmax(0, 1fr); }
     .body { grid-column: 1; grid-row: auto; }
   }
+  /* Same stacking inside a narrow settings column (the Deck workbench puts the
+     form beside the live preview, so the viewport is wide but the form is not). */
+  @container settings-form (max-width: 600px) {
+    .override { grid-template-columns: minmax(0, 1fr); }
+    .body { grid-column: 1; grid-row: auto; }
+  }
 </style>

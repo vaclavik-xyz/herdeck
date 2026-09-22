@@ -309,3 +309,97 @@ describe("ConfigApp sidebar version", () => {
     expect(line).not.toMatch(/v\d+\.\d+\.\d+/);
   });
 });
+
+async function openSection(target: HTMLElement, label: string): Promise<void> {
+  Array.from(target.querySelectorAll<HTMLButtonElement>(".sidebar button"))
+    .find((b) => b.textContent?.includes(label))!.click();
+  flushSync();
+  await vi.waitFor(() => expect(target.querySelector(".loading-card")).toBeNull());
+}
+
+function clickApply(target: HTMLElement): void {
+  Array.from(target.querySelectorAll<HTMLButtonElement>(".savebar button"))
+    .find((b) => b.title.startsWith("Save the config"))!.click();
+}
+
+describe("ConfigApp Apply outcome banner", () => {
+  it("shows the hotkey registration error instead of 'saved'", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "reload_hotkey") throw "accelerator CmdOrCtrl+Shift+D is already taken";
+      return mockInvoke(cmd);
+    });
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Window");
+      const checkbox = target.querySelector<HTMLInputElement>(".content input[type='checkbox']")!;
+      checkbox.checked = true;
+      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      flushSync();
+      clickApply(target);
+      await vi.waitFor(() => {
+        expect(target.querySelector(".savebar")?.textContent).toContain("already taken");
+      });
+      expect(target.querySelector(".savebar")?.textContent).not.toMatch(/\bsaved\s*$/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("asks for a restart when a startup-only key changed", async () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Deck");
+      const input = Array.from(target.querySelectorAll<HTMLLabelElement>(".content label.field"))
+        .find((l) => l.querySelector("[data-config-key='deck']"))!.querySelector("input")!;
+      input.value = "web";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      clickApply(target);
+      await vi.waitFor(() => {
+        expect(target.querySelector(".savebar")?.textContent).toContain("Restart Herdeck");
+      });
+      expect(target.querySelector(".savebar")?.textContent).toContain("deck");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("ConfigApp status chrome and navigation a11y", () => {
+  it("marks the active section with aria-current", () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      const current = () => Array.from(target.querySelectorAll<HTMLButtonElement>(".sidebar button[aria-current='page']"));
+      expect(current().map((b) => b.textContent?.trim())).toEqual(["Overview"]);
+      Array.from(target.querySelectorAll<HTMLButtonElement>(".sidebar button"))
+        .find((b) => b.textContent?.includes("Window"))!.click();
+      flushSync();
+      expect(current().map((b) => b.textContent?.trim())).toEqual(["Window"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("shows no remote-servers pill for a local-only setup", async () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await new Promise((r) => setTimeout(r, 0));
+      flushSync();
+      // The runtime pill is there; the remote one would only read "0/0 · not ready".
+      expect(target.querySelector(".topbar .status-pill")).not.toBeNull();
+      expect(target.querySelector(".secondary-status")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("gives the overview's icon-only connections button a title", () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      const button = target.querySelector<HTMLButtonElement>(".connection-card .icon-button");
+      expect(button?.title).toBe("Open connections");
+    } finally {
+      cleanup();
+    }
+  });
+});
