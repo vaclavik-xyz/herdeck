@@ -16,6 +16,7 @@ import json
 import threading
 import time
 import urllib.request
+from dataclasses import replace
 
 from PIL import Image
 
@@ -1261,8 +1262,8 @@ class RecordingNotifier:
         self.calls.append((title, body, sound))
 
 
-def make_notifying_live(config, server):
-    src = LiveSource(config, server, notify_schedule=lambda fn: fn())
+def make_notifying_live(config, server, clock=None):
+    src = LiveSource(config, server, notify_schedule=lambda fn: fn(), notify_clock=clock)
     notifier = RecordingNotifier()
     src._notifier = notifier
     return src, notifier
@@ -1286,7 +1287,7 @@ def test_done_snapshot_fires_notification_once():
     assert notifier.calls == []
 
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
-    assert notifier.calls == [("codex done", "p0 · main", "Hero")]
+    assert notifier.calls == [("codex · done", "p0 · main", "Hero")]
 
     # Still done on the next snapshot -> no duplicate.
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
@@ -1308,7 +1309,7 @@ def test_first_snapshot_seeds_notification_baseline_without_alerting():
 
     src._on_event(server.id, agent(server.id, "done-before-runtime", Status.WORKING))
     src._on_event(server.id, agent(server.id, "done-before-runtime", Status.DONE))
-    assert notifier.calls == [("claude done", "done-before-runtime · main", "Hero")]
+    assert notifier.calls == [("claude · done", "done-before-runtime · main", "Hero")]
 
 
 def test_done_rearms_after_leaving_the_state():
@@ -1328,7 +1329,7 @@ def test_blocked_event_uses_glass_sound():
 
     src._on_snapshot(server.id, [agent(server.id, "p1", Status.WORKING)])
     src._on_event(server.id, agent(server.id, "p1", Status.BLOCKED))
-    assert notifier.calls == [("claude blocked", "p1 · main", "Glass")]
+    assert notifier.calls == [("claude · needs input", "p1 · main", "Glass")]
 
 
 def test_event_not_in_on_list_is_silent():
@@ -1345,22 +1346,79 @@ def test_sound_master_toggle_off_makes_alerts_silent():
 
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING, agent_type="codex")])
     src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
-    assert notifier.calls == [("codex done", "p0 · main", False)]
+    assert notifier.calls == [("codex · done", "p0 · main", False)]
 
 
 def test_event_fires_from_single_state_event_too():
     config, server = notify_config()
-    src, notifier = make_notifying_live(config, server)
+    now = [100.0]
+    src, notifier = make_notifying_live(config, server, clock=lambda: now[0])
 
     src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
-    assert notifier.calls == [("codex done", "p0 · main", "Hero")]
+    assert notifier.calls == [("codex · done", "p0 · main", "Hero")]
 
     # Same done state re-delivered -> no duplicate; then leaving re-arms.
     src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
     assert len(notifier.calls) == 1
+    now[0] += 61  # past the per-agent "done" cooldown
     src._on_event(server.id, agent(server.id, "p0", Status.WORKING))
     src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
     assert len(notifier.calls) == 2
+
+
+def test_done_flapping_within_cooldown_notifies_once():
+    config, server = notify_config()
+    now = [100.0]
+    src, notifier = make_notifying_live(config, server, clock=lambda: now[0])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    for _ in range(4):
+        src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
+        now[0] += 5
+        src._on_event(server.id, agent(server.id, "p0", Status.WORKING))
+    assert len(notifier.calls) == 1
+    # A different agent is not throttled by p0's cooldown.
+    src._on_event(server.id, agent(server.id, "p1", Status.DONE, agent_type="codex"))
+    assert len(notifier.calls) == 2
+
+
+def test_recycled_pane_is_not_throttled_by_previous_agent():
+    config, server = notify_config()
+    now = [100.0]
+    src, notifier = make_notifying_live(config, server, clock=lambda: now[0])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_event(server.id, replace(agent(server.id, "p0", Status.DONE), terminal_id="t1"))
+    src._on_event(server.id, replace(agent(server.id, "p0", Status.WORKING), terminal_id="t2"))
+    src._on_event(server.id, replace(agent(server.id, "p0", Status.DONE), terminal_id="t2"))
+    assert len(notifier.calls) == 2
+
+
+def test_done_right_after_pressing_that_agent_is_suppressed():
+    config, server = notify_config()
+    now = [100.0]
+    src, notifier = make_notifying_live(config, server, clock=lambda: now[0])
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    blocked_calls = len(notifier.calls)
+    app.press(0)  # drill into the blocked agent = the user is on it
+    src._on_event(server.id, agent(server.id, "p0", Status.DONE))
+    assert len(notifier.calls) == blocked_calls  # "done" suppressed
+    # Long after the interaction a fresh done episode notifies again.
+    now[0] += 120
+    src._on_event(server.id, agent(server.id, "p0", Status.WORKING))
+    src._on_event(server.id, agent(server.id, "p0", Status.DONE))
+    assert len(notifier.calls) == blocked_calls + 1
+    app.close()
+
+
+def test_notification_titles_follow_view_language():
+    config, server = notify_config()
+    config.view.language = "cs"
+    src, notifier = make_notifying_live(config, server)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))
+    src._on_event(server.id, agent(server.id, "p1", Status.DONE, agent_type="codex"))
+    assert [c[0] for c in notifier.calls] == ["claude · čeká na tebe", "codex · hotovo"]
 
 
 def test_notifications_disabled_builds_no_notifier():
@@ -1457,10 +1515,12 @@ def test_state_exposes_notify_feed_and_shell_claim_toggles():
     app.note_shell_claim("shell-1")
     assert app.shell_claims_banners() is True
     assert src._notify_gate() is True
-    src._notifier.notify("codex done", "p0", "Hero")
-    st = app._state()
-    assert st["notify"]["seq"] == 1
-    assert st["notify"]["items"][0]["title"] == "codex done"
+    src._notifier.notify("codex · done", "p0", "Hero")
+    feed = src.notifications_feed_state()
+    assert feed["seq"] == 1
+    assert feed["items"][0]["title"] == "codex · done"
+    # The feed is served by /notifications only; /state no longer mirrors it.
+    assert "notify" not in app._state()
     app.close()
 
 
@@ -1488,7 +1548,7 @@ def test_runtime_sink_suppresses_osascript_while_shell_claims(monkeypatch):
     # No shell claim yet -> gate closed -> osascript fallback fires.
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING, agent_type="codex")])
     src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
-    assert scripted == [("codex done", "p0 · main", "Hero")]
+    assert scripted == [("codex · done", "p0 · main", "Hero")]
 
     # After the shell claims, the banner is the shell's job: no more osascript,
     # the alert goes through the feed instead.
@@ -1496,7 +1556,7 @@ def test_runtime_sink_suppresses_osascript_while_shell_claims(monkeypatch):
     src._on_snapshot(server.id, [agent(server.id, "p1", Status.WORKING)])
     src._on_snapshot(server.id, [agent(server.id, "p1", Status.DONE, agent_type="codex")])
     assert len(scripted) == 1
-    assert src._notify_feed.state()["items"][-1]["title"] == "codex done"
+    assert src._notify_feed.state()["items"][-1]["title"] == "codex · done"
     app.close()
 
 
@@ -1515,8 +1575,8 @@ def test_new_shell_claim_preserves_feed_and_ack_prevents_replay():
     src.set_notify_gate(app.shell_claims_banners)
 
     app.note_shell_claim("gen-1")
-    src._notifier.notify("codex done", "p0", "Hero")
-    src._notifier.notify("claude blocked", "p1", "Glass")
+    src._notifier.notify("codex · done", "p0", "Hero")
+    src._notifier.notify("claude · needs input", "p1", "Glass")
     assert src._notify_feed.state()["seq"] == 2
 
     state = src._notify_feed.state()
@@ -1524,7 +1584,7 @@ def test_new_shell_claim_preserves_feed_and_ack_prevents_replay():
     assert src._notify_feed.state()["acked_seq"] == 2
 
     # Alerts arriving while the shell is alive keep normal seqs.
-    src._notifier.notify("codex done", "p2", "Hero")
+    src._notifier.notify("codex · done", "p2", "Hero")
     assert src._notify_feed.state()["seq"] == 3
     app.note_shell_claim("gen-1")  # same shell, claim refresh: no reset
     assert src._notify_feed.state()["seq"] == 3
@@ -1551,7 +1611,7 @@ def test_genless_claim_after_ttl_gap_preserves_feed():
 
     app.note_shell_claim()
     assert src._notify_feed.state()["seq"] == 0
-    src._notifier.notify("claude blocked", "p1", "Glass")
+    src._notifier.notify("claude · needs input", "p1", "Glass")
     # Still claiming (fresh, same gen-less shell) -> no reset.
     app.note_shell_claim()
     assert src._notify_feed.state()["seq"] == 1
@@ -1592,11 +1652,11 @@ def test_notification_long_poll_wakes_and_acknowledges_delivery():
     assert app.shell_claims_banners()
 
     started = time.monotonic()
-    src._notifier.notify("codex done", "api", "Hero")
+    src._notifier.notify("codex · done", "api", "Hero")
     thread.join(timeout=0.3)
     assert not thread.is_alive()
     assert time.monotonic() - started < 0.3
-    assert result[0]["items"][0]["title"] == "codex done"
+    assert result[0]["items"][0]["title"] == "codex · done"
 
     payload = json.dumps({"generation": generation, "seq": 1}).encode()
     req = urllib.request.Request(
@@ -1629,7 +1689,7 @@ def test_notification_native_failure_uses_one_fallback_and_keeps_pump_claim():
     app = DeckApp(src, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
     src.set_notify_gate(app.shell_claims_banners)
     app.note_shell_claim("shell-a")
-    src._notifier.notify("codex done", "p1", "Hero")
+    src._notifier.notify("codex · done", "p1", "Hero")
     item = src._notify_feed.state()["items"][0]
 
     payload = json.dumps(
@@ -1644,7 +1704,7 @@ def test_notification_native_failure_uses_one_fallback_and_keeps_pump_claim():
     with urllib.request.urlopen(req, timeout=2) as response:
         assert response.status == 204
 
-    assert delivered == [("codex done", "p1", "Hero")]
+    assert delivered == [("codex · done", "p1", "Hero")]
     assert src._notify_feed.state()["acked_seq"] == 1
     assert app.shell_claims_banners() is True
     app.close()

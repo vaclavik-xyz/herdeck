@@ -44,8 +44,17 @@ STRINGS: dict[str, dict[str, str]] = {
         "offline_reconnecting": "OFFLINE — reconnecting…",
         "press_to_confirm": "press again to confirm",
         "sent": "sent › {label}",
+        "others_blocked": "▲ {n} more blocked",
+        "launch_on": "on {server}",
+        # notification titles (banner / Telegram headline)
+        "notify.title_blocked": "{agent} · needs input",
+        "notify.title_done": "{agent} · done",
+        # accessible tile descriptions (desktop aria-label via /state)
+        "a11y.empty_tile": "empty tile {n}",
+        "a11y.pinned": "pinned",
         # Elgato plugin action keys
         "act.approve": "Approve",
+        "act.approve_always": "Approve!",
         "act.deny": "Deny",
         "act.stop": "Stop",
         "act.pager": "Next",
@@ -114,7 +123,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "offline_reconnecting": "OFFLINE — připojuji…",
         "press_to_confirm": "stiskni znovu pro potvrzení",
         "sent": "posláno › {label}",
+        "others_blocked": "▲ další blokováno: {n}",
+        "launch_on": "na {server}",
+        "notify.title_blocked": "{agent} · čeká na tebe",
+        "notify.title_done": "{agent} · hotovo",
+        "a11y.empty_tile": "prázdná dlaždice {n}",
+        "a11y.pinned": "připnuto",
         "act.approve": "Schválit",
+        "act.approve_always": "Schválit!",
         "act.deny": "Zamítnout",
         "act.stop": "Stop",
         "act.pager": "Další",
@@ -131,10 +147,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "mgmt.theme": "Barvy",
         "status.working": "PRACUJE",
         "status.idle": "NEČINNÝ",
-        "status.blocked": "ČEKÁ",
+        # Not "ČEKÁ": next to waiting's "V POZADÍ" (and the panel's "čeká na
+        # tebe") a waits-for-you tile and a background-work tile read alike.
+        "status.blocked": "BLOKOVÁN",
         "status.done": "HOTOVO",
-        # blocked already owns "ČEKÁ" (waiting for YOU); this one is passive
-        # background work, so it must read differently.
+        # passive background work (CI, review), distinct from blocked
         "status.waiting": "V POZADÍ",
         "status.unknown": "NEZNÁMÝ",
         "status.offline": "OFFLINE",

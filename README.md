@@ -551,6 +551,9 @@ npm ci
 npm run tauri dev   # opens the desktop control room (needs a real desktop session)
 ```
 
+The UI is dark-only by design: it mirrors the deck hardware's black tiles, so
+there is no light theme to switch to.
+
 See **Native desktop app** under Install for a local application bundle and
 [`desktop/README.md`](desktop/README.md) for architecture and test details.
 
@@ -748,7 +751,11 @@ backends = ["macos"]
 
 Legacy flat configs use the root `[notifications]` table with the same fields.
 
-- **macOS** posts to Notification Center (osascript). **Telegram** delivers to
+- **macOS** shows native banners posted by the Herdeck desktop app under its
+  own name and icon: the runtime queues each alert and the app long-polls
+  `/notifications`, posts the banner with its sound, and acknowledges it. Only
+  while no desktop app is attached (or native delivery fails) does the runtime
+  fall back to an `osascript` notification. **Telegram** delivers to
   your phone via the Bot API over HTTPS (stdlib only, no extra dependency) —
   useful when you drive herdeck from the phone over Tailscale.
 - Telegram setup: create a bot with @BotFather, `export HERDECK_TELEGRAM_TOKEN=<token>`
@@ -761,8 +768,13 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   to send text to that specific agent. Herdeck accepts inbound actions only from
   `allowed_user_ids`, only in the configured `chat_id`, and only in `message_thread_id`
   when one is configured.
+- Titles name the agent and the event in the deck language (`[view].language`),
+  e.g. `claude · needs input` / `claude · done`.
 - Notifications fire once per event episode (re-arming after the agent leaves
-  the notified state) and never block the UI loop. **done** alerts are plain
+  the notified state) and never block the UI loop. An agent that flaps is
+  throttled per agent and event (60 s for **done**, a 5 s flap guard for
+  **blocked**), and a **done** that follows within 10 s of you pressing that
+  agent on the deck is skipped — you just caused it. **done** alerts are plain
   one-way notifications (no Telegram approve buttons); the sound differs per
   event by default (Glass for blocked, Hero for done).
 

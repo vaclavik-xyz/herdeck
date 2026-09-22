@@ -8,7 +8,10 @@ machine state and never enter the shareable config.
 
 from __future__ import annotations
 
+import errno
 import os
+import socket
+import stat
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -24,6 +27,41 @@ class LocalSession:
 
     def public(self) -> dict:
         return asdict(self)
+
+
+_PROBE_TIMEOUT_S = 0.2
+# connect() failures that prove nobody is listening on a socket file.
+_DEAD_SOCKET_ERRNOS = {errno.ECONNREFUSED, errno.ENOENT, errno.ENOTSOCK}
+
+
+def socket_alive(path: str | Path, *, timeout: float = _PROBE_TIMEOUT_S) -> bool:
+    """Is a Herdr server actually listening at ``path``?
+
+    A socket FILE outlives a crashed Herdr, so ``exists()`` reported a dead
+    session as running. For a real socket file this does a short AF_UNIX
+    connect (closed immediately, nothing is sent): refused = stale. A path
+    that exists but is not a socket, or one the probe cannot judge (e.g. too
+    long for sun_path), keeps the old existence answer.
+    """
+    target = os.path.expanduser(str(path))
+    try:
+        mode = os.stat(target).st_mode
+    except OSError:
+        return False
+    if not stat.S_ISSOCK(mode):
+        return True
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(timeout)
+        probe.connect(target)
+        return True
+    except TimeoutError:
+        # Accept queue full / server busy: something is there.
+        return True
+    except OSError as exc:
+        return exc.errno not in _DEAD_SOCKET_ERRNOS
+    finally:
+        probe.close()
 
 
 def _read_local(local_path: str | Path | None) -> dict:
@@ -137,7 +175,7 @@ def discover_local_sessions(
                 name=name,
                 server_id=_server_id(name),
                 socket_path=str(path),
-                available=path.exists(),
+                available=socket_alive(path),
                 selected=name in selected_names,
             )
         )
@@ -151,7 +189,7 @@ def discover_local_sessions(
                 name=name,
                 server_id=_server_id(name),
                 socket_path=str(path),
-                available=path.exists(),
+                available=socket_alive(path),
                 selected=True,
             )
         )

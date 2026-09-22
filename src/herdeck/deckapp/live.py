@@ -29,12 +29,24 @@ import threading
 import time
 from collections.abc import Callable
 
-from ..app import NOTIFY_EVENT_STATUSES, event_notification_body, newly_entered
+from ..app import (
+    NOTIFY_EVENT_STATUSES,
+    _interaction_keys,
+    event_notification_body,
+    newly_entered,
+)
 from ..commands import Command, command_to_msg
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
 from ..model import AgentKey, AgentState, Status
-from ..notify import NotificationFeed, Notifier, _macos_sink, deckapp_sink
+from ..notify import (
+    NotificationFeed,
+    Notifier,
+    NotifyThrottle,
+    _macos_sink,
+    deckapp_sink,
+    event_title,
+)
 from ..orchestrator import Orchestrator
 from .source import StateSource
 
@@ -69,6 +81,7 @@ class LiveSource(StateSource):
         notify_schedule=None,
         notify_sink_factory=None,
         notification_fallback=None,
+        notify_clock=None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -83,6 +96,9 @@ class LiveSource(StateSource):
         # is only the fallback while no shell is attached.
         self._notify_keys: dict[str, set] = {event: set() for event in NOTIFY_EVENT_STATUSES}
         self._notify_baselined_servers: set[str] = set()
+        # Cooldown per agent+event and "done right after you answered it"
+        # suppression (see notify.NotifyThrottle).
+        self._notify_throttle = NotifyThrottle(clock=notify_clock or time.monotonic)
         self._notify_schedule = notify_schedule or _thread_notify_schedule
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
@@ -184,6 +200,8 @@ class LiveSource(StateSource):
             return []
         was_drilling = orch.is_drilling()
         cmds = orch.on_press(index)
+        for key in _interaction_keys(orch, cmds):
+            self._notify_throttle.note_interaction(key)
         # If this press just opened a drill into a blocked pane whose prompt we
         # pre-read, seed the detection so the very first render shows the options —
         # no wait for the read round-trip, no empty-drill flash. The drill's own
@@ -282,7 +300,15 @@ class LiveSource(StateSource):
             return
         sound = False if not n.sound else n.sounds.get(event, True)
         multi = len(self._config.overview_order) > 1
-        title = f"{agent.agent_type} {event}"
+        if not self._notify_throttle.allow(event, agent.key):
+            log.info(
+                "notification suppressed (cooldown/recent press) event=%s agent=%s:%s",
+                event,
+                agent.key.server_id,
+                agent.key.pane_id,
+            )
+            return
+        title = event_title(agent.agent_type, event, self._config.view.language)
         body = event_notification_body(agent, multi_server=multi)
         log.info(
             "notification transition event=%s agent=%s:%s observed_at_ms=%s",
@@ -323,6 +349,7 @@ class LiveSource(StateSource):
                 for key in recycled:
                     self._preread.pop(key, None)
                     self._preread_req.pop(key, None)
+                    self._notify_throttle.forget(key)
             if self._drilled_key() in recycled:
                 self._active_read_req = None
                 if self._orch is not None:
@@ -370,6 +397,7 @@ class LiveSource(StateSource):
                 if recycled:
                     self._preread.pop(state.key, None)
                     self._preread_req.pop(state.key, None)
+                    self._notify_throttle.forget(state.key)
             # Same rule for a single-pane event: only a real unblock clears the
             # drilled prompt (App.handle_event).
             drilled = self._drilled_key()

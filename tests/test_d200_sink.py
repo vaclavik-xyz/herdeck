@@ -353,3 +353,53 @@ def test_reconnecting_sink_cannot_overwrite_concurrent_frame_with_stale_repaint(
     finally:
         driver.old_frame_release.set()
         sink.close()
+
+
+def test_d200_sinks_opt_out_of_ticker_frames():
+    # DeckApp reads this to skip rendering animation frames nobody consumes.
+    assert D200Sink.wants_ticker_frames is False
+    assert ReconnectingD200Sink.wants_ticker_frames is False
+
+
+def test_reconnecting_sink_reopens_immediately_after_disconnect():
+    """The supervisor waits on events, not a 250ms poll: a disconnect is
+    followed by the reopen attempt right away (every time)."""
+
+    class DroppingDriver(FrameDriver):
+        def __init__(self):
+            super().__init__()
+            self.drop = threading.Event()
+
+        async def run_reader(self):
+            await asyncio.to_thread(self.drop.wait)  # returning = device gone
+
+        def close(self):
+            super().close()
+            self.drop.set()
+
+    drivers = []
+    opened_at = []
+
+    def factory():
+        opened_at.append(time.monotonic())
+        driver = DroppingDriver()
+        drivers.append(driver)
+        return driver
+
+    sink = ReconnectingD200Sink(factory, on_press=lambda i: None, slots=13, retry_interval=5)
+    try:
+        for cycle in range(3):
+            deadline = time.monotonic() + 2.0
+            while len(drivers) <= cycle and time.monotonic() < deadline:
+                time.sleep(0.002)
+            assert len(drivers) == cycle + 1
+            dropped_at = time.monotonic()
+            drivers[cycle].drop.set()
+            deadline = time.monotonic() + 2.0
+            while len(opened_at) <= cycle + 1 and time.monotonic() < deadline:
+                time.sleep(0.002)
+            assert opened_at[cycle + 1] - dropped_at < 0.1
+    finally:
+        t0 = time.monotonic()
+        sink.close()
+        assert time.monotonic() - t0 < 1.0

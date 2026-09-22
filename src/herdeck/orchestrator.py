@@ -29,6 +29,10 @@ _PREVIEW_SLOT_GUARD_S = _SLOT_PRESS_GUARD_S + 0.5
 _SENT_NOTE_TTL_S = 3.0
 # How long a panel press holds the usage-limit detail (single-page decks).
 _USAGE_DETAIL_HOLD_S = 6.0
+# A drill / launcher / profile menu left untouched this long returns to the
+# overview on its own: new blocks never yank an open view (see _on_new_block),
+# so a forgotten drill would otherwise hide every later attention request.
+MENU_IDLE_TIMEOUT_S = 60.0
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 _MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
 _APPROVE_ALWAYS_HINTS = ("always", "don't ask", "dont ask", "do not ask")
@@ -86,6 +90,11 @@ class Orchestrator:
         self._launcher: bool = False
         self._profile_menu: bool = False
         self._profile_menu_origin: str = "overview"
+        # Last deck press (or view entry) — drives MENU_IDLE_TIMEOUT_S.
+        self._last_press_at: float = self._clock()
+        # When the current drill was opened: blocks that start later are
+        # counted on the drill panel ("▲ 2 more blocked").
+        self._drill_since: float = 0.0
         self._pending_confirm: tuple[str, AgentKey] | None = None
         self._pending_confirm_at: float = 0.0
         self._sent_note: tuple[str, float] | None = None  # (agent label, sent at)
@@ -223,11 +232,33 @@ class Orchestrator:
         """True ONCE when a held usage detail just expired — the hold is gated
         at render time only, so without this an idle deck kept showing the
         \"6s\" detail until the next periodic full refresh (up to ~16s). Hosts
-        call it each tick and issue a full render when it fires."""
+        call it each tick and issue a full render when it fires.
+
+        Also True once when an idle drill/launcher/profile menu just timed out
+        back to the overview (MENU_IDLE_TIMEOUT_S), for the same reason."""
+        expired = False
         if self._usage_detail_until and self._clock() >= self._usage_detail_until:
             self._usage_detail_until = 0.0
-            return True
-        return False
+            expired = True
+        if self._expire_idle_view():
+            expired = True
+        return expired
+
+    def _expire_idle_view(self) -> bool:
+        """Leave an untouched drill/launcher/profile menu for the overview."""
+        if self._drill is None and not self._launcher and not self._profile_menu:
+            return False
+        if self._clock() - self._last_press_at < MENU_IDLE_TIMEOUT_S:
+            return False
+        self._drill = None
+        self._launcher = False
+        self._profile_menu = False
+        self._profile_menu_origin = "overview"
+        self._pending_confirm = None
+        self._detection = ""
+        self._page = 0  # land where fresh blocks sort (see _on_new_block)
+        self._resettle()
+        return True
 
     # --- drill helpers (used by app for read correlation) ---
     def drill_key(self) -> AgentKey | None:
@@ -627,9 +658,17 @@ class Orchestrator:
                 tiles.append(TileView(i, self._tr("back"), "grey"))
             else:
                 tiles.append(TileView(i, "", "empty"))
-        return RenderState(
-            tiles, PanelView(self._tr("new_agent_title"), [self._tr("pick_type")], "grey")
-        )
+        lines = [self._tr("pick_type")]
+        target = self._launch_server()
+        if target is not None and len(self.config.overview_order) > 1:
+            # With several servers the new agent's destination is not obvious:
+            # say where it will start instead of silently using the first one.
+            lines.append(self._tr("launch_on", server=target))
+        return RenderState(tiles, PanelView(self._tr("new_agent_title"), lines, "grey"))
+
+    def _launch_server(self) -> str | None:
+        """Where a launcher press starts the agent: the first overview server."""
+        return self.config.overview_order[0] if self.config.overview_order else None
 
     def tick(self) -> list[int]:
         """Advance the spinner phase; return overview tile indices that are working.
@@ -720,10 +759,12 @@ class Orchestrator:
                 # (Skipped while detection is empty so we never offer blind
                 # approval before the prompt has been read.)
                 profile = self._profile_for(self._drill)
-                fallback = [("approve", "Approve", profile.approve)]
+                fallback = [("approve", self._tr("act.approve"), profile.approve)]
                 if self.config.safety.approve_always:
-                    fallback.append(("approve_always", "Approve!", profile.approve_always))
-                fallback.append(("deny", "Deny", profile.deny))
+                    fallback.append(
+                        ("approve_always", self._tr("act.approve_always"), profile.approve_always)
+                    )
+                fallback.append(("deny", self._tr("act.deny"), profile.deny))
                 for action_id, label, keys in fallback:
                     actions.append(
                         {
@@ -852,7 +893,29 @@ class Orchestrator:
             panel = PanelView(
                 panel.title, [self._tr("press_to_confirm"), *panel.lines], panel.color
             )
+        elif agent is not None:
+            others = self._blocked_since_drill()
+            if others:
+                panel = PanelView(
+                    panel.title,
+                    [self._tr("others_blocked", n=others), *panel.lines],
+                    panel.color,
+                )
         return RenderState(tiles, panel)
+
+    def _blocked_since_drill(self) -> int:
+        """Other agents whose blocked episode started after this drill opened —
+        they cannot yank the drill, so the panel must at least say so."""
+        count = 0
+        for key, state in self._agents.items():
+            if key == self._drill or state.status is not Status.BLOCKED:
+                continue
+            if state.lifecycle != "active":
+                continue
+            since = self._since.get(key)
+            if since is not None and since[1] > self._drill_since:
+                count += 1
+        return count
 
     # --- presses ---
     def _profile_for(self, key: AgentKey):
@@ -872,6 +935,7 @@ class Orchestrator:
         return None
 
     def on_press(self, index: int) -> list[Command]:
+        self._last_press_at = self._clock()
         if self._profile_menu:
             return self._press_profile_menu(index)
         if self._launcher:
@@ -943,6 +1007,7 @@ class Orchestrator:
             self._drill_position = pos
             key = selected.key
             self._drill = key
+            self._drill_since = self._clock()
             self._detection = ""
             self._pending_confirm = None
             self._resettle()  # returning from drill re-sorts anyway
@@ -983,7 +1048,9 @@ class Orchestrator:
                 self._launcher = False
                 return []
             argv = list(self.config.start_profiles[name])
-            server = self.config.overview_order[0]
+            server = self._launch_server()
+            if server is None:
+                return []
             self._launcher = False  # return to overview
             return [Command("start", server, text=name, keys=argv)]
         return []

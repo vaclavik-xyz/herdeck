@@ -122,7 +122,11 @@ def test_connect_local_uses_configured_local_socket(tmp_path, monkeypatch):
     app = srv.create_mock_app(serve=False, config_service=srv._default_config_service())
     try:
         result = srv.connect(app, {"choice": "local"})
-        assert result == {"ok": False, "error": "could not start local source"}
+        assert result == {
+            "ok": False,
+            "error": "could not start local source",
+            "code": "local_start_failed",
+        }
         assert seen == [str(socket_path)]
     finally:
         app.close()
@@ -358,6 +362,7 @@ def test_connect_remote_probe_fail_persists_nothing(tmp_path, monkeypatch):
             {"choice": "remote", "url": "ws://10.0.0.5:8788", "token": "x", "id": "herdr"},
         )
         assert status == 200 and body["ok"] is False and body["error"] == "bad_token"
+        assert body["code"] == "bad_token"
         assert not (tmp_path / "config.toml").exists()
         assert fake.store == {}
     finally:
@@ -596,6 +601,7 @@ def test_connect_remote_set_secret_failure_restores_prior(tmp_path, monkeypatch)
             {"choice": "remote", "url": "ws://new:8788", "token": "new-tok", "id": "herdr"},
         )
         assert body["ok"] is False and "store token" in body["error"]
+        assert body["code"] == "token_store_failed"
         assert fake.store[("herdeck", "HERDECK_HERDR_TOKEN")] == "old-tok"  # restored after partial set
     finally:
         app.close()
@@ -1148,6 +1154,7 @@ def test_connect_local_bridge_surfaces_snapshot_unsupported(tmp_path, monkeypatc
         _, body = _post(app, "/setup/connect", {"choice": "local"})
         assert body["ok"] is False
         assert body["error"] == _SNAPSHOT_UNSUPPORTED
+        assert body["code"] == "herdr_too_old"
         assert app._source is prev and app._local_bridge is None
     finally:
         app.close()
@@ -1296,6 +1303,7 @@ def test_connect_saved_no_config_is_soft_error_keeps_marker(tmp_path, monkeypatc
     try:
         status, body = _post(app, "/setup/connect", {"choice": "saved"})
         assert status == 200 and body["ok"] is False and body["error"] == "no saved connection"
+        assert body["code"] == "no_saved_connection"
         assert app._source is prev  # no swap
         assert onboarding.read_choice(str(tmp_path / "config.toml")) == "demo"  # marker untouched
     finally:
@@ -1319,5 +1327,68 @@ def test_connect_saved_build_failure_restores_marker(tmp_path, monkeypatch):
         assert "could not restore saved connection" in body["error"]
         assert app._source is prev  # previous source intact
         assert onboarding.read_choice(cfg) == "demo"  # marker restored (build failed before clear)
+    finally:
+        app.close()
+
+
+def test_setup_status_caches_disk_facts_until_files_change(tmp_path, monkeypatch):
+    import os
+
+    from herdeck.deckapp import sessions
+
+    config_path = tmp_path / "config.toml"
+    local_path = tmp_path / "local.toml"
+    local_path.write_text("[local]\n")
+    monkeypatch.setenv("HERDECK_CONFIG", str(config_path))
+    monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "nope.sock"))
+    app = srv.create_mock_app(serve=False, config_service=srv._default_config_service())
+    calls = []
+    real = sessions.discover_local_sessions
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(sessions, "discover_local_sessions", counting)
+    try:
+        app._setup_status()
+        app._setup_status()
+        assert len(calls) == 1  # second poll served from the cache
+        stat = local_path.stat()
+        local_path.write_text("[local]\nherdr_sessions = []\n")
+        os.utime(local_path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000))
+        app._setup_status()
+        assert len(calls) == 2  # an edited file invalidates at once
+        app._invalidate_setup_cache()
+        app._setup_status()
+        assert len(calls) == 3
+        monkeypatch.setattr(app, "_SETUP_CACHE_TTL_S", 0.0)
+        app._setup_status()
+        assert len(calls) == 4  # and the TTL bounds staleness of socket liveness
+    finally:
+        app.close()
+
+
+def test_setup_error_codes_are_stable_snake_case_and_all_used():
+    import inspect
+    import re
+
+    codes = srv.SETUP_ERROR_CODES
+    assert all(re.fullmatch(r"[a-z][a-z0-9_]*", code) for code in codes)
+    source = inspect.getsource(srv)
+    used = set(re.findall(r'_fail\(\s*"([a-z0-9_]+)"', source))
+    used |= set(srv._PROBE_CODES.values())
+    assert used == set(codes)  # every documented code is produced, no stray ones
+
+
+def test_connect_sessions_without_selection_reports_code(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERDECK_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "nope.sock"))
+    app = srv.create_mock_app(serve=False, config_service=srv._default_config_service())
+    try:
+        result = srv.connect(app, {"choice": "sessions", "sessions": []})
+        assert result["ok"] is False
+        assert result["code"] == "no_session_selected"
+        assert result["error"]  # the human message stays
     finally:
         app.close()
