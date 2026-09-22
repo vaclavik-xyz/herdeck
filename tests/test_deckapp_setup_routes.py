@@ -1321,3 +1321,41 @@ def test_connect_saved_build_failure_restores_marker(tmp_path, monkeypatch):
         assert onboarding.read_choice(cfg) == "demo"  # marker restored (build failed before clear)
     finally:
         app.close()
+
+
+def test_setup_status_caches_disk_facts_until_files_change(tmp_path, monkeypatch):
+    import os
+
+    from herdeck.deckapp import sessions
+
+    config_path = tmp_path / "config.toml"
+    local_path = tmp_path / "local.toml"
+    local_path.write_text("[local]\n")
+    monkeypatch.setenv("HERDECK_CONFIG", str(config_path))
+    monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "nope.sock"))
+    app = srv.create_mock_app(serve=False, config_service=srv._default_config_service())
+    calls = []
+    real = sessions.discover_local_sessions
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(sessions, "discover_local_sessions", counting)
+    try:
+        app._setup_status()
+        app._setup_status()
+        assert len(calls) == 1  # second poll served from the cache
+        stat = local_path.stat()
+        local_path.write_text("[local]\nherdr_sessions = []\n")
+        os.utime(local_path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000))
+        app._setup_status()
+        assert len(calls) == 2  # an edited file invalidates at once
+        app._invalidate_setup_cache()
+        app._setup_status()
+        assert len(calls) == 3
+        monkeypatch.setattr(app, "_SETUP_CACHE_TTL_S", 0.0)
+        app._setup_status()
+        assert len(calls) == 4  # and the TTL bounds staleness of socket liveness
+    finally:
+        app.close()

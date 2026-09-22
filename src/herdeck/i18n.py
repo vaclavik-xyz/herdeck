@@ -47,6 +47,9 @@ STRINGS: dict[str, dict[str, str]] = {
         # notification titles (banner / Telegram headline)
         "notify.title_blocked": "{agent} · needs input",
         "notify.title_done": "{agent} · done",
+        # accessible tile descriptions (desktop aria-label via /state)
+        "a11y.empty_tile": "empty tile {n}",
+        "a11y.pinned": "pinned",
         # Elgato plugin action keys
         "act.approve": "Approve",
         "act.deny": "Deny",
@@ -119,6 +122,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "sent": "posláno › {label}",
         "notify.title_blocked": "{agent} · čeká na tebe",
         "notify.title_done": "{agent} · hotovo",
+        "a11y.empty_tile": "prázdná dlaždice {n}",
+        "a11y.pinned": "připnuto",
         "act.approve": "Schválit",
         "act.deny": "Zamítnout",
         "act.stop": "Stop",
