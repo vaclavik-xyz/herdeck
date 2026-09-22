@@ -419,33 +419,190 @@ fn notification_batch(
     Some((generation, acked_seq, items))
 }
 
-#[cfg(target_os = "macos")]
-fn play_notification_sound(sound: &serde_json::Value) {
-    let name = match sound {
-        serde_json::Value::String(name) => name.as_str(),
-        serde_json::Value::Bool(true) => "Glass",
-        _ => return,
-    };
-    if name.is_empty()
-        || !name
+/// The sound played for `sound = true` (and for a test banner with no sound
+/// picked), matching the runtime's osascript fallback.
+const DEFAULT_NOTIFICATION_SOUND: &str = "Glass";
+
+/// File extensions macOS system sounds come in (what `NSSound(named:)` and the
+/// runtime's osascript `sound name` fallback resolve).
+const SOUND_EXTENSIONS: [&str; 6] = ["aiff", "aif", "caf", "wav", "m4a", "mp3"];
+
+/// Where named sounds live, in `NSSound(named:)`'s own search order: the
+/// user's, then the machine's, then the system's. Empty off macOS — there the
+/// settings UI falls back to a free-text sound field.
+fn sound_dirs() -> Vec<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+    let mut dirs = Vec::new();
+    if let Ok(home) = env::var("HOME") {
+        if !home.is_empty() {
+            dirs.push(PathBuf::from(home).join("Library/Sounds"));
+        }
+    }
+    dirs.push(PathBuf::from("/Library/Sounds"));
+    dirs.push(PathBuf::from("/System/Library/Sounds"));
+    dirs
+}
+
+/// A sound name safe to hand to `afplay` / the runtime: letters, digits, space,
+/// `_` and `-` — no path separators, no dots, nothing to escape.
+fn valid_sound_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-'))
-    {
-        eprintln!("herdeck: refused invalid notification sound name");
-        return;
+}
+
+fn sound_stem(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !SOUND_EXTENSIONS.contains(&ext.as_str()) {
+        return None;
     }
-    let path = PathBuf::from("/System/Library/Sounds").join(format!("{name}.aiff"));
-    if !path.is_file() {
-        eprintln!("herdeck: notification sound not found: {name}");
-        return;
+    let stem = path.file_stem()?.to_str()?;
+    valid_sound_name(stem).then(|| stem.to_string())
+}
+
+/// Every playable sound name found in `dirs`, sorted and de-duplicated. Only
+/// names that pass `valid_sound_name` are offered, so the settings picker can
+/// never list a sound that playback would then refuse.
+fn list_sound_names(dirs: &[PathBuf]) -> Vec<String> {
+    let mut names: Vec<String> = dirs
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .filter_map(|entry| sound_stem(&entry.path()))
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup();
+    names
+}
+
+/// The file a sound name plays, searching `dirs` in order.
+fn resolve_sound_path(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    if !valid_sound_name(name) {
+        return None;
     }
-    if let Err(err) = Command::new("/usr/bin/afplay").arg(path).spawn() {
-        eprintln!("herdeck: notification sound failed: {err}");
+    dirs.iter().find_map(|dir| {
+        SOUND_EXTENSIONS
+            .iter()
+            .map(|ext| dir.join(format!("{name}.{ext}")))
+            .find(|path| path.is_file())
+    })
+}
+
+/// The sound a feed item (or test request) asks for: a name, `true` for the
+/// default, anything else for silence.
+fn requested_sound_name(sound: &serde_json::Value) -> Option<&str> {
+    match sound {
+        serde_json::Value::String(name) if !name.is_empty() => Some(name.as_str()),
+        serde_json::Value::Bool(true) => Some(DEFAULT_NOTIFICATION_SOUND),
+        _ => None,
     }
 }
 
+#[cfg(target_os = "macos")]
+fn play_notification_sound(sound: &serde_json::Value) -> Result<(), String> {
+    let Some(name) = requested_sound_name(sound) else {
+        return Ok(());
+    };
+    if !valid_sound_name(name) {
+        return Err(format!("invalid notification sound name: {name:?}"));
+    }
+    let path = resolve_sound_path(name, &sound_dirs())
+        .ok_or_else(|| format!("notification sound not found: {name}"))?;
+    Command::new("/usr/bin/afplay")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("notification sound failed: {err}"))
+}
+
 #[cfg(not(target_os = "macos"))]
-fn play_notification_sound(_sound: &serde_json::Value) {}
+fn play_notification_sound(_sound: &serde_json::Value) -> Result<(), String> {
+    Ok(())
+}
+
+/// Bring the deck forward: un-hide the app (macOS), show and focus the deck
+/// window. What a click on one of our banners, and a Dock/Finder reopen, do.
+fn reveal_deck(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        #[cfg(target_os = "macos")]
+        let _ = handle.show();
+        show_role_window(&handle, DECK_WINDOW);
+    });
+}
+
+/// Localized title/body of the banner the settings "Test notification" button
+/// shows. Native text, so it lives beside `tray_labels` rather than in a
+/// WebView catalog.
+fn test_notification_texts(lang: &str) -> (&'static str, &'static str) {
+    match lang {
+        "cs" => (
+            "Herdeck – zkušební oznámení",
+            "Takhle vypadá upozornění, když agent potřebuje vaši pozornost.",
+        ),
+        _ => (
+            "Herdeck test notification",
+            "This is how an alert looks when an agent needs your attention.",
+        ),
+    }
+}
+
+/// Named sounds the notification settings can offer (C4): sorted unique stems
+/// from the macOS sound folders. Empty elsewhere — the UI then shows a free-text
+/// field instead of a picker.
+#[tauri::command]
+fn notification_sounds() -> Vec<String> {
+    list_sound_names(&sound_dirs())
+}
+
+/// Show a localized test banner through the same native path real alerts take,
+/// then play `sound` (a name; `None` = the default sound, `""` = silent). `Err`
+/// carries a message the settings UI shows as is.
+#[tauri::command]
+fn test_notification(
+    app: tauri::AppHandle,
+    tray: tauri::State<'_, TrayHandles>,
+    sound: Option<String>,
+) -> Result<(), String> {
+    let lang = tray
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(TrayMenuItems::current_lang)
+        .unwrap_or_else(|| "en".to_string());
+    let (title, body) = test_notification_texts(&lang);
+    let sound = match sound {
+        Some(name) => serde_json::Value::String(name),
+        None => serde_json::Value::Bool(true),
+    };
+    let item = PendingNotification {
+        id: "test".to_string(),
+        generation: String::new(),
+        seq: 0,
+        title: title.to_string(),
+        body: body.to_string(),
+        sound: sound.clone(),
+        created_at_ms: None,
+    };
+    post_native_notification(&app, &item)?;
+    play_notification_sound(&sound)
+}
+
+/// Whether native notifications are permitted (C4). Always `None` ("unknown"):
+/// banners go through the legacy `NSUserNotificationCenter` on macOS, which has
+/// no permission query, and the notification plugin reports a hard-coded
+/// "granted" on every desktop OS — passing that on would claim a certainty the
+/// shell does not have.
+#[tauri::command]
+fn notification_permission() -> Option<bool> {
+    None
+}
 
 /// Keep the time-sensitive long-poll pump out of App Nap while this process is
 /// responsible for native banners. The allowing-idle-system-sleep option keeps
@@ -625,7 +782,9 @@ fn start_notify_pump(app: tauri::AppHandle) {
                 std::thread::sleep(NOTIFY_RETRY_DELAY);
                 break;
             }
-            play_notification_sound(&item.sound);
+            if let Err(err) = play_notification_sound(&item.sound) {
+                eprintln!("herdeck: {err}");
+            }
             // Advance the process-local cursor immediately after visible
             // delivery. A transient ACK failure must never show the banner a
             // second time in this shell; the next long poll carries this cursor
@@ -664,6 +823,90 @@ fn start_notify_pump(app: tauri::AppHandle) {
     });
 }
 
+/// At most this many banners wait for a click at once. Each tracked banner
+/// parks one thread until it is clicked or cleared from Notification Center;
+/// past the cap a banner is posted fire-and-forget (its click then only
+/// activates the app, which `RunEvent::Reopen` does not see).
+#[cfg(target_os = "macos")]
+const MAX_CLICK_TRACKED_BANNERS: usize = 16;
+
+#[cfg(target_os = "macos")]
+static CLICK_TRACKED_BANNERS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Claim one of the `MAX_CLICK_TRACKED_BANNERS` slots.
+#[cfg(target_os = "macos")]
+fn claim_click_slot() -> bool {
+    CLICK_TRACKED_BANNERS
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            (n < MAX_CLICK_TRACKED_BANNERS).then_some(n + 1)
+        })
+        .is_ok()
+}
+
+/// Attribute our banners to this app's bundle — the same choice the
+/// notification plugin makes (Terminal in `tauri dev`, where the binary has no
+/// registered bundle). First caller wins; the plugin shares this global.
+#[cfg(target_os = "macos")]
+fn ensure_notification_application(app: &tauri::AppHandle) {
+    use std::sync::Once;
+    static SET: Once = Once::new();
+    let identifier = if tauri::is_dev() {
+        "com.apple.Terminal".to_string()
+    } else {
+        app.config().identifier.clone()
+    };
+    SET.call_once(|| {
+        let _ = mac_notification_sys::set_application(&identifier);
+    });
+}
+
+/// Post one banner. On macOS it goes straight through `mac-notification-sys`
+/// (the plugin fires and forgets, so a click could never be observed): a
+/// dedicated thread waits for the click and then reveals the deck. There is no
+/// per-agent grouping — the legacy `NSUserNotification` API has no thread id.
+#[cfg(target_os = "macos")]
+fn post_native_notification(
+    app: &tauri::AppHandle,
+    item: &PendingNotification,
+) -> Result<(), String> {
+    use mac_notification_sys::{Notification, NotificationResponse};
+
+    ensure_notification_application(app);
+    let tracked = claim_click_slot();
+    let (title, body) = (item.title.clone(), item.body.clone());
+    let handle = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("herdeck-banner".into())
+        .spawn(move || {
+            let mut banner = Notification::new();
+            banner.title(&title).message(&body);
+            if tracked {
+                banner.wait_for_click(true);
+            } else {
+                banner.asynchronous(true);
+            }
+            match banner.send() {
+                Ok(NotificationResponse::Click) | Ok(NotificationResponse::ActionButton(_)) => {
+                    reveal_deck(&handle)
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!("herdeck: native notification failed: {err}"),
+            }
+            if tracked {
+                CLICK_TRACKED_BANNERS.fetch_sub(1, Ordering::SeqCst);
+            }
+        });
+    if let Err(err) = spawned {
+        if tracked {
+            CLICK_TRACKED_BANNERS.fetch_sub(1, Ordering::SeqCst);
+        }
+        return Err(format!("could not start the banner thread: {err}"));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
 fn post_native_notification(
     app: &tauri::AppHandle,
     item: &PendingNotification,
@@ -1062,6 +1305,66 @@ mod plan_tests {
         assert!(!backoff_until(Duration::from_millis(30), || false));
         assert!(start.elapsed() >= Duration::from_millis(30));
         assert_ne!(discovery_key(&discovery_on(1)), discovery_key(&discovery_on(2)));
+    }
+
+    fn sound_scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("herdeck-sounds-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn sound_names_are_sorted_unique_playable_stems() {
+        let user = sound_scratch("list-user");
+        let system = sound_scratch("list-system");
+        for f in ["Glass.aiff", "Zap.wav", "notes.txt", "bad.name.aiff", "Ping.caf"] {
+            std::fs::write(user.join(f), b"").unwrap();
+        }
+        for f in ["Glass.aiff", "Basso.aiff"] {
+            std::fs::write(system.join(f), b"").unwrap();
+        }
+        std::fs::create_dir_all(user.join("Folder.aiff")).unwrap();
+        let names = list_sound_names(&[user, system, PathBuf::from("/nonexistent-herdeck")]);
+        assert_eq!(names, vec!["Basso", "Glass", "Ping", "Zap"]);
+    }
+
+    // Every listed sound must be one playback can find: a user sound from
+    // ~/Library/Sounds used to be listed-but-unplayable (only the system folder
+    // and .aiff were searched).
+    #[test]
+    fn sound_resolution_searches_the_user_folder_first_and_any_extension() {
+        let user = sound_scratch("resolve-user");
+        let system = sound_scratch("resolve-system");
+        std::fs::write(user.join("Glass.m4a"), b"").unwrap();
+        std::fs::write(system.join("Glass.aiff"), b"").unwrap();
+        std::fs::write(system.join("Basso.aiff"), b"").unwrap();
+        let dirs = [user.clone(), system.clone()];
+        assert_eq!(resolve_sound_path("Glass", &dirs), Some(user.join("Glass.m4a")));
+        assert_eq!(resolve_sound_path("Basso", &dirs), Some(system.join("Basso.aiff")));
+        assert_eq!(resolve_sound_path("Missing", &dirs), None);
+        assert_eq!(resolve_sound_path("../Basso", &dirs), None);
+    }
+
+    #[test]
+    fn requested_sound_maps_true_to_the_default_and_false_to_silence() {
+        use serde_json::json;
+        assert_eq!(requested_sound_name(&json!(true)), Some(DEFAULT_NOTIFICATION_SOUND));
+        assert_eq!(requested_sound_name(&json!("Hero")), Some("Hero"));
+        assert_eq!(requested_sound_name(&json!(false)), None);
+        assert_eq!(requested_sound_name(&json!("")), None);
+        assert_eq!(requested_sound_name(&json!(null)), None);
+    }
+
+    #[test]
+    fn test_notification_text_exists_in_both_languages() {
+        let (en_t, en_b) = test_notification_texts("en");
+        let (cs_t, cs_b) = test_notification_texts("cs");
+        assert!(!en_t.is_empty() && !en_b.is_empty());
+        assert_ne!(en_t, cs_t);
+        assert_ne!(en_b, cs_b);
+        // Unknown languages fall back to English.
+        assert_eq!(test_notification_texts("de"), (en_t, en_b));
     }
 
     #[test]
@@ -2776,7 +3079,10 @@ pub fn run() {
             show_app,
             deck_visible,
             tray_set_language,
-            show_deck_context_menu
+            show_deck_context_menu,
+            notification_sounds,
+            test_notification,
+            notification_permission
         ])
         .setup(move |app| {
             // Mark banner duty as claimed up-front (the desktop plugin's
@@ -2916,6 +3222,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build herdeck desktop app")
         .run(move |app_handle, event| {
+            // Dock icon click / relaunch from Finder while already running:
+            // with both windows hidden it would otherwise do nothing at all.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                reveal_deck(app_handle);
+                return;
+            }
             if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
                 // The last chance to save a deck position that was dragged and
                 // never hidden — `Moved` deliberately does not touch the disk.
