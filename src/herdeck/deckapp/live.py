@@ -24,7 +24,9 @@ Secret hygiene: bridge tokens live only inside their ``Connector`` instances
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
+import time
 from collections.abc import Callable
 
 from ..app import NOTIFY_EVENT_STATUSES, event_notification_body, newly_entered
@@ -32,9 +34,11 @@ from ..commands import Command, command_to_msg
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
 from ..model import AgentKey, AgentState, Status
-from ..notify import NotificationFeed, Notifier, deckapp_sink
+from ..notify import NotificationFeed, Notifier, _macos_sink, deckapp_sink
 from ..orchestrator import Orchestrator
 from .source import StateSource
+
+log = logging.getLogger(__name__)
 
 
 def _thread_notify_schedule(fn) -> None:
@@ -64,6 +68,7 @@ class LiveSource(StateSource):
         *,
         notify_schedule=None,
         notify_sink_factory=None,
+        notification_fallback=None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -77,8 +82,10 @@ class LiveSource(StateSource):
         # own identity) and plays the event sound itself; a plain osascript
         # notification is only the fallback while no shell is attached.
         self._notify_keys: dict[str, set] = {event: set() for event in NOTIFY_EVENT_STATUSES}
+        self._notify_baselined_servers: set[str] = set()
         self._notify_schedule = notify_schedule or _thread_notify_schedule
         self._notify_feed = NotificationFeed()
+        self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
         if config.notifications.enabled:
             factory = notify_sink_factory or (
@@ -249,6 +256,22 @@ class LiveSource(StateSource):
         """Recent event notifications for the shell to post natively."""
         return self._notify_feed.state()
 
+    def notifications_feed_wait(
+        self, generation: str | None, after_seq: int, *, timeout: float
+    ) -> dict:
+        """Long-poll the acknowledged shell feed without polling latency."""
+        return self._notify_feed.wait(generation, after_seq, timeout=timeout)
+
+    def notifications_feed_ack(self, generation: str, seq: int) -> bool:
+        """Advance delivery only after the shell posted the native banner."""
+        return self._notify_feed.ack(generation, seq)
+
+    def notifications_feed_fallback(self, generation: str, seq: int) -> bool:
+        """Use the single runtime fallback after native shell delivery fails."""
+        return self._notify_feed.fallback(
+            generation, seq, self._notification_fallback
+        )
+
     # --- connector callbacks (run on the connector's loop thread) ---
     def _fire_notify(self, event: str, agent: AgentState) -> None:
         """Schedule one event alert (never raises, never blocks the loop)."""
@@ -261,6 +284,13 @@ class LiveSource(StateSource):
         multi = len(self._config.overview_order) > 1
         title = f"{agent.agent_type} {event}"
         body = event_notification_body(agent, multi_server=multi)
+        log.info(
+            "notification transition event=%s agent=%s:%s observed_at_ms=%s",
+            event,
+            agent.key.server_id,
+            agent.key.pane_id,
+            time.time_ns() // 1_000_000,
+        )
         self._notify_schedule(lambda: self._notifier.notify(title, body, sound))
 
     def _notify_entered(self, event: str, states: list[AgentState], scope: set) -> None:
@@ -305,6 +335,17 @@ class LiveSource(StateSource):
             return True
 
         self._apply(mutate)
+        if server_id not in self._notify_baselined_servers:
+            # A process/source restart observes current truth, not lifecycle
+            # transitions. Seed the episode sets without replaying stale alerts.
+            if self._notifier is not None:
+                scope = set(prev_keys) | {s.key for s in states}
+                for event, status in NOTIFY_EVENT_STATUSES.items():
+                    tracked = self._notify_keys[event]
+                    entered_here = {s.key for s in states if s.status is status}
+                    self._notify_keys[event] = (tracked - scope) | entered_here
+            self._notify_baselined_servers.add(server_id)
+            return
         # Notifications reconcile AFTER the buffer update: `scope` is every key
         # this snapshot is authoritative for (previous + current), matching
         # App.handle_snapshot's server-scoped reconciliation.

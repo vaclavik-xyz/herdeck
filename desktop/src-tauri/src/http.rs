@@ -354,6 +354,85 @@ pub fn fetch_state(
     http_get_request(host, port, &req, timeout)
 }
 
+/// Long-poll the shell-owned notification feed. A live request is also the
+/// banner-duty claim, so an event wakes this connection instead of waiting for
+/// a fixed heartbeat interval.
+pub fn fetch_notifications(
+    host: &str,
+    port: u16,
+    token: &str,
+    timeout: Duration,
+    generation: Option<&str>,
+    after: u64,
+    shell_gen: &str,
+) -> Result<String, String> {
+    let mut path = format!(
+        "/notifications?token={token}&after={after}&wait_ms=25000"
+    );
+    if let Some(generation) = generation {
+        path.push_str("&generation=");
+        path.push_str(&percent_encode_segment(generation));
+    }
+    let req = build_get_request_with_headers(
+        host,
+        &path,
+        &[
+            ("X-Herdeck-Shell", "1"),
+            ("X-Herdeck-Shell-Gen", shell_gen),
+        ],
+    );
+    http_get_request(host, port, &req, timeout)
+}
+
+/// Confirm one generation-scoped delivery after the shell posted the banner.
+pub fn ack_notification(
+    host: &str,
+    port: u16,
+    token: &str,
+    timeout: Duration,
+    generation: &str,
+    seq: u64,
+) -> Result<u16, String> {
+    let body = serde_json::json!({"generation": generation, "seq": seq}).to_string();
+    let (code, _) = http_post_json(
+        host,
+        port,
+        "/notifications/ack",
+        ("X-Herdeck-Token", token),
+        &body,
+        timeout,
+    )?;
+    Ok(code)
+}
+
+/// Ask the runtime to deliver exactly one queued alert through osascript and
+/// release this shell's claim after native notification delivery failed.
+pub fn fallback_notification(
+    host: &str,
+    port: u16,
+    token: &str,
+    timeout: Duration,
+    generation: &str,
+    seq: u64,
+    shell_gen: &str,
+) -> Result<u16, String> {
+    let body = serde_json::json!({
+        "generation": generation,
+        "seq": seq,
+        "shell_gen": shell_gen,
+    })
+    .to_string();
+    let (code, _) = http_post_json(
+        host,
+        port,
+        "/notifications/fallback",
+        ("X-Herdeck-Token", token),
+        &body,
+        timeout,
+    )?;
+    Ok(code)
+}
+
 /// Issue an already-built GET request and return the body.
 pub fn http_get_request(
     host: &str,

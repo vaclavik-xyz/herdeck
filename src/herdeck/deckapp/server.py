@@ -253,18 +253,18 @@ class DeckApp:
             self._panel = panel_png
             self._panel_ver = self._bump()
 
-    def _refresh_locked(self, *, working=None, full=True) -> None:
+    def _refresh_locked(self, *, working=None, full=True, ticker=False) -> None:
         rs, tiles, panel_png, sections = self._render_locked(self._source, self._orch, self._slots)
         self._apply_rendered_locked(tiles, panel_png, sections)
-        self._fan_out_locked(rs, working, full)
+        self._fan_out_locked(rs, working, full, ticker)
 
-    def _fan_out_locked(self, rs, working, full) -> None:
+    def _fan_out_locked(self, rs, working, full, ticker=False) -> None:
         """Deliver the rendered frame to every sink under self._lock. A sink that
         raises is isolated — the HTTP buffer (already updated above) and the other
         sinks must not be affected."""
         if not self._sinks:
             return
-        frame = RenderFrame(render=rs, working=working, full=full)
+        frame = RenderFrame(render=rs, working=working, full=full, ticker=ticker)
         for sink in self._sinks:
             try:
                 sink.deliver(frame)
@@ -333,9 +333,9 @@ class DeckApp:
             self._ticks += 1
             hold_expired = self._orch.consume_expired_panel_hold()
             if self._ticks % self.FULL_REFRESH_TICKS == 0 or hold_expired:
-                self._refresh_locked(working=None, full=True)
+                self._refresh_locked(working=None, full=True, ticker=True)
             elif working:
-                self._refresh_locked(working=working, full=False)
+                self._refresh_locked(working=working, full=False, ticker=True)
 
     def _ticker_loop(self) -> None:
         # A config reload wakes the current wait so a shorter interval takes
@@ -582,22 +582,10 @@ class DeckApp:
     def note_shell_claim(self, shell_gen: str | None = None) -> None:
         """A shell GET /state with X-Herdeck-Shell means "I post the banners".
 
-        A NEW shell generation (fresh process after relaunch) resets the feed
-        regardless of the TTL — the fresh shell's counter starts at 0, so
-        without the reset it would replay already-delivered alerts. A claim
-        after a TTL gap with no generation header is treated as a new shell
-        too (legacy shells never send the header).
+        Feed delivery has its own generation + acknowledged cursor, so a fresh
+        shell never resets pending runtime state. This method tracks liveness
+        only; resetting here used to race fallback and duplicate/drop alerts.
         """
-        stale = not self.shell_claims_banners()
-        gen_changed = (
-            shell_gen is not None
-            and getattr(self, "_shell_gen", None) is not None
-            and shell_gen != self._shell_gen
-        )
-        if stale or gen_changed:
-            feed = getattr(self._source, "_notify_feed", None)
-            if feed is not None:
-                feed.reset()
         if shell_gen is not None:
             self._shell_gen = shell_gen
         self._shell_last_seen = time.monotonic()
@@ -605,6 +593,14 @@ class DeckApp:
     def shell_claims_banners(self) -> bool:
         """True while a shell polled /state recently (within the claim TTL)."""
         return time.monotonic() - getattr(self, "_shell_last_seen", -1e9) < self._SHELL_CLAIM_TTL_S
+
+    def release_shell_claim(self, shell_gen: str | None) -> bool:
+        """Release banner duty only for the shell that currently owns it."""
+        current = getattr(self, "_shell_gen", None)
+        if shell_gen is not None and current is not None and shell_gen != current:
+            return False
+        self._shell_last_seen = -1e9
+        return True
 
     def _state(self) -> dict:
         with self._lock:
@@ -769,6 +765,25 @@ class DeckApp:
                     if self.headers.get("X-Herdeck-Shell") == "1":
                         app.note_shell_claim(self.headers.get("X-Herdeck-Shell-Gen"))
                     self._send(200, json.dumps(app._state()).encode(), "application/json")
+                elif path == "/notifications":
+                    if not self._require_query_token(url):
+                        return
+                    wait = getattr(app._source, "notifications_feed_wait", None)
+                    if not callable(wait):
+                        self._send(404)
+                        return
+                    if self.headers.get("X-Herdeck-Shell") == "1":
+                        app.note_shell_claim(self.headers.get("X-Herdeck-Shell-Gen"))
+                    params = parse_qs(url.query)
+                    generation = params.get("generation", [None])[0] or None
+                    try:
+                        after = max(0, int(params.get("after", ["0"])[0]))
+                        wait_ms = min(30_000, max(0, int(params.get("wait_ms", ["25000"])[0])))
+                    except (TypeError, ValueError):
+                        self._send(400)
+                        return
+                    state = wait(generation, after, timeout=wait_ms / 1000.0)
+                    self._send(200, json.dumps(state).encode(), "application/json")
                 elif path == "/health":
                     if not self._require_query_token(url):
                         return
@@ -844,6 +859,72 @@ class DeckApp:
                         self._send(204)
                     except ValueError:
                         self._send(400)
+                elif path == "/notifications/ack":
+                    if not self._require_header_token():
+                        return
+                    ack = getattr(app._source, "notifications_feed_ack", None)
+                    if not callable(ack):
+                        self._send(404)
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    generation = body.get("generation")
+                    seq = body.get("seq")
+                    if (
+                        not isinstance(generation, str)
+                        or not generation
+                        or not isinstance(seq, int)
+                        or isinstance(seq, bool)
+                    ):
+                        self._send(400)
+                        return
+                    if not ack(generation, seq):
+                        self._send(409)
+                        return
+                    log.info("notification acknowledged id=%s:%s", generation, seq)
+                    self._send(204)
+                elif path == "/notifications/fallback":
+                    if not self._require_header_token():
+                        return
+                    fallback = getattr(app._source, "notifications_feed_fallback", None)
+                    if not callable(fallback):
+                        self._send(404)
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    generation = body.get("generation")
+                    seq = body.get("seq")
+                    shell_gen = body.get("shell_gen")
+                    if (
+                        not isinstance(generation, str)
+                        or not generation
+                        or not isinstance(seq, int)
+                        or isinstance(seq, bool)
+                        or not isinstance(shell_gen, str)
+                        or not shell_gen
+                    ):
+                        self._send(400)
+                        return
+                    if not app.release_shell_claim(shell_gen):
+                        self._send(409)
+                        return
+                    try:
+                        delivered = fallback(generation, seq)
+                    except Exception:
+                        log.warning(
+                            "notification fallback failed id=%s:%s",
+                            generation,
+                            seq,
+                            exc_info=True,
+                        )
+                        self._send(502)
+                        return
+                    if not delivered:
+                        self._send(409)
+                        return
+                    self._send(204)
                 elif path == "/setup/connect":
                     if not self._require_header_token():
                         return

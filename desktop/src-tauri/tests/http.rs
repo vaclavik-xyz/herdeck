@@ -8,8 +8,9 @@ use std::thread;
 use std::time::Duration;
 
 use herdeck_desktop_lib::http::{
-    fetch_image, fetch_setup, fetch_state, http_delete, http_get, http_post_json,
-    post_setup_connect, send_press,
+    ack_notification, fallback_notification, fetch_image, fetch_notifications, fetch_setup,
+    fetch_state, http_delete,
+    http_get, http_post_json, post_setup_connect, send_press,
 };
 
 /// Bind a loopback listener and, on one connection, reply with `response` then
@@ -97,6 +98,75 @@ fn fetch_state_injects_token_as_query_param() {
         req.starts_with("GET /state?token=SECRET123 HTTP/1.0"),
         "request was: {req:?}"
     );
+}
+
+#[test]
+fn fetch_notifications_carries_cursor_claim_and_generation() {
+    let (port, rx) = serve_once_capture(
+        b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"generation\":\"g2\",\"seq\":3,\"items\":[]}".to_vec(),
+    );
+    let body = fetch_notifications(
+        "127.0.0.1",
+        port,
+        "SECRET123",
+        Duration::from_secs(2),
+        Some("g1"),
+        2,
+        "shell-a",
+    )
+    .unwrap();
+    assert!(body.contains("\"generation\":\"g2\""));
+    let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(req.starts_with(
+        "GET /notifications?token=SECRET123&after=2&wait_ms=25000&generation=g1 HTTP/1.0"
+    ));
+    assert!(req.contains("X-Herdeck-Shell: 1\r\n"));
+    assert!(req.contains("X-Herdeck-Shell-Gen: shell-a\r\n"));
+}
+
+#[test]
+fn ack_notification_posts_generation_and_seq() {
+    let (port, rx) = serve_once_capture(
+        b"HTTP/1.0 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec(),
+    );
+    let code = ack_notification(
+        "127.0.0.1",
+        port,
+        "TOKEN",
+        Duration::from_secs(2),
+        "gen-1",
+        7,
+    )
+    .unwrap();
+    assert_eq!(code, 204);
+    let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(req.starts_with("POST /notifications/ack HTTP/1.0"));
+    assert!(req.contains("X-Herdeck-Token: TOKEN\r\n"));
+    assert!(req.ends_with("{\"generation\":\"gen-1\",\"seq\":7}"));
+}
+
+#[test]
+fn fallback_notification_identifies_shell_and_item() {
+    let (port, rx) = serve_once_capture(
+        b"HTTP/1.0 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec(),
+    );
+    let code = fallback_notification(
+        "127.0.0.1",
+        port,
+        "TOKEN",
+        Duration::from_secs(2),
+        "gen-1",
+        7,
+        "shell-a",
+    )
+    .unwrap();
+    assert_eq!(code, 204);
+    let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(req.starts_with("POST /notifications/fallback HTTP/1.0"));
+    assert!(req.contains("X-Herdeck-Token: TOKEN\r\n"));
+    assert!(req.ends_with(
+        "{\"generation\":\"gen-1\",\"seq\":7,\"shell_gen\":\"shell-a\"}"
+    ));
 }
 
 #[test]

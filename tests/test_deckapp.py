@@ -139,7 +139,7 @@ def test_state_has_required_shape():
 # LiveSource); the plain notify-module behaviour is covered here.
 
 
-def test_runtime_sink_records_feed_and_plays_sound_when_shell_claims(monkeypatch):
+def test_runtime_sink_queues_one_shell_owned_alert_without_playing_sound(monkeypatch):
     import herdeck.notify as notify_mod
 
     played, scripted = [], []
@@ -153,7 +153,7 @@ def test_runtime_sink_records_feed_and_plays_sound_when_shell_claims(monkeypatch
     sink("codex done", "p0", "Hero")
     sink("t", "b", False)
     assert [i["title"] for i in feed.state()["items"]] == ["codex done", "t"]
-    assert played == ["Hero"]
+    assert played == []
     assert scripted == []
 
 
@@ -171,7 +171,8 @@ def test_runtime_sink_falls_back_to_osascript_without_shell(monkeypatch):
     sink("claude blocked", "p1", "Glass")
     assert scripted == [("claude blocked", "p1", "Glass")]
     assert played == []
-    assert feed.state()["seq"] == 1
+    # A fallback alert is not also retained for a later native replay.
+    assert feed.state()["seq"] == 0
 
 
 def test_play_sound_file_rejects_unknown_names(monkeypatch, tmp_path):

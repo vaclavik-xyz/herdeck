@@ -13,6 +13,9 @@ real Connector uses) and capture sends through a fake runner. Covers:
 
 import io
 import json
+import threading
+import time
+import urllib.request
 
 from PIL import Image
 
@@ -1290,21 +1293,41 @@ def test_done_snapshot_fires_notification_once():
     assert len(notifier.calls) == 1
 
 
+def test_first_snapshot_seeds_notification_baseline_without_alerting():
+    config, server = notify_config()
+    src, notifier = make_notifying_live(config, server)
+
+    src._on_snapshot(
+        server.id,
+        [
+            agent(server.id, "done-before-runtime", Status.DONE),
+            agent(server.id, "blocked-before-runtime", Status.BLOCKED),
+        ],
+    )
+    assert notifier.calls == []
+
+    src._on_event(server.id, agent(server.id, "done-before-runtime", Status.WORKING))
+    src._on_event(server.id, agent(server.id, "done-before-runtime", Status.DONE))
+    assert notifier.calls == [("claude done", "done-before-runtime · main", "Hero")]
+
+
 def test_done_rearms_after_leaving_the_state():
     config, server = notify_config()
     src, notifier = make_notifying_live(config, server)
 
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    assert notifier.calls == []
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
-    assert len(notifier.calls) == 2
+    assert len(notifier.calls) == 1
 
 
 def test_blocked_event_uses_glass_sound():
     config, server = notify_config()
     src, notifier = make_notifying_live(config, server)
 
-    src._on_snapshot(server.id, [agent(server.id, "p1", Status.BLOCKED)])
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.WORKING)])
+    src._on_event(server.id, agent(server.id, "p1", Status.BLOCKED))
     assert notifier.calls == [("claude blocked", "p1 · main", "Glass")]
 
 
@@ -1320,7 +1343,8 @@ def test_sound_master_toggle_off_makes_alerts_silent():
     config, server = notify_config(sound=False)
     src, notifier = make_notifying_live(config, server)
 
-    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING, agent_type="codex")])
+    src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
     assert notifier.calls == [("codex done", "p0 · main", False)]
 
 
@@ -1354,7 +1378,8 @@ def test_multi_server_body_includes_server_id():
     config.overview_order = [server.id, local.id]
     src, notifier = make_notifying_live(config, server)
 
-    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING, agent_type="codex")])
+    src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
     assert notifier.calls[0][1] == "p0 · main · prod"
 
 
@@ -1425,18 +1450,17 @@ def test_state_exposes_notify_feed_and_shell_claim_toggles():
     src = LiveSource(config, server, notify_sink_factory=silent_sink)
     app = DeckApp(src, serve=False, icon_provider=StubIcons())
     src.set_notify_gate(app.shell_claims_banners)  # create_live_app wires this
-    src._notifier.notify("codex done", "p0", "Hero")
-    st = app._state()
-    assert st["notify"]["seq"] == 1
-    assert st["notify"]["items"][0]["title"] == "codex done"
-
     # No shell claim yet -> the runtime gate stays closed (osascript fallback).
     assert src._notify_gate() is False
     assert app.shell_claims_banners() is False
 
-    app.note_shell_claim()
+    app.note_shell_claim("shell-1")
     assert app.shell_claims_banners() is True
     assert src._notify_gate() is True
+    src._notifier.notify("codex done", "p0", "Hero")
+    st = app._state()
+    assert st["notify"]["seq"] == 1
+    assert st["notify"]["items"][0]["title"] == "codex done"
     app.close()
 
 
@@ -1462,7 +1486,8 @@ def test_runtime_sink_suppresses_osascript_while_shell_claims(monkeypatch):
     src.set_notify_gate(app.shell_claims_banners)
 
     # No shell claim yet -> gate closed -> osascript fallback fires.
-    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING, agent_type="codex")])
+    src._on_event(server.id, agent(server.id, "p0", Status.DONE, agent_type="codex"))
     assert scripted == [("codex done", "p0 · main", "Hero")]
 
     # After the shell claims, the banner is the shell's job: no more osascript,
@@ -1475,7 +1500,7 @@ def test_runtime_sink_suppresses_osascript_while_shell_claims(monkeypatch):
     app.close()
 
 
-def test_new_shell_claim_resets_stale_feed():
+def test_new_shell_claim_preserves_feed_and_ack_prevents_replay():
     config, server = notify_config()
 
     def silent_sink(feed, gate):
@@ -1489,29 +1514,28 @@ def test_new_shell_claim_resets_stale_feed():
     app = DeckApp(src, serve=False, icon_provider=StubIcons())
     src.set_notify_gate(app.shell_claims_banners)
 
+    app.note_shell_claim("gen-1")
     src._notifier.notify("codex done", "p0", "Hero")
     src._notifier.notify("claude blocked", "p1", "Glass")
     assert src._notify_feed.state()["seq"] == 2
 
-    # First claim: banners are the shell's job from here, feed restarts so the
-    # fresh shell never replays the two already-delivered alerts.
-    app.note_shell_claim("gen-1")
-    assert src._notify_feed.state()["seq"] == 0
-    assert src._notify_feed.state()["items"] == []
+    state = src._notify_feed.state()
+    assert src._notify_feed.ack(state["generation"], 2) is True
+    assert src._notify_feed.state()["acked_seq"] == 2
 
     # Alerts arriving while the shell is alive keep normal seqs.
     src._notifier.notify("codex done", "p2", "Hero")
-    assert src._notify_feed.state()["seq"] == 1
+    assert src._notify_feed.state()["seq"] == 3
     app.note_shell_claim("gen-1")  # same shell, claim refresh: no reset
-    assert src._notify_feed.state()["seq"] == 1
+    assert src._notify_feed.state()["seq"] == 3
 
-    # A NEW generation (relaunched shell) resets the feed even within the TTL.
+    # A fresh shell process preserves the runtime feed/cursor.
     app.note_shell_claim("gen-2")
-    assert src._notify_feed.state()["seq"] == 0
+    assert src._notify_feed.state()["seq"] == 3
     app.close()
 
 
-def test_genless_claim_after_ttl_gap_still_resets():
+def test_genless_claim_after_ttl_gap_preserves_feed():
     config, server = notify_config()
 
     def silent_sink(feed, gate):
@@ -1525,10 +1549,102 @@ def test_genless_claim_after_ttl_gap_still_resets():
     app = DeckApp(src, serve=False, icon_provider=StubIcons())
     src.set_notify_gate(app.shell_claims_banners)
 
-    app.note_shell_claim()  # legacy shell, no generation header: first claim resets
+    app.note_shell_claim()
     assert src._notify_feed.state()["seq"] == 0
     src._notifier.notify("claude blocked", "p1", "Glass")
     # Still claiming (fresh, same gen-less shell) -> no reset.
     app.note_shell_claim()
     assert src._notify_feed.state()["seq"] == 1
+    app.close()
+
+
+def test_notification_long_poll_wakes_and_acknowledges_delivery():
+    import herdeck.notify as notify_mod
+
+    config, server = notify_config()
+
+    def silent_sink(feed, gate):
+        return notify_mod.runtime_sink(feed, gate, fallback=lambda t, b, s: None)
+
+    src = LiveSource(config, server, notify_sink_factory=silent_sink)
+    app = DeckApp(src, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
+    src.set_notify_gate(app.shell_claims_banners)
+    generation = src._notify_feed.state()["generation"]
+    result = []
+
+    def poll():
+        url = (
+            f"http://{app.host}:{app.port}/notifications?token={app.token}"
+            f"&generation={generation}&after=0&wait_ms=1000"
+        )
+        req = urllib.request.Request(
+            url,
+            headers={"X-Herdeck-Shell": "1", "X-Herdeck-Shell-Gen": "test-shell"},
+        )
+        with urllib.request.urlopen(req, timeout=2) as response:
+            result.append(json.load(response))
+
+    thread = threading.Thread(target=poll)
+    thread.start()
+    deadline = time.monotonic() + 0.5
+    while not app.shell_claims_banners() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert app.shell_claims_banners()
+
+    started = time.monotonic()
+    src._notifier.notify("codex done", "api", "Hero")
+    thread.join(timeout=0.3)
+    assert not thread.is_alive()
+    assert time.monotonic() - started < 0.3
+    assert result[0]["items"][0]["title"] == "codex done"
+
+    payload = json.dumps({"generation": generation, "seq": 1}).encode()
+    req = urllib.request.Request(
+        f"http://{app.host}:{app.port}/notifications/ack",
+        data=payload,
+        method="POST",
+        headers={"X-Herdeck-Token": app.token, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=2) as response:
+        assert response.status == 204
+    assert src._notify_feed.state()["acked_seq"] == 1
+    app.close()
+
+
+def test_notification_native_failure_uses_one_fallback_and_releases_claim():
+    import herdeck.notify as notify_mod
+
+    delivered = []
+    config, server = notify_config()
+
+    def silent_sink(feed, gate):
+        return notify_mod.runtime_sink(feed, gate, fallback=lambda t, b, s: None)
+
+    src = LiveSource(
+        config,
+        server,
+        notify_sink_factory=silent_sink,
+        notification_fallback=lambda t, b, s: delivered.append((t, b, s)),
+    )
+    app = DeckApp(src, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
+    src.set_notify_gate(app.shell_claims_banners)
+    app.note_shell_claim("shell-a")
+    src._notifier.notify("codex done", "p1", "Hero")
+    item = src._notify_feed.state()["items"][0]
+
+    payload = json.dumps(
+        {"generation": item["generation"], "seq": item["seq"], "shell_gen": "shell-a"}
+    ).encode()
+    req = urllib.request.Request(
+        f"http://{app.host}:{app.port}/notifications/fallback",
+        data=payload,
+        method="POST",
+        headers={"X-Herdeck-Token": app.token, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=2) as response:
+        assert response.status == 204
+
+    assert delivered == [("codex done", "p1", "Hero")]
+    assert src._notify_feed.state()["acked_seq"] == 1
+    assert app.shell_claims_banners() is False
     app.close()

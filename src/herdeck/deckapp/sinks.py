@@ -29,6 +29,10 @@ class RenderFrame:
     render: object
     working: list[int] | None
     full: bool
+    # True only for the periodic animation/elapsed-time ticker. Physical D200
+    # full-page uploads visibly blink, so its sink intentionally ignores these
+    # volatile frames while browser/HTTP consumers keep animating.
+    ticker: bool = False
 
 
 @runtime_checkable
@@ -74,6 +78,8 @@ class D200Sink:
             self._reader_thread.start()
 
     def deliver(self, frame) -> None:
+        if frame.ticker:
+            return
         # Always render a FULL frame — every tile plus the panel. The D200 drops the
         # cells missing from a partial (working-only) update, so a working frame would
         # blank the static/idle tiles + panel; re-sending everything keeps the whole

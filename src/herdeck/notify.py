@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+import threading
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -66,22 +68,36 @@ def _macos_sink(title: str, body: str, sound: bool | str) -> None:
 class NotificationFeed:
     """In-process record of recent event notifications.
 
-    The deck shell (desktop app) polls `/state` and posts these under its own
+    The deck shell (desktop app) long-polls `/notifications` and posts these under its own
     bundle identity, so the banner carries the Herdeck name and icon instead of
     the anonymous "Script Editor" attribution an osascript notification gets.
-    ``seq`` is monotonic per feed instance; the shell diffs against its last
-    seen value (a smaller seq after a source swap means "reset, nothing new").
+    ``seq`` is monotonic within a generation; acknowledgements make a shell
+    restart safe without clearing pending events.
     """
 
     def __init__(self, maxlen: int = 10):
         self._items: deque[dict] = deque(maxlen=maxlen)
+        self._generation = uuid.uuid4().hex
         self._seq = 0
+        self._acked_seq = 0
+        self._changed = threading.Condition()
 
-    def push(self, title: str, body: str, sound: bool | str) -> None:
-        self._seq += 1
-        self._items.append(
-            {"seq": self._seq, "title": title, "body": body, "sound": sound}
-        )
+    def push(self, title: str, body: str, sound: bool | str) -> dict:
+        with self._changed:
+            self._seq += 1
+            item = {
+                "id": f"{self._generation}:{self._seq}",
+                "generation": self._generation,
+                "seq": self._seq,
+                "title": title,
+                "body": body,
+                "sound": sound,
+                "created_at_ms": time.time_ns() // 1_000_000,
+            }
+            self._items.append(item)
+            self._changed.notify_all()
+        log.info("notification queued id=%s title=%r", item["id"], title)
+        return item
 
     def reset(self) -> None:
         """Drop everything and restart the sequence from zero.
@@ -90,11 +106,70 @@ class NotificationFeed:
         counter starts at 0, so without the reset it would replay every stale
         entry still sitting in the feed as a "new" banner.
         """
-        self._items.clear()
-        self._seq = 0
+        with self._changed:
+            self._items.clear()
+            self._generation = uuid.uuid4().hex
+            self._seq = 0
+            self._acked_seq = 0
+            self._changed.notify_all()
 
     def state(self) -> dict:
-        return {"seq": self._seq, "items": list(self._items)}
+        with self._changed:
+            return {
+                "generation": self._generation,
+                "seq": self._seq,
+                "acked_seq": self._acked_seq,
+                "items": list(self._items),
+            }
+
+    def wait(self, generation: str | None, after_seq: int, *, timeout: float) -> dict:
+        """Wait until this cursor has pending work or the feed generation changes."""
+        with self._changed:
+            # `after_seq` is the shell's process-local post-delivery cursor. It
+            # also repairs a lost explicit ACK without replaying after restart.
+            if generation == self._generation and 0 <= after_seq <= self._seq:
+                self._acked_seq = max(self._acked_seq, after_seq)
+            self._changed.wait_for(
+                lambda: generation != self._generation
+                or self._seq > max(after_seq, self._acked_seq),
+                timeout=max(0.0, timeout),
+            )
+            floor = self._acked_seq
+            if generation == self._generation:
+                floor = max(floor, after_seq)
+            return {
+                "generation": self._generation,
+                "seq": self._seq,
+                "acked_seq": self._acked_seq,
+                "items": [item for item in self._items if item["seq"] > floor],
+            }
+
+    def ack(self, generation: str, seq: int) -> bool:
+        with self._changed:
+            if generation != self._generation or seq < 0 or seq > self._seq:
+                return False
+            self._acked_seq = max(self._acked_seq, seq)
+            return True
+
+    def fallback(
+        self,
+        generation: str,
+        seq: int,
+        deliver: Callable[[str, str, bool | str], None],
+    ) -> bool:
+        """Deliver one pending item through the runtime fallback, then ACK it."""
+        with self._changed:
+            if generation != self._generation or seq <= self._acked_seq:
+                return False
+            item = next((item for item in self._items if item["seq"] == seq), None)
+            if item is None:
+                return False
+            payload = (item["title"], item["body"], item["sound"])
+        deliver(*payload)
+        if not self.ack(generation, seq):
+            return False
+        log.info("notification fallback delivered id=%s:%s", generation, seq)
+        return True
 
 
 _SOUND_DIR = Path("/System/Library/Sounds")
@@ -130,22 +205,16 @@ def runtime_sink(
 ) -> Callable[[str, str, bool | str], None]:
     """Sink for the deckapp runtime path.
 
-    Always records into the feed (the shell turns that into the banner) and
-    plays the event sound directly — audio carries no app attribution, so the
-    per-event system sound works without the osascript banner. When the gate
-    says no shell is attached to post banners (or its notification permission
-    is missing), the whole alert falls back to a plain osascript notification
-    and no separate audio plays (the fallback banner carries the sound).
+    With a live shell, records once into its acknowledged feed; the shell owns
+    both the native banner and sound. Without a shell, delivers only through
+    the osascript fallback. Never doing both removes the handoff replay race.
     """
 
     def sink(title: str, body: str, sound: bool | str) -> None:
-        feed.push(title, body, sound)
         if gate():
-            if sound and isinstance(sound, str):
-                sound_player(sound)
-            elif sound:  # plain on/off switch -> the historical default
-                sound_player("Glass")
+            feed.push(title, body, sound)
             return
+        log.info("notification fallback=osascript title=%r", title)
         fallback(title, body, sound)
 
     return sink

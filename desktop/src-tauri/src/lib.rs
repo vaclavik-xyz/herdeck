@@ -19,6 +19,8 @@ pub mod window_state;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Child;
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -90,10 +92,8 @@ struct AppState {
     /// (rather than re-read from config) so a failed persist can revert the
     /// checkbox to what is ACTUALLY in effect, not to stale config text.
     deck_always_on_top: Arc<Mutex<bool>>,
-    /// Highest `notify.seq` already posted as a native banner. The sidecar's
-    /// feed resets to 0 on every config reload / source swap, so a SMALLER
-    /// value means "reset" and the counter simply adopts it.
-    notify_last_seq: Arc<Mutex<u64>>,
+    /// Generation-scoped cursor acknowledged only after native delivery.
+    notify_cursor: Arc<Mutex<NotifyCursor>>,
     /// True once the sidecar-side notification permission is GRANTED. Until
     /// then the `/state` polls omit the `X-Herdeck-Shell` claim header, so the
     /// runtime keeps posting plain osascript alerts instead of double-firing
@@ -107,16 +107,32 @@ struct AppState {
     attached_from_runtime_json: Arc<AtomicBool>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct NotifyCursor {
+    generation: Option<String>,
+    seq: u64,
+}
+
+#[derive(Debug, Clone)]
+struct PendingNotification {
+    id: String,
+    generation: String,
+    seq: u64,
+    title: String,
+    body: String,
+    sound: serde_json::Value,
+    created_at_ms: Option<i64>,
+}
+
 /// Minimum interval between on-disk re-discovery attempts.
 const REDISCOVER_MIN_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Default timeout for the Rust-side sidecar proxy calls.
 const SIDECAR_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Period of the notification heartbeat thread. The deck windows may sit
-/// hidden in the tray (no WebView polls), but banner duty must keep being
-/// claimed — otherwise the runtime quietly falls back to osascript banners.
-const POLL_HEARTBEAT_S: Duration = Duration::from_secs(10);
+/// The runtime holds a long poll for 25 s; leave transport headroom around it.
+const NOTIFY_POLL_TIMEOUT: Duration = Duration::from_secs(30);
+const NOTIFY_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// `/setup/connect` runs, inside the sidecar, the whole remote transaction: a probe
 /// (≈4 s) THEN build + render-prepare + keychain/config snapshots + write + swap. The
@@ -307,7 +323,7 @@ async fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::V
 /// poll endpoint; the WebView never sees the token. The poll carries the
 /// banner-claim headers (`X-Herdeck-Shell`/`-Gen`, only with a granted
 /// permission) — a claim is just liveness; the actual posting of feed entries
-/// lives in `start_notify_heartbeat` (single poster by design).
+/// lives in `start_notify_pump` (single poster by design).
 #[tauri::command]
 async fn deck_state(
     state: tauri::State<'_, AppState>,
@@ -337,8 +353,8 @@ async fn deck_state(
 }
 
 /// Per-process shell identity for the banner claim. A fresh shell process
-/// carries a new generation, so the runtime can reset its feed even after a
-/// crash-relaunch shorter than the claim TTL (no stale-banner replay).
+/// carries a new generation, so the runtime can reject a stale shell's
+/// fallback request without resetting its acknowledged feed.
 fn shell_gen() -> String {
     use std::sync::OnceLock;
     static GEN: OnceLock<String> = OnceLock::new();
@@ -352,17 +368,88 @@ fn shell_gen() -> String {
     .clone()
 }
 
-/// Heartbeat + notification pump, independent of WebView visibility: the deck
-/// polls `/state` every POLL_HEARTBEAT_S for the whole app lifetime, claims
-/// banner duty, and posts new sidecar feed entries natively. This is the ONLY
-/// poster (the frontend-facing `deck_state` command never posts), so no
-/// double banners; the claim dying with hidden windows was the reason this
-/// moved off the WebView-driven poll.
-fn start_notify_heartbeat(app: tauri::AppHandle) {
+fn notification_batch(
+    state_json: &serde_json::Value,
+    cursor: &NotifyCursor,
+) -> Option<(String, u64, Vec<PendingNotification>)> {
+    let generation = state_json.get("generation")?.as_str()?.to_string();
+    let acked_seq = state_json
+        .get("acked_seq")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let floor = if cursor.generation.as_deref() == Some(generation.as_str()) {
+        cursor.seq.max(acked_seq)
+    } else {
+        acked_seq
+    };
+    let mut items = Vec::new();
+    for item in state_json.get("items").and_then(|v| v.as_array()).into_iter().flatten() {
+        let seq = item.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
+        if seq <= floor {
+            continue;
+        }
+        items.push(PendingNotification {
+            id: item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            generation: generation.clone(),
+            seq,
+            title: item
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            body: item
+                .get("body")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            sound: item.get("sound").cloned().unwrap_or(serde_json::Value::Bool(false)),
+            created_at_ms: item.get("created_at_ms").and_then(|v| v.as_i64()),
+        });
+    }
+    items.sort_by_key(|item| item.seq);
+    Some((generation, acked_seq, items))
+}
+
+#[cfg(target_os = "macos")]
+fn play_notification_sound(sound: &serde_json::Value) {
+    let name = match sound {
+        serde_json::Value::String(name) => name.as_str(),
+        serde_json::Value::Bool(true) => "Glass",
+        _ => return,
+    };
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-'))
+    {
+        eprintln!("herdeck: refused invalid notification sound name");
+        return;
+    }
+    let path = PathBuf::from("/System/Library/Sounds").join(format!("{name}.aiff"));
+    if !path.is_file() {
+        eprintln!("herdeck: notification sound not found: {name}");
+        return;
+    }
+    if let Err(err) = Command::new("/usr/bin/afplay").arg(path).spawn() {
+        eprintln!("herdeck: notification sound failed: {err}");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn play_notification_sound(_sound: &serde_json::Value) {}
+
+/// Generation-aware long-poll notification pump. The blocking request itself
+/// keeps banner duty claimed and wakes immediately when the runtime queues an
+/// event. Only a successfully shown banner is acknowledged.
+fn start_notify_pump(app: tauri::AppHandle) {
     let permission = app.state::<AppState>().notify_permission.clone();
     std::thread::spawn(move || loop {
-        std::thread::sleep(POLL_HEARTBEAT_S);
         if !permission.load(Ordering::Relaxed) {
+            std::thread::sleep(NOTIFY_RETRY_DELAY);
             continue;
         }
         let state = app.state::<AppState>();
@@ -370,89 +457,142 @@ fn start_notify_heartbeat(app: tauri::AppHandle) {
             Some(d) => d,
             None => continue,
         };
-        let fetched = http::fetch_state(
+        let cursor = state.notify_cursor.lock().unwrap().clone();
+        let fetched = http::fetch_notifications(
             &d.host,
             d.port,
             &d.token,
-            SIDECAR_TIMEOUT,
-            true,
-            Some(&shell_gen()),
+            NOTIFY_POLL_TIMEOUT,
+            cursor.generation.as_deref(),
+            cursor.seq,
+            &shell_gen(),
         );
-        let body = match fetched {
-            Ok(body) => body,
+        let (body, active_discovery) = match fetched {
+            Ok(body) => (body, d),
             Err(_) => {
-                // Stale port after a runtime restart: re-discover from
-                // runtime.json and CLAIM+FETCH immediately (waiting for the
-                // next tick would leave a 10 s osascript-fallback window).
                 if rediscover_runtime(&state).is_none() {
+                    std::thread::sleep(NOTIFY_RETRY_DELAY);
                     continue;
                 }
                 let d = match state.discovery.lock().unwrap().clone() {
                     Some(d) => d,
                     None => continue,
                 };
-                match http::fetch_state(
+                let cursor = state.notify_cursor.lock().unwrap().clone();
+                match http::fetch_notifications(
                     &d.host,
                     d.port,
                     &d.token,
-                    SIDECAR_TIMEOUT,
-                    true,
-                    Some(&shell_gen()),
+                    NOTIFY_POLL_TIMEOUT,
+                    cursor.generation.as_deref(),
+                    cursor.seq,
+                    &shell_gen(),
                 ) {
-                    Ok(body) => body,
-                    Err(_) => continue,
+                    Ok(body) => (body, d),
+                    Err(_) => {
+                        std::thread::sleep(NOTIFY_RETRY_DELAY);
+                        continue;
+                    }
                 }
             }
         };
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
-            post_new_notifications(&app, &parsed, &state.notify_last_seq);
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) else {
+            std::thread::sleep(NOTIFY_RETRY_DELAY);
+            continue;
+        };
+        let Some((generation, acked_seq, items)) = notification_batch(
+            &parsed,
+            &state.notify_cursor.lock().unwrap().clone(),
+        ) else {
+            std::thread::sleep(NOTIFY_RETRY_DELAY);
+            continue;
+        };
+        {
+            let mut cursor = state.notify_cursor.lock().unwrap();
+            if cursor.generation.as_deref() != Some(generation.as_str()) {
+                cursor.generation = Some(generation.clone());
+                cursor.seq = acked_seq;
+            } else {
+                cursor.seq = cursor.seq.max(acked_seq);
+            }
+        }
+        for item in items {
+            if let Err(err) = post_native_notification(&app, &item) {
+                eprintln!("herdeck: native notification failed id={}: {err}", item.id);
+                let code = http::fallback_notification(
+                    &active_discovery.host,
+                    active_discovery.port,
+                    &active_discovery.token,
+                    SIDECAR_TIMEOUT,
+                    &item.generation,
+                    item.seq,
+                    &shell_gen(),
+                );
+                if code == Ok(204) {
+                    permission.store(false, Ordering::Relaxed);
+                    let mut cursor = state.notify_cursor.lock().unwrap();
+                    cursor.generation = Some(item.generation.clone());
+                    cursor.seq = cursor.seq.max(item.seq);
+                    eprintln!("herdeck: notification fallback delivered id={}", item.id);
+                } else {
+                    eprintln!(
+                        "herdeck: notification fallback failed id={} result={code:?}",
+                        item.id
+                    );
+                }
+                std::thread::sleep(NOTIFY_RETRY_DELAY);
+                break;
+            }
+            play_notification_sound(&item.sound);
+            // Advance the process-local cursor immediately after visible
+            // delivery. A transient ACK failure must never show the banner a
+            // second time in this shell; the next long poll carries this cursor
+            // and repairs the server ACK before waiting.
+            {
+                let mut cursor = state.notify_cursor.lock().unwrap();
+                cursor.generation = Some(item.generation.clone());
+                cursor.seq = cursor.seq.max(item.seq);
+            }
+            let code = http::ack_notification(
+                &active_discovery.host,
+                active_discovery.port,
+                &active_discovery.token,
+                SIDECAR_TIMEOUT,
+                &item.generation,
+                item.seq,
+            );
+            if code != Ok(204) {
+                eprintln!("herdeck: notification ack failed id={} result={code:?}", item.id);
+                std::thread::sleep(NOTIFY_RETRY_DELAY);
+                break;
+            }
+            let latency = item.created_at_ms.map(|created| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(created);
+                (now - created).max(0)
+            });
+            eprintln!(
+                "herdeck: notification delivered id={} latency_ms={}",
+                item.id,
+                latency.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into())
+            );
         }
     });
 }
 
-/// Post every sidecar feed entry above `last` as a native Herdeck banner (no
-/// sound — the runtime plays the per-event system sound itself via afplay).
-/// A feed seq smaller than `last` is a reset (source swap): adopt it silently.
-fn post_new_notifications(
+fn post_native_notification(
     app: &tauri::AppHandle,
-    state_json: &serde_json::Value,
-    last_seq: &Mutex<u64>,
-) {
+    item: &PendingNotification,
+) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
-
-    let feed_seq = state_json
-        .pointer("/notify/seq")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let mut last = last_seq.lock().unwrap();
-    if feed_seq < *last {
-        *last = feed_seq;
-        return;
-    }
-    if let Some(items) = state_json.pointer("/notify/items").and_then(|v| v.as_array()) {
-        for item in items {
-            let seq = item.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-            if seq <= *last {
-                continue;
-            }
-            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            let body = item.get("body").and_then(|v| v.as_str()).unwrap_or("");
-            match app.notification().builder().title(title).body(body).show() {
-                Err(err) => {
-                    // Most likely the user revoked notification permission
-                    // mid-run: stop claiming banner duty so the runtime's
-                    // osascript fallback takes over (and keeps advancing its
-                    // own bookkeeping) instead of double-silencing alerts.
-                    eprintln!("herdeck: native notification failed: {err}");
-                    app.state::<AppState>()
-                        .notify_permission
-                        .store(false, Ordering::Relaxed);
-                }
-                Ok(()) => {}
-            }
-            *last = seq;
-        }
-    }
+    app.notification()
+        .builder()
+        .title(&item.title)
+        .body(&item.body)
+        .show()
+        .map_err(|err| err.to_string())
 }
 
 /// Proxy `GET /tile/{index}` → a `data:image/png;base64,…` URL (or `None` if the
@@ -759,6 +899,43 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
 #[cfg(test)]
 mod plan_tests {
     use super::*;
+
+    #[test]
+    fn notification_generation_change_delivers_low_sequence_item() {
+        let cursor = NotifyCursor {
+            generation: Some("old".into()),
+            seq: 10,
+        };
+        let state = serde_json::json!({
+            "generation": "new",
+            "seq": 1,
+            "acked_seq": 0,
+            "items": [{
+                "id": "new:1", "seq": 1, "title": "done", "body": "p1",
+                "sound": "Hero", "created_at_ms": 1
+            }]
+        });
+        let (generation, _, items) = notification_batch(&state, &cursor).unwrap();
+        assert_eq!(generation, "new");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].seq, 1);
+    }
+
+    #[test]
+    fn notification_cursor_filters_an_already_delivered_item() {
+        let cursor = NotifyCursor {
+            generation: Some("same".into()),
+            seq: 1,
+        };
+        let state = serde_json::json!({
+            "generation": "same",
+            "seq": 1,
+            "acked_seq": 0,
+            "items": [{"id": "same:1", "seq": 1, "title": "done", "body": "p1"}]
+        });
+        let (_, _, items) = notification_batch(&state, &cursor).unwrap();
+        assert!(items.is_empty());
+    }
 
     #[test]
     fn main_window_capability_allows_compact_window_control() {
@@ -2431,7 +2608,7 @@ pub fn run() {
         discovery,
         window_state: Arc::new(Mutex::new(startup)),
         deck_always_on_top: Arc::new(Mutex::new(deck_always_on_top)),
-        notify_last_seq: Arc::new(Mutex::new(0)),
+        notify_cursor: Arc::new(Mutex::new(NotifyCursor::default())),
         notify_permission: Arc::new(AtomicBool::new(false)),
         rediscover_last: Arc::new(Mutex::new(None)),
         attached_from_runtime_json: Arc::new(AtomicBool::new(false)),
@@ -2490,7 +2667,7 @@ pub fn run() {
             }
             // The notification pump runs for the whole app lifetime, detached
             // from WebView visibility (deck windows may hide into the tray).
-            start_notify_heartbeat(app.handle().clone());
+            start_notify_pump(app.handle().clone());
             // NEITHER window is declared in tauri.conf.json: both are built here
             // so both get an initialization script, which stamps the window's
             // role on `<html>` before its first paint. The frontend routes its

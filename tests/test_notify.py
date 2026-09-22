@@ -1,3 +1,6 @@
+import threading
+import time
+
 from herdeck.notify import NoopNotifier, Notifier, escape_applescript
 
 
@@ -16,6 +19,59 @@ def test_macos_sink_sound_name_and_switch(monkeypatch):
     assert scripts[0] == 'display notification "api" with title "claude done" sound name "Hero"'
     assert 'sound name "Glass"' in scripts[1]  # True keeps the historical default
     assert "sound name" not in scripts[2]
+
+
+def test_notification_feed_generation_ack_and_reset_cursor():
+    from herdeck.notify import NotificationFeed
+
+    feed = NotificationFeed()
+    first = feed.state()["generation"]
+
+    item = feed.push("codex done", "api", "Hero")
+    assert item["id"] == f"{first}:1"
+    assert feed.ack(first, 1) is True
+    assert feed.state()["acked_seq"] == 1
+
+    feed.reset()
+    state = feed.state()
+    assert state["generation"] != first
+    assert state["seq"] == 0
+    assert state["acked_seq"] == 0
+    assert feed.ack(first, 2) is False
+
+
+def test_notification_feed_wait_wakes_immediately_for_new_item():
+    from herdeck.notify import NotificationFeed
+
+    feed = NotificationFeed()
+    generation = feed.state()["generation"]
+    result = []
+    ready = threading.Event()
+
+    def waiter():
+        ready.set()
+        result.append(feed.wait(generation, 0, timeout=1.0))
+
+    thread = threading.Thread(target=waiter)
+    thread.start()
+    assert ready.wait(0.2)
+    started = time.monotonic()
+    feed.push("codex done", "api", "Hero")
+    thread.join(timeout=0.3)
+
+    assert not thread.is_alive()
+    assert time.monotonic() - started < 0.3
+    assert result[0]["items"][0]["title"] == "codex done"
+
+
+def test_notification_feed_long_poll_cursor_repairs_lost_ack():
+    from herdeck.notify import NotificationFeed
+
+    feed = NotificationFeed()
+    item = feed.push("done", "p1", "Hero")
+    state = feed.wait(item["generation"], 1, timeout=0)
+    assert state["acked_seq"] == 1
+    assert state["items"] == []
 
 
 def test_noop_notifier_never_raises():
@@ -149,7 +205,7 @@ def test_deckapp_sink_honors_backends_and_disabled():
     sink("t", "b", "Glass")
     assert calls == [] and feed.state()["items"] == []
 
-    # macos only: feed + sound, no telegram.
+    # macos only: shell-owned feed, no runtime sound and no telegram.
     calls = []
     feed = make_feed()
     sink = notify_mod.deckapp_sink(
@@ -161,7 +217,7 @@ def test_deckapp_sink_honors_backends_and_disabled():
         telegram_factory=lambda *a, **kw: (lambda t, b, s: calls.append(("tg", t))),
     )
     sink("t", "b", "Glass")
-    assert calls == [("sound", "Glass")] and feed.state()["items"]
+    assert calls == [] and feed.state()["items"]
 
     # telegram only: telegram fires, no sound, no feed recording.
     calls = []
@@ -177,7 +233,7 @@ def test_deckapp_sink_honors_backends_and_disabled():
     sink("t", "b", "Glass")
     assert calls == [("tg", "t")] and feed.state()["items"] == []
 
-    # both: sound + telegram.
+    # both: shell-owned feed + telegram (the shell plays sound after showing).
     calls = []
     feed = make_feed()
     sink = notify_mod.deckapp_sink(
@@ -189,7 +245,7 @@ def test_deckapp_sink_honors_backends_and_disabled():
         telegram_factory=lambda *a, **kw: (lambda t, b, s: calls.append(("tg", t))),
     )
     sink("t", "b", "Glass")
-    assert calls == [("sound", "Glass"), ("tg", "t")]
+    assert calls == [("tg", "t")]
 
 
 def test_composite_sink_calls_all_even_if_one_raises():

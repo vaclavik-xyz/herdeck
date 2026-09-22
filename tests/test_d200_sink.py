@@ -88,6 +88,17 @@ def test_working_frame_renders_full_frame():
     assert drv.working_renders == []  # render_working is never called
 
 
+def test_ticker_frame_does_not_touch_physical_d200():
+    drv = FakeDriver()
+    sink = _sink(drv, slots=3)
+    rs = _RS([_Tile(0), _Tile(1), _Tile(2)])
+
+    sink.deliver(RenderFrame(render=rs, working=[1], full=False, ticker=True))
+
+    assert drv.full_renders == []
+    assert drv.panels == []
+
+
 def test_working_frame_with_no_working_tiles_still_renders_full_frame():
     # Even a working frame with an empty working set triggers a full render —
     # D200Sink ignores frame.working entirely.
