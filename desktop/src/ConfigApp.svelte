@@ -44,6 +44,8 @@
   } from "./lib/deckClient";
   import { visibilityGatedLoop } from "./lib/pollGate";
   import { adoptDeckStatus, deckPreviewMounted } from "./lib/deckStatus";
+  import { restartRequiredChanges } from "./lib/restartKeys";
+  import { validationMessage } from "./lib/validationMessages";
   import { DEFAULT_STATUS_COLORS } from "./lib/statusColors";
   import { connectionInventory, type ConnectionHealth } from "./lib/connectionStatus";
   import { filterSettingsNavigation } from "./lib/settingsNavigation";
@@ -61,6 +63,7 @@
     effectiveStatusColors,
     parseConfig,
     parseValidate,
+    parseValidateCodes,
     parseActiveChanged,
     toWriteBody,
     orphanedSecrets,
@@ -176,6 +179,8 @@
       orphans: "{n} orphaned keychain keys ({list})",
       cleanup: "clean up",
       saved: "saved",
+      saved_restart: "saved. Restart Herdeck (and its runtime) to apply: {keys}",
+      hotkey_failed: "saved, but the global shortcut could not be registered: {e}",
       cleanup_failed: "cleaning token '{name}' failed (HTTP {code})",
       orphans_cleaned: "orphaned keychain keys cleaned",
     },
@@ -280,6 +285,8 @@
       orphans: "{n} osiřelých keychain klíčů ({list})",
       cleanup: "uklidit",
       saved: "uloženo",
+      saved_restart: "uloženo. Pro použití restartuj Herdeck (i jeho runtime): {keys}",
+      hotkey_failed: "uloženo, ale globální zkratku se nepodařilo zaregistrovat: {e}",
       cleanup_failed: "úklid tokenu '{name}' selhal (HTTP {code})",
       orphans_cleaned: "osiřelé keychain klíče uklizeny",
     },
@@ -355,6 +362,8 @@
   let deckView = $state<DeckViewModel>(initialView());
   let dirty = $state(false);
   let errors = $state<string[]>([]);
+  // message -> stable code (C3) for the issues that carry one; display only.
+  let errorCodes = $state<Record<string, string>>({});
   // undefined follows the runtime profile; null deliberately edits base;
   // a string opens that profile's overlay without switching the running deck.
   let validationEditProfile = $state<string | null | undefined>(undefined);
@@ -503,6 +512,7 @@
       appliedPayload = fresh;
       dirty = false;
       errors = [];
+      errorCodes = {};
       validationEditProfile = undefined;
       banner = null;
       reloadRev += 1;
@@ -529,7 +539,9 @@
   async function liveValidate(): Promise<void> {
     if (!payload || !dirty) return;
     try {
-      errors = parseValidate(await cfg.validate(toWriteBody(payload)));
+      const raw = await cfg.validate(toWriteBody(payload));
+      errors = parseValidate(raw);
+      errorCodes = parseValidateCodes(raw);
     } catch {
       /* sidecar hiccup — keep the previous result; Apply still validates */
     }
@@ -539,7 +551,9 @@
     if (!payload) return;
     busy = true;
     try {
-      const res = parseValidate(await cfg.write(toWriteBody(payload)));
+      const raw = await cfg.write(toWriteBody(payload));
+      const res = parseValidate(raw);
+      errorCodes = parseValidateCodes(raw);
       if (res.some(isStaleRevisionError)) {
         // The files changed under the editor (re-onboarding, tray switch, hand
         // edit): never resurrect the stale snapshot — offer a reload instead.
@@ -559,22 +573,36 @@
         // payload.secrets only carries still-referenced token_envs, so a renamed/deleted old
         // key would vanish and post-load detection would miss it.
         const orphans = orphanedSecrets(payload);
+        // Startup-only keys: a live reload cannot apply them, so "saved" alone
+        // would read as "done" while the runtime keeps the old value.
+        const restartKeys = restartRequiredChanges(appliedPayload, payload);
         appliedPayload = JSON.parse(JSON.stringify(payload)) as ConfigPayload;
         dirty = false;
         await load(); // re-read saved state (preview refreshes itself via its own poll)
-        // A changed [hotkeys] accelerator only takes effect once Rust re-registers it.
-        void invoke("reload_hotkey").catch(() => {});
+        // A changed [hotkeys] accelerator only takes effect once Rust re-registers
+        // it; a registration failure (taken/invalid accelerator) comes back as
+        // Err and must be shown instead of claiming success.
+        let hotkeyError: string | null = null;
+        try {
+          await invoke("reload_hotkey");
+        } catch (e) {
+          hotkeyError = e instanceof Error ? e.message : String(e);
+        }
         // Same reasoning for [desktop].deck_always_on_top: it is applied live via
         // set_always_on_top, not a creation-time window property, so nothing
         // restarts it — but nothing re-applies it either without this call.
         void invoke("reload_deck_always_on_top").catch(() => {});
-        if (orphans.length > 0) {
+        if (hotkeyError != null) {
+          setBanner("error", fmt(lm.hotkey_failed, { e: hotkeyError }));
+        } else if (orphans.length > 0) {
           setBanner(
             "warning",
             fmt(lm.orphans, { n: orphans.length, list: orphans.join(", ") }),
             lm.cleanup,
             () => void cleanupOrphans(orphans),
           );
+        } else if (restartKeys.length > 0) {
+          setBanner("warning", fmt(lm.saved_restart, { keys: restartKeys.join(", ") }));
         } else if (banner == null) {
           // load() surfaces its own warning on a failed refresh — never mask it
           setBanner("success", lm.saved);
@@ -963,7 +991,7 @@
     <div class="errlist" role="alert">
       <ul>
         {#each validationIssues as entry}
-          <li><button type="button" onclick={() => void focusValidationIssue(entry)}>{entry.message}</button></li>
+          <li><button type="button" onclick={() => void focusValidationIssue(entry)}>{validationMessage(entry.message, errorCodes[entry.message], locale.lang)}</button></li>
         {/each}
       </ul>
     </div>
