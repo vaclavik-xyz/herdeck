@@ -91,12 +91,49 @@ def test_notification_feed_hides_item_while_fallback_is_in_flight():
     )
     thread.start()
     assert delivering.wait(0.2)
+    feed.push("blocked", "p2", "Glass")
     state = feed.wait(item["generation"], 0, timeout=0)
     assert state["items"] == []
+    assert feed.ack(item["generation"], 2) is False
     release.set()
     thread.join(timeout=0.2)
     assert not thread.is_alive()
     assert feed.state()["acked_seq"] == 1
+
+
+def test_failed_fallback_does_not_let_newer_item_skip_it():
+    from herdeck.notify import NotificationFeed
+
+    feed = NotificationFeed()
+    first = feed.push("done", "p1", "Hero")
+    delivering = threading.Event()
+    release = threading.Event()
+
+    def fail(*_args):
+        delivering.set()
+        assert release.wait(1)
+        raise RuntimeError("osascript failed")
+
+    failures = []
+
+    def run_fallback():
+        try:
+            feed.fallback(first["generation"], first["seq"], fail)
+        except RuntimeError as exc:
+            failures.append(str(exc))
+
+    thread = threading.Thread(target=run_fallback)
+    thread.start()
+    assert delivering.wait(0.2)
+    feed.push("blocked", "p2", "Glass")
+    assert feed.wait(first["generation"], 0, timeout=0)["items"] == []
+    release.set()
+    thread.join(timeout=0.2)
+
+    state = feed.wait(first["generation"], 0, timeout=0)
+    assert failures == ["osascript failed"]
+    assert [item["seq"] for item in state["items"]] == [1, 2]
+    assert state["acked_seq"] == 0
 
 
 def test_noop_notifier_never_raises():

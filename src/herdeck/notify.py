@@ -129,14 +129,20 @@ class NotificationFeed:
         with self._changed:
             # `after_seq` is the shell's process-local post-delivery cursor. It
             # also repairs a lost explicit ACK without replaying after restart.
-            if generation == self._generation and 0 <= after_seq <= self._seq:
+            if (
+                self._fallback_seq is None
+                and generation == self._generation
+                and 0 <= after_seq <= self._seq
+            ):
                 self._acked_seq = max(self._acked_seq, after_seq)
             self._changed.wait_for(
                 lambda: generation != self._generation
-                or any(
+                or (
+                    self._fallback_seq is None
+                    and any(
                     item["seq"] > max(after_seq, self._acked_seq)
-                    and item["seq"] != self._fallback_seq
                     for item in self._items
+                    )
                 ),
                 timeout=max(0.0, timeout),
             )
@@ -147,11 +153,11 @@ class NotificationFeed:
                 "generation": self._generation,
                 "seq": self._seq,
                 "acked_seq": self._acked_seq,
-                "items": [
-                    item
-                    for item in self._items
-                    if item["seq"] > floor and item["seq"] != self._fallback_seq
-                ],
+                "items": (
+                    []
+                    if self._fallback_seq is not None
+                    else [item for item in self._items if item["seq"] > floor]
+                ),
             }
 
     def ack(self, generation: str, seq: int) -> bool:
@@ -160,7 +166,7 @@ class NotificationFeed:
                 generation != self._generation
                 or seq < 0
                 or seq > self._seq
-                or seq == self._fallback_seq
+                or self._fallback_seq is not None
             ):
                 return False
             self._acked_seq = max(self._acked_seq, seq)
