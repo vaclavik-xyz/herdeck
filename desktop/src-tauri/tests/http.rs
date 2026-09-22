@@ -8,9 +8,9 @@ use std::thread;
 use std::time::Duration;
 
 use herdeck_desktop_lib::http::{
-    ack_notification, fallback_notification, fetch_image, fetch_notifications, fetch_setup,
-    fetch_state, http_delete,
-    http_get, http_post_json, post_setup_connect, send_press,
+    ack_notification, fallback_notification, fetch_image, fetch_notifications,
+    fetch_notifications_status, fetch_png, fetch_setup, fetch_state, fetch_state_poll,
+    http_delete, http_get, http_post_json, idle_connections, post_setup_connect, send_press,
 };
 
 /// Bind a loopback listener and, on one connection, reply with `response` then
@@ -95,7 +95,7 @@ fn fetch_state_injects_token_as_query_param() {
     assert!(body.contains("\"version\":7"));
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(
-        req.starts_with("GET /state?token=SECRET123 HTTP/1.0"),
+        req.starts_with("GET /state?token=SECRET123 HTTP/1.1"),
         "request was: {req:?}"
     );
 }
@@ -118,7 +118,7 @@ fn fetch_notifications_carries_cursor_claim_and_generation() {
     assert!(body.contains("\"generation\":\"g2\""));
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(req.starts_with(
-        "GET /notifications?token=SECRET123&after=2&wait_ms=25000&generation=g1 HTTP/1.0"
+        "GET /notifications?token=SECRET123&after=2&wait_ms=25000&generation=g1 HTTP/1.1"
     ));
     assert!(req.contains("X-Herdeck-Shell: 1\r\n"));
     assert!(req.contains("X-Herdeck-Shell-Gen: shell-a\r\n"));
@@ -140,7 +140,7 @@ fn ack_notification_posts_generation_and_seq() {
     .unwrap();
     assert_eq!(code, 204);
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(req.starts_with("POST /notifications/ack HTTP/1.0"));
+    assert!(req.starts_with("POST /notifications/ack HTTP/1.1"));
     assert!(req.contains("X-Herdeck-Token: TOKEN\r\n"));
     assert!(req.ends_with("{\"generation\":\"gen-1\",\"seq\":7}"));
 }
@@ -162,7 +162,7 @@ fn fallback_notification_identifies_shell_and_item() {
     .unwrap();
     assert_eq!(code, 204);
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(req.starts_with("POST /notifications/fallback HTTP/1.0"));
+    assert!(req.starts_with("POST /notifications/fallback HTTP/1.1"));
     assert!(req.contains("X-Herdeck-Token: TOKEN\r\n"));
     assert!(req.ends_with(
         "{\"generation\":\"gen-1\",\"seq\":7,\"shell_gen\":\"shell-a\"}"
@@ -179,7 +179,7 @@ fn fetch_image_frames_png_bytes_as_data_url_with_token() {
     assert_eq!(url, Some("data:image/png;base64,iVBORw==".to_string()));
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(
-        req.starts_with("GET /tile/2?token=TKN HTTP/1.0"),
+        req.starts_with("GET /tile/2?token=TKN HTTP/1.1"),
         "request was: {req:?}"
     );
 }
@@ -209,7 +209,7 @@ fn http_post_json_sends_body_and_returns_status_and_body() {
     assert_eq!(body, "{\"errors\":[]}");
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(
-        req.starts_with("POST /config HTTP/1.0"),
+        req.starts_with("POST /config HTTP/1.1"),
         "request was: {req:?}"
     );
     assert!(
@@ -249,7 +249,7 @@ fn http_delete_sends_token_header_and_returns_status() {
     assert_eq!(code, 204);
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(
-        req.starts_with("DELETE /secret/TOK HTTP/1.0"),
+        req.starts_with("DELETE /secret/TOK HTTP/1.1"),
         "request was: {req:?}"
     );
     assert!(
@@ -266,7 +266,7 @@ fn send_press_posts_with_token_header_and_returns_status() {
     assert_eq!(code, 204);
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(
-        req.starts_with("POST /press/3 HTTP/1.0"),
+        req.starts_with("POST /press/3 HTTP/1.1"),
         "request was: {req:?}"
     );
     assert!(
@@ -284,7 +284,7 @@ fn fetch_setup_injects_token_as_query_param() {
     assert!(body.contains("\"reason\":\"first_run\""));
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(
-        req.starts_with("GET /setup?token=SECRET HTTP/1.0"),
+        req.starts_with("GET /setup?token=SECRET HTTP/1.1"),
         "request was: {req:?}"
     );
 }
@@ -306,7 +306,7 @@ fn post_setup_connect_sends_header_token_and_body() {
     assert!(body.contains("\"ok\":true"));
     let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(
-        req.starts_with("POST /setup/connect HTTP/1.0"),
+        req.starts_with("POST /setup/connect HTTP/1.1"),
         "request was: {req:?}"
     );
     assert!(
@@ -317,4 +317,141 @@ fn post_setup_connect_sends_header_token_and_body() {
         req.ends_with("{\"choice\":\"demo\"}"),
         "request was: {req:?}"
     );
+}
+
+// --- keep-alive connection pool ---
+
+/// Read one request head (up to the blank line) off a server-side socket.
+fn read_request_head(sock: &mut std::net::TcpStream) -> Option<String> {
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    while !buf.ends_with(b"\r\n\r\n") {
+        match sock.read(&mut byte) {
+            Ok(0) | Err(_) => return None,
+            Ok(_) => buf.push(byte[0]),
+        }
+    }
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+#[test]
+fn keep_alive_responses_reuse_one_connection() {
+    // The server accepts exactly ONE connection and answers every request on
+    // it. A client that reconnected per request would hang on the second call.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut sock, _) = listener.accept().unwrap();
+        let mut served = 0;
+        while let Some(req) = read_request_head(&mut sock) {
+            served += 1;
+            let _ = tx.send(req);
+            let body = format!("{{\"n\":{served}}}");
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            if sock.write_all(resp.as_bytes()).is_err() {
+                break;
+            }
+        }
+    });
+    let t = Duration::from_secs(2);
+    assert_eq!(http_get("127.0.0.1", port, "/health", t).unwrap(), "{\"n\":1}");
+    assert_eq!(http_get("127.0.0.1", port, "/health", t).unwrap(), "{\"n\":2}");
+    assert_eq!(
+        fetch_state("127.0.0.1", port, "T", t, false, None).unwrap(),
+        "{\"n\":3}"
+    );
+    assert_eq!(rx.try_iter().count(), 3);
+    assert_eq!(idle_connections("127.0.0.1", port), 1);
+}
+
+#[test]
+fn a_pooled_connection_the_server_closed_is_replaced_transparently() {
+    // First connection: one keep-alive response, then the server hangs up
+    // (runtime restart / idle reap). The next request must reconnect instead
+    // of surfacing "connection closed" to the deck.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (closed_tx, closed_rx) = mpsc::channel();
+    thread::spawn(move || {
+        for (i, conn) in listener.incoming().take(2).enumerate() {
+            let mut sock = conn.unwrap();
+            let _ = read_request_head(&mut sock);
+            let body = if i == 0 { "one" } else { "two" };
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n{body}");
+            let _ = sock.write_all(resp.as_bytes());
+            drop(sock);
+            if i == 0 {
+                let _ = closed_tx.send(());
+            }
+        }
+    });
+    let t = Duration::from_secs(2);
+    assert_eq!(http_get("127.0.0.1", port, "/a", t).unwrap(), "one");
+    closed_rx.recv_timeout(t).unwrap();
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(http_get("127.0.0.1", port, "/b", t).unwrap(), "two");
+}
+
+#[test]
+fn a_connection_close_response_is_not_pooled() {
+    let port = serve_once("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\nok");
+    assert_eq!(
+        http_get("127.0.0.1", port, "/x", Duration::from_secs(2)).unwrap(),
+        "ok"
+    );
+    assert_eq!(idle_connections("127.0.0.1", port), 0);
+}
+
+#[test]
+fn fetch_notifications_status_reports_a_404_as_a_status_not_an_error() {
+    let port = serve_once("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+    let (code, _) = fetch_notifications_status(
+        "127.0.0.1",
+        port,
+        "T",
+        Duration::from_secs(2),
+        None,
+        0,
+        "shell",
+    )
+    .unwrap();
+    assert_eq!(code, 404);
+}
+
+#[test]
+fn fetch_state_poll_sends_the_long_poll_cursor() {
+    let (port, rx) = serve_once_capture(
+        b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"version\":8}".to_vec(),
+    );
+    let body = fetch_state_poll(
+        "127.0.0.1",
+        port,
+        "TOK",
+        Duration::from_secs(2),
+        false,
+        None,
+        Some(7),
+        Some(20_000),
+    )
+    .unwrap();
+    assert!(body.contains("\"version\":8"));
+    let req = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(
+        req.starts_with("GET /state?token=TOK&after=7&wait_ms=20000 HTTP/1.1"),
+        "request was: {req:?}"
+    );
+}
+
+#[test]
+fn fetch_png_returns_raw_bytes() {
+    let mut resp =
+        b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 4\r\n\r\n".to_vec();
+    resp.extend_from_slice(&[0x89, 0x50, 0x4e, 0x47]);
+    let (port, _rx) = serve_once_capture(resp);
+    let png = fetch_png("127.0.0.1", port, "/panel", "T", Duration::from_secs(2)).unwrap();
+    assert_eq!(png, Some(vec![0x89, 0x50, 0x4e, 0x47]));
 }

@@ -31,6 +31,9 @@ tauri-plugin-notification = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
+# Already in the tree via tauri-plugin-notification -> notify-rust; used directly
+# so a banner click can be observed (the plugin fires and forgets).
+mac-notification-sys = "0.6"
 
 [profile.release]
 opt-level = "s"
