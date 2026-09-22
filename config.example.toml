@@ -38,10 +38,12 @@ tile_fields = ["repo", "title", "tab", "branch", "status", "time", "server"]
 language = "en"
 # Tile icon: "agent" (default) = the agent's logo, "project" = the project's
 # favicon (found in the repo by the bridge; a coloured letter when none),
-# "both" = the agent's logo with a small project badge.
+# "both" = the agent's logo with a small project badge. In "project" mode the
+# spin working animation renders as a comet ring around the favicon.
 tile_icon = "agent"
 # Per-repo icon file on the machine running the deck ("~" expanded); overrides
-# the discovered favicon. PNG/ICO (<= 256 KiB); SVG only in source installs.
+# the discovered favicon. PNG/ICO (<= 256 KiB); SVG only where CairoSVG is
+# installed. Quote repo names containing a dot: "vaclavik.xyz" = "~/icons/site.png".
 # [view.project_icons]
 # herdeck = "~/icons/herdeck.png"
 

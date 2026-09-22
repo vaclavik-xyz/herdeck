@@ -9,7 +9,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - Project favicons on agent tiles: `[view].tile_icon = "project"` shows the
   repository's favicon instead of the agent mark (`"both"` adds it as a small
-  badge; default `"agent"` is unchanged). The bridge discovers the icon in the
+  badge; default `"agent"` is unchanged). In `"project"` mode the `spin`
+  working animation renders as a `comet` ring around the favicon. The bridge discovers the icon in the
   pane's repo and sends it once per content hash to deck runtimes that opt in
   (new `project_icon` capability); `[view.project_icons]` overrides it per repo
   with a file on the deck machine. PNG and ICO work everywhere; SVG only where
