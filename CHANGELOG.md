@@ -6,6 +6,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-09-22
+
+### Fixed
+- Agent completion and blocked alerts now wake the desktop through an
+  acknowledged long-poll feed instead of waiting up to ten seconds for the
+  next state heartbeat. The desktop owns both banner and sound, correlates
+  delivery latency in logs, and falls back to `osascript` without replaying or
+  reordering queued alerts.
+- A fresh runtime seeds its notification baseline from the first snapshot, so
+  agents that were already done or blocked before restart do not alert again.
+- Periodic spinner and elapsed-time ticks no longer upload full frames to the
+  physical D200. Semantic changes, including an expired temporary panel, still
+  repaint the device, avoiding the whole-deck flash seen while agents work.
+
 ## [0.7.1] - 2026-09-21
 
 ### Fixed
