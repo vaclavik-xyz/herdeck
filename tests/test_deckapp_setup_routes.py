@@ -1381,6 +1381,19 @@ def test_setup_error_codes_are_stable_snake_case_and_all_used():
     assert used == set(codes)  # every documented code is produced, no stray ones
 
 
+def test_every_setup_error_code_is_localized_by_the_desktop():
+    # C3 cross-cluster contract: the desktop maps each runtime code to en+cs text
+    # (CONNECT_CODES in onboardingClient.ts); an unmapped code would fall back to
+    # the raw English message in a Czech UI.
+    import re
+    from pathlib import Path
+
+    ts = (Path(__file__).resolve().parents[1] / "desktop/src/lib/onboardingClient.ts").read_text()
+    block = ts.split("const CONNECT_CODES", 1)[1].split("};", 1)[0]
+    mapped = set(re.findall(r"^\s*([a-z0-9_]+):", block, re.M))
+    assert set(srv.SETUP_ERROR_CODES) <= mapped, set(srv.SETUP_ERROR_CODES) - mapped
+
+
 def test_connect_sessions_without_selection_reports_code(tmp_path, monkeypatch):
     monkeypatch.setenv("HERDECK_CONFIG", str(tmp_path / "config.toml"))
     monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "nope.sock"))

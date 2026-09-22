@@ -276,6 +276,21 @@ describe("setupTransport", () => {
 });
 
 describe("connectErrorMessage", () => {
+  it("maps the runtime's canonical code names (SETUP_ERROR_CODES)", () => {
+    // runtime token_env_conflict = an exported env var shadows the typed token
+    expect(connectErrorMessage("HERDECK_X_TOKEN is set…", null, "en", "token_env_conflict")).toContain(
+      "environment variable overrides",
+    );
+    // runtime token_env_in_use = the derived env name belongs to another secret
+    expect(connectErrorMessage("in use", null, "en", "token_env_in_use")).toContain("already used");
+    expect(connectErrorMessage("herdr socket not found at /s", "/s", "cs", "herdr_socket_not_found")).toContain("/s");
+    expect(connectErrorMessage("old", null, "en", "herdr_too_old")).toContain("too old");
+    expect(connectErrorMessage("x", null, "en", "saved_restore_failed")).toContain("could not be restored");
+    expect(connectErrorMessage("x", null, "en", "onboarding_finalize_failed")).toContain("finishing setup");
+    expect(connectErrorMessage("x", null, "en", "demo_switch_failed")).toContain("demo");
+    expect(connectErrorMessage("x", null, "en", "unknown_local_session")).toContain("no longer exists");
+    expect(connectErrorMessage("x", null, "en", "selection_save_failed")).toContain("selected connections");
+  });
   it("maps a known code to a localized message regardless of the English sentence", () => {
     expect(connectErrorMessage("could not store token", null, "en", "token_store_failed"))
       .toBe("The token could not be stored. Check the keychain.");

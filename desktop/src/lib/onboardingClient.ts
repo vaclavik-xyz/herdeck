@@ -263,13 +263,27 @@ const CONNECT_CODES: Record<string, ConnectMessageKey> = {
   connections_build_failed: "connections_failed",
   connections_save_failed: "connections_failed",
   token_env_override: "token_env_override",
-  token_env_conflict: "token_env_conflict",
+  // Runtime (SETUP_ERROR_CODES in deckapp/server.py): token_env_conflict = an
+  // exported HERDECK_<ID>_TOKEN shadows the typed token (the "override" text);
+  // token_env_in_use = the derived env name already belongs to another secret.
+  token_env_conflict: "token_env_override",
+  token_env_in_use: "token_env_conflict",
   server_not_in_profile: "server_not_in_profile",
   remote_build_failed: "remote_failed",
   token_read_failed: "token_read_failed",
   token_store_failed: "token_store_failed",
   finalize_failed: "finalize_failed",
+  // Canonical runtime names (deckapp/server.py SETUP_ERROR_CODES).
+  demo_switch_failed: "demo_failed",
+  unknown_local_session: "unknown_session",
+  selection_save_failed: "connections_failed",
+  herdr_socket_not_found: "socket",
+  herdr_too_old: "snapshot_unsupported",
+  saved_restore_failed: "restore_failed",
+  onboarding_finalize_failed: "finalize_failed",
 };
+// tests/test_deckapp_setup_routes.py pins these keys against the runtime's
+// SETUP_ERROR_CODES, so a new runtime code cannot silently fall back to raw text.
 
 export function connectErrorMessage(
   error: string | null | undefined,
