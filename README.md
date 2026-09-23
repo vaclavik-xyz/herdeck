@@ -554,6 +554,14 @@ npm run tauri dev   # opens the desktop control room (needs a real desktop sessi
 The UI is dark-only by design: it mirrors the deck hardware's black tiles, so
 there is no light theme to switch to.
 
+Launched outside a terminal (Finder, Dock, login item, the updater), the app
+keeps its own and its sidecar runtime's stderr in a timestamped log:
+`~/Library/Logs/herdeck/herdeck.log` on macOS, `~/.local/state/herdeck/herdeck.log`
+(or `$XDG_STATE_HOME/herdeck/`) on Linux; `herdeck-dev.log` for the dev build.
+It rotates at 5 MB, keeping one previous file (`.1`). Besides warnings it
+records how each notification was delivered (native banner or `osascript`
+fallback).
+
 See **Native desktop app** under Install for a local application bundle and
 [`desktop/README.md`](desktop/README.md) for architecture and test details.
 

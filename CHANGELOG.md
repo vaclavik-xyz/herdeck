@@ -6,6 +6,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- The desktop app keeps a log when launched outside a terminal: its own and
+  the sidecar runtime's stderr, timestamped, in
+  `~/Library/Logs/herdeck/herdeck.log` (Linux: `~/.local/state/herdeck/`),
+  rotated at 5 MB. The runtime now also logs each notification's route
+  (queued for the banner, or the `osascript` fallback) at INFO.
+
 ### Fixed
 - SVG project favicons now render in the packaged desktop app and the Elgato
   plugin (they showed the monogram): SVG goes through resvg (`resvg-py`, a

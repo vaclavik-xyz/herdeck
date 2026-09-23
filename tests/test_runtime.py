@@ -197,3 +197,21 @@ def test_runtime_reopens_and_repaints_d200_after_reader_disconnect(monkeypatch, 
         assert _wait_until(lambda: drivers[1].frames == [([], "panel")])
     finally:
         sink.close()
+
+
+def test_logging_keeps_notification_routes_at_info(monkeypatch):
+    import logging
+
+    calls = []
+    monkeypatch.setattr(logging, "basicConfig", lambda **kw: calls.append(kw))
+    for name in ("herdeck.notify", "herdeck.deckapp.live"):
+        monkeypatch.setattr(logging.getLogger(name), "level", logging.NOTSET)
+
+    runtime.configure_logging(debug=False)
+
+    assert calls[0]["level"] == logging.WARNING
+    assert logging.getLogger("herdeck.notify").getEffectiveLevel() == logging.INFO
+    assert logging.getLogger("herdeck.deckapp.live").getEffectiveLevel() == logging.INFO
+
+    runtime.configure_logging(debug=True)
+    assert calls[1] == {"level": logging.DEBUG}

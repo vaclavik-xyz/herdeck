@@ -9,6 +9,7 @@
 //! the frontend can reach the sidecar over loopback. The sidecar is restarted on
 //! crash and killed on quit.
 
+pub mod app_log;
 pub mod build_channel;
 pub mod deck_prefs;
 pub mod hotkey;
@@ -1553,6 +1554,26 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
         runtime_discovery,
         probe_runtime_health,
     )
+}
+
+/// Keep this process's and the sidecar's stderr in a log file when launched
+/// outside a terminal (see `app_log`); the marker line separates launches.
+fn start_app_log() {
+    let Ok(home) = env::var("HOME") else {
+        return;
+    };
+    let dir = app_log::log_dir(Path::new(&home), env::var("XDG_STATE_HOME").ok().as_deref());
+    let path = dir.join(app_log::log_file_name(build_channel::is_dev()));
+    match app_log::capture_stderr(&path) {
+        Ok(Some(_)) => eprintln!(
+            "herdeck: ---- {} {} (pid {}) started ----",
+            build_channel::current(),
+            env!("CARGO_PKG_VERSION"),
+            std::process::id()
+        ),
+        Ok(None) => {}
+        Err(err) => eprintln!("herdeck: log file {} unavailable: {err}", path.display()),
+    }
 }
 
 #[cfg(test)]
@@ -3551,6 +3572,7 @@ fn start_sidecar(
 
 /// Tauri entry point.
 pub fn run() {
+    start_app_log();
     let discovery: Arc<Mutex<Option<Discovery>>> = Arc::new(Mutex::new(None));
     let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let stop = Arc::new(AtomicBool::new(false));
