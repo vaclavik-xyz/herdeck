@@ -774,3 +774,77 @@ def test_agent_mode_tiles_carry_no_project_icon():
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
     t = o.render().tiles[0]
     assert (t.tile_icon, t.project_icon, t.project_name) == ("agent", None, "")
+
+
+# --- partial outage (one of several servers down) ---
+
+
+def _two_server_config():
+    cfg = make_config()
+    cfg.servers = [ServerConfig("dev", "wss://x", "t"), ServerConfig("t3-headless", "ws://y", "t", "t3")]
+    cfg.overview_order = ["dev", "t3-headless"]
+    return cfg
+
+
+def test_all_servers_down_keeps_offline_panel():
+    o = Orchestrator(_two_server_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.set_connection("dev", False)
+    o.set_connection("t3-headless", False)
+    panel = o.render().panel
+    assert panel.title == "OFFLINE"
+    assert panel.gauges == []
+
+
+def test_partial_outage_shows_usage_gauges_and_offline_note():
+    o = Orchestrator(_two_server_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.set_connection("dev", True)
+    o.set_connection("t3-headless", False)
+    panel = o.render().panel
+    assert panel.title == "1 agents"
+    assert [g.label for g in panel.gauges] == ["Claude", "Claude", "Codex"]
+    assert panel.note == "t3-headless offline"
+    assert panel.color != o.config.theme.colors.get("offline", "red")
+    assert panel.color == "grey"
+
+
+def test_partial_outage_keeps_blocked_spotlight():
+    o = Orchestrator(_two_server_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
+    o.set_usage(_usage_data())
+    o.set_connection("dev", True)
+    o.set_connection("t3-headless", False)
+    panel = o.render().panel
+    assert panel.title == "▲ needs you"
+    assert panel.lines[0] == "api"
+    assert panel.gauges == []
+    assert panel.note == "t3-headless offline"
+
+
+def test_usage_detail_press_works_in_partial_outage():
+    t = {"now": 0.0}
+    o = Orchestrator(_two_server_config(), slots=13, clock=lambda: t["now"])
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.set_connection("dev", True)
+    o.set_connection("t3-headless", False)
+    o.on_press(13)
+    panel = o.render().panel
+    assert panel.title == "usage limits"
+    assert panel.gauges  # the held detail renders despite the outage
+    # ...and a full outage still takes the panel back at once
+    o.set_connection("dev", False)
+    assert o.render().panel.title == "OFFLINE"
+
+
+def test_usage_detail_press_refused_when_all_servers_down():
+    o = Orchestrator(_two_server_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.set_connection("dev", False)
+    o.set_connection("t3-headless", False)
+    o.on_press(13)
+    assert o._usage_detail_until == 0.0

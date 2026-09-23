@@ -554,3 +554,57 @@ def test_t3_project_fallback_does_not_display_workspace_path():
     assert compose_line(s, ["repo"]) == "herdeck"
     s.repo = ""
     assert compose_line(s, ["repo"]) == s.label
+
+
+# --- partial outage: some (not all) configured servers down ---
+
+
+def test_panel_overview_all_servers_down_keeps_offline_panel():
+    pv = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"a", "b"}, 1, None, servers=2)
+    assert pv.title == "OFFLINE"
+    assert pv.color == "red"
+    assert pv.note == ""
+
+
+def test_panel_overview_partial_outage_keeps_calm_panel_with_usage():
+    from herdeck.driver.base import PanelGauge
+
+    usage = ["Codex 5h 100%", "Claude 5h 17%"]
+    gauges = [PanelGauge("Codex", "5H", 100), PanelGauge("Claude", "5H", 17)]
+    pv = panel_overview(
+        Counts(0, 2, 1, 0), 1, 2, {"t3-headless"}, 3, None,
+        usage_lines=usage, usage_gauges=gauges, servers=2,
+    )
+    assert pv.title == "3 agents"
+    assert pv.color == "grey"  # not the red offline panel
+    assert pv.gauges == gauges
+    assert pv.lines[0] == "W2 · I1 · D0 · 2/2"  # counts + page marker survive
+    assert pv.lines[1] == usage[0]
+    assert pv.note == "t3-headless offline"
+    assert len(pv.lines) + 1 <= 3  # the note fits the 3-line body budget
+
+
+def test_panel_overview_partial_outage_without_usage_drops_online():
+    pv = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"t3"}, 1, None, servers=2)
+    assert pv.lines == ["W1 · I0 · D0"]  # "online" would be a lie
+    assert pv.note == "t3 offline"
+
+
+def test_panel_overview_partial_outage_counts_several_servers():
+    pv = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"a", "b"}, 1, None, servers=3)
+    assert pv.note == "2 servers offline"
+    cs = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"a", "b"}, 1, None, lang="cs", servers=3)
+    assert cs.note == "servery offline: 2"
+
+
+def test_panel_overview_partial_outage_keeps_blocked_spotlight():
+    pv = panel_overview(Counts(2, 0, 0, 0), 0, 1, {"t3"}, 2, ("api", "5m"), servers=2)
+    assert pv.title == "▲ 2 need you"
+    assert pv.lines == ["api", "blocked 5m"]
+    assert pv.color == "amber"
+    assert pv.note == "t3 offline"
+
+
+def test_panel_overview_legacy_callers_treat_any_down_as_offline():
+    pv = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"a"}, 1, None)
+    assert pv.title == "OFFLINE"

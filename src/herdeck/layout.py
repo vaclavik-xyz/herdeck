@@ -196,10 +196,27 @@ def panel_overview(
     lang: str = "en",
     usage_lines: list[str] | None = None,
     usage_gauges: list[PanelGauge] | None = None,
+    servers: int | None = None,
 ) -> PanelView:
+    """The overview status panel.
+
+    ``servers`` is the number of configured servers. When it is given and only
+    SOME of them are in ``down`` (a partial outage), the normal calm/spotlight
+    panel renders and a compact ``note`` names the offline server(s); the full
+    OFFLINE panel is kept for "every server down". ``servers=None`` keeps the
+    legacy rule (any down server -> OFFLINE).
+    """
     page_line = -1  # which line carries the "· p/n" page marker
     gauges: list[PanelGauge] = []
-    if down:
+    partial = bool(down) and servers is not None and len(down) < servers
+    note = ""
+    if partial:
+        note = (
+            tr(lang, "server_offline", name=next(iter(down)))
+            if len(down) == 1
+            else tr(lang, "servers_offline", n=len(down))
+        )
+    if down and not partial:
         title, lines, color = tr(lang, "offline_title"), [tr(lang, "reconnecting")], "red"
         if counts.blocked:
             # one dead server must not hide that agents are waiting for input
@@ -225,16 +242,22 @@ def panel_overview(
             tr(lang, "online"),
         ]
         color = "grey"
+        if partial:
+            # "online" would be false with a server down; the note says which.
+            lines = lines[:1]
         if usage_lines:
             # The calm panel has spare body lines: swap the (implicit) "online"
             # line for provider usage; the page marker moves to the counts line.
             # Blocked/offline panels keep their priority — no usage there.
-            lines = [lines[0], *usage_lines[: _DETAIL_MAX_LINES - 1]]
+            # A partial-outage note takes the last of the 3 body lines, so one
+            # usage line gives way to it (the gauges still carry every window).
+            room = _DETAIL_MAX_LINES - 1 - (1 if note else 0)
+            lines = [lines[0], *usage_lines[:room]]
             page_line = 0
             gauges = usage_gauges or []
     if page_count > 1 and lines:
         lines[page_line] = f"{lines[page_line]} · {page_index + 1}/{page_count}"
-    return PanelView(title=title, lines=lines, color=color, gauges=gauges)
+    return PanelView(title=title, lines=lines, color=color, gauges=gauges, note=note)
 
 
 def _fmt_reset(resets_at: str | None, now) -> str:

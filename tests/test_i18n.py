@@ -34,3 +34,10 @@ def test_status_words_exist_for_all_statuses():
         for status in Status:
             text = tr(lang, f"status.{status.value}")
             assert text and not text.startswith("status."), (lang, status)
+
+
+def test_partial_outage_note_strings():
+    assert tr("en", "server_offline", name="t3") == "t3 offline"
+    assert tr("en", "servers_offline", n=2) == "2 servers offline"
+    assert tr("cs", "server_offline", name="t3") == "t3 offline"
+    assert tr("cs", "servers_offline", n=2) == "servery offline: 2"

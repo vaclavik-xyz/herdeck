@@ -805,3 +805,23 @@ def test_standard_zip_preserves_manifest_and_disk_file_metadata(monkeypatch):
         assert json.loads(z.read("manifest.json"))["3_2"]["SmallViewMode"] == 2
         assert stat.S_ISREG(z.getinfo("icons/panel.png").external_attr >> 16)
         assert z.read("icons/panel.png") == b"image"
+
+
+def test_compose_panel_draws_offline_note_on_text_and_gauge_panels():
+    from herdeck.driver.base import PanelGauge
+
+    text = PanelView("3 agents", ["W2 · I1 · D0"], "grey")
+    noted = PanelView("3 agents", ["W2 · I1 · D0"], "grey", note="t3 offline")
+    assert compose_panel(text).tobytes() != compose_panel(noted).tobytes()
+    gauges = [PanelGauge("Codex", "5H", 100), PanelGauge("Claude", "5H", 17)]
+    plain = PanelView("3 agents", ["W2 · I1 · D0"], "grey", gauges=gauges)
+    gauged = PanelView("3 agents", ["W2 · I1 · D0"], "grey", gauges=gauges, note="t3 offline")
+    assert compose_panel(plain).tobytes() != compose_panel(gauged).tobytes()
+    assert plain.cache_key() != gauged.cache_key()
+
+
+def test_compose_panel_note_yields_to_a_full_body():
+    full = ["▲ 2 need you", "api", "blocked 5m"]
+    a = PanelView("x", full, "amber")
+    b = PanelView("x", full, "amber", note="t3 offline")
+    assert compose_panel(a).tobytes() == compose_panel(b).tobytes()

@@ -227,6 +227,16 @@ class Orchestrator:
             if self._pending_confirm[1].server_id == server_id:
                 self._pending_confirm = None
 
+    def _server_count(self) -> int:
+        """Servers the overview panel accounts for: the configured ones plus any
+        unknown id reported down (so a stray id can never read as a partial)."""
+        return len({s.id for s in self.config.servers} | self._down)
+
+    def _all_down(self) -> bool:
+        """Every server is down -> the full OFFLINE panel. Some (not all) down
+        is a partial outage: the calm/spotlight panel stays, with a note."""
+        return bool(self._down) and len(self._down) >= self._server_count()
+
     def set_detection(self, text: str) -> None:
         if text != self._detection:
             self._pending_confirm = None
@@ -565,14 +575,15 @@ class Orchestrator:
         spotlight = self._blocked_spotlight()
         if (
             self._usage
-            and not self._down
+            and not self._all_down()
             and spotlight is None
             and self._clock() < self._usage_detail_until
         ):
             # Held usage detail (panel press on a single-page deck): every
             # provider window with its reset time, in place of the overview;
             # repeated presses page when there are more windows than lines.
-            # An offline server or a blocked agent takes the panel back at once.
+            # A full outage or a blocked agent takes the panel back at once; a
+            # partial outage does not (the user still wants their limits).
             detail_pages = layout.usage_detail_pages(self._usage)
             title = self._tr("usage_title")
             if detail_pages > 1:
@@ -607,6 +618,7 @@ class Orchestrator:
                 if self._usage
                 else None
             ),
+            servers=self._server_count(),
         )
         if panel.color == "red":
             panel.color = self.config.theme.colors.get("offline", panel.color)
@@ -956,7 +968,9 @@ class Orchestrator:
     def _press_overview(self, index: int) -> list[Command]:
         if index in self._panel_indices():
             _, pages = layout.page(self._ordered(), self._page, self._agent_slots())
-            detail_can_show = self._usage and not self._down and self._blocked_spotlight() is None
+            detail_can_show = (
+                self._usage and not self._all_down() and self._blocked_spotlight() is None
+            )
             if pages == 1 and detail_can_show:
                 # Nothing to page through: the press shows a held usage detail
                 # instead (reset times per provider window); repeated presses
