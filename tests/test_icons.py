@@ -797,6 +797,22 @@ def test_project_name_wraps_long_identifiers_without_losing_the_suffix():
     assert all(draw.textlength(line, font=font) <= 172 for line in lines)
 
 
+def test_project_name_keeps_the_suffix_with_a_wide_font():
+    # Regression for CI on Linux: DejaVu Bold is wide enough that the word
+    # boundary split ("macdoktor-" + "crm-production") overflowed line two and
+    # truncated the suffix. A width function that makes every glyph 13 px
+    # reproduces that without depending on which fonts the host has.
+    from herdeck.icons import _fit_project_name
+
+    class WideDraw:
+        def textlength(self, text, font=None):
+            return 13.0 * len(text)
+
+    font, lines = _fit_project_name(WideDraw(), "macdoktor-crm-production", 172)
+    assert "".join(lines) == "macdoktor-crm-production"
+    assert all(13.0 * len(line) <= 172 for line in lines)
+
+
 def test_extreme_project_names_keep_a_readable_minimum_and_ellipsis():
     from herdeck.icons import _fit_project_name
     draw = ImageDraw.Draw(Image.new("RGB", (196, 196)))
