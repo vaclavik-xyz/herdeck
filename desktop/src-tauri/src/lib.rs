@@ -478,8 +478,9 @@ fn notification_batch(
 /// picked), matching the runtime's osascript fallback.
 const DEFAULT_NOTIFICATION_SOUND: &str = "Glass";
 
-/// File extensions macOS system sounds come in (what `NSSound(named:)` and the
-/// runtime's osascript `sound name` fallback resolve).
+/// File extensions a named sound can have. Only used to list and check names:
+/// the banner itself carries the bare name (`NSUserNotification.soundName`, and
+/// the runtime's osascript `sound name`), which macOS resolves by `NSSound(named:)`.
 const SOUND_EXTENSIONS: [&str; 6] = ["aiff", "aif", "caf", "wav", "m4a", "mp3"];
 
 /// Where named sounds live, in `NSSound(named:)`'s own search order: the
@@ -500,7 +501,7 @@ fn sound_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// A sound name safe to hand to `afplay` / the runtime: letters, digits, space,
+/// A sound name safe to put on a banner / hand to the runtime: letters, digits, space,
 /// `_` and `-` — no path separators, no dots, nothing to escape.
 fn valid_sound_name(name: &str) -> bool {
     !name.is_empty()
@@ -616,9 +617,10 @@ fn notification_sounds() -> Vec<String> {
 
 /// Show a localized test banner through the same native path real alerts take,
 /// carrying `sound` (a name; `None` = the default sound, `""` = silent). `Err`
-/// carries a message the settings UI shows as is. Async so the (briefly
-/// blocking) native post never runs on the main thread, which delivers the
-/// post's own confirmation.
+/// carries a message the settings UI shows as is. The native post blocks until
+/// Notification Center confirms delivery (up to ~2 s) and that confirmation
+/// arrives on the main thread, so it runs on the blocking pool — never on the
+/// main thread or an async worker.
 #[tauri::command]
 async fn test_notification(
     app: tauri::AppHandle,
@@ -653,8 +655,11 @@ async fn test_notification(
         sound,
         created_at_ms: None,
     };
-    post_native_notification(&app, &item)?;
-    sound_problem.map_or(Ok(()), Err)
+    run_blocking(move || {
+        post_native_notification(&app, &item)?;
+        sound_problem.map_or(Ok(()), Err)
+    })
+    .await
 }
 
 /// Whether native notifications are permitted (C4). Always `None` ("unknown"):
@@ -930,8 +935,7 @@ fn post_native_notification(
     banner
         .send()
         .map_err(|err| format!("native notification failed: {err}"))?;
-    // mac-notification-sys installs its own center delegate on the first send;
-    // wrap it (again) so banner clicks keep reaching `banner_clicks`.
+    // Guard: re-wrap if anything replaced the center delegate since startup.
     banner_clicks::ensure_installed(app);
     Ok(())
 }
@@ -945,6 +949,13 @@ fn activation_reveals_deck(activation_type: isize) -> bool {
     matches!(activation_type, 1 | 2 | 4)
 }
 
+/// Whether to present a banner while Herdeck is frontmost: the wrapped
+/// delegate's answer when it has one, else yes (AppKit's own default is no).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn should_present_banner(inner_answer: Option<bool>) -> bool {
+    inner_answer.unwrap_or(true)
+}
+
 /// Banner clicks → reveal the deck, with no per-banner thread and no polling.
 ///
 /// `NSUserNotificationCenter` has exactly one delegate, owned by
@@ -954,12 +965,13 @@ fn activation_reveals_deck(activation_type: isize) -> bool {
 /// That is one object for the whole process, event driven, on the main thread
 /// where AppKit delivers these callbacks anyway.
 ///
-/// The crate sets its delegate once, on the first send (`dispatch_once`), which
-/// replaces a proxy installed at startup; `ensure_installed` after each post
-/// notices that and wraps the crate's delegate. A click that lands before the
-/// first post of this process (a banner left over from a previous run) is
-/// seen by the startup proxy; otherwise macOS still activates the app and
-/// `RunEvent::Reopen` / the tray remain the way back to the deck.
+/// It also answers `shouldPresentNotification:` (the crate does not), so a
+/// banner — and the sound it carries — still shows while Herdeck is frontmost.
+///
+/// `install_at_startup` makes the crate create its delegate (normally done
+/// lazily inside its first send) and wraps it before any banner is posted, so
+/// the first banner already goes through the proxy. `ensure_installed` after
+/// each post is a cheap guard in case anything replaced the delegate since.
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // NSUserNotification*: the legacy API mac-notification-sys posts through
 mod banner_clicks {
@@ -999,6 +1011,23 @@ mod banner_clicks {
                         msg_send![inner, userNotificationCenter: center, didDeliverNotification: notification]
                     };
                 }
+            }
+
+            // NSUserNotificationCenter's default is to NOT present a banner
+            // while the posting app is frontmost, and the crate's delegate does
+            // not implement this. Now that the sound rides on the banner, an
+            // unpresented banner would be a fully silent alert (including the
+            // settings Test button, which is pressed with Herdeck frontmost).
+            #[unsafe(method(userNotificationCenter:shouldPresentNotification:))]
+            fn should_present(&self, center: &NSUserNotificationCenter, notification: &NSUserNotification) -> bool {
+                let inner = self
+                    .forward_to(sel!(userNotificationCenter:shouldPresentNotification:))
+                    .map(|inner| -> bool {
+                        unsafe {
+                            msg_send![inner, userNotificationCenter: center, shouldPresentNotification: notification]
+                        }
+                    });
+                super::should_present_banner(inner)
             }
 
             #[unsafe(method(userNotificationCenter:didActivateNotification:))]
@@ -1048,10 +1077,38 @@ mod banner_clicks {
         static PROXY: RefCell<Option<Retained<ClickDelegate>>> = const { RefCell::new(None) };
     }
 
+    extern "C" {
+        /// mac-notification-sys's own ObjC entry point (notify.m, in the
+        /// `libnotify.a` the crate links): creates its delegate singleton and
+        /// sets it on the center, once (`dispatch_once`). The crate only calls
+        /// it inside its first send, which would put a banner through the
+        /// crate's delegate before our proxy could wrap it.
+        fn setupDelegate();
+    }
+
+    /// Install the proxy before anything is posted, so the very first banner
+    /// already gets `shouldPresentNotification:` (presented while Herdeck is
+    /// frontmost) and its click is seen. Order matters: attribute the bundle
+    /// first (an unbundled `tauri dev` binary has no notification center
+    /// otherwise), then let the crate create its delegate, then wrap it; the
+    /// crate's later `setupDelegate` calls are then no-ops. Main thread.
+    pub fn install_at_startup(app: &tauri::AppHandle) {
+        super::ensure_notification_application(app);
+        // SAFETY: a plain C function with no arguments; idempotent.
+        unsafe { setupDelegate() };
+        ensure_installed(app);
+    }
+
     /// Put the proxy in front of the center's current delegate unless it is
     /// already there. Main thread only.
     fn install(mtm: MainThreadMarker) {
-        let center = NSUserNotificationCenter::defaultUserNotificationCenter();
+        // Nil when the process has no bundle identity; nothing to wrap then.
+        let center: Option<Retained<NSUserNotificationCenter>> = unsafe {
+            msg_send![NSUserNotificationCenter::class(), defaultUserNotificationCenter]
+        };
+        let Some(center) = center else {
+            return;
+        };
         // SAFETY: the current delegate is either ours (kept alive by PROXY) or
         // the crate's process-lifetime singleton.
         let current = unsafe { center.delegate() };
@@ -1611,6 +1668,13 @@ mod plan_tests {
         assert_eq!(banner_sound_name(&json!(false), &dirs), Ok(None));
         assert!(banner_sound_name(&json!("Missing"), &dirs).is_err());
         assert!(banner_sound_name(&json!("../Hero"), &dirs).is_err());
+    }
+
+    #[test]
+    fn banners_present_while_frontmost_unless_the_inner_delegate_says_no() {
+        assert!(should_present_banner(None));
+        assert!(should_present_banner(Some(true)));
+        assert!(!should_present_banner(Some(false)));
     }
 
     #[test]
@@ -3530,10 +3594,10 @@ pub fn run() {
             }
             // The notification pump runs for the whole app lifetime, detached
             // from WebView visibility (deck windows may hide into the tray).
-            // Banner clicks reveal the deck (see `banner_clicks`), including a
-            // click on a banner left over from a previous run.
+            // Banner clicks reveal the deck and banners show while Herdeck is
+            // frontmost (see `banner_clicks`) — from the very first post on.
             #[cfg(target_os = "macos")]
-            banner_clicks::ensure_installed(app.handle());
+            banner_clicks::install_at_startup(app.handle());
             start_notify_pump(app.handle().clone());
             // NEITHER window is declared in tauri.conf.json: both are built here
             // so both get an initialization script, which stamps the window's
