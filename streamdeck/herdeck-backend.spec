@@ -18,6 +18,7 @@ a = Analysis(
     # shows PyInstaller missed a real serve_elgato-graph import.
     hiddenimports=[
         "herdeck.elgato.runtime",
+        "resvg_py",  # project SVG favicons (imported lazily)
         "herdeck.elgato.frozen",
         "herdeck.elgato.session",
         "herdeck.elgato.ipc",

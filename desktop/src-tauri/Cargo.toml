@@ -29,6 +29,10 @@ toml = "0.8"
 tauri-plugin-updater = "2"
 tauri-plugin-notification = "2"
 
+[target.'cfg(unix)'.dependencies]
+# Already in the tree (tauri); used directly to redirect stderr into the app log.
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSProcessInfo", "NSString", "NSUserNotification"] }

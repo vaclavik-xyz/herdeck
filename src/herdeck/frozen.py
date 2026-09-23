@@ -37,10 +37,15 @@ def glyph_png_name(svg_text: str) -> str:
 
 
 def make_png_rasterizer(baked_dir: str) -> Callable[[str, int], Image.Image]:
-    """A Pillow-only rasterizer that returns a pre-baked PNG for an SVG glyph."""
+    """Returns the pre-baked PNG for a bundled SVG glyph; any other SVG (a
+    project favicon) is rendered by resvg, which ships in the frozen bundle."""
 
     def rasterize(svg: str, size: int) -> Image.Image:
         path = os.path.join(baked_dir, glyph_png_name(svg))
+        if not os.path.exists(path):
+            from .icons import resvg_rasterize
+
+            return resvg_rasterize(svg, size)
         img = Image.open(path).convert("RGBA")
         if img.size != (size, size):
             img = img.resize((size, size))

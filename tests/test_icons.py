@@ -2,6 +2,7 @@ import io as _io
 import logging
 import os
 
+import pytest
 from PIL import Image, ImageDraw
 
 from herdeck.driver.base import TileView as _TileView
@@ -1272,3 +1273,64 @@ def test_png_icon_within_the_pixel_cap_still_decodes(tmp_path):
     h = _stored(store, _png_ico(_img_bytes(RED, size=(64, 64)), side_byte=64), "image/x-icon")
     p = _project_provider(tmp_path, store)
     assert p._decode_project_icon(h, store.get(h)) is not None
+
+
+def test_resvg_rasterize_centres_a_non_square_svg():
+    pytest.importorskip("resvg_py")
+    from herdeck.icons import resvg_rasterize
+
+    wide = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">'
+        '<rect width="200" height="100" fill="red"/></svg>'
+    )
+    img = resvg_rasterize(wide, 64)
+    assert img.size == (64, 64)
+    assert img.getpixel((32, 32))[:3] == (255, 0, 0)  # centre band is the rect
+    assert img.getpixel((32, 2))[3] == 0  # letterboxed, not stretched
+
+
+def test_svg_favicon_decodes_with_the_default_rasterizer():
+    pytest.importorskip("resvg_py")
+    from herdeck.icons import decode_project_icon
+    from herdeck.project_icons import StoredIcon
+
+    svg = (
+        b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+        b'<circle cx="5" cy="5" r="5" fill="#0a0"/></svg>'
+    )
+    img = decode_project_icon(StoredIcon("image/svg+xml", svg))
+    assert img.getpixel((img.width // 2, img.height // 2))[:3] == (0, 170, 0)
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        '<image href="/etc/secret.png" width="1" height="1"/>',
+        '<image xlink:href="file:///Users/x/a.png" width="1" height="1"/>',
+        '<image href="https://example.com/a.png" width="1" height="1"/>',
+        '<rect style="fill:url(\'/tmp/p.svg#g\')" width="1" height="1"/>',
+    ],
+)
+def test_svg_favicon_with_outside_references_is_refused(ref):
+    from herdeck.icons import decode_project_icon
+    from herdeck.project_icons import StoredIcon
+
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        f'xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1 1">{ref}</svg>'
+    )
+    calls = []
+    with pytest.raises(ValueError):
+        decode_project_icon(
+            StoredIcon("image/svg+xml", svg.encode()), lambda s, n: calls.append(s)
+        )
+    assert calls == []  # never handed to a rasterizer
+
+
+def test_svg_favicon_with_internal_references_is_allowed():
+    from herdeck.icons import _svg_references_outside
+
+    assert not _svg_references_outside(
+        '<svg><defs><linearGradient id="g"/></defs><rect fill="url(#g)"/>'
+        '<use href="#g"/><image href="data:image/png;base64,AAAA"/></svg>'
+    )

@@ -29,6 +29,7 @@ SELFTEST_IMPORTS = (
     "strmdck",
     "strmdck.devices.ulanzi_d200",
     "hid",
+    "resvg_py",
 )
 
 
@@ -37,6 +38,11 @@ def _run_import_selftest() -> int:
 
     for module in SELFTEST_IMPORTS:
         importlib.import_module(module)
+    # The native resvg module must also load and render inside the bundle
+    # (it draws SVG project favicons there).
+    from .icons import resvg_rasterize
+
+    resvg_rasterize('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', 8)
     return 0
 
 
@@ -99,11 +105,22 @@ def build_runtime(
     return app, sink, info, path
 
 
+def configure_logging(*, debug: bool) -> None:
+    """Warnings for everything; each notification's route (queued / osascript
+    fallback) at INFO too — the desktop app keeps stderr in its log file, and
+    those lines are what explain a banner that arrived the wrong way."""
+    if debug:
+        logging.basicConfig(level=logging.DEBUG)
+        return
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    for name in ("herdeck.notify", "herdeck.deckapp.live"):  # INFO = notification lines only
+        logging.getLogger(name).setLevel(logging.INFO)
+
+
 def main() -> int:
     if os.environ.get("HERDECK_SELFTEST") == "imports":
         return _run_import_selftest()
-    if os.environ.get("HERDECK_DEBUG"):
-        logging.basicConfig(level=logging.DEBUG)
+    configure_logging(debug=bool(os.environ.get("HERDECK_DEBUG")))
     port = int(os.environ.get("HERDECK_DECKAPP_PORT", "0"))
     write_discovery = _should_write_discovery()
     app, sink, info, path = build_runtime(

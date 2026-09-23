@@ -108,6 +108,7 @@ def check_servers(servers, probe) -> list[Check]:
 def check_optional_deps(is_available: Callable[[str], bool]) -> Check:
     modules = (
         ("PIL", "PIL"),
+        ("resvg_py", "resvg_py"),  # SVG agent marks + project favicons
         ("cairosvg", "cairosvg"),
         ("strmdck", "strmdck"),
         ("streamdeck", "StreamDeck"),
