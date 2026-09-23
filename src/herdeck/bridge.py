@@ -1493,7 +1493,7 @@ class SocketHerdr:
         res = await self._rpc("pane.read", {"pane_id": pane_id, "source": source})
         read = res.get("result", {}).get("read", {})
         if read.get("truncated"):
-            # herdr >= 0.8.0 omits older terminal rows from the returned
+            # herdr 0.8+ omits older terminal rows from the returned
             # window; surface it so a decision made on a clipped prompt is
             # diagnosable instead of silently wrong.
             log.warning("herdr pane.read %s truncated older rows (source=%s)", pane_id, source)
