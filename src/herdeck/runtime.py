@@ -29,6 +29,7 @@ SELFTEST_IMPORTS = (
     "strmdck",
     "strmdck.devices.ulanzi_d200",
     "hid",
+    "resvg_py",
 )
 
 
@@ -37,6 +38,11 @@ def _run_import_selftest() -> int:
 
     for module in SELFTEST_IMPORTS:
         importlib.import_module(module)
+    # The native resvg module must also load and render inside the bundle
+    # (it draws SVG project favicons there).
+    from .icons import resvg_rasterize
+
+    resvg_rasterize('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', 8)
     return 0
 
 

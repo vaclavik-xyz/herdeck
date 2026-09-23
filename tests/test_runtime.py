@@ -83,6 +83,7 @@ def test_frozen_runtime_selftest_covers_dynamic_d200_imports():
         "strmdck",
         "strmdck.devices.ulanzi_d200",
         "hid",
+        "resvg_py",
     )
 
 
