@@ -796,7 +796,10 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   own name and icon: the runtime queues each alert and the app long-polls
   `/notifications`, posts the banner with its sound, and acknowledges it. Only
   while no desktop app is attached (or native delivery fails) does the runtime
-  fall back to an `osascript` notification. **Telegram** delivers to
+  fall back to an `osascript` notification. Each banner shows the agent's
+  project mark — the same favicon (or letter badge) the deck uses, rendered by
+  the runtime into `~/.cache/herdeck/notification-icons/` — on the right, and
+  in place of the app icon where macOS allows it. **Telegram** delivers to
   your phone via the Bot API over HTTPS (stdlib only, no extra dependency) —
   useful when you drive herdeck from the phone over Tailscale.
 - Telegram setup: create a bot with @BotFather, `export HERDECK_TELEGRAM_TOKEN=<token>`

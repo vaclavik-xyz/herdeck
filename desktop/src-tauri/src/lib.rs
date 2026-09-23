@@ -118,6 +118,8 @@ struct PendingNotification {
     title: String,
     body: String,
     sound: serde_json::Value,
+    /// PNG of the agent's project mark written by the runtime (notify_icons).
+    icon: Option<String>,
     created_at_ms: Option<i64>,
 }
 
@@ -467,6 +469,7 @@ fn notification_batch(
                 .unwrap_or("")
                 .to_string(),
             sound: item.get("sound").cloned().unwrap_or(serde_json::Value::Bool(false)),
+            icon: item.get("icon").and_then(|v| v.as_str()).map(str::to_string),
             created_at_ms: item.get("created_at_ms").and_then(|v| v.as_i64()),
         });
     }
@@ -580,6 +583,26 @@ fn banner_sound_name(
     Ok(Some(name.to_string()))
 }
 
+/// The banner image path from a feed item, if it is one the runtime's
+/// notify_icons wrote: an absolute path to `[a-z0-9-]+.png` directly inside a
+/// `notification-icons` directory. Anything else is ignored (no image), so a
+/// feed item can never make the shell read an arbitrary file.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn banner_image_path(raw: &str) -> Option<&str> {
+    let path = Path::new(raw);
+    let name = path.file_name()?.to_str()?;
+    let stem = name.strip_suffix(".png")?;
+    let parent_ok = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|dir| dir == "notification-icons");
+    let stem_ok = !stem.is_empty()
+        && stem
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    (path.is_absolute() && parent_ok && stem_ok).then_some(raw)
+}
+
 /// Bring the deck forward: un-hide the app (macOS), show and focus the deck
 /// window. What a click on one of our banners, and a Dock/Finder reopen, do.
 fn reveal_deck(app: &tauri::AppHandle) {
@@ -653,6 +676,7 @@ async fn test_notification(
         title: title.to_string(),
         body: body.to_string(),
         sound,
+        icon: None,
         created_at_ms: None,
     };
     run_blocking(move || {
@@ -932,6 +956,12 @@ fn post_native_notification(
         .message(&item.body)
         .maybe_sound(sound.as_deref())
         .asynchronous(true);
+    // The project mark twice: `app_icon` swaps the left-hand app icon through
+    // a private key that newer macOS may ignore; `content_image` (public API)
+    // shows it on the right either way.
+    if let Some(image) = item.icon.as_deref().and_then(banner_image_path) {
+        banner.app_icon(image).content_image(image);
+    }
     banner
         .send()
         .map_err(|err| format!("native notification failed: {err}"))?;
@@ -1548,6 +1578,43 @@ mod plan_tests {
         assert_eq!(generation, "new");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].seq, 1);
+    }
+
+    #[test]
+    fn notification_item_carries_its_banner_icon() {
+        let state = serde_json::json!({
+            "generation": "g",
+            "seq": 2,
+            "acked_seq": 0,
+            "items": [
+                {"id": "g:1", "seq": 1, "title": "done", "body": "p1",
+                 "icon": "/c/notification-icons/v1-p-ab12.png"},
+                {"id": "g:2", "seq": 2, "title": "done", "body": "p2", "icon": null}
+            ]
+        });
+        let (_, _, items) = notification_batch(&state, &NotifyCursor::default()).unwrap();
+        assert_eq!(
+            items[0].icon.as_deref(),
+            Some("/c/notification-icons/v1-p-ab12.png")
+        );
+        assert_eq!(items[1].icon, None);
+    }
+
+    #[test]
+    fn banner_image_path_accepts_only_runtime_icon_files() {
+        let ok = "/Users/a/.cache/herdeck/notification-icons/v1-m-0f3a.png";
+        assert_eq!(banner_image_path(ok), Some(ok));
+        for bad in [
+            "notification-icons/v1-p-ab.png",                 // relative
+            "/Users/a/.ssh/id_ed25519",                       // not a png
+            "/Users/a/Pictures/v1-p-ab.png",                  // wrong directory
+            "/c/notification-icons/../../etc/v1.png",         // parent is not the dir
+            "/c/notification-icons/V1 P.png",                 // outside [a-z0-9-]
+            "/c/notification-icons/.png",                     // empty stem
+            "",
+        ] {
+            assert_eq!(banner_image_path(bad), None, "{bad}");
+        }
     }
 
     #[test]

@@ -437,3 +437,44 @@ def test_event_title_localized():
 
     assert event_title("claude", "blocked") == "claude · needs input"
     assert event_title("codex", "done", "cs") == "codex · hotovo"
+
+
+def test_banner_icon_rides_the_feed_but_not_the_fallback():
+    import herdeck.notify as notify_mod
+
+    feed = notify_mod.NotificationFeed()
+    fallback = []
+    gate = {"open": True}
+    sink = notify_mod.runtime_sink(
+        feed, lambda: gate["open"], fallback=lambda t, b, s: fallback.append((t, b, s))
+    )
+    notifier = Notifier(sink=sink)
+
+    notifier.notify("claude · done", "shop", "Hero", icon="/tmp/notification-icons/v1-p-ab.png")
+    notifier.notify("claude · done", "blog", "Hero")
+    items = feed.state()["items"]
+    assert items[0]["icon"] == "/tmp/notification-icons/v1-p-ab.png"
+    assert items[1]["icon"] is None
+
+    # osascript cannot attach images: the fallback keeps its 3-arg contract.
+    gate["open"] = False
+    notifier.notify("claude · done", "shop", "Hero", icon="/x.png")
+    assert fallback == [("claude · done", "shop", "Hero")]
+
+
+def test_icon_is_only_passed_to_sinks_when_set():
+    import herdeck.notify as notify_mod
+
+    plain = []  # a pre-icon three-argument sink keeps working without an icon
+    Notifier(sink=lambda t, b, s: plain.append((t, b, s))).notify("t", "b", True)
+    assert plain == [("t", "b", True)]
+
+    got = []
+    composite = notify_mod.composite_sink(
+        [lambda t, b, s: got.append("plain"), lambda t, b, s, icon=None: got.append(icon)]
+    )
+    composite("t", "b", True)
+    composite("t", "b", True, icon="/i.png")
+    # No icon -> both run with three args; with one, the icon-aware sink gets it
+    # (the plain one raises, which composite_sink isolates and logs).
+    assert got == ["plain", None, "/i.png"]

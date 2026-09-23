@@ -1258,9 +1258,11 @@ def test_converged_runtime_pins_are_local_persisted_and_reloaded(tmp_path):
 class RecordingNotifier:
     def __init__(self):
         self.calls = []
+        self.icons = []
 
-    def notify(self, title, body, sound=False):
+    def notify(self, title, body, sound=False, icon=None):
         self.calls.append((title, body, sound))
+        self.icons.append(icon)
 
 
 def make_notifying_live(config, server, clock=None):
@@ -1293,6 +1295,32 @@ def test_done_snapshot_fires_notification_once():
     # Still done on the next snapshot -> no duplicate.
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
     assert len(notifier.calls) == 1
+
+
+def test_banner_carries_the_agents_project_mark(tmp_path):
+    from herdeck.notify_icons import NotificationIconCache
+    from herdeck.project_icons import ProjectIconStore
+
+    config, server = notify_config()
+    src, notifier = make_notifying_live(config, server)
+    src._notify_icons = NotificationIconCache(str(tmp_path), store=ProjectIconStore())
+
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE, agent_type="codex")])
+
+    [icon] = notifier.icons
+    assert icon and icon.startswith(str(tmp_path)) and (tmp_path / icon).is_file()
+
+
+def test_banner_icon_is_skipped_without_the_macos_backend(tmp_path):
+    config, server = notify_config()
+    config.notifications.backends = ["telegram"]
+    src, notifier = make_notifying_live(config, server)
+
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.DONE)])
+
+    assert notifier.icons == [None]
 
 
 def test_first_snapshot_seeds_notification_baseline_without_alerting():
@@ -1541,7 +1569,9 @@ def test_runtime_sink_suppresses_osascript_while_shell_claims(monkeypatch):
             fallback=notify_mod._macos_sink,
         )
 
-    src = LiveSource(config, server, notify_sink_factory=spying_sink)
+    src = LiveSource(
+        config, server, notify_sink_factory=spying_sink, notify_schedule=lambda fn: fn()
+    )
     app = DeckApp(src, serve=False, icon_provider=StubIcons())
     src.set_notify_gate(app.shell_claims_banners)
 

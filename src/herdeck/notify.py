@@ -124,7 +124,8 @@ def escape_applescript(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _macos_sink(title: str, body: str, sound: bool | str) -> None:
+def _macos_sink(title: str, body: str, sound: bool | str, icon: str | None = None) -> None:
+    # ``icon`` is accepted but unused: `display notification` cannot attach images.
     t, b = escape_applescript(title), escape_applescript(body)
     script = f'display notification "{b}" with title "{t}"'
     # `sound` is either a macOS system sound name or a plain on/off switch
@@ -165,7 +166,9 @@ class NotificationFeed:
         self._fallback_seq: int | None = None
         self._changed = threading.Condition()
 
-    def push(self, title: str, body: str, sound: bool | str) -> dict:
+    def push(
+        self, title: str, body: str, sound: bool | str, icon: str | None = None
+    ) -> dict:
         with self._changed:
             self._seq += 1
             item = {
@@ -175,6 +178,8 @@ class NotificationFeed:
                 "title": title,
                 "body": body,
                 "sound": sound,
+                # Absolute path of the project mark PNG (notify_icons), or None.
+                "icon": icon,
                 "created_at_ms": time.time_ns() // 1_000_000,
             }
             self._items.append(item)
@@ -349,9 +354,9 @@ def runtime_sink(
     doing both feed and fallback removes the handoff replay race.
     """
 
-    def sink(title: str, body: str, sound: bool | str) -> None:
+    def sink(title: str, body: str, sound: bool | str, icon: str | None = None) -> None:
         if gate():
-            feed.push(title, body, sound)
+            feed.push(title, body, sound, icon)
             return
         log.info("notification fallback=osascript title=%r", title)
         fallback(title, body, sound)
@@ -375,7 +380,7 @@ def make_telegram_sink(
     """Sink that posts the alert to a Telegram chat via the Bot API."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
-    def sink(title: str, body: str, sound: bool | str) -> None:
+    def sink(title: str, body: str, sound: bool | str, icon: str | None = None) -> None:
         fields = {
             "chat_id": str(chat_id),
             "text": f"{title}\n{body}",
@@ -408,7 +413,7 @@ def deckapp_sink(
     n = config.notifications
     if not n.enabled:
 
-        def noop(title: str, body: str, sound: bool | str) -> None:
+        def noop(title: str, body: str, sound: bool | str, icon: str | None = None) -> None:
             pass
 
         return noop
@@ -424,7 +429,7 @@ def deckapp_sink(
     if not macos_on:
         # No shell banner should fire either: the runtime's feed drives the
         # shell banners, which are the macOS backend's job.
-        sinks[0] = lambda t, b, s: None  # noqa: E731
+        sinks[0] = lambda t, b, s, icon=None: None  # noqa: E731
     if "telegram" in n.backends:
         tg = n.telegram
         token = getenv(tg.token_env) if tg else None
@@ -448,10 +453,13 @@ def composite_sink(
 ) -> Callable[[str, str, bool | str], None]:
     """Fan out to multiple sinks; one failing sink never stops the others."""
 
-    def sink(title: str, body: str, sound: bool | str) -> None:
+    def sink(title: str, body: str, sound: bool | str, icon: str | None = None) -> None:
         for s in sinks:
             try:
-                s(title, body, sound)
+                if icon is None:
+                    s(title, body, sound)
+                else:
+                    s(title, body, sound, icon=icon)
             except Exception as exc:
                 _warn_failure(_sink_name(s), exc)
 
@@ -464,9 +472,16 @@ class Notifier:
     def __init__(self, sink: Callable[[str, str, bool | str], None] = _macos_sink):
         self._sink = sink
 
-    def notify(self, title: str, body: str, sound: bool | str = False) -> None:
+    def notify(
+        self, title: str, body: str, sound: bool | str = False, icon: str | None = None
+    ) -> None:
+        """``icon`` (a PNG path for the banner) is passed on only when set, so
+        plain three-argument sinks keep working."""
         try:
-            self._sink(title, body, sound)
+            if icon is None:
+                self._sink(title, body, sound)
+            else:
+                self._sink(title, body, sound, icon=icon)
         except Exception as exc:
             _warn_failure(_sink_name(self._sink), exc)
 
