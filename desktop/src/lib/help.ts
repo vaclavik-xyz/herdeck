@@ -64,7 +64,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     },
     notifications: {
       enabled: "Master switch for notifications. When off, no notifications are sent (default: off).",
-      sound: "Whether a sound plays with the alert; off = silent. Per-event sounds (default Glass/Hero) live in [notifications.sounds] in the TOML.",
+      sound: "Alert sound on/off. macOS plays it with the banner (Focus mutes both); off = silent, Telegram posts quietly.",
       sounds_blocked: "Sound of the blocked-agent banner, only if 'blocked' is in on; empty = default Glass. E.g. Basso, Funk, Ping.",
       sounds_done: "Sound of the finished-agent banner, only if 'done' is in on; empty = default Hero. E.g. Pop, Purr, Tink.",
       on: "Agent states that notify: 'blocked' (waiting for your input) and/or 'done' (task finished). Default: both.",
@@ -161,7 +161,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     },
     notifications: {
       enabled: "Hlavní vypínač upozornění. Když je vypnutý, žádná oznámení se neposílají (výchozí: vypnuto).",
-      sound: "Zda oznámení zazní i zvukem; vypnuto = ticho. Zvuky per event (výchozí Glass/Hero) se nastaví v [notifications.sounds] v TOML.",
+      sound: "Zvuk upozornění. macOS ho přehraje s bannerem (Soustředění ztlumí obojí); vypnuto = ticho, Telegram potichu.",
       sounds_blocked: "Zvuk banneru zablokovaného agenta, jen když je 'blocked' v on; prázdné = výchozí Glass. Např. Basso, Funk, Ping.",
       sounds_done: "Zvuk banneru dokončeného agenta, jen když je 'done' v on; prázdné = výchozí Hero. Např. Pop, Purr, Tink.",
       on: "Stavy agenta, které upozorní: „blocked“ (čeká na váš vstup) a/nebo „done“ (dokončil úkol). Výchozí: oba.",

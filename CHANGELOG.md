@@ -25,6 +25,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   next to a sound whose event is not in `on` and offers to add it.
 
 ### Fixed
+- macOS notification sounds now ride on the banner itself instead of a
+  separate `afplay`, so Focus / Do Not Disturb silences both; previously a
+  muted banner still played its sound.
+- Desktop banners are posted fire-and-forget: a click is caught by a single
+  forwarding Notification Center delegate instead of one parked thread plus a
+  0.5 s main-thread `deliveredNotifications` poll per banner, which leaked for
+  every banner left in Notification Center, kept the main thread busy and,
+  after 16 banners, stopped clicks from revealing the deck.
 - Notifications: localized titles (`claude · needs input`, `claude · done`);
   per-agent cooldown so flapping agents stop spamming, and no **done** alert
   right after you answered that agent on the deck; the delivery feed holds 50

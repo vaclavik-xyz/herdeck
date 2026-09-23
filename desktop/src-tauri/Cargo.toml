@@ -30,9 +30,10 @@ tauri-plugin-updater = "2"
 tauri-plugin-notification = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSProcessInfo", "NSString", "NSUserNotification"] }
 # Already in the tree via tauri-plugin-notification -> notify-rust; used directly
-# so a banner click can be observed (the plugin fires and forgets).
+# to attach the sound to the banner and to attribute it to our bundle.
 mac-notification-sys = "0.6"
 
 [profile.release]

@@ -19,8 +19,6 @@ pub mod window_state;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Child;
-#[cfg(target_os = "macos")]
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -560,26 +558,25 @@ fn requested_sound_name(sound: &serde_json::Value) -> Option<&str> {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn play_notification_sound(sound: &serde_json::Value) -> Result<(), String> {
+/// The sound to attach to a banner: `Ok(None)` = silent (`false`, `""`,
+/// `sound = false`), `Ok(Some(name))` = a name found in `dirs`, `Err` = a bad or
+/// missing name. The sound rides on the notification itself (never a separate
+/// player), so Focus / Do Not Disturb silences the sound together with the
+/// banner instead of leaving a sound with no banner.
+fn banner_sound_name(
+    sound: &serde_json::Value,
+    dirs: &[PathBuf],
+) -> Result<Option<String>, String> {
     let Some(name) = requested_sound_name(sound) else {
-        return Ok(());
+        return Ok(None);
     };
     if !valid_sound_name(name) {
         return Err(format!("invalid notification sound name: {name:?}"));
     }
-    let path = resolve_sound_path(name, &sound_dirs())
-        .ok_or_else(|| format!("notification sound not found: {name}"))?;
-    Command::new("/usr/bin/afplay")
-        .arg(path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| format!("notification sound failed: {err}"))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn play_notification_sound(_sound: &serde_json::Value) -> Result<(), String> {
-    Ok(())
+    if resolve_sound_path(name, dirs).is_none() {
+        return Err(format!("notification sound not found: {name}"));
+    }
+    Ok(Some(name.to_string()))
 }
 
 /// Bring the deck forward: un-hide the app (macOS), show and focus the deck
@@ -618,10 +615,12 @@ fn notification_sounds() -> Vec<String> {
 }
 
 /// Show a localized test banner through the same native path real alerts take,
-/// then play `sound` (a name; `None` = the default sound, `""` = silent). `Err`
-/// carries a message the settings UI shows as is.
+/// carrying `sound` (a name; `None` = the default sound, `""` = silent). `Err`
+/// carries a message the settings UI shows as is. Async so the (briefly
+/// blocking) native post never runs on the main thread, which delivers the
+/// post's own confirmation.
 #[tauri::command]
-fn test_notification(
+async fn test_notification(
     app: tauri::AppHandle,
     tray: tauri::State<'_, TrayHandles>,
     sound: Option<String>,
@@ -638,17 +637,24 @@ fn test_notification(
         Some(name) => serde_json::Value::String(name),
         None => serde_json::Value::Bool(true),
     };
+    // A bad or missing sound still shows the (silent) banner, then reports
+    // why it was silent. Off macOS banners carry no sound at all.
+    let sound_problem = if cfg!(target_os = "macos") {
+        banner_sound_name(&sound, &sound_dirs()).err()
+    } else {
+        None
+    };
     let item = PendingNotification {
         id: "test".to_string(),
         generation: String::new(),
         seq: 0,
         title: title.to_string(),
         body: body.to_string(),
-        sound: sound.clone(),
+        sound,
         created_at_ms: None,
     };
     post_native_notification(&app, &item)?;
-    play_notification_sound(&sound)
+    sound_problem.map_or(Ok(()), Err)
 }
 
 /// Whether native notifications are permitted (C4). Always `None` ("unknown"):
@@ -839,9 +845,6 @@ fn start_notify_pump(app: tauri::AppHandle) {
                 std::thread::sleep(NOTIFY_RETRY_DELAY);
                 break;
             }
-            if let Err(err) = play_notification_sound(&item.sound) {
-                eprintln!("herdeck: {err}");
-            }
             // Advance the process-local cursor immediately after visible
             // delivery. A transient ACK failure must never show the banner a
             // second time in this shell; the next long poll carries this cursor
@@ -880,27 +883,6 @@ fn start_notify_pump(app: tauri::AppHandle) {
     });
 }
 
-/// At most this many banners wait for a click at once. Each tracked banner
-/// parks one thread until it is clicked or cleared from Notification Center;
-/// past the cap a banner is posted fire-and-forget (its click then only
-/// activates the app, which `RunEvent::Reopen` does not see).
-#[cfg(target_os = "macos")]
-const MAX_CLICK_TRACKED_BANNERS: usize = 16;
-
-#[cfg(target_os = "macos")]
-static CLICK_TRACKED_BANNERS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-/// Claim one of the `MAX_CLICK_TRACKED_BANNERS` slots.
-#[cfg(target_os = "macos")]
-fn claim_click_slot() -> bool {
-    CLICK_TRACKED_BANNERS
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-            (n < MAX_CLICK_TRACKED_BANNERS).then_some(n + 1)
-        })
-        .is_ok()
-}
-
 /// Attribute our banners to this app's bundle — the same choice the
 /// notification plugin makes (Terminal in `tauri dev`, where the binary has no
 /// registered bundle). First caller wins; the plugin shares this global.
@@ -918,49 +900,188 @@ fn ensure_notification_application(app: &tauri::AppHandle) {
     });
 }
 
-/// Post one banner. On macOS it goes straight through `mac-notification-sys`
-/// (the plugin fires and forgets, so a click could never be observed): a
-/// dedicated thread waits for the click and then reveals the deck. There is no
-/// per-agent grouping — the legacy `NSUserNotification` API has no thread id.
+/// Post one banner, fire-and-forget, with its sound attached. On macOS it goes
+/// straight through `mac-notification-sys`, which blocks this (non-main) thread
+/// only until Notification Center confirms delivery (at most ~2 s). Clicks are
+/// observed by `banner_clicks`, not by waiting on the banner: a parked
+/// wait-for-click thread per banner also parked a 0.5 s main-run-loop timer
+/// that called the synchronous `deliveredNotifications` XPC until the banner
+/// left Notification Center — i.e. forever for a banner the user never
+/// cleared. There is no per-agent grouping — the legacy `NSUserNotification`
+/// API has no thread id.
 #[cfg(target_os = "macos")]
 fn post_native_notification(
     app: &tauri::AppHandle,
     item: &PendingNotification,
 ) -> Result<(), String> {
-    use mac_notification_sys::{Notification, NotificationResponse};
+    use mac_notification_sys::Notification;
 
     ensure_notification_application(app);
-    let tracked = claim_click_slot();
-    let (title, body) = (item.title.clone(), item.body.clone());
-    let handle = app.clone();
-    let spawned = std::thread::Builder::new()
-        .name("herdeck-banner".into())
-        .spawn(move || {
-            let mut banner = Notification::new();
-            banner.title(&title).message(&body);
-            if tracked {
-                banner.wait_for_click(true);
-            } else {
-                banner.asynchronous(true);
-            }
-            match banner.send() {
-                Ok(NotificationResponse::Click) | Ok(NotificationResponse::ActionButton(_)) => {
-                    reveal_deck(&handle)
+    let sound = banner_sound_name(&item.sound, &sound_dirs()).unwrap_or_else(|err| {
+        eprintln!("herdeck: {err}; posting id={} silently", item.id);
+        None
+    });
+    let mut banner = Notification::new();
+    banner
+        .title(&item.title)
+        .message(&item.body)
+        .maybe_sound(sound.as_deref())
+        .asynchronous(true);
+    banner
+        .send()
+        .map_err(|err| format!("native notification failed: {err}"))?;
+    // mac-notification-sys installs its own center delegate on the first send;
+    // wrap it (again) so banner clicks keep reaching `banner_clicks`.
+    banner_clicks::ensure_installed(app);
+    Ok(())
+}
+
+/// Whether a banner activation (the raw `NSUserNotificationActivationType`)
+/// should bring the deck forward: a click on the banner body or on one of its
+/// action buttons. `None` (0) and an inline reply (3) do not.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn activation_reveals_deck(activation_type: isize) -> bool {
+    // ContentsClicked = 1, ActionButtonClicked = 2, AdditionalActionClicked = 4.
+    matches!(activation_type, 1 | 2 | 4)
+}
+
+/// Banner clicks → reveal the deck, with no per-banner thread and no polling.
+///
+/// `NSUserNotificationCenter` has exactly one delegate, owned by
+/// `mac-notification-sys` (it needs `didDeliverNotification:` to end each
+/// send). We put a forwarding proxy in front of it: every delegate message is
+/// passed on unchanged, and `didActivateNotification:` also reveals the deck.
+/// That is one object for the whole process, event driven, on the main thread
+/// where AppKit delivers these callbacks anyway.
+///
+/// The crate sets its delegate once, on the first send (`dispatch_once`), which
+/// replaces a proxy installed at startup; `ensure_installed` after each post
+/// notices that and wraps the crate's delegate. A click that lands before the
+/// first post of this process (a banner left over from a previous run) is
+/// seen by the startup proxy; otherwise macOS still activates the app and
+/// `RunEvent::Reopen` / the tray remain the way back to the deck.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)] // NSUserNotification*: the legacy API mac-notification-sys posts through
+mod banner_clicks {
+    use std::cell::RefCell;
+    use std::sync::OnceLock;
+
+    use objc2::rc::Retained;
+    use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
+    use objc2::{
+        define_class, msg_send, sel, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly,
+    };
+    use objc2_foundation::{
+        NSUserNotification, NSUserNotificationCenter, NSUserNotificationCenterDelegate,
+    };
+
+    type Delegate = ProtocolObject<dyn NSUserNotificationCenterDelegate>;
+
+    pub struct Ivars {
+        /// The delegate we stand in front of (the crate's), if any.
+        inner: Option<Retained<Delegate>>,
+    }
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "HerdeckBannerClickDelegate"]
+        #[ivars = Ivars]
+        pub struct ClickDelegate;
+
+        unsafe impl NSObjectProtocol for ClickDelegate {}
+
+        unsafe impl NSUserNotificationCenterDelegate for ClickDelegate {
+            #[unsafe(method(userNotificationCenter:didDeliverNotification:))]
+            fn did_deliver(&self, center: &NSUserNotificationCenter, notification: &NSUserNotification) {
+                if let Some(inner) = self.forward_to(sel!(userNotificationCenter:didDeliverNotification:)) {
+                    let _: () = unsafe {
+                        msg_send![inner, userNotificationCenter: center, didDeliverNotification: notification]
+                    };
                 }
-                Ok(_) => {}
-                Err(err) => eprintln!("herdeck: native notification failed: {err}"),
             }
-            if tracked {
-                CLICK_TRACKED_BANNERS.fetch_sub(1, Ordering::SeqCst);
+
+            #[unsafe(method(userNotificationCenter:didActivateNotification:))]
+            fn did_activate(&self, center: &NSUserNotificationCenter, notification: &NSUserNotification) {
+                if super::activation_reveals_deck(notification.activationType().0) {
+                    if let Some(app) = APP.get() {
+                        super::reveal_deck(app);
+                    }
+                }
+                if let Some(inner) = self.forward_to(sel!(userNotificationCenter:didActivateNotification:)) {
+                    let _: () = unsafe {
+                        msg_send![inner, userNotificationCenter: center, didActivateNotification: notification]
+                    };
+                }
+            }
+        }
+
+        impl ClickDelegate {
+            // Private NSUserNotificationCenter callback the crate implements
+            // (close button); forwarded so it keeps working.
+            #[unsafe(method(userNotificationCenter:didDismissAlert:))]
+            fn did_dismiss_alert(&self, center: &NSUserNotificationCenter, notification: &NSUserNotification) {
+                if let Some(inner) = self.forward_to(sel!(userNotificationCenter:didDismissAlert:)) {
+                    let _: () = unsafe {
+                        msg_send![inner, userNotificationCenter: center, didDismissAlert: notification]
+                    };
+                }
+            }
+        }
+    );
+
+    impl ClickDelegate {
+        fn forward_to(&self, selector: objc2::runtime::Sel) -> Option<&Delegate> {
+            self.ivars()
+                .inner
+                .as_deref()
+                .filter(|inner| inner.respondsToSelector(selector))
+        }
+    }
+
+    static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+    thread_local! {
+        /// The installed proxy. The center holds its delegate unretained, so
+        /// this keeps it alive; a replaced proxy is dropped once the center no
+        /// longer points at it.
+        static PROXY: RefCell<Option<Retained<ClickDelegate>>> = const { RefCell::new(None) };
+    }
+
+    /// Put the proxy in front of the center's current delegate unless it is
+    /// already there. Main thread only.
+    fn install(mtm: MainThreadMarker) {
+        let center = NSUserNotificationCenter::defaultUserNotificationCenter();
+        // SAFETY: the current delegate is either ours (kept alive by PROXY) or
+        // the crate's process-lifetime singleton.
+        let current = unsafe { center.delegate() };
+        if current
+            .as_deref()
+            .is_some_and(|d| d.isKindOfClass(ClickDelegate::class()))
+        {
+            return;
+        }
+        let proxy = ClickDelegate::alloc(mtm).set_ivars(Ivars { inner: current });
+        let proxy: Retained<ClickDelegate> = unsafe { msg_send![super(proxy), init] };
+        // SAFETY: PROXY keeps the delegate alive for as long as it is set.
+        unsafe { center.setDelegate(Some(ProtocolObject::from_ref(&*proxy))) };
+        PROXY.with(|slot| *slot.borrow_mut() = Some(proxy));
+    }
+
+    /// Install (or re-install) the proxy. Cheap and idempotent: one property
+    /// read on the main thread per call.
+    pub fn ensure_installed(app: &tauri::AppHandle) {
+        let _ = APP.set(app.clone());
+        if let Some(mtm) = MainThreadMarker::new() {
+            install(mtm);
+            return;
+        }
+        let _ = app.run_on_main_thread(|| {
+            if let Some(mtm) = MainThreadMarker::new() {
+                install(mtm);
             }
         });
-    if let Err(err) = spawned {
-        if tracked {
-            CLICK_TRACKED_BANNERS.fetch_sub(1, Ordering::SeqCst);
-        }
-        return Err(format!("could not start the banner thread: {err}"));
     }
-    Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1470,6 +1591,35 @@ mod plan_tests {
         assert_eq!(resolve_sound_path("Basso", &dirs), Some(system.join("Basso.aiff")));
         assert_eq!(resolve_sound_path("Missing", &dirs), None);
         assert_eq!(resolve_sound_path("../Basso", &dirs), None);
+    }
+
+    // The banner carries its own sound (no separate afplay): silence stays
+    // silence, and only a name the OS can find is attached.
+    #[test]
+    fn banner_sound_is_attached_only_for_a_findable_name() {
+        use serde_json::json;
+        let dir = sound_scratch("banner");
+        std::fs::write(dir.join("Hero.aiff"), b"").unwrap();
+        std::fs::write(dir.join("Glass.aiff"), b"").unwrap();
+        let dirs = [dir];
+        assert_eq!(banner_sound_name(&json!("Hero"), &dirs), Ok(Some("Hero".into())));
+        assert_eq!(
+            banner_sound_name(&json!(true), &dirs),
+            Ok(Some(DEFAULT_NOTIFICATION_SOUND.into()))
+        );
+        assert_eq!(banner_sound_name(&json!(""), &dirs), Ok(None));
+        assert_eq!(banner_sound_name(&json!(false), &dirs), Ok(None));
+        assert!(banner_sound_name(&json!("Missing"), &dirs).is_err());
+        assert!(banner_sound_name(&json!("../Hero"), &dirs).is_err());
+    }
+
+    #[test]
+    fn only_a_banner_or_action_click_reveals_the_deck() {
+        assert!(!activation_reveals_deck(0)); // none
+        assert!(activation_reveals_deck(1)); // contents clicked
+        assert!(activation_reveals_deck(2)); // action button
+        assert!(!activation_reveals_deck(3)); // replied
+        assert!(activation_reveals_deck(4)); // additional action
     }
 
     #[test]
@@ -3380,6 +3530,10 @@ pub fn run() {
             }
             // The notification pump runs for the whole app lifetime, detached
             // from WebView visibility (deck windows may hide into the tray).
+            // Banner clicks reveal the deck (see `banner_clicks`), including a
+            // click on a banner left over from a previous run.
+            #[cfg(target_os = "macos")]
+            banner_clicks::ensure_installed(app.handle());
             start_notify_pump(app.handle().clone());
             // NEITHER window is declared in tauri.conf.json: both are built here
             // so both get an initialization script, which stamps the window's
