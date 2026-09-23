@@ -105,3 +105,19 @@ def test_failure_returns_none_instead_of_raising(tmp_path):
     blocker.write_text("not a dir")
     cache = NotificationIconCache(str(blocker / "icons"), store=ProjectIconStore())
     assert cache.path_for(_state()) is None
+
+
+def test_undecodable_favicon_is_not_shared_under_its_hash(tmp_path):
+    store = ProjectIconStore()
+    broken = b"\x89PNG\r\n\x1a\nnot really"
+    digest = icon_hash(broken)
+    store.put(digest, "image/png", broken)
+    cache = NotificationIconCache(str(tmp_path), store=store)
+
+    shop = cache.path_for(_state(repo="shop", project_icon=digest))
+    blog = cache.path_for(_state(repo="blog", project_icon=digest))
+
+    # Each project falls back to its own monogram, not the first one's.
+    assert shop == cache.path_for(_state(repo="shop"))
+    assert blog == cache.path_for(_state(repo="blog"))
+    assert shop != blog

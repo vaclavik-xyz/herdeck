@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 
 from PIL import Image
 
-from .icons import _default_rasterize, project_mark_image
+from .icons import _default_rasterize, decode_project_icon, project_mark_image
 from .project_icons import ProjectIconStore, default_store
 
 log = logging.getLogger(__name__)
@@ -62,23 +62,44 @@ class NotificationIconCache:
             resolved = self._store.resolve(
                 name, getattr(state, "project_icon", ""), overrides or {}
             )
-            if resolved:
-                key = "p-" + _UNSAFE.sub("", resolved.lower())
-            else:
-                key = "m-" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:16]
-            path = os.path.join(self._dir, f"{_VERSION}-{key}.png")
             with self._lock:
-                if os.path.exists(path):
-                    os.utime(path)  # LRU for _prune
-                    return path
-                image = project_mark_image(
-                    self._store.get(resolved) if resolved else None, name, self._rasterize
-                )
+                image = None
+                if resolved:
+                    # Only a favicon that actually decoded is filed under its
+                    # hash; evicted or undecodable bytes fall through to the
+                    # project's own monogram (never shared by hash).
+                    path = self._path("p-" + _UNSAFE.sub("", resolved.lower()))
+                    if self._reuse(path):
+                        return path
+                    stored = self._store.get(resolved)
+                    image = self._decode(stored) if stored is not None else None
+                if image is None:
+                    path = self._path("m-" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:16])
+                    if self._reuse(path):
+                        return path
+                    image = project_mark_image(None, name)
                 self._write(path, image)
                 self._prune()
             return path
         except Exception as exc:
             log.warning("notification icon for %r unavailable: %s", name, exc)
+            return None
+
+    def _path(self, key: str) -> str:
+        return os.path.join(self._dir, f"{_VERSION}-{key}.png")
+
+    @staticmethod
+    def _reuse(path: str) -> bool:
+        if not os.path.exists(path):
+            return False
+        os.utime(path)  # LRU for _prune
+        return True
+
+    def _decode(self, stored) -> Image.Image | None:
+        try:
+            return decode_project_icon(stored, self._rasterize)
+        except Exception as exc:
+            log.debug("project icon could not be decoded, using a monogram: %s", exc)
             return None
 
     def _write(self, path: str, image: Image.Image) -> None:
@@ -90,7 +111,7 @@ class NotificationIconCache:
     def _prune(self) -> None:
         entries = []
         for entry in os.scandir(self._dir):
-            if entry.name.endswith(".png") and entry.is_file():
+            if entry.name.endswith((".png", ".tmp")) and entry.is_file():
                 entries.append((entry.stat().st_mtime_ns, entry.path))
         entries.sort()
         for _, path in entries[: max(0, len(entries) - self._max_files)]:
