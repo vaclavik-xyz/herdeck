@@ -4,6 +4,7 @@ import {
   parseConfig,
   effectiveStatusColors,
   parseValidate,
+  parseValidateCodes,
   commandTransport,
   toWriteBody,
   inheritedValue,
@@ -149,6 +150,12 @@ describe("parseValidate", () => {
     expect(parseValidate({})).toEqual([]);
     expect(parseValidate(null)).toEqual([]);
     expect(parseValidate({ errors: [1, "ok", null] })).toEqual(["ok"]);
+  });
+
+  it("accepts coded issue objects (C3) and keeps their message as the key", () => {
+    const raw = { errors: ["plain", { message: "deck.grid: bad", code: "invalid_grid" }, { error: "e2" }, { code: "x" }] };
+    expect(parseValidate(raw)).toEqual(["plain", "deck.grid: bad", "e2"]);
+    expect(parseValidateCodes(raw)).toEqual({ "deck.grid: bad": "invalid_grid" });
   });
 });
 

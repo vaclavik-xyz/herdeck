@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import BooleanField from "../fields/BooleanField.svelte";
   import NumberField from "../fields/NumberField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import TextField from "../fields/TextField.svelte";
+  import SoundField from "../fields/SoundField.svelte";
   import TokenSecretField from "../fields/TokenSecretField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import {
@@ -54,6 +56,11 @@
       origin_unset: "unset",
       save_token_failed: "saving token '{name}' failed (HTTP {code})",
       clear_token_failed: "deleting token '{name}' failed (HTTP {code})",
+      sound_default: "(default: {name})",
+      sound_inherit: "(inherit)",
+      test_sound: "Play a test notification with this sound",
+      test_failed: "test notification failed: {e}",
+      permission_denied: "macOS notifications are turned off for Herdeck, so no banner will appear. Allow them in System Settings → Notifications → Herdeck.",
     },
     cs: {
       group_telegram: "Telegram bot",
@@ -69,9 +76,39 @@
       origin_unset: "nenastaveno",
       save_token_failed: "uložení tokenu '{name}' selhalo (HTTP {code})",
       clear_token_failed: "smazání tokenu '{name}' selhalo (HTTP {code})",
+      sound_default: "(výchozí: {name})",
+      sound_inherit: "(zdědit)",
+      test_sound: "Přehrát testovací notifikaci s tímto zvukem",
+      test_failed: "testovací notifikace selhala: {e}",
+      permission_denied: "Notifikace macOS má Herdeck vypnuté, takže se žádný banner neukáže. Povol je v Nastavení systému → Oznámení → Herdeck.",
     },
   });
   const lm = $derived(LM[locale.lang]);
+
+  // C4 shell commands. Each degrades on its own: an older shell, a plain
+  // browser or a non-macOS build yields an empty sound list (free-text field)
+  // and an unknown permission (no warning).
+  let soundNames = $state<string[]>([]);
+  let permission = $state<boolean | null>(null);
+  onMount(() => {
+    void invoke("notification_sounds")
+      .then((names) => {
+        soundNames = Array.isArray(names) ? names.filter((n): n is string => typeof n === "string") : [];
+      })
+      .catch(() => {});
+    void invoke("notification_permission")
+      .then((granted) => { permission = typeof granted === "boolean" ? granted : null; })
+      .catch(() => {});
+  });
+
+  async function testSound(key: "blocked" | "done", name: string): Promise<void> {
+    const sound = name.trim() || SOUNDS_DEFAULTS[key] || null;
+    try {
+      await invoke("test_notification", { sound });
+    } catch (e) {
+      onError(fmt(lm.test_failed, { e: e instanceof Error ? e.message : String(e) }));
+    }
+  }
 
   const enabled = $derived((getAt(payload, "base", "notifications", "enabled") as boolean) ?? NOTIF_DEFAULTS.enabled);
   const sound = $derived((getAt(payload, "base", "notifications", "sound") as boolean) ?? NOTIF_DEFAULTS.sound);
@@ -295,6 +332,9 @@
   }
 </script>
 
+{#if permission === false}
+  <p class="permission-warning" role="alert">{lm.permission_denied}</p>
+{/if}
 {#if overlay}
   <OverrideField label="enabled" help={HELP.enabled} state={scState("enabled")} inheritedDisplay={scHint("enabled")} onstate={(s) => setScState("enabled", s)}>
     <BooleanField label="" value={scBool("enabled")} onchange={(v) => setSc("enabled", v)} />
@@ -307,10 +347,10 @@
   <FieldGroup title={lm.group_sounds}>
     <p class="hint">{lm.sounds_hint_overlay}</p>
     <OverrideField label="sounds_blocked" help={HELP.sounds_blocked} state={soState("blocked")} inheritedDisplay={soInheritedDisplay("blocked")} onstate={(s) => setSoState("blocked", s)}>
-      <TextField label="" value={soValue("blocked")} oninput={(v) => setSo("blocked", v)} />
+      <SoundField label="" value={soValue("blocked")} options={soundNames} defaultLabel={lm.sound_inherit} testLabel={lm.test_sound} onchange={(v) => setSo("blocked", v)} ontest={() => void testSound("blocked", soValue("blocked") || soInheritedDisplay("blocked"))} />
     </OverrideField>
     <OverrideField label="sounds_done" help={HELP.sounds_done} state={soState("done")} inheritedDisplay={soInheritedDisplay("done")} onstate={(s) => setSoState("done", s)}>
-      <TextField label="" value={soValue("done")} oninput={(v) => setSo("done", v)} />
+      <SoundField label="" value={soValue("done")} options={soundNames} defaultLabel={lm.sound_inherit} testLabel={lm.test_sound} onchange={(v) => setSo("done", v)} ontest={() => void testSound("done", soValue("done") || soInheritedDisplay("done"))} />
     </OverrideField>
   </FieldGroup>
   <FieldGroup title={lm.group_telegram}>
@@ -345,8 +385,8 @@
   <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} resetKey={`base:${reloadRev}:notifications:backends`} onchange={(s, l) => setTri("backends", s, l)} />
   <FieldGroup title={lm.group_sounds}>
     <p class="hint">{lm.sounds_hint}</p>
-    <TextField label="sounds_blocked" help={HELP.sounds_blocked} value={sounds.blocked} oninput={(v) => setSounds("blocked", v)} />
-    <TextField label="sounds_done" help={HELP.sounds_done} value={sounds.done} oninput={(v) => setSounds("done", v)} />
+    <SoundField label="sounds_blocked" help={HELP.sounds_blocked} value={sounds.blocked} options={soundNames} placeholder={SOUNDS_DEFAULTS.blocked} defaultLabel={fmt(lm.sound_default, { name: SOUNDS_DEFAULTS.blocked })} testLabel={lm.test_sound} onchange={(v) => setSounds("blocked", v)} ontest={() => void testSound("blocked", sounds.blocked)} />
+    <SoundField label="sounds_done" help={HELP.sounds_done} value={sounds.done} options={soundNames} placeholder={SOUNDS_DEFAULTS.done} defaultLabel={fmt(lm.sound_default, { name: SOUNDS_DEFAULTS.done })} testLabel={lm.test_sound} onchange={(v) => setSounds("done", v)} ontest={() => void testSound("done", sounds.done)} />
   </FieldGroup>
   <FieldGroup title={lm.group_telegram}>
     <TokenSecretField label="token_env" help={HELP.token} value={telegram.token_env} flag={secretFlag(payload, telegram.token_env)} oninput={(v) => setTelegram("token_env", v)} onset={(val) => setSecret(telegram.token_env, val)} onclear={() => clearSecret(telegram.token_env)} />
@@ -360,4 +400,13 @@
 
 <style>
   .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
+  .permission-warning {
+    margin: 0 0 var(--s3);
+    padding: var(--s2) var(--s3);
+    border: 1px solid color-mix(in srgb, var(--st-blocked) 45%, var(--line));
+    border-radius: var(--r-control);
+    background: color-mix(in srgb, var(--st-blocked) 12%, var(--canvas));
+    color: var(--text);
+    font: var(--t-help);
+  }
 </style>

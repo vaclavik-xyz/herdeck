@@ -43,6 +43,9 @@
     type DeckViewModel,
   } from "./lib/deckClient";
   import { visibilityGatedLoop } from "./lib/pollGate";
+  import { adoptDeckStatus, deckPreviewMounted } from "./lib/deckStatus";
+  import { restartRequiredChanges } from "./lib/restartKeys";
+  import { validationMessage } from "./lib/validationMessages";
   import { DEFAULT_STATUS_COLORS } from "./lib/statusColors";
   import { connectionInventory, type ConnectionHealth } from "./lib/connectionStatus";
   import { filterSettingsNavigation } from "./lib/settingsNavigation";
@@ -60,6 +63,7 @@
     effectiveStatusColors,
     parseConfig,
     parseValidate,
+    parseValidateCodes,
     parseActiveChanged,
     toWriteBody,
     orphanedSecrets,
@@ -113,7 +117,7 @@
       editing_profile: "Editing profile: {name}",
       overview_eyebrow: "System overview",
       overview_title: "System status",
-      overview_ready: "Runtime, sessions, and notifications are responding.",
+      overview_ready: "The local Herdeck runtime is responding.",
       overview_connecting: "Waiting for the local Herdeck runtime.",
       live_deck: "Live deck",
       live_deck_hint: "Select a key to open its related settings.",
@@ -146,7 +150,9 @@
       new_server: "New bridge",
       local_sessions: "Local sessions",
       remote_servers: "Remote servers",
-      deck_device: "Deck device",
+      deck_device: "Deck runtime",
+      section_has_errors: "has validation errors",
+      open_connections: "Open connections",
       automatic: "Automatic",
       settings_eyebrow: "Settings",
       settings_hint: "Changes are validated live and applied to the running deck.",
@@ -173,6 +179,8 @@
       orphans: "{n} orphaned keychain keys ({list})",
       cleanup: "clean up",
       saved: "saved",
+      saved_restart: "saved. Restart Herdeck (and its runtime) to apply: {keys}",
+      hotkey_failed: "saved, but the global shortcut could not be registered: {e}",
       cleanup_failed: "cleaning token '{name}' failed (HTTP {code})",
       orphans_cleaned: "orphaned keychain keys cleaned",
     },
@@ -215,7 +223,7 @@
       editing_profile: "Upravuješ profil: {name}",
       overview_eyebrow: "Přehled systému",
       overview_title: "Stav systému",
-      overview_ready: "Runtime, sessions a notifikace odpovídají.",
+      overview_ready: "Lokální Herdeck runtime odpovídá.",
       overview_connecting: "Čekám na lokální Herdeck runtime.",
       live_deck: "Živý deck",
       live_deck_hint: "Výběrem tlačítka otevřeš související nastavení.",
@@ -248,7 +256,9 @@
       new_server: "Nový bridge",
       local_sessions: "Lokální sessions",
       remote_servers: "Vzdálené servery",
-      deck_device: "Zařízení decku",
+      deck_device: "Runtime decku",
+      section_has_errors: "obsahuje chyby",
+      open_connections: "Otevřít připojení",
       automatic: "Automaticky",
       settings_eyebrow: "Nastavení",
       settings_hint: "Změny se průběžně ověřují a po uložení se promítnou do běžícího decku.",
@@ -275,6 +285,8 @@
       orphans: "{n} osiřelých keychain klíčů ({list})",
       cleanup: "uklidit",
       saved: "uloženo",
+      saved_restart: "uloženo. Pro použití restartuj Herdeck (i jeho runtime): {keys}",
+      hotkey_failed: "uloženo, ale globální zkratku se nepodařilo zaregistrovat: {e}",
       cleanup_failed: "úklid tokenu '{name}' selhal (HTTP {code})",
       orphans_cleaned: "osiřelé keychain klíče uklizeny",
     },
@@ -350,6 +362,8 @@
   let deckView = $state<DeckViewModel>(initialView());
   let dirty = $state(false);
   let errors = $state<string[]>([]);
+  // message -> stable code (C3) for the issues that carry one; display only.
+  let errorCodes = $state<Record<string, string>>({});
   // undefined follows the runtime profile; null deliberately edits base;
   // a string opens that profile's overlay without switching the running deck.
   let validationEditProfile = $state<string | null | undefined>(undefined);
@@ -371,7 +385,7 @@
     PROFILE_SCOPED.has(active) && (validationEditProfile !== undefined || editProfile != null),
   );
   const validationIssues = $derived(classifyValidationErrors(errors, payload ?? undefined));
-  const validationSections = $derived(new Set(validationIssues.flatMap((entry) => entry.section ? [entry.section] : [])));
+  const validationSections = $derived(new Set<string>(validationIssues.flatMap((entry) => entry.section ? [entry.section] : [])));
   $effect(() => fieldValidationMessages.set(messagesForSection(
     validationIssues,
     active,
@@ -443,6 +457,11 @@
     appliedPayload ? effectiveStatusColors(appliedPayload) : DEFAULT_STATUS_COLORS,
   );
 
+  function onDeckView(view: DeckViewModel): void {
+    const next = adoptDeckStatus(deckView, view);
+    if (next !== deckView) deckView = next;
+  }
+
   function connectionLabel(health: ConnectionHealth): string {
     return lm[health];
   }
@@ -493,6 +512,7 @@
       appliedPayload = fresh;
       dirty = false;
       errors = [];
+      errorCodes = {};
       validationEditProfile = undefined;
       banner = null;
       reloadRev += 1;
@@ -519,7 +539,9 @@
   async function liveValidate(): Promise<void> {
     if (!payload || !dirty) return;
     try {
-      errors = parseValidate(await cfg.validate(toWriteBody(payload)));
+      const raw = await cfg.validate(toWriteBody(payload));
+      errors = parseValidate(raw);
+      errorCodes = parseValidateCodes(raw);
     } catch {
       /* sidecar hiccup — keep the previous result; Apply still validates */
     }
@@ -529,7 +551,9 @@
     if (!payload) return;
     busy = true;
     try {
-      const res = parseValidate(await cfg.write(toWriteBody(payload)));
+      const raw = await cfg.write(toWriteBody(payload));
+      const res = parseValidate(raw);
+      errorCodes = parseValidateCodes(raw);
       if (res.some(isStaleRevisionError)) {
         // The files changed under the editor (re-onboarding, tray switch, hand
         // edit): never resurrect the stale snapshot — offer a reload instead.
@@ -549,22 +573,36 @@
         // payload.secrets only carries still-referenced token_envs, so a renamed/deleted old
         // key would vanish and post-load detection would miss it.
         const orphans = orphanedSecrets(payload);
+        // Startup-only keys: a live reload cannot apply them, so "saved" alone
+        // would read as "done" while the runtime keeps the old value.
+        const restartKeys = restartRequiredChanges(appliedPayload, payload);
         appliedPayload = JSON.parse(JSON.stringify(payload)) as ConfigPayload;
         dirty = false;
         await load(); // re-read saved state (preview refreshes itself via its own poll)
-        // A changed [hotkeys] accelerator only takes effect once Rust re-registers it.
-        void invoke("reload_hotkey").catch(() => {});
+        // A changed [hotkeys] accelerator only takes effect once Rust re-registers
+        // it; a registration failure (taken/invalid accelerator) comes back as
+        // Err and must be shown instead of claiming success.
+        let hotkeyError: string | null = null;
+        try {
+          await invoke("reload_hotkey");
+        } catch (e) {
+          hotkeyError = e instanceof Error ? e.message : String(e);
+        }
         // Same reasoning for [desktop].deck_always_on_top: it is applied live via
         // set_always_on_top, not a creation-time window property, so nothing
         // restarts it — but nothing re-applies it either without this call.
         void invoke("reload_deck_always_on_top").catch(() => {});
-        if (orphans.length > 0) {
+        if (hotkeyError != null) {
+          setBanner("error", fmt(lm.hotkey_failed, { e: hotkeyError }));
+        } else if (orphans.length > 0) {
           setBanner(
             "warning",
             fmt(lm.orphans, { n: orphans.length, list: orphans.join(", ") }),
             lm.cleanup,
             () => void cleanupOrphans(orphans),
           );
+        } else if (restartKeys.length > 0) {
+          setBanner("warning", fmt(lm.saved_restart, { keys: restartKeys.join(", ") }));
         } else if (banner == null) {
           // load() surfaces its own warning on a failed refresh — never mask it
           setBanner("success", lm.saved);
@@ -636,17 +674,20 @@
     let alive = true;
     let unlisten: (() => void) | null = null;
     let unlistenDeckVisibility: (() => void) | null = null;
+    // Only for pages WITHOUT a live DeckView: where one is mounted it already
+    // polls /state and feeds `onDeckView`, so a second fetch here is waste.
     const statusPoll = visibilityGatedLoop(
       async () => {
+        if (deckPreviewMounted(active, payload != null)) return;
         const transport = preview;
         if (!transport) {
-          deckView = { ...deckView, online: false, connected: false, connections: {}, localConnections: {} };
+          onDeckView({ ...deckView, online: false, connected: false, connections: {}, localConnections: {} });
           return;
         }
         try {
           const state = parseState(await transport.fetchState());
           if (!state) throw new Error("invalid deck state");
-          deckView = {
+          onDeckView({
             ...deckView,
             online: true,
             slots: state.slots || deckView.slots,
@@ -657,9 +698,9 @@
             sections: state.sections,
             connections: state.connections,
             localConnections: state.localConnections,
-          };
+          });
         } catch {
-          deckView = { ...deckView, online: false, connected: false, connections: {}, localConnections: {} };
+          onDeckView({ ...deckView, online: false, connected: false, connections: {}, localConnections: {} });
         }
       },
       () => 1000,
@@ -731,7 +772,10 @@
       <strong>Herdeck</strong>
     </div>
     <span class="status-pill"><span class:ready={runtimeReady} class="status-dot"></span>{lm.runtime} · {runtimeReady ? lm.ready : lm.connecting}</span>
-    <span class="status-pill secondary-status"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span>{connectedRemoteServers}/{remoteServers} {lm.remote_servers.toLowerCase()}</span>
+    {#if remoteServers > 0}
+      <!-- Local-only setups have nothing remote to be "not ready": no pill. -->
+      <span class="status-pill secondary-status"><span class:ready={connectedRemoteServers === remoteServers} class="status-dot"></span>{connectedRemoteServers}/{remoteServers} {lm.remote_servers.toLowerCase()}</span>
+    {/if}
     <button
       class="show-deck-button"
       data-action="toggle-deck"
@@ -773,16 +817,27 @@
       <div class="settings-search" role="search">
         <MagnifyingGlass size={12} aria-hidden="true" />
         <input bind:this={navSearchInput} bind:value={navQuery} onkeydown={searchKeydown} placeholder={lm.search_settings} aria-label={lm.search_settings} />
-        {#if navQuery}<button type="button" onclick={() => (navQuery = "")} aria-label={lm.clear_search}>×</button>{:else}<kbd>⌘K</kbd>{/if}
+        {#if navQuery}<button type="button" onclick={() => (navQuery = "")} aria-label={lm.clear_search} title={lm.clear_search}>×</button>{:else}<kbd>⌘K</kbd>{/if}
       </div>
       {#each filteredNavGroups as group}
         <div class="nav-group">
           <span class="nav-label">{group.label}</span>
           {#each group.items as item}
             {@const Icon = item.icon}
-            <button class:active={item.key === active} class:problem={validationSections.has(item.key)} onclick={() => selectSection(item.key)}>
+            <button
+              class:active={item.key === active}
+              class:problem={validationSections.has(item.key)}
+              aria-current={item.key === active ? "page" : undefined}
+              onclick={() => selectSection(item.key)}
+            >
               <span class="nav-icon" aria-hidden="true"><Icon size={14} weight="regular" /></span>
               <span>{item.label}</span>
+              {#if validationSections.has(item.key)}
+                <!-- Not colour alone: the dot carries a tooltip and the name is
+                     announced with the problem. -->
+                <span class="problem-dot" title={lm.section_has_errors} aria-hidden="true"></span>
+                <span class="sr-only">({lm.section_has_errors})</span>
+              {/if}
             </button>
           {/each}
         </div>
@@ -812,10 +867,10 @@
         <div class="overview-stage">
           <article class="card live-deck-card">
             <div class="card-heading"><div><h2>{lm.live_deck}</h2><p>{lm.live_deck_hint}</p></div><button class="secondary" onclick={() => (active = "deck")}>{lm["sec.deck"]}</button></div>
-            <div class="deck-surface"><DeckView transport={preview} onJump={jumpToSection} onView={(view) => (deckView = view)} /></div>
+            <div class="deck-surface"><DeckView transport={preview} onJump={jumpToSection} onView={onDeckView} /></div>
           </article>
           <div class="overview-stack">
-            <article class="card connection-card"><div class="card-heading"><div><h2>{lm.connections}</h2><p>{selectedLocalSessions.length + remoteServers} {lm.configured}</p></div><button class="icon-button" onclick={() => (active = "servers")} aria-label={lm.connections}><ArrowRight size={14} /></button></div><div class="connection-row"><span class:ready={selectedLocalSessions.length > 0 && connectedLocalSessions === selectedLocalSessions.length} class="status-dot"></span><div><strong>{lm.local_sessions}</strong><small>{connectedLocalSessions}/{selectedLocalSessions.length} {lm.ready.toLowerCase()}</small></div><span class="badge">{selectedLocalSessions.length}</span></div><div class="connection-row"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span><div><strong>{lm.remote_servers}</strong><small>{connectedRemoteServers}/{remoteServers} {lm.ready.toLowerCase()}</small></div><span class="badge">{remoteServers}</span></div><div class="connection-row"><span class:ready={deckView.online} class="status-dot"></span><div><strong>{lm.deck_device}</strong><small>{payload?.runtimeDeck ?? lm.automatic}</small></div></div></article>
+            <article class="card connection-card"><div class="card-heading"><div><h2>{lm.connections}</h2><p>{selectedLocalSessions.length + remoteServers} {lm.configured}</p></div><button class="icon-button" onclick={() => (active = "servers")} aria-label={lm.open_connections} title={lm.open_connections}><ArrowRight size={14} aria-hidden="true" /></button></div><div class="connection-row"><span class:ready={selectedLocalSessions.length > 0 && connectedLocalSessions === selectedLocalSessions.length} class="status-dot"></span><div><strong>{lm.local_sessions}</strong><small>{connectedLocalSessions}/{selectedLocalSessions.length} {lm.ready.toLowerCase()}</small></div><span class="badge">{selectedLocalSessions.length}</span></div><div class="connection-row"><span class:ready={remoteServers > 0 && connectedRemoteServers === remoteServers} class="status-dot"></span><div><strong>{lm.remote_servers}</strong><small>{connectedRemoteServers}/{remoteServers} {lm.ready.toLowerCase()}</small></div><span class="badge">{remoteServers}</span></div><div class="connection-row"><span class:ready={deckView.online} class="status-dot"></span><div><strong>{lm.deck_device}</strong><small>{payload?.runtimeDeck ?? lm.automatic}</small></div></div></article>
           </div>
         </div>
       {:else}
@@ -898,7 +953,7 @@
           </div>
         {:else if active === "deck"}
           <div class="deck-workbench">
-            <article class="card deck-workbench-preview"><div class="card-heading"><div><h2>{lm.live_deck}</h2><p>{lm.live_deck_hint}</p></div><span class="badge">{optionLabel(activeValue)}</span></div><div class="deck-surface"><DeckView transport={preview} onJump={jumpToSection} onView={(view) => (deckView = view)} /></div></article>
+            <article class="card deck-workbench-preview"><div class="card-heading"><div><h2>{lm.live_deck}</h2><p>{lm.live_deck_hint}</p></div><span class="badge">{optionLabel(activeValue)}</span></div><div class="deck-surface"><DeckView transport={preview} onJump={jumpToSection} onView={onDeckView} /></div></article>
             <article class="card form-card"><DeckSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} /></article>
           </div>
         {:else}
@@ -936,7 +991,7 @@
     <div class="errlist" role="alert">
       <ul>
         {#each validationIssues as entry}
-          <li><button type="button" onclick={() => void focusValidationIssue(entry)}>{entry.message}</button></li>
+          <li><button type="button" onclick={() => void focusValidationIssue(entry)}>{validationMessage(entry.message, errorCodes[entry.message], locale.lang)}</button></li>
         {/each}
       </ul>
     </div>
@@ -972,7 +1027,7 @@
   .brand-mark i { width: 5px; height: 5px; border-radius: 1.5px; background: var(--accent-strong); }
   .brand-mark i:nth-child(2), .brand-mark i:nth-child(3) { background: var(--accent); }
   .brand-mark i:nth-child(4) { background: var(--text); }
-  .status-pill { display: inline-flex; align-items: center; gap: 7px; color: var(--text-dim); font: 10px var(--font-mono); white-space: nowrap; }
+  .status-pill { display: inline-flex; align-items: center; gap: 7px; color: var(--text-dim); font: var(--t-mono); white-space: nowrap; }
   .status-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--st-blocked); }
   .status-dot.ready { background: var(--st-working); }
   .top-spacer, .spacer { flex: 1; }
@@ -984,9 +1039,9 @@
   .sidebar { display: flex; flex-direction: column; padding: 13px 10px 10px; border-right: 1px solid var(--line); background: var(--sidebar); overflow: auto; }
   .settings-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 32px; margin-bottom: 14px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--field); color: var(--text-faint); }
   .settings-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-  .settings-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 10px; }
+  .settings-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 11px; }
   .settings-search input::placeholder { color: var(--text-faint); }
-  .settings-search kbd { padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; color: var(--text-faint); background: var(--panel); font: 8px var(--font-mono); }
+  .settings-search kbd { padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; color: var(--text-faint); background: var(--panel); font: var(--t-mono); }
   .settings-search button { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--text-dim); cursor: pointer; }
   .settings-search button:hover { background: var(--panel-raised); color: var(--text); }
   .nav-empty { margin: 4px 9px; color: var(--text-dim); font-size: 10px; }
@@ -995,20 +1050,22 @@
   .sidebar button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 31px; padding: 0 9px; border: 0; border-radius: 6px; background: none; color: var(--text-dim); font-size: 11px; text-align: left; cursor: pointer; }
   .sidebar button:hover { color: var(--text); background: var(--panel-raised); }
   .sidebar button.active { color: var(--text); background: var(--accent-soft); }
-  .sidebar button.problem::after { width: 5px; height: 5px; margin-left: auto; border-radius: 50%; background: var(--st-offline); content: ""; }
+  .problem-dot { flex: none; width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--st-offline); }
+  .sidebar button.problem { color: var(--st-offline-text); }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   .nav-icon { width: 16px; color: var(--text-faint); text-align: center; }
   .sidebar button.active .nav-icon { color: var(--accent-strong); }
-  .sidebar-version { display: flex; flex-direction: column; gap: 3px; margin-top: auto; padding: 12px 10px 2px; border-top: 1px solid var(--line); color: var(--text-faint); font: 9px var(--font-mono); }
+  .sidebar-version { display: flex; flex-direction: column; gap: 3px; margin-top: auto; padding: 12px 10px 2px; border-top: 1px solid var(--line); color: var(--text-faint); font: var(--t-mono); }
   .sidebar-version strong { color: var(--text-dim); font-family: inherit; }
   .content { min-width: 0; padding: var(--s6) var(--s8) var(--s10); overflow: auto; }
   .content > * { max-width: var(--measure-form); }
   .content > .ribbon-slot, .content > .overview-stage, .content > .deck-workbench, .content > .connections-workbench {
     max-width: var(--measure-wide);
   }
-  .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+  .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
   .page-heading h1 { margin: 0; font-size: 23px; font-weight: 680; line-height: 1.2; letter-spacing: -.035em; }
   .title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-  .scope-badge { margin-top: 4px; padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text-dim); background: var(--panel); font: 9px var(--font-mono); }
+  .scope-badge { margin-top: 4px; padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text-dim); background: var(--panel); font: var(--t-mono); }
   .page-heading p, .card-heading p, .card p { margin: 5px 0 0; color: var(--text-dim); font-size: 11px; }
   .eyebrow { color: var(--text-dim); font-size: 9px; font-weight: 650; letter-spacing: .04em; }
   .secondary, .icon-button, .savebar button, .show-deck-button { border: 1px solid var(--line-strong); border-radius: var(--r-control); background: var(--panel-raised); color: var(--text); cursor: pointer; }
@@ -1031,13 +1088,14 @@
   .deck-surface :global(.cell), .deck-surface :global(.panel) { border: 1px solid var(--line-strong); border-radius: var(--r-control); box-shadow: 0 2px 5px color-mix(in srgb, var(--canvas) 70%, transparent); }
   .deck-surface :global(footer.summary) { padding: 8px 4px 1px; color: var(--text-dim); }
   .overview-stack { display: grid; gap: 10px; }
-  .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--st-working) 30%, transparent); border-radius: var(--r-control); background: transparent; color: var(--st-working); font: 600 9px var(--font-mono); white-space: nowrap; }
+  /* Counts, not health: neutral chrome. Readiness is carried by the row's dot. */
+  .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--r-control); background: transparent; color: var(--text-dim); font: 600 11px/1.4 var(--font-mono); white-space: nowrap; }
   .connection-card { padding: var(--s4) var(--s5); }
   .connection-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; min-height: 51px; border-top: 1px solid var(--line); }
   .connection-row:first-of-type { margin-top: 11px; }
   .connection-row strong, .connection-row small { display: block; }
   .connection-row strong { font-size: 11px; }
-  .connection-row small { margin-top: 2px; color: var(--text-dim); font-size: 9px; }
+  .connection-row small { margin-top: 2px; color: var(--text-dim); font-size: 11px; }
   .deck-workbench { display: grid; grid-template-columns: minmax(480px, 1.15fr) minmax(380px, .85fr); gap: 14px; align-items: start; }
   .deck-workbench-preview { padding: 18px; }
   .connections-workbench { display: grid; gap: 14px; }
@@ -1049,7 +1107,7 @@
   .connection-summary dl { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; }
   .connection-summary dl div { display: flex; flex-direction: column; justify-content: center; gap: 5px; min-width: 0; padding: 14px 18px; border-right: 1px solid var(--line); }
   .connection-summary dl div:last-child { border-right: 0; }
-  .connection-summary dt { color: var(--text-dim); font-size: 9px; }
+  .connection-summary dt { color: var(--text-dim); font-size: 11px; }
   .connection-summary dd { margin: 0; font: 600 12px var(--font-mono); color: var(--st-blocked); }
   .connection-summary dd.connected { color: var(--st-working); }
   .connection-inventories { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
@@ -1057,7 +1115,7 @@
   .diagnostic-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 17px; border-bottom: 1px solid var(--line); }
   .diagnostic-card h2 { margin: 0; font-size: 13px; }
   .diagnostic-card header p { max-width: 420px; }
-  .diagnostic-card > header > span { min-width: 24px; padding: 3px 6px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-dim); font: 600 10px var(--font-mono); text-align: center; }
+  .diagnostic-card > header > span { min-width: 24px; padding: 3px 6px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-dim); font: 600 11px/1.4 var(--font-mono); text-align: center; }
   .diagnostic-list { padding: 0 17px; }
   .diagnostic-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; min-height: 72px; padding: 11px 0; border-bottom: 1px solid var(--line); }
   .diagnostic-row:last-child { border-bottom: 0; }
@@ -1068,7 +1126,7 @@
   .connection-identity { min-width: 0; }
   .connection-identity strong, .connection-identity small { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .connection-identity strong { font: 600 11px var(--font-mono); }
-  .connection-identity small { margin-top: 3px; color: var(--text-dim); font: 9px var(--font-mono); }
+  .connection-identity small { margin-top: 3px; color: var(--text-dim); font: var(--t-mono); }
   .connection-identity small span { margin-right: 7px; color: var(--text-faint); }
   .connection-identity .profile-use { color: var(--text-dim); font-family: inherit; }
   .state-label { align-self: start; padding-top: 3px; color: var(--st-blocked); font: var(--t-help); white-space: nowrap; }
@@ -1077,12 +1135,15 @@
   .state-label.inactive { color: var(--st-unknown); }
   .empty-diagnostic { min-height: 70px; padding: 18px 0; }
   .connections-editor { margin-top: 2px; }
-  .form-card { padding: 0; border: 0; background: transparent; }
+  /* Named container: field components stack their label above the control
+     when THIS column is narrow (e.g. beside the Deck preview), not only when
+     the whole viewport is. */
+  .form-card { padding: 0; border: 0; background: transparent; container: settings-form / inline-size; }
   .loading-card { padding: 22px; }
   .hint { color: var(--text-dim); }
   .savebar { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 7px 14px; border-top: 1px solid var(--line); background: var(--panel); }
   .savebar button { min-height: 32px; margin: 0; padding: 0 13px; font-size: 11px; }
-  .savebar button kbd { margin-left: 8px; color: var(--text); font: 8px var(--font-mono); }
+  .savebar button kbd { margin-left: 8px; color: var(--text); font: var(--t-mono); }
   .savebar button:last-child { border-color: var(--accent-strong); background: var(--accent); color: var(--canvas); font-weight: 680; }
   .errcount { color: var(--st-offline-text) !important; background: transparent !important; border-color: transparent !important; }
   .errlist { max-height: 120px; padding: 8px 14px; overflow: auto; border-top: 1px solid color-mix(in srgb, var(--st-offline) 40%, var(--line)); background: color-mix(in srgb, var(--st-offline) 12%, var(--canvas)); color: var(--st-offline-text); font: var(--t-body); }
@@ -1103,10 +1164,12 @@
        fill the flex parent, which inflated the selected nav item to half the
        viewport (its background made the stretch visible; the others hid it). */
     .body { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
-    .sidebar { flex-direction: row; align-items: center; gap: 5px; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; }
+    /* Wrap rather than scroll: a horizontally scrolling strip clipped the last
+       items ("Agent lau…") with nothing telling the user there was more. */
+    .sidebar { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 5px; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); overflow: visible; }
     .settings-search { width: 148px; flex: none; margin: 0; }
     .settings-search kbd { display: none; }
-    .nav-group { display: flex; flex: none; align-items: center; gap: 5px; margin: 0; }
+    .nav-group { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: 5px; margin: 0; }
     .nav-label, .sidebar-version { display: none; }
     .sidebar button { width: auto; min-width: max-content; justify-content: center; }
     .content { padding: 20px 16px 28px; }

@@ -7,6 +7,8 @@ import {
   connectErrorMessage,
   hasConnectionInventory,
   shouldAutoReconnect,
+  autoReconnectDelayMs,
+  setupPollMs,
 } from "./onboardingClient";
 
 const full = {
@@ -184,17 +186,22 @@ import type { InvokeFn } from "./deckClient";
 describe("parseConnectResult", () => {
   it("shapes a success", () => {
     const r = parseConnectResult({ ok: true, connected: true });
-    expect(r).toEqual({ ok: true, connected: true, error: null });
+    expect(r).toEqual({ ok: true, connected: true, error: null, code: null });
   });
 
   it("shapes a failure with an error reason", () => {
     const r = parseConnectResult({ ok: false, error: "bad_token" });
-    expect(r).toEqual({ ok: false, connected: false, error: "bad_token" });
+    expect(r).toEqual({ ok: false, connected: false, error: "bad_token", code: null });
+  });
+
+  it("carries the runtime's stable error code", () => {
+    const r = parseConnectResult({ ok: false, error: "could not store token", code: "token_store_failed" });
+    expect(r.code).toBe("token_store_failed");
   });
 
   it("treats garbage as a non-ok result (never throws)", () => {
-    expect(parseConnectResult(null)).toEqual({ ok: false, connected: false, error: null });
-    expect(parseConnectResult("nope")).toEqual({ ok: false, connected: false, error: null });
+    expect(parseConnectResult(null)).toEqual({ ok: false, connected: false, error: null, code: null });
+    expect(parseConnectResult("nope")).toEqual({ ok: false, connected: false, error: null, code: null });
   });
 });
 
@@ -228,7 +235,7 @@ describe("setupTransport", () => {
     const req: ConnectRequest = { choice: "remote", url: "ws://h:8788", token: "tok", id: "herdr" };
     const r = await setupTransport(invoke).connect(req);
     expect(calls).toEqual([{ cmd: "setup_connect", args: { body: req } }]);
-    expect(r).toEqual({ ok: true, connected: true, error: null });
+    expect(r).toEqual({ ok: true, connected: true, error: null, code: null });
   });
 
   it("connect() forwards a multi-session selection", async () => {
@@ -269,6 +276,36 @@ describe("setupTransport", () => {
 });
 
 describe("connectErrorMessage", () => {
+  it("maps the runtime's canonical code names (SETUP_ERROR_CODES)", () => {
+    // runtime token_env_conflict = an exported env var shadows the typed token
+    expect(connectErrorMessage("HERDECK_X_TOKEN is set…", null, "en", "token_env_conflict")).toContain(
+      "environment variable overrides",
+    );
+    // runtime token_env_in_use = the derived env name belongs to another secret
+    expect(connectErrorMessage("in use", null, "en", "token_env_in_use")).toContain("already used");
+    expect(connectErrorMessage("herdr socket not found at /s", "/s", "cs", "herdr_socket_not_found")).toContain("/s");
+    expect(connectErrorMessage("old", null, "en", "herdr_too_old")).toContain("too old");
+    expect(connectErrorMessage("x", null, "en", "saved_restore_failed")).toContain("could not be restored");
+    expect(connectErrorMessage("x", null, "en", "onboarding_finalize_failed")).toContain("finishing setup");
+    expect(connectErrorMessage("x", null, "en", "demo_switch_failed")).toContain("demo");
+    expect(connectErrorMessage("x", null, "en", "unknown_local_session")).toContain("no longer exists");
+    expect(connectErrorMessage("x", null, "en", "selection_save_failed")).toContain("selected connections");
+  });
+  it("maps a known code to a localized message regardless of the English sentence", () => {
+    expect(connectErrorMessage("could not store token", null, "en", "token_store_failed"))
+      .toBe("The token could not be stored. Check the keychain.");
+    expect(connectErrorMessage("could not store token", null, "cs", "token_store_failed"))
+      .toBe("Token se nepodařilo uložit. Zkontroluj klíčenku.");
+    expect(connectErrorMessage("x", null, "en", "no_session_selected")).toContain("Select a running local session");
+    expect(connectErrorMessage("x", "/tmp/h.sock", "en", "socket_not_found")).toContain("/tmp/h.sock");
+    expect(connectErrorMessage("port must be 1-65535", null, "cs", "config_invalid"))
+      .toBe("Config byl odmítnut: port must be 1-65535");
+  });
+
+  it("falls back to the raw message for an unknown code", () => {
+    expect(connectErrorMessage("something new", null, "cs", "brand_new_code")).toBe("something new");
+  });
+
   it("maps known machine codes to actionable English text by default", () => {
     expect(connectErrorMessage("bad_token")).toContain("token doesn't match");
     expect(connectErrorMessage("unreachable")).toContain("not responding");
@@ -322,5 +359,27 @@ describe("shouldAutoReconnect", () => {
   it("never fires without local herdr or for a first run", () => {
     expect(shouldAutoReconnect({ ...base, localAvailable: false })).toBe(false);
     expect(shouldAutoReconnect({ ...base, choice: null })).toBe(false);
+  });
+});
+
+describe("autoReconnectDelayMs", () => {
+  it("fires the first attempt at once, then backs off exponentially up to 60s", () => {
+    expect(autoReconnectDelayMs(0)).toBe(0);
+    expect(autoReconnectDelayMs(1)).toBe(2_000);
+    expect(autoReconnectDelayMs(2)).toBe(4_000);
+    expect(autoReconnectDelayMs(10)).toBe(60_000);
+  });
+});
+
+describe("setupPollMs", () => {
+  const status = parseSetupStatus({ mode: "local", connected: true })!;
+  it("polls fast until there is a status and while onboarding shows", () => {
+    expect(setupPollMs(null, "deck")).toBe(600);
+    expect(setupPollMs(status, "welcome")).toBe(2_500);
+    expect(setupPollMs(status, "reconnect")).toBe(2_500);
+  });
+  it("slows down once the deck is connected", () => {
+    expect(setupPollMs(status, "deck")).toBeGreaterThanOrEqual(15_000);
+    expect(setupPollMs(status, "deck")).toBeLessThanOrEqual(30_000);
   });
 });

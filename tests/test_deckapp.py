@@ -8,6 +8,7 @@ Network is never touched: tests inject a StubIcons provider.
 import http.client
 import io
 import json
+import time
 import urllib.error
 import urllib.request
 
@@ -1177,3 +1178,247 @@ def test_render_always_feeds_usage_state():
     app._usage_poller = None  # [usage] disabled by a config swap
     app.refresh()
     assert app._orch._usage == []  # stale usage cleared, not left to linger
+
+
+# --- headless ticker / long-poll /state / tile labels (review fixes) --------
+
+
+class _DeviceSink:
+    """A sink that, like the D200, ignores ticker frames."""
+
+    wants_ticker_frames = False
+
+    def __init__(self):
+        self.frames = []
+
+    def deliver(self, frame):
+        self.frames.append(frame)
+
+    def close(self):
+        pass
+
+
+def _headless(app):
+    app._state_last_read = float("-inf")  # nobody has read /state
+    return app
+
+
+def test_headless_ticker_skips_unread_frames_and_renders_on_demand():
+    app = make_app()  # demo fleet includes WORKING agents
+    sink = _DeviceSink()
+    app.add_sink(sink)
+    _headless(app)
+    v0 = app._version
+    base = len(sink.frames)
+    for _ in range(3):
+        app._tick_once()
+    assert app._version == v0  # nothing rendered for nobody
+    assert len(sink.frames) == base
+    assert app._ticker_stale is True
+    # The next reader gets a fresh frame rendered on demand.
+    assert app._state()["version"] > v0
+    assert app._ticker_stale is False
+
+
+def test_ticker_renders_while_a_state_reader_is_recent():
+    app = make_app()
+    app.add_sink(_DeviceSink())
+    app._state()  # a reader just polled
+    v0 = app._version
+    app._tick_once()
+    assert app._version > v0
+
+
+def test_headless_ticker_still_delivers_non_ticker_frames():
+    app = make_app()
+    sink = _DeviceSink()
+    app.add_sink(sink)
+    _headless(app)
+    sink.frames.clear()
+    app._orch.consume_expired_panel_hold = lambda: True
+    app._tick_once()
+    assert len(sink.frames) == 1 and sink.frames[0].ticker is False
+
+
+def test_split_render_drops_a_frame_superseded_by_a_newer_one():
+    app = make_app()
+    with app._lock:
+        rs = app._snapshot_render(app._source, app._orch)
+        app._render_seq += 1
+        stale_seq = app._render_seq
+    app.press(0)  # a newer frame lands (rendered under the lock)
+    v = app._version
+    tiles = dict(app._tiles)
+    applied = app._refresh_split(
+        rs, stale_seq, app._orch, app._slots, working=None, full=True, ticker=True
+    )
+    assert applied is False
+    assert app._version == v and app._tiles == tiles  # never goes backwards
+
+
+def test_ticker_rasterizes_outside_the_state_lock():
+    import threading
+
+    gate = threading.Event()
+    entered = threading.Event()
+
+    class SlowIcons(StubIcons):
+        block = False
+
+        def render_tile_bytes(self, tile):
+            if self.block and tile.index == 0:
+                entered.set()
+                gate.wait(timeout=5)
+            return super().render_tile_bytes(tile)
+
+    icons = SlowIcons()
+    app = DeckApp(MockSource(), serve=False, icon_provider=icons)
+    app._state()  # a reader is present -> the tick renders
+    icons.block = True
+    ticker = threading.Thread(target=app._tick_once)
+    ticker.start()
+    try:
+        assert entered.wait(timeout=5)
+        # While the ticker is rasterizing, /state is served without waiting.
+        got = []
+        reader = threading.Thread(target=lambda: got.append(app._state()))
+        reader.start()
+        reader.join(timeout=1)
+        assert got, "/state blocked behind the ticker's rasterization"
+    finally:
+        gate.set()
+        ticker.join(timeout=5)
+
+
+def test_long_poll_state_returns_at_once_when_version_differs():
+    app = make_app()
+    v = app._state()["version"]
+    t0 = time.monotonic()
+    st = app._wait_state(v - 1, 10_000)
+    assert time.monotonic() - t0 < 1.0
+    assert st["version"] == v
+
+
+def test_long_poll_state_wakes_on_change():
+    import threading
+
+    app = make_app()
+    v = app._state()["version"]
+    got = []
+    waiter = threading.Thread(target=lambda: got.append(app._wait_state(v, 10_000)))
+    waiter.start()
+    time.sleep(0.05)
+    assert app._state_waiters == 1
+    app.press(0)  # changes the deck -> bumps the version
+    waiter.join(timeout=2)
+    assert got and got[0]["version"] > v
+    assert app._state_waiters == 0
+
+
+def test_long_poll_state_times_out_with_unchanged_state():
+    app = make_app()
+    v = app._state()["version"]
+    t0 = time.monotonic()
+    st = app._wait_state(v, 100)
+    assert 0.08 <= time.monotonic() - t0 < 2.0
+    assert st["version"] == v
+
+
+def test_long_poll_waiter_counts_as_a_state_reader():
+    app = _headless(make_app())
+    app._state_waiters = 1
+    assert app._has_state_reader() is True
+
+
+def test_http_long_poll_state_params():
+    app = _serving_app()
+    try:
+        with _get(app, f"/state?token={app.token}") as r:
+            v = json.loads(r.read())["version"]
+        with _get(app, f"/state?token={app.token}&after={v - 1}&wait_ms=20000") as r:
+            assert json.loads(r.read())["version"] == v
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _get(app, f"/state?token={app.token}&after=x")
+        assert exc.value.code == 400
+    finally:
+        app.close()
+
+
+def test_state_exposes_localized_tile_labels_for_every_tile():
+    app = make_app()
+    st = app._state()
+    assert set(st["tile_labels"]) == set(st["tiles"])
+    labels = list(st["tile_labels"].values())
+    assert all(isinstance(label, str) and label for label in labels)
+    # Agent tiles read "<agent> · <repo> · ... · <status> <elapsed>".
+    assert any(label.startswith("claude · ") and "working" in label for label in labels)
+    # A JSON round-trip keeps the same keys as "tiles".
+    wire = json.loads(json.dumps(st))
+    assert set(wire["tile_labels"]) == set(wire["tiles"])
+
+
+def test_tile_accessible_label_shapes_and_language():
+    from herdeck.deckapp.server import tile_accessible_label
+    from herdeck.driver.base import TileView
+
+    agent = TileView(
+        0, "api", "green", agent_type="claude", repo="herdeck", branch="main",
+        status_text="WORKING", time_text="3m",
+    )
+    assert tile_accessible_label(agent) == "claude · herdeck · main · working 3m"
+    cs = TileView(0, "api", "amber", agent_type="codex", repo="web", status_text="SCHVÁLIT")
+    assert tile_accessible_label(cs, "cs") == "codex · web · schválit"
+    assert tile_accessible_label(TileView(4, "", "empty")) == "empty tile 5"
+    assert tile_accessible_label(TileView(4, "", "empty"), "cs") == "prázdná dlaždice 5"
+    choice = TileView(1, "1", "green", subtext="Yes, proceed")
+    assert tile_accessible_label(choice) == "1 · Yes, proceed"
+
+
+def test_state_only_change_bumps_version_without_image_change():
+    # A /state field can change while every PNG stays byte-identical (a bridge
+    # dropping, an off-screen agent unblocking while drilled): the version must
+    # still move, or long-poll waiters sit on stale data until their timeout.
+    app = make_app()
+    v = app._state()["version"]
+    tiles, panel = dict(app._tiles), app._panel
+    base = app._source.summary()
+    app._source.summary = lambda: {**base, "blocked": base["blocked"] + 1}
+    with app._lock:
+        app._refresh_locked()
+    assert app._tiles == tiles and app._panel == panel  # no image changed
+    st = app._state()
+    assert st["version"] > v
+    assert st["summary"]["blocked"] == base["blocked"] + 1
+
+
+def test_unchanged_state_and_images_do_not_bump_version():
+    app = make_app()
+    v = app._state()["version"]
+    with app._lock:
+        app._refresh_locked()
+    assert app._version == v
+
+
+def test_long_poll_state_wakes_on_connection_flip_without_image_change():
+    import threading
+
+    class FlakySource(MockSource):
+        up = True
+
+        @property
+        def connected(self):
+            return self.up
+
+    source = FlakySource()
+    app = DeckApp(source, serve=False, icon_provider=StubIcons())
+    v = app._state()["version"]
+    got = []
+    waiter = threading.Thread(target=lambda: got.append(app._wait_state(v, 10_000)))
+    waiter.start()
+    time.sleep(0.05)
+    source.up = False  # the bridge drops; the rendered frame is unchanged
+    with app._lock:
+        app._refresh_locked()
+    waiter.join(timeout=2)
+    assert got and got[0]["version"] > v
+    assert got[0]["connected"] is False

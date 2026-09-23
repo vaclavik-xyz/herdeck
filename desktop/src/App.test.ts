@@ -845,11 +845,9 @@ describe("App update banner auto-dismiss", () => {
     }
   });
 
-  // installError outranks both `notice` and `availableUpdate`, and used to
-  // be cleared ONLY by installUpdate's own entry (a retry click) — ignored,
-  // it would pin a red bar for the rest of the process's life. Same 8s
-  // window as the two kinds above, tracked independently of updateState.
-  it("clears an install error after a timeout, revealing the update underneath again", async () => {
+  // installError used to be swept after 8s, often before anyone had read it.
+  // It now stays until dismissed, and dismissing reveals the update again.
+  it("keeps an install error until it is dismissed, then reveals the update underneath", async () => {
     vi.useFakeTimers();
     try {
       const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
@@ -866,16 +864,64 @@ describe("App update banner auto-dismiss", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(target.textContent).toContain("disk full");
 
-        await vi.advanceTimersByTimeAsync(8000);
-        expect(target.textContent, "the install error never cleared").not.toContain("disk full");
-        // installError merely masked the available update — it is still
-        // there, and shows again once the error is out of the way.
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(target.textContent, "the install error vanished on its own").toContain("disk full");
+
+        Array.from(target.querySelectorAll<HTMLButtonElement>("button"))
+          .find((b) => b.textContent === "Dismiss")!.click();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.textContent).not.toContain("disk full");
         expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
       } finally {
         cleanup();
       }
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("App update banner actions", () => {
+  it("hides an available update on 'Later' and links its release notes", async () => {
+    const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
+    invokeMock.mockImplementation(mockInvoke(check));
+    const { target, cleanup } = render();
+    try {
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+      const link = target.querySelector<HTMLAnchorElement>(".banner a");
+      expect(link?.href).toBe("https://github.com/vaclavik-xyz/herdeck/releases/tag/v0.2.0");
+      Array.from(target.querySelectorAll<HTMLButtonElement>("button"))
+        .find((b) => b.textContent === "Later")!.click();
+      flushSync();
+      expect(target.textContent).not.toContain("Herdeck 0.2.0 is available.");
+
+      // An explicit tray check shows it again.
+      registeredListener("check-for-updates")!();
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("re-checks periodically while the app keeps running", async () => {
+    // Driving 6h of fake time would spin every other poll loop tens of
+    // thousands of times; grab the interval App registers and fire it.
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    try {
+      const check = vi.fn().mockResolvedValue(null);
+      invokeMock.mockImplementation(mockInvoke(check));
+      const { cleanup } = render();
+      try {
+        await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+        const recheck = intervals.mock.calls.find(([, ms]) => ms === 6 * 60 * 60 * 1000);
+        expect(recheck, "no periodic update re-check registered").toBeDefined();
+        (recheck![0] as () => void)();
+        await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+      } finally {
+        cleanup();
+      }
+    } finally {
+      intervals.mockRestore();
     }
   });
 });

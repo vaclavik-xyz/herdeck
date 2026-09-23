@@ -843,3 +843,109 @@ def test_empty_slots_render_darker_than_agent_tiles():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [st("p1", Status.IDLE)])
     assert o.render().tiles[1].color == "empty"  # near-background, not dim grey
+
+
+# --- review fixes: idle views time out, drill shows new blocks, launcher target
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def test_idle_drill_returns_to_overview_after_timeout():
+    from herdeck.orchestrator import MENU_IDLE_TIMEOUT_S
+
+    clock = _Clock()
+    o = Orchestrator(make_config(), slots=13, clock=clock)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    assert o.is_drilling()
+    clock.t += MENU_IDLE_TIMEOUT_S - 1
+    assert o.consume_expired_panel_hold() is False
+    assert o.is_drilling()
+    clock.t += 2
+    assert o.consume_expired_panel_hold() is True  # hosts re-render on True
+    assert not o.is_drilling()
+    assert o.render().tiles[0].agent_type == "claude"  # overview again
+    assert o.consume_expired_panel_hold() is False  # fires once
+
+
+def test_idle_launcher_times_out_but_a_press_keeps_it_open():
+    from herdeck.orchestrator import MENU_IDLE_TIMEOUT_S
+
+    clock = _Clock()
+    o = Orchestrator(make_config(), slots=13, clock=clock)
+    o.on_press(12)  # open the launcher
+    clock.t += MENU_IDLE_TIMEOUT_S - 5
+    o.on_press(11)  # a blank launcher tile still counts as activity
+    clock.t += 10
+    assert o.consume_expired_panel_hold() is False
+    assert o.render().panel.title == "new agent"
+    clock.t += MENU_IDLE_TIMEOUT_S
+    assert o.consume_expired_panel_hold() is True
+    assert o.render().tiles[12].label == "+ New"
+
+
+def test_drill_panel_counts_agents_that_blocked_after_it_opened():
+    clock = _Clock()
+    o = Orchestrator(make_config(), slots=13, clock=clock)
+    o.apply_snapshot(
+        "dev",
+        [st("p1", Status.BLOCKED), st("p2", Status.BLOCKED, label="old"), st("p3", Status.WORKING)],
+    )
+    o.on_press(0)
+    drilled = o.drill_key()
+    # Already-blocked agents are not news; nothing is shown yet.
+    assert not any("more blocked" in line for line in o.render().panel.lines)
+    clock.t += 5
+    o.apply_snapshot(
+        "dev",
+        [st("p1", Status.BLOCKED), st("p2", Status.BLOCKED, label="old"), st("p3", Status.BLOCKED)],
+    )
+    assert o.drill_key() == drilled  # a new block never yanks the drill
+    assert o.render().panel.lines[0] == "▲ 1 more blocked"
+
+
+def test_drill_new_block_indicator_is_localized():
+    clock = _Clock()
+    cfg = make_config()
+    cfg.view.language = "cs"
+    o = Orchestrator(cfg, slots=13, clock=clock)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED), st("p2", Status.WORKING)])
+    o.on_press(0)
+    clock.t += 1
+    o.apply_event("dev", st("p2", Status.BLOCKED))
+    assert o.render().panel.lines[0] == "▲ další blokováno: 1"
+
+
+def test_fallback_approve_labels_are_localized():
+    cfg = make_config()
+    cfg.view.language = "cs"
+    cfg.safety.approve_always = True
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [st("p1", Status.BLOCKED)])
+    o.on_press(0)
+    o.set_detection("Continue? (y/n)")
+    labels = [t.label for t in o.render().tiles[:3]]
+    assert labels == ["Schválit", "Schválit!", "Zamítnout"]
+
+
+def test_launcher_names_the_target_server_when_several_are_configured():
+    cfg = make_config()
+    cfg.servers.append(ServerConfig("gpu", "wss://y", "t"))
+    cfg.overview_order = ["gpu", "dev"]
+    o = Orchestrator(cfg, slots=13)
+    o.on_press(12)
+    assert o.render().panel.lines[-1] == "on gpu"
+    # ...and the start goes exactly there.
+    assert o.on_press(0) == [Command("start", "gpu", text="claude", keys=["claude"])]
+
+
+def test_launcher_single_server_keeps_the_plain_panel():
+    o = Orchestrator(make_config(), slots=13)
+    o.on_press(12)
+    assert o.render().panel.lines == ["pick a type"]

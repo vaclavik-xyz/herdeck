@@ -56,6 +56,10 @@ class D200Sink:
     ``on_press`` (the DeckApp's thread-safe ``press``), so a D200 press flows
     through the SAME Orchestrator + bridge as a window press."""
 
+    # Ticker frames are dropped in deliver(); telling DeckApp lets a headless
+    # runtime skip rendering them at all.
+    wants_ticker_frames = False
+
     def __init__(
         self,
         driver,
@@ -170,6 +174,8 @@ class ReconnectingD200Sink:
     repaints that frame when the device becomes available again.
     """
 
+    wants_ticker_frames = False  # same device, same policy as D200Sink
+
     def __init__(
         self,
         driver_factory: Callable[[], object],
@@ -187,6 +193,9 @@ class ReconnectingD200Sink:
         self._active: D200Sink | None = None
         self._stop = threading.Event()
         self._reconfigure = threading.Event()
+        # Set by every event the attached-device wait cares about (disconnect,
+        # reconfigure, close), so the supervisor sleeps instead of polling.
+        self._wake = threading.Event()
         self._thread = threading.Thread(
             target=self._run,
             name="herdeck-d200-reconnect",
@@ -212,6 +221,7 @@ class ReconnectingD200Sink:
     def reconfigure(self) -> None:
         """Reopen the active driver so it adopts the latest hardware config."""
         self._reconfigure.set()
+        self._wake.set()
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -237,11 +247,16 @@ class ReconnectingD200Sink:
                 return
 
             disconnected = threading.Event()
+
+            def on_disconnect(flag=disconnected) -> None:
+                flag.set()
+                self._wake.set()
+
             active = D200Sink(
                 driver,
                 on_press=self._on_press,
                 slots=self._slots,
-                on_disconnect=disconnected.set,
+                on_disconnect=on_disconnect,
             )
             with self._lock:
                 # set_slots() may have raced device construction before this
@@ -256,9 +271,11 @@ class ReconnectingD200Sink:
                 self._active = active
             log.info("D200 attached")
 
-            while not self._stop.wait(0.25):
-                if disconnected.is_set() or self._reconfigure.is_set():
-                    break
+            while not (
+                self._stop.is_set() or disconnected.is_set() or self._reconfigure.is_set()
+            ):
+                self._wake.wait()
+                self._wake.clear()
 
             with self._lock:
                 if self._active is active:
@@ -273,6 +290,7 @@ class ReconnectingD200Sink:
         if self._stop.is_set():
             return
         self._stop.set()
+        self._wake.set()
         with self._lock:
             active = self._active
             self._active = None

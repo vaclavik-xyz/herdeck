@@ -150,3 +150,10 @@ export function isDismissableNotice(notice: Notice | null): boolean {
     }
   }
 }
+
+/** The available update to SHOW: hidden when the user chose "Later" for that
+ *  exact version this session. A newer version shows again. */
+export function visibleUpdate(available: UpdateInfo | null, dismissedVersion: string | null): UpdateInfo | null {
+  if (available == null) return null;
+  return available.version === dismissedVersion ? null : available;
+}

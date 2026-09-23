@@ -6,6 +6,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Notifications: localized titles (`claude · needs input`, `claude · done`);
+  per-agent cooldown so flapping agents stop spamming, and no **done** alert
+  right after you answered that agent on the deck; the delivery feed holds 50
+  items and never drops an undelivered alert silently.
+- Desktop notification pump no longer spins the CPU, and backs off when the
+  runtime has no notification feed (demo/mock).
+- A headless runtime driving only the D200 no longer renders animation frames
+  nobody reads; tile rasterization runs outside the state lock, so `/state`,
+  tiles and presses are not stalled by a cold frame.
+- `/state` supports long-polling (`?after=<version>&wait_ms=<ms>`) and the
+  desktop keeps its HTTP connection alive instead of polling.
+- A socket left behind by a crashed herdr is no longer reported as a running
+  local session.
+- An idle drill, launcher or profile menu returns to the overview after 60 s;
+  while drilled, newly blocked agents are flagged on the panel; the launcher
+  shows which server a new agent starts on when several are configured.
+- Tile legibility and contrast improvements, accessible tile descriptions
+  (`/state` `tile_labels`), clearer Czech status wording (blocked is now
+  BLOKOVÁN), and translated drill fallback buttons.
+- Settings UI fixes, including localized `/setup` errors via stable error
+  codes and surfaced global-shortcut registration failures.
+
 ## [0.7.8] - 2026-09-22
 
 ### Fixed

@@ -132,6 +132,10 @@ const SIDECAR_TIMEOUT: Duration = Duration::from_secs(3);
 /// The runtime holds a long poll for 25 s; leave transport headroom around it.
 const NOTIFY_POLL_TIMEOUT: Duration = Duration::from_secs(30);
 const NOTIFY_RETRY_DELAY: Duration = Duration::from_millis(500);
+/// A source without a notification feed (demo/mock) answers `/notifications`
+/// with 404. That will not change until the shell is pointed at a different
+/// runtime, so the pump sleeps this long — or until discovery changes.
+const NOTIFY_UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(30);
 
 /// `/setup/connect` runs, inside the sidecar, the whole remote transaction: a probe
 /// (≈4 s) THEN build + render-prepare + keychain/config snapshots + write + swap. The
@@ -323,34 +327,91 @@ async fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::V
 /// banner-claim headers (`X-Herdeck-Shell`/`-Gen`, only with a granted
     /// permission) — a claim is just liveness; the actual posting of feed entries
 /// lives in `start_notify_pump` (single poster by design).
+///
+/// Long poll (C2): with `after` (JS `after`, the last `version` seen) the
+/// runtime holds the request until the version moves or `waitMs` (JS key; clamped
+/// to 25 s) passes. The HTTP read timeout then outlasts the wait by 6 s.
+///
+/// The body is handed to the WebView as the raw JSON text (`ipc::Response`), not
+/// parsed into a `Value` and re-serialised. One typed pass still validates it —
+/// never forward unchecked text as JSON — and reads the blocked-agent count for
+/// the tray tooltip on the way.
 #[tauri::command]
 async fn deck_state(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
+    after: Option<u64>,
+    wait_ms: Option<u64>,
+) -> Result<tauri::ipc::Response, String> {
     let d = current_discovery(&state)?;
     // The dedicated long-poll pump owns the claim. UI state polling must not
     // compete with it or keep a failed native-notification claim alive.
     let claim = false;
-    let body = match run_blocking(move || {
-        http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT, claim, Some(&shell_gen()))
-    })
-    .await
-    {
+    let timeout = state_request_timeout(after, wait_ms);
+    let fetch = move |d: Discovery| {
+        run_blocking(move || {
+            http::fetch_state_poll(
+                &d.host,
+                d.port,
+                &d.token,
+                timeout,
+                claim,
+                Some(&shell_gen()),
+                after,
+                wait_ms,
+            )
+        })
+    };
+    let body = match fetch(d).await {
         Ok(body) => body,
         Err(first_err) => {
             // Stale external sidecar (launchd restart → fresh port): re-read
             // runtime.json once and retry against the live runtime.
-            if rediscover_runtime(&state).is_none() {
+            let Some(d) = rediscover_runtime(&state) else {
                 return Err(first_err);
-            }
-            let d = current_discovery(&state)?;
-            run_blocking(move || {
-                http::fetch_state(&d.host, d.port, &d.token, SIDECAR_TIMEOUT, claim, Some(&shell_gen()))
-            })
-            .await?
+            };
+            fetch(d).await?
         }
     };
-    serde_json::from_str(&body).map_err(|e| format!("invalid /state JSON from sidecar: {e}"))
+    let peek = peek_state(&body)?;
+    update_tray_blocked(&app, peek.blocked());
+    Ok(tauri::ipc::Response::new(body))
+}
+
+/// HTTP read timeout for a `/state` request: the plain proxy timeout, or — for
+/// a long poll — the (clamped) wait plus 6 s of transport headroom (C2).
+fn state_request_timeout(after: Option<u64>, wait_ms: Option<u64>) -> Duration {
+    match after {
+        Some(_) => {
+            let wait = wait_ms.unwrap_or(0).min(http::STATE_MAX_WAIT_MS);
+            SIDECAR_TIMEOUT.max(Duration::from_millis(wait) + Duration::from_secs(6))
+        }
+        None => SIDECAR_TIMEOUT,
+    }
+}
+
+/// The only `/state` fields the shell itself reads. Deserialising into this
+/// validates the whole document without building a `serde_json::Value`.
+#[derive(serde::Deserialize)]
+struct StatePeek {
+    #[serde(default)]
+    summary: Option<SummaryPeek>,
+}
+
+#[derive(serde::Deserialize)]
+struct SummaryPeek {
+    #[serde(default)]
+    blocked: Option<u64>,
+}
+
+impl StatePeek {
+    fn blocked(&self) -> Option<u64> {
+        self.summary.as_ref().and_then(|s| s.blocked)
+    }
+}
+
+fn peek_state(body: &str) -> Result<StatePeek, String> {
+    serde_json::from_str(body).map_err(|e| format!("invalid /state JSON from sidecar: {e}"))
 }
 
 /// Per-process shell identity for the banner claim. A fresh shell process
@@ -415,33 +476,190 @@ fn notification_batch(
     Some((generation, acked_seq, items))
 }
 
-#[cfg(target_os = "macos")]
-fn play_notification_sound(sound: &serde_json::Value) {
-    let name = match sound {
-        serde_json::Value::String(name) => name.as_str(),
-        serde_json::Value::Bool(true) => "Glass",
-        _ => return,
-    };
-    if name.is_empty()
-        || !name
+/// The sound played for `sound = true` (and for a test banner with no sound
+/// picked), matching the runtime's osascript fallback.
+const DEFAULT_NOTIFICATION_SOUND: &str = "Glass";
+
+/// File extensions macOS system sounds come in (what `NSSound(named:)` and the
+/// runtime's osascript `sound name` fallback resolve).
+const SOUND_EXTENSIONS: [&str; 6] = ["aiff", "aif", "caf", "wav", "m4a", "mp3"];
+
+/// Where named sounds live, in `NSSound(named:)`'s own search order: the
+/// user's, then the machine's, then the system's. Empty off macOS — there the
+/// settings UI falls back to a free-text sound field.
+fn sound_dirs() -> Vec<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+    let mut dirs = Vec::new();
+    if let Ok(home) = env::var("HOME") {
+        if !home.is_empty() {
+            dirs.push(PathBuf::from(home).join("Library/Sounds"));
+        }
+    }
+    dirs.push(PathBuf::from("/Library/Sounds"));
+    dirs.push(PathBuf::from("/System/Library/Sounds"));
+    dirs
+}
+
+/// A sound name safe to hand to `afplay` / the runtime: letters, digits, space,
+/// `_` and `-` — no path separators, no dots, nothing to escape.
+fn valid_sound_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-'))
-    {
-        eprintln!("herdeck: refused invalid notification sound name");
-        return;
+}
+
+fn sound_stem(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !SOUND_EXTENSIONS.contains(&ext.as_str()) {
+        return None;
     }
-    let path = PathBuf::from("/System/Library/Sounds").join(format!("{name}.aiff"));
-    if !path.is_file() {
-        eprintln!("herdeck: notification sound not found: {name}");
-        return;
+    let stem = path.file_stem()?.to_str()?;
+    valid_sound_name(stem).then(|| stem.to_string())
+}
+
+/// Every playable sound name found in `dirs`, sorted and de-duplicated. Only
+/// names that pass `valid_sound_name` are offered, so the settings picker can
+/// never list a sound that playback would then refuse.
+fn list_sound_names(dirs: &[PathBuf]) -> Vec<String> {
+    let mut names: Vec<String> = dirs
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .filter_map(|entry| sound_stem(&entry.path()))
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup();
+    names
+}
+
+/// The file a sound name plays, searching `dirs` in order.
+fn resolve_sound_path(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    if !valid_sound_name(name) {
+        return None;
     }
-    if let Err(err) = Command::new("/usr/bin/afplay").arg(path).spawn() {
-        eprintln!("herdeck: notification sound failed: {err}");
+    dirs.iter().find_map(|dir| {
+        SOUND_EXTENSIONS
+            .iter()
+            .map(|ext| dir.join(format!("{name}.{ext}")))
+            .find(|path| path.is_file())
+    })
+}
+
+/// The sound a feed item (or test request) asks for: a name, `true` for the
+/// default, anything else for silence.
+fn requested_sound_name(sound: &serde_json::Value) -> Option<&str> {
+    match sound {
+        serde_json::Value::String(name) if !name.is_empty() => Some(name.as_str()),
+        serde_json::Value::Bool(true) => Some(DEFAULT_NOTIFICATION_SOUND),
+        _ => None,
     }
 }
 
+#[cfg(target_os = "macos")]
+fn play_notification_sound(sound: &serde_json::Value) -> Result<(), String> {
+    let Some(name) = requested_sound_name(sound) else {
+        return Ok(());
+    };
+    if !valid_sound_name(name) {
+        return Err(format!("invalid notification sound name: {name:?}"));
+    }
+    let path = resolve_sound_path(name, &sound_dirs())
+        .ok_or_else(|| format!("notification sound not found: {name}"))?;
+    Command::new("/usr/bin/afplay")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("notification sound failed: {err}"))
+}
+
 #[cfg(not(target_os = "macos"))]
-fn play_notification_sound(_sound: &serde_json::Value) {}
+fn play_notification_sound(_sound: &serde_json::Value) -> Result<(), String> {
+    Ok(())
+}
+
+/// Bring the deck forward: un-hide the app (macOS), show and focus the deck
+/// window. What a click on one of our banners, and a Dock/Finder reopen, do.
+fn reveal_deck(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        #[cfg(target_os = "macos")]
+        let _ = handle.show();
+        show_role_window(&handle, DECK_WINDOW);
+    });
+}
+
+/// Localized title/body of the banner the settings "Test notification" button
+/// shows. Native text, so it lives beside `tray_labels` rather than in a
+/// WebView catalog.
+fn test_notification_texts(lang: &str) -> (&'static str, &'static str) {
+    match lang {
+        "cs" => (
+            "Herdeck – zkušební oznámení",
+            "Takhle vypadá upozornění, když agent potřebuje vaši pozornost.",
+        ),
+        _ => (
+            "Herdeck test notification",
+            "This is how an alert looks when an agent needs your attention.",
+        ),
+    }
+}
+
+/// Named sounds the notification settings can offer (C4): sorted unique stems
+/// from the macOS sound folders. Empty elsewhere — the UI then shows a free-text
+/// field instead of a picker.
+#[tauri::command]
+fn notification_sounds() -> Vec<String> {
+    list_sound_names(&sound_dirs())
+}
+
+/// Show a localized test banner through the same native path real alerts take,
+/// then play `sound` (a name; `None` = the default sound, `""` = silent). `Err`
+/// carries a message the settings UI shows as is.
+#[tauri::command]
+fn test_notification(
+    app: tauri::AppHandle,
+    tray: tauri::State<'_, TrayHandles>,
+    sound: Option<String>,
+) -> Result<(), String> {
+    let lang = tray
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(TrayMenuItems::current_lang)
+        .unwrap_or_else(|| "en".to_string());
+    let (title, body) = test_notification_texts(&lang);
+    let sound = match sound {
+        Some(name) => serde_json::Value::String(name),
+        None => serde_json::Value::Bool(true),
+    };
+    let item = PendingNotification {
+        id: "test".to_string(),
+        generation: String::new(),
+        seq: 0,
+        title: title.to_string(),
+        body: body.to_string(),
+        sound: sound.clone(),
+        created_at_ms: None,
+    };
+    post_native_notification(&app, &item)?;
+    play_notification_sound(&sound)
+}
+
+/// Whether native notifications are permitted (C4). Always `None` ("unknown"):
+/// banners go through the legacy `NSUserNotificationCenter` on macOS, which has
+/// no permission query, and the notification plugin reports a hard-coded
+/// "granted" on every desktop OS — passing that on would claim a certainty the
+/// shell does not have.
+#[tauri::command]
+fn notification_permission() -> Option<bool> {
+    None
+}
 
 /// Keep the time-sensitive long-poll pump out of App Nap while this process is
 /// responsible for native banners. The allowing-idle-system-sleep option keeps
@@ -463,54 +681,112 @@ fn prevent_notification_pump_app_nap() {
 #[cfg(not(target_os = "macos"))]
 fn prevent_notification_pump_app_nap() {}
 
+/// What the pump does with the result of one `/notifications` round trip.
+#[derive(Debug, PartialEq, Eq)]
+enum NotifyPoll {
+    /// A 2xx feed snapshot to deliver from.
+    Deliver(String),
+    /// 404: this runtime's source has no feed (demo/mock). Not an outage —
+    /// re-discovery would find the very same runtime — so back off instead of
+    /// hammering it twice a second.
+    Unsupported,
+    /// Transport failure or any other status: retry, possibly re-discovering.
+    Failed,
+}
+
+fn classify_notify_poll(result: Result<(u16, String), String>) -> NotifyPoll {
+    match result {
+        Ok((code, body)) if (200..300).contains(&code) => NotifyPoll::Deliver(body),
+        Ok((404, _)) => NotifyPoll::Unsupported,
+        _ => NotifyPoll::Failed,
+    }
+}
+
+/// The runtime the pump should poll right now, or how long to idle first.
+/// Both "no permission yet" and "sidecar not discovered yet" must SLEEP: a bare
+/// `continue` there spun a core at 100% through every sidecar boot, and forever
+/// while a crashing sidecar never reported in.
+fn notify_target(permission: bool, discovery: Option<Discovery>) -> Result<Discovery, Duration> {
+    match (permission, discovery) {
+        (true, Some(d)) => Ok(d),
+        _ => Err(NOTIFY_RETRY_DELAY),
+    }
+}
+
+/// Identity of a discovered runtime, for "has the shell been repointed?".
+fn discovery_key(d: &Discovery) -> (String, u16, String) {
+    (d.host.clone(), d.port, d.token.clone())
+}
+
+/// Sleep up to `max`, in `NOTIFY_RETRY_DELAY` steps, returning early as soon as
+/// `changed()` reports true. Returns whether it woke early.
+fn backoff_until(max: Duration, changed: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + max;
+    loop {
+        if changed() {
+            return true;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep(NOTIFY_RETRY_DELAY.min(deadline - now));
+    }
+}
+
 /// Generation-aware long-poll notification pump. The blocking request itself
 /// keeps banner duty claimed and wakes immediately when the runtime queues an
 /// event. Only a successfully shown banner is acknowledged.
 fn start_notify_pump(app: tauri::AppHandle) {
     let permission = app.state::<AppState>().notify_permission.clone();
     std::thread::spawn(move || loop {
-        if !permission.load(Ordering::Relaxed) {
-            std::thread::sleep(NOTIFY_RETRY_DELAY);
-            continue;
-        }
         let state = app.state::<AppState>();
-        let d = match state.discovery.lock().unwrap().clone() {
-            Some(d) => d,
-            None => continue,
+        let d = match notify_target(
+            permission.load(Ordering::Relaxed),
+            state.discovery.lock().unwrap().clone(),
+        ) {
+            Ok(d) => d,
+            Err(delay) => {
+                std::thread::sleep(delay);
+                continue;
+            }
         };
-        let cursor = state.notify_cursor.lock().unwrap().clone();
-        let fetched = http::fetch_notifications(
-            &d.host,
-            d.port,
-            &d.token,
-            NOTIFY_POLL_TIMEOUT,
-            cursor.generation.as_deref(),
-            cursor.seq,
-            &shell_gen(),
-        );
-        let (body, active_discovery) = match fetched {
-            Ok(body) => (body, d),
-            Err(_) => {
-                if rediscover_runtime(&state).is_none() {
+        let poll = |d: &Discovery| {
+            let cursor = state.notify_cursor.lock().unwrap().clone();
+            classify_notify_poll(http::fetch_notifications_status(
+                &d.host,
+                d.port,
+                &d.token,
+                NOTIFY_POLL_TIMEOUT,
+                cursor.generation.as_deref(),
+                cursor.seq,
+                &shell_gen(),
+            ))
+        };
+        let unsupported_backoff = |d: &Discovery| {
+            let key = discovery_key(d);
+            backoff_until(NOTIFY_UNSUPPORTED_BACKOFF, || {
+                state.discovery.lock().unwrap().as_ref().map(discovery_key) != Some(key.clone())
+            });
+        };
+        let (body, active_discovery) = match poll(&d) {
+            NotifyPoll::Deliver(body) => (body, d),
+            NotifyPoll::Unsupported => {
+                unsupported_backoff(&d);
+                continue;
+            }
+            NotifyPoll::Failed => {
+                let Some(d) = rediscover_runtime(&state) else {
                     std::thread::sleep(NOTIFY_RETRY_DELAY);
                     continue;
-                }
-                let d = match state.discovery.lock().unwrap().clone() {
-                    Some(d) => d,
-                    None => continue,
                 };
-                let cursor = state.notify_cursor.lock().unwrap().clone();
-                match http::fetch_notifications(
-                    &d.host,
-                    d.port,
-                    &d.token,
-                    NOTIFY_POLL_TIMEOUT,
-                    cursor.generation.as_deref(),
-                    cursor.seq,
-                    &shell_gen(),
-                ) {
-                    Ok(body) => (body, d),
-                    Err(_) => {
+                match poll(&d) {
+                    NotifyPoll::Deliver(body) => (body, d),
+                    NotifyPoll::Unsupported => {
+                        unsupported_backoff(&d);
+                        continue;
+                    }
+                    NotifyPoll::Failed => {
                         std::thread::sleep(NOTIFY_RETRY_DELAY);
                         continue;
                     }
@@ -563,7 +839,9 @@ fn start_notify_pump(app: tauri::AppHandle) {
                 std::thread::sleep(NOTIFY_RETRY_DELAY);
                 break;
             }
-            play_notification_sound(&item.sound);
+            if let Err(err) = play_notification_sound(&item.sound) {
+                eprintln!("herdeck: {err}");
+            }
             // Advance the process-local cursor immediately after visible
             // delivery. A transient ACK failure must never show the banner a
             // second time in this shell; the next long poll carries this cursor
@@ -602,6 +880,90 @@ fn start_notify_pump(app: tauri::AppHandle) {
     });
 }
 
+/// At most this many banners wait for a click at once. Each tracked banner
+/// parks one thread until it is clicked or cleared from Notification Center;
+/// past the cap a banner is posted fire-and-forget (its click then only
+/// activates the app, which `RunEvent::Reopen` does not see).
+#[cfg(target_os = "macos")]
+const MAX_CLICK_TRACKED_BANNERS: usize = 16;
+
+#[cfg(target_os = "macos")]
+static CLICK_TRACKED_BANNERS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Claim one of the `MAX_CLICK_TRACKED_BANNERS` slots.
+#[cfg(target_os = "macos")]
+fn claim_click_slot() -> bool {
+    CLICK_TRACKED_BANNERS
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            (n < MAX_CLICK_TRACKED_BANNERS).then_some(n + 1)
+        })
+        .is_ok()
+}
+
+/// Attribute our banners to this app's bundle — the same choice the
+/// notification plugin makes (Terminal in `tauri dev`, where the binary has no
+/// registered bundle). First caller wins; the plugin shares this global.
+#[cfg(target_os = "macos")]
+fn ensure_notification_application(app: &tauri::AppHandle) {
+    use std::sync::Once;
+    static SET: Once = Once::new();
+    let identifier = if tauri::is_dev() {
+        "com.apple.Terminal".to_string()
+    } else {
+        app.config().identifier.clone()
+    };
+    SET.call_once(|| {
+        let _ = mac_notification_sys::set_application(&identifier);
+    });
+}
+
+/// Post one banner. On macOS it goes straight through `mac-notification-sys`
+/// (the plugin fires and forgets, so a click could never be observed): a
+/// dedicated thread waits for the click and then reveals the deck. There is no
+/// per-agent grouping — the legacy `NSUserNotification` API has no thread id.
+#[cfg(target_os = "macos")]
+fn post_native_notification(
+    app: &tauri::AppHandle,
+    item: &PendingNotification,
+) -> Result<(), String> {
+    use mac_notification_sys::{Notification, NotificationResponse};
+
+    ensure_notification_application(app);
+    let tracked = claim_click_slot();
+    let (title, body) = (item.title.clone(), item.body.clone());
+    let handle = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("herdeck-banner".into())
+        .spawn(move || {
+            let mut banner = Notification::new();
+            banner.title(&title).message(&body);
+            if tracked {
+                banner.wait_for_click(true);
+            } else {
+                banner.asynchronous(true);
+            }
+            match banner.send() {
+                Ok(NotificationResponse::Click) | Ok(NotificationResponse::ActionButton(_)) => {
+                    reveal_deck(&handle)
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!("herdeck: native notification failed: {err}"),
+            }
+            if tracked {
+                CLICK_TRACKED_BANNERS.fetch_sub(1, Ordering::SeqCst);
+            }
+        });
+    if let Err(err) = spawned {
+        if tracked {
+            CLICK_TRACKED_BANNERS.fetch_sub(1, Ordering::SeqCst);
+        }
+        return Err(format!("could not start the banner thread: {err}"));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
 fn post_native_notification(
     app: &tauri::AppHandle,
     item: &PendingNotification,
@@ -633,6 +995,75 @@ async fn deck_tile(
         )
     })
     .await
+}
+
+/// Custom URI scheme that serves tile/panel PNGs to the WebView straight from
+/// the discovered runtime, token injected here in Rust — no base64 `data:` URLs
+/// over IPC. The frontend builds image URLs in exactly this form:
+///
+/// - macOS / Linux: `herdeck://localhost/tile/<i>?v=<ver>` and
+///   `herdeck://localhost/panel?v=<ver>`
+/// - Windows (WebView2 maps custom schemes onto http): `http://herdeck.localhost/tile/<i>?v=<ver>`
+///   and `http://herdeck.localhost/panel?v=<ver>`
+///
+/// `v` is the tile/panel version from `/state`; it only makes the URL change
+/// when the image does and is not forwarded. A missing tile/panel is a 404
+/// (the `<img>` fires `error`), no discovery yet a 503, an unreachable runtime
+/// a 502. `deck_tile`/`deck_panel` stay as the fallback transport.
+const IMAGE_SCHEME: &str = "herdeck";
+
+/// Map a request path on the image scheme to the runtime endpoint it proxies —
+/// only `/panel` and `/tile/<index>` (decimal) are served, nothing else.
+fn image_proxy_path(uri_path: &str) -> Option<String> {
+    if uri_path == "/panel" {
+        return Some("/panel".to_string());
+    }
+    let index = uri_path.strip_prefix("/tile/")?;
+    if index.is_empty() || index.len() > 4 || !index.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    index.parse::<u32>().ok().map(|i| format!("/tile/{i}"))
+}
+
+fn image_response(status: u16, png: Vec<u8>) -> tauri::http::Response<Vec<u8>> {
+    let mut builder = tauri::http::Response::builder().status(status);
+    if status == 200 {
+        // Versions restart from zero when the runtime restarts, so the same
+        // `?v=` can name a different image later: revalidate rather than trust
+        // a cached copy. An unchanged `src` is never re-requested by the <img>
+        // anyway, which is where the saving is.
+        builder = builder
+            .header("Content-Type", "image/png")
+            .header("Cache-Control", "no-cache");
+    } else {
+        builder = builder.header("Cache-Control", "no-store");
+    }
+    builder.body(png).unwrap_or_else(|_| {
+        let mut resp = tauri::http::Response::new(Vec::new());
+        *resp.status_mut() = tauri::http::StatusCode::INTERNAL_SERVER_ERROR;
+        resp
+    })
+}
+
+/// Serve one image-scheme request (blocking — runs on the blocking pool).
+fn serve_image_request(app: &tauri::AppHandle, uri_path: &str) -> tauri::http::Response<Vec<u8>> {
+    let Some(path) = image_proxy_path(uri_path) else {
+        return image_response(404, Vec::new());
+    };
+    let Some(d) = app
+        .try_state::<AppState>()
+        .and_then(|s| s.discovery.lock().unwrap().clone())
+    else {
+        return image_response(503, Vec::new());
+    };
+    match http::fetch_png(&d.host, d.port, &path, &d.token, SIDECAR_TIMEOUT) {
+        Ok(Some(png)) => image_response(200, png),
+        Ok(None) => image_response(404, Vec::new()),
+        Err(err) => {
+            eprintln!("herdeck: image proxy {path}: {err}");
+            image_response(502, Vec::new())
+        }
+    }
 }
 
 /// Proxy `GET /panel` → a `data:` PNG URL (or `None` if there is no panel yet).
@@ -955,6 +1386,172 @@ mod plan_tests {
         });
         let (_, _, items) = notification_batch(&state, &cursor).unwrap();
         assert!(items.is_empty());
+    }
+
+    fn discovery_on(port: u16) -> Discovery {
+        Discovery {
+            url: format!("http://127.0.0.1:{port}"),
+            host: "127.0.0.1".into(),
+            port,
+            token: "t".into(),
+            source: "mock".into(),
+        }
+    }
+
+    // A bare `continue` on either of these spun the pump thread at 100% CPU
+    // for as long as the sidecar had not reported in.
+    #[test]
+    fn the_pump_idles_instead_of_spinning_without_permission_or_discovery() {
+        assert_eq!(notify_target(true, None), Err(NOTIFY_RETRY_DELAY));
+        assert_eq!(notify_target(false, Some(discovery_on(1))), Err(NOTIFY_RETRY_DELAY));
+        assert_eq!(notify_target(false, None), Err(NOTIFY_RETRY_DELAY));
+        assert!(NOTIFY_RETRY_DELAY > Duration::ZERO);
+        assert_eq!(notify_target(true, Some(discovery_on(1))), Ok(discovery_on(1)));
+    }
+
+    #[test]
+    fn a_feedless_source_is_unsupported_not_a_failure() {
+        assert_eq!(
+            classify_notify_poll(Ok((200, "{}".into()))),
+            NotifyPoll::Deliver("{}".into())
+        );
+        assert_eq!(classify_notify_poll(Ok((404, String::new()))), NotifyPoll::Unsupported);
+        assert_eq!(classify_notify_poll(Ok((409, String::new()))), NotifyPoll::Failed);
+        assert_eq!(classify_notify_poll(Err("down".into())), NotifyPoll::Failed);
+        assert!(NOTIFY_UNSUPPORTED_BACKOFF >= Duration::from_secs(30));
+    }
+
+    #[test]
+    fn the_unsupported_backoff_wakes_when_discovery_changes() {
+        let start = std::time::Instant::now();
+        assert!(backoff_until(Duration::from_secs(30), || true));
+        assert!(start.elapsed() < Duration::from_secs(1));
+        // And it does wait out the full period when nothing changes.
+        let start = std::time::Instant::now();
+        assert!(!backoff_until(Duration::from_millis(30), || false));
+        assert!(start.elapsed() >= Duration::from_millis(30));
+        assert_ne!(discovery_key(&discovery_on(1)), discovery_key(&discovery_on(2)));
+    }
+
+    fn sound_scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("herdeck-sounds-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn sound_names_are_sorted_unique_playable_stems() {
+        let user = sound_scratch("list-user");
+        let system = sound_scratch("list-system");
+        for f in ["Glass.aiff", "Zap.wav", "notes.txt", "bad.name.aiff", "Ping.caf"] {
+            std::fs::write(user.join(f), b"").unwrap();
+        }
+        for f in ["Glass.aiff", "Basso.aiff"] {
+            std::fs::write(system.join(f), b"").unwrap();
+        }
+        std::fs::create_dir_all(user.join("Folder.aiff")).unwrap();
+        let names = list_sound_names(&[user, system, PathBuf::from("/nonexistent-herdeck")]);
+        assert_eq!(names, vec!["Basso", "Glass", "Ping", "Zap"]);
+    }
+
+    // Every listed sound must be one playback can find: a user sound from
+    // ~/Library/Sounds used to be listed-but-unplayable (only the system folder
+    // and .aiff were searched).
+    #[test]
+    fn sound_resolution_searches_the_user_folder_first_and_any_extension() {
+        let user = sound_scratch("resolve-user");
+        let system = sound_scratch("resolve-system");
+        std::fs::write(user.join("Glass.m4a"), b"").unwrap();
+        std::fs::write(system.join("Glass.aiff"), b"").unwrap();
+        std::fs::write(system.join("Basso.aiff"), b"").unwrap();
+        let dirs = [user.clone(), system.clone()];
+        assert_eq!(resolve_sound_path("Glass", &dirs), Some(user.join("Glass.m4a")));
+        assert_eq!(resolve_sound_path("Basso", &dirs), Some(system.join("Basso.aiff")));
+        assert_eq!(resolve_sound_path("Missing", &dirs), None);
+        assert_eq!(resolve_sound_path("../Basso", &dirs), None);
+    }
+
+    #[test]
+    fn requested_sound_maps_true_to_the_default_and_false_to_silence() {
+        use serde_json::json;
+        assert_eq!(requested_sound_name(&json!(true)), Some(DEFAULT_NOTIFICATION_SOUND));
+        assert_eq!(requested_sound_name(&json!("Hero")), Some("Hero"));
+        assert_eq!(requested_sound_name(&json!(false)), None);
+        assert_eq!(requested_sound_name(&json!("")), None);
+        assert_eq!(requested_sound_name(&json!(null)), None);
+    }
+
+    #[test]
+    fn test_notification_text_exists_in_both_languages() {
+        let (en_t, en_b) = test_notification_texts("en");
+        let (cs_t, cs_b) = test_notification_texts("cs");
+        assert!(!en_t.is_empty() && !en_b.is_empty());
+        assert_ne!(en_t, cs_t);
+        assert_ne!(en_b, cs_b);
+        // Unknown languages fall back to English.
+        assert_eq!(test_notification_texts("de"), (en_t, en_b));
+    }
+
+    #[test]
+    fn a_long_poll_state_request_outlasts_its_wait() {
+        assert_eq!(state_request_timeout(None, None), SIDECAR_TIMEOUT);
+        assert_eq!(state_request_timeout(None, Some(20_000)), SIDECAR_TIMEOUT);
+        // C2: read timeout must exceed wait_ms + 5 s.
+        assert!(state_request_timeout(Some(3), Some(20_000)) > Duration::from_millis(25_000));
+        // The runtime clamps to 25 s; so does the timeout, instead of hanging on.
+        assert_eq!(
+            state_request_timeout(Some(3), Some(600_000)),
+            state_request_timeout(Some(3), Some(25_000))
+        );
+        assert!(state_request_timeout(Some(3), Some(0)) >= SIDECAR_TIMEOUT);
+    }
+
+    #[test]
+    fn state_peek_validates_and_reads_the_blocked_count() {
+        let peek = peek_state(r#"{"version":3,"summary":{"blocked":2,"working":1},"tiles":{}}"#)
+            .unwrap();
+        assert_eq!(peek.blocked(), Some(2));
+        assert_eq!(peek_state(r#"{"version":3}"#).unwrap().blocked(), None);
+        assert!(peek_state("{\"version\":").is_err());
+        assert!(peek_state("not json").is_err());
+    }
+
+    #[test]
+    fn tray_tooltip_names_blocked_agents_in_both_languages() {
+        assert_eq!(tray_tooltip("en", "Herdeck", None), "Herdeck");
+        assert_eq!(tray_tooltip("en", "Herdeck", Some(0)), "Herdeck");
+        assert_eq!(tray_tooltip("en", "Herdeck", Some(3)), "Herdeck — 3 blocked");
+        assert_eq!(tray_tooltip("cs", "Herdeck", Some(3)), "Herdeck — zablokováno: 3");
+        assert_ne!(tray_blocked_label("en", 1), tray_blocked_label("cs", 1));
+    }
+
+    #[test]
+    fn tray_left_click_opens_the_menu_on_macos() {
+        assert_eq!(tray_menu_on_left_click(), cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn the_image_scheme_only_proxies_tiles_and_the_panel() {
+        assert_eq!(image_proxy_path("/panel").as_deref(), Some("/panel"));
+        assert_eq!(image_proxy_path("/tile/0").as_deref(), Some("/tile/0"));
+        assert_eq!(image_proxy_path("/tile/14").as_deref(), Some("/tile/14"));
+        assert_eq!(image_proxy_path("/tile/007").as_deref(), Some("/tile/7"));
+        for bad in ["/", "/state", "/config", "/tile/", "/tile/-1", "/tile/1/x", "/tile/99999", "/panel/x", "/tile/1%2F"] {
+            assert_eq!(image_proxy_path(bad), None, "{bad} must not be proxied");
+        }
+    }
+
+    #[test]
+    fn image_responses_carry_type_and_cache_policy() {
+        let ok = image_response(200, vec![1, 2]);
+        assert_eq!(ok.status(), 200);
+        assert_eq!(ok.headers()["Content-Type"], "image/png");
+        assert_eq!(ok.headers()["Cache-Control"], "no-cache");
+        assert_eq!(ok.body(), &vec![1, 2]);
+        let missing = image_response(404, Vec::new());
+        assert_eq!(missing.status(), 404);
+        assert_eq!(missing.headers()["Cache-Control"], "no-store");
     }
 
     #[test]
@@ -2043,35 +2640,28 @@ fn persist_deck_always_on_top(state: &AppState, target: bool) -> Result<(), Stri
 }
 
 /// (Re)register the deck-toggle global shortcut from the sidecar's `/config`.
-/// Best-effort: any failure is logged and leaves the deck usable without a hotkey.
-fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) {
+/// A failure leaves the deck usable without a hotkey; it is returned as a
+/// message so `reload_hotkey` can surface it in the settings UI (C4). When the
+/// configured accelerator cannot be registered the default is tried instead,
+/// and the error still says the configured one failed.
+fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
 
-    let body = match http::http_get(
+    let body = http::http_get(
         &d.host,
         d.port,
         &format!("/config?token={}", d.token),
         SIDECAR_TIMEOUT,
-    ) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("hotkey: /config fetch failed: {e}");
-            return;
-        }
-    };
-    let cfg: serde_json::Value = match serde_json::from_str(&body) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("hotkey: invalid /config JSON: {e}");
-            return;
-        }
-    };
+    )
+    .map_err(|e| format!("hotkey: /config fetch failed: {e}"))?;
+    let cfg: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("hotkey: invalid /config JSON: {e}"))?;
     let accel = match hotkey::toggle_deck_accelerator(&cfg) {
         Some(a) => a,
-        None => return, // explicitly disabled
+        None => return Ok(()), // explicitly disabled
     };
 
     let app_for_cb = app.clone();
@@ -2080,35 +2670,45 @@ fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) {
             toggle_deck_window(&app_for_cb);
         }
     };
-    if let Err(e) = gs.on_shortcut(accel.as_str(), handler) {
-        eprintln!("hotkey: register '{accel}' failed: {e}");
-        if accel != hotkey::DEFAULT_TOGGLE_DECK {
-            let app_for_fb = app.clone();
-            let _ = gs.on_shortcut(
-                hotkey::DEFAULT_TOGGLE_DECK,
-                move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
-                    if event.state == ShortcutState::Pressed {
-                        toggle_deck_window(&app_for_fb);
-                    }
-                },
-            );
+    let Err(e) = gs.on_shortcut(accel.as_str(), handler) else {
+        return Ok(());
+    };
+    let mut msg = format!("could not register the deck hotkey '{accel}': {e}");
+    if accel != hotkey::DEFAULT_TOGGLE_DECK {
+        let app_for_fb = app.clone();
+        let fallback = gs.on_shortcut(
+            hotkey::DEFAULT_TOGGLE_DECK,
+            move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
+                if event.state == ShortcutState::Pressed {
+                    toggle_deck_window(&app_for_fb);
+                }
+            },
+        );
+        if fallback.is_ok() {
+            msg.push_str(&format!(" (using the default '{}' instead)", hotkey::DEFAULT_TOGGLE_DECK));
         }
+    }
+    Err(format!("hotkey: {msg}"))
+}
+
+/// Startup/discovery-time registration: nobody is waiting for the result, so a
+/// failure is only logged (the settings UI learns it from `reload_hotkey`).
+fn register_toggle_hotkey_logged(app: &tauri::AppHandle, d: &Discovery) {
+    if let Err(e) = register_toggle_hotkey(app, d) {
+        eprintln!("{e}");
     }
 }
 
 /// Re-read `/config` and re-register the deck-toggle hotkey (the editor calls
 /// this after a successful config write so a changed accelerator takes effect).
+/// `Err` carries the registration failure for the settings UI to show.
 #[tauri::command]
 async fn reload_hotkey(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let d = current_discovery(&state)?;
-    run_blocking(move || {
-        register_toggle_hotkey(&app, &d);
-        Ok(())
-    })
-    .await
+    run_blocking(move || register_toggle_hotkey(&app, &d)).await
 }
 
 /// The always-on-top value a live re-read should apply, or `None` when the
@@ -2180,6 +2780,27 @@ fn tray_labels(lang: &str) -> [&'static str; 8] {
             "Check for updates",
             "Quit",
         ],
+    }
+}
+
+/// The tray icon's id, for `tray_by_id` lookups after `build_tray`.
+const TRAY_ID: &str = "herdeck-tray";
+
+/// The blocked-agent part of the tray tooltip. A count-first "label: n" form in
+/// Czech sidesteps plural agreement.
+fn tray_blocked_label(lang: &str, blocked: u64) -> String {
+    match lang {
+        "cs" => format!("zablokováno: {blocked}"),
+        _ => format!("{blocked} blocked"),
+    }
+}
+
+/// The tray tooltip: the app's display name, plus how many agents are blocked
+/// when any are (the count the deck's own `/state` poll just reported).
+fn tray_tooltip(lang: &str, name: &str, blocked: Option<u64>) -> String {
+    match blocked {
+        Some(n) if n > 0 => format!("{name} — {}", tray_blocked_label(lang, n)),
+        _ => name.to_string(),
     }
 }
 
@@ -2256,6 +2877,9 @@ struct TrayMenuItems {
     /// run from every path that shows or hides the deck) can pick the right
     /// string without its caller having to track the language too.
     lang: Mutex<String>,
+    /// The blocked-agent count the tooltip last showed, so the tooltip is only
+    /// touched when it actually changes (`/state` is polled many times a second).
+    blocked: Mutex<Option<u64>>,
 }
 
 impl TrayMenuItems {
@@ -2298,7 +2922,37 @@ fn tray_set_language(app: tauri::AppHandle, lang: String, handles: tauri::State<
     let deck_visible = deck_is_visible(&app);
     if let Some(items) = handles.0.lock().unwrap().as_ref() {
         items.retitle(&lang, deck_visible);
+        let blocked = *items.blocked.lock().unwrap();
+        set_tray_tooltip(&app, &lang, blocked);
     }
+}
+
+fn set_tray_tooltip(app: &tauri::AppHandle, lang: &str, blocked: Option<u64>) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let text = tray_tooltip(lang, &build_channel::display_name(), blocked);
+        let _ = tray.set_tooltip(Some(text));
+    }
+}
+
+/// Record the blocked-agent count from a `/state` response and retitle the
+/// tray tooltip — only when the count changed.
+fn update_tray_blocked(app: &tauri::AppHandle, blocked: Option<u64>) {
+    let Some(handles) = app.try_state::<TrayHandles>() else {
+        return;
+    };
+    let lang = {
+        let guard = handles.0.lock().unwrap();
+        let Some(items) = guard.as_ref() else {
+            return;
+        };
+        let mut last = items.blocked.lock().unwrap();
+        if *last == blocked {
+            return;
+        }
+        *last = blocked;
+        items.current_lang()
+    };
+    set_tray_tooltip(app, &lang, blocked);
 }
 
 /// Build the deck's right-click context menu fresh for every popup, so its
@@ -2379,6 +3033,13 @@ fn show_deck_context_menu(
     menu.popup(webview.window()).map_err(|e| e.to_string())
 }
 
+/// Whether a left click on the tray icon opens its menu. Left click with the
+/// menu disabled and no click handler did NOTHING on macOS, where the menu bar
+/// has no right-click habit to fall back on.
+fn tray_menu_on_left_click() -> bool {
+    cfg!(target_os = "macos")
+}
+
 /// Build the tray icon. `deck_always_on_top` and `deck_visible` are the
 /// values `run()` already resolved at startup (config text + window state) —
 /// handed in rather than re-read here, so the tray's initial checkbox and
@@ -2440,13 +3101,31 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
             check_update: check_update.clone(),
             quit: quit.clone(),
             lang: Mutex::new("en".to_string()),
+            blocked: Mutex::new(None),
         });
     }
 
-    let mut builder = TrayIconBuilder::with_id("herdeck-tray")
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(build_channel::display_name())
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        // macOS convention: a menu-bar extra opens its menu on a left click
+        // too. Elsewhere the right click opens the menu and a left click
+        // toggles the deck (see `on_tray_icon_event`).
+        .show_menu_on_left_click(tray_menu_on_left_click())
+        .on_tray_icon_event(|tray, event| {
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+            if tray_menu_on_left_click() {
+                return;
+            }
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                toggle_deck_window(tray.app_handle());
+            }
+        })
         .on_menu_event(move |app, event| match event.id.as_ref() {
             MENU_ID_SHOW_APP => {
                 // Also the deck context menu's "Open Herdeck" item
@@ -2555,7 +3234,7 @@ fn start_sidecar(
     match resolve_plan(resource_dir) {
         SidecarPlan::External(d, from_runtime_json) => {
             let view = DiscoveryView::from(&d);
-            register_toggle_hotkey(app.handle(), &d);
+            register_toggle_hotkey_logged(app.handle(), &d);
             if let Some(state) = app.try_state::<AppState>() {
                 state
                     .attached_from_runtime_json
@@ -2578,7 +3257,7 @@ fn start_sidecar(
             std::thread::spawn(move || {
                 supervise(SupervisorConfig::new(spec), child, stop, move |d| {
                     let view = DiscoveryView::from(&d);
-                    register_toggle_hotkey(&handle, &d);
+                    register_toggle_hotkey_logged(&handle, &d);
                     if let Some(state) = handle.try_state::<AppState>() {
                         *state.discovery.lock().unwrap() = Some(d);
                     }
@@ -2638,6 +3317,14 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .manage(TrayHandles::default())
+        .register_asynchronous_uri_scheme_protocol(IMAGE_SCHEME, |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_string();
+            // Never block the WebView's scheme thread on loopback I/O.
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(serve_image_request(&app, &path));
+            });
+        })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -2669,7 +3356,10 @@ pub fn run() {
             show_app,
             deck_visible,
             tray_set_language,
-            show_deck_context_menu
+            show_deck_context_menu,
+            notification_sounds,
+            test_notification,
+            notification_permission
         ])
         .setup(move |app| {
             // Mark banner duty as claimed up-front (the desktop plugin's
@@ -2809,6 +3499,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build herdeck desktop app")
         .run(move |app_handle, event| {
+            // Dock icon click / relaunch from Finder while already running:
+            // with both windows hidden it would otherwise do nothing at all.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                reveal_deck(app_handle);
+                return;
+            }
             if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
                 // The last chance to save a deck position that was dragged and
                 // never hidden — `Moved` deliberately does not touch the disk.

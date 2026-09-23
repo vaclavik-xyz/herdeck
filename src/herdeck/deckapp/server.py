@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..config import ConfigError
+from ..i18n import tr
 from ..model import AgentKey
 from ..orchestrator import Orchestrator
 from ..pins import PinStore
@@ -38,6 +39,35 @@ _FORBIDDEN = (
     b"herdeck deckapp: missing or invalid access token.\n"
     b"The token is handed to the desktop shell on startup; it is never in logs.\n"
 )
+
+
+def tile_accessible_label(tile, lang: str = "en") -> str:
+    """Screen-reader description of one rendered tile (/state "tile_labels").
+
+    Built only from the TileView the deck just rendered, so it always says
+    what the tile shows: agent tiles read like ``claude · herdeck · main ·
+    working 3m``; control tiles give their label (plus the option text of a
+    drill choice); blank cells say so instead of staying silent.
+    """
+    label = (tile.label or "").strip()
+    if tile.color == "empty" and not label:
+        return tr(lang, "a11y.empty_tile", n=tile.index + 1)
+    if tile.agent_type:
+        parts = [tile.agent_type]
+        for part in (tile.repo or label, tile.branch):
+            part = (part or "").strip()
+            if part and part not in parts:
+                parts.append(part)
+        status = " ".join(
+            p for p in ((tile.status_text or "").strip().lower(), tile.time_text or "") if p
+        )
+        if status:
+            parts.append(status)
+        if tile.pinned:
+            parts.append(tr(lang, "a11y.pinned"))
+        return " · ".join(parts)
+    parts = [p for p in (label, (tile.subtext or "").strip()) if p]
+    return " · ".join(parts) or tr(lang, "a11y.empty_tile", n=tile.index + 1)
 
 
 class DeckApp:
@@ -111,6 +141,31 @@ class DeckApp:
         self._version = 0
         self._sinks: list = []  # RenderSink fan-out targets (HTTP buffer is DeckApp's own)
         self._ticks = 0
+        # Accessible per-tile descriptions (/state "tile_labels", contract C1).
+        self._tile_labels: dict[int, str] = {}
+        # Long-poll /state waiters block on this; every version bump notifies
+        # (it shares self._lock, so waiting releases the render lock).
+        self._state_changed = threading.Condition(self._lock)
+        # Digest of the /state fields that are NOT image versions (summary,
+        # connection flags, sections, labels, language). Some changes leave
+        # every PNG byte-identical (a bridge dropping, an off-screen agent
+        # unblocking while drilled), so _apply_rendered_locked bumps the
+        # version on a digest change too — else long-poll waiters sleep on
+        # stale data until their timeout.
+        self._state_digest: str | None = None
+        # Rasterization (IconProvider + Pillow) is not thread-safe, but it must
+        # not hold self._lock either: the ticker rasterizes OUTSIDE the state
+        # lock under this one. Lock order is always self._lock -> _raster_lock.
+        self._raster_lock = threading.Lock()
+        # Render sequencing: a frame rendered outside the lock is applied only
+        # if no newer frame landed meanwhile, so versions/tiles never go back.
+        self._render_seq = 0
+        self._applied_seq = 0
+        # Headless ticker: skip animation renders nobody reads (see _tick_once).
+        self._ticker_stale = False
+        self._state_waiters = 0
+        self._state_last_read = float("-inf")
+        self._setup_cache: tuple[tuple, float, dict] | None = None
 
         # Hand the source the render orchestrator (plus this lock and the lock-free
         # render) so a live source can drive on_press/read-results against the very
@@ -161,8 +216,10 @@ class DeckApp:
         return self._slots
 
     def _bump(self) -> int:
-        """Assign the next monotonic version. Call while holding self._lock."""
+        """Assign the next monotonic version and wake long-poll /state
+        waiters. Call while holding self._lock."""
         self._version += 1
+        self._state_changed.notify_all()
         return self._version
 
     @staticmethod
@@ -199,22 +256,36 @@ class DeckApp:
             self._refresh_locked()
 
     def _render_locked(self, source, orch, slots, *, icons=None):
-        """Render `source` through `orch` → (tiles, panel_png, sections). This is the
-        FALLIBLE part of a refresh (apply_to / orchestrator render / icon raster / panel
-        compose); apart from the value-keyed panel memo it mutates no self state, so it
-        can run on a throwaway orchestrator in `_prepare_swap` or on the live deck
-        inside `_refresh_locked`."""
-        import io
+        """Render `source` through `orch` → (rs, tiles, panel_png, sections, labels).
+        This is the FALLIBLE part of a refresh (apply_to / orchestrator render / icon
+        raster / panel compose); apart from the value-keyed panel memo it mutates no
+        self state, so it can run on a throwaway orchestrator in `_prepare_swap` or on
+        the live deck inside `_refresh_locked`."""
+        rs = self._snapshot_render(source, orch)
+        return (rs, *self._rasterize(rs, slots, icons=icons, source=source))
 
-        from ..icons import PANEL_W_TWO_CELL, compose_panel
-
+    def _snapshot_render(self, source, orch):
+        """Feed the orchestrator and take its RenderState. Mutates `orch`, so the
+        live deck calls it under self._lock; the result is plain view data."""
         # ALWAYS feed usage state (empty when off): the orchestrator may carry
         # usage lines from before a swap that disabled [usage] — only an
         # unconditional set clears them (roborev e0eeb95).
         poller = self._usage_poller
         orch.set_usage(poller.snapshot() if poller is not None else [])
         source.apply_to(orch)
-        rs = orch.render()
+        return orch.render()
+
+    def _rasterize(self, rs, slots, *, icons=None, source=None):
+        """RenderState → (tiles, panel_png, sections, labels). Touches no deck
+        state except the panel memo, so the ticker runs it outside self._lock."""
+        with self._raster_lock:
+            return self._rasterize_serialized(rs, slots, icons, source or self._source)
+
+    def _rasterize_serialized(self, rs, slots, icons, source):
+        import io
+
+        from ..icons import PANEL_W_TWO_CELL, compose_panel
+
         icon_provider = icons if icons is not None else self._icons
         tiles = {
             t.index: icon_provider.render_tile_bytes(t) for t in rs.tiles if t.index < slots
@@ -234,9 +305,13 @@ class DeckApp:
             panel_png = buf.getvalue()
             self._panel_memo = (panel_key, panel_png)
         sections = {t.index: t.section for t in rs.tiles if t.index < slots and t.section}
-        return rs, tiles, panel_png, sections
+        lang = getattr(source, "language", "en")
+        labels = {
+            t.index: tile_accessible_label(t, lang) for t in rs.tiles if t.index < slots
+        }
+        return tiles, panel_png, sections, labels
 
-    def _apply_rendered_locked(self, tiles, panel_png, sections):
+    def _apply_rendered_locked(self, tiles, panel_png, sections, labels=None):
         """Assign pre-rendered tiles/panel/sections with version bumps — pure dict/int ops
         (no rendering), so it CANNOT raise. Callers hold self._lock. Byte-for-byte the tail
         of the original `_refresh_locked`."""
@@ -250,14 +325,76 @@ class DeckApp:
             self._bump()
         self._tiles = tiles
         self._tile_sections = sections
+        if labels is not None:
+            self._tile_labels = labels
         if self._panel != panel_png:
             self._panel = panel_png
             self._panel_ver = self._bump()
+        digest = self._state_digest_locked()
+        if digest != self._state_digest:
+            self._state_digest = digest
+            self._bump()
+
+    def _state_meta_locked(self) -> dict:
+        """The /state fields derived from the source/bridges rather than from
+        rendered images. Callers hold self._lock."""
+        meta = {
+            "summary": self._source.summary(),
+            "source": self._source.source_name,
+            "connected": self._source.connected,
+            "language": getattr(self._source, "language", "en"),
+        }
+        connections = getattr(self._source, "connections", None)
+        if isinstance(connections, dict):
+            meta["connections"] = connections
+        local_connections = {
+            session_name: server_id
+            for server_id, runner in getattr(self, "_local_bridges", {}).items()
+            if isinstance(
+                session_name := getattr(runner, "_herdeck_session_name", None),
+                str,
+            )
+            and session_name
+        }
+        if local_connections:
+            meta["local_connections"] = local_connections
+        return meta
+
+    def _state_digest_locked(self) -> str:
+        return repr(
+            (
+                sorted(self._state_meta_locked().items()),
+                sorted(self._tile_sections.items()),
+                sorted(self._tile_labels.items()),
+            )
+        )
 
     def _refresh_locked(self, *, working=None, full=True, ticker=False) -> None:
-        rs, tiles, panel_png, sections = self._render_locked(self._source, self._orch, self._slots)
-        self._apply_rendered_locked(tiles, panel_png, sections)
+        rs, tiles, panel_png, sections, labels = self._render_locked(
+            self._source, self._orch, self._slots
+        )
+        self._render_seq += 1
+        self._applied_seq = self._render_seq  # newest frame: supersedes any in flight
+        self._ticker_stale = False
+        self._apply_rendered_locked(tiles, panel_png, sections, labels)
         self._fan_out_locked(rs, working, full, ticker)
+
+    def _refresh_split(self, rs, seq, orch, slots, *, working, full, ticker) -> bool:
+        """Rasterize a RenderState snapshot taken under self._lock WITHOUT holding
+        it, then apply it under the lock — unless a newer frame (or a source
+        swap) already landed, which keeps versions and tiles monotonic.
+
+        Callers take ``rs`` + ``seq`` under self._lock and release it first.
+        Returns True when the frame was applied."""
+        tiles, panel_png, sections, labels = self._rasterize(rs, slots)
+        with self._lock:
+            if seq <= self._applied_seq or orch is not self._orch:
+                return False
+            self._applied_seq = seq
+            self._ticker_stale = False
+            self._apply_rendered_locked(tiles, panel_png, sections, labels)
+            self._fan_out_locked(rs, working, full, ticker)
+            return True
 
     def _fan_out_locked(self, rs, working, full, ticker=False) -> None:
         """Deliver the rendered frame to every sink under self._lock. A sink that
@@ -321,24 +458,72 @@ class DeckApp:
             )
             self._ticker_thread.start()
 
+    # A /state reader within this window (or a long-poll waiter) keeps the
+    # ticker rendering; with none, animation frames are skipped (headless).
+    STATE_READER_TTL_S = 5.0
+
+    def _note_state_read(self) -> None:
+        self._state_last_read = time.monotonic()
+
+    def _has_state_reader(self) -> bool:
+        return (
+            self._state_waiters > 0
+            or time.monotonic() - self._state_last_read < self.STATE_READER_TTL_S
+        )
+
+    def _ticker_consumers_locked(self) -> bool:
+        """Does anyone consume ticker (animation/elapsed) frames right now?
+        The D200 sink drops them (full-page uploads blink); unknown sinks are
+        assumed to want them."""
+        if self._has_state_reader():
+            return True
+        return any(getattr(sink, "wants_ticker_frames", True) for sink in self._sinks)
+
     def _tick_once(self) -> None:
-        """Advance the spinner phase and re-render, atomically w.r.t. presses
-        and bridge updates (same lock). A tick renders only when something
-        actually animates (a WORKING tile) or on the periodic full refresh —
-        bridge updates and presses trigger their own refresh, so an idle deck
-        does no per-tick render/encode/device work at all (matching the legacy
-        App.handle_tick). Every FULL_REFRESH_TICKS-th tick is a full frame so
-        idle elapsed text advances and every sink resyncs."""
+        """Advance the spinner phase and re-render. A tick renders only when
+        something actually animates (a WORKING tile) or on the periodic full
+        refresh — bridge updates and presses trigger their own refresh, so an
+        idle deck does no per-tick render/encode/device work at all (matching
+        the legacy App.handle_tick). Every FULL_REFRESH_TICKS-th tick is a full
+        frame so idle elapsed text advances and every sink resyncs.
+
+        The orchestrator tick + RenderState snapshot run under self._lock
+        (atomic w.r.t. presses and bridge updates); the costly rasterization
+        runs OUTSIDE it (see _refresh_split), so /state, /tile, presses and
+        bridge updates are not stalled behind a cold ~70ms frame.
+
+        Ticker frames nobody reads are skipped: a headless runtime driving
+        only a D200 (which ignores ticker frames) marks the deck stale instead,
+        and the next /state read renders on demand."""
         with self._lock:
             working = self._orch.tick()
             self._ticks += 1
             hold_expired = self._orch.consume_expired_panel_hold()
             if hold_expired:
-                self._refresh_locked(working=None, full=True)
+                kwargs = {"working": None, "full": True, "ticker": False}
             elif self._ticks % self.FULL_REFRESH_TICKS == 0:
-                self._refresh_locked(working=None, full=True, ticker=True)
+                kwargs = {"working": None, "full": True, "ticker": True}
             elif working:
-                self._refresh_locked(working=working, full=False, ticker=True)
+                kwargs = {"working": working, "full": False, "ticker": True}
+            else:
+                return
+            if kwargs["ticker"] and not self._ticker_consumers_locked():
+                self._ticker_stale = True
+                return
+            rs = self._snapshot_render(self._source, self._orch)
+            self._render_seq += 1
+            seq, orch, slots = self._render_seq, self._orch, self._slots
+        self._refresh_split(rs, seq, orch, slots, **kwargs)
+
+    def _refresh_if_stale(self) -> None:
+        """Render on demand for a reader after headless ticks were skipped."""
+        with self._lock:
+            if not self._ticker_stale:
+                return
+            rs = self._snapshot_render(self._source, self._orch)
+            self._render_seq += 1
+            seq, orch, slots = self._render_seq, self._orch, self._slots
+        self._refresh_split(rs, seq, orch, slots, working=None, full=True, ticker=True)
 
     def _ticker_loop(self) -> None:
         # A config reload wakes the current wait so a shorter interval takes
@@ -483,7 +668,7 @@ class DeckApp:
     def _prepare_swap(self, new_source, *, clock=None):
         """Build the orchestrator AND render `new_source` into it — all the FALLIBLE parts
         of a swap (grid parse, Orchestrator construction, render). Returns a prepared bundle
-        `(slots, orch, clock, icons, icons_dir, rs, tiles, panel_png, sections)` for an
+        `(slots, orch, clock, icons, icons_dir, rs, tiles, panel_png, sections, labels)` for an
         assignment-only commit;
         mutates NO live deck state (throwaway orchestrator), so any failure raises here,
         BEFORE anything is swapped or persisted. Pass `clock=time.monotonic` for a LIVE
@@ -500,10 +685,10 @@ class DeckApp:
             if self._owns_icons and icons_dir != self._icons_dir
             else self._icons
         )
-        rs, tiles, panel_png, sections = self._render_locked(
+        rs, tiles, panel_png, sections, labels = self._render_locked(
             new_source, orch, slots, icons=icons
         )
-        return slots, orch, clk, icons, icons_dir, rs, tiles, panel_png, sections
+        return slots, orch, clk, icons, icons_dir, rs, tiles, panel_png, sections, labels
 
     def _commit_swap(self, new_source, prepared) -> None:
         """Assign the prepared source/orchestrator/clock + its pre-rendered tiles under the
@@ -511,7 +696,7 @@ class DeckApp:
         the post-persist swap is guaranteed not to half-swap. The single lock serializes
         against in-flight reads/presses. After applying the new tiles the sink list is
         fanned out a full frame so physical sinks repaint immediately on swap."""
-        slots, orch, clk, icons, icons_dir, rs, tiles, panel_png, sections = prepared
+        slots, orch, clk, icons, icons_dir, rs, tiles, panel_png, sections, labels = prepared
         usage_changed = self._adopt_usage_config(new_source.config)
         with self._lock:
             old = self._source
@@ -530,7 +715,10 @@ class DeckApp:
                 self._set_sink_slots_locked(sink, slots)
                 if hardware_changed:
                     self._reconfigure_sink_locked(sink)
-            self._apply_rendered_locked(tiles, panel_png, sections)
+            self._render_seq += 1
+            self._applied_seq = self._render_seq
+            self._ticker_stale = False
+            self._apply_rendered_locked(tiles, panel_png, sections, labels)
             self._fan_out_locked(rs, None, True)
             if usage_changed:
                 # The prepared frame was rendered with the OLD poller's data
@@ -554,6 +742,7 @@ class DeckApp:
         if getattr(self, "_suppress_reload", False):
             return
         with self._setup_lock:  # serialize against in-flight connect / config-write transactions
+            self._invalidate_setup_cache()
             if self._reloader is not None:
                 self._reloader()
 
@@ -574,6 +763,7 @@ class DeckApp:
                 if not watcher.dirty():
                     return  # already handled by the route that held the lock
                 watcher.resync()  # adopt BEFORE reloading (this callback owns it)
+            self._invalidate_setup_cache()
             if self._reloader is not None:
                 self._reloader()
 
@@ -611,7 +801,29 @@ class DeckApp:
                 < self._SHELL_CLAIM_TTL_S
             )
 
+    STATE_WAIT_MAX_MS = 25_000
+
+    def _wait_state(self, after: int, wait_ms: int) -> dict:
+        """Long-poll /state (contract C2): return at once when the version
+        already differs from ``after``, else block until it changes or
+        ``wait_ms`` (clamped to STATE_WAIT_MAX_MS) elapses. A waiter counts as
+        a live /state reader, so the ticker keeps animating for it."""
+        timeout = min(self.STATE_WAIT_MAX_MS, max(0, wait_ms)) / 1000.0
+        with self._lock:
+            self._state_waiters += 1
+        try:
+            self._note_state_read()
+            self._refresh_if_stale()
+            with self._lock:
+                self._state_changed.wait_for(lambda: self._version != after, timeout=timeout)
+        finally:
+            with self._lock:
+                self._state_waiters -= 1
+        return self._state()
+
     def _state(self) -> dict:
+        self._note_state_read()
+        self._refresh_if_stale()
         with self._lock:
             state = {
                 "version": self._version,
@@ -620,30 +832,14 @@ class DeckApp:
                 "panel": self._panel_ver,
                 "tiles": dict(self._tile_ver),
                 "tile_sections": dict(self._tile_sections),
-                "summary": self._source.summary(),
-                "source": self._source.source_name,
-                "connected": self._source.connected,
-                "language": getattr(self._source, "language", "en"),
-                "notify": (
-                    self._source.notifications_feed_state()
-                    if hasattr(self._source, "notifications_feed_state")
-                    else {"seq": 0, "items": []}
-                ),
+                "tile_labels": {
+                    i: label for i, label in self._tile_labels.items() if i in self._tile_ver
+                },
+                # Notifications are NOT part of /state: the shell long-polls
+                # /notifications (acknowledged feed). The old "notify" mirror
+                # had no consumer and copied the whole feed on every poll.
             }
-            connections = getattr(self._source, "connections", None)
-            if isinstance(connections, dict):
-                state["connections"] = connections
-            local_connections = {
-                session_name: server_id
-                for server_id, runner in self._local_bridges.items()
-                if isinstance(
-                    session_name := getattr(runner, "_herdeck_session_name", None),
-                    str,
-                )
-                and session_name
-            }
-            if local_connections:
-                state["local_connections"] = local_connections
+            state.update(self._state_meta_locked())
             return state
 
     def _health(self) -> dict:
@@ -659,22 +855,75 @@ class DeckApp:
             health["server_ids"] = list(connections)
         return health
 
-    def _setup_status(self) -> dict:
+    # /setup is polled by the desktop onboarding card. Its disk facts (two
+    # TOML reads, the onboarding marker, a sessions glob and one socket probe
+    # per session) are cached while the files they come from are unchanged,
+    # for at most this long so a started/stopped Herdr still shows up quickly.
+    _SETUP_CACHE_TTL_S = 2.0
+
+    def _invalidate_setup_cache(self) -> None:
+        self._setup_cache = None
+
+    def _setup_signature(self, config_path) -> tuple:
+        from .onboarding import state_path
+
+        herdr_dir = Path.home() / ".config" / "herdr"
+        paths = (
+            config_path,
+            getattr(self._config_service, "_local_path", None),
+            state_path(config_path),
+            herdr_dir,
+            herdr_dir / "sessions",
+        )
+        stats = []
+        for path in paths:
+            try:
+                st = os.stat(path) if path is not None else None
+            except OSError:
+                st = None
+            stats.append((st.st_mtime_ns, st.st_size, st.st_ino) if st else None)
+        env = tuple(
+            os.environ.get(name)
+            for name in ("HERDR_SOCKET", "HERDR_SOCKET_PATH", "HERDR_SESSION", "HERDECK_MOCK")
+        )
+        return (str(config_path), tuple(stats), env)
+
+    def _setup_disk_facts(self, config_path) -> dict:
         from ..bootstrap import resolve_saved_socket_path
         from .onboarding import read_choice
         from .sessions import discover_local_sessions
 
+        signature = self._setup_signature(config_path)
+        now = time.monotonic()
+        cached = self._setup_cache
+        if (
+            cached is not None
+            and cached[0] == signature
+            and now - cached[1] < self._SETUP_CACHE_TTL_S
+        ):
+            return cached[2]
+        facts = {
+            "socket_path": resolve_saved_socket_path(config_path),
+            "local_sessions": discover_local_sessions(
+                getattr(self._config_service, "_local_path", None)
+            ),
+            "choice": read_choice(config_path),
+            "saved_remote": _has_saved_remote(self._config_service),
+        }
+        self._setup_cache = (signature, now, facts)
+        return facts
+
+    def _setup_status(self) -> dict:
         config_path = str(self._config_service._config_path) if self._config_service else None
-        socket_path = resolve_saved_socket_path(config_path)
-        local_sessions = discover_local_sessions(
-            getattr(self._config_service, "_local_path", None)
-        )
+        facts = self._setup_disk_facts(config_path)
+        socket_path = facts["socket_path"]
+        local_sessions = facts["local_sessions"]
         selected_sessions = [session for session in local_sessions if session.selected]
         socket_exists = any(session.available for session in local_sessions)
         selected_socket_exists = any(session.available for session in selected_sessions)
         if selected_sessions:
             socket_path = selected_sessions[0].socket_path
-        choice = read_choice(config_path)
+        choice = facts["choice"]
         live = self._source.source_name == "live"
         if live:
             local_ids = set(getattr(self, "_local_bridges", {}))
@@ -701,7 +950,7 @@ class DeckApp:
             "connected": self._source.connected,
             "reason": reason,
             "local_herdr_available": socket_exists,
-            "saved_remote_available": _has_saved_remote(self._config_service),
+            "saved_remote_available": facts["saved_remote"],
             "choice": choice,
             "socket_path": socket_path,
             "local_sessions": [session.public() for session in local_sessions],
@@ -773,7 +1022,18 @@ class DeckApp:
                         return
                     if self.headers.get("X-Herdeck-Shell") == "1":
                         app.note_shell_claim(self.headers.get("X-Herdeck-Shell-Gen"))
-                    self._send(200, json.dumps(app._state()).encode(), "application/json")
+                    params = parse_qs(url.query)
+                    if "after" in params:
+                        try:
+                            after = int(params["after"][0])
+                            wait_ms = int(params.get("wait_ms", ["0"])[0])
+                        except (TypeError, ValueError):
+                            self._send(400)
+                            return
+                        state = app._wait_state(after, wait_ms)
+                    else:
+                        state = app._state()
+                    self._send(200, json.dumps(state).encode(), "application/json")
                 elif path == "/notifications":
                     if not self._require_query_token(url):
                         return
@@ -944,7 +1204,10 @@ class DeckApp:
                     if body is _BAD_BODY:
                         return
                     with app._setup_lock:  # serialize concurrent connects (ThreadingHTTPServer)
-                        result = connect(app, body)
+                        try:
+                            result = connect(app, body)
+                        finally:
+                            app._invalidate_setup_cache()
                     if result is None:
                         self._send(400)
                         return
@@ -1196,12 +1459,12 @@ def _resolve_source_kind():
     """Gather the facts and apply select_source_kind."""
     from ..bootstrap import resolve_saved_socket_path
     from .onboarding import read_choice
-    from .sessions import selected_local_sessions
+    from .sessions import selected_local_sessions, socket_alive
 
     config_path, local_path = _default_config_paths()
     socket_path = resolve_saved_socket_path(config_path)
     choice = read_choice(config_path)
-    socket_exists = os.path.exists(socket_path)
+    socket_exists = socket_alive(socket_path)  # a stale socket after a crash is not "local"
     exact_session_override = any(
         os.environ.get(name)
         for name in ("HERDR_SOCKET", "HERDR_SOCKET_PATH", "HERDR_SESSION")
@@ -1707,6 +1970,73 @@ def build_live_source_for_connect(config, server=None, **kwargs):
     return build_live_source(config, server, **kwargs)
 
 
+# Stable machine-readable ids for /setup* failures (contract C3). Every
+# {"ok": False} response keeps its human "error" message and adds one of these
+# as "code"; the desktop maps known codes to localized text and falls back to
+# the raw message. Keep this list in sync with the _fail() call sites:
+#   demo_switch_failed          switching to the demo deck failed
+#   unknown_local_session       a requested local session name does not exist
+#   no_session_selected         nothing running selected and no saved connection
+#   connections_build_failed    starting the selected local/saved connections failed
+#   config_read_failed          config.toml / local.toml could not be read
+#   selection_save_failed       persisting the session selection failed
+#   herdr_socket_not_found      no live herdr socket at the resolved path
+#   herdr_too_old               herdr lacks session.snapshot (run `herdr update`)
+#   local_start_failed          the embedded local bridge could not start
+#   token_env_conflict          HERDECK_<ID>_TOKEN in the env shadows the typed token
+#   bad_token                   the bridge rejected the token (probe)
+#   bridge_unreachable          the bridge URL did not answer (probe)
+#   config_unreadable           the existing config is not valid TOML
+#   config_malformed            the existing config has a malformed [[servers]] list
+#   token_env_in_use            the derived token env name is used elsewhere
+#   server_not_in_profile       the active profile does not include this server
+#   remote_build_failed         building the remote live source failed
+#   token_read_failed           the keychain could not be read
+#   token_store_failed          the keychain could not store the token
+#   config_write_failed         writing config.toml failed
+#   config_invalid              the merged config failed validation
+#   onboarding_finalize_failed  clearing the onboarding marker failed
+#   no_saved_connection         "use saved" but no resolvable saved server
+#   saved_restore_failed        reconnecting the saved server failed
+SETUP_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "demo_switch_failed",
+        "unknown_local_session",
+        "no_session_selected",
+        "connections_build_failed",
+        "config_read_failed",
+        "selection_save_failed",
+        "herdr_socket_not_found",
+        "herdr_too_old",
+        "local_start_failed",
+        "token_env_conflict",
+        "bad_token",
+        "bridge_unreachable",
+        "config_unreadable",
+        "config_malformed",
+        "token_env_in_use",
+        "server_not_in_profile",
+        "remote_build_failed",
+        "token_read_failed",
+        "token_store_failed",
+        "config_write_failed",
+        "config_invalid",
+        "onboarding_finalize_failed",
+        "no_saved_connection",
+        "saved_restore_failed",
+    }
+)
+
+
+def _fail(code: str, error: str) -> dict:
+    """A /setup* failure body: human message + stable ``code`` (C3)."""
+    assert code in SETUP_ERROR_CODES, code
+    return {"ok": False, "error": error, "code": code}
+
+
+_PROBE_CODES = {"bad_token": "bad_token", "unreachable": "bridge_unreachable"}
+
+
 def connect(app, body) -> dict | None:
     """Run the onboarding connect flow. Returns the response dict, or None for a
     malformed body (the route maps None -> HTTP 400). Live swaps follow
@@ -1732,7 +2062,7 @@ def connect(app, body) -> dict | None:
         except Exception:
             _restore_choice(config_path, prior_choice)
             new_source.close()
-            return {"ok": False, "error": "could not switch to demo"}
+            return _fail("demo_switch_failed", "could not switch to demo")
         app._commit_swap(new_source, prepared)  # assignment-only
         app._set_local_bridge(None)
         app._reloader = _reloader_for(app, ("mock",), _select_source)  # mock/remote reloads resume
@@ -1753,7 +2083,7 @@ def connect(app, body) -> dict | None:
         by_name = {session.name: session for session in discovered}
         unknown = [name for name in names if name not in by_name]
         if unknown:
-            return {"ok": False, "error": f"unknown local session: {unknown[0]}"}
+            return _fail("unknown_local_session", f"unknown local session: {unknown[0]}")
         selected_sessions = [
             by_name[name] for name in dict.fromkeys(names) if by_name[name].available
         ]
@@ -1777,17 +2107,17 @@ def connect(app, body) -> dict | None:
                 new_source = MockSource(_device_local_hardware(app._config_service))
                 prepared = app._prepare_swap(new_source)
             else:
-                return {
-                    "ok": False,
-                    "error": "select a running local session or include the saved connection",
-                }
+                return _fail(
+                    "no_session_selected",
+                    "select a running local session or include the saved connection",
+                )
             if live_selection:
                 new_source = build_live_source_for_connect(config, config.servers[0])
                 prepared = app._prepare_swap(new_source, clock=time.monotonic)
         except Exception:
             for runner in runners.values():
                 runner.close()
-            return {"ok": False, "error": "could not build the selected connections"}
+            return _fail("connections_build_failed", "could not build the selected connections")
 
         prior_choice = read_choice(config_path)
         try:
@@ -1796,7 +2126,7 @@ def connect(app, body) -> dict | None:
             new_source.close()
             for runner in runners.values():
                 runner.close()
-            return {"ok": False, "error": "could not read config"}
+            return _fail("config_read_failed", "could not read config")
         app._suppress_reload = True
         try:
             app._config_service.set_local_sessions(list(dict.fromkeys(names)))
@@ -1811,7 +2141,7 @@ def connect(app, body) -> dict | None:
             new_source.close()
             for runner in runners.values():
                 runner.close()
-            return {"ok": False, "error": "could not save the selected connections"}
+            return _fail("selection_save_failed", "could not save the selected connections")
         finally:
             watcher = getattr(app, "_watcher", None)
             if watcher is not None:
@@ -1832,15 +2162,17 @@ def connect(app, body) -> dict | None:
         from ..bridge import _SNAPSHOT_UNSUPPORTED
 
         socket_path = resolve_saved_socket_path(config_path)
-        if not os.path.exists(socket_path):
-            return {"ok": False, "error": f"herdr socket not found at {socket_path}"}
+        from .sessions import socket_alive
+
+        if not socket_alive(socket_path):
+            return _fail("herdr_socket_not_found", f"herdr socket not found at {socket_path}")
         new_source = None
         runner = None
         prior_choice = read_choice(config_path)  # snapshot the marker for rollback
         try:
             prior_config, prior_local = _snapshot_config(app._config_service)
         except OSError:
-            return {"ok": False, "error": "could not read config"}
+            return _fail("config_read_failed", "could not read config")
         try:
             config, server, runner = _start_local_bridge(socket_path)  # may raise (bridge bind)
             new_source = build_live_source_for_connect(config, server)  # build ...
@@ -1869,8 +2201,9 @@ def connect(app, body) -> dict | None:
             # The bridge's hard version floor (herdr < 0.7.2, no session.snapshot) carries
             # actionable guidance ('run herdr update') that must reach the desktop user
             # verbatim, not the generic message below.
-            error = str(exc) if str(exc) == _SNAPSHOT_UNSUPPORTED else "could not start local source"
-            return {"ok": False, "error": error}
+            if str(exc) == _SNAPSHOT_UNSUPPORTED:
+                return _fail("herdr_too_old", str(exc))
+            return _fail("local_start_failed", "could not start local source")
         app._commit_swap(new_source, prepared)  # non-failing: all fallible work done; sets the live clock
         server_id = getattr(server, "id", "local")
         app._set_local_bridges({server_id: runner})  # adopt new bridge (closes old ones)
@@ -1888,17 +2221,17 @@ def connect(app, body) -> dict | None:
         # persisted config would NOT resolve to the typed token. Reject before doing anything.
         env_token = os.environ.get(token_env)
         if env_token is not None and env_token != token:
-            return {
-                "ok": False,
-                "error": f"{token_env} is set in the environment and would override the saved token; unset it or connect with that value",
-            }
+            return _fail(
+                "token_env_conflict",
+                f"{token_env} is set in the environment and would override the saved token; unset it or connect with that value",
+            )
         result = _probe_sync(url, token)
         if not result.ok:
-            return {"ok": False, "error": result.reason}
+            return _fail(_PROBE_CODES.get(result.reason, "bridge_unreachable"), result.reason)
         try:
             data = app._config_service.read()  # a malformed/unreadable existing config must not 500
         except (OSError, tomllib.TOMLDecodeError):
-            return {"ok": False, "error": "existing config is unreadable — fix it in Settings"}
+            return _fail("config_unreadable", "existing config is unreadable — fix it in Settings")
         payload = {
             "base": dict(data.get("base") or {}),
             "profiles": data.get("profiles") or {},
@@ -1907,7 +2240,7 @@ def connect(app, body) -> dict | None:
         existing = payload["base"].get("servers")
         if existing is not None and not (isinstance(existing, list) and all(isinstance(s, dict) for s in existing)):
             # parseable TOML but a wrong shape (e.g. `servers = ["bad"]`) would crash the upsert
-            return {"ok": False, "error": "existing config is malformed (servers) — fix it in Settings"}
+            return _fail("config_malformed", "existing config is malformed (servers) — fix it in Settings")
         entry = {"id": server_id, "url": url, "token_env": token_env}
         rebuilt = []
         replaced = False
@@ -1939,10 +2272,10 @@ def connect(app, body) -> dict | None:
         ConfigService._collect_token_envs(base_wo_ours, in_use)
         ConfigService._collect_token_envs(data.get("profiles") or {}, in_use)
         if token_env in in_use:
-            return {
-                "ok": False,
-                "error": f"token env {token_env} is already used elsewhere in the config — pick a different id",
-            }
+            return _fail(
+                "token_env_in_use",
+                f"token env {token_env} is already used elsewhere in the config — pick a different id",
+            )
         # BUILD-BEFORE-PERSIST: resolve the merged payload (placeholder tokens) to confirm
         # selection, then build the live source with the REAL token baked into the chosen
         # ServerConfig — all BEFORE mutating keychain/config, so any selection / validation
@@ -1953,10 +2286,10 @@ def connect(app, body) -> dict | None:
             None,
         )
         if config is None or selected_server is None:
-            return {
-                "ok": False,
-                "error": "the active profile does not include this server (check overview_order / profile servers) — fix it in Settings",
-            }
+            return _fail(
+                "server_not_in_profile",
+                "the active profile does not include this server (check overview_order / profile servers) — fix it in Settings",
+            )
         config = dataclasses.replace(
             config,
             servers=[
@@ -1971,7 +2304,7 @@ def connect(app, body) -> dict | None:
                 config_service=app._config_service,
             )
         except Exception:
-            return {"ok": False, "error": "could not build the remote source"}
+            return _fail("remote_build_failed", "could not build the remote source")
         # Persist + swap as one watcher-suppressed transaction (see _commit_remote).
         return _commit_remote(
             app,
@@ -1992,7 +2325,7 @@ def connect(app, body) -> dict | None:
         # PRESENCE, not validity; the live source dials async, so connected may be False).
         remote = select_live()  # (config, server) from disk + keychain, or None
         if remote is None:
-            return {"ok": False, "error": "no saved connection"}
+            return _fail("no_saved_connection", "no saved connection")
         config, server = remote
         prior_choice = read_choice(config_path)
         new_source = None
@@ -2010,7 +2343,7 @@ def connect(app, body) -> dict | None:
                 new_source.close()
             for runner in local_runners.values():
                 runner.close()
-            return {"ok": False, "error": "could not restore saved connection"}
+            return _fail("saved_restore_failed", "could not restore saved connection")
         app._commit_swap(new_source, prepared)  # assignment-only, non-failing
         app._set_local_bridges(local_runners)
         app._reloader = _reloader_for(app, ("remote",), _select_source)
@@ -2054,7 +2387,7 @@ def _commit_remote(
             prepared = app._prepare_swap(new_source, clock=time.monotonic)  # live clock
         except Exception:
             _close_new()
-            return {"ok": False, "error": "could not build the remote source"}
+            return _fail("remote_build_failed", "could not build the remote source")
         # Snapshot the prior keychain value AND the on-disk config BEFORE any mutation, so a
         # read fault can't strand a secret, and a partial write (config ok, local faults) is
         # undone — never leaving a serverful-but-tokenless config or a destroyed prior token.
@@ -2064,19 +2397,19 @@ def _commit_remote(
             prior_secret = secret_store.peek_keychain(token_env)
         except Exception:
             _close_new()
-            return {"ok": False, "error": "could not read the existing token — check the keychain"}
+            return _fail("token_read_failed", "could not read the existing token — check the keychain")
         svc = app._config_service
         try:
             prior_config, prior_local = _snapshot_config(svc)
         except OSError:
             _close_new()  # nothing mutated yet
-            return {"ok": False, "error": "could not read config"}
+            return _fail("config_read_failed", "could not read config")
         try:
             secret_store.set_secret(token_env, token)
         except Exception:
             _restore_secret(token_env, prior_secret)  # set may have partially overwritten
             _close_new()
-            return {"ok": False, "error": "could not store token"}
+            return _fail("token_store_failed", "could not store token")
 
         def _rollback():
             _restore_file(svc._config_path, prior_config)
@@ -2088,10 +2421,10 @@ def _commit_remote(
             errors = svc.write(payload)
         except OSError:  # atomic write can fault, possibly after a partial write
             _rollback()
-            return {"ok": False, "error": "could not write config"}
+            return _fail("config_write_failed", "could not write config")
         if errors:  # structural validation runs before any write, so nothing was written
             _rollback()
-            return {"ok": False, "error": "; ".join(errors)}
+            return _fail("config_invalid", "; ".join(errors))
         # Clear the stale local/demo marker as PART OF THE COMMIT: remote == a usable config,
         # no opt-in marker. If the unlink faults, roll everything back so a later-removed
         # config falls to first_run (the card), never to a stale marker that would mask it.
@@ -2099,7 +2432,7 @@ def _commit_remote(
             clear_choice(config_path)
         except OSError:
             _rollback()
-            return {"ok": False, "error": "could not finalize onboarding"}
+            return _fail("onboarding_finalize_failed", "could not finalize onboarding")
         app._commit_swap(new_source, prepared)  # non-failing: all fallible work done; sets the live clock
         app._set_local_bridges(local_runners)
         app._reloader = _reloader_for(app, ("remote",), _select_source)  # config-edit reloads resume

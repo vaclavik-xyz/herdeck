@@ -13,10 +13,10 @@ def test_macos_sink_sound_name_and_switch(monkeypatch):
 
     scripts = []
     monkeypatch.setattr(notify_mod.subprocess, "run", lambda cmd, **kw: scripts.append(cmd[2]))
-    notify_mod._macos_sink("claude done", "api", "Hero")
+    notify_mod._macos_sink("claude · done", "api", "Hero")
     notify_mod._macos_sink("t", "b", True)
     notify_mod._macos_sink("t", "b", False)
-    assert scripts[0] == 'display notification "api" with title "claude done" sound name "Hero"'
+    assert scripts[0] == 'display notification "api" with title "claude · done" sound name "Hero"'
     assert 'sound name "Glass"' in scripts[1]  # True keeps the historical default
     assert "sound name" not in scripts[2]
 
@@ -31,7 +31,7 @@ def test_notification_feed_generation_ack_and_reset_cursor(caplog, monkeypatch):
     feed = NotificationFeed()
     first = feed.state()["generation"]
 
-    item = feed.push("codex done", "api", "Hero")
+    item = feed.push("codex · done", "api", "Hero")
     assert item["id"] == f"{first}:1"
     now_ns += 37_000_000
     assert feed.ack(first, 1) is True
@@ -62,12 +62,12 @@ def test_notification_feed_wait_wakes_immediately_for_new_item():
     thread.start()
     assert ready.wait(0.2)
     started = time.monotonic()
-    feed.push("codex done", "api", "Hero")
+    feed.push("codex · done", "api", "Hero")
     thread.join(timeout=0.3)
 
     assert not thread.is_alive()
     assert time.monotonic() - started < 0.3
-    assert result[0]["items"][0]["title"] == "codex done"
+    assert result[0]["items"][0]["title"] == "codex · done"
 
 
 def test_notification_feed_long_poll_cursor_repairs_lost_ack():
@@ -176,7 +176,7 @@ def test_legacy_blocked_notifier_uses_agent_type_title_and_body():
 
     asyncio.run(notifier.notify_blocked(agent, body="herdeck · main", sound=True, multi_server=False))
 
-    assert calls == [("codex", "herdeck · main", True)]
+    assert calls == [("codex · needs input", "herdeck · main", True)]
 
 
 def test_composite_blocked_notifier_calls_all_even_if_one_raises():
@@ -361,3 +361,68 @@ def test_delivery_failure_is_visible_and_rate_limited(monkeypatch, caplog):
     assert len(warnings) == 2
     assert "telegram" in warnings[0].getMessage()
     assert "Unauthorized" in warnings[0].getMessage()
+
+
+def test_feed_default_capacity_holds_a_fleet_burst():
+    from herdeck.notify import NotificationFeed
+
+    feed = NotificationFeed()
+    for i in range(40):
+        feed.push(f"t{i}", "b", False)
+    state = feed.wait(None, 0, timeout=0)
+    assert len(state["items"]) == 40
+    assert feed.dropped == 0
+
+
+def test_feed_overflow_evicts_acked_history_before_undelivered_items():
+    from herdeck.notify import NotificationFeed
+
+    feed = NotificationFeed(maxlen=5)
+    for i in range(4):
+        feed.push(f"t{i}", "b", False)
+    feed_gen = feed.state()["generation"]
+    assert feed.ack(feed_gen, 4)  # all four delivered
+    for i in range(4, 9):
+        feed.push(f"t{i}", "b", False)
+    items = feed.state()["items"]
+    # Five undelivered items fit exactly: acked history was evicted, none lost.
+    assert [item["seq"] for item in items] == [5, 6, 7, 8, 9]
+    assert feed.dropped == 0
+
+
+def test_feed_overflow_of_undelivered_items_is_counted_and_logged(caplog):
+    import logging
+
+    from herdeck.notify import NotificationFeed
+
+    feed = NotificationFeed(maxlen=3)
+    with caplog.at_level(logging.WARNING, logger="herdeck.notify"):
+        for i in range(5):
+            feed.push(f"t{i}", "b", False)
+    assert [item["seq"] for item in feed.state()["items"]] == [3, 4, 5]
+    assert feed.dropped == 2
+    assert "overflow" in caplog.text
+
+
+def test_throttle_cooldown_and_interaction_window():
+    from herdeck.notify import NotifyThrottle
+
+    now = [0.0]
+    throttle = NotifyThrottle(clock=lambda: now[0], cooldowns={"done": 60.0, "blocked": 5.0})
+    assert throttle.allow("done", "a")
+    assert not throttle.allow("done", "a")
+    assert throttle.allow("blocked", "a")  # separate event
+    now[0] = 61
+    assert throttle.allow("done", "a")
+    throttle.note_interaction("b")
+    assert not throttle.allow("done", "b")
+    assert throttle.allow("blocked", "b")  # blocked always matters
+    now[0] = 80
+    assert throttle.allow("done", "b")
+
+
+def test_event_title_localized():
+    from herdeck.notify import event_title
+
+    assert event_title("claude", "blocked") == "claude · needs input"
+    assert event_title("codex", "done", "cs") == "codex · hotovo"

@@ -36,8 +36,10 @@ from .notify import (
     LegacyBlockedNotifier,
     NoopNotifier,
     Notifier,
+    NotifyThrottle,
     _macos_sink,
     composite_sink,
+    event_title,
     make_telegram_sink,
 )
 from .orchestrator import Orchestrator
@@ -78,6 +80,21 @@ def newly_entered(status, prev, states):
     entered_now = {s.key for s in states if s.status is status}
     to_notify = entered_now - prev
     return to_notify, entered_now
+
+
+def _interaction_keys(orch, cmds) -> set[AgentKey]:
+    """Agents the user just touched on the deck: the drilled agent plus every
+    pane a press command targets. Feeds the "done right after you answered it"
+    notification suppression."""
+    keys = {
+        AgentKey(cmd.server_id, cmd.pane_id)
+        for cmd in cmds
+        if cmd.pane_id is not None and cmd.kind not in ("list", "toggle_pin")
+    }
+    drilled = orch.drill_key()
+    if drilled is not None:
+        keys.add(drilled)
+    return keys
 
 
 def event_notification_body(agent: AgentState, *, multi_server: bool) -> str:
@@ -189,7 +206,10 @@ def _build_blocked_notification_runtime(
                 telegram_factory=telegram_factory,
                 skip_telegram=True,
             )
-            notifiers: list[BlockedAlertNotifier] = [LegacyBlockedNotifier(legacy), interactor]
+            notifiers: list[BlockedAlertNotifier] = [
+                LegacyBlockedNotifier(legacy, config.view.language),
+                interactor,
+            ]
             notifier = notifiers[0] if len(notifiers) == 1 else CompositeBlockedNotifier(notifiers)
             return BlockedNotificationRuntime(notifier, interactor)
         log.warning(
@@ -203,7 +223,7 @@ def _build_blocked_notification_runtime(
         macos_sink=macos_sink,
         telegram_factory=telegram_factory,
     )
-    notifiers = [LegacyBlockedNotifier(legacy)]
+    notifiers = [LegacyBlockedNotifier(legacy, config.view.language)]
     notifier = notifiers[0] if len(notifiers) == 1 else CompositeBlockedNotifier(notifiers)
     return BlockedNotificationRuntime(notifier, None)
 
@@ -288,10 +308,13 @@ class App:
             self._install_blocked_runtime(blocked_runtime_factory(config))
         else:
             self._install_blocked_runtime(
-                BlockedNotificationRuntime(LegacyBlockedNotifier(self.notifier))
+                BlockedNotificationRuntime(
+                    LegacyBlockedNotifier(self.notifier, self.config.view.language)
+                )
             )
         self._notify_schedule = notify_schedule or _default_notify_schedule
         self._notify_keys: dict[str, set] = {event: set() for event in NOTIFY_EVENT_STATUSES}
+        self._notify_throttle = NotifyThrottle(clock=_now)
         self.orch = Orchestrator(config, slots=deck.slot_count())
         self._pin_store = pin_store
         self._load_pins()
@@ -323,7 +346,9 @@ class App:
             self._install_blocked_runtime(self._blocked_runtime_factory(config))
         else:
             self._install_blocked_runtime(
-                BlockedNotificationRuntime(LegacyBlockedNotifier(self.notifier))
+                BlockedNotificationRuntime(
+                    LegacyBlockedNotifier(self.notifier, self.config.view.language)
+                )
             )
 
     def set_blocked_runtime_factory(
@@ -460,6 +485,8 @@ class App:
             multi = len(self.config.overview_order) > 1
             sound = self._event_sound(event)
             for s in (x for x in states if x.key in to):
+                if not self._notify_throttle.allow(event, s.key):
+                    continue
                 self._schedule_notify(
                     event,
                     s,
@@ -492,9 +519,8 @@ class App:
         # Other events (done) are simple one-way alerts: the interactive
         # blocked chain (Telegram approve buttons, prompt reads) makes no
         # sense for them, so they go straight to the plain sinks.
-        self._notify_schedule(
-            asyncio.to_thread(self.notifier.notify, f"{agent.agent_type} done", body, sound)
-        )
+        title = event_title(agent.agent_type, event, self.config.view.language)
+        self._notify_schedule(asyncio.to_thread(self.notifier.notify, title, body, sound))
 
     def _event_notification_body(self, agent: AgentState, *, multi_server: bool) -> str:
         return event_notification_body(agent, multi_server=multi_server)
@@ -547,6 +573,8 @@ class App:
         }
         for keys in self._notify_keys.values():
             keys.difference_update(recycled)
+        for key in recycled:
+            self._notify_throttle.forget(key)
         self._semantic_ready_servers.add(server_id)
         key = self.orch.drill_key()
         self.orch.apply_snapshot(server_id, states)
@@ -576,6 +604,7 @@ class App:
         if recycled:
             for keys in self._notify_keys.values():
                 keys.discard(state.key)
+            self._notify_throttle.forget(state.key)
         self.orch.apply_event(server_id, state)
         if self.orch.is_drill_pane(server_id, state.key.pane_id):
             if recycled:
@@ -805,6 +834,8 @@ class App:
     def _handle_press(self, index: int) -> None:
         self._status_panel = None  # any key press dismisses a held status panel
         cmds = self.orch.on_press(index)
+        for key in _interaction_keys(self.orch, cmds):
+            self._notify_throttle.note_interaction(key)
         if log.isEnabledFor(logging.DEBUG):
             rs = self.orch.render()
             labels = [t.label for t in rs.tiles[:6] if t.label]

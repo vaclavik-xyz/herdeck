@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from .i18n import tr
 from .model import AgentState
 from .secrets import get_secret
 
@@ -38,6 +39,82 @@ def _warn_failure(context: str, exc: Exception) -> None:
         return
     _last_warned[context] = (reason, now)
     log.warning("notify via %s failed: %s", context, reason)
+
+
+# Per agent+event re-notify floor (seconds). The notification state machine
+# re-arms whenever an agent LEAVES a status, so an agent that flaps
+# working -> done -> working -> done (or a detection flicker on blocked)
+# would otherwise alert on every re-entry. "done" is informational, so a
+# minute of quiet per agent is fine; "blocked" needs the user, so it only
+# gets a short flap guard.
+NOTIFY_COOLDOWN_S: dict[str, float] = {"blocked": 5.0, "done": 60.0}
+# A "done" this soon after the user pressed/answered that very agent on the
+# deck is the expected result of their own action, not news.
+DONE_AFTER_INTERACTION_S = 10.0
+_THROTTLE_MAX_KEYS = 1024
+
+
+def event_title(agent_type: str, event: str, lang: str = "en") -> str:
+    """Localized notification title, e.g. ``claude · needs input``."""
+    key = "notify.title_blocked" if event == "blocked" else "notify.title_done"
+    return tr(lang, key, agent=agent_type or "agent")
+
+
+class NotifyThrottle:
+    """Cooldown + "you just touched it" suppression for event alerts.
+
+    Only gates delivery: the caller's episode bookkeeping (``newly_entered``)
+    still advances, so a suppressed alert is dropped, never queued.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        cooldowns: dict[str, float] | None = None,
+        interaction_window: float = DONE_AFTER_INTERACTION_S,
+    ):
+        self._clock = clock
+        self._cooldowns = dict(NOTIFY_COOLDOWN_S if cooldowns is None else cooldowns)
+        self._interaction_window = interaction_window
+        self._fired: dict[tuple[str, object], float] = {}
+        self._touched: dict[object, float] = {}
+        self._lock = threading.Lock()
+
+    def note_interaction(self, key) -> None:
+        """The user pressed/answered this agent on the deck just now."""
+        with self._lock:
+            self._touched[key] = self._clock()
+            if len(self._touched) > _THROTTLE_MAX_KEYS:
+                self._prune(self._touched, self._interaction_window)
+
+    def forget(self, key) -> None:
+        """A recycled pane (new terminal identity) is a new agent: drop its history."""
+        with self._lock:
+            self._touched.pop(key, None)
+            for k in [k for k in self._fired if k[1] == key]:
+                del self._fired[k]
+
+    def allow(self, event: str, key) -> bool:
+        """True when an alert for ``(event, key)`` may fire now (and records it)."""
+        with self._lock:
+            now = self._clock()
+            if event == "done":
+                touched = self._touched.get(key)
+                if touched is not None and now - touched < self._interaction_window:
+                    return False
+            last = self._fired.get((event, key))
+            if last is not None and now - last < self._cooldowns.get(event, 0.0):
+                return False
+            self._fired[(event, key)] = now
+            if len(self._fired) > _THROTTLE_MAX_KEYS:
+                self._prune(self._fired, max(self._cooldowns.values(), default=0.0))
+            return True
+
+    def _prune(self, table: dict, horizon: float) -> None:
+        now = self._clock()
+        for k in [k for k, at in table.items() if now - at >= horizon]:
+            del table[k]
 
 
 def _sink_name(sink) -> str:
@@ -75,8 +152,14 @@ class NotificationFeed:
     restart safe without clearing pending events.
     """
 
-    def __init__(self, maxlen: int = 10):
-        self._items: deque[dict] = deque(maxlen=maxlen)
+    # Big enough for a whole-fleet burst (every agent finishing at once) while
+    # the shell is mid-delivery; see push() for the overflow policy.
+    DEFAULT_MAXLEN = 50
+
+    def __init__(self, maxlen: int = DEFAULT_MAXLEN):
+        self._maxlen = max(1, maxlen)
+        self._items: deque[dict] = deque()
+        self.dropped = 0  # undelivered items evicted by overflow (observability)
         self._generation = uuid.uuid4().hex
         self._seq = 0
         self._acked_seq = 0
@@ -96,9 +179,39 @@ class NotificationFeed:
                 "created_at_ms": time.time_ns() // 1_000_000,
             }
             self._items.append(item)
+            dropped = self._trim_locked()
             self._changed.notify_all()
         log.info("notification queued id=%s title=%r", item["id"], title)
+        if dropped:
+            log.warning(
+                "notification feed overflow: dropped %d undelivered item(s) "
+                "(capacity %d); the shell is not keeping up",
+                dropped,
+                self._maxlen,
+            )
         return item
+
+    def _trim_locked(self) -> int:
+        """Enforce capacity. Already-delivered (acked) items go first; an
+        undelivered item is evicted only when the feed is full of undelivered
+        work, and that loss is counted + logged instead of vanishing silently.
+        Returns how many undelivered items were dropped."""
+        if len(self._items) <= self._maxlen:
+            return 0
+        acked = self._acked_seq
+        kept = deque(item for item in self._items if item["seq"] > acked)
+        # Keep the newest acked history only if there is room left over.
+        room = self._maxlen - len(kept)
+        if room > 0:
+            history = [item for item in self._items if item["seq"] <= acked][-room:]
+            kept = deque([*history, *kept])
+        dropped = 0
+        while len(kept) > self._maxlen:
+            kept.popleft()
+            dropped += 1
+        self._items = kept
+        self.dropped += dropped
+        return dropped
 
     def reset(self) -> None:
         """Drop everything and restart the sequence from zero.
@@ -424,8 +537,9 @@ class NoopBlockedNotifier:
 
 
 class LegacyBlockedNotifier:
-    def __init__(self, notifier: Notifier):
+    def __init__(self, notifier: Notifier, language: str = "en"):
         self._notifier = notifier
+        self._language = language
 
     async def notify_blocked(
         self,
@@ -435,7 +549,8 @@ class LegacyBlockedNotifier:
         sound: bool | str,
         multi_server: bool,
     ) -> None:
-        await asyncio.to_thread(self._notifier.notify, agent.agent_type, body, sound)
+        title = event_title(agent.agent_type, "blocked", self._language)
+        await asyncio.to_thread(self._notifier.notify, title, body, sound)
 
 
 class CompositeBlockedNotifier:

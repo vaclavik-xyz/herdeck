@@ -136,6 +136,6 @@
   /* No border-top: this always follows a field that already draws its own
      bottom rule, and the pair rendered as two hairlines 12px apart. */
   .advanced-settings { margin: var(--s5) 0 var(--s3); }
-  .advanced-settings summary { color: var(--text-dim); font: var(--t-eyebrow); cursor: pointer; user-select: none; }
+  .advanced-settings summary { color: var(--text-dim); font: var(--t-label); cursor: pointer; user-select: none; }
   .advanced-settings[open] summary { margin-bottom: var(--s3); color: var(--text); }
 </style>

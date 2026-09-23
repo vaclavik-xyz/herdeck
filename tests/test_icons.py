@@ -459,21 +459,79 @@ def test_solid_fill_paints_whole_tile_the_status_colour(tmp_path):
     assert img.getpixel((2, 2)) == COLORS["cyan"]  # top-left bg = full status colour
 
 
-def test_solid_dark_fill_keeps_subtext_readable():
+def test_solid_fill_text_takes_the_higher_contrast_ink():
     from herdeck.driver.base import COLORS
-    from herdeck.icons import _tile_text_colors
+    from herdeck.icons import DARK_INK, LIGHT_INK, _tile_text_colors
 
-    # blue idle solid: light text, and the branch + elapsed time must be near-white
-    # (not the dim grey used on the dark default background) so they read on blue.
-    repo, branch, time_c, word = _tile_text_colors("solid", COLORS["blue"], COLORS["blue"])
-    assert word == (255, 255, 255)
-    assert min(branch) > 200 and min(time_c) > 200  # bright subtext on the colour
+    # red is dark enough for white ink; the whole text block follows it
+    repo, branch, time_c, word = _tile_text_colors("solid", COLORS["red"], COLORS["red"])
+    assert repo == word == time_c == LIGHT_INK
+    assert min(branch) > 200  # quieter, but still near-white
     # a bright solid (green) flips to dark text instead
-    _, gbranch, _, gword = _tile_text_colors("solid", COLORS["green"], COLORS["green"])
-    assert max(gword) < 60 and max(gbranch) < 80  # dark text on the bright fill
-    # none keeps the dim-grey subtext + accent status word for the dark background
-    _, nbranch, ntime, nword = _tile_text_colors("none", (26, 26, 30), COLORS["green"])
+    _, gbranch, gtime, gword = _tile_text_colors("solid", COLORS["green"], COLORS["green"])
+    assert gword == gtime == DARK_INK and max(gbranch) < 80
+    # violet/grey sat on the old Rec.601 threshold: their elapsed time read at
+    # ~2.9/3.1:1 — it now uses the same ink as the repo name
+    for colour in ("violet", "grey"):
+        repo, _, time_c, _ = _tile_text_colors("solid", COLORS[colour], COLORS[colour])
+        assert time_c == repo
+    # none keeps the dim-grey subtext + the accent status word where it passes
+    _, nbranch, _, nword = _tile_text_colors("none", (26, 26, 30), COLORS["green"])
     assert nbranch == (180, 180, 188) and nword == COLORS["green"]
+
+
+def _all_tile_backgrounds():
+    from herdeck.driver.base import COLORS
+    from herdeck.icons import TILE_BG, _tint_bg
+
+    for name, accent in COLORS.items():
+        for fill, bg in (("none", TILE_BG), ("tint", _tint_bg(accent)), ("solid", accent)):
+            yield name, fill, accent, bg
+
+
+def test_every_status_text_meets_wcag_aa_on_every_fill():
+    """Status word, repo, branch and elapsed time reach 4.5:1 for every palette
+    colour x tile_fill (IDLE on none read at 4.0:1, UNKNOWN on tint 3.3:1)."""
+    from herdeck.icons import TEXT_CONTRAST, _contrast, _tile_text_colors
+
+    failures = []
+    for name, fill, accent, bg in _all_tile_backgrounds():
+        colors = _tile_text_colors(fill, bg, accent)
+        for role, c in zip(("repo", "branch", "time", "word"), colors, strict=True):
+            ratio = _contrast(c, bg)
+            if ratio < TEXT_CONTRAST:
+                failures.append(f"{name}/{fill}/{role}: {ratio:.2f}")
+    assert not failures, failures
+
+
+def test_status_word_keeps_its_hue_where_it_already_passes():
+    from herdeck.driver.base import COLORS
+    from herdeck.icons import TILE_BG, _tile_text_colors
+
+    _, _, _, word = _tile_text_colors("none", TILE_BG, COLORS["blue"])
+    assert word != COLORS["blue"]  # lightened (4.0:1 raw)
+    assert word[2] > word[0]  # ...but still reads blue, not white
+    assert word != (255, 255, 255)
+
+
+def test_label_tiles_flip_to_dark_ink_on_bright_colours(tmp_path):
+    """Drill/label tiles were always white: 2.1:1 on amber, 2.0:1 on cyan."""
+    import io
+
+    from herdeck.driver.base import COLORS, TileView
+    from herdeck.icons import TEXT_CONTRAST, _contrast
+
+    p = make_provider(tmp_path)
+    for colour in ("amber", "cyan", "green", "blue", "red", "grey", "dim"):
+        bg = COLORS[colour]
+        for tile in (
+            TileView(0, "Back", colour),
+            TileView(0, "2", colour, subtext="No, and tell Claude what to do"),
+        ):
+            img = Image.open(io.BytesIO(p.render_tile_bytes(tile))).convert("RGB")
+            # the most contrasting pixel on the tile is the text ink
+            ink = max((c for _, c in img.getcolors(1 << 16)), key=lambda px: _contrast(px, bg))
+            assert _contrast(ink, bg) >= TEXT_CONTRAST, (colour, ink)
 
 
 def test_solid_fill_sweep_still_animates(tmp_path):
@@ -719,7 +777,7 @@ def test_project_name_shrinks_before_truncating():
     short_font, short_lines = _fit_project_name(draw, "herdeck", 172)
     assert short_font.size == 31 and short_lines == ["herdeck"]
     font, lines = _fit_project_name(draw, "macdoktor-crm", 172)
-    assert 18 <= font.size < 31
+    assert 20 <= font.size < 31
     assert lines == ["macdoktor-crm"]
     assert draw.textlength(lines[0], font=font) <= 172
 
@@ -729,14 +787,165 @@ def test_project_name_wraps_long_identifiers_without_losing_the_suffix():
     draw = ImageDraw.Draw(Image.new("RGB", (196, 196)))
     name = "macdoktor-crm-production"
     font, lines = _fit_project_name(draw, name, 172)
-    assert font.size == 18 and len(lines) == 2
+    assert font.size == 20 and len(lines) == 2
     assert "".join(lines) == name
     assert all(draw.textlength(line, font=font) <= 172 for line in lines)
+
+
+def test_project_name_keeps_the_suffix_with_a_wide_font():
+    # Regression for CI on Linux: DejaVu Bold is wide enough that the word
+    # boundary split ("macdoktor-" + "crm-production") overflowed line two and
+    # truncated the suffix. A width function that makes every glyph 13 px
+    # reproduces that without depending on which fonts the host has.
+    from herdeck.icons import _fit_project_name
+
+    class WideDraw:
+        def textlength(self, text, font=None):
+            return 13.0 * len(text)
+
+    font, lines = _fit_project_name(WideDraw(), "macdoktor-crm-production", 172)
+    assert "".join(lines) == "macdoktor-crm-production"
+    assert all(13.0 * len(line) <= 172 for line in lines)
 
 
 def test_extreme_project_names_keep_a_readable_minimum_and_ellipsis():
     from herdeck.icons import _fit_project_name
     draw = ImageDraw.Draw(Image.new("RGB", (196, 196)))
     font, lines = _fit_project_name(draw, "W" * 100, 172)
-    assert font.size == 18 and len(lines) == 2 and lines[-1].endswith("…")
+    # never below 20px: at 18px the repo matched the branch line's size
+    assert font.size == 20 and len(lines) == 2 and lines[-1].endswith("…")
     assert all(draw.textlength(line, font=font) <= 172 for line in lines)
+
+
+def _draw():
+    return ImageDraw.Draw(Image.new("RGB", (196, 196)))
+
+
+def test_wrap_never_inserts_spaces_around_slashes():
+    """The old ' / ' split rendered an approval as 'rm -rf / tmp / build'."""
+    from herdeck.icons import _font, _wrap
+
+    d, f = _draw(), _font(22)
+    for text in ("rm -rf /tmp/build", "/home/user/x", "fix/x"):
+        assert _wrap(d, text, f, 1000, 3) == [text]
+
+
+def test_wrap_breaks_after_slash_and_glues_the_pieces_back():
+    from herdeck.icons import _font, _wrap
+
+    d, f = _draw(), _font(22)
+    text = "rm -rf /home/user/projects/herdeck/build"
+    lines = _wrap(d, text, f, 150, 5)
+    assert len(lines) > 1
+    assert all(d.textlength(line, font=f) <= 150 for line in lines)
+    assert " / " not in " ".join(lines)
+    # the pieces re-join to the original once the line-break spaces go
+    assert "".join(lines).replace(" ", "") == text.replace(" ", "")
+    # a path break keeps the slash on the upper line
+    assert any(line.endswith("/") for line in lines[:-1])
+
+
+def test_wrap_hard_splits_an_unbreakable_token_and_marks_the_cut():
+    from herdeck.icons import _font, _wrap
+
+    d, f = _draw(), _font(22)
+    lines = _wrap(d, "x" * 200, f, 150, 2)
+    assert len(lines) == 2 and lines[-1].endswith("…")
+    assert all(d.textlength(line, font=f) <= 150 for line in lines)
+    # a path that is cut at max_lines still ends in an ellipsis
+    cut = _wrap(d, "rm -rf /tmp/build/and/a/lot/more/of/this/path", f, 120, 2)
+    assert cut[-1].endswith("…")
+
+
+def test_branch_keeps_short_names_and_drops_the_prefix_of_long_ones():
+    from herdeck.icons import _fit_branch, _font
+
+    d, f = _draw(), _font(18, bold=False)
+    assert _fit_branch(d, "fix/x", f, 172) == ["fix/x"]
+    assert _fit_branch(d, "main", f, 172) == ["main"]
+    # the first line is no longer spent on "feature /"
+    lines = _fit_branch(d, "feature/login-page-polish", f, 120)
+    assert lines == ["…/login-page-polish"] or lines[0].startswith("…/login-")
+    long = _fit_branch(d, "feature/very-long-branch-name-for-testing-truncation", f, 172)
+    assert long[0].startswith("…/very-") and len(long) == 2
+    assert all(d.textlength(line, font=f) <= 172 for line in long)
+
+
+def test_bright_solid_comet_ring_is_dark_ink(tmp_path):
+    """A white comet ring all but vanished on bright solid fills."""
+    import io
+
+    p = make_provider(tmp_path)
+    ring = p._comet_overlay(62, 0, 2, 4, (0, 0, 0))
+    opaque = [c for _, c in ring.getcolors(1 << 16) if c[3] > 200]
+    assert opaque and all(max(px[:3]) < 40 for px in opaque)
+
+    def ring_pixels(fill):
+        tile = _tile_ns(color="green", tile_fill=fill, spinner=0,
+                        working_animation="comet", status_text="WORKING")
+        img = Image.open(io.BytesIO(p.render_tile_bytes(tile))).convert("RGB")
+        # the ring's outer edge just right of the 46px logo box (x 58..64)
+        return [img.getpixel((x, y)) for x in range(59, 65) for y in range(20, 50)]
+
+    assert min(sum(px) for px in ring_pixels("solid")) < 150  # dark ring on green
+
+
+def test_gauge_labels_are_neutral_and_upper_case(monkeypatch):
+    from herdeck.driver.base import COLORS, PanelGauge, PanelView
+    from herdeck.icons import _GAUGE_CARD, _GAUGE_LABEL, _contrast, compose_panel
+
+    drawn = []
+    real_text = ImageDraw.ImageDraw.text
+
+    def spy(self, xy, text, *a, **kw):
+        drawn.append((text, kw.get("fill")))
+        return real_text(self, xy, text, *a, **kw)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", spy)
+    compose_panel(PanelView("Usage", gauges=[PanelGauge("Claude", "5h", 42, color="violet")]))
+    text, fill = next((t, c) for t, c in drawn if "CLAUDE" in t)
+    assert text == "CLAUDE  5H"  # consistent case
+    assert fill == _GAUGE_LABEL and fill != COLORS["violet"]
+    assert _contrast(_GAUGE_LABEL, _GAUGE_CARD) >= 4.5
+
+
+def test_render_tile_bytes_does_not_touch_the_disk(tmp_path):
+    p = make_provider(tmp_path)
+    data = p.render_tile_bytes(_tile_ns(time_text="7m"))
+    assert data[:4] == b"\x89PNG"
+    assert not list(tmp_path.glob("tile_*.png"))
+
+
+def test_layered_frames_match_a_full_render(tmp_path):
+    """Cached static base + per-frame motion must be pixel-identical to a
+    fresh composition, frame by frame, for every animation style."""
+    from herdeck.icons import SPINNER_FRAMES
+
+    for anim in ("spin", "comet", "pulse", "sweep"):
+        for fill in ("none", "solid"):
+            warm = make_provider(tmp_path / f"w{anim}{fill}")
+            for phase in range(SPINNER_FRAMES):
+                tile = _tile_ns(spinner=phase, working_animation=anim, tile_fill=fill,
+                                status_text="WORKING")
+                cold = make_provider(tmp_path / f"c{anim}{fill}{phase}")
+                assert warm.render_tile_bytes(tile) == cold.render_tile_bytes(tile), (
+                    anim, fill, phase)
+            # the whole cycle composed the static base exactly once
+            assert len(warm._base_cache) == 1
+
+
+def test_agent_tile_bottom_band_shows_tag_and_pin_at_readable_size(tmp_path):
+    import io
+
+    p = make_provider(tmp_path)
+    plain = _tile_ns(branch="x", pinned=False)
+    tagged = _tile_ns(branch="x", pinned=True, server_tag="macbench")
+    a = Image.open(io.BytesIO(p.render_tile_bytes(plain))).convert("RGB")
+    b = Image.open(io.BytesIO(p.render_tile_bytes(tagged))).convert("RGB")
+    ys = [
+        y
+        for x in range(196)
+        for y in range(158, 188)
+        if a.getpixel((x, y)) != b.getpixel((x, y))
+    ]
+    assert ys and max(ys) - min(ys) >= 14  # ~16px-tall content, not a 12px speck
