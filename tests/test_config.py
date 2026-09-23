@@ -232,6 +232,11 @@ def test_notifications_explicit_blocked_only_is_honoured(tmp_path):
     assert cfg.notifications.on == ["blocked"]
 
 
+def test_notifications_on_entries_are_stripped(tmp_path):
+    cfg = load_config(_write(tmp_path, '[notifications]\nenabled=true\non=[" done"]\n'))
+    assert cfg.notifications.on == ["done"]
+
+
 def test_notifications_parsed(tmp_path):
     cfg = load_config(
         _write(tmp_path, '[notifications]\nenabled=true\nsound=false\non=["blocked", "done"]\n')

@@ -34,6 +34,7 @@ from .config import (
     _parse_grid,
     _parse_profile,
     _parse_telegram_config,
+    normalize_notify_on,
     validate_event_sounds,
 )
 from .i18n import LANGUAGES
@@ -301,7 +302,7 @@ def _notifications_config(raw: dict | None) -> Notifications:
         telegram = _parse_telegram_config(tg_raw)
     return Notifications(
         enabled=raw.get("enabled", False),
-        on=list(raw.get("on", DEFAULT_NOTIFY_ON)),
+        on=normalize_notify_on(raw.get("on", DEFAULT_NOTIFY_ON)),
         sound=raw.get("sound", True),
         backends=list(raw.get("backends", ["macos"])),
         sounds={**DEFAULT_EVENT_SOUNDS, **validate_event_sounds(raw.get("sounds"))},

@@ -148,7 +148,7 @@ describe("NotificationsSection", () => {
     const target = document.createElement("div");
     const instance = mount(NotificationsSectionHarness, {
       target,
-      props: { initial: parseConfig({ base: { notifications: { on: ["blocked"] } } })! },
+      props: { initial: parseConfig({ base: { notifications: { enabled: true, on: ["blocked"] } } })! },
     });
     try {
       expect(target.querySelector('[data-event-off="blocked"]')).toBeNull();
@@ -160,6 +160,24 @@ describe("NotificationsSection", () => {
       expect(target.querySelector('[data-event-off="done"]')).toBeNull();
     } finally {
       unmount(instance);
+    }
+  });
+
+  it("hides the event warning while notifications are disabled or macOS is not a backend", () => {
+    for (const notifications of [
+      { enabled: false, on: ["blocked"] },
+      { enabled: true, on: ["blocked"], backends: ["telegram"] },
+    ]) {
+      const target = document.createElement("div");
+      const instance = mount(NotificationsSectionHarness, {
+        target,
+        props: { initial: parseConfig({ base: { notifications } })! },
+      });
+      try {
+        expect(target.querySelector("[data-event-off]")).toBeNull();
+      } finally {
+        unmount(instance);
+      }
     }
   });
 
@@ -182,7 +200,7 @@ describe("NotificationsSection", () => {
       target,
       props: {
         initial: parseConfig({
-          base: { notifications: { on: ["done"] } },
+          base: { notifications: { enabled: true, on: ["done"] } },
           profiles: { night: {} },
         })!,
         editProfile: "night",
@@ -209,7 +227,7 @@ describe("NotificationsSection", () => {
     const target = document.createElement("div");
     const instance = mount(NotificationsSectionHarness, {
       target,
-      props: { initial: parseConfig({ base: { notifications: { on: [] } } })! },
+      props: { initial: parseConfig({ base: { notifications: { enabled: true, on: [] } } })! },
     });
     try {
       expect(target.querySelector('[data-event-off="done"]')?.textContent).toContain("Upozornění done jsou vypnutá");

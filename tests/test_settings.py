@@ -784,6 +784,8 @@ def test_notifications_payload_on_defaults_to_both_events_but_honours_explicit()
     assert _notifications_config({"enabled": True}).on == ["blocked", "done"]
     assert _notifications_config({"on": ["blocked"]}).on == ["blocked"]
     assert _notifications_config({"on": []}).on == []
+    # A hand-written " done" still fires: the app matches events with `in`.
+    assert _notifications_config({"on": [" blocked", "done "]}).on == ["blocked", "done"]
 
 
 def test_view_config_parses_tile_icon():

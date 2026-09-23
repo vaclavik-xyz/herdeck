@@ -245,8 +245,16 @@
   const effectiveOn = $derived(
     !overlay ? on : overrideState(payload, prof, SEC, "on") === "default" ? effectiveList("on") : ovList("on"),
   );
+  const effectiveBackends = $derived(
+    !overlay ? backends : overrideState(payload, prof, SEC, "backends") === "default" ? effectiveList("backends") : ovList("backends"),
+  );
+  // Only meaningful when macOS alerts can fire at all: with notifications
+  // disabled or no "macos" backend, the sound is moot either way.
+  const soundsLive = $derived(
+    (overlay ? scBool("enabled") : enabled) && effectiveBackends.some((b) => String(b).trim() === "macos"),
+  );
   function eventOff(event: NotifyEvent): boolean {
-    return !hasEvent(effectiveOn, event);
+    return soundsLive && !hasEvent(effectiveOn, event);
   }
   function enableEvent(event: NotifyEvent): void {
     const next = [...effectiveOn.filter((item) => String(item).trim() !== ""), event];
