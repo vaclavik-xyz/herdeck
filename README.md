@@ -581,7 +581,11 @@ working animation draws as a `comet` ring around it. The bridge finds the
 favicon in the pane's repository
 (`favicon.png`, `public/favicon.png`, `app/icon.png`, … then `.ico`, then
 `.svg`; at most 256 KiB) and sends it to the deck once; a project without one
-gets a coloured letter badge. Override it per repository with
+gets a coloured letter badge. When the pane's working directory is not inside
+a Git repository (say a workspace folder holding several repos), the bridge
+looks in that folder itself, so you can drop a `favicon.png` there, and
+otherwise in its direct child repositories in name order (at most 32 child
+directories; never for `$HOME`, its ancestors, or `/`). Override it per repository with
 `[view.project_icons]` (`myrepo = "~/icons/myrepo.png"`, a path on the machine
 running the deck; quote a repo name that contains a dot, e.g.
 `"vaclavik.xyz" = "~/icons/site.png"`, or TOML reads it as a nested table).

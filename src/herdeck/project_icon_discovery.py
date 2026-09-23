@@ -3,6 +3,9 @@
 The bridge runs on the herdr host with base dependencies only (no Pillow, no
 cairosvg), so nothing here decodes an image: it finds a pane's repository
 root, picks the first favicon-like file and serves its bytes by content hash.
+A pane whose cwd is not inside any repo (a workspace folder grouping several
+repos) falls back to that folder: its own candidates first, then those of its
+direct child repos in name order (see ``find_folder_icon_file``).
 The runtime decodes (icons.py). Hashing and the size/format limits live here
 so the runtime's [view.project_icons] overrides hash exactly like the bridge.
 """
@@ -22,6 +25,10 @@ log = logging.getLogger(__name__)
 MAX_ICON_BYTES = 256 * 1024
 MAX_WALK_LEVELS = 12
 RESTAT_INTERVAL_S = 60.0
+# The non-repo folder fallback examines at most this many direct child
+# directories (sorted by name, dot-dirs and symlinks skipped, non-repos counted
+# too) so a pane parked in a huge folder costs a bounded number of stats.
+MAX_FALLBACK_CHILDREN = 32
 # Raster first: the frozen app and the Elgato plugin cannot rasterise SVG.
 CANDIDATES: tuple[str, ...] = (
     "favicon.png",
@@ -120,6 +127,52 @@ def find_icon_file(root: str) -> tuple[str, os.stat_result] | None:
     return None
 
 
+def is_fallback_folder(path: str, *, home: str | None = None) -> bool:
+    """True when ``path`` may serve as a non-repo fallback folder: an existing
+    absolute directory that is neither ``$HOME``, an ancestor of it, nor the
+    filesystem root (those are far too broad to stand for one project)."""
+    if not path or not os.path.isabs(path):
+        return False
+    cur = os.path.normpath(path)
+    home_dir = os.path.normpath(home if home is not None else os.path.expanduser("~"))
+    if os.path.dirname(cur) == cur or cur == home_dir:
+        return False
+    if home_dir.startswith(cur.rstrip(os.sep) + os.sep):
+        return False
+    return os.path.isdir(cur)
+
+
+def find_folder_icon_file(
+    folder: str, *, max_children: int = MAX_FALLBACK_CHILDREN
+) -> tuple[str, os.stat_result] | None:
+    """Icon for a folder that is not itself a repo: the candidates in the
+    folder itself, else in each direct child repo (``.git`` dir or file) in
+    name order. Symlink containment is relative to the root the icon is found
+    in, so a child repo cannot borrow a file from its sibling."""
+    found = find_icon_file(folder)
+    if found is not None:
+        return found
+    try:
+        with os.scandir(folder) as it:
+            children = sorted(
+                e.name
+                for e in it
+                if not e.name.startswith(".")
+                and not e.is_symlink()
+                and e.is_dir(follow_symlinks=False)
+            )
+    except OSError:
+        return None
+    for name in children[:max_children]:
+        child = os.path.join(folder, name)
+        if not os.path.lexists(os.path.join(child, ".git")):
+            continue
+        found = find_icon_file(child)
+        if found is not None:
+            return found
+    return None
+
+
 @dataclass(frozen=True)
 class IconBlob:
     hash: str
@@ -137,7 +190,7 @@ class _RootEntry:
 class ProjectIconIndex:
     """Bridge-side cache: pane location -> icon hash, hash -> bytes.
 
-    Each repo root is re-stat'ed at most every ``restat_interval`` seconds
+    Each repo root (or non-repo fallback folder) is re-stat'ed at most every ``restat_interval`` seconds
     (``invalidate`` forces it, e.g. on a herdr worktree event); the file is
     re-read only when its (path, mtime_ns, size) changed. Blobs no repo
     references any more are dropped."""
@@ -152,16 +205,17 @@ class ProjectIconIndex:
         self._clock = clock
         self._home = home
         self._interval = restat_interval
-        self._roots_by_cwd: dict[str, tuple[float, str | None]] = {}
-        self._by_root: dict[str, _RootEntry] = {}
+        # cwd -> (checked_at, root, root is a non-repo fallback folder)
+        self._roots_by_cwd: dict[str, tuple[float, str | None, bool]] = {}
+        self._by_root: dict[tuple[str, bool], _RootEntry] = {}
         self._blobs: dict[str, IconBlob] = {}
 
     def hash_for(self, *, worktree_path: str = "", cwd: str = "") -> str:
         """The icon hash for a pane, or "" — never raises (a permissions error
         or a file racing away must not cost a snapshot)."""
         try:
-            root = self._root(worktree_path, cwd)
-            return self._hash_for_root(root) if root else ""
+            root, fallback = self._root(worktree_path, cwd)
+            return self._hash_for_root(root, fallback) if root else ""
         except Exception as exc:
             log.debug("project icon discovery failed for %s: %s", worktree_path or cwd, exc)
             return ""
@@ -177,28 +231,32 @@ class ProjectIconIndex:
     def _fresh(self, checked_at: float) -> bool:
         return self._clock() - checked_at < self._interval
 
-    def _root(self, worktree_path: str, cwd: str) -> str | None:
+    def _root(self, worktree_path: str, cwd: str) -> tuple[str | None, bool]:
         if worktree_path and os.path.isdir(worktree_path):
-            return os.path.normpath(worktree_path)
+            return os.path.normpath(worktree_path), False
         if not cwd:
-            return None
+            return None, False
         hit = self._roots_by_cwd.get(cwd)
         if hit is not None and self._fresh(hit[0]):
-            return hit[1]
+            return hit[1], hit[2]
         root = find_repo_root(cwd, home=self._home)
+        fallback = False
+        if root is None and is_fallback_folder(cwd, home=self._home):
+            root, fallback = os.path.normpath(cwd), True
         if len(self._roots_by_cwd) >= _MAX_CACHED_PATHS:
             self._roots_by_cwd.clear()
-        self._roots_by_cwd[cwd] = (self._clock(), root)
-        return root
+        self._roots_by_cwd[cwd] = (self._clock(), root, fallback)
+        return root, fallback
 
-    def _hash_for_root(self, root: str) -> str:
-        entry = self._by_root.get(root)
+    def _hash_for_root(self, root: str, fallback: bool = False) -> str:
+        key = (root, fallback)
+        entry = self._by_root.get(key)
         if entry is not None and self._fresh(entry.checked_at):
             return entry.hash
         now = self._clock()
-        found = find_icon_file(root)
+        found = find_folder_icon_file(root) if fallback else find_icon_file(root)
         if found is None:
-            self._remember(root, _RootEntry(now, None, ""))
+            self._remember(key, _RootEntry(now, None, ""))
             return ""
         path, st = found
         sig = (path, st.st_mtime_ns, st.st_size)
@@ -207,18 +265,18 @@ class ProjectIconIndex:
             return entry.hash
         read = read_icon_file(path)
         if read is None:
-            self._remember(root, _RootEntry(now, None, ""))
+            self._remember(key, _RootEntry(now, None, ""))
             return ""
         mime, data = read
         digest = icon_hash(data)
         self._blobs[digest] = IconBlob(digest, mime, data)
-        self._remember(root, _RootEntry(now, sig, digest))
+        self._remember(key, _RootEntry(now, sig, digest))
         return digest
 
-    def _remember(self, root: str, entry: _RootEntry) -> None:
-        if root not in self._by_root and len(self._by_root) >= _MAX_CACHED_PATHS:
+    def _remember(self, key: tuple[str, bool], entry: _RootEntry) -> None:
+        if key not in self._by_root and len(self._by_root) >= _MAX_CACHED_PATHS:
             self._by_root.clear()
-        self._by_root[root] = entry
+        self._by_root[key] = entry
         live = {e.hash for e in self._by_root.values() if e.hash}
         for stale in [h for h in self._blobs if h not in live]:
             del self._blobs[stale]
