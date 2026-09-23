@@ -573,3 +573,158 @@ def test_read_claude_cache_rejects_stale_or_invalid_snapshot(tmp_path):
     assert read_claude_cache(str(target), wall_clock=lambda: 30, max_age_s=15) is None
     target.write_text("not json")
     assert read_claude_cache(str(target)) is None
+
+
+class _ScriptedAppServer:
+    """Fake ``codex app-server`` that answers each request as it is written.
+
+    ``delays`` maps a method name to seconds to wait before answering, and
+    ``preamble`` lines are emitted before every response (notifications and
+    server-initiated requests that a newer codex interleaves).
+    """
+
+    def __init__(self, delays=None, preamble=()):
+        self._out: queue.Queue[str | None] = queue.Queue()
+        self._delays = delays or {}
+        self._preamble = list(preamble)
+        self.returncode = None
+        self.terminated = False
+        self.stdout = iter(self._out.get, None)
+        server = self
+
+        class _Stdin:
+            def write(self, line):
+                server._handle(json.loads(line))
+
+            def flush(self):
+                pass
+
+        self.stdin = _Stdin()
+
+    def _handle(self, message):
+        if "id" not in message:
+            return
+        method = message["method"]
+        results = {
+            "initialize": {"codexHome": "/tmp"},
+            "account/read": {"account": {"type": "chatgpt", "planType": "pro"}},
+            "account/rateLimits/read": {
+                "rateLimits": {
+                    "secondary": {
+                        "usedPercent": 100,
+                        "windowDurationMins": 10080,
+                        "resetsAt": 1784487551,
+                    }
+                }
+            },
+        }
+        lines = [*self._preamble, json.dumps({"id": message["id"], "result": results[method]})]
+
+        def emit():
+            for line in lines:
+                self._out.put(line + "\n")
+
+        delay = self._delays.get(method, 0)
+        if delay:
+            threading.Timer(delay, emit).start()
+        else:
+            emit()
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = 0
+        self._out.put(None)
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+        self._out.put(None)
+
+
+def test_codex_app_server_start_uses_longer_handshake_timeout(monkeypatch):
+    # A cold codex (plus SSH for a thin-client wrapper) can take far longer to
+    # answer `initialize` than later requests take.
+    monkeypatch.setattr("herdeck.usage._APP_SERVER_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("herdeck.usage._APP_SERVER_START_TIMEOUT_S", 2.0)
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codex")
+    proc = _ScriptedAppServer(delays={"initialize": 0.3})
+    source = CodexAppServerSource(popen=lambda *a, **k: proc)
+
+    usage = source.fetch()
+
+    assert usage is not None and usage.windows[0].used_percent == 100
+    source.close()
+
+
+def test_codex_app_server_later_requests_keep_short_timeout(monkeypatch):
+    monkeypatch.setattr("herdeck.usage._APP_SERVER_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("herdeck.usage._APP_SERVER_START_TIMEOUT_S", 2.0)
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codex")
+    proc = _ScriptedAppServer(delays={"account/rateLimits/read": 0.3})
+    source = CodexAppServerSource(popen=lambda *a, **k: proc)
+
+    assert source.fetch() is None
+    assert proc.terminated  # the timed-out session is torn down, not leaked
+    assert source._proc is None
+
+
+def test_codex_app_server_start_timeout_does_not_leak_process(monkeypatch):
+    monkeypatch.setattr("herdeck.usage._APP_SERVER_START_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codex")
+    procs = []
+
+    def popen(*args, **kwargs):
+        procs.append(_ScriptedAppServer(delays={"initialize": 0.5}))
+        return procs[-1]
+
+    source = CodexAppServerSource(popen=popen)
+    assert source.fetch() is None
+    assert source.fetch() is None
+
+    assert len(procs) == 2
+    assert all(proc.terminated for proc in procs)
+    assert source._proc is None
+
+
+def test_codex_app_server_process_is_reused_across_polls(monkeypatch):
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codex")
+    procs = []
+
+    def popen(*args, **kwargs):
+        procs.append(_ScriptedAppServer())
+        return procs[-1]
+
+    source = CodexAppServerSource(popen=popen)
+    first = source.fetch()
+    second = source.fetch()
+
+    assert first is not None and second is not None
+    assert len(procs) == 1 and not procs[0].terminated
+    source.close()
+    assert procs[0].terminated
+
+
+def test_codex_app_server_skips_notifications_and_server_requests(monkeypatch):
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codex")
+    # Newer codex emits notifications before responses, and a server-initiated
+    # request carries its own `id` that can collide with ours.
+    preamble = [
+        '{"method":"remoteControl/status/changed","params":{"status":"disabled"}}',
+        '{"id":1,"method":"item/tool/requestUserInput","params":{}}',
+        '{"id":2,"method":"item/tool/requestUserInput","params":{}}',
+        '["not", "an", "object"]',
+        '"id"',
+    ]
+    proc = _ScriptedAppServer(preamble=preamble)
+    source = CodexAppServerSource(popen=lambda *a, **k: proc)
+
+    usage = source.fetch()
+
+    assert usage is not None and usage.windows[0].used_percent == 100
+    assert (usage.subscription, usage.plan) == ("paid", "pro")
+    source.close()

@@ -25,7 +25,13 @@ from . import __version__
 log = logging.getLogger(__name__)
 
 _CLI_TIMEOUT_S = 120.0
+# Per-request deadline once the app-server session is up.
 _APP_SERVER_TIMEOUT_S = 15.0
+# Deadline for spawning ``codex app-server`` and answering ``initialize``. A
+# cold codex-cli 0.155 needs 13-18 s for the handshake alone, and a thin-client
+# ``codex_path`` wrapper that runs codex over SSH adds its connection setup on
+# top. The session is kept alive across polls, so only the first start pays it.
+_APP_SERVER_START_TIMEOUT_S = 60.0
 _STALE_REFRESHES = 4
 _CLAUDE_CACHE_MAX_AGE_S = 6 * 60 * 60
 _FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
@@ -306,6 +312,7 @@ class CodexAppServerSource:
         except Exception:
             try:
                 proc.kill()
+                proc.wait(timeout=1.0)
             except Exception:
                 pass
         if self._reader_thread is not None:
@@ -376,7 +383,7 @@ class CodexAppServerSource:
                 },
             }
         )
-        self._read_response(0)
+        self._read_response(0, timeout=_APP_SERVER_START_TIMEOUT_S)
         self._send({"method": "initialized", "params": {}})
 
     def _send(self, message: dict) -> None:
@@ -385,10 +392,10 @@ class CodexAppServerSource:
         self._proc.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
         self._proc.stdin.flush()
 
-    def _read_response(self, request_id: int) -> dict:
+    def _read_response(self, request_id: int, timeout: float | None = None) -> dict:
         if self._proc is None:
             raise RuntimeError("Codex app-server is not running")
-        deadline = time.monotonic() + _APP_SERVER_TIMEOUT_S
+        deadline = time.monotonic() + (_APP_SERVER_TIMEOUT_S if timeout is None else timeout)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -399,7 +406,9 @@ class CodexAppServerSource:
                 raise TimeoutError(f"Codex app-server request {request_id} timed out") from exc
             if message is None:
                 raise RuntimeError("Codex app-server closed its output")
-            if message.get("id") != request_id:
+            # Server-initiated requests carry their own ``id`` (and a
+            # ``method``); only a response to our request id counts.
+            if "method" in message or message.get("id") != request_id:
                 continue
             if "error" in message:
                 raise RuntimeError(str(message["error"]))
@@ -416,9 +425,10 @@ class CodexAppServerSource:
                     message = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                # Notifications have no id and are irrelevant to this polling
-                # client. Drop them here so an idle daemon cannot grow the queue.
-                if "id" in message:
+                # Notifications (e.g. ``remoteControl/status/changed``) have no
+                # id and are irrelevant to this polling client. Drop them, and
+                # any non-object line, so an idle daemon cannot grow the queue.
+                if isinstance(message, dict) and "id" in message:
                     messages.put(message)
         finally:
             messages.put(None)
