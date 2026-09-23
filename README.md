@@ -584,8 +584,10 @@ favicon in the pane's repository
 gets a coloured letter badge. When the pane's working directory is not inside
 a Git repository (say a workspace folder holding several repos), the bridge
 looks in that folder itself, so you can drop a `favicon.png` there, and
-otherwise in its direct child repositories in name order (at most 32 child
-directories; never for `$HOME`, its ancestors, or `/`). Override it per repository with
+otherwise in its direct child repositories in name order, but only when the
+folder groups at most 4 repos (one project split into app/web, not a folder of
+projects; at most 32 child directories are looked at; never for `$HOME`, its
+ancestors, or `/`). Override it per repository with
 `[view.project_icons]` (`myrepo = "~/icons/myrepo.png"`, a path on the machine
 running the deck; quote a repo name that contains a dot, e.g.
 `"vaclavik.xyz" = "~/icons/site.png"`, or TOML reads it as a nested table).

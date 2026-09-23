@@ -29,6 +29,9 @@ RESTAT_INTERVAL_S = 60.0
 # directories (sorted by name, dot-dirs and symlinks skipped, non-repos counted
 # too) so a pane parked in a huge folder costs a bounded number of stats.
 MAX_FALLBACK_CHILDREN = 32
+# ...and borrows a child repo's icon only when the folder groups at most this
+# many repos (one project split into app/web/...), not a folder of projects.
+MAX_FALLBACK_CHILD_REPOS = 4
 # Raster first: the frozen app and the Elgato plugin cannot rasterise SVG.
 CANDIDATES: tuple[str, ...] = (
     "favicon.png",
@@ -163,10 +166,17 @@ def find_folder_icon_file(
             )
     except OSError:
         return None
-    for name in children[:max_children]:
-        child = os.path.join(folder, name)
-        if not os.path.lexists(os.path.join(child, ".git")):
-            continue
+    repos = [
+        os.path.join(folder, name)
+        for name in children[:max_children]
+        if os.path.lexists(os.path.join(folder, name, ".git"))
+    ]
+    # A folder grouping a few repos stands for one project (app + web); a
+    # folder of many independent repos (~/projects) does not, and borrowing
+    # the alphabetically first repo's icon would mislabel the tile.
+    if len(repos) > MAX_FALLBACK_CHILD_REPOS:
+        return None
+    for child in repos:
         found = find_icon_file(child)
         if found is not None:
             return found

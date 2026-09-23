@@ -255,6 +255,18 @@ def test_child_scan_is_capped(tmp_path):
     assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == icon_hash(b"late")
 
 
+def test_folder_of_many_repos_does_not_borrow_a_child_icon(tmp_path):
+    # ~/projects-style folder: many independent repos, so no single child
+    # icon stands for it; its own favicon still counts.
+    home, folder = _home_with_folder(tmp_path)
+    for i in range(disc.MAX_FALLBACK_CHILD_REPOS + 1):
+        repo = _repo(folder, f"r{i}")
+        _put(repo, "favicon.png", f"icon-{i}".encode())
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == ""
+    _put(folder, "favicon.png", b"own")
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == icon_hash(b"own")
+
+
 def test_fallback_symlink_escape_is_rejected(tmp_path):
     home, folder = _home_with_folder(tmp_path)
     outside = tmp_path / "secret.png"
