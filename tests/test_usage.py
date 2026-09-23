@@ -369,7 +369,140 @@ def test_parse_codex_account_distinguishes_paid_free_and_api_key():
     ) == ("unknown", "future-sentinel")
 
 
-def test_paid_only_hides_unconfirmed_providers_without_codexbar_fallback(monkeypatch):
+# Trimmed real `codexbar usage --format json --provider claude` / `codex` output
+# (CodexBar 2026-09, email and pace/cost blocks removed).
+_CODEXBAR_PAID_JSON = json.dumps(
+    [
+        {
+            "provider": "claude",
+            "source": "web",
+            "rateWindowLabels": {"secondary": "Weekly", "primary": "Session"},
+            "usage": {
+                "loginMethod": "Claude Max 20x",
+                "primary": {
+                    "resetsAt": "2026-09-23T12:10:00Z",
+                    "windowMinutes": 300,
+                    "usedPercent": 14,
+                },
+                "secondary": {
+                    "resetsAt": "2026-09-28T13:00:00Z",
+                    "windowMinutes": 10080,
+                    "usedPercent": 17,
+                },
+                "tertiary": None,
+                "identity": {"loginMethod": "Claude Max 20x", "providerID": "claude"},
+                "extraRateWindows": [
+                    {
+                        "title": "Fable only",
+                        "id": "claude-weekly-scoped-fable",
+                        "window": {
+                            "windowMinutes": 10080,
+                            "resetsAt": "2026-09-28T13:00:00Z",
+                            "usedPercent": 0,
+                        },
+                    }
+                ],
+            },
+        },
+        {
+            "provider": "codex",
+            "source": "oauth",
+            "rateWindowLabels": {"secondary": "Weekly"},
+            "usage": {
+                "loginMethod": "pro",
+                "primary": None,
+                "secondary": {
+                    "usedPercent": 100,
+                    "windowMinutes": 10080,
+                    "resetsAt": "2026-09-26T08:45:06Z",
+                },
+                "tertiary": None,
+                "identity": {"loginMethod": "pro", "providerID": "codex"},
+            },
+        },
+    ]
+)
+
+
+def _codexbar_entry(provider, login_method=None, *, identity_only=False):
+    usage = {"secondary": {"windowMinutes": 10080, "usedPercent": 5}}
+    if login_method is not None:
+        usage["identity"] = {"loginMethod": login_method}
+        if not identity_only:
+            usage["loginMethod"] = login_method
+    return {"provider": provider, "usage": usage}
+
+
+def test_parse_usage_derives_paid_subscription_from_login_method():
+    data = {p.provider: p for p in parse_usage(_CODEXBAR_PAID_JSON)}
+    assert (data["claude"].subscription, data["claude"].plan) == ("paid", "max 20x")
+    assert [(w.label, w.used_percent) for w in data["claude"].windows] == [("5h", 14), ("7d", 17)]
+    assert (data["codex"].subscription, data["codex"].plan) == ("paid", "pro")
+    assert [(w.label, w.used_percent) for w in data["codex"].windows] == [("7d", 100)]
+
+
+def test_parse_usage_login_method_classification():
+    cases = [
+        (_codexbar_entry("claude", "Claude Pro"), "paid"),
+        (_codexbar_entry("claude", "Claude Team", identity_only=True), "paid"),
+        (_codexbar_entry("claude", "claude enterprise"), "paid"),
+        (_codexbar_entry("claude", "Max"), "paid"),
+        (_codexbar_entry("claude", "Claude Free"), "free"),
+        (_codexbar_entry("claude", "Claude Maximal Sentinel"), "unknown"),
+        (_codexbar_entry("claude"), "unknown"),
+        (_codexbar_entry("codex", "Plus"), "paid"),
+        (_codexbar_entry("codex", "ChatGPT Team"), "paid"),
+        (_codexbar_entry("codex", "free"), "free"),
+        (_codexbar_entry("codex", "future-sentinel"), "unknown"),
+        (_codexbar_entry("gemini", "Pro"), "unknown"),  # no known plan vocabulary
+    ]
+    for entry, expected in cases:
+        (usage,) = parse_usage(json.dumps([entry]))
+        assert usage.subscription == expected, entry
+
+
+def test_paid_only_uses_codexbar_fallback_and_keeps_only_paid(monkeypatch):
+    calls = []
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codexbar")
+    stdout = json.dumps(
+        [_codexbar_entry("claude", "Claude Max 20x"), _codexbar_entry("codex", "mystery")]
+    )
+    poller = UsagePoller(
+        ["claude", "codex"],
+        paid_only=True,
+        codex_source=_Source(None),
+        claude_reader=lambda _path: None,
+        runner=lambda argv, **kwargs: calls.append(argv) or _Proc(stdout=stdout),
+    )
+
+    poller.poll_once()
+
+    assert calls[0][-1] == "claude,codex"
+    assert [usage.provider for usage in poller.snapshot()] == ["claude"]
+    # An unconfirmed fallback result is not cached at all in paid-only mode.
+    assert "codex" not in poller._data
+
+
+def test_paid_only_skips_codexbar_when_native_sources_cover_everything(monkeypatch):
+    calls = []
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codexbar")
+    paid_codex = ProviderUsage("codex", [UsageWindow("5h", 12, None)], "paid", "pro")
+    paid_claude = ProviderUsage("claude", [UsageWindow("7d", 3, None)], "paid")
+    poller = UsagePoller(
+        ["claude", "codex"],
+        paid_only=True,
+        codex_source=_Source(paid_codex),
+        claude_reader=lambda _path: paid_claude,
+        runner=lambda *args, **kwargs: calls.append(args) or _Proc(stdout=_CODEXBAR_JSON),
+    )
+
+    poller.poll_once()
+
+    assert [usage.provider for usage in poller.snapshot()] == ["claude", "codex"]
+    assert calls == []
+
+
+def test_paid_only_falls_back_only_for_missing_provider(monkeypatch):
     calls = []
     monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codexbar")
     paid = ProviderUsage("codex", [UsageWindow("5h", 12, None)], "paid", "pro")
@@ -378,13 +511,14 @@ def test_paid_only_hides_unconfirmed_providers_without_codexbar_fallback(monkeyp
         paid_only=True,
         codex_source=_Source(paid),
         claude_reader=lambda _path: None,
-        runner=lambda *args, **kwargs: calls.append(args) or _Proc(stdout=_CODEXBAR_JSON),
+        # Legacy CodexBar output without loginMethod: no positive paid signal.
+        runner=lambda argv, **kwargs: calls.append(argv) or _Proc(stdout=_CODEXBAR_JSON),
     )
 
     poller.poll_once()
 
+    assert calls[0][-1] == "claude"
     assert [usage.provider for usage in poller.snapshot()] == ["codex"]
-    assert calls == []
 
 
 def test_paid_only_hides_free_native_subscription():

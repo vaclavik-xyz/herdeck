@@ -616,14 +616,36 @@ The default Claude snapshot is `~/.cache/herdeck/claude-usage.json`. Configure
 `codex_path` when Codex lives elsewhere. If you change `claude_cache_path`, pass
 the same path to the status-line collector, for example
 `herdeck-usage capture-claude --output /path/to/claude-usage.json`.
-Set `paid_only = true` to hide providers unless native account data confirms a
-paid subscription. Codex uses the ChatGPT plan reported by app-server. Claude's
+Set `paid_only = true` to hide providers unless account data confirms a paid
+subscription. Codex uses the ChatGPT plan reported by app-server. Claude's
 subscriber-only rate limits confirm Pro/Max after the first API response in a
 Claude Code session; until then the state is unknown and stays hidden. Removing
 a provider from `providers` disables it completely.
 CodexBar remains an automatic compatibility fallback for missing providers;
-set `codexbar_path = ""` to disable it. Pressing the status window holds a
-detail view with reset times. Blocked and offline alerts always take priority.
+set `codexbar_path = ""` to disable it. Its `loginMethod` is the paid signal:
+Claude Pro/Max/Team/Enterprise and the paid ChatGPT plans (Plus, Pro, Team,
+Business, …) count as paid, so with `paid_only = true` the fallback still runs
+and keeps only those results. Pressing the status window holds a detail view
+with reset times. Blocked and offline alerts always take priority.
+
+**Thin-client deck.** When the deck machine only displays the deck and the AI
+logins live on another Mac, point `codex_path` and `codexbar_path` at small
+wrapper scripts that run the real tools there over SSH (key-based, no prompt):
+
+```bash
+#!/bin/sh
+# ~/bin/codex-remote  (codex_path = "~/bin/codex-remote")
+exec ssh -T admin@ai-mac codex "$@"
+```
+
+```bash
+#!/bin/sh
+# ~/bin/codexbar-remote  (codexbar_path = "~/bin/codexbar-remote")
+exec ssh -T admin@ai-mac /opt/homebrew/bin/codexbar "$@"
+```
+
+The Codex app-server session stays open across polls; its first start (cold
+codex plus SSH) may take up to 60 s, later reads time out after 15 s.
 
 ## Stream Deck (Elgato) plugin backend
 herdeck can also drive a native **Elgato Stream Deck** as a plugin. A thin

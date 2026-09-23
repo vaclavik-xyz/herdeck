@@ -46,6 +46,11 @@ _PAID_CODEX_PLANS = {
     "prolite",
     "team",
 }
+# Claude subscription tiers that CodexBar reports as ``loginMethod`` (e.g.
+# "Claude Max 20x"); matched on the first word after an optional "claude".
+_PAID_CLAUDE_PLANS = {"enterprise", "max", "pro", "team"}
+# Product prefixes CodexBar may put in front of the tier name.
+_LOGIN_METHOD_PREFIXES = {"claude": "claude", "codex": "chatgpt"}
 
 
 @dataclass
@@ -72,6 +77,30 @@ def _subscription_from_plan(plan) -> tuple[str, str | None]:
         return "free", normalized
     if normalized in _PAID_CODEX_PLANS:
         return "paid", normalized
+    return "unknown", normalized
+
+
+def _subscription_from_login_method(provider: str, login_method) -> tuple[str, str | None]:
+    """Classify a CodexBar ``loginMethod`` such as "Claude Max 20x" or "pro".
+
+    Only Claude and Codex have a known plan vocabulary; anything else (and any
+    unrecognised tier) stays "unknown" so paid-only mode never guesses.
+    """
+    if not isinstance(login_method, str) or not login_method.strip():
+        return "unknown", None
+    normalized = " ".join(login_method.strip().lower().split())
+    prefix = _LOGIN_METHOD_PREFIXES.get(provider)
+    if prefix and normalized.startswith(prefix + " "):
+        normalized = normalized[len(prefix) + 1 :]
+    if provider == "claude":
+        tier = normalized.split(" ", 1)[0]
+        if tier == "free":
+            return "free", normalized
+        if tier in _PAID_CLAUDE_PLANS:
+            return "paid", normalized
+        return "unknown", normalized
+    if provider == "codex":
+        return _subscription_from_plan(normalized)
     return "unknown", normalized
 
 
@@ -124,7 +153,11 @@ def _parse_window(
 
 
 def parse_usage(raw: str) -> list[ProviderUsage]:
-    """Normalize CodexBar JSON for the compatibility fallback."""
+    """Normalize CodexBar JSON for the compatibility fallback.
+
+    The subscription tier comes from ``usage.loginMethod`` (or
+    ``usage.identity.loginMethod``), e.g. "Claude Max 20x" or "pro".
+    """
     try:
         entries = json.loads(raw)
     except json.JSONDecodeError:
@@ -154,7 +187,12 @@ def parse_usage(raw: str) -> list[ProviderUsage]:
             is not None
         ]
         if windows:
-            out.append(ProviderUsage(provider=provider, windows=windows))
+            identity = usage.get("identity")
+            login_method = usage.get("loginMethod")
+            if not isinstance(login_method, str) and isinstance(identity, dict):
+                login_method = identity.get("loginMethod")
+            subscription, plan = _subscription_from_login_method(provider, login_method)
+            out.append(ProviderUsage(provider, windows, subscription, plan))
     return out
 
 
@@ -509,17 +547,17 @@ class UsagePoller:
             if usage is not None:
                 fresh["claude"] = usage
 
-        # CodexBar does not expose a stable paid-subscription entitlement. In
-        # paid-only mode an unknown fallback would be hidden anyway, so avoid
-        # both the subprocess and the risk of presenting login as payment.
-        missing = (
-            []
-            if self._paid_only
-            else [provider for provider in self._providers if provider not in fresh]
-        )
+        # CodexBar fills providers the native sources could not read (e.g. a
+        # thin-client deck whose AI logins live on another machine). Its
+        # ``loginMethod`` is the paid signal; in paid-only mode anything short
+        # of a recognised paid tier is dropped rather than shown as payment.
+        missing = [provider for provider in self._providers if provider not in fresh]
         for usage in self._fetch_codexbar(missing):
-            if usage.provider in requested and usage.provider not in fresh:
-                fresh[usage.provider] = usage
+            if usage.provider not in requested or usage.provider in fresh:
+                continue
+            if self._paid_only and usage.subscription != "paid":
+                continue
+            fresh[usage.provider] = usage
         if not fresh:
             return
         fetched_at = self._clock()
