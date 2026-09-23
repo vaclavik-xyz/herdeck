@@ -64,6 +64,10 @@ class PanelView:
     color: str = "grey"
     gauges: list[PanelGauge] = field(default_factory=list)
     gauge_meta: str = ""
+    # A compact secondary status line (e.g. "t3 offline" during a partial
+    # outage). Rendered only where it fits: after the body lines on a text
+    # panel (a full body drops it), under the header meta on a gauge panel.
+    note: str = ""
 
     def cache_key(self) -> tuple:
         return (
@@ -74,6 +78,7 @@ class PanelView:
                 (g.label, g.window, g.used_percent, g.hint, g.color) for g in self.gauges
             ),
             self.gauge_meta,
+            self.note,
         )
 
 

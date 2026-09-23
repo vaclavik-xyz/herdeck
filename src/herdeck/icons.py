@@ -671,10 +671,14 @@ def compose_panel(panel: PanelView, width: int = PANEL_W) -> Image.Image:
     )
     line_f = _font(24)
     y = 60
-    for line in _panel_body_lines(d, panel.lines, line_f, width - 32):
+    body = _panel_body_lines(d, panel.lines, line_f, width - 32)
+    for line in body:
         # _truncate is a safety net for unbreakable tokens wider than the panel.
         d.text((16, y), _truncate(d, line, line_f, width - 32), font=line_f, fill=(232, 232, 236))
         y += 40
+    if panel.note and len(body) < _PANEL_BODY_LINES:
+        # The note only takes a free body line: blocked/spotlight lines win.
+        d.text((16, y), _truncate(d, panel.note, line_f, width - 32), font=line_f, fill=_NOTE_TEXT)
     return img
 
 
@@ -687,6 +691,10 @@ _GAUGE_TEXT = (251, 252, 253)
 # 2.2:1 on the card) lives only in the rail, which also shifts to amber/red as
 # the limit nears — a coloured label then disagreed with its own bar.
 _GAUGE_LABEL = _GAUGE_MUTED
+# PanelView.note (e.g. "t3 offline" during a partial outage): a soft warning
+# tint, readable on both the grey text panel and the gauge header — the note
+# flags one server, it must not make the whole panel read as offline.
+_NOTE_TEXT = (255, 160, 150)
 
 
 def _gauge_tone(color: str, used_percent: int) -> tuple[int, int, int]:
@@ -719,12 +727,18 @@ def _compose_gauge_panel(panel: PanelView, width: int) -> Image.Image:
         fill=_GAUGE_TEXT,
     )
     meta = panel.gauge_meta if detail else panel.lines[0] if panel.lines else ""
+    note = panel.note.upper() if panel.note else ""
+    meta_font = _font(15)
     if meta:
-        meta_font = _font(15)
         meta = meta.upper()
         meta = _truncate(draw, meta, meta_font, width * 0.38)
         meta_w = draw.textlength(meta, font=meta_font)
-        draw.text((width - 16 - meta_w, 17), meta, font=meta_font, fill=_GAUGE_MUTED)
+        # With a note the header stacks two short right-aligned rows.
+        draw.text((width - 16 - meta_w, 8 if note else 17), meta, font=meta_font, fill=_GAUGE_MUTED)
+    if note:
+        note = _truncate(draw, note, meta_font, width * 0.38)
+        note_w = draw.textlength(note, font=meta_font)
+        draw.text((width - 16 - note_w, 26 if meta else 17), note, font=meta_font, fill=_NOTE_TEXT)
     draw.line((16, 45, width - 16, 45), fill=_GAUGE_LINE, width=1)
 
     columns = min(3, len(panel.gauges)) if detail else min(2, len(panel.gauges))

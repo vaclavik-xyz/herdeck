@@ -19,6 +19,9 @@ STRINGS: dict[str, dict[str, str]] = {
         # overview panel (layout.panel_overview)
         "offline_title": "OFFLINE",
         "reconnecting": "reconnecting…",
+        # partial outage: some, not all, servers down (note line on the calm panel)
+        "server_offline": "{name} offline",
+        "servers_offline": "{n} servers offline",
         "blocked_count": "▲ {n} blocked",
         "needs_you_one": "▲ needs you",
         "needs_you_many": "▲ {n} need you",
@@ -100,6 +103,8 @@ STRINGS: dict[str, dict[str, str]] = {
     "cs": {
         "offline_title": "OFFLINE",
         "reconnecting": "připojuji…",
+        "server_offline": "{name} offline",
+        "servers_offline": "servery offline: {n}",
         "blocked_count": "▲ blokováno: {n}",
         "needs_you_one": "▲ čeká na tebe",
         "needs_you_many": "▲ čeká: {n}",
