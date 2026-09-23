@@ -50,7 +50,7 @@ tile_icon = "agent"
 [notifications]
 enabled = false
 backends = ["macos"]
-on = ["blocked"]         # events that alert you: "blocked" and/or "done"
+on = ["blocked", "done"] # events that alert you (default both); ["blocked"] mutes done
 sound = true
 # Per-event macOS system sound (played with the alert). A missing key falls
 # back to the default: Glass for "blocked", Hero for "done".

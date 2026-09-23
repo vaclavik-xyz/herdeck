@@ -1074,7 +1074,8 @@ def test_app_done_not_notified_unless_enabled_in_on():
 
     calls = []
     cfg = make_config()
-    cfg.notifications.enabled = True  # on stays ["blocked"]
+    cfg.notifications.enabled = True
+    cfg.notifications.on = ["blocked"]  # an explicit opt-out of done alerts
     app = App(
         cfg,
         FakeRenderer(13),

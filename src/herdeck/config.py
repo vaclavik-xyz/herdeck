@@ -37,6 +37,10 @@ class Macro:
 # default macOS system sound played for each (override via [notifications.sounds]).
 NOTIFY_EVENTS: tuple[str, ...] = ("blocked", "done")
 DEFAULT_EVENT_SOUNDS: dict[str, str] = {"blocked": "Glass", "done": "Hero"}
+# Events that alert when `on` is omitted. Both: the editor always offers a
+# per-event sound, and a "done" sound that silently never fires reads as broken.
+# An explicit `on = ["blocked"]` still opts out of done alerts.
+DEFAULT_NOTIFY_ON: tuple[str, ...] = ("blocked", "done")
 
 
 @dataclass
@@ -52,7 +56,7 @@ class TelegramConfig:
 @dataclass
 class Notifications:
     enabled: bool = False
-    on: list[str] = field(default_factory=lambda: ["blocked"])
+    on: list[str] = field(default_factory=lambda: list(DEFAULT_NOTIFY_ON))
     sound: bool = True
     backends: list[str] = field(default_factory=lambda: ["macos"])
     # Per-event sound name (a macOS system sound played with the alert); the
@@ -322,10 +326,16 @@ def validate_event_sounds(raw) -> dict[str, str]:
     return dict(raw)
 
 
+def normalize_notify_on(raw) -> list[str]:
+    """`[notifications].on` with surrounding whitespace stripped from each event,
+    so a hand-written " done" still fires (the app matches with `in`)."""
+    return [e.strip() if isinstance(e, str) else e for e in raw]
+
+
 def parse_notifications(n: dict) -> Notifications:
     tg_raw = n.get("telegram")
     telegram = _parse_telegram_config(tg_raw) if isinstance(tg_raw, dict) else None
-    on = list(n.get("on", ["blocked"]))
+    on = normalize_notify_on(n.get("on", DEFAULT_NOTIFY_ON))
     unknown_events = [e for e in on if e not in NOTIFY_EVENTS]
     if unknown_events:
         log.warning(

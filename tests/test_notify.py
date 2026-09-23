@@ -21,6 +21,21 @@ def test_macos_sink_sound_name_and_switch(monkeypatch):
     assert "sound name" not in scripts[2]
 
 
+def test_macos_sink_attaches_the_sound_to_the_notification_only(monkeypatch):
+    # One osascript call per alert, sound included: a separately played sound
+    # (afplay) would still ring while Focus silences the banner.
+    import herdeck.notify as notify_mod
+
+    commands = []
+    monkeypatch.setattr(notify_mod.subprocess, "run", lambda cmd, **kw: commands.append(cmd))
+    notify_mod._macos_sink("claude · done", "api", "Hero")
+    notify_mod._macos_sink("t", "b", "")  # "" = silent
+    assert [cmd[0] for cmd in commands] == ["osascript", "osascript"]
+    assert 'sound name "Hero"' in commands[0][2]
+    assert "sound name" not in commands[1][2]
+    assert not hasattr(notify_mod, "play_sound_file")
+
+
 def test_notification_feed_generation_ack_and_reset_cursor(caplog, monkeypatch):
     from herdeck.notify import NotificationFeed
 
@@ -268,7 +283,6 @@ def test_deckapp_sink_honors_backends_and_disabled():
         feed,
         lambda: True,
         make_config(["macos"], enabled=False),
-        sound_player=lambda name: calls.append(("sound", name)) or True,
         getenv=lambda name: "tok",
         telegram_factory=lambda *a, **kw: (lambda t, b, s: calls.append(("tg", t))),
     )
@@ -282,7 +296,6 @@ def test_deckapp_sink_honors_backends_and_disabled():
         feed,
         lambda: True,
         make_config(["macos"]),
-        sound_player=lambda name: calls.append(("sound", name)) or True,
         getenv=lambda name: "tok",
         telegram_factory=lambda *a, **kw: (lambda t, b, s: calls.append(("tg", t))),
     )
@@ -296,7 +309,6 @@ def test_deckapp_sink_honors_backends_and_disabled():
         feed,
         lambda: True,
         make_config(["telegram"]),
-        sound_player=lambda name: calls.append(("sound", name)) or True,
         getenv=lambda name: "tok",
         telegram_factory=lambda *a, **kw: (lambda t, b, s: calls.append(("tg", t))),
     )
@@ -310,7 +322,6 @@ def test_deckapp_sink_honors_backends_and_disabled():
         feed,
         lambda: True,
         make_config(["macos", "telegram"]),
-        sound_player=lambda name: calls.append(("sound", name)) or True,
         getenv=lambda name: "tok",
         telegram_factory=lambda *a, **kw: (lambda t, b, s: calls.append(("tg", t))),
     )

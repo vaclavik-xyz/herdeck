@@ -223,7 +223,18 @@ def test_default_profiles_claude_codex_documented():
 def test_notifications_default_disabled_when_absent(tmp_path):
     cfg = load_config(_write(tmp_path, '[deck]\ngrid="5x3"\n'))
     assert cfg.notifications.enabled is False
+    # Both events alert by default: the editor offers a sound for each.
+    assert cfg.notifications.on == ["blocked", "done"]
+
+
+def test_notifications_explicit_blocked_only_is_honoured(tmp_path):
+    cfg = load_config(_write(tmp_path, '[notifications]\nenabled=true\non=["blocked"]\n'))
     assert cfg.notifications.on == ["blocked"]
+
+
+def test_notifications_on_entries_are_stripped(tmp_path):
+    cfg = load_config(_write(tmp_path, '[notifications]\nenabled=true\non=[" done"]\n'))
+    assert cfg.notifications.on == ["done"]
 
 
 def test_notifications_parsed(tmp_path):

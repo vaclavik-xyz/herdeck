@@ -11,7 +11,6 @@ import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 from .i18n import tr
@@ -334,42 +333,20 @@ class NotificationFeed:
         return True
 
 
-_SOUND_DIR = Path("/System/Library/Sounds")
-
-
-def play_sound_file(name: str) -> bool:
-    """Play a macOS system sound via `afplay` (audio only, no banner).
-
-    Unlike an osascript notification this is not attributed to any app, so the
-    shell can own the banner while the runtime still honors the per-event
-    system sound (`True` maps to the historical "Glass" default). Returns
-    False when the sound name is not a stock system sound.
-    """
-    path = _SOUND_DIR / f"{name}.aiff"
-    if not path.is_file():
-        return False
-    subprocess.run(
-        ["/usr/bin/afplay", str(path)],
-        timeout=10,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return True
-
-
 def runtime_sink(
     feed: NotificationFeed,
     gate: Callable[[], bool],
     *,
-    sound_player: Callable[[str], bool] = play_sound_file,
     fallback: Callable[[str, str, bool | str], None] = _macos_sink,
 ) -> Callable[[str, str, bool | str], None]:
     """Sink for the deckapp runtime path.
 
-    With a live shell, records once into its acknowledged feed; the shell owns
-    both the native banner and sound. Without a shell, delivers only through
-    the osascript fallback. Never doing both removes the handoff replay race.
+    With a live shell, records once into its acknowledged feed; the shell posts
+    the native banner with the sound attached. Without a shell, delivers only
+    through the osascript fallback, whose ``sound name`` also rides on the
+    notification. The sound is never played separately (e.g. via afplay): a
+    detached sound would still play while Focus silences the banner. Never
+    doing both feed and fallback removes the handoff replay race.
     """
 
     def sink(title: str, body: str, sound: bool | str) -> None:
@@ -417,14 +394,13 @@ def deckapp_sink(
     gate: Callable[[], bool],
     config,  # herdeck.config.Config (duck-typed; notify.py stays import-free)
     *,
-    sound_player: Callable[[str], bool] = play_sound_file,
     getenv=get_secret,
     telegram_factory=make_telegram_sink,
     macos_sink=_macos_sink,
 ) -> Callable[[str, str, bool | str], None]:
     """Deckapp runtime sink honoring ``[notifications.backends]``.
 
-    The shell claim pipeline (feed + sound + osascript fallback) serves the
+    The shell claim pipeline (feed + osascript fallback) serves the
     "macos" backend; telegram fires independently and always. When
     notifications are disabled, nothing fires and the feed stays empty.
     """
@@ -442,7 +418,6 @@ def deckapp_sink(
         runtime_sink(
             feed,
             gate,
-            sound_player=sound_player,
             fallback=macos_sink if macos_on else (lambda t, b, s: None),
         )
     ]

@@ -45,7 +45,7 @@
   },
   "notifications": {
     "enabled": false,
-    "on": ["blocked"],
+    "on": ["blocked", "done"],
     "sound": true,
     "sounds": { "blocked": "Glass", "done": "Hero" },
     "backends": ["macos"],
