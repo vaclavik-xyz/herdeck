@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-23
+
 ### Added
 - Project favicons on agent tiles: `[view].tile_icon = "project"` shows the
   repository's favicon instead of the agent mark (`"both"` adds it as a small
