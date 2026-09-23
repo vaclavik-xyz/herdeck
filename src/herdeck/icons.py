@@ -644,6 +644,14 @@ def _fit_project_name(draw, text, max_w):
     while cut < len(text) and draw.textlength(text[:cut + 1], font=font) <= max_w:
         cut += 1
     boundaries = [i + 1 for i, c in enumerate(text[:cut]) if c in " -_/" and i >= cut // 2]
+    # Prefer the latest word boundary whose remainder still fits on line two,
+    # then a hard cut at the widest first line: with a wide font (DejaVu on
+    # Linux) the boundary split can push the suffix past the edge, and losing
+    # the suffix loses what tells two repos apart.
+    for split in [*reversed(boundaries), cut]:
+        rest = text[split:].lstrip()
+        if draw.textlength(rest, font=font) <= max_w:
+            return font, [text[:split].rstrip(), rest]
     if boundaries:
         cut = boundaries[-1]
     return font, [text[:cut].rstrip(), _truncate(draw, text[cut:].lstrip(), font, max_w)]
