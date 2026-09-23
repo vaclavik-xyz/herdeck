@@ -1145,6 +1145,33 @@ def test_dark_icon_gets_a_light_plate_but_a_bright_one_does_not(tmp_path):
     assert _close(_px(red, (13, 35)), RED[:3])  # no plate: the icon fills the box
 
 
+def test_opaque_favicon_with_its_own_background_is_not_plated_on_a_bright_fill(tmp_path):
+    # Regression: a white app-tile favicon with a dark letter (mean colour
+    # greyish) got a dark plate on a solid green WORKING tile and shrank inside
+    # a black frame. Its white edge contrasts fine with green, so no plate.
+    store = ProjectIconStore()
+    p = _project_provider(tmp_path, store)
+    icon = Image.new("RGBA", (64, 64), (250, 250, 250, 255))
+    ImageDraw.Draw(icon).rectangle([16, 8, 48, 56], fill=(20, 20, 20, 255))
+    buf = _io.BytesIO()
+    icon.save(buf, "PNG")
+    tile = _project_tile(project_icon=_stored(store, buf.getvalue()), color="green", tile_fill="solid")
+    png = p.render_tile_bytes(tile)
+    assert min(_px(png, (13, 35))) >= 200  # the icon's own white edge, not a dark plate
+
+
+def test_transparent_glyph_still_gets_a_plate_on_a_matching_fill(tmp_path):
+    store = ProjectIconStore()
+    p = _project_provider(tmp_path, store)
+    glyph = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    ImageDraw.Draw(glyph).ellipse([20, 20, 44, 44], fill=(255, 255, 255, 255))
+    buf = _io.BytesIO()
+    glyph.save(buf, "PNG")
+    tile = _project_tile(project_icon=_stored(store, buf.getvalue()), color="cyan", tile_fill="solid")
+    png = p.render_tile_bytes(tile)
+    assert max(_px(png, (13, 35))) <= 60  # dark plate behind the white glyph
+
+
 def test_both_mode_keeps_the_agent_mark_and_adds_a_badge(tmp_path):
     store = ProjectIconStore()
     h = _stored(store, _img_bytes(RED))
