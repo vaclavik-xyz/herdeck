@@ -261,7 +261,9 @@ _font_cache: dict[tuple[int, bool], object] = {}  # (size, bold) -> font
 #     logo box or as a corner badge; spin renders as comet around a favicon.
 # 16: invalidates on-disk tiles an intermediate build may have written with a
 #     missing-icon monogram under the real icon's tile name.
-TILE_VERSION = 16
+# 17: opaque favicons are plated by their edge, not their mean colour (no dark
+#     frame around a white/red app-tile favicon on a bright solid fill).
+TILE_VERSION = 17
 # The status word / elapsed time column: right of the logo box incl. the comet
 # ring (x < 66), inside the 12px right margin.
 STATUS_MAX_W = ICON_SIZE - 12 - 70
@@ -460,6 +462,13 @@ PROJECT_BADGE = 24  # badge edge in px; overlaps the 46px logo box's corner
 PROJECT_BADGE_XY = 38  # badge top-left: box (12..58) bottom-right corner, overhanging
 PROJECT_RADIUS = 0.2  # rounded-corner radius as a fraction of the edge
 _PLATE_MIN_CONTRAST = 2.2  # below this vs the tile background an icon gets a plate
+# Icons at least this opaque (share of pixels, after corner rounding ~0.97 for a
+# full square) carry their own background and are never plated.
+_PLATE_OPAQUE_COVERAGE = 0.85
+# ...and are plated only when their edge colour nearly merges with the tile's
+# (RGB distance, not luminance contrast: a red square on a blue tile has ~1.1:1
+# WCAG contrast yet is plainly visible; a black square on the dark tile is not).
+_PLATE_OPAQUE_MIN_DISTANCE = 60.0
 _PLATE_LIGHT = (236, 236, 240)
 _PLATE_DARK = (22, 22, 26)
 _PROJECT_CACHE_MAX = 64
@@ -502,9 +511,16 @@ def _round_corners(img: Image.Image) -> Image.Image:
 
 
 def _normalize_project_image(img: Image.Image) -> Image.Image:
-    """Any decoded favicon -> ICON_SIZE RGBA square: centred on transparent
-    padding (aspect kept), LANCZOS-resized, corners rounded."""
+    """Any decoded favicon -> ICON_SIZE RGBA square: transparent margins
+    trimmed, centred on transparent padding (aspect kept), LANCZOS-resized,
+    corners rounded."""
     img = img.convert("RGBA")
+    # App-style favicons often sit inset on a transparent canvas, which drew
+    # them smaller than their neighbours and hid their own square background
+    # from the plate check; trim that margin first.
+    bbox = img.getchannel("A").point(lambda v: 255 if v > 16 else 0).getbbox()
+    if bbox:
+        img = img.crop(bbox)
     w, h = img.size
     side = max(w, h, 1)
     canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
@@ -592,10 +608,41 @@ def _mean_rgb(img: Image.Image) -> tuple[int, int, int] | None:
     return tuple(round(c) for c in ImageStat.Stat(img.convert("RGB"), mask=mask).mean)
 
 
+def _edge_rgb(img: Image.Image) -> tuple[int, int, int] | None:
+    """Mean colour of the icon's opaque outer band (its visible silhouette)."""
+    w, h = img.size
+    band = max(2, min(w, h) // 12)
+    ring = Image.new("L", img.size, 255)
+    ImageDraw.Draw(ring).rectangle([band, band, w - 1 - band, h - 1 - band], fill=0)
+    opaque = img.getchannel("A").point(lambda v: 255 if v > 200 else 0)
+    mask = ImageChops.multiply(ring, opaque)
+    if not mask.getbbox():
+        return None
+    return tuple(round(c) for c in ImageStat.Stat(img.convert("RGB"), mask=mask).mean)
+
+
+def _opaque_coverage(img: Image.Image) -> float:
+    """Share of the icon's pixels that are (nearly) opaque, 0..1."""
+    alpha = img.getchannel("A").point(lambda v: 255 if v > 200 else 0)
+    return ImageStat.Stat(alpha).mean[0] / 255
+
+
 def _plate_for(img: Image.Image, bg) -> tuple[int, int, int] | None:
     """A plate colour when the icon's average colour would vanish on ``bg``
-    (a black favicon on the dark tile, a white one on a bright solid fill);
-    the plate is whichever of light/dark contrasts more with the icon."""
+    (a black glyph favicon on the dark tile, a white one on a bright solid
+    fill); the plate is whichever of light/dark contrasts more with the icon.
+
+    An icon that fills its own square (a favicon with a baked-in background,
+    e.g. a white or red app tile) shows as that square, so what matters is
+    its EDGE against the tile, not the average of its artwork: a white square
+    with a dark letter reads fine on a green tile. Such an icon is plated only
+    when its edge nearly merges with the tile (black square on the dark tile);
+    plating it otherwise just shrinks it inside a dark frame."""
+    if _opaque_coverage(img) >= _PLATE_OPAQUE_COVERAGE:
+        edge = _edge_rgb(img)
+        if edge is None or math.dist(edge, tuple(bg)[:3]) >= _PLATE_OPAQUE_MIN_DISTANCE:
+            return None
+        return max((_PLATE_LIGHT, _PLATE_DARK), key=lambda plate: _contrast(plate, edge))
     mean = _mean_rgb(img)
     if mean is None or _contrast(mean, tuple(bg)) >= _PLATE_MIN_CONTRAST:
         return None
