@@ -184,3 +184,130 @@ def test_discovery_errors_never_raise(tmp_path, monkeypatch):
 
     monkeypatch.setattr(disc, "find_icon_file", boom)
     assert ProjectIconIndex(home=str(tmp_path)).hash_for(cwd=str(repo)) == ""
+
+
+# --- fallback for a workspace folder that is not itself a repo ---------------
+
+
+def _home_with_folder(tmp_path, name="diktato"):
+    home = tmp_path / "home"
+    folder = home / "projects" / name
+    folder.mkdir(parents=True)
+    return home, folder
+
+
+def test_non_repo_folder_uses_its_own_favicon(tmp_path):
+    home, folder = _home_with_folder(tmp_path)
+    _put(folder, "favicon.png", b"parent-icon")
+    child = _repo(folder, "app")
+    _put(child, "favicon.png", b"child-icon")
+    index = ProjectIconIndex(home=str(home))
+    assert index.hash_for(cwd=str(folder)) == icon_hash(b"parent-icon")
+
+
+def test_non_repo_folder_falls_back_to_child_repos_in_name_order(tmp_path):
+    home, folder = _home_with_folder(tmp_path)
+    app = _repo(folder, "dtt-app")
+    cloud = _repo(folder, "dtt-cloud")
+    _put(cloud, "src/app/icon.png", b"cloud-icon")
+    index = ProjectIconIndex(home=str(home))
+    assert index.hash_for(cwd=str(folder)) == icon_hash(b"cloud-icon")
+    _put(app, "public/favicon.ico", b"app-icon")  # "dtt-app" sorts first
+    index = ProjectIconIndex(home=str(home))
+    assert index.hash_for(cwd=str(folder)) == icon_hash(b"app-icon")
+
+
+def test_child_repo_detected_by_git_file(tmp_path):
+    home, folder = _home_with_folder(tmp_path)
+    wt = _repo(folder, "wt", git_file=True)
+    _put(wt, "favicon.png", b"wt-icon")
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == icon_hash(b"wt-icon")
+
+
+def test_non_repo_child_dir_is_ignored(tmp_path):
+    home, folder = _home_with_folder(tmp_path)
+    _put(folder / "notes", "favicon.png", b"notes-icon")  # no .git
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == ""
+    repo = _repo(folder, "zeta")
+    _put(repo, "favicon.png", b"zeta-icon")
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == icon_hash(b"zeta-icon")
+
+
+def test_no_fallback_at_home_or_its_ancestors(tmp_path):
+    home, _folder = _home_with_folder(tmp_path)
+    _put(home, "favicon.png", b"home-icon")
+    repo = _repo(home, "proj")
+    _put(repo, "favicon.png", b"proj-icon")
+    index = ProjectIconIndex(home=str(home))
+    assert index.hash_for(cwd=str(home)) == ""
+    assert index.hash_for(cwd=str(tmp_path)) == ""  # home's parent
+    assert index.hash_for(cwd=os.path.sep) == ""
+
+
+def test_child_scan_is_capped(tmp_path):
+    home, folder = _home_with_folder(tmp_path)
+    for i in range(disc.MAX_FALLBACK_CHILDREN):
+        (folder / f"a{i:03d}").mkdir()  # plain dirs still count toward the cap
+    late = _repo(folder, "zz")
+    _put(late, "favicon.png", b"late")
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == ""
+    (folder / "a000").rmdir()
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == icon_hash(b"late")
+
+
+def test_folder_of_many_repos_does_not_borrow_a_child_icon(tmp_path):
+    # ~/projects-style folder: many independent repos, so no single child
+    # icon stands for it; its own favicon still counts.
+    home, folder = _home_with_folder(tmp_path)
+    for i in range(disc.MAX_FALLBACK_CHILD_REPOS + 1):
+        repo = _repo(folder, f"r{i}")
+        _put(repo, "favicon.png", f"icon-{i}".encode())
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == ""
+    _put(folder, "favicon.png", b"own")
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == icon_hash(b"own")
+
+
+def test_fallback_symlink_escape_is_rejected(tmp_path):
+    home, folder = _home_with_folder(tmp_path)
+    outside = tmp_path / "secret.png"
+    outside.write_bytes(PNG)
+    (folder / "favicon.png").symlink_to(outside)
+    child = _repo(folder, "app")
+    sibling = _put(folder, "shared/logo.png", b"sibling")  # inside the folder, outside the child
+    (child / "favicon.png").symlink_to(sibling)
+    (folder / "linked").symlink_to(_repo(tmp_path, "elsewhere"))  # symlinked child skipped
+    _put(tmp_path / "elsewhere", "favicon.png", b"elsewhere")
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(folder)) == ""
+
+
+def test_fallback_restat_picks_up_a_new_parent_favicon(tmp_path):
+    now = [0.0]
+    home, folder = _home_with_folder(tmp_path)
+    child = _repo(folder, "app")
+    _put(child, "favicon.png", b"child")
+    index = ProjectIconIndex(clock=lambda: now[0], home=str(home), restat_interval=60.0)
+    first = index.hash_for(cwd=str(folder))
+    assert first == icon_hash(b"child")
+    _put(folder, "favicon.png", b"parent")
+    now[0] += 30.0
+    assert index.hash_for(cwd=str(folder)) == first
+    now[0] += 31.0
+    assert index.hash_for(cwd=str(folder)) == icon_hash(b"parent")
+    assert index.blob(first) is None
+
+
+def test_fallback_folder_gaining_an_icon_from_nothing(tmp_path):
+    now = [0.0]
+    home, folder = _home_with_folder(tmp_path)
+    index = ProjectIconIndex(clock=lambda: now[0], home=str(home))
+    assert index.hash_for(cwd=str(folder)) == ""
+    _put(folder, "favicon.png", b"new")
+    now[0] += 61.0
+    assert index.hash_for(cwd=str(folder)) == icon_hash(b"new")
+
+
+def test_pane_inside_a_repo_does_not_use_the_parent_folder(tmp_path):
+    home, folder = _home_with_folder(tmp_path)
+    _put(folder, "favicon.png", b"parent")
+    repo = _repo(folder, "app")  # repo without an icon
+    assert ProjectIconIndex(home=str(home)).hash_for(cwd=str(repo / "src")) == ""

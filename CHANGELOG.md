@@ -17,6 +17,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cairosvg is available (not the packaged app or Elgato plugin). Projects
   without a usable icon get a coloured letter badge. Editable in the desktop
   settings (View).
+- Project favicon discovery for panes whose cwd is not inside a Git repo: the
+  bridge checks that folder's own favicon candidates, then those of its direct
+  child repos in name order (capped at 32 child directories; never for `$HOME`,
+  its ancestors or `/`), with the same 60 s restat.
 
 ### Changed
 - Notifications: `[notifications].on` now defaults to `["blocked", "done"]`
