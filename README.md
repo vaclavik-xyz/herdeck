@@ -591,8 +591,9 @@ ancestors, or `/`). Override it per repository with
 `[view.project_icons]` (`myrepo = "~/icons/myrepo.png"`, a path on the machine
 running the deck; quote a repo name that contains a dot, e.g.
 `"vaclavik.xyz" = "~/icons/site.png"`, or TOML reads it as a nested table).
-SVG icons render only where CairoSVG is installed (not in the packaged app or
-the Elgato plugin), so prefer PNG or ICO there.
+SVG icons are rendered with resvg (bundled in the packaged app and the Elgato
+plugin). An SVG that references anything outside itself (a file path or URL in
+`href`/`url(...)`) is refused and shows the monogram.
 Agents are always grouped by attention priority. Set `[view].agent_order` to
 `"herdr"` to mirror Herdr's workspace and tab positions within the same state
 and server; the default `"status"` uses stable pane ids as the tie-breaker.
@@ -719,8 +720,8 @@ npm run package # pre-rasterize → freeze → npm build → zip
 ```
 
 `streamdeck/scripts/build-plugin.sh` runs four steps: pre-rasterize
-`src/herdeck/assets/*.svg` → PNG (so the frozen runtime is Pillow-only, never
-cairosvg); freeze the backend with PyInstaller (onedir) into
+`src/herdeck/assets/*.svg` → PNG (so the frozen runtime never needs cairosvg;
+project SVG favicons use the bundled resvg); freeze the backend with PyInstaller (onedir) into
 `…sdPlugin/backend/herdeck-backend/herdeck-backend`; `npm run build` the TS
 shell; then package the `.sdPlugin` into a `.streamDeckPlugin` with Elgato's
 `DistributionTool` if it is on `PATH`, else a plain `zip` (the format is a zip

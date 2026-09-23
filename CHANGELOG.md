@@ -6,6 +6,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- SVG project favicons now render in the packaged desktop app and the Elgato
+  plugin (they showed the monogram): SVG goes through resvg (`resvg-py`, a
+  self-contained wheel bundled into both), with cairosvg only as the fallback
+  on source installs without it. An SVG favicon referencing external files or
+  URLs is refused and shows the monogram.
+
 ## [0.8.0] - 2026-09-23
 
 ### Added

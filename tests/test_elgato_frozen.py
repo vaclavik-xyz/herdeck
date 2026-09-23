@@ -110,3 +110,15 @@ def test_prerasterize_into_same_dir_is_idempotent(tmp_path, monkeypatch):
     assert second == first  # re-running over the same dir is stable
     assert calls == []  # nothing re-encoded
     assert (src / first[0]).stat().st_mtime_ns == mtime  # file left untouched
+
+
+def test_png_rasterizer_renders_an_unbaked_svg_with_resvg(tmp_path):
+    import pytest
+
+    pytest.importorskip("resvg_py")
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4">'
+        '<rect width="4" height="4" fill="#00f"/></svg>'
+    )
+    img = frozen.make_png_rasterizer(str(tmp_path))(svg, 32)  # nothing baked
+    assert img.size == (32, 32) and img.getpixel((16, 16))[:3] == (0, 0, 255)

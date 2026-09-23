@@ -214,12 +214,34 @@ def _default_fetch(slug: str) -> str | None:
     return None
 
 
+def resvg_rasterize(svg: str, size: int) -> Image.Image:
+    """SVG -> ``size``x``size`` RGBA via resvg (self-contained wheel, also in
+    the frozen bundles). resvg keeps the aspect ratio, so a non-square SVG is
+    centred on a transparent square."""
+    import resvg_py
+
+    png = resvg_py.svg_to_bytes(svg_string=svg, width=size, height=size)
+    with Image.open(io.BytesIO(png)) as im:
+        img = im.convert("RGBA")
+    if img.size == (size, size):
+        return img
+    img.thumbnail((size, size), Image.LANCZOS)
+    square = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    square.paste(img, ((size - img.width) // 2, (size - img.height) // 2))
+    return square
+
+
 def _default_rasterize(svg: str, size: int) -> Image.Image:
-    import cairosvg  # build-time only; not needed in tests
+    """resvg when installed, else cairosvg (needs the native cairo library)."""
+    try:
+        import resvg_py  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        return resvg_rasterize(svg, size)
+    import cairosvg
 
     png = cairosvg.svg2png(bytestring=svg.encode(), output_width=size, output_height=size)
-    import io
-
     return Image.open(io.BytesIO(png)).convert("RGBA")
 
 
@@ -954,15 +976,28 @@ def _fit_branch(draw, branch, font, max_w):
     return _wrap(draw, branch, font, max_w, 2, break_after="/-_.")
 
 
+# href / xlink:href / url(...) values an SVG may carry: in-document ids and
+# inline data only. A project's favicon comes from someone else's repo; the
+# rasterizers would otherwise read an absolute path or URL on the deck machine.
+_SVG_REF_RE = re.compile(r"""(?:href\s*=\s*["']|url\(\s*["']?)\s*([^"')\s]*)""", re.I)
+
+
+def _svg_references_outside(svg: str) -> bool:
+    return any(not ref.startswith(("#", "data:")) for ref in _SVG_REF_RE.findall(svg))
+
+
 def decode_project_icon(
     stored: StoredIcon, rasterize: Callable[[str, int], Image.Image] = _default_rasterize
 ) -> Image.Image:
     """Stored favicon bytes -> the normalised ICON_SIZE RGBA mark. Raises
     when the bytes cannot be decoded (callers fall back to the monogram)."""
     if stored.mime == "image/svg+xml":
-        # cairosvg (source installs) or the frozen baked-PNG lookup; both
-        # raise for an SVG they cannot render -> monogram.
-        raw = rasterize(stored.data.decode("utf-8"), ICON_SIZE)
+        svg = stored.data.decode("utf-8")
+        if _svg_references_outside(svg):
+            raise ValueError("SVG references external resources")
+        # resvg / cairosvg (or the frozen rasterizer); any of them raises for
+        # an SVG it cannot render -> monogram.
+        raw = rasterize(svg, ICON_SIZE)
     else:
         with _open_project_icon(stored.data) as im:
             im.load()  # ICO: Pillow loads the largest frame

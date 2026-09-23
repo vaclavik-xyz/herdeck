@@ -21,6 +21,7 @@ a = Analysis(
     # deckapp.config_service; listed as a safety net against the lazy path.
     hiddenimports=[
         "herdeck.runtime",
+        "resvg_py",  # project SVG favicons (imported lazily)
         "herdeck.deckapp.server",
         "herdeck.deckapp.live",
         "herdeck.deckapp.mock",
