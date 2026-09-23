@@ -369,7 +369,140 @@ def test_parse_codex_account_distinguishes_paid_free_and_api_key():
     ) == ("unknown", "future-sentinel")
 
 
-def test_paid_only_hides_unconfirmed_providers_without_codexbar_fallback(monkeypatch):
+# Trimmed real `codexbar usage --format json --provider claude` / `codex` output
+# (CodexBar 2026-09, email and pace/cost blocks removed).
+_CODEXBAR_PAID_JSON = json.dumps(
+    [
+        {
+            "provider": "claude",
+            "source": "web",
+            "rateWindowLabels": {"secondary": "Weekly", "primary": "Session"},
+            "usage": {
+                "loginMethod": "Claude Max 20x",
+                "primary": {
+                    "resetsAt": "2026-09-23T12:10:00Z",
+                    "windowMinutes": 300,
+                    "usedPercent": 14,
+                },
+                "secondary": {
+                    "resetsAt": "2026-09-28T13:00:00Z",
+                    "windowMinutes": 10080,
+                    "usedPercent": 17,
+                },
+                "tertiary": None,
+                "identity": {"loginMethod": "Claude Max 20x", "providerID": "claude"},
+                "extraRateWindows": [
+                    {
+                        "title": "Fable only",
+                        "id": "claude-weekly-scoped-fable",
+                        "window": {
+                            "windowMinutes": 10080,
+                            "resetsAt": "2026-09-28T13:00:00Z",
+                            "usedPercent": 0,
+                        },
+                    }
+                ],
+            },
+        },
+        {
+            "provider": "codex",
+            "source": "oauth",
+            "rateWindowLabels": {"secondary": "Weekly"},
+            "usage": {
+                "loginMethod": "pro",
+                "primary": None,
+                "secondary": {
+                    "usedPercent": 100,
+                    "windowMinutes": 10080,
+                    "resetsAt": "2026-09-26T08:45:06Z",
+                },
+                "tertiary": None,
+                "identity": {"loginMethod": "pro", "providerID": "codex"},
+            },
+        },
+    ]
+)
+
+
+def _codexbar_entry(provider, login_method=None, *, identity_only=False):
+    usage = {"secondary": {"windowMinutes": 10080, "usedPercent": 5}}
+    if login_method is not None:
+        usage["identity"] = {"loginMethod": login_method}
+        if not identity_only:
+            usage["loginMethod"] = login_method
+    return {"provider": provider, "usage": usage}
+
+
+def test_parse_usage_derives_paid_subscription_from_login_method():
+    data = {p.provider: p for p in parse_usage(_CODEXBAR_PAID_JSON)}
+    assert (data["claude"].subscription, data["claude"].plan) == ("paid", "max 20x")
+    assert [(w.label, w.used_percent) for w in data["claude"].windows] == [("5h", 14), ("7d", 17)]
+    assert (data["codex"].subscription, data["codex"].plan) == ("paid", "pro")
+    assert [(w.label, w.used_percent) for w in data["codex"].windows] == [("7d", 100)]
+
+
+def test_parse_usage_login_method_classification():
+    cases = [
+        (_codexbar_entry("claude", "Claude Pro"), "paid"),
+        (_codexbar_entry("claude", "Claude Team", identity_only=True), "paid"),
+        (_codexbar_entry("claude", "claude enterprise"), "paid"),
+        (_codexbar_entry("claude", "Max"), "paid"),
+        (_codexbar_entry("claude", "Claude Free"), "free"),
+        (_codexbar_entry("claude", "Claude Maximal Sentinel"), "unknown"),
+        (_codexbar_entry("claude"), "unknown"),
+        (_codexbar_entry("codex", "Plus"), "paid"),
+        (_codexbar_entry("codex", "ChatGPT Team"), "paid"),
+        (_codexbar_entry("codex", "free"), "free"),
+        (_codexbar_entry("codex", "future-sentinel"), "unknown"),
+        (_codexbar_entry("gemini", "Pro"), "unknown"),  # no known plan vocabulary
+    ]
+    for entry, expected in cases:
+        (usage,) = parse_usage(json.dumps([entry]))
+        assert usage.subscription == expected, entry
+
+
+def test_paid_only_uses_codexbar_fallback_and_keeps_only_paid(monkeypatch):
+    calls = []
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codexbar")
+    stdout = json.dumps(
+        [_codexbar_entry("claude", "Claude Max 20x"), _codexbar_entry("codex", "mystery")]
+    )
+    poller = UsagePoller(
+        ["claude", "codex"],
+        paid_only=True,
+        codex_source=_Source(None),
+        claude_reader=lambda _path: None,
+        runner=lambda argv, **kwargs: calls.append(argv) or _Proc(stdout=stdout),
+    )
+
+    poller.poll_once()
+
+    assert calls[0][-1] == "claude,codex"
+    assert [usage.provider for usage in poller.snapshot()] == ["claude"]
+    # An unconfirmed fallback result is not cached at all in paid-only mode.
+    assert "codex" not in poller._data
+
+
+def test_paid_only_skips_codexbar_when_native_sources_cover_everything(monkeypatch):
+    calls = []
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codexbar")
+    paid_codex = ProviderUsage("codex", [UsageWindow("5h", 12, None)], "paid", "pro")
+    paid_claude = ProviderUsage("claude", [UsageWindow("7d", 3, None)], "paid")
+    poller = UsagePoller(
+        ["claude", "codex"],
+        paid_only=True,
+        codex_source=_Source(paid_codex),
+        claude_reader=lambda _path: paid_claude,
+        runner=lambda *args, **kwargs: calls.append(args) or _Proc(stdout=_CODEXBAR_JSON),
+    )
+
+    poller.poll_once()
+
+    assert [usage.provider for usage in poller.snapshot()] == ["claude", "codex"]
+    assert calls == []
+
+
+def test_paid_only_falls_back_only_for_missing_provider(monkeypatch):
     calls = []
     monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codexbar")
     paid = ProviderUsage("codex", [UsageWindow("5h", 12, None)], "paid", "pro")
@@ -378,13 +511,14 @@ def test_paid_only_hides_unconfirmed_providers_without_codexbar_fallback(monkeyp
         paid_only=True,
         codex_source=_Source(paid),
         claude_reader=lambda _path: None,
-        runner=lambda *args, **kwargs: calls.append(args) or _Proc(stdout=_CODEXBAR_JSON),
+        # Legacy CodexBar output without loginMethod: no positive paid signal.
+        runner=lambda argv, **kwargs: calls.append(argv) or _Proc(stdout=_CODEXBAR_JSON),
     )
 
     poller.poll_once()
 
+    assert calls[0][-1] == "claude"
     assert [usage.provider for usage in poller.snapshot()] == ["codex"]
-    assert calls == []
 
 
 def test_paid_only_hides_free_native_subscription():
@@ -573,3 +707,158 @@ def test_read_claude_cache_rejects_stale_or_invalid_snapshot(tmp_path):
     assert read_claude_cache(str(target), wall_clock=lambda: 30, max_age_s=15) is None
     target.write_text("not json")
     assert read_claude_cache(str(target)) is None
+
+
+class _ScriptedAppServer:
+    """Fake ``codex app-server`` that answers each request as it is written.
+
+    ``delays`` maps a method name to seconds to wait before answering, and
+    ``preamble`` lines are emitted before every response (notifications and
+    server-initiated requests that a newer codex interleaves).
+    """
+
+    def __init__(self, delays=None, preamble=()):
+        self._out: queue.Queue[str | None] = queue.Queue()
+        self._delays = delays or {}
+        self._preamble = list(preamble)
+        self.returncode = None
+        self.terminated = False
+        self.stdout = iter(self._out.get, None)
+        server = self
+
+        class _Stdin:
+            def write(self, line):
+                server._handle(json.loads(line))
+
+            def flush(self):
+                pass
+
+        self.stdin = _Stdin()
+
+    def _handle(self, message):
+        if "id" not in message:
+            return
+        method = message["method"]
+        results = {
+            "initialize": {"codexHome": "/tmp"},
+            "account/read": {"account": {"type": "chatgpt", "planType": "pro"}},
+            "account/rateLimits/read": {
+                "rateLimits": {
+                    "secondary": {
+                        "usedPercent": 100,
+                        "windowDurationMins": 10080,
+                        "resetsAt": 1784487551,
+                    }
+                }
+            },
+        }
+        lines = [*self._preamble, json.dumps({"id": message["id"], "result": results[method]})]
+
+        def emit():
+            for line in lines:
+                self._out.put(line + "\n")
+
+        delay = self._delays.get(method, 0)
+        if delay:
+            threading.Timer(delay, emit).start()
+        else:
+            emit()
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = 0
+        self._out.put(None)
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+        self._out.put(None)
+
+
+def test_codex_app_server_start_uses_longer_handshake_timeout(monkeypatch):
+    # A cold codex (plus SSH for a thin-client wrapper) can take far longer to
+    # answer `initialize` than later requests take.
+    monkeypatch.setattr("herdeck.usage._APP_SERVER_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("herdeck.usage._APP_SERVER_START_TIMEOUT_S", 2.0)
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codex")
+    proc = _ScriptedAppServer(delays={"initialize": 0.3})
+    source = CodexAppServerSource(popen=lambda *a, **k: proc)
+
+    usage = source.fetch()
+
+    assert usage is not None and usage.windows[0].used_percent == 100
+    source.close()
+
+
+def test_codex_app_server_later_requests_keep_short_timeout(monkeypatch):
+    monkeypatch.setattr("herdeck.usage._APP_SERVER_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("herdeck.usage._APP_SERVER_START_TIMEOUT_S", 2.0)
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codex")
+    proc = _ScriptedAppServer(delays={"account/rateLimits/read": 0.3})
+    source = CodexAppServerSource(popen=lambda *a, **k: proc)
+
+    assert source.fetch() is None
+    assert proc.terminated  # the timed-out session is torn down, not leaked
+    assert source._proc is None
+
+
+def test_codex_app_server_start_timeout_does_not_leak_process(monkeypatch):
+    monkeypatch.setattr("herdeck.usage._APP_SERVER_START_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codex")
+    procs = []
+
+    def popen(*args, **kwargs):
+        procs.append(_ScriptedAppServer(delays={"initialize": 0.5}))
+        return procs[-1]
+
+    source = CodexAppServerSource(popen=popen)
+    assert source.fetch() is None
+    assert source.fetch() is None
+
+    assert len(procs) == 2
+    assert all(proc.terminated for proc in procs)
+    assert source._proc is None
+
+
+def test_codex_app_server_process_is_reused_across_polls(monkeypatch):
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codex")
+    procs = []
+
+    def popen(*args, **kwargs):
+        procs.append(_ScriptedAppServer())
+        return procs[-1]
+
+    source = CodexAppServerSource(popen=popen)
+    first = source.fetch()
+    second = source.fetch()
+
+    assert first is not None and second is not None
+    assert len(procs) == 1 and not procs[0].terminated
+    source.close()
+    assert procs[0].terminated
+
+
+def test_codex_app_server_skips_notifications_and_server_requests(monkeypatch):
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codex")
+    # Newer codex emits notifications before responses, and a server-initiated
+    # request carries its own `id` that can collide with ours.
+    preamble = [
+        '{"method":"remoteControl/status/changed","params":{"status":"disabled"}}',
+        '{"id":1,"method":"item/tool/requestUserInput","params":{}}',
+        '{"id":2,"method":"item/tool/requestUserInput","params":{}}',
+        '["not", "an", "object"]',
+        '"id"',
+    ]
+    proc = _ScriptedAppServer(preamble=preamble)
+    source = CodexAppServerSource(popen=lambda *a, **k: proc)
+
+    usage = source.fetch()
+
+    assert usage is not None and usage.windows[0].used_percent == 100
+    assert (usage.subscription, usage.plan) == ("paid", "pro")
+    source.close()

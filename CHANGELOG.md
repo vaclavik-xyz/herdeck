@@ -23,12 +23,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its ancestors or `/`), with the same 60 s restat.
 
 ### Changed
+- Usage panel: `paid_only = true` no longer skips the CodexBar fallback. Its
+  `loginMethod` (e.g. "Claude Max 20x", "pro") now marks a result as paid;
+  only recognised paid tiers are kept, unknown or free ones stay hidden.
 - Notifications: `[notifications].on` now defaults to `["blocked", "done"]`
   (was `["blocked"]`), so a configured done sound actually plays. An explicit
   `on = ["blocked"]` still turns done alerts off; the settings editor now warns
   next to a sound whose event is not in `on` and offers to add it.
 
 ### Fixed
+- Usage panel: the Codex app-server handshake gets its own 60 s start timeout
+  (later requests keep 15 s), so a cold codex or an SSH `codex_path` wrapper no
+  longer times out on every poll. Notifications and server-initiated requests
+  interleaved with responses are skipped. README documents the thin-client
+  setup (SSH wrappers for `codex_path` / `codexbar_path`).
 - macOS notification sounds now ride on the banner itself instead of a
   separate `afplay`, so Focus / Do Not Disturb silences both; previously a
   muted banner still played its sound.

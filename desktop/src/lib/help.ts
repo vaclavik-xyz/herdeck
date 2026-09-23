@@ -82,11 +82,11 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     },
     usage: {
       providers: "Providers shown on the deck; Claude and Codex use native account data, while other ids use the CodexBar fallback.",
-      paid_only: "Show only providers whose native account data confirms a paid subscription; unknown or free accounts stay hidden.",
+      paid_only: "Show only providers whose account data (native, or CodexBar loginMethod) confirms a paid plan; unknown or free stay hidden.",
       refresh_secs: "How often provider limits are refreshed in seconds (min 30, default 300); limits move slowly, keep it high.",
-      codex_path: "Codex executable name or path used to read native account limits (default codex).",
+      codex_path: "Codex executable or wrapper path for native limits (default codex); a wrapper can run codex over ssh on another Mac.",
       claude_cache_path: "Path to the Claude usage cache JSON written by the native integration.",
-      codexbar_path: "codexbar executable name or path; bare names also search /opt/homebrew/bin and /usr/local/bin.",
+      codexbar_path: "codexbar executable or ssh wrapper path; bare names also search /opt/homebrew/bin and /usr/local/bin; empty = off.",
     },
     answer_profiles: {
       name: "Profile name = agent type (claude, codex…) that selects the keys; default is the fallback.",
@@ -179,11 +179,11 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     },
     usage: {
       providers: "Poskytovatelé zobrazení na decku; Claude a Codex používají nativní data účtu, ostatní ID záložní CodexBar.",
-      paid_only: "Zobrazí jen poskytovatele, u kterých nativní data účtu potvrdí placené předplatné; neznámé a bezplatné účty skryje.",
+      paid_only: "Zobrazí jen poskytovatele, u nichž data účtu (nativní nebo loginMethod z CodexBaru) potvrdí placený plán; ostatní skryje.",
       refresh_secs: "Jak často se limity poskytovatelů obnoví v sekundách (min 30, výchozí 300); limity se mění pomalu, nechte vysoké.",
-      codex_path: "Název nebo cesta k binárce Codexu, ze které se čtou nativní limity účtu (výchozí codex).",
+      codex_path: "Binárka Codexu nebo cesta k wrapperu pro nativní limity (výchozí codex); wrapper může spustit codex přes ssh na jiném Macu.",
       claude_cache_path: "Cesta k JSON cache využití Claude zapisované nativní integrací.",
-      codexbar_path: "Název nebo cesta k binárce codexbar; holé jméno se hledá i v /opt/homebrew/bin a /usr/local/bin.",
+      codexbar_path: "Binárka codexbar nebo ssh wrapper; holé jméno se hledá i v /opt/homebrew/bin a /usr/local/bin; prázdné = vypnuto.",
     },
     answer_profiles: {
       name: "Jméno profilu = typ agenta (claude, codex…), podle kterého se vyberou klávesy; záložní je default.",
