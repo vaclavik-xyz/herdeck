@@ -89,6 +89,10 @@ class Orchestrator:
         self._agents: dict[AgentKey, AgentState] = {}
         self._since: dict[AgentKey, tuple[Status, float]] = {}  # status start time
         self._down: set[str] = set()
+        # Servers seen connected at least once. A configured backend that never
+        # came up (kept in config but not running, e.g. T3) is not announced
+        # as offline on the panel; losing one that WAS up is a real outage.
+        self._ever_up: set[str] = set()
         self._drill: AgentKey | None = None
         self.pins: dict[int, AgentKey] = {}
         self._drill_position = 0
@@ -220,6 +224,8 @@ class Orchestrator:
 
     def set_connection(self, server_id: str, up: bool) -> None:
         self._down.discard(server_id) if up else self._down.add(server_id)
+        if up:
+            self._ever_up.add(server_id)
         if not up and self._pending_confirm is not None:
             # An armed confirmation must not survive an outage: the offline
             # drill hides it, so after a quick reconnect a single press could
@@ -605,7 +611,9 @@ class Orchestrator:
             layout.summary(self._agents.values()),
             self._page % pages,
             pages,
-            self._down,
+            # A full outage shows OFFLINE whatever connected before; in a
+            # partial one only servers that were up once get the note.
+            self._down if self._all_down() else self._down & self._ever_up,
             sum(s.lifecycle == "active" for s in self._agents.values()),
             spotlight,
             lang=self.config.view.language,
@@ -1165,6 +1173,7 @@ class Orchestrator:
             key: value for key, value in self._since.items() if key.server_id in allowed_servers
         }
         self._down &= allowed_servers
+        self._ever_up &= allowed_servers
         self._launcher = False
         self._profile_menu = False
         self._profile_menu_origin = "overview"

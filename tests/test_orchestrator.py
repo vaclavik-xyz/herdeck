@@ -802,6 +802,7 @@ def test_partial_outage_shows_usage_gauges_and_offline_note():
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
     o.set_usage(_usage_data())
     o.set_connection("dev", True)
+    o.set_connection("t3-headless", True)  # it was up, so going down is news
     o.set_connection("t3-headless", False)
     panel = o.render().panel
     assert panel.title == "1 agents"
@@ -811,11 +812,30 @@ def test_partial_outage_shows_usage_gauges_and_offline_note():
     assert panel.color == "grey"
 
 
+def test_server_that_never_connected_is_not_announced_offline():
+    # A configured backend the user simply isn't running (T3 kept for later)
+    # never came up: no nagging note, just the normal calm panel.
+    o = Orchestrator(_two_server_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_usage(_usage_data())
+    o.set_connection("dev", True)
+    o.set_connection("t3-headless", False)
+    panel = o.render().panel
+    assert panel.title == "1 agents"
+    assert panel.gauges
+    assert panel.note == ""
+    # ...until it has been seen up once: then losing it is a real outage.
+    o.set_connection("t3-headless", True)
+    o.set_connection("t3-headless", False)
+    assert o.render().panel.note == "t3-headless offline"
+
+
 def test_partial_outage_keeps_blocked_spotlight():
     o = Orchestrator(_two_server_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
     o.set_usage(_usage_data())
     o.set_connection("dev", True)
+    o.set_connection("t3-headless", True)
     o.set_connection("t3-headless", False)
     panel = o.render().panel
     assert panel.title == "▲ needs you"
