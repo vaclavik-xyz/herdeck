@@ -21,6 +21,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bridge checks that folder's own favicon candidates, then those of its direct
   child repos in name order (capped at 32 child directories; never for `$HOME`,
   its ancestors or `/`), with the same 60 s restat.
+- macOS notification banners carry the agent's project mark (favicon, a
+  `[view.project_icons]` override, or the letter badge). The runtime writes it
+  as a PNG under `~/.cache/herdeck/notification-icons/` (at most 64 files) and
+  the desktop app attaches it as the banner's content image and, where macOS
+  still honours it, its app icon. The `osascript` fallback stays text-only.
 
 ### Changed
 - Usage panel: `paid_only = true` no longer skips the CodexBar fallback. Its

@@ -954,6 +954,38 @@ def _fit_branch(draw, branch, font, max_w):
     return _wrap(draw, branch, font, max_w, 2, break_after="/-_.")
 
 
+def decode_project_icon(
+    stored: StoredIcon, rasterize: Callable[[str, int], Image.Image] = _default_rasterize
+) -> Image.Image:
+    """Stored favicon bytes -> the normalised ICON_SIZE RGBA mark. Raises
+    when the bytes cannot be decoded (callers fall back to the monogram)."""
+    if stored.mime == "image/svg+xml":
+        # cairosvg (source installs) or the frozen baked-PNG lookup; both
+        # raise for an SVG they cannot render -> monogram.
+        raw = rasterize(stored.data.decode("utf-8"), ICON_SIZE)
+    else:
+        with _open_project_icon(stored.data) as im:
+            im.load()  # ICO: Pillow loads the largest frame
+            _check_dims(im.size)  # the frame actually decoded
+            raw = im.convert("RGBA")
+    return _normalize_project_image(raw)
+
+
+def project_mark_image(
+    stored: StoredIcon | None,
+    name: str,
+    rasterize: Callable[[str, int], Image.Image] = _default_rasterize,
+) -> Image.Image:
+    """A project's mark outside a tile (e.g. a notification banner): the
+    decoded favicon, else the same monogram the deck shows."""
+    if stored is not None:
+        try:
+            return decode_project_icon(stored, rasterize)
+        except Exception as exc:
+            log.debug("project icon could not be decoded, using a monogram: %s", exc)
+    return _monogram_image(name)
+
+
 class IconProvider:
     """Resolves agent type -> composited tile-icon PNG in the strmdck icon dir.
 
@@ -1440,16 +1472,7 @@ class IconProvider:
 
     def _decode_project_icon(self, icon_hash: str, stored: StoredIcon) -> Image.Image | None:
         try:
-            if stored.mime == "image/svg+xml":
-                # cairosvg (source installs) or the frozen baked-PNG lookup;
-                # both raise for an SVG they cannot render -> monogram.
-                raw = self._rasterize(stored.data.decode("utf-8"), ICON_SIZE)
-            else:
-                with _open_project_icon(stored.data) as im:
-                    im.load()  # ICO: Pillow loads the largest frame
-                    _check_dims(im.size)  # the frame actually decoded
-                    raw = im.convert("RGBA")
-            return _normalize_project_image(raw)
+            return decode_project_icon(stored, self._rasterize)
         except Exception as exc:
             if icon_hash not in self._project_failed:
                 self._project_failed.add(icon_hash)

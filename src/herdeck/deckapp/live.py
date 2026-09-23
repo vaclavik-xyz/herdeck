@@ -47,6 +47,7 @@ from ..notify import (
     deckapp_sink,
     event_title,
 )
+from ..notify_icons import NotificationIconCache
 from ..orchestrator import Orchestrator
 from ..project_icons import ingest_project_icon
 from .source import StateSource
@@ -83,6 +84,7 @@ class LiveSource(StateSource):
         notify_sink_factory=None,
         notification_fallback=None,
         notify_clock=None,
+        notify_icons: NotificationIconCache | None = None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -104,6 +106,8 @@ class LiveSource(StateSource):
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
+        # Banners carry the agent's project mark (favicon or monogram).
+        self._notify_icons = notify_icons or NotificationIconCache()
         if config.notifications.enabled:
             factory = notify_sink_factory or (
                 lambda feed, gate: deckapp_sink(feed, gate, self._config)
@@ -318,7 +322,17 @@ class LiveSource(StateSource):
             agent.key.pane_id,
             time.time_ns() // 1_000_000,
         )
-        self._notify_schedule(lambda: self._notifier.notify(title, body, sound))
+        self._notify_schedule(
+            lambda: self._notifier.notify(title, body, sound, icon=self._banner_icon(agent))
+        )
+
+    def _banner_icon(self, agent: AgentState) -> str | None:
+        """PNG path of the agent's project mark for the macOS banner; runs on
+        the notify thread (it may render and write the file)."""
+        n = self._config.notifications
+        if "macos" not in n.backends:
+            return None
+        return self._notify_icons.path_for(agent, self._config.view.project_icons)
 
     def _notify_entered(self, event: str, states: list[AgentState], scope: set) -> None:
         """Notify keys that just entered `event`'s status within `scope`."""
