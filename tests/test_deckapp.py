@@ -143,55 +143,33 @@ def test_state_has_required_shape():
 def test_runtime_sink_queues_one_shell_owned_alert_without_playing_sound(monkeypatch):
     import herdeck.notify as notify_mod
 
-    played, scripted = [], []
+    scripted = []
     feed = notify_mod.NotificationFeed()
     sink = notify_mod.runtime_sink(
         feed,
         lambda: True,
-        sound_player=lambda name: played.append(name) or True,
         fallback=lambda t, b, s: scripted.append((t, b, s)),
     )
     sink("codex done", "p0", "Hero")
     sink("t", "b", False)
     assert [i["title"] for i in feed.state()["items"]] == ["codex done", "t"]
-    assert played == []
     assert scripted == []
 
 
 def test_runtime_sink_falls_back_to_osascript_without_shell(monkeypatch):
     import herdeck.notify as notify_mod
 
-    played, scripted = [], []
+    scripted = []
     feed = notify_mod.NotificationFeed()
     sink = notify_mod.runtime_sink(
         feed,
         lambda: False,
-        sound_player=lambda name: played.append(name) or True,
         fallback=lambda t, b, s: scripted.append((t, b, s)),
     )
     sink("claude blocked", "p1", "Glass")
     assert scripted == [("claude blocked", "p1", "Glass")]
-    assert played == []
     # A fallback alert is not also retained for a later native replay.
     assert feed.state()["seq"] == 0
-
-
-def test_play_sound_file_rejects_unknown_names(monkeypatch, tmp_path):
-    import herdeck.notify as notify_mod
-
-    # Redirect the sound dir to a fake tree: the test must be OS-independent
-    # (Linux CI has no /System/Library/Sounds).
-    sounds = tmp_path / "Sounds"
-    sounds.mkdir()
-    (sounds / "Hero.aiff").write_bytes(b"id3")
-    monkeypatch.setattr(notify_mod, "_SOUND_DIR", sounds)
-
-    runs = []
-    monkeypatch.setattr(notify_mod.subprocess, "run", lambda cmd, **kw: runs.append(cmd))
-    assert notify_mod.play_sound_file("Nonexistent") is False
-    assert runs == []
-    assert notify_mod.play_sound_file("Hero") is True
-    assert runs[0][1].endswith("Hero.aiff")
 
 
 def test_state_maps_local_session_names_to_collision_safe_runtime_ids():

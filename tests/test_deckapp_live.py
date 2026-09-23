@@ -1499,9 +1499,9 @@ def test_state_exposes_notify_feed_and_shell_claim_toggles():
     config, server = notify_config()
 
     def silent_sink(feed, gate):
-        # Deterministic sink: no afplay, no osascript in tests.
+        # Deterministic sink: no osascript in tests.
         return notify_mod.runtime_sink(
-            feed, gate, sound_player=lambda name: True, fallback=lambda t, b, s: None
+            feed, gate, fallback=lambda t, b, s: None
         )
 
     import herdeck.notify as notify_mod
@@ -1538,7 +1538,6 @@ def test_runtime_sink_suppresses_osascript_while_shell_claims(monkeypatch):
         return notify_mod.runtime_sink(
             feed,
             gate,
-            sound_player=lambda name: True,
             fallback=notify_mod._macos_sink,
         )
 
@@ -1568,7 +1567,7 @@ def test_new_shell_claim_preserves_feed_and_ack_prevents_replay():
         import herdeck.notify as notify_mod
 
         return notify_mod.runtime_sink(
-            feed, gate, sound_player=lambda name: True, fallback=lambda t, b, s: None
+            feed, gate, fallback=lambda t, b, s: None
         )
 
     src = LiveSource(config, server, notify_sink_factory=silent_sink)
@@ -1603,7 +1602,7 @@ def test_genless_claim_after_ttl_gap_preserves_feed():
         import herdeck.notify as notify_mod
 
         return notify_mod.runtime_sink(
-            feed, gate, sound_player=lambda name: True, fallback=lambda t, b, s: None
+            feed, gate, fallback=lambda t, b, s: None
         )
 
     src = LiveSource(config, server, notify_sink_factory=silent_sink)
