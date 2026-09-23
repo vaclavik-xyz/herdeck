@@ -67,13 +67,15 @@ impl RotatingLog {
     fn rotate(&mut self) -> io::Result<()> {
         let mut old = self.path.clone().into_os_string();
         old.push(".1");
-        fs::rename(&self.path, &old)?;
+        // A file deleted meanwhile (log cleaners) just starts over: never
+        // leave `file` pointing at a vanished or rotated-away inode.
+        let _ = fs::rename(&self.path, &old);
+        self.written = 0;
         self.file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(&self.path)?;
-        self.written = 0;
         Ok(())
     }
 }
@@ -152,6 +154,14 @@ pub fn capture_stderr(path: &Path) -> io::Result<Option<PathBuf>> {
         return Err(io::Error::last_os_error());
     }
     let (read_fd, write_fd) = (fds[0], fds[1]);
+    // Only this process may hold the read end: a child (the sidecar) that
+    // inherited it would, once orphaned, block on a full pipe instead of
+    // getting EPIPE. The write end reaches children through fd 2 (dup2
+    // clears CLOEXEC there), which is intended.
+    unsafe {
+        libc::fcntl(read_fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        libc::fcntl(write_fd, libc::F_SETFD, libc::FD_CLOEXEC);
+    }
     if unsafe { libc::dup2(write_fd, libc::STDERR_FILENO) } < 0 {
         let err = io::Error::last_os_error();
         unsafe {
@@ -219,6 +229,19 @@ mod tests {
         log.write(b"6789").unwrap(); // 5 + 4 > 8 -> rotated
         assert_eq!(fs::read(dir.join("herdeck.log.1")).unwrap(), b"12345");
         assert_eq!(fs::read(&path).unwrap(), b"6789");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_log_deleted_while_running_is_recreated_on_rotation() {
+        let dir = temp_dir("deleted");
+        let path = dir.join("herdeck.log");
+        let mut log = RotatingLog::open(&path, 6).unwrap();
+        log.write(b"12345").unwrap();
+        fs::remove_file(&path).unwrap();
+        log.write(b"abcd").unwrap(); // rotation finds no file to move
+        log.write(b"ef").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"abcdef");
         fs::remove_dir_all(&dir).unwrap();
     }
 
