@@ -108,6 +108,7 @@ class FakeConnector:
         self.on_snapshot = on_snapshot
         self.on_event = on_event
         self.on_connection = on_connection
+        self.on_project_icon = kw.get("on_project_icon")
         self.stopped = False
         FakeConnector.instances.append(self)
 
@@ -1708,3 +1709,28 @@ def test_notification_native_failure_uses_one_fallback_and_keeps_pump_claim():
     assert src._notify_feed.state()["acked_seq"] == 1
     assert app.shell_claims_banners() is True
     app.close()
+
+
+def test_build_live_source_wires_project_icons_into_the_shared_store():
+    from herdeck.project_icon_discovery import icon_hash
+    from herdeck.project_icons import default_store
+    from herdeck.protocol import ProjectIcon
+
+    default_store().clear()
+    FakeConnector.instances.clear()
+    config, server = live_config()
+    src = build_live_source(config, server, connector_factory=FakeConnector, runner_factory=FakeRunner)
+    conn = FakeConnector.instances[-1]
+    renders = []
+    src.attach(Orchestrator(config, slots=13), lock=threading.Lock(), refresh_locked=lambda: renders.append(1))
+    data = b"\x89PNG-live"
+    icon = ProjectIcon(server.id, icon_hash(data), "image/png", data)
+    try:
+        conn.on_project_icon(server.id, icon)
+        assert icon.hash in default_store()
+        assert renders == [1]
+        conn.on_project_icon(server.id, icon)  # already known: no re-render
+        assert renders == [1]
+    finally:
+        src.close()
+        default_store().clear()

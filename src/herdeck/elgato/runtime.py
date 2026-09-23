@@ -10,6 +10,7 @@ from ..config import Config, ConfigError
 from ..connector import Connector, create_connector
 from ..icons import DEFAULT_AGENT_SLUGS, IconProvider
 from ..model import AgentKey
+from ..project_icons import ingest_project_icon
 from .frozen import baked_assets_dir as _baked_assets_dir
 from .frozen import is_frozen as _is_frozen
 from .frozen import make_png_rasterizer as _make_png_rasterizer
@@ -201,6 +202,8 @@ async def serve_elgato(config: Config, *, socket_path: str, token: str, make_ses
             on_result=lambda req_id, data, sid=sc.id: loop.call_soon_threadsafe(
                 _apply, on_result, sid, req_id, data
             ),
+            # The 0.5 s _ticker pushes the render diff, so storing is enough.
+            on_project_icon=lambda sid, icon: loop.call_soon_threadsafe(ingest_project_icon, icon),
         )
         connectors[sc.id] = conn
 

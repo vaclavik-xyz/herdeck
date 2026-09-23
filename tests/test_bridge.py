@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import contextlib
 import json
 import os
@@ -19,6 +20,7 @@ from herdeck.bridge import (
     handle_client_message,
 )
 from herdeck.decisions import decision_revision
+from herdeck.project_icon_discovery import ProjectIconIndex, icon_hash
 
 
 def raw_pane(pane_id="w1:p1", agent="claude", status="blocked", cwd="/home/user/projects/api"):
@@ -67,6 +69,7 @@ def test_herdr_pane_to_wire_maps_fields():
         "title": "",
         "display_agent": "",
         "capabilities": [],
+        "project_icon": "",
         "work": {"source": "", "item": "", "run": "", "url": ""},
     }
 
@@ -209,6 +212,7 @@ async def test_list_returns_mapped_filtered_snapshot(herdr):
         "metadata_tokens",
         "state_labels",
         "herdr_order",
+        "project_icon",
     ]
     p = msg["panes"][0]
     assert p["pane_id"] == "w1:p1"
@@ -3231,3 +3235,173 @@ async def test_send_timeout_starts_after_connection_lock_is_acquired():
     fast = await _send_to_client(ws, "fast", lock, timeout=0.01)
     assert await slow is True
     assert fast is True
+
+
+# --- project favicons ---
+
+ICON = b"\x89PNG-icon"
+
+
+def _repo_with_icon(tmp_path, data=ICON, rel="public/favicon.png"):
+    repo = tmp_path / "shop"
+    (repo / ".git").mkdir(parents=True)
+    target = repo / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return repo
+
+
+def test_wire_pane_carries_project_icon_hash(tmp_path):
+    repo = _repo_with_icon(tmp_path)
+    icons = ProjectIconIndex(home=str(tmp_path))
+    wire = _herdr_pane_to_wire(raw_pane(cwd=str(repo / "src")), icons=icons)
+    assert wire["project_icon"] == icon_hash(ICON)
+
+
+def test_wire_pane_prefers_worktree_path(tmp_path):
+    repo = _repo_with_icon(tmp_path)
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    icons = ProjectIconIndex(home=str(tmp_path))
+    wt = {"w1": {"path": str(repo), "label": "shop", "branch": "main"}}
+    assert _herdr_pane_to_wire(raw_pane(cwd=str(other)), wt, icons=icons)["project_icon"] == (
+        icon_hash(ICON)
+    )
+
+
+def test_wire_pane_without_index_has_empty_project_icon():
+    assert _herdr_pane_to_wire(raw_pane())["project_icon"] == ""
+
+
+def test_project_icon_frames_once_per_hash(tmp_path):
+    from herdeck.bridge import _project_icon_frames
+
+    repo = _repo_with_icon(tmp_path)
+    icons = ProjectIconIndex(home=str(tmp_path))
+    panes = _wire_panes(
+        [raw_pane(cwd=str(repo)), raw_pane(pane_id="w1:p2", cwd=str(repo))], icons=icons
+    )
+    sent: set[str] = set()
+    frames = _project_icon_frames("box", panes, icons, sent)
+    assert [json.loads(f) for f in frames] == [
+        {
+            "type": "project_icon",
+            "server_id": "box",
+            "hash": icon_hash(ICON),
+            "mime": "image/png",
+            "data": base64.b64encode(ICON).decode(),
+        }
+    ]
+    assert _project_icon_frames("box", panes, icons, sent) == []
+
+
+def test_project_icon_frames_send_a_new_hash_after_the_icon_changes(tmp_path):
+    from herdeck.bridge import _project_icon_frames
+
+    repo = _repo_with_icon(tmp_path)
+    icons = ProjectIconIndex(home=str(tmp_path))
+    sent: set[str] = set()
+    _project_icon_frames("box", _wire_panes([raw_pane(cwd=str(repo))], icons=icons), icons, sent)
+    (repo / "public" / "favicon.png").write_bytes(b"\x89PNG-rebuilt")
+    icons.invalidate()
+    panes = _wire_panes([raw_pane(cwd=str(repo))], icons=icons)
+    frames = _project_icon_frames("box", panes, icons, sent)
+    assert [json.loads(f)["hash"] for f in frames] == [icon_hash(b"\x89PNG-rebuilt")]
+
+
+def test_worktree_event_invalidates_project_icon_index():
+    from herdeck.bridge import HerdrEvents
+
+    class Spy:
+        invalidated = 0
+
+        def invalidate(self):
+            self.invalidated += 1
+
+    spy = Spy()
+    events = HerdrEvents(StubHerdr(panes=[]), icons=spy)
+    events._note_event("worktree.created")
+    assert spy.invalidated == 1
+
+
+async def test_events_stream_includes_project_icon(tmp_path):
+    from herdeck.bridge import HerdrEvents
+
+    repo = _repo_with_icon(tmp_path)
+    events = HerdrEvents(
+        StubHerdr(panes=[raw_pane(cwd=str(repo))]), icons=ProjectIconIndex(home=str(tmp_path))
+    )
+    stream = events.stream()
+    panes = await asyncio.wait_for(stream.__anext__(), 3)
+    await stream.aclose()
+    assert panes[0]["project_icon"] == icon_hash(ICON)
+
+
+async def test_broadcast_sends_icons_only_to_opted_in_clients_after_snapshot(tmp_path):
+    from herdeck.bridge import _broadcast
+
+    repo = _repo_with_icon(tmp_path)
+    icons = ProjectIconIndex(home=str(tmp_path))
+    panes = _wire_panes([raw_pane(cwd=str(repo))], icons=icons)
+
+    class FakeWS:
+        def __init__(self):
+            self.log = []
+
+        async def send(self, msg):
+            self.log.append(json.loads(msg)["type"])
+
+    plain, opted = FakeWS(), FakeWS()
+    clients = {plain: asyncio.Lock(), opted: asyncio.Lock()}
+
+    async def stream():
+        yield panes
+        yield panes  # same hash again: no second frame
+
+    await _broadcast(stream(), clients, "box", icon_subs={opted: set()}, icons=icons)
+    assert plain.log == ["snapshot", "snapshot"]
+    assert opted.log == ["snapshot", "project_icon", "snapshot"]
+
+
+async def _frames(ws, window=0.3):
+    out = []
+    with contextlib.suppress(TimeoutError):
+        while True:
+            out.append(json.loads(await asyncio.wait_for(ws.recv(), window)))
+    return out
+
+
+async def test_local_bridge_opt_in_gates_icon_frames(tmp_path):
+    import websockets
+
+    from herdeck.bridge import start_local_bridge
+
+    repo = _repo_with_icon(tmp_path)
+    herdr = StubHerdr(panes=[raw_pane(cwd=str(repo), status="idle")])
+    host, port, token, (server, btask) = await start_local_bridge("unused.sock", herdr=herdr)
+    url, headers = f"ws://{host}:{port}", {"Authorization": f"Bearer {token}"}
+    try:
+        async with (
+            websockets.connect(url, additional_headers=headers) as plain,
+            websockets.connect(url, additional_headers=headers) as opted,
+        ):
+            first = json.loads(await asyncio.wait_for(plain.recv(), 3))
+            assert first["type"] == "snapshot" and "project_icon" in first["capabilities"]
+            assert first["panes"][0]["project_icon"] == icon_hash(ICON)
+            await plain.send(json.dumps({"type": "list"}))
+            plain_frames = await _frames(plain)
+            assert plain_frames and {f["type"] for f in plain_frames} == {"snapshot"}
+
+            assert json.loads(await asyncio.wait_for(opted.recv(), 3))["type"] == "snapshot"
+            await opted.send(json.dumps({"type": "list", "features": ["project_icon"]}))
+            types = [f["type"] for f in await _frames(opted)]
+            assert types.count("project_icon") == 1
+            assert types.index("snapshot") < types.index("project_icon")
+            await opted.send(json.dumps({"type": "list", "features": ["project_icon"]}))
+            assert "project_icon" not in [f["type"] for f in await _frames(opted)]
+    finally:
+        btask.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await btask
+        server.close()
+        await server.wait_closed()

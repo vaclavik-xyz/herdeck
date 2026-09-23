@@ -219,3 +219,51 @@ def test_serve_elgato_default_make_session_is_runtime_dispatcher():
     from herdeck.elgato.runtime import _session_for_runtime, serve_elgato
 
     assert inspect.signature(serve_elgato).parameters["make_session"].default is _session_for_runtime
+
+
+async def test_serve_elgato_wires_project_icons_into_the_shared_store(monkeypatch):
+    import asyncio
+
+    from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
+    from herdeck.elgato import runtime
+    from herdeck.elgato.session import ElgatoSession
+    from herdeck.project_icon_discovery import icon_hash
+    from herdeck.project_icons import default_store
+    from herdeck.protocol import ProjectIcon
+
+    captured = {}
+
+    class _Stop(Exception):
+        pass
+
+    def fake_create_connector(server, **kw):
+        captured.update(kw)
+        raise _Stop
+
+    class _NoIcons:
+        def render_tile_bytes(self, tile):
+            return b""
+
+    monkeypatch.setattr(runtime, "create_connector", fake_create_connector)
+    cfg = Config(
+        servers=[ServerConfig("dev", "ws://x", "t")],
+        profiles=dict(DEFAULT_PROFILES),
+        overview_order=["dev"],
+        grid=(5, 3),
+    )
+    with pytest.raises(_Stop):
+        await runtime.serve_elgato(
+            cfg,
+            socket_path="/nonexistent/herdeck.sock",
+            token="t",
+            make_session=lambda c: ElgatoSession(c, _NoIcons()),
+        )
+    default_store().clear()
+    data = b"\x89PNG-elgato"
+    try:
+        captured["on_project_icon"]("dev", ProjectIcon("dev", icon_hash(data), "image/png", data))
+        await asyncio.sleep(0)  # the callback hops onto the loop
+        assert icon_hash(data) in default_store()
+    finally:
+        default_store().clear()
+

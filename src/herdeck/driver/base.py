@@ -34,6 +34,9 @@ class TileView:
     spinner: int | None = None  # rotation phase for working tiles
     working_animation: str = "spin"  # how a working tile animates ([view].working_animation)
     tile_fill: str = "none"  # how the tile is filled with its status colour ([view].tile_fill)
+    tile_icon: str = "agent"  # what the logo box shows ([view].tile_icon)
+    project_icon: str | None = None  # resolved favicon content hash; None = monogram
+    project_name: str = ""  # repo name: monogram seed (agent tiles only)
     # Rich agent-tile content (None on control tiles, which render `label` only):
     repo: str | None = None
     branch: str | None = None

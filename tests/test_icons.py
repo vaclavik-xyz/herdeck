@@ -1,8 +1,13 @@
+import io as _io
+import logging
 import os
 
 from PIL import Image, ImageDraw
 
+from herdeck.driver.base import TileView as _TileView
 from herdeck.icons import IconProvider
+from herdeck.project_icon_discovery import icon_hash
+from herdeck.project_icons import ProjectIconStore, default_store
 
 
 def _fake_fetch(slug):  # pretend Simple Icons returns an SVG for known slugs
@@ -949,3 +954,294 @@ def test_agent_tile_bottom_band_shows_tag_and_pin_at_readable_size(tmp_path):
         if a.getpixel((x, y)) != b.getpixel((x, y))
     ]
     assert ys and max(ys) - min(ys) >= 14  # ~16px-tall content, not a 12px speck
+
+
+RED = (220, 20, 20, 255)
+
+
+def _img_bytes(color, size=(32, 32), fmt="PNG", **save):
+    buf = _io.BytesIO()
+    Image.new("RGBA", size, color).save(buf, fmt, **save)
+    return buf.getvalue()
+
+
+def _stored(store, data, mime="image/png"):
+    h = icon_hash(data)
+    store.put(h, mime, data)
+    return h
+
+
+def _project_provider(tmp_path, store, rasterize=_fake_rasterize):
+    return IconProvider(
+        cache_dir=str(tmp_path / "cache"),
+        slug_map={"claude": None},
+        fetch=lambda s: None,
+        rasterize=rasterize,
+        assets_dir=None,
+        project_icons=store,
+    )
+
+
+def _project_tile(**over):
+    base = dict(
+        index=0,
+        label="",
+        color="blue",
+        agent_type="claude",
+        repo="shop",
+        branch="main",
+        status_text="IDLE",
+        time_text="1m",
+        tile_icon="project",
+        project_icon=None,
+        project_name="shop",
+    )
+    base.update(over)
+    return _TileView(**base)
+
+
+def _px(png, xy):
+    return Image.open(_io.BytesIO(png)).convert("RGB").getpixel(xy)
+
+
+def _close(a, b, tol=4):
+    return all(abs(x - y) <= tol for x, y in zip(a, b, strict=True))
+
+
+def test_provider_defaults_to_the_shared_store(tmp_path):
+    p = IconProvider(cache_dir=str(tmp_path), slug_map={}, fetch=lambda s: None)
+    assert p._project_icons is default_store()
+
+
+def test_each_tile_icon_mode_renders_distinctly(tmp_path):
+    store = ProjectIconStore()
+    h = _stored(store, _img_bytes(RED))
+    p = _project_provider(tmp_path, store)
+    out = {
+        mode: p.render_tile_bytes(_project_tile(tile_icon=mode, project_icon=h))
+        for mode in ("agent", "project", "both")
+    }
+    assert len(set(out.values())) == 3
+
+
+def test_project_mode_shows_the_favicon_in_the_logo_box(tmp_path):
+    store = ProjectIconStore()
+    p = _project_provider(tmp_path, store)
+    png = p.render_tile_bytes(_project_tile(project_icon=_stored(store, _img_bytes(RED))))
+    assert _close(_px(png, (35, 35)), RED[:3])
+
+
+def test_tile_icon_and_hash_are_part_of_the_cache_key(tmp_path):
+    store = ProjectIconStore()
+    a = _stored(store, _img_bytes(RED))
+    b = _stored(store, _img_bytes((20, 20, 220, 255)))
+    p = _project_provider(tmp_path, store)
+    names = {
+        p._tile_name(_project_tile(tile_icon=mode, project_icon=h))[0]
+        for mode, h in (("agent", a), ("project", a), ("project", b), ("both", a))
+    }
+    assert len(names) == 4
+
+
+def test_spin_renders_as_comet_around_a_project_icon(tmp_path):
+    store = ProjectIconStore()
+    h = _stored(store, _img_bytes(RED))
+    p = _project_provider(tmp_path, store)
+
+    def render(mode, anim):
+        return p.render_tile_bytes(
+            _project_tile(
+                tile_icon=mode, project_icon=h, color="green", status_text="WORKING",
+                spinner=3, working_animation=anim,
+            )
+        )
+
+    assert render("project", "spin") == render("project", "comet")
+    assert render("agent", "spin") != render("agent", "comet")
+
+
+def test_pulse_scales_the_project_icon(tmp_path):
+    store = ProjectIconStore()
+    h = _stored(store, _img_bytes(RED))
+    p = _project_provider(tmp_path, store)
+    frames = {
+        p.render_tile_bytes(
+            _project_tile(project_icon=h, color="green", spinner=raw, working_animation="pulse")
+        )
+        for raw in (0, 5)  # effective pulse phases 0 and 1
+    }
+    assert len(frames) == 2
+
+
+def test_monogram_is_deterministic_per_repo():
+    from herdeck.icons import _monogram_image
+
+    assert _monogram_image("herdeck").tobytes() == _monogram_image("herdeck").tobytes()
+    assert _monogram_image("herdeck").tobytes() != _monogram_image("api").tobytes()
+    assert _monogram_image("").size == (196, 196)
+
+
+def test_missing_icon_renders_a_per_repo_monogram(tmp_path):
+    p = _project_provider(tmp_path, ProjectIconStore())
+    shop = p.render_tile_bytes(_project_tile(project_name="shop"))
+    blog = p.render_tile_bytes(_project_tile(project_name="blog"))
+    assert shop != blog
+
+
+def test_corrupt_icon_falls_back_to_the_monogram_and_logs_once(tmp_path, caplog):
+    store = ProjectIconStore()
+    bad = _stored(store, b"definitely not an image")
+    p = _project_provider(tmp_path, store)
+    with caplog.at_level(logging.WARNING, logger="herdeck.icons"):
+        broken = p.render_tile_bytes(_project_tile(project_icon=bad))
+        p.render_tile_bytes(_project_tile(project_icon=bad, color="green"))
+    mono = p.render_tile_bytes(_project_tile(project_icon=None))
+    decoded = Image.open(_io.BytesIO(broken)).tobytes()
+    assert decoded == Image.open(_io.BytesIO(mono)).tobytes()
+    assert sum("could not be decoded" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_ico_decodes_its_largest_frame(tmp_path):
+    store = ProjectIconStore()
+    ico = _img_bytes((10, 200, 60, 255), size=(64, 64), fmt="ICO", sizes=[(16, 16), (64, 64)])
+    p = _project_provider(tmp_path, store)
+    png = p.render_tile_bytes(_project_tile(project_icon=_stored(store, ico, "image/x-icon")))
+    assert _close(_px(png, (35, 35)), (10, 200, 60))
+
+
+def test_svg_uses_the_rasteriser_when_available(tmp_path):
+    store = ProjectIconStore()
+    svg = _stored(store, b"<svg>project</svg>", "image/svg+xml")
+
+    def raster(text, size):
+        assert text == "<svg>project</svg>"
+        return Image.new("RGBA", (size, size), (40, 200, 240, 255))
+
+    png = _project_provider(tmp_path, store, rasterize=raster).render_tile_bytes(
+        _project_tile(project_icon=svg)
+    )
+    assert _close(_px(png, (35, 35)), (40, 200, 240))
+
+
+def test_svg_without_a_rasteriser_falls_back_to_the_monogram(tmp_path):
+    store = ProjectIconStore()
+    svg = _stored(store, b"<svg/>", "image/svg+xml")
+
+    def no_cairo(text, size):
+        raise OSError("no library called cairo was found")
+
+    p = _project_provider(tmp_path, store, rasterize=no_cairo)
+    broken = p.render_tile_bytes(_project_tile(project_icon=svg))
+    mono = p.render_tile_bytes(_project_tile(project_icon=None))
+    assert Image.open(_io.BytesIO(broken)).tobytes() == Image.open(_io.BytesIO(mono)).tobytes()
+
+
+def test_dark_icon_gets_a_light_plate_but_a_bright_one_does_not(tmp_path):
+    store = ProjectIconStore()
+    p = _project_provider(tmp_path, store)
+    dark = p.render_tile_bytes(_project_tile(project_icon=_stored(store, _img_bytes((0, 0, 0, 255)))))
+    assert min(_px(dark, (13, 35))) >= 200  # plate edge left of the inset icon
+    red = p.render_tile_bytes(_project_tile(project_icon=_stored(store, _img_bytes(RED))))
+    assert _close(_px(red, (13, 35)), RED[:3])  # no plate: the icon fills the box
+
+
+def test_both_mode_keeps_the_agent_mark_and_adds_a_badge(tmp_path):
+    store = ProjectIconStore()
+    h = _stored(store, _img_bytes(RED))
+    p = _project_provider(tmp_path, store)
+    agent = Image.open(_io.BytesIO(p.render_tile_bytes(_project_tile(tile_icon="agent"))))
+    both = Image.open(
+        _io.BytesIO(p.render_tile_bytes(_project_tile(tile_icon="both", project_icon=h)))
+    )
+    box = (12, 12, 36, 36)  # the part of the logo box the badge does not cover
+    assert agent.crop(box).tobytes() == both.crop(box).tobytes()
+    assert _close(both.convert("RGB").getpixel((50, 50)), RED[:3])  # badge centre
+
+
+def test_monogram_for_an_evicted_hash_is_not_pinned_in_the_render_caches(tmp_path):
+    # the bytes can be LRU-evicted between resolve() and the render: the
+    # monogram drawn then must not stick under the real icon's tile name
+    data = _img_bytes(RED)
+    h = icon_hash(data)
+    store = ProjectIconStore()
+    p = _project_provider(tmp_path, store)
+    tile = _project_tile(project_icon=h)
+    assert not _close(_px(p.render_tile_bytes(tile), (35, 35)), RED[:3])
+    fallback = p.render_tile(tile)
+    # the fallback frame is filed under the monogram's name, not the icon's
+    assert fallback == p.render_tile(_project_tile(project_icon=None))
+    store.put(h, "image/png", data)
+    assert _close(_px(p.render_tile_bytes(tile), (35, 35)), RED[:3])
+    name = p.render_tile(tile)
+    assert name != fallback
+    with open(os.path.join(str(tmp_path / "cache"), name), "rb") as f:
+        assert _close(_px(f.read(), (35, 35)), RED[:3])
+
+
+def _zero_png(side):
+    buf = _io.BytesIO()
+    Image.new("L", (side, side), 0).save(buf, "PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _png_ico(png, side_byte=0):
+    import struct
+
+    header = struct.pack("<HHH", 0, 1, 1)
+    entry = struct.pack("<BBBBHHII", side_byte, side_byte, 0, 0, 1, 32, len(png), 6 + 16)
+    return header + entry + png
+
+
+def _spy_on_load(monkeypatch):
+    from PIL import ImageFile
+
+    calls = []
+    real = ImageFile.ImageFile.load
+
+    def spy(self):
+        calls.append(self.size)
+        return real(self)
+
+    monkeypatch.setattr(ImageFile.ImageFile, "load", spy)
+    return calls
+
+
+def test_decompression_bomb_png_falls_back_without_decoding(tmp_path, monkeypatch, caplog):
+    from herdeck.icons import PROJECT_ICON_MAX_SIDE
+
+    side = PROJECT_ICON_MAX_SIDE * 4  # far over the cap, still a tiny file
+    data = _zero_png(side)
+    assert len(data) < 256 * 1024
+    store = ProjectIconStore()
+    h = _stored(store, data)
+    p = _project_provider(tmp_path, store)
+    calls = _spy_on_load(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="herdeck.icons"):
+        assert p._decode_project_icon(h, store.get(h)) is None
+    assert calls == []  # rejected from the header, pixels never decoded
+    monkeypatch.undo()
+    broken = p.render_tile_bytes(_project_tile(project_icon=h))
+    mono = p.render_tile_bytes(_project_tile(project_icon=None))
+    assert Image.open(_io.BytesIO(broken)).tobytes() == Image.open(_io.BytesIO(mono)).tobytes()
+    assert sum("could not be decoded" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_decompression_bomb_inside_an_ico_frame_is_rejected(tmp_path, monkeypatch):
+    from herdeck.icons import PROJECT_ICON_MAX_SIDE
+
+    # The ICO directory claims 256x256 but the embedded PNG frame is huge.
+    data = _png_ico(_zero_png(PROJECT_ICON_MAX_SIDE * 2))
+    assert len(data) < 256 * 1024
+    store = ProjectIconStore()
+    h = _stored(store, data, "image/x-icon")
+    p = _project_provider(tmp_path, store)
+    calls = _spy_on_load(monkeypatch)
+    assert p._decode_project_icon(h, store.get(h)) is None
+    assert calls == []
+
+
+def test_png_icon_within_the_pixel_cap_still_decodes(tmp_path):
+    store = ProjectIconStore()
+    h = _stored(store, _png_ico(_img_bytes(RED, size=(64, 64)), side_byte=64), "image/x-icon")
+    p = _project_provider(tmp_path, store)
+    assert p._decode_project_icon(h, store.get(h)) is not None

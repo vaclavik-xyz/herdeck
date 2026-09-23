@@ -44,7 +44,8 @@ from .notify import (
 )
 from .orchestrator import Orchestrator
 from .pins import PinStore
-from .protocol import TermClosed, TermFrame
+from .project_icons import ingest_project_icon
+from .protocol import ProjectIcon, TermClosed, TermFrame
 from .secrets import get_secret
 from .telegram import TelegramBotClient, TelegramInteractor
 
@@ -642,6 +643,19 @@ class App:
             self._close_server_terminals(server_id)
         self.orch.set_connection(server_id, up)
         self._refresh()
+
+    def handle_project_icon(
+        self, server_id: str, icon: ProjectIcon, epoch: int | None = None
+    ) -> None:
+        """A project favicon arrived (sent once per hash per connection, always
+        after the snapshot referencing it): store it and re-render so tiles
+        waiting on it swap their monogram for the icon."""
+        if not self._server_allowed(server_id) or not self._accept_connection_epoch(
+            server_id, epoch
+        ):
+            return
+        if ingest_project_icon(icon):
+            self._refresh()
 
     def handle_result(self, server_id: str, req: str, data: dict, epoch: int | None = None) -> None:
         if not self._server_allowed(server_id) or not self._accept_connection_epoch(
@@ -1278,6 +1292,9 @@ async def _run(
             ),
             on_term=lambda _sid, message, sid=server.id, epoch=epoch: loop.call_soon_threadsafe(
                 app.handle_term, sid, message, epoch
+            ),
+            on_project_icon=lambda sid, icon, epoch=epoch: loop.call_soon_threadsafe(
+                app.handle_project_icon, sid, icon, epoch
             ),
         )
 

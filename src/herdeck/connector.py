@@ -12,15 +12,20 @@ from .model import AgentKey, AgentState
 from .protocol import (
     Error,
     Event,
+    ProjectIcon,
     Result,
     Snapshot,
     TermClosed,
     TermFrame,
+    Unknown,
     decode_inbound,
     encode,
 )
 
 log = logging.getLogger("herdeck.connector")
+
+# Wire capability + opt-in feature name for project favicon frames.
+PROJECT_ICON_FEATURE = "project_icon"
 
 
 def create_connector(server, **kwargs):
@@ -59,6 +64,7 @@ class Connector:
         backoff_base: float = 0.5,
         backoff_max: float = 30.0,
         on_term: Callable[[str, TermFrame | TermClosed], None] | None = None,
+        on_project_icon: Callable[[str, ProjectIcon], None] | None = None,
     ):
         self.server = server
         self._on_snapshot = on_snapshot
@@ -79,6 +85,9 @@ class Connector:
         self._last_logged_error: str | None = None
         self._protocol = 1
         self._capabilities: frozenset[str] = frozenset()
+        # None = this consumer renders no tiles (e.g. ctl): never opt in.
+        self._on_project_icon = on_project_icon
+        self._icons_requested = False
 
     @property
     def last_connect_error(self) -> str | None:
@@ -132,6 +141,7 @@ class Connector:
                         await ws.close()
                         break
                     self._stopping_terms.clear()
+                    self._icons_requested = False  # opt-in is per connection
                     attempt = 0
                     connected = True
                     self._on_connection(self.server.id, True)
@@ -194,6 +204,7 @@ class Connector:
             self._protocol = msg.protocol
             self._capabilities = frozenset(msg.capabilities)
             self._on_snapshot(self.server.id, [self._rekey(s) for s in msg.states])
+            self._maybe_request_icons()
         elif isinstance(msg, Event):
             self._on_event(self.server.id, self._rekey(msg.state))
         elif isinstance(msg, Result):
@@ -214,5 +225,25 @@ class Connector:
                 self._stopping_terms.discard(msg.req)
                 return
             self._on_term(self.server.id, msg)
+        elif isinstance(msg, ProjectIcon):
+            if self._on_project_icon is not None:
+                self._on_project_icon(self.server.id, msg)
+        elif isinstance(msg, Unknown):
+            return  # a newer bridge's frame type: ignored by design
         elif isinstance(msg, Error):
             self._on_error(msg.message)
+
+    def _maybe_request_icons(self) -> None:
+        """Opt in to project_icon frames once per connection — only when this
+        consumer renders them and the bridge advertises them. The first
+        snapshot of a connection is the earliest point the capability is
+        known; the bridge answers the extra ``list`` with a snapshot followed
+        by every icon it references."""
+        if (
+            self._on_project_icon is None
+            or self._icons_requested
+            or PROJECT_ICON_FEATURE not in self._capabilities
+        ):
+            return
+        self._icons_requested = True
+        asyncio.create_task(self.send({"type": "list", "features": [PROJECT_ICON_FEATURE]}))

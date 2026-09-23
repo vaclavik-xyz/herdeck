@@ -48,6 +48,7 @@ from ..notify import (
     event_title,
 )
 from ..orchestrator import Orchestrator
+from ..project_icons import ingest_project_icon
 from .source import StateSource
 
 log = logging.getLogger(__name__)
@@ -504,6 +505,12 @@ class LiveSource(StateSource):
 
         self._apply(mutate)
 
+    def _on_project_icon(self, server_id: str, icon) -> None:
+        """Connector callback (runner thread): store the favicon; when it is new,
+        re-render under the deck lock so waiting tiles pick it up."""
+        if ingest_project_icon(icon):
+            self._apply(lambda: True)
+
     def _apply(self, mutate) -> None:
         """Run a state transition (and render it) atomically w.r.t. presses.
 
@@ -724,6 +731,7 @@ def build_live_source(
             on_event=source._on_event,
             on_connection=source._on_connection,
             on_result=lambda req, data, sid=selected.id: source._on_result(sid, req, data),
+            on_project_icon=source._on_project_icon,
         )
         runner = runner_factory(connector)
         source.attach_runner(runner, selected.id)

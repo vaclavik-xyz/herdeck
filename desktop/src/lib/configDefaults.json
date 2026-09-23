@@ -21,6 +21,8 @@
     "tile_fields": ["repo", "title", "tab", "branch", "status", "time", "server"],
     "working_animation": "spin",
     "tile_fill": "none",
+    "tile_icon": "agent",
+    "project_icons": {},
     "language": "en"
   },
   "safety": {

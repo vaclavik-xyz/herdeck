@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import re
 from dataclasses import dataclass
 
 from .model import AgentKey, AgentState, Status, WorkContext
+from .project_icon_discovery import ICON_MIMES, MAX_ICON_BYTES, icon_hash
+
+_ICON_HASH_RE = re.compile(r"[0-9a-f]{16}")
+# Base64 length of MAX_ICON_BYTES (whole 4-char groups): a cheap pre-decode cap.
+_MAX_ICON_B64 = 4 * ((MAX_ICON_BYTES + 2) // 3)
 
 
 def encode(msg: dict) -> str:
@@ -19,6 +27,11 @@ def _status(value: str) -> Status:
 
 def _order(value: object) -> int | None:
     return value if type(value) is int and value >= 0 else None
+
+
+def _icon_ref(value: object) -> str:
+    """A pane's favicon hash, or "" for anything that is not one."""
+    return value if isinstance(value, str) and _ICON_HASH_RE.fullmatch(value) else ""
 
 
 def _pane_to_state(server_id: str, pane: dict) -> AgentState:
@@ -70,6 +83,7 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         display_agent=pane.get("display_agent") or "",
         work=WorkContext.from_tokens(work_tokens),
         capabilities=capabilities,
+        project_icon=_icon_ref(pane.get("project_icon")),
     )
 
 
@@ -117,9 +131,44 @@ class TermClosed:
     stop_remote: bool = False
 
 
+@dataclass
+class ProjectIcon:
+    """A project favicon's bytes, sent once per content hash to clients that
+    opted in with ``{"type": "list", "features": ["project_icon"]}``."""
+
+    server_id: str
+    hash: str
+    mime: str
+    data: bytes
+
+
+@dataclass
+class Unknown:
+    """A frame type this client does not know (a newer bridge). Ignored."""
+
+    type: str
+
+
+def _decode_project_icon(msg: dict) -> ProjectIcon:
+    sid, digest, mime, data = (msg.get(k) for k in ("server_id", "hash", "mime", "data"))
+    if not isinstance(sid, str) or not isinstance(digest, str) or not _ICON_HASH_RE.fullmatch(digest):
+        raise ValueError("malformed project_icon frame (server_id/hash)")
+    if not isinstance(mime, str) or mime not in ICON_MIMES:
+        raise ValueError(f"malformed project_icon frame (mime {mime!r})")
+    if not isinstance(data, str) or len(data) > _MAX_ICON_B64:
+        raise ValueError("malformed project_icon frame (data)")
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("malformed project_icon frame (base64)") from exc
+    if not 1 <= len(raw) <= MAX_ICON_BYTES or icon_hash(raw) != digest:
+        raise ValueError("malformed project_icon frame (size/hash)")
+    return ProjectIcon(sid, digest, mime, raw)
+
+
 def decode_inbound(
     raw: str,
-) -> Snapshot | Event | Result | Error | TermFrame | TermClosed:
+) -> Snapshot | Event | Result | Error | TermFrame | TermClosed | ProjectIcon | Unknown:
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "snapshot":
@@ -176,4 +225,8 @@ def decode_inbound(
             raise ValueError("terminal close missing request id")
         reason = msg.get("reason", "")
         return TermClosed(req, reason if isinstance(reason, str) else "preview closed")
-    raise ValueError(f"unknown inbound message type: {kind}")
+    if kind == "project_icon":
+        return _decode_project_icon(msg)
+    # Forward compatibility: a newer bridge may add frame types. Raising here
+    # would reach Connector's on_error (ctl fails every pending request on it).
+    return Unknown(str(kind))

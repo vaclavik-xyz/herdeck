@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 
 import pytest
@@ -6,6 +7,8 @@ import websockets
 
 from herdeck.config import ServerConfig
 from herdeck.connector import Connector
+from herdeck.project_icon_discovery import icon_hash
+from herdeck.protocol import ProjectIcon
 
 
 @pytest.fixture
@@ -329,6 +332,24 @@ def test_dispatch_exposes_negotiated_bridge_capabilities():
     assert conn.capabilities == frozenset({"work_context", "terminal_preview"})
 
 
+def test_dispatch_ignores_unknown_frame_types():
+    # A newer bridge's frame type must not reach on_error (ctl would fail
+    # every pending request on it) nor any other callback.
+    seen = []
+    conn = Connector(
+        ServerConfig("dev", "ws://x", "t"),
+        on_snapshot=lambda sid, states: seen.append("snapshot"),
+        on_event=lambda sid, state: seen.append("event"),
+        on_connection=lambda sid, up: seen.append("connection"),
+        on_error=seen.append,
+        on_term=lambda sid, msg: seen.append("term"),
+    )
+
+    conn._dispatch('{"type":"future_frame","x":1}')
+
+    assert seen == []
+
+
 def test_dispatch_rekey_preserves_workspace_and_tab():
     cfg = ServerConfig("dev", "ws://x", "t")
     seen = {}
@@ -461,3 +482,109 @@ async def test_bridge_4401_close_reads_as_token_rejection():
     finally:
         server.close()
         await server.wait_closed()
+
+
+def _snapshot_frame(caps):
+    return json.dumps(
+        {"type": "snapshot", "server_id": "b", "protocol": 3, "capabilities": caps, "panes": []}
+    )
+
+
+def _conn(**kw):
+    return Connector(
+        ServerConfig("workbox", "ws://unused", "tok"),
+        on_snapshot=lambda sid, st: None,
+        on_event=lambda sid, s: None,
+        on_connection=lambda sid, up: None,
+        **kw,
+    )
+
+
+async def test_opt_in_list_sent_once_when_capability_present(monkeypatch):
+    sent = []
+
+    async def fake_send(msg):
+        sent.append(msg)
+
+    conn = _conn(on_project_icon=lambda sid, icon: None)
+    monkeypatch.setattr(conn, "send", fake_send)
+    conn._dispatch(_snapshot_frame(["project_icon"]))
+    conn._dispatch(_snapshot_frame(["project_icon"]))
+    await asyncio.sleep(0)
+    assert sent == [{"type": "list", "features": ["project_icon"]}]
+
+
+async def test_no_opt_in_without_capability_or_consumer(monkeypatch):
+    sent = []
+
+    async def fake_send(msg):
+        sent.append(msg)
+
+    for conn, caps in (
+        (_conn(on_project_icon=lambda sid, icon: None), ["work_context"]),
+        (_conn(), ["project_icon"]),  # e.g. ctl: renders no tiles, never opts in
+    ):
+        monkeypatch.setattr(conn, "send", fake_send)
+        conn._dispatch(_snapshot_frame(caps))
+    await asyncio.sleep(0)
+    assert sent == []
+
+
+async def test_project_icon_frame_dispatches_to_callback():
+    got = []
+    conn = _conn(on_project_icon=lambda sid, icon: got.append((sid, icon)))
+    data = b"\x89PNG"
+    conn._dispatch(
+        json.dumps(
+            {
+                "type": "project_icon",
+                "server_id": "bridge-side",
+                "hash": icon_hash(data),
+                "mime": "image/png",
+                "data": base64.b64encode(data).decode(),
+            }
+        )
+    )
+    assert got == [("workbox", ProjectIcon("bridge-side", icon_hash(data), "image/png", data))]
+
+
+def test_unknown_frame_is_ignored():
+    _conn()._dispatch('{"type": "from_the_future"}')  # must not raise
+
+
+async def test_opt_in_repeats_after_reconnect():
+    received = []
+    connections = 0
+
+    async def handler(ws):
+        nonlocal connections
+        connections += 1
+        await ws.send(_snapshot_frame(["project_icon"]))
+        async for raw in ws:
+            msg = json.loads(raw)
+            received.append(msg)
+            if msg.get("features") and connections == 1:
+                await ws.close()
+
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    conn = Connector(
+        ServerConfig("w", f"ws://127.0.0.1:{port}", "t"),
+        on_snapshot=lambda sid, st: None,
+        on_event=lambda sid, s: None,
+        on_connection=lambda sid, up: None,
+        on_project_icon=lambda sid, icon: None,
+        backoff_base=0.05,
+    )
+    task = asyncio.create_task(conn.run())
+    try:
+        for _ in range(150):
+            if sum(1 for m in received if m.get("features")) >= 2:
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        conn.stop()
+        await asyncio.wait_for(task, timeout=2.0)
+        server.close()
+        await server.wait_closed()
+    assert sum(1 for m in received if m.get("features") == ["project_icon"]) == 2

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 
-import { parseConfig } from "../configClient";
+import { parseConfig, type ConfigPayload } from "../configClient";
+import { reactiveProps } from "../testProps.svelte";
 import { setLang } from "../i18n.svelte";
 import ViewSection from "./ViewSection.svelte";
 
@@ -169,6 +170,92 @@ describe("ViewSection", () => {
       expect(chip("Emphasize")).toBe("tile_primary · tile_secondary");
       expect(chip("Show T3 / HERDR labels")).toBe("tile_fields");
       expect(chip("Controls layout")).toBe("management");
+    } finally { unmount(instance); }
+  });
+});
+
+describe("ViewSection project icons", () => {
+  function mountView(payload: ConfigPayload, editProfile?: string, errors: string[] = []) {
+    const props = reactiveProps<Record<string, unknown>>({
+      payload, editProfile, onChange: () => {}, onError: (m: string) => errors.push(m),
+    });
+    const target = document.createElement("div");
+    const instance = mount(ViewSection, { target, props: props as never });
+    const view = () => ((props.payload as ConfigPayload).base.view ?? {}) as Record<string, unknown>;
+    return { props, target, instance, view };
+  }
+  const iconsField = (target: HTMLElement) => target.querySelector<HTMLElement>(".project-icons")!;
+  const type = (input: HTMLInputElement, value: string) =>
+    flushSync(() => { input.value = value; input.dispatchEvent(new Event("input", { bubbles: true })); });
+  const addRow = (field: HTMLElement) => flushSync(() => field.querySelector<HTMLButtonElement>("button.add")!.click());
+
+  it("offers tile_icon with agent as the default", () => {
+    setLang("en");
+    const { target, instance, view } = mountView(parseConfig({ base: { view: {} } })!);
+    try {
+      const select = Array.from(target.querySelectorAll("label.field"))
+        .find((i) => i.querySelector<HTMLElement>("[data-config-key]")?.dataset.configKey === "tile_icon")!
+        .querySelector("select")!;
+      expect(select.value).toBe("agent");
+      expect(Array.from(select.options).map((o) => o.value)).toEqual(["agent", "project", "both"]);
+      flushSync(() => { select.value = "both"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(view().tile_icon).toBe("both");
+    } finally { unmount(instance); }
+  });
+
+  it("writes complete rows into view.project_icons and removes them again", () => {
+    setLang("en");
+    const { target, instance, view } = mountView(parseConfig({ base: { view: {} } })!);
+    try {
+      const field = iconsField(target);
+      expect(field.querySelector("[data-config-key]")?.getAttribute("data-config-key")).toBe("project_icons");
+      addRow(field);
+      const [repo, path] = Array.from(field.querySelectorAll<HTMLInputElement>(".row input"));
+      type(repo, "shop");
+      expect(view().project_icons).toBeUndefined(); // no path yet: nothing written
+      type(path, "~/icons/shop.png");
+      expect(view().project_icons).toEqual({ shop: "~/icons/shop.png" });
+      const remove = field.querySelector<HTMLButtonElement>("button.remove")!;
+      expect(remove.title).toBe("Remove project icon");
+      flushSync(() => remove.click());
+      expect(view()).not.toHaveProperty("project_icons");
+    } finally { unmount(instance); }
+  });
+
+  it("reports duplicate repo names instead of writing them", () => {
+    setLang("en");
+    const errors: string[] = [];
+    const { target, instance, view } = mountView(
+      parseConfig({ base: { view: { project_icons: { shop: "~/a.png" } } } })!, undefined, errors,
+    );
+    try {
+      const field = iconsField(target);
+      addRow(field);
+      const inputs = Array.from(field.querySelectorAll<HTMLInputElement>(".row input"));
+      type(inputs[2], "shop");
+      type(inputs[3], "~/b.png");
+      expect(errors.some((e) => e.includes("duplicate"))).toBe(true);
+      expect(view().project_icons).toEqual({ shop: "~/a.png" });
+    } finally { unmount(instance); }
+  });
+
+  it("writes profile-only project icons without touching the base", () => {
+    setLang("cs");
+    const payload = parseConfig({
+      base: { view: { project_icons: { api: "~/a.png" } } },
+      profiles: { night: { view: {} } },
+    })!;
+    const { props, target, instance, view } = mountView(payload, "night");
+    try {
+      const field = iconsField(target);
+      expect(field.textContent).toContain("api → ~/a.png");
+      addRow(field);
+      const [repo, path] = Array.from(field.querySelectorAll<HTMLInputElement>(".row input"));
+      type(repo, "web");
+      type(path, "~/w.png");
+      expect((props.payload as ConfigPayload).profiles.night.view).toEqual({ project_icons: { web: "~/w.png" } });
+      expect(view().project_icons).toEqual({ api: "~/a.png" });
+      expect(field.querySelector<HTMLButtonElement>("button.remove")!.title).toBe("Odebrat ikonu projektu");
     } finally { unmount(instance); }
   });
 });

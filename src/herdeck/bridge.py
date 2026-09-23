@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import hmac
@@ -18,6 +19,7 @@ import websockets
 
 from .decisions import decision_choices, decision_revision
 from .model import Status, WorkContext
+from .project_icon_discovery import ProjectIconIndex
 from .protocol import encode
 
 log = logging.getLogger(__name__)
@@ -58,6 +60,7 @@ _WIRE_CAPABILITIES = (
     "metadata_tokens",
     "state_labels",
     "herdr_order",
+    "project_icon",
 )
 
 _TITLE_PLUGIN_ID = "zhangzujian.auto-session-title"
@@ -475,6 +478,7 @@ def _herdr_pane_to_wire(
     tab_order_by_id: dict[str, int] | None = None,
     *,
     can_refresh_title: bool = False,
+    icons: ProjectIconIndex | None = None,
 ) -> dict:
     """Map a raw herdr pane to herdeck's wire pane schema.
 
@@ -491,6 +495,16 @@ def _herdr_pane_to_wire(
     branch = wt.get("branch") or ""
     tokens = p.get("tokens") if isinstance(p.get("tokens"), dict) else {}
     work = WorkContext.from_tokens(tokens)
+    # Favicon discovery is cached per repo root and never raises (see
+    # ProjectIconIndex.hash_for); without an index the field stays empty.
+    # Known trade-off: discovery stats the pane's cwd/worktree on the event
+    # loop. The per-root/per-cwd cache (RESTAT_INTERVAL_S = 60 s) bounds how
+    # often, but a hung network mount could still block the loop here. It runs
+    # regardless of [view].tile_icon: the bridge always builds the index and
+    # the runtime opts in to icon frames whenever it has a consumer.
+    project_icon = (
+        icons.hash_for(worktree_path=wt.get("path") or "", cwd=cwd) if icons is not None else ""
+    )
     agent_type = p.get("agent", "default")
     title_refresh_supported = agent_type in {"codex", "claude", "hermes"}
     return {
@@ -513,6 +527,7 @@ def _herdr_pane_to_wire(
         "title": (p.get("title") or p.get("terminal_title_stripped") or "")[:160],
         "display_agent": (p.get("display_agent") or "")[:160],
         "capabilities": ["refresh_title"] if can_refresh_title and title_refresh_supported else [],
+        "project_icon": project_icon,
         "work": {
             "source": work.source,
             "item": work.item,
@@ -529,6 +544,7 @@ def _wire_panes(
     tabs: list[dict] | None = None,
     *,
     can_refresh_title: bool = False,
+    icons: ProjectIconIndex | None = None,
 ) -> list[dict]:
     wt_by_ws = _worktrees_by_workspace(worktrees or [])
     ws_by_id = _workspaces_by_id(workspaces or [])
@@ -544,6 +560,7 @@ def _wire_panes(
             ws_order_by_id,
             tab_order_by_id,
             can_refresh_title=can_refresh_title,
+            icons=icons,
         )
         for p in raw
         if _is_agent_pane(p)
@@ -569,7 +586,7 @@ def _agent_workspace_ids(raw_panes: list[dict]) -> list[str]:
     )
 
 
-async def _wired_snapshot(herdr: HerdrClient) -> list[dict]:
+async def _wired_snapshot(herdr: HerdrClient, icons: ProjectIconIndex | None = None) -> list[dict]:
     """One session.snapshot carries the agent panes AND the workspace/tab
     labels; only branch labels need the extra per-workspace worktree fan-out
     (worktrees are not part of the snapshot)."""
@@ -590,6 +607,7 @@ async def _wired_snapshot(herdr: HerdrClient) -> list[dict]:
         snap.get("workspaces", []),
         snap.get("tabs", []),
         can_refresh_title=can_refresh_title,
+        icons=icons,
     )
 
 
@@ -660,11 +678,13 @@ class StubHerdr:
         self.refreshed_titles.append(pane_id)
 
 
-async def handle_client_message(herdr: HerdrClient, server_id: str, raw: str) -> str:
+async def handle_client_message(
+    herdr: HerdrClient, server_id: str, raw: str, icons: ProjectIconIndex | None = None
+) -> str:
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "list":
-        panes = await _wired_snapshot(herdr)
+        panes = await _wired_snapshot(herdr, icons)
         return encode(_snapshot_message(server_id, panes))
     if kind == "read":
         if await _pane_identity_changed(herdr, msg):
@@ -797,6 +817,34 @@ def _snapshot_message(server_id: str, panes: list[dict]) -> dict:
         "capabilities": list(_WIRE_CAPABILITIES),
         "panes": panes,
     }
+
+
+def _project_icon_frames(
+    server_id: str, panes: list[dict], icons: ProjectIconIndex, sent: set[str]
+) -> list[str]:
+    """Encoded project_icon frames for hashes in ``panes`` this connection has
+    not received yet (``sent`` is that connection's set, updated here)."""
+    frames: list[str] = []
+    for pane in panes:
+        digest = pane.get("project_icon") if isinstance(pane, dict) else None
+        if not digest or digest in sent:
+            continue
+        blob = icons.blob(digest)
+        if blob is None:
+            continue
+        sent.add(digest)
+        frames.append(
+            encode(
+                {
+                    "type": "project_icon",
+                    "server_id": server_id,
+                    "hash": digest,
+                    "mime": blob.mime,
+                    "data": base64.b64encode(blob.data).decode("ascii"),
+                }
+            )
+        )
+    return frames
 
 
 def _pane_record_identity_changed(pane: dict | None, expected: object) -> bool:
@@ -1049,8 +1097,13 @@ class HerdrEvents:
         poll_interval: float = 5.0,
         backoff_base: float = 0.3,
         backoff_max: float = 30.0,
+        *,
+        icons: ProjectIconIndex | None = None,
     ):
         self._herdr = herdr
+        # Only ever touched from this stream's event loop (hash_for in stream,
+        # invalidate in _note_event) — ProjectIconIndex has no lock.
+        self._icons = icons
         self._socket_path = socket_path
         self._interval = poll_interval
         self._backoff_base = backoff_base
@@ -1087,6 +1140,7 @@ class HerdrEvents:
                         self._worktrees,
                         snap.get("workspaces", []),
                         snap.get("tabs", []),
+                        icons=self._icons,
                     )
                 except Exception as exc:
                     if str(exc) == _SNAPSHOT_UNSUPPORTED:
@@ -1122,6 +1176,8 @@ class HerdrEvents:
         normalized = name.replace(".", "_") if isinstance(name, str) else None
         if normalized in _WORKTREE_EVENT_NAMES:
             self._worktrees_stale = True
+            if self._icons is not None:
+                self._icons.invalidate()  # a new/removed worktree may change a repo root
         if normalized in _FLEET_EVENT_NAMES:
             self._worktrees_stale = True  # a new pane may sit in an unseen workspace
             return True
@@ -1275,21 +1331,44 @@ async def _send_to_client(ws, msg: str, lock: asyncio.Lock, timeout: float | Non
     return False
 
 
-async def _broadcast(snapshot_stream, clients: dict, server_id: str) -> None:
+async def _broadcast(
+    snapshot_stream,
+    clients: dict,
+    server_id: str,
+    *,
+    icon_subs: dict | None = None,
+    icons: ProjectIconIndex | None = None,
+) -> None:
     """Forward each changed full agent list to all clients as a snapshot.
 
     Snapshots (not per-pane events) are used so that removed/finished panes
     disappear from the deck instead of lingering until a manual refresh.
     Clients are isolated from each other: sends fan out concurrently with a
     short per-client timeout, so a stalled laptop cannot freeze status
-    updates for the physical deck.
+    updates for the physical deck. Clients that opted in to project icons
+    (``icon_subs``: ws -> hashes already sent) get each newly referenced icon
+    right AFTER the snapshot that references it.
     """
     async for panes in snapshot_stream:
         msg = encode(_snapshot_message(server_id, panes))
         if clients:
             await asyncio.gather(
-                *(_send_to_client(ws, msg, lock) for ws, lock in list(clients.items()))
+                *(
+                    _deliver_snapshot(ws, lock, msg, panes, server_id, icon_subs, icons)
+                    for ws, lock in list(clients.items())
+                )
             )
+
+
+async def _deliver_snapshot(ws, lock, msg, panes, server_id, icon_subs, icons) -> None:
+    if not await _send_to_client(ws, msg, lock):
+        return
+    sent = icon_subs.get(ws) if icon_subs is not None and icons is not None else None
+    if sent is None:
+        return
+    for frame in _project_icon_frames(server_id, panes, icons, sent):
+        if not await _send_to_client(ws, frame, lock):
+            return
 
 
 class SocketHerdr:
@@ -1634,6 +1713,9 @@ async def _serve_connection(
     token: str,
     clients: dict,
     socket_path: str,
+    *,
+    icons: ProjectIconIndex | None = None,
+    icon_subs: dict | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
@@ -1645,7 +1727,7 @@ async def _serve_connection(
     async def send(msg: str) -> bool:
         return await _send_to_client(ws, msg, send_lock)
 
-    panes = await _wired_snapshot(herdr)
+    panes = await _wired_snapshot(herdr, icons)
     if not await send(encode(_snapshot_message(server_id, panes))):
         return
     clients[ws] = send_lock
@@ -1760,13 +1842,32 @@ async def _serve_connection(
                 if isinstance(req, str):
                     await stop_observe(req)
                 continue
+            if kind == "list" and icons is not None and icon_subs is not None:
+                features = msg.get("features")
+                if isinstance(features, list) and "project_icon" in features:
+                    icon_subs.setdefault(ws, set())  # opt-in: this connection renders icons
+                try:
+                    panes = await _wired_snapshot(herdr, icons)
+                except Exception as exc:
+                    await send(encode({"type": "error", "message": str(exc)}))
+                    continue
+                if not await send(encode(_snapshot_message(server_id, panes))):
+                    continue
+                sent = icon_subs.get(ws)
+                if sent is not None:
+                    for frame in _project_icon_frames(server_id, panes, icons, sent):
+                        if not await send(frame):
+                            break
+                continue
             try:
-                out = await handle_client_message(herdr, server_id, raw)
+                out = await handle_client_message(herdr, server_id, raw, icons)
             except Exception as exc:
                 out = encode({"type": "error", "message": str(exc)})
             await send(out)
     finally:
         clients.pop(ws, None)
+        if icon_subs is not None:
+            icon_subs.pop(ws, None)
         pending = list(observes)
         for req in pending:
             current = observes.get(req)
@@ -1834,15 +1935,30 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     events_herdr = herdr or SocketHerdr(socket_path)
     client_herdr = herdr or SocketHerdr(socket_path)
     await _require_snapshot_support(events_herdr)
-    events = HerdrEvents(events_herdr, socket_path=socket_path)
+    # One index per bridge, shared by the event stream and client handlers —
+    # all on this event loop (ProjectIconIndex is not thread-safe).
+    icons = ProjectIconIndex()
+    events = HerdrEvents(events_herdr, socket_path=socket_path, icons=icons)
     clients: dict = {}
+    icon_subs: dict = {}
 
     async def handler(ws):
-        await _serve_connection(ws, client_herdr, "local", token, clients, socket_path)
+        await _serve_connection(
+            ws,
+            client_herdr,
+            "local",
+            token,
+            clients,
+            socket_path,
+            icons=icons,
+            icon_subs=icon_subs,
+        )
 
     server = await websockets.serve(handler, host, 0)
     port = server.sockets[0].getsockname()[1]
-    btask = asyncio.create_task(_broadcast(events.stream(), clients, "local"))
+    btask = asyncio.create_task(
+        _broadcast(events.stream(), clients, "local", icon_subs=icon_subs, icons=icons)
+    )
     btask.add_done_callback(_log_broadcast_task_failure)
     return host, port, token, (server, btask)
 
@@ -1855,14 +1971,26 @@ async def serve(socket_path: str, host: str, port: int, server_id: str, token: s
     events_herdr = SocketHerdr(socket_path)
     client_herdr = SocketHerdr(socket_path)
     await _require_snapshot_support(events_herdr)
-    events = HerdrEvents(events_herdr, socket_path=socket_path)  # push events + slow poll
+    icons = ProjectIconIndex()  # event-loop only (not thread-safe), see start_local_bridge
+    events = HerdrEvents(events_herdr, socket_path=socket_path, icons=icons)  # push + slow poll
     clients: dict = {}
+    icon_subs: dict = {}
 
     async def handler(ws):
-        await _serve_connection(ws, client_herdr, server_id, token, clients, socket_path)
+        await _serve_connection(
+            ws,
+            client_herdr,
+            server_id,
+            token,
+            clients,
+            socket_path,
+            icons=icons,
+            icon_subs=icon_subs,
+        )
 
     async with websockets.serve(handler, host, port):
-        await _broadcast(events.stream(), clients, server_id)  # runs forever
+        # runs forever
+        await _broadcast(events.stream(), clients, server_id, icon_subs=icon_subs, icons=icons)
 
 
 def load_bridge_token(*, getenv=os.environ.get) -> str:

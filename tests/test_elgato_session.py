@@ -629,3 +629,32 @@ def test_t3_stop_confirmation_cannot_cross_turn_revision():
         assert sess.key_up("t") == []  # a fresh first press, not a stop
         command = sess.key_up("t")[0]
         assert command.action == "stop" and command.decision_revision == "turn-2"
+
+
+def test_slot_tile_carries_tile_icon_and_project_hash():
+    from herdeck.project_icon_discovery import icon_hash
+    from herdeck.project_icons import ProjectIconStore
+
+    store = ProjectIconStore()
+    h = icon_hash(b"shop")
+    store.put(h, "image/png", b"shop")
+    cfg = make_config()
+    cfg.view.tile_icon = "both"
+
+    class Capture:
+        def __init__(self):
+            self.tiles = []
+
+        def render_tile_bytes(self, tile):
+            self.tiles.append(tile)
+            return b""
+
+    icons = Capture()
+    sess = ElgatoSession(cfg, icons, project_icons=store)
+    sess.set_slots([("s0", (0, 0))])
+    s = state("p1", Status.IDLE, "shop")
+    s.project_icon = h
+    sess.apply_snapshot("dev", [s])
+    sess.render_all()
+    tile = icons.tiles[0]
+    assert (tile.tile_icon, tile.project_icon, tile.project_name) == ("both", h, "shop")

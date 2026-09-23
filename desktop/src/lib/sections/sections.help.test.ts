@@ -28,7 +28,7 @@ function demoPayload(): ConfigPayload {
     base: {
       servers: [{ id: "m4", url: "ws://host:8788", token_env: "HERDECK_TOKEN_M4" }],
       deck: { grid: "5x3", overview_order: ["m4"] },
-      view: { management: "launcher_menu", tile_fields: ["repo", "status"] },
+      view: { management: "launcher_menu", tile_fields: ["repo", "status"], project_icons: { herdeck: "~/icons/herdeck.png" } },
       theme: { colors: { working: "green" }, server_accents: ["teal"] },
       macros: [{ label: "go", text: "continue" }],
       start_profiles: { claude: ["claude"] },
@@ -40,7 +40,7 @@ function demoPayload(): ConfigPayload {
       usage: { providers: ["claude"], paid_only: true, refresh_secs: 300, codexbar_path: "codexbar" },
       desktop: { deck_always_on_top: true },
     },
-    profiles: { night: { view: { tile_fill: "solid" } } },
+    profiles: { night: { view: { tile_fill: "solid", project_icons: { web: "~/w.png" } } } },
     local: { local: { deck: "d200", web_port: 8800 }, hardware: { brightness: 80 } },
     secrets: {},
   });

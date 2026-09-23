@@ -744,3 +744,33 @@ def test_waiting_agent_renders_violet_with_holder_label():
     assert waiting.spinner is None  # waiting tiles do not animate
     working = [t for t in rs.tiles if t.color == "green"]
     assert working and rs.tiles.index(working[0]) < rs.tiles.index(waiting)  # working sorts first
+
+
+def test_tile_icon_mode_and_resolved_hash_reach_agent_tiles():
+    from herdeck.project_icon_discovery import icon_hash
+    from herdeck.project_icons import ProjectIconStore
+
+    store = ProjectIconStore()
+    data = b"\x89PNG-shop"
+    h = icon_hash(data)
+    store.put(h, "image/png", data)
+    cfg = make_config()
+    cfg.view.tile_icon = "project"
+    o = Orchestrator(cfg, slots=13, project_icons=store)
+    shop = state("p1", Status.IDLE)
+    shop.repo, shop.project_icon = "shop", h
+    blog = state("p2", Status.IDLE)
+    blog.repo, blog.project_icon = "blog", icon_hash(b"not delivered yet")
+    o.apply_snapshot("dev", [shop, blog])
+    tiles = o.render().tiles
+    by_name = {t.project_name: t for t in tiles if t.project_name}
+    assert by_name["shop"].tile_icon == "project" and by_name["shop"].project_icon == h
+    assert by_name["blog"].project_icon is None  # bytes not here -> monogram
+    assert tiles[-1].tile_icon == "agent"  # launcher/control tiles keep the default
+
+
+def test_agent_mode_tiles_carry_no_project_icon():
+    o = Orchestrator(make_config(), slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    t = o.render().tiles[0]
+    assert (t.tile_icon, t.project_icon, t.project_name) == ("agent", None, "")
