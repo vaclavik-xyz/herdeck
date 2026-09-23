@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 
 import { parseConfig } from "../configClient";
+import { setLang } from "../i18n.svelte";
 import NotificationsSection from "./NotificationsSection.svelte";
 import NotificationsSectionHarness from "./NotificationsSectionHarness.svelte";
 
@@ -140,6 +141,82 @@ describe("NotificationsSection", () => {
       expect(draft.allowed_user_ids).toEqual([]);
     } finally {
       unmount(instance);
+    }
+  });
+
+  it("warns when a sound's event is not in the base on list and adds it back", () => {
+    const target = document.createElement("div");
+    const instance = mount(NotificationsSectionHarness, {
+      target,
+      props: { initial: parseConfig({ base: { notifications: { on: ["blocked"] } } })! },
+    });
+    try {
+      expect(target.querySelector('[data-event-off="blocked"]')).toBeNull();
+      const warning = target.querySelector<HTMLElement>('[data-event-off="done"]');
+      expect(warning?.textContent).toContain("done notifications are off");
+      warning!.querySelector<HTMLButtonElement>("button")!.click();
+      flushSync();
+      expect(JSON.parse(target.querySelector(".base-on")?.textContent ?? "null")).toEqual(["blocked", "done"]);
+      expect(target.querySelector('[data-event-off="done"]')).toBeNull();
+    } finally {
+      unmount(instance);
+    }
+  });
+
+  it("shows no event warning with the default on list (both events)", () => {
+    const target = document.createElement("div");
+    const instance = mount(NotificationsSectionHarness, {
+      target,
+      props: { initial: parseConfig({})! },
+    });
+    try {
+      expect(target.querySelector("[data-event-off]")).toBeNull();
+    } finally {
+      unmount(instance);
+    }
+  });
+
+  it("warns from the profile's effective on list and overrides it to re-enable", () => {
+    const target = document.createElement("div");
+    const instance = mount(NotificationsSectionHarness, {
+      target,
+      props: {
+        initial: parseConfig({
+          base: { notifications: { on: ["done"] } },
+          profiles: { night: {} },
+        })!,
+        editProfile: "night",
+      },
+    });
+    try {
+      // Inherited from base: done on, blocked off.
+      expect(target.querySelector('[data-event-off="done"]')).toBeNull();
+      const warning = target.querySelector<HTMLElement>('[data-event-off="blocked"]');
+      expect(warning?.textContent).toContain("blocked notifications are off");
+      warning!.querySelector<HTMLButtonElement>("button")!.click();
+      flushSync();
+      expect(JSON.parse(target.querySelector(".profile-on")?.textContent ?? "null")).toEqual(["done", "blocked"]);
+      // The base list is left alone; the profile now overrides it.
+      expect(JSON.parse(target.querySelector(".base-on")?.textContent ?? "null")).toEqual(["done"]);
+      expect(target.querySelector("[data-event-off]")).toBeNull();
+    } finally {
+      unmount(instance);
+    }
+  });
+
+  it("warns in Czech too", () => {
+    setLang("cs");
+    const target = document.createElement("div");
+    const instance = mount(NotificationsSectionHarness, {
+      target,
+      props: { initial: parseConfig({ base: { notifications: { on: [] } } })! },
+    });
+    try {
+      expect(target.querySelector('[data-event-off="done"]')?.textContent).toContain("Upozornění done jsou vypnutá");
+      expect(target.querySelector('[data-event-off="blocked"]')).not.toBeNull();
+    } finally {
+      unmount(instance);
+      setLang("en");
     }
   });
 

@@ -781,6 +781,9 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   to send text to that specific agent. Herdeck accepts inbound actions only from
   `allowed_user_ids`, only in the configured `chat_id`, and only in `message_thread_id`
   when one is configured.
+- `on` defaults to both events (`["blocked", "done"]`); set `on = ["blocked"]`
+  to mute done alerts. The desktop settings warn next to a per-event sound whose
+  event is not in `on`.
 - Titles name the agent and the event in the deck language (`[view].language`),
   e.g. `claude · needs input` / `claude · done`.
 - Notifications fire once per event episode (re-arming after the agent leaves

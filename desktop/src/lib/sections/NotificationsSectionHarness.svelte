@@ -22,6 +22,12 @@
       : ((payload.profiles[editProfile]?.notifications as Record<string, unknown> | undefined)
           ?.sounds as Record<string, unknown> | undefined),
   );
+  const baseOn = $derived(getAt(payload, "base", "notifications", "on"));
+  const profileOn = $derived(
+    editProfile == null
+      ? undefined
+      : (payload.profiles[editProfile]?.notifications as Record<string, unknown> | undefined)?.on,
+  );
   const baseSounds = $derived(
     (getAt(payload, "base", "notifications", "sounds") as Record<string, unknown> | undefined) ??
       undefined,
@@ -32,4 +38,6 @@
 <output class="allowed-payload">{JSON.stringify(allowedUsers)}</output>
 <output class="profile-telegram">{JSON.stringify(profileTelegram)}</output>
 <output class="profile-sounds">{JSON.stringify(profileSounds)}</output>
+<output class="base-on">{JSON.stringify(baseOn)}</output>
+<output class="profile-on">{JSON.stringify(profileOn)}</output>
 <output class="sounds-payload">{JSON.stringify(baseSounds)}</output>

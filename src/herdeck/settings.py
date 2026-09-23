@@ -12,6 +12,7 @@ from .config import (
     AGENT_ORDERS,
     DEFAULT_EVENT_SOUNDS,
     DEFAULT_MACROS,
+    DEFAULT_NOTIFY_ON,
     DEFAULT_PROFILES,
     DEFAULT_REQUIRE_CONFIRM,
     DEFAULT_START_PROFILES,
@@ -300,7 +301,7 @@ def _notifications_config(raw: dict | None) -> Notifications:
         telegram = _parse_telegram_config(tg_raw)
     return Notifications(
         enabled=raw.get("enabled", False),
-        on=list(raw.get("on", ["blocked"])),
+        on=list(raw.get("on", DEFAULT_NOTIFY_ON)),
         sound=raw.get("sound", True),
         backends=list(raw.get("backends", ["macos"])),
         sounds={**DEFAULT_EVENT_SOUNDS, **validate_event_sounds(raw.get("sounds"))},

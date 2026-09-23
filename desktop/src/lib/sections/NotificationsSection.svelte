@@ -61,6 +61,10 @@
       test_sound: "Play a test notification with this sound",
       test_failed: "test notification failed: {e}",
       permission_denied: "macOS notifications are turned off for Herdeck, so no banner will appear. Allow them in System Settings → Notifications → Herdeck.",
+      event_off_blocked: "blocked notifications are off: 'blocked' is not in on, so this sound never plays.",
+      event_off_done: "done notifications are off: 'done' is not in on, so this sound never plays.",
+      event_enable: "Add '{event}' to on",
+      event_enable_title: "Add '{event}' to the on list so this event notifies again",
     },
     cs: {
       group_telegram: "Telegram bot",
@@ -81,6 +85,10 @@
       test_sound: "Přehrát testovací notifikaci s tímto zvukem",
       test_failed: "testovací notifikace selhala: {e}",
       permission_denied: "Notifikace macOS má Herdeck vypnuté, takže se žádný banner neukáže. Povol je v Nastavení systému → Oznámení → Herdeck.",
+      event_off_blocked: "Upozornění blocked jsou vypnutá: 'blocked' není v on, takže tenhle zvuk nikdy nezazní.",
+      event_off_done: "Upozornění done jsou vypnutá: 'done' není v on, takže tenhle zvuk nikdy nezazní.",
+      event_enable: "Přidat '{event}' do on",
+      event_enable_title: "Přidá '{event}' do seznamu on, aby tahle událost zase upozorňovala",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -165,7 +173,7 @@
     payload = setAt(payload, "base", "notifications", key, value);
     onChange();
   }
-  // `on`/`backends` tri-state: absent → backend defaults (["blocked"]/["macos"]), [] → none, custom → list.
+  // `on`/`backends` tri-state: absent → backend defaults (["blocked","done"]/["macos"]), [] → none, custom → list.
   function setTri(key: string, state: ListFieldState, list: string[]): void {
     payload = setListField(payload, "base", "notifications", key, state, list);
     onChange();
@@ -221,6 +229,30 @@
   function setOvList(key: string, state: ListFieldState, list: string[]): void {
     payload = { ...payload, profiles: state === "default" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, state === "empty" ? [] : list) };
     onChange();
+  }
+
+  // --- per-event sound vs `on` ---
+  // A sound field is always shown, but its event only fires when it is in the
+  // effective `on` list; warn inline instead of letting a configured sound
+  // silently never play (the "done sound but no done alert" trap).
+  type NotifyEvent = "blocked" | "done";
+  // Bumped when the enable button rewrites `on`, so the list widget drops a
+  // stale local draft and shows the new list.
+  let onRev = $state(0);
+  function hasEvent(list: string[], event: NotifyEvent): boolean {
+    return list.some((item) => String(item).trim() === event);
+  }
+  const effectiveOn = $derived(
+    !overlay ? on : overrideState(payload, prof, SEC, "on") === "default" ? effectiveList("on") : ovList("on"),
+  );
+  function eventOff(event: NotifyEvent): boolean {
+    return !hasEvent(effectiveOn, event);
+  }
+  function enableEvent(event: NotifyEvent): void {
+    const next = [...effectiveOn.filter((item) => String(item).trim() !== ""), event];
+    onRev += 1;
+    if (overlay) setOvList("on", "custom", next);
+    else setTri("on", "custom", next);
   }
 
   // --- overlay telegram (nested dict, per-subfield via path) ---
@@ -332,6 +364,15 @@
   }
 </script>
 
+{#snippet eventOffWarning(event: NotifyEvent)}
+  {#if eventOff(event)}
+    <p class="event-off" role="status" data-event-off={event}>
+      <span>{event === "done" ? lm.event_off_done : lm.event_off_blocked}</span>
+      <button type="button" class="event-enable" title={fmt(lm.event_enable_title, { event })} onclick={() => enableEvent(event)}>{fmt(lm.event_enable, { event })}</button>
+    </p>
+  {/if}
+{/snippet}
+
 {#if permission === false}
   <p class="permission-warning" role="alert">{lm.permission_denied}</p>
 {/if}
@@ -342,13 +383,15 @@
   <OverrideField label="sound" help={HELP.sound} state={scState("sound")} inheritedDisplay={scHint("sound")} onstate={(s) => setScState("sound", s)}>
     <BooleanField label="" value={scBool("sound")} onchange={(v) => setSc("sound", v)} />
   </OverrideField>
-  <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} customSeed={effectiveList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} resetKey={`${prof}:${reloadRev}:notifications:on`} onchange={(s, l) => setOvList("on", s, l)} />
+  <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} customSeed={effectiveList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} resetKey={`${prof}:${reloadRev}:${onRev}:notifications:on`} onchange={(s, l) => setOvList("on", s, l)} />
   <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} customSeed={effectiveList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} resetKey={`${prof}:${reloadRev}:notifications:backends`} onchange={(s, l) => setOvList("backends", s, l)} />
   <FieldGroup title={lm.group_sounds}>
     <p class="hint">{lm.sounds_hint_overlay}</p>
+    {@render eventOffWarning("blocked")}
     <OverrideField label="sounds_blocked" help={HELP.sounds_blocked} state={soState("blocked")} inheritedDisplay={soInheritedDisplay("blocked")} onstate={(s) => setSoState("blocked", s)}>
       <SoundField label="" value={soValue("blocked")} options={soundNames} defaultLabel={lm.sound_inherit} testLabel={lm.test_sound} onchange={(v) => setSo("blocked", v)} ontest={() => void testSound("blocked", soValue("blocked") || soInheritedDisplay("blocked"))} />
     </OverrideField>
+    {@render eventOffWarning("done")}
     <OverrideField label="sounds_done" help={HELP.sounds_done} state={soState("done")} inheritedDisplay={soInheritedDisplay("done")} onstate={(s) => setSoState("done", s)}>
       <SoundField label="" value={soValue("done")} options={soundNames} defaultLabel={lm.sound_inherit} testLabel={lm.test_sound} onchange={(v) => setSo("done", v)} ontest={() => void testSound("done", soValue("done") || soInheritedDisplay("done"))} />
     </OverrideField>
@@ -381,11 +424,13 @@
 {:else}
   <BooleanField label="enabled" help={HELP.enabled} value={enabled} onchange={(v) => set("enabled", v)} />
   <BooleanField label="sound" help={HELP.sound} value={sound} onchange={(v) => set("sound", v)} />
-  <TriStateListField label="on" help={HELP.on} state={onState} list={on} customSeed={NOTIF_LIST_DEFAULTS.on} defaultHint={NOTIF_LIST_DEFAULTS.on.join(" · ")} resetKey={`base:${reloadRev}:notifications:on`} onchange={(s, l) => setTri("on", s, l)} />
+  <TriStateListField label="on" help={HELP.on} state={onState} list={on} customSeed={NOTIF_LIST_DEFAULTS.on} defaultHint={NOTIF_LIST_DEFAULTS.on.join(" · ")} resetKey={`base:${reloadRev}:${onRev}:notifications:on`} onchange={(s, l) => setTri("on", s, l)} />
   <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} resetKey={`base:${reloadRev}:notifications:backends`} onchange={(s, l) => setTri("backends", s, l)} />
   <FieldGroup title={lm.group_sounds}>
     <p class="hint">{lm.sounds_hint}</p>
+    {@render eventOffWarning("blocked")}
     <SoundField label="sounds_blocked" help={HELP.sounds_blocked} value={sounds.blocked} options={soundNames} placeholder={SOUNDS_DEFAULTS.blocked} defaultLabel={fmt(lm.sound_default, { name: SOUNDS_DEFAULTS.blocked })} testLabel={lm.test_sound} onchange={(v) => setSounds("blocked", v)} ontest={() => void testSound("blocked", sounds.blocked)} />
+    {@render eventOffWarning("done")}
     <SoundField label="sounds_done" help={HELP.sounds_done} value={sounds.done} options={soundNames} placeholder={SOUNDS_DEFAULTS.done} defaultLabel={fmt(lm.sound_default, { name: SOUNDS_DEFAULTS.done })} testLabel={lm.test_sound} onchange={(v) => setSounds("done", v)} ontest={() => void testSound("done", sounds.done)} />
   </FieldGroup>
   <FieldGroup title={lm.group_telegram}>
@@ -400,6 +445,31 @@
 
 <style>
   .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
+  .event-off {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s2);
+    margin: 0 0 var(--s2);
+    padding: var(--s2) var(--s3);
+    border: 1px solid color-mix(in srgb, var(--st-blocked) 45%, var(--line));
+    border-radius: var(--r-control);
+    background: color-mix(in srgb, var(--st-blocked) 12%, var(--canvas));
+    color: var(--text);
+    font: var(--t-help);
+  }
+  .event-off span { flex: 1 1 16em; }
+  .event-enable {
+    flex: none;
+    min-height: 28px;
+    padding: 0 var(--s3);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-control);
+    background: var(--panel-raised);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .event-enable:hover { background: var(--key); }
   .permission-warning {
     margin: 0 0 var(--s3);
     padding: var(--s2) var(--s3);

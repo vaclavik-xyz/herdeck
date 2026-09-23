@@ -18,6 +18,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without a usable icon get a coloured letter badge. Editable in the desktop
   settings (View).
 
+### Changed
+- Notifications: `[notifications].on` now defaults to `["blocked", "done"]`
+  (was `["blocked"]`), so a configured done sound actually plays. An explicit
+  `on = ["blocked"]` still turns done alerts off; the settings editor now warns
+  next to a sound whose event is not in `on` and offers to add it.
+
 ### Fixed
 - Notifications: localized titles (`claude · needs input`, `claude · done`);
   per-agent cooldown so flapping agents stop spamming, and no **done** alert
