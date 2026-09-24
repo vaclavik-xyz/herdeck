@@ -6,6 +6,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- The bridge can poll provider usage itself: `herdeck-service install bridge
+  --usage` (or `HERDECK_BRIDGE_USAGE=1`, settings from the `[usage]` table of
+  `HERDECK_USAGE_CONFIG`) runs the usage poller on the agents' Mac and pushes
+  `usage` frames (capability `usage`) to every runtime on connect and on
+  change. Thin-client decks no longer need SSH wrapper scripts for
+  `codex_path` / `codexbar_path`.
+- `[usage].source` (`auto` default, `local`, `bridge`; editor: Usage →
+  `source`): `auto` prefers a connected bridge that offers usage and falls
+  back to the local poller (also for older bridges). `providers` / `paid_only`
+  are applied by the runtime to bridge data too, alerts and the pace hint work
+  from either input, and several bridges merge per provider in config order.
+  `/health` reports the active input under `usage`.
+
 ## [0.10.2] - 2026-09-24
 
 ### Changed

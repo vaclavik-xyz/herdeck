@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -645,4 +646,142 @@ def poller_from_config(usage_config, on_alert=None) -> UsagePoller | None:
         alert_at=usage_config.alert_at,
         alert_reset=usage_config.alert_reset,
         on_alert=on_alert,
+    )
+
+
+# --- bridge usage frames ------------------------------------------------------
+#
+# A bridge on the agents' Mac (where Codex/Claude are logged in) can run this
+# poller itself and push its snapshot to every runtime as a ``usage`` frame
+# (capability ``usage``). The frame carries the same ProviderUsage model the
+# panel renders, UNFILTERED by paid_only: each runtime applies its own
+# ``[usage].providers`` / ``paid_only`` (usage_hub.py), so one bridge serves
+# runtimes with different settings. ``full_early_s`` is the bridge's pace
+# projection (its poller sees every poll; a runtime only sees changes).
+
+USAGE_CAPABILITY = "usage"
+# Defensive caps for decoding a frame: a malformed frame must never grow
+# runtime state or reach the panel as garbage.
+_WIRE_MAX_PROVIDERS = 16
+_WIRE_MAX_WINDOWS = 6
+_WIRE_TEXT_MAX = 64
+_WIRE_PROVIDER_RE = re.compile(r"[A-Za-z0-9_-]{1,32}")
+_SUBSCRIPTIONS = {"paid", "free", "unknown"}
+# Providers the bridge polls when its usage table names none.
+DEFAULT_BRIDGE_PROVIDERS = ("codex", "claude")
+
+
+def usage_to_wire(data: list[ProviderUsage]) -> list[dict]:
+    """ProviderUsage list -> the JSON-able ``providers`` payload of a frame."""
+    return [
+        {
+            "provider": usage.provider,
+            "subscription": usage.subscription,
+            "plan": usage.plan,
+            "windows": [
+                {
+                    "label": window.label,
+                    "used_percent": window.used_percent,
+                    "resets_at": window.resets_at,
+                    "full_early_s": window.full_early_s,
+                }
+                for window in usage.windows
+            ],
+        }
+        for usage in data
+    ]
+
+
+def _wire_text(value, default: str | None) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()[:_WIRE_TEXT_MAX]
+    return default
+
+
+def _window_from_wire(raw) -> UsageWindow | None:
+    if not isinstance(raw, dict):
+        return None
+    used = raw.get("used_percent")
+    if type(used) is not int:
+        return None
+    early = raw.get("full_early_s")
+    return UsageWindow(
+        label=_wire_text(raw.get("label"), "?") or "?",
+        used_percent=max(0, min(100, used)),
+        resets_at=_iso_reset(raw.get("resets_at"), allow_epoch=False),
+        full_early_s=early if type(early) is int and early > 0 else None,
+    )
+
+
+def usage_from_wire(raw) -> list[ProviderUsage]:
+    """Validate a usage frame's ``providers`` payload. Malformed entries are
+    dropped (never coerced into panel text); a repeated provider keeps its
+    first entry."""
+    if not isinstance(raw, list):
+        return []
+    out: list[ProviderUsage] = []
+    seen: set[str] = set()
+    for entry in raw[:_WIRE_MAX_PROVIDERS]:
+        if not isinstance(entry, dict):
+            continue
+        provider = entry.get("provider")
+        if not isinstance(provider, str) or not _WIRE_PROVIDER_RE.fullmatch(provider):
+            continue
+        raw_windows = entry.get("windows")
+        if provider in seen or not isinstance(raw_windows, list):
+            continue
+        windows = [
+            window
+            for window in (_window_from_wire(item) for item in raw_windows[:_WIRE_MAX_WINDOWS])
+            if window is not None
+        ]
+        if not windows:
+            continue
+        subscription = entry.get("subscription")
+        if subscription not in _SUBSCRIPTIONS:
+            subscription = "unknown"
+        seen.add(provider)
+        plan = _wire_text(entry.get("plan"), None)
+        out.append(ProviderUsage(provider, windows, subscription, plan))
+    return out
+
+
+def bridge_usage_enabled(getenv=os.environ.get) -> bool:
+    """``HERDECK_BRIDGE_USAGE=1`` (alias ``HERDECK_USAGE=1``) turns the
+    bridge's usage poller on."""
+    for name in ("HERDECK_BRIDGE_USAGE", "HERDECK_USAGE"):
+        if (getenv(name) or "").strip().lower() in ("1", "true", "yes", "on"):
+            return True
+    return False
+
+
+def bridge_usage_config(getenv=os.environ.get):
+    """The bridge poller's settings: the ``[usage]`` table of the TOML file at
+    ``HERDECK_USAGE_CONFIG`` (e.g. this host's herdeck config.toml, validated
+    like any config), else the defaults. Only the poll side is used
+    (providers, refresh_secs, codex_path, claude_cache_path, codexbar_path);
+    paid_only and alerts belong to each runtime, so they are cleared here.
+    No providers named -> codex + claude. Raises SystemExit on a bad file."""
+    import tomllib
+    from dataclasses import replace
+
+    from .config import ConfigError, UsageConfig
+    from .settings import _usage_config
+
+    path = getenv("HERDECK_USAGE_CONFIG")
+    if path:
+        try:
+            raw = tomllib.loads(Path(os.path.expanduser(path)).read_text(encoding="utf-8"))
+            table = raw.get("usage")
+            cfg = _usage_config(table if isinstance(table, dict) else None)
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ConfigError) as exc:
+            raise SystemExit(f"HERDECK_USAGE_CONFIG ({path}): {exc}") from None
+    else:
+        cfg = UsageConfig()
+    return replace(
+        cfg,
+        providers=list(cfg.providers) or list(DEFAULT_BRIDGE_PROVIDERS),
+        paid_only=False,
+        alert_at=[],
+        alert_reset=False,
     )

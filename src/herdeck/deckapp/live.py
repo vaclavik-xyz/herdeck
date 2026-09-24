@@ -238,6 +238,12 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StateSource):
         self._deck_lock = None
         self._refresh_locked_cb = None
         self._runners: dict[str, object] = {}
+        # Bridge usage reports per server (offered, last providers) and the
+        # DeckApp's usage hub they go to; buffered so a hub wired after the
+        # connectors started (or rebuilt by a config swap) gets a replay.
+        self._usage_lock = threading.Lock()
+        self._bridge_usage: dict[str, tuple[bool, list | None]] = {}
+        self._usage_sink = None
         self._card_init()  # desktop agent card (agent_card.AgentCardMixin)
         self._bridge_update_init()  # bridge self-update (bridge_update.BridgeUpdateMixin)
 
@@ -1151,6 +1157,34 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StateSource):
 
         self._apply(mutate)
 
+    def set_usage_sink(self, sink) -> None:
+        """``sink(server_id, offered, providers)`` receives every bridge usage
+        report (usage_hub.UsageHub.bridge_update); the current state of each
+        server is replayed at once. None detaches (an outgoing source)."""
+        # Sink calls happen under _usage_lock so a replay can never overtake
+        # a newer live report (lock order: _usage_lock -> the deck lock).
+        with self._usage_lock:
+            self._usage_sink = sink
+            if sink is None:
+                return
+            for server_id, (offered, providers) in self._bridge_usage.items():
+                sink(server_id, offered, providers)
+
+    def _on_usage(self, server_id: str, offered: bool, providers: list | None) -> None:
+        """Connector callback (runner thread): a snapshot's ``usage``
+        capability, a usage frame, or a disconnect (offered=False)."""
+        with self._usage_lock:
+            _prev_offered, prev = self._bridge_usage.get(server_id, (False, None))
+            if not offered:
+                prev = None
+            self._bridge_usage[server_id] = (
+                offered,
+                providers if providers is not None else prev,
+            )
+            sink = self._usage_sink
+            if sink is not None:
+                sink(server_id, offered, providers)
+
     def _on_project_icon(self, server_id: str, icon) -> None:
         """Connector callback (runner thread): store the favicon; when it is new,
         re-render under the deck lock so waiting tiles pick it up."""
@@ -1405,6 +1439,7 @@ def build_live_source(
             on_progress=lambda req, stage, message, sid=selected.id: source._on_progress(
                 sid, req, stage, message
             ),
+            on_usage=source._on_usage,
         )
         runner = runner_factory(connector)
         source.attach_runner(runner, selected.id)

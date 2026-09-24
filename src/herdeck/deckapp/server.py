@@ -229,6 +229,10 @@ class DeckApp:
             )
             self._ticker_thread.start()
 
+        # Bridge usage frames (usage_hub.py) may repaint from here on.
+        self._usage_wired = True
+        self._wire_usage(self._source)
+
     @property
     def token(self) -> str:
         return self._token
@@ -254,12 +258,51 @@ class DeckApp:
         return self._version
 
     def _build_usage_poller(self, usage_cfg):
-        from ..usage import poller_from_config
+        """The usage input (usage_hub.UsageHub: bridge frames or the local
+        poller per [usage].source); None when [usage] names no providers."""
+        from .. import usage as usage_mod
+        from ..usage_hub import UsageHub
 
-        poller = poller_from_config(usage_cfg, on_alert=self._deliver_usage_alerts)
-        if poller is not None:
-            poller.start()
-        return poller
+        if usage_cfg is None or not usage_cfg.providers:
+            return None
+        return UsageHub(
+            usage_cfg,
+            # Looked up at call time (tests patch usage.poller_from_config).
+            local_factory=lambda: usage_mod.poller_from_config(
+                usage_cfg, on_alert=self._deliver_usage_alerts
+            ),
+            on_alert=self._deliver_usage_alerts,
+            on_change=self._on_usage_changed,
+            server_ids=self._usage_server_ids(self._source),
+        )
+
+    @staticmethod
+    def _usage_server_ids(source) -> list[str]:
+        """Servers that may offer usage, in config order. T3 servers never
+        do, so [usage].source = "auto" must not wait for them."""
+        ids = getattr(source, "server_ids", None)
+        if not isinstance(ids, list):
+            return []
+        servers = getattr(getattr(source, "config", None), "servers", None) or []
+        t3 = {server.id for server in servers if getattr(server, "backend", "herdr") == "t3"}
+        return [sid for sid in ids if sid not in t3]
+
+    def _on_usage_changed(self) -> None:
+        """The hub switched input or bridge numbers changed: repaint now
+        instead of waiting for the next tick (never called under a hub lock)."""
+        if getattr(self, "_usage_wired", False):
+            self.refresh()
+
+    def _wire_usage(self, source) -> None:
+        """Route ``source``'s bridge usage reports (LiveSource) into the hub.
+        Call WITHOUT self._lock: the replay may repaint."""
+        hub = self._usage_poller
+        bridge_update = getattr(hub, "bridge_update", None)
+        if hub is not None and hasattr(hub, "set_servers"):
+            hub.set_servers(self._usage_server_ids(source))
+        setter = getattr(source, "set_usage_sink", None)
+        if callable(setter):
+            setter(bridge_update if callable(bridge_update) else None)
 
     def _deliver_usage_alerts(self, alerts) -> None:
         """Usage-limit alerts from the poller thread ride the CURRENT source's
@@ -826,6 +869,9 @@ class DeckApp:
         fanned out a full frame so physical sinks repaint immediately on swap."""
         slots, orch, clk, icons, icons_dir, rs, tiles, panel_png, sections, labels = prepared
         usage_changed = self._adopt_usage_config(new_source.config)
+        old_sink = getattr(self._source, "set_usage_sink", None)
+        if callable(old_sink):
+            old_sink(None)  # the outgoing connectors must not report into the hub
         # A swapped-in live source (profile switch, config reload, connect from
         # the demo) must keep posting through the shell; without this its gate
         # stayed at the "no shell" default and every alert fell back to osascript.
@@ -860,6 +906,7 @@ class DeckApp:
                 # (prepare must not mutate live state); re-render once so a
                 # disabled/changed [usage] doesn't linger on the panel.
                 self._refresh_locked()
+        self._wire_usage(new_source)
         try:
             old.close()
         except Exception:
@@ -1068,6 +1115,9 @@ class DeckApp:
         server_health = getattr(self._source, "server_health", None)
         if callable(server_health):
             health["servers"] = server_health()
+        usage_health = getattr(getattr(self, "_usage_poller", None), "health", None)
+        if callable(usage_health):
+            health["usage"] = usage_health()
         stats = getattr(self._source, "notification_stats", None)
         if callable(stats):
             health["notifications"] = stats()

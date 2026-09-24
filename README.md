@@ -859,9 +859,43 @@ detected from the clock passing the known reset time, so it arrives within one
 startup is a silent baseline. Both the desktop runtime and `herdeck` /
 `herdeck-web` send them; the demo deck does not.
 
-**Thin-client deck.** When the deck machine only displays the deck and the AI
-logins live on another Mac, point `codex_path` and `codexbar_path` at small
-wrapper scripts that run the real tools there over SSH (key-based, no prompt):
+**Usage from the bridge (thin-client decks).** When the deck machine only
+displays the deck and the AI logins live on the agents' Mac, let that Mac's
+bridge poll the limits and push them to every runtime:
+
+```bash
+# on the agents' Mac (the bridge host); --config is optional
+herdeck-service install bridge --bind 100.x.y.z --usage \
+  --config ~/.config/herdeck/config.toml
+```
+
+`--usage` sets `HERDECK_BRIDGE_USAGE=1` in the service unit (set it by hand
+for a bridge you start yourself). The bridge then runs the same poller (native
+`codex app-server`, the Claude status-line snapshot, the CodexBar fallback) on
+that host. Its settings come from the `[usage]` table of the TOML file in
+`HERDECK_USAGE_CONFIG` (what `--config` sets; only `providers`,
+`refresh_secs`, `codex_path`, `claude_cache_path` and `codexbar_path` are
+used), else the defaults with providers `codex` + `claude`. The unit also gets
+a Homebrew `PATH` (codex is a Node script); override it with
+`--env PATH=...`. The `herdeck-usage capture-claude` status-line hook belongs
+on the bridge host too, since that is where Claude Code runs.
+
+Each runtime chooses with `[usage].source`: `"auto"` (default) uses bridge data
+while a connected bridge offers it and otherwise its own poller; `"local"`
+always polls locally (the previous behaviour); `"bridge"` shows only bridge
+data and never polls locally. `providers` (which ones, in which order) and
+`paid_only` are still applied by each runtime, to bridge data as well; the
+bridge sends everything it has. Alerts (`alert_at`, `alert_reset`) and the pace
+hint work with either input. With several bridges offering usage, each provider
+comes from the first server in config order that has it. A runtime connected
+to an older bridge (no `usage` capability) falls back to its own poller. With
+the bridge doing the polling, the thin client's SSH wrappers below are no
+longer needed: remove `codex_path` / `codexbar_path` overrides that point at
+them and delete the scripts.
+
+**Thin client without bridge usage.** Without `--usage` on the bridge, point
+`codex_path` and `codexbar_path` at small wrapper scripts that run the real
+tools on the agents' Mac over SSH (key-based, no prompt):
 
 ```bash
 #!/bin/sh
