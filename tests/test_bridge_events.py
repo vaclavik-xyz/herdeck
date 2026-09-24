@@ -423,12 +423,12 @@ async def test_forced_act_and_skipped_answers_do_not_mark_the_episode():
     hub = hub_for(herdr)
     hub.observe(wire(herdr, StatusSinceTracker(clock=Clock())))
     await settle()
-    assert hub.begin_answer({"type": "act", "pane_id": "w1:p1", "guard": False}, "x") is None
-    assert hub.begin_answer({"type": "focus", "pane_id": "w1:p1"}, "x") is None
-    ticket = hub.begin_answer({"type": "send_text", "pane_id": "w1:p1"}, "x")
+    assert await hub.begin_answer({"type": "act", "pane_id": "w1:p1", "guard": False}, "x") is None
+    assert await hub.begin_answer({"type": "focus", "pane_id": "w1:p1"}, "x") is None
+    ticket = await hub.begin_answer({"type": "send_text", "pane_id": "w1:p1"}, "x")
     # a concurrent second answer naming the episode while the first is in flight
     claimed = {"type": "act", "pane_id": "w1:p1", "episode_id": ticket.episode.id}
-    assert hub.begin_answer(claimed, "y") == "stale"
+    assert await hub.begin_answer(claimed, "y") == "stale"
     hub.end_answer(ticket, sent=False)  # skipped by herdr: not answered
     assert not ticket.episode.answered
     assert [e["kind"] for e in hub.events()] == ["blocked"]
@@ -477,3 +477,112 @@ async def test_local_bridge_advertises_events_and_announces_a_blocked_pane():
             await btask
         server.close()
         await server.wait_closed()
+
+
+# --- multi-step prompts, answer pinning, poll caps, subscribe on failure -----
+
+Q2 = "Run tests?\n1. Yes\n2. No"
+
+
+async def _answered_q1(**kw):
+    herdr = StubHerdr(panes=[raw_pane()])
+    herdr.detection["w1:p1"] = PROMPT
+    hub = hub_for(herdr, **kw)
+    hub.observe(wire(herdr, StatusSinceTracker(clock=Clock())))
+    await settle()
+    ep = hub.open_episode("w1:p1")
+    msg = {"type": "act", "pane_id": "w1:p1", "episode_id": ep.id, "prompt_revision": ep.revision}
+    ticket = await hub.begin_answer(msg, "deck")
+    hub.end_answer(ticket, sent=True)
+    return herdr, hub, ep, msg
+
+
+async def test_second_question_of_one_episode_is_answerable_at_once():
+    # The client answers Q2 before the bridge re-announced it: it still names
+    # Q1's revision. The bridge re-reads, sees the prompt moved on, accepts.
+    herdr, hub, ep, q1 = await _answered_q1(answer_reread_delays=(60.0,))
+    herdr.detection["w1:p1"] = Q2
+    ticket = await hub.begin_answer(q1, "phone")
+    assert ticket not in (None, "stale")
+    hub.end_answer(ticket, sent=True)
+    assert ep.answered_revision == prompt_revision(Q2)
+    kinds = [e["kind"] for e in hub.events()]
+    assert kinds == ["blocked", "answered", "blocked", "answered"]
+    # the same Q2 answered once more: nothing changed, refused
+    assert await hub.begin_answer(q1, "phone") == "stale"
+    await hub.close()
+
+
+async def test_answer_rereads_promptly_and_announces_the_next_question():
+    herdr, hub, ep, _ = await _answered_q1(answer_reread_delays=(0.0, 0.0))
+    herdr.detection["w1:p1"] = Q2
+    await settle()
+    last = hub.events()[-1]
+    assert last["kind"] == "blocked" and last["prompt"] == Q2
+    await hub.close()
+
+
+async def test_answer_before_the_prompt_is_known_pins_its_revision():
+    gate = asyncio.Event()
+
+    class Slow(StubHerdr):
+        reads = 0
+
+        async def read_pane(self, pane_id, source):
+            self.reads += 1
+            if self.reads == 1:
+                await gate.wait()  # the first pre-read hangs
+            return PROMPT
+
+    herdr = Slow(panes=[raw_pane()])
+    hub = hub_for(herdr, prompt_wait_s=5.0)
+    hub.observe(wire(herdr, StatusSinceTracker(clock=Clock())))
+    await settle()
+    ticket = await hub.begin_answer({"type": "send_text", "pane_id": "w1:p1"}, "old")
+    hub.end_answer(ticket, sent=True)
+    assert ticket.episode.answered_revision == prompt_revision(PROMPT)
+    gate.set()
+    await hub.close()
+
+
+async def test_prompt_polling_backs_off_and_stops_after_an_answer():
+    mono = Clock(0.0)
+    herdr, hub, ep, _ = await _answered_q1(monotonic=mono, answer_reread_delays=())
+    ep.answered_revision = None  # an unanswered episode first
+    for n in range(ev.PROMPT_BACKOFF_AFTER):
+        mono.now += ev.PROMPT_POLL_S
+        assert hub.poll_prompts() == 1, n
+        await settle()
+    mono.now += ev.PROMPT_POLL_S
+    assert hub.poll_prompts() == 0  # backed off
+    mono.now += ev.PROMPT_BACKOFF_S
+    assert hub.poll_prompts() == 1
+    await settle()
+    ep.answered_revision, ep.answered_at = ep.revision, mono.now
+    mono.now += ev.ANSWERED_POLL_FOR_S + ev.PROMPT_BACKOFF_S
+    assert hub.poll_prompts() == 0  # answered a minute ago: no more reads
+    await hub.close()
+
+
+async def test_subscription_survives_a_failing_list_snapshot():
+    class Flaky(StubHerdr):
+        fail = False
+
+        async def snapshot(self):
+            if self.fail:
+                raise RuntimeError("herdr busy")
+            return await super().snapshot()
+
+    herdr = Flaky(panes=[raw_pane()])
+    herdr.detection["w1:p1"] = PROMPT
+    hub = hub_for(herdr)
+    hub.observe(wire(herdr, StatusSinceTracker(clock=Clock())))
+    await settle()
+    async with _bridge(herdr, hub) as url:
+        async with websockets.connect(url, additional_headers={"Authorization": "Bearer tok"}) as ws:
+            await ws.recv()
+            herdr.fail = True
+            await ws.send(json.dumps({"type": "list", "events": {"after": None}}))
+            frames = await _until(ws, lambda f: f["type"] == "event_sync")
+            assert [f["type"] for f in frames] == ["error", "event", "event_sync"]
+    await hub.close()

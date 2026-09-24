@@ -2050,17 +2050,22 @@ async def _serve_connection(
                 try:
                     panes = await _wired_snapshot(herdr, icons, status_since, subagents, events)
                 except Exception as exc:
+                    # A transient herdr error must not cost the event
+                    # subscription below: the broadcast stream still serves
+                    # snapshots, and the runtime would otherwise wait for an
+                    # event_sync that never comes.
                     await send(encode({"type": "error", "message": str(exc)}))
-                    continue
-                if not await send(
-                    encode(_snapshot_message(server_id, panes, extra_capabilities))
-                ):
-                    continue
-                sent = icon_subs.get(ws) if icon_subs is not None else None
-                if sent is not None and icons is not None:
-                    for frame in _project_icon_frames(server_id, panes, icons, sent):
-                        if not await send(frame):
-                            break
+                    panes = None
+                if panes is not None:
+                    if not await send(
+                        encode(_snapshot_message(server_id, panes, extra_capabilities))
+                    ):
+                        continue
+                    sent = icon_subs.get(ws) if icon_subs is not None else None
+                    if sent is not None and icons is not None:
+                        for frame in _project_icon_frames(server_id, panes, icons, sent):
+                            if not await send(frame):
+                                break
                 request = msg.get("events")
                 if events is not None and isinstance(request, dict):
                     # Opt-in (an older runtime would choke on the frames):
@@ -2069,7 +2074,7 @@ async def _serve_connection(
                     await events.subscribe(ws, send_lock, request)
                 continue
             ticket = (
-                events.begin_answer(msg, label)
+                await events.begin_answer(msg, label)
                 if events is not None and isinstance(msg, dict)
                 else None
             )

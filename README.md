@@ -448,8 +448,12 @@ Telegram) agrees, and a runtime that was asleep catches up. Details live in
   broadcasts `answered`. An answer that names `episode_id` (and optionally the
   `prompt_revision` it answers) is refused with `{"skipped": true, "message":
   "stale"}` when that episode is over, is being answered right now, or was
-  already answered, unless the prompt has changed since. Answers without
-  `episode_id` (older runtimes) are never refused.
+  already answered, unless the prompt has changed since. Before refusing, the
+  bridge reads the prompt again, and after each answer it checks for the next
+  question within a few seconds, so the second question of a multi-step
+  prompt can be answered right away. Answers without `episode_id` (older
+  runtimes) are never refused. Prompt polling backs off to 30 s after five
+  unchanged reads and stops a minute after an answer.
 
 ### Status history and statistics
 
