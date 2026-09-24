@@ -336,6 +336,35 @@ describe("MaintenanceSection", () => {
     expect(note.textContent).toContain("jen pro čtení");
   });
 
+  it("offers the OpenCode plugin only when the bridge reports it, with a plugin confirmation", async () => {
+    let t = await render(fake(withHooks(hooksSummary())).invoke);
+    expect(t.querySelector('[data-hooks="m4"] [data-agent="opencode"]')).toBeNull();
+    cleanup?.();
+    const plugin = "/Users/me/.config/opencode/plugins/herdeck-subagents.js";
+    const posted: unknown[] = [];
+    const f = fake(withHooks({ ...hooksSummary(), opencode: { installed: false, file: plugin, error: null } }), {
+      "POST /maintenance/servers/m4/hooks": (args) => {
+        posted.push(args?.body);
+        return { status: 200, body: { ok: true, code: "ok", message: "", agents: null } };
+      },
+    });
+    t = await render(f.invoke);
+    expect(hookRow(t, "opencode").dataset.state).toBe("not_installed");
+    expect(button(t, "hooks-opencode").getAttribute("title")).toBe("Install herdeck's subagent hooks for OpenCode on m4");
+    button(t, "hooks-opencode").click();
+    await settle();
+    const confirm = t.querySelector('[data-confirm="hooks-install"]')!;
+    expect(confirm.textContent).toContain(`subagent plugin on m4? herdeck writes ${plugin}`);
+    button(t, "hooks-confirm").click();
+    await settle();
+    expect(posted).toEqual([{ action: "install", agents: ["opencode"] }]);
+    cleanup?.();
+    t = await render(fake(withHooks({ ...hooksSummary(), opencode: { installed: true, file: plugin, error: null } })).invoke, "cs");
+    button(t, "hooks-opencode").click();
+    await settle();
+    expect(t.querySelector('[data-confirm="hooks-uninstall"]')?.textContent).toContain("Odebrat plugin pro subagenty OpenCode");
+  });
+
   it("explains a bridge that does not report hooks and hides the row while disconnected", async () => {
     let t = await render(fake(withHooks(null)).invoke);
     expect(t.querySelector('[data-hooks="m4"] [data-hooks-unavailable]')?.textContent).toContain("Subagent tracking");

@@ -313,15 +313,15 @@ def _check_configured_notifications(config_path: str | None) -> Check:
 
 def check_subagent_hooks(status: Callable[[str], dict]) -> Check:
     """Whether ``herdeck-subagent-hook`` is wired into Claude Code and Codex on
-    this machine (hooks_install.py). Not installed is fine (optional); a hook
-    file that cannot be read, a partial install, or Codex hooks without
-    ``[features] hooks`` are not."""
-    from .hooks_install import AGENTS
+    this machine (hooks_install.py), and the OpenCode plugin. Not installed is
+    fine (optional); a hook file that cannot be read, a partial install, or
+    Codex hooks without ``[features] hooks`` are not."""
+    from .hooks_install import AGENT_NAMES, AGENTS
 
     ok = True
     parts = []
     for agent in AGENTS:
-        name = "Claude Code" if agent == "claude" else "Codex"
+        name = AGENT_NAMES[agent]
         info = status(agent)
         if info.get("error"):
             ok = False

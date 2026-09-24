@@ -1,6 +1,6 @@
 """Install / remove / inspect the ``herdeck-subagent-hook`` agent hooks.
 
-``herdeck-service hooks install|uninstall|status [--agents claude,codex]``
+``herdeck-service hooks install|uninstall|status [--agents claude,codex,opencode]``
 edits the hook files README "Subagent tracking" documents:
 
 * Claude Code: ``~/.claude/settings.json`` (``$CLAUDE_CONFIG_DIR/settings.json``
@@ -14,6 +14,14 @@ edits the hook files README "Subagent tracking" documents:
   trust new hooks (``/hooks`` in a session). Codex keeps that trust record
   itself, so ``needs_trust`` is simply true whenever our Codex hooks are
   installed: the UI reminds, it cannot verify.
+* OpenCode: the plugin file ``herdeck-subagents.js`` (shipped in
+  ``assets/opencode``, the hook's absolute path filled in) in
+  ``~/.config/opencode/plugins/`` (``$OPENCODE_CONFIG_DIR/plugins/`` when set,
+  else ``$XDG_CONFIG_HOME/opencode/plugins/``). Only that one file is written
+  or removed, and only when it carries herdeck's ``HERDECK_INTEGRATION=subagents``
+  marker (a foreign file of that name is reported, never replaced); a changed
+  file is backed up first like the JSON files. Without ``--agents``,
+  ``install`` includes OpenCode only when its config directory exists.
 
 Our entries are recognised by their command's program (first shell word)
 being named ``herdeck-subagent-hook``; every other hook (herdr, herdwatch, moshi, the
@@ -45,7 +53,14 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 HOOK_NAME = "herdeck-subagent-hook"
-AGENTS = ("claude", "codex")
+AGENTS = ("claude", "codex", "opencode")
+# The agents whose hooks live in a JSON hook file (OpenCode takes a plugin file).
+JSON_AGENTS = ("claude", "codex")
+OPENCODE_PLUGIN = "herdeck-subagents.js"
+OPENCODE_MARKER = "HERDECK_INTEGRATION=subagents"
+_OPENCODE_HOOK_PLACEHOLDER = '"__HERDECK_SUBAGENT_HOOK__"'
+# A plugin file bigger than this is not ours (ours is ~5 KiB).
+_OPENCODE_MAX_BYTES = 256 * 1024
 ACTIONS = ("status", "install", "uninstall")
 CAPABILITY = "hooks"
 HOOK_TIMEOUT_S = 5
@@ -81,7 +96,11 @@ class HookFileError(Exception):
 # relies on one of these must set it in the bridge service's env too
 # (``herdeck-service install bridge --env CLAUDE_CONFIG_DIR=...``); status
 # reports which directory was used and where it came from.
-CONFIG_DIR_ENV = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}
+CONFIG_DIR_ENV = {
+    "claude": "CLAUDE_CONFIG_DIR",
+    "codex": "CODEX_HOME",
+    "opencode": "OPENCODE_CONFIG_DIR",
+}
 
 
 def config_dir(agent: str, home: Path, env: Mapping[str, str] | None = None) -> tuple[Path, str]:
@@ -90,12 +109,31 @@ def config_dir(agent: str, home: Path, env: Mapping[str, str] | None = None) -> 
     base = env.get(CONFIG_DIR_ENV[agent])
     if base:
         return Path(base), CONFIG_DIR_ENV[agent]
+    if agent == "opencode":
+        xdg = env.get("XDG_CONFIG_HOME")
+        if xdg:
+            return Path(xdg) / "opencode", "XDG_CONFIG_HOME"
+        return home / ".config" / "opencode", "home"
     return home / (".claude" if agent == "claude" else ".codex"), "home"
 
 
 def hook_file(agent: str, home: Path, env: Mapping[str, str] | None = None) -> Path:
     directory, _ = config_dir(agent, home, env)
+    if agent == "opencode":
+        return directory / "plugins" / OPENCODE_PLUGIN
     return directory / ("settings.json" if agent == "claude" else "hooks.json")
+
+
+def default_agents(action: str, home: Path, env: Mapping[str, str] | None = None) -> list[str]:
+    """The agents an action covers when none are named: every agent, except
+    that ``install`` adds the OpenCode plugin only where OpenCode is set up
+    (its config directory exists)."""
+    if action != "install":
+        return list(AGENTS)
+    agents = list(JSON_AGENTS)
+    if config_dir("opencode", home, env)[0].is_dir():
+        agents.append("opencode")
+    return agents
 
 
 def codex_config_file(home: Path, env: Mapping[str, str] | None = None) -> Path:
@@ -208,10 +246,115 @@ def codex_features_hooks(home: Path, env: Mapping[str, str] | None = None) -> bo
     return isinstance(features, dict) and features.get("hooks") is True
 
 
+# --- OpenCode plugin file -------------------------------------------------------
+
+
+def opencode_plugin_source(hook_path: str) -> str:
+    """The shipped plugin with ``hook_path`` filled in."""
+    from importlib import resources
+
+    template = (
+        resources.files("herdeck").joinpath("assets", "opencode", OPENCODE_PLUGIN).read_text("utf-8")
+    )
+    if template.count(_OPENCODE_HOOK_PLACEHOLDER) != 1:  # pragma: no cover - packaging bug
+        raise HookFileError(f"the bundled {OPENCODE_PLUGIN} has no hook placeholder")
+    return template.replace(_OPENCODE_HOOK_PLACEHOLDER, json.dumps(hook_path))
+
+
+def _load_plugin(path: Path) -> str | None:
+    """Our plugin file's text; None when absent. A file of that name that is
+    not ours (no marker), too big or unreadable is an error."""
+    try:
+        if path.stat().st_size > _OPENCODE_MAX_BYTES:
+            raise HookFileError(f"{path} is not herdeck's plugin (too big); not changed")
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except UnicodeDecodeError as exc:
+        raise HookFileError(f"{path} is not herdeck's plugin; not changed") from exc
+    except OSError as exc:
+        raise HookFileError(f"cannot read {path}: {exc.strerror or exc}") from exc
+    if OPENCODE_MARKER not in text:
+        raise HookFileError(f"{path} exists and is not herdeck's plugin; not changed")
+    return text
+
+
+def _plugin_command(text: str | None) -> str | None:
+    """The hook path an installed plugin runs."""
+    for line in (text or "").splitlines():
+        if line.startswith("const HOOK = "):
+            try:
+                value = json.loads(line[len("const HOOK = "):].rstrip().rstrip(";"))
+            except ValueError:
+                return None
+            return value if isinstance(value, str) else None
+    return None
+
+
+def _opencode_status(out: dict, path: Path) -> None:
+    out["missing_events"] = ["plugin"]
+    try:
+        text = _load_plugin(path)
+    except HookFileError as exc:
+        out["error"] = str(exc)
+        return
+    if text is not None:
+        out.update(installed=True, events=["plugin"], missing_events=[])
+        out["command"] = _plugin_command(text)
+
+
+def _write_text(path: Path, text: str | None, original: str | None) -> str | None:
+    """Back up the current plugin (when there is one), then atomically write
+    ``text`` (or remove the file for None). Returns the backup path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path = path.resolve()
+    try:
+        current = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        current = None
+    if current != original:
+        raise HookFileError(f"{path} changed while it was being edited; try again")
+    backup = None
+    mode = 0o644
+    if original is not None:
+        mode = path.stat().st_mode & 0o777
+        backup_file = _backup_path(path)
+        fd = os.open(backup_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(original)
+        backup = str(backup_file)
+    if text is None:
+        path.unlink(missing_ok=True)
+        return backup
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return backup
+
+
+def _apply_opencode(action: str, path: Path, hook_path: str | None) -> tuple[bool, str | None]:
+    """Install/uninstall the plugin file: (changed, backup)."""
+    current = _load_plugin(path)
+    if action == "install":
+        wanted = opencode_plugin_source(hook_path or "")
+        if current == wanted:
+            return False, None
+        return True, _write_text(path, wanted, current)
+    if current is None:
+        return False, None
+    return True, _write_text(path, None, current)
+
+
 def agent_status(agent: str, home: Path, env: Mapping[str, str] | None = None) -> dict:
     path = hook_file(agent, home, env)
     directory, source = config_dir(agent, home, env)
-    wanted = [event for event, _ in EVENTS[agent]]
+    wanted = [event for event, _ in EVENTS.get(agent, ())]
     out: dict = {
         "agent": agent,
         "file": str(path),
@@ -224,6 +367,9 @@ def agent_status(agent: str, home: Path, env: Mapping[str, str] | None = None) -
         "command": None,
         "error": None,
     }
+    if agent == "opencode":
+        _opencode_status(out, path)
+        return out
     try:
         doc, _ = _load(path)
     except HookFileError as exc:
@@ -337,9 +483,22 @@ def _write(path: Path, doc: dict, original: bytes | None) -> str | None:
     return backup
 
 
+def _apply_json(action: str, agent: str, path: Path, hook_path: str | None) -> tuple[bool, str | None]:
+    """Install/uninstall our entries in a JSON hook file: (changed, backup)."""
+    doc, raw = _load(path)
+    base = doc if doc is not None else {}
+    if action == "install":
+        new = _installed(base, agent, hook_command(hook_path or "", agent))
+    else:
+        new = _uninstalled(base)
+    if new != base and (doc is not None or action == "install"):
+        return True, _write(path, new, raw)
+    return False, None
+
+
 def apply(
     action: str,
-    agents: Iterable[str] = AGENTS,
+    agents: Iterable[str] | None = None,
     *,
     home: Path | None = None,
     hook_path: str | None = None,
@@ -350,11 +509,11 @@ def apply(
     any agent reports an ``error``."""
     if action not in ACTIONS:
         raise ValueError(f"unknown action: {action}")
-    agents = list(dict.fromkeys(agents))
+    home = Path.home() if home is None else home
+    agents = default_agents(action, home, env) if agents is None else list(dict.fromkeys(agents))
     for agent in agents:
         if agent not in AGENTS:
             raise ValueError(f"unknown agent: {agent}")
-    home = Path.home() if home is None else home
     resolved = resolve_hook_path(hook_path) if action == "install" else None
     results: dict[str, dict] = {}
     with _WRITE_LOCK:
@@ -368,15 +527,10 @@ def apply(
                             f"{HOOK_NAME} not found (next to {sys.executable} or on PATH); "
                             "pass --hook-path"
                         )
-                    doc, raw = _load(path)
-                    base = doc if doc is not None else {}
-                    if action == "install":
-                        new = _installed(base, agent, hook_command(resolved, agent))
+                    if agent == "opencode":
+                        changed, backup = _apply_opencode(action, path, resolved)
                     else:
-                        new = _uninstalled(base)
-                    if new != base and (doc is not None or action == "install"):
-                        backup = _write(path, new, raw)
-                        changed = True
+                        changed, backup = _apply_json(action, agent, path, resolved)
                 except (HookFileError, OSError) as exc:
                     error = str(exc) if isinstance(exc, HookFileError) else f"{path}: {exc}"
             status = agent_status(agent, home, env)
@@ -413,15 +567,19 @@ def summary(agents: Mapping[str, object]) -> dict:
 # --- bridge message -------------------------------------------------------------
 
 
+_INVALID: list[str] = []  # sentinel (compared by identity)
+
+
 def _parse_agents(raw: object) -> list[str] | None:
+    """A valid agent list, None (not given: ``default_agents``), or ``_INVALID``."""
     if raw is None:
-        return list(AGENTS)
+        return None
     if isinstance(raw, str):
         raw = [a.strip() for a in raw.split(",") if a.strip()]
     if not isinstance(raw, list) or not raw or not all(isinstance(a, str) for a in raw):
-        return None
+        return _INVALID
     if any(a not in AGENTS for a in raw):
-        return None
+        return _INVALID
     return list(dict.fromkeys(raw))
 
 
@@ -432,7 +590,7 @@ async def bridge_reply(msg: dict, *, timeout: float = BRIDGE_TIMEOUT_S, **kwargs
     req = req if isinstance(req, str) else ""
     action = msg.get("action", "status")
     agents = _parse_agents(msg.get("agents"))
-    if action not in ACTIONS or agents is None:
+    if action not in ACTIONS or agents is _INVALID:
         return {"type": "error", "req": req, "message": "hooks: invalid action or agents"}
     try:
         data = await asyncio.wait_for(asyncio.to_thread(apply, action, agents, **kwargs), timeout)
@@ -446,10 +604,13 @@ async def bridge_reply(msg: dict, *, timeout: float = BRIDGE_TIMEOUT_S, **kwargs
 # --- CLI (herdeck-service hooks ...) ---------------------------------------------
 
 
+AGENT_NAMES = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
+
+
 def _describe(result: dict) -> list[str]:
     lines = []
     for agent, r in result["agents"].items():
-        name = "Claude Code" if agent == "claude" else "Codex"
+        name = AGENT_NAMES[agent]
         if r["error"]:
             state = f"error: {r['error']}"
         elif r["installed"]:
@@ -481,7 +642,12 @@ def parser() -> argparse.ArgumentParser:
         description="Install, remove or inspect the herdeck-subagent-hook agent hooks.",
     )
     p.add_argument("action", choices=ACTIONS)
-    p.add_argument("--agents", default=",".join(AGENTS), help="comma list: claude,codex")
+    p.add_argument(
+        "--agents",
+        default=None,
+        help="comma list of claude,codex,opencode (default: all; install adds opencode "
+        "only when its config directory exists)",
+    )
     p.add_argument("--hook-path", default=None, help=f"path of {HOOK_NAME} (default: auto)")
     p.add_argument("--home", type=Path, default=None, help=argparse.SUPPRESS)
     p.add_argument("--json", action="store_true", help="print the result as JSON")
@@ -491,7 +657,7 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     agents = _parse_agents(args.agents)
-    if agents is None:
+    if agents is _INVALID:
         parser().error(f"--agents: choose from {', '.join(AGENTS)}")
     result = apply(args.action, agents, home=args.home, hook_path=args.hook_path)
     if args.json:

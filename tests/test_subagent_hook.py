@@ -645,3 +645,43 @@ def test_codex_parent_session_start_resets(env):
     fire(parent_start, codex_env, clock, rec)
     assert read_spool(env)["entries"] == []
     assert rec.calls[-1] == (PANE, "0/0")
+
+
+# --- transcript hints for the bridge's reconciler ----------------------------------
+
+
+def test_claude_entries_remember_their_transcripts(env):
+    clock, rec = Clock(), Recorder()
+    fire(claude_start("a1", transcript="/p/sess-1.jsonl"), env, clock, rec)
+    (entry,) = read_spool(env)["entries"]
+    assert entry["transcript"] == "/p/sess-1.jsonl" and entry["agent_transcript"] == ""
+    fire(claude_stop("a1"), env, clock, rec)
+    (entry,) = read_spool(env)["entries"]
+    assert entry["transcript"] == "/p/sess-1.jsonl"  # the first one stays
+    assert entry["agent_transcript"] == "/nowhere/sess-1/subagents/agent-a1.jsonl"
+
+
+def test_codex_entries_remember_the_sessions_tree(env):
+    fire(codex_start(), dict(env, CODEX_HOME="/srv/codex"), Clock(), Recorder())
+    (entry,) = read_spool(env)["entries"]
+    assert entry["sessions_dir"] == "/srv/codex/sessions" and entry["transcript"] == ""
+
+
+def test_codex_sessions_tree_comes_from_the_transcript_first():
+    payload = dict(codex_start(), transcript_path="/h/.codex/sessions/2026/09/24/rollout-x.jsonl")
+    assert hook.codex_sessions_dir(payload, {"CODEX_HOME": "/elsewhere"}) == "/h/.codex/sessions"
+
+
+@pytest.mark.parametrize("bad", ["relative/x.jsonl", "/a\nb.jsonl", "/" + "x" * 2000, 7, None])
+def test_unusable_transcript_paths_are_dropped(env, bad):
+    fire(claude_start("a1", transcript=bad), env, Clock(), Recorder())
+    assert read_spool(env)["entries"][0]["transcript"] == ""
+
+
+def test_transcript_hints_never_reach_the_wire(env):
+    from herdeck.subagent_spool import SubagentSpoolReader
+
+    fire(claude_start("a1", transcript="/p/sess-1.jsonl"), env, Clock(), Recorder())
+    reader = SubagentSpoolReader(env["HERDECK_SUBAGENT_SPOOL_DIR"], clock=lambda: 1_000_000_000)
+    (wire,) = reader.entries_for(PANE)
+    assert not set(hook.PATH_FIELDS) & set(wire)

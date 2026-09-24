@@ -24,6 +24,16 @@ Handled events (anything else is a no-op):
   heartbeat that keeps the entry from going stale.
 * ``SessionStart`` with source ``startup``/``clear`` (or a new session id):
   resets the spool.
+* OpenCode (``--provider opencode``): the ``herdeck-subagents.js`` plugin
+  (``assets/opencode``) reports its child sessions (the ones with a
+  ``parentID``) as ``session.created`` (start), ``session.status`` busy
+  (heartbeat), ``session.idle`` / ``session.deleted`` (stop) and
+  ``session.error`` (fail); see ``parse_opencode_event`` for the payload.
+
+Entries also remember where the provider's transcripts live (``transcript``,
+``agent_transcript``, ``sessions_dir``; absolute paths, never sent on the
+wire) so the bridge's reconciler (``subagent_reconcile``) can finish a
+subagent whose stop hook never arrived.
 
 Stale rule: a running entry without a heartbeat for 10 min is marked stale;
 stale entries are dropped 30 min after they were last seen. The spool keeps at
@@ -66,6 +76,10 @@ _AGENT_TOOLS = {"Agent", "Task"}
 _MAX_STDIN = 4 * 2**20
 _PANE_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _FIELD_MAX = {"id": 128, "type": 64, "description": 160, "model": 64, "provider": 16}
+PROVIDERS = ("claude", "codex", "opencode")
+# Transcript hints kept per entry for the bridge's reconciler (not on the wire).
+PATH_FIELDS = ("transcript", "agent_transcript", "sessions_dir")
+_PATH_MAX = 1024
 
 Reporter = Callable[[str, str, float], None]
 
@@ -101,6 +115,15 @@ def _clean_str(value: object, key: str) -> str:
     return value.strip()[: _FIELD_MAX[key]] if isinstance(value, str) else ""
 
 
+def _clean_path(value: object) -> str:
+    """An absolute, single-line path of sane length; "" for anything else."""
+    if not isinstance(value, str) or len(value) > _PATH_MAX or not os.path.isabs(value):
+        return ""
+    if any(ch in value for ch in "\x00\n\r"):
+        return ""
+    return value
+
+
 def _clean_int(value: object) -> int | None:
     return value if type(value) is int and value >= 0 else None
 
@@ -116,7 +139,7 @@ def _clean_entry(raw: object) -> dict | None:
     last_seen = _clean_int(raw.get("last_seen_ms"))
     if started is None or last_seen is None:
         return None
-    return {
+    entry = {
         "id": entry_id,
         "provider": _clean_str(raw.get("provider"), "provider"),
         "type": _clean_str(raw.get("type"), "type"),
@@ -128,6 +151,9 @@ def _clean_entry(raw: object) -> dict | None:
         "status": status,
         "last_seen_ms": last_seen,
     }
+    for key in PATH_FIELDS:
+        entry[key] = _clean_path(raw.get(key))
+    return entry
 
 
 def load_spool(path: str, pane_id: str) -> dict:
@@ -254,6 +280,10 @@ class Event:
     depth: int | None = None
     # The parent session this event proves the pane is in ("" = unknown).
     session_id: str = ""
+    # Transcript hints for the reconciler (see PATH_FIELDS).
+    transcript: str = ""
+    agent_transcript: str = ""
+    sessions_dir: str = ""
 
 
 def detect_provider(
@@ -263,7 +293,7 @@ def detect_provider(
     ``turn_id`` payload extension (subagent/tool events) or the
     ``CODEX_THREAD_ID`` Codex exports to its hooks (its SessionStart has no
     turn_id); else Claude."""
-    if override in ("claude", "codex"):
+    if override in PROVIDERS:
         return override
     if "turn_id" in payload or (env or {}).get("CODEX_THREAD_ID"):
         return "codex"
@@ -286,7 +316,35 @@ def _parent_session(payload: Mapping, provider: str, env: Mapping[str, str]) -> 
     return session
 
 
+def codex_sessions_dir(payload: Mapping, env: Mapping[str, str]) -> str:
+    """Codex's rollout tree (``<CODEX_HOME>/sessions``), where the reconciler
+    looks for a child thread's rollout: the ``sessions`` ancestor of the
+    payload's transcript when there is one, else ``$CODEX_HOME/sessions``,
+    else ``~/.codex/sessions``."""
+    transcript = _clean_path(payload.get("transcript_path"))
+    if transcript:
+        head = os.path.dirname(transcript)
+        for _ in range(5):
+            if os.path.basename(head) == "sessions":
+                return head
+            head = os.path.dirname(head)
+    home = env.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+    return _clean_path(os.path.join(home, "sessions"))
+
+
+def _paths(payload: Mapping, provider: str, env: Mapping[str, str]) -> dict:
+    """Transcript hints of a parent-side event (start/stop/Agent tool)."""
+    if provider == "codex":
+        return {"sessions_dir": codex_sessions_dir(payload, env)}
+    return {
+        "transcript": _clean_path(payload.get("transcript_path")),
+        "agent_transcript": _clean_path(payload.get("agent_transcript_path")),
+    }
+
+
 def parse_event(payload: Mapping, provider: str, env: Mapping[str, str]) -> Event:
+    if provider == "opencode":
+        return parse_opencode_event(payload)
     name = _str(payload, "hook_event_name")
     agent_id = _str(payload, "agent_id")
     session = _parent_session(payload, provider, env)
@@ -295,10 +353,10 @@ def parse_event(payload: Mapping, provider: str, env: Mapping[str, str]) -> Even
         "agent_type": _str(payload, "agent_type"),
         "model": _str(payload, "model") if provider == "codex" else "",
     }
-    if name == "SubagentStart" and agent_id:
-        return Event("start", agent_id, session_id=session, **common)
-    if name == "SubagentStop" and agent_id:
-        return Event("stop", agent_id, session_id=session, **common)
+    if name in ("SubagentStart", "SubagentStop") and agent_id:
+        kind = "start" if name == "SubagentStart" else "stop"
+        paths = _paths(payload, provider, env)
+        return Event(kind, agent_id, session_id=session, **common, **paths)
     if name == "PreToolUse" and agent_id:
         # Inside a subagent: never a proof of the parent session (a Codex
         # child thread carries its own id).
@@ -306,10 +364,64 @@ def parse_event(payload: Mapping, provider: str, env: Mapping[str, str]) -> Even
     if name == "PostToolUse" and _str(payload, "tool_name") in _AGENT_TOOLS:
         # agent_id here (a subagent spawning its own) is the caller, not the
         # spawned agent: that one is the response's agentId.
-        return _agent_tool_event(payload, provider, session)
+        event = _agent_tool_event(payload, provider, session)
+        if event.kind != "ignore":
+            for key, value in _paths(payload, provider, env).items():
+                setattr(event, key, value)
+        return event
     if name == "SessionStart" and not agent_id and session:
         source = _str(payload, "source")
         return Event("reset" if source in ("startup", "clear") else "session", session_id=session)
+    return Event("ignore")
+
+
+# OpenCode's task tool titles a child session "<description> (@<agent> subagent)".
+_OPENCODE_TITLE_RE = re.compile(r"^(.*?)\s*\(@([A-Za-z0-9_.-]{1,64}) subagent\)\s*$")
+_OPENCODE_BUSY = {"busy", "active", "pending", "retry", "running", "streaming", "working"}
+
+
+def parse_opencode_event(payload: Mapping) -> Event:
+    """One event from the OpenCode plugin (``assets/opencode/herdeck-subagents.js``).
+
+    Payload: ``{"hook_event_name": "session.created" | "session.status" |
+    "session.idle" | "session.error" | "session.deleted", "session_id": <child
+    session>, "parent_id": <its parent>, "root_session_id": <the pane's root
+    session>, "depth": <int>, "title": str, "agent": str, "model": str,
+    "status": <session.status type>}``. Only child sessions are reported; one
+    without a ``parent_id`` is ignored. The root session is the pane's own
+    (parent) session, so a new root resets the spool like Claude's."""
+    name = _str(payload, "hook_event_name")
+    child = _str(payload, "session_id")
+    if not child or not _str(payload, "parent_id"):
+        return Event("ignore")
+    title = _str(payload, "title").strip()
+    agent_type = _str(payload, "agent")
+    match = _OPENCODE_TITLE_RE.match(title)
+    if match:
+        title = match.group(1)
+        agent_type = agent_type or match.group(2)
+    depth = _clean_int(payload.get("depth"))
+    fields = {
+        "provider": "opencode",
+        "agent_type": agent_type,
+        "description": title,
+        "model": _str(payload, "model"),
+        "depth": depth if depth is not None and depth <= 64 else None,
+        "session_id": _str(payload, "root_session_id"),
+    }
+    if name == "session.created":
+        return Event("start", child, **fields)
+    if name == "session.status":
+        kind = _str(payload, "status").lower()
+        if kind == "idle":
+            return Event("stop", child, **fields)
+        if kind in _OPENCODE_BUSY:
+            return Event("heartbeat", child, **fields)
+        return Event("ignore")
+    if name in ("session.idle", "session.deleted"):
+        return Event("stop", child, **fields)
+    if name == "session.error":
+        return Event("fail", child, **fields)
     return Event("ignore")
 
 
@@ -379,6 +491,10 @@ def _enrich(entry: dict, event: Event, meta: Mapping) -> None:
     depth = event.depth if event.depth is not None else meta.get("depth")
     if entry["depth"] is None and depth is not None:
         entry["depth"] = depth
+    for key in PATH_FIELDS:
+        value = _clean_path(getattr(event, key))
+        if value and not entry.get(key):
+            entry[key] = value
 
 
 def _new_entry(event: Event, now_ms: int) -> dict:
@@ -393,6 +509,7 @@ def _new_entry(event: Event, now_ms: int) -> dict:
         "ended_ms": None,
         "status": "running",
         "last_seen_ms": now_ms,
+        **dict.fromkeys(PATH_FIELDS, ""),
     }
 
 

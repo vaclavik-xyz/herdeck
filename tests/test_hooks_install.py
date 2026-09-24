@@ -52,6 +52,8 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     assert Path.home() == home
     return home
 
@@ -275,7 +277,8 @@ def test_uninstall_restores_the_other_entries(home):
     assert result["ok"] is True
     assert _read(_claude(home)) == CLAUDE_SETTINGS
     assert _read(_codex(home)) == CODEX_HOOKS
-    for r in result["agents"].values():
+    for agent in ("claude", "codex"):
+        r = result["agents"][agent]
         assert r["installed"] is False and r["events"] == [] and r["changed"] is True
         assert r["backup"]
     assert result["agents"]["codex"]["needs_trust"] is False
@@ -357,7 +360,7 @@ def test_apply_rejects_unknown_actions_and_agents(home):
     with pytest.raises(ValueError):
         hi.apply("enable", home=home)
     with pytest.raises(ValueError):
-        hi.apply("status", ["opencode"], home=home)
+        hi.apply("status", ["pi"], home=home)
 
 
 # --- bridge message ------------------------------------------------------------------
@@ -371,7 +374,7 @@ async def test_bridge_reply_runs_the_action(home):
     assert reply["data"]["agents"]["codex"]["installed"] is True
     assert set(reply["data"]["agents"]) == {"codex"}
     status = await hi.bridge_reply({"type": "hooks", "req": "h2"})
-    assert set(status["data"]["agents"]) == {"claude", "codex"}
+    assert set(status["data"]["agents"]) == {"claude", "codex", "opencode"}
     assert status["data"]["action"] == "status"
 
 
@@ -379,7 +382,7 @@ async def test_bridge_reply_runs_the_action(home):
     "msg",
     [
         {"action": "enable"},
-        {"action": "install", "agents": ["opencode"]},
+        {"action": "install", "agents": ["pi"]},
         {"action": "install", "agents": []},
         {"action": "install", "agents": 5},
         {"action": "install", "agents": "claude,pi"},

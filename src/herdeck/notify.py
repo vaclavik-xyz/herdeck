@@ -42,7 +42,7 @@ def _warn_failure(context: str, exc: Exception) -> None:
 # would otherwise alert on every re-entry. "done" is informational, so a
 # minute of quiet per agent is fine; "blocked" needs the user, so it only
 # gets a short flap guard.
-NOTIFY_COOLDOWN_S: dict[str, float] = {"blocked": 5.0, "done": 60.0}
+NOTIFY_COOLDOWN_S: dict[str, float] = {"blocked": 5.0, "done": 60.0, "subagents_done": 60.0}
 # A "done" this soon after the user pressed/answered that very agent on the
 # deck is the expected result of their own action, not news.
 DONE_AFTER_INTERACTION_S = 10.0

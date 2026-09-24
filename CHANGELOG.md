@@ -7,6 +7,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- OpenCode subagent tracking: a shipped plugin (`herdeck-subagents.js`) reports
+  OpenCode child sessions (subagents, found by their `parentID`) to
+  `herdeck-subagent-hook --provider opencode`, which feeds the same per-pane
+  spool, `⑂N` badge and agent card list as Claude Code and Codex.
+  `herdeck-service hooks install|uninstall|status --agents opencode`, the
+  bridge `hooks` message and the Maintenance switch install it into
+  `~/.config/opencode/plugins/` (`$OPENCODE_CONFIG_DIR` / `$XDG_CONFIG_HOME`
+  honoured). The installer only ever writes or removes that one file, only
+  when it carries herdeck's marker, and backs it up first. A default `install`
+  adds it only where OpenCode is set up. README "Subagent tracking".
+- Subagent transcript fallback on the bridge: every 60 s, for panes whose
+  spool still has running or stale subagents, the bridge reads the tail of
+  the provider's transcripts and marks a subagent done or failed when its
+  stop hook never arrived. For Claude Code that is a `task-notification` or
+  `Agent` tool result in the parent transcript; for Codex, `task_complete` or
+  `turn_aborted` in the child rollout. It then updates the `subagents` token
+  through herdr (`pane.report_metadata`). Unknown formats leave entries as
+  they are, and file reads are bounded and run off the event loop.
+- `[notifications].subagents_done = false` (opt-in, editor field with en+cs
+  help): one alert (`claude · subagents done (3)`, en+cs) when an agent's last
+  running subagent finished and the agent is idle, blocked or done. It fires
+  once per burst through the usual backends, `skip_focused` and a per-agent
+  cooldown.
 - Bridge lifecycle events (capability `events`): the bridge gives every
   blocked and done episode a stable `episode_id` (it survives a bridge
   restart), streams `event` frames (`blocked` with the pre-read, sanitized

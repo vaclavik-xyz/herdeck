@@ -51,12 +51,15 @@ export interface ServerStatus {
   hooks: HooksSummary | null;
 }
 
-export type HookAgent = "claude" | "codex";
-export const HOOK_AGENTS: readonly HookAgent[] = ["claude", "codex"];
+export type HookAgent = "claude" | "codex" | "opencode";
+/** OpenCode takes a plugin file instead of hook entries; older bridges do not
+ *  report it (its row is then hidden). */
+export const HOOK_AGENTS: readonly HookAgent[] = ["claude", "codex", "opencode"];
 
 export interface HookAgentStatus {
   installed: boolean;
-  /** The hook file on the bridge's machine (~/.claude/settings.json, ~/.codex/hooks.json). */
+  /** The hook file on the bridge's machine (~/.claude/settings.json, ~/.codex/hooks.json,
+   *  ~/.config/opencode/plugins/herdeck-subagents.js). */
   file: string | null;
   /** Why the file could not be used (not valid JSON, …); it was not changed. */
   error: string | null;

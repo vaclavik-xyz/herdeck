@@ -738,8 +738,9 @@ blocked agent.
 ### Subagent tracking
 
 An agent tile shows a fork badge with a count (`⑂3`) while the pane's agent has
-subagents running. Claude Code and Codex report subagents through hooks, and
-`herdeck-subagent-hook` turns them into a Herdr pane metadata token
+subagents running. Claude Code and Codex report subagents through hooks,
+OpenCode through a small plugin (see below), and `herdeck-subagent-hook` turns
+them into a Herdr pane metadata token
 `subagents=<running>/<total>` (source `herdeck:subagents`, 15-minute TTL) that
 the bridge forwards like any other token (`$subagents` also works in
 `tile_primary` / `tile_secondary`).
@@ -760,10 +761,26 @@ description, status (running, done, failed, or "no signal" for a stale one),
 running time or total time, with nested subagents indented. The cockpit's
 `GET /api/v1/agents` carries the same list in each record's `subagents`.
 
+A stop hook can get lost (the agent was killed, or a background subagent
+finished while its parent was busy). So every 60 s the bridge also checks the
+transcripts of each pane that still has running or stale subagents. For Claude
+Code it reads the parent session's `.jsonl`, where a finished subagent shows up
+as a `<task-notification>` with its `<task-id>` and `<status>` (`completed` or
+`failed`), or as the `Agent` tool's result. A recently written
+`<session>/subagents/agent-<id>.jsonl` counts as a heartbeat. For Codex it
+reads the child thread's rollout under `~/.codex/sessions` (the one named for
+the subagent whose `session_meta` names the parent thread), which ends a
+finished turn with `task_complete` (done) or `turn_aborted` (failed). Only the
+newest record counts, only the last 1 MiB (256 KiB for a Codex rollout) is
+read, and anything it does not recognise leaves the entry as it is. The work
+runs off the bridge's event loop under the hook's spool lock, and a changed
+count goes to herdr as the same `subagents` token. The hook records where
+these transcripts are (in the spool only, never sent to clients).
+
 **Install the hooks.** On the agents' Mac run
 
 ```bash
-herdeck-service hooks install            # both; or --agents claude / --agents codex
+herdeck-service hooks install            # all; or --agents claude,codex,opencode
 herdeck-service hooks status [--json]    # what is installed, per agent
 herdeck-service hooks uninstall
 ```
@@ -794,9 +811,29 @@ the new hooks (`/hooks` in a Codex session; `needs_trust` reminds you, since
 Codex keeps that trust record itself). Agents that are already running pick
 the hooks up after a restart. `herdeck-doctor` reports the state per agent.
 
+**OpenCode.** OpenCode has no subagent hooks, so herdeck ships a plugin,
+`herdeck-subagents.js`. The installer copies it into
+`~/.config/opencode/plugins/` (`$OPENCODE_CONFIG_DIR/plugins/` when that is
+set, else `$XDG_CONFIG_HOME/opencode/plugins/`), with the hook's absolute path
+filled in. Inside a herdr pane the plugin watches OpenCode's session events and
+reports child sessions (the ones with a `parentID`, which is how OpenCode runs
+a subagent) to `herdeck-subagent-hook --provider opencode`: `session.created`
+starts an entry, a busy `session.status` is a heartbeat (at most every 30 s),
+`session.idle` or `session.deleted` finishes it and `session.error` marks it
+failed. The title `<description> (@<agent> subagent)` gives the description and
+type. The plugin never waits for the hook. Without `--agents`, `install` only
+adds the plugin when OpenCode's config directory exists; `status` and
+`uninstall` always include it. The installer writes and removes only that one
+file and only when it carries herdeck's `HERDECK_INTEGRATION=subagents`
+marker. A different file with that name is reported and left alone, other
+plugins (herdr's `herdr-agent-state.js`, your own) are never touched, and a
+changed or removed plugin is backed up first to
+`herdeck-subagents.js.bak-herdeck-<timestamp>`, a name OpenCode does not load.
+Restart OpenCode to load it.
+
 The bridge offers the same thing to runtimes (capability `hooks`, **full token
 only**; the read-only token is refused): `{"type": "hooks", "req", "action":
-"status"|"install"|"uninstall", "agents": ["claude", "codex"]}` runs on the
+"status"|"install"|"uninstall", "agents": ["claude", "codex", "opencode"]}` runs on the
 bridge's machine off the event loop (at most 10 s) and answers `{"type":
 "result", "req", "data": {"action", "ok", "hook_path", "agents": {"claude":
 {...}, "codex": {...}}}}`, where each agent carries `installed`, `events`,
@@ -927,8 +964,9 @@ it offers **Update bridge**: the runtime asks that bridge to install the
 runtime's version into its managed install and restart, with progress shown
 live. A bridge that is not a managed install explains the one-time
 `herdeck-service install bridge --managed` instead. Under each connected bridge,
-**Subagent tracking** has an on/off switch for Claude Code and for Codex that
-installs or removes the subagent hooks on that bridge's machine, after a
+**Subagent tracking** has an on/off switch for Claude Code, for Codex and
+(when the bridge reports it) for the OpenCode plugin that installs or removes
+the subagent hooks on that bridge's machine, after a
 confirmation naming the file that changes and the backup it gets. The status
 next to it says whether the hooks are installed and, for Codex, whether hooks
 still have to be enabled in its config or trusted with `/hooks` (see
@@ -1251,6 +1289,7 @@ banner_actions = false             # opt-in: Approve/Deny or Reply on blocked ma
 banner_prompt = false              # opt-in: add a short prompt excerpt to blocked alerts
 skip_focused = true                # no local banner for the herdr-focused pane while you use this Mac
 remind_after = 0                   # minutes; >0 re-alerts a still-blocked agent (max 3x)
+subagents_done = false             # opt-in: one alert when an agent's subagents all finished
 
 # Optional: which macOS system sound plays per event. A missing key falls
 # back to the default (Glass for "blocked", Hero for "done").
@@ -1320,6 +1359,16 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 - `remind_after = N` (minutes, 0 = off): an agent still blocked in the same
   episode alerts again after N, 2N and 3N minutes, titled
   `claude · still needs input (10 min)`.
+- `subagents_done = true` (opt-in): one alert, titled
+  `claude · subagents done (3)`, when an agent that had subagents running
+  (see [Subagent tracking](#subagent-tracking)) has none running any more and
+  is itself idle, blocked or done. While the agent keeps working on the
+  results, the alert waits, and a subagent started meanwhile joins the same
+  burst. The count covers the burst's subagents, including ones that started
+  and finished between two updates. It goes through the same backends,
+  `skip_focused` and a 60-second per-agent cooldown, uses the `done` sound, and
+  fires once per burst. It works with bridges that drive the lifecycle events
+  too, since those carry no subagent news.
 - `[notifications.telegram].only_when_away = N` (minutes, 0 = off): Telegram
   alerts go out only when this Mac has been idle for N minutes AND the deck was
   not pressed in that window. On Linux there is no idle source, so only deck

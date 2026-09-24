@@ -32,6 +32,7 @@ from .protocol import WIRE_PROTOCOL, encode
 from .self_update import EXIT_GRACE_S, BridgeUpdater, not_managed_result
 from .status_since import CAPABILITY as _STATUS_SINCE_CAPABILITY
 from .status_since import StatusSinceTracker
+from .subagent_reconcile import SubagentReconciler
 from .subagent_spool import CAPABILITY as _SUBAGENTS_CAPABILITY
 from .subagent_spool import SubagentSpoolReader
 from .usage import USAGE_CAPABILITY, bridge_usage_config, bridge_usage_enabled, usage_to_wire
@@ -1537,6 +1538,23 @@ class SocketHerdr:
         assert last_exc is not None
         raise last_exc
 
+    async def report_metadata(
+        self, pane_id: str, source: str, tokens: dict[str, str], ttl_ms: int
+    ) -> None:
+        """Set display-only pane metadata tokens (the subagent reconciler
+        refreshes the ``subagents`` token the hook normally writes)."""
+        await self._rpc(
+            "pane.report_metadata",
+            {
+                "pane_id": pane_id,
+                "source": source,
+                "tokens": tokens,
+                "ttl_ms": ttl_ms,
+                "seq": time.time_ns(),
+            },
+            retry=False,
+        )
+
     async def list_panes(self) -> list[dict]:
         # Kept for get_pane's act guard only (herdr has no working pane.get);
         # fleet state comes from snapshot().
@@ -2251,8 +2269,12 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     server = await websockets.serve(handler, host, 0)
     port = server.sockets[0].getsockname()[1]
 
+    # Transcript fallback for subagents whose stop hook never came.
+    reconciler = SubagentReconciler(subagents, client_herdr)
+
     async def broadcast() -> None:
         poll = asyncio.create_task(hub.run())
+        reconcile = asyncio.create_task(reconciler.run())
         try:
             await _broadcast(
                 events.stream(),
@@ -2265,6 +2287,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
             )
         finally:
             poll.cancel()
+            reconcile.cancel()
             await hub.close()
 
     btask = asyncio.create_task(broadcast())
@@ -2356,6 +2379,8 @@ async def serve(
         )
         stopper = asyncio.create_task(stop.wait())
         tasks = {broadcast, stopper, asyncio.create_task(hub.run())}
+        # Transcript fallback for subagents whose stop hook never came.
+        tasks.add(asyncio.create_task(SubagentReconciler(subagents, client_herdr).run()))
         if usage is not None:
             tasks.add(asyncio.create_task(usage.run(clients)))
         try:
