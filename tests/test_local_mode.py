@@ -2,11 +2,12 @@ import asyncio
 
 import pytest
 
-from herdeck.app import _discover_config_path, local_config, make_deck, resolve_mode
+from herdeck.bootstrap import _discover_config_path, local_config, resolve_mode
 from herdeck.bridge import StubHerdr, start_local_bridge
-from herdeck.config import AnswerProfile, Config, ServerConfig
+from herdeck.config import AnswerProfile, Config, HardwareConfig, ServerConfig
 from herdeck.connector import Connector
 from herdeck.driver.fake import FakeRenderer
+from herdeck.host import build_web_deck, open_front
 
 SOCK = "/Users/x/.config/herdr/herdr.sock"
 
@@ -56,68 +57,131 @@ class _Elgato:
         self.kind = "elgato"
 
 
+class _Lock:
+    def __init__(self, free=True):
+        self.free = free
+        self.held = False
+
+    def acquire(self):
+        self.held = self.free
+        return self.free
+
+    def release(self):
+        self.held = False
+
+    def owner_pid(self):
+        return None if self.free else 4242
+
+
 def _boom():
     raise RuntimeError("no device")
 
 
+def _front(kind, **kwargs):
+    kwargs.setdefault("lock_factory", _Lock)
+    return open_front(kind, 13, **kwargs)
+
+
 def test_auto_falls_back_to_web_when_d200_unavailable():
-    deck = make_deck(None, 13, d200_factory=_boom, elgato_factory=_boom, web_factory=_Web)
-    assert isinstance(deck, _Web)
+    lock = _Lock()
+    front = _front(
+        None, d200_factory=_boom, elgato_factory=_boom, web_factory=_Web, lock_factory=lambda: lock
+    )
+    assert front.kind == "web" and isinstance(front.deck, _Web)
+    assert lock.held is False  # a failed probe releases the D200 lock
 
 
-def test_explicit_d200_failure_propagates():
-    with pytest.raises(RuntimeError):
-        make_deck("d200", 13, d200_factory=_boom, web_factory=_Web)
+def test_auto_keeps_a_probed_d200_and_its_lock():
+    lock = _Lock()
+    driver = object()
+    front = _front(None, d200_factory=lambda: driver, web_factory=_Web, lock_factory=lambda: lock)
+    assert front.kind == "d200"
+    assert front.d200_driver is driver and front.d200_lock is lock and lock.held
+
+
+def test_auto_skips_a_d200_owned_by_another_runtime(capsys):
+    opened = []
+    front = _front(
+        None,
+        d200_factory=lambda: opened.append(1),
+        elgato_factory=_boom,
+        web_factory=_Web,
+        lock_factory=lambda: _Lock(free=False),
+    )
+    assert front.kind == "web" and opened == []
+    assert "owned by another herdeck runtime, pid 4242" in capsys.readouterr().out
+
+
+def test_explicit_d200_is_opened_by_the_runtime_sink_under_the_lock():
+    # The reconnecting sink opens (and re-opens) the device while holding
+    # d200.lock, so an explicit D200 is never opened here.
+    front = _front("d200", d200_factory=_boom, web_factory=_Web)
+    assert front.kind == "d200" and front.d200_driver is None and front.d200_lock is None
 
 
 def test_explicit_elgato_kind_uses_factory():
-    deck = make_deck("elgato", 13, d200_factory=_boom, elgato_factory=_Elgato, web_factory=_Web)
-    assert isinstance(deck, _Elgato)
+    front = _front("elgato", d200_factory=_boom, elgato_factory=_Elgato, web_factory=_Web)
+    assert isinstance(front.deck, _Elgato)
 
 
 def test_auto_tries_elgato_after_d200_and_before_web():
-    deck = make_deck(None, 13, d200_factory=_boom, elgato_factory=_Elgato, web_factory=_Web)
-    assert isinstance(deck, _Elgato)
+    front = _front(None, d200_factory=_boom, elgato_factory=_Elgato, web_factory=_Web)
+    assert isinstance(front.deck, _Elgato)
 
 
 def test_explicit_elgato_failure_propagates():
     with pytest.raises(RuntimeError):
-        make_deck("elgato", 13, elgato_factory=_boom, web_factory=_Web)
+        _front("elgato", elgato_factory=_boom, web_factory=_Web)
 
 
 def test_fake_kind_returns_fake_renderer():
-    deck = make_deck("fake", 13, d200_factory=_boom, web_factory=_Web)
-    assert isinstance(deck, FakeRenderer)
+    front = _front("fake", d200_factory=_boom, web_factory=_Web)
+    assert isinstance(front.deck, FakeRenderer)
 
 
 def test_fake_deck_ignores_invalid_web_port(monkeypatch):
     monkeypatch.setenv("HERDECK_WEB_PORT", "not-a-port")
 
-    deck = make_deck("fake", 13, d200_factory=_boom, web_factory=_Web)
+    front = _front("fake", d200_factory=_boom, web_factory=_Web)
 
-    assert isinstance(deck, FakeRenderer)
+    assert isinstance(front.deck, FakeRenderer)
 
 
-def test_make_deck_uses_hardware_web_bind_and_port(monkeypatch):
-    from herdeck.config import HardwareConfig
+class _RecordingWebDeck:
+    seen: dict = {}
 
-    seen = {}
-    monkeypatch.delenv("HERDECK_WEB_BIND", raising=False)
-    monkeypatch.delenv("HERDECK_WEB_PORT", raising=False)
+    def __init__(self, slots, **kwargs):
+        type(self).seen = {"slots": slots, **kwargs}
+        self.host = kwargs["host"]
+        self.port = kwargs["port"]
+        self.press_token = "token"
+        self._allow_query_token = False
+        self._base_path = kwargs.get("base_path", "")
+        self._public_origin = kwargs.get("public_origin", "")
 
-    def web_factory(host=None, port=None):
-        seen["host"] = host
-        seen["port"] = port
-        return _Web()
 
+@pytest.fixture
+def web_deck(monkeypatch):
+    monkeypatch.setattr("herdeck.driver.web.WebDeck", _RecordingWebDeck)
+    for name in (
+        "HERDECK_WEB_BIND",
+        "HERDECK_WEB_PORT",
+        "HERDECK_WEB_BASE_PATH",
+        "HERDECK_WEB_PUBLIC_ORIGIN",
+        "HERDECK_WEB_FRAME_ANCESTORS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return _RecordingWebDeck
+
+
+def test_web_deck_uses_hardware_web_bind_and_port(web_deck):
     hw = HardwareConfig(web_bind="100.65.2.3", web_port=1234)
-    make_deck("web", 13, web_factory=web_factory, hardware=hw)
-
-    assert seen == {"host": "100.65.2.3", "port": 1234}
+    build_web_deck(13, hardware=hw, cols=5, language="en")
+    assert (web_deck.seen["host"], web_deck.seen["port"]) == ("100.65.2.3", 1234)
 
 
 def test_web_bind_rejects_wildcard_public_and_lan_without_explicit_override(monkeypatch):
-    from herdeck.app import validate_web_bind
+    from herdeck.host import validate_web_bind
 
     for host in ("0.0.0.0", "::", "8.8.8.8", "192.168.1.10"):
         with pytest.raises(ValueError, match="loopback or a Tailscale"):
@@ -131,50 +195,23 @@ def test_web_bind_rejects_wildcard_public_and_lan_without_explicit_override(monk
     assert validate_web_bind("0.0.0.0") == "0.0.0.0"
 
 
-def test_make_deck_preserves_hardware_web_port_zero(monkeypatch):
-    from herdeck.config import HardwareConfig
-
-    seen = {}
-    monkeypatch.delenv("HERDECK_WEB_PORT", raising=False)
-
-    def web_factory(host=None, port=None):
-        seen["port"] = port
-        return _Web()
-
-    make_deck("web", 13, web_factory=web_factory, hardware=HardwareConfig(web_port=0))
-
-    assert seen == {"port": 0}
+def test_web_deck_preserves_hardware_web_port_zero(web_deck):
+    build_web_deck(13, hardware=HardwareConfig(web_port=0), cols=5, language="en")
+    assert web_deck.seen["port"] == 0
 
 
-def test_make_deck_wires_icons_dir_to_web_driver(monkeypatch):
-    from herdeck.config import HardwareConfig
-
-    seen = {}
-
-    class WebDeck:
-        def __init__(self, slots, host=None, port=None, icons_dir=None):
-            seen["slots"] = slots
-            seen["host"] = host
-            seen["port"] = port
-            seen["icons_dir"] = icons_dir
-            self.host = host
-            self.port = port
-            self.press_token = "token"
-
-    monkeypatch.setattr("herdeck.driver.web.WebDeck", WebDeck)
-
-    make_deck("web", 13, hardware=HardwareConfig(icons_dir="~/herdeck-icons"))
-
-    assert seen == {
-        "slots": 13,
-        "host": "127.0.0.1",
-        "port": 8800,
-        "icons_dir": "~/herdeck-icons",
-    }
+def test_web_deck_gets_icons_dir_grid_and_language(web_deck):
+    build_web_deck(
+        13, hardware=HardwareConfig(icons_dir="~/herdeck-icons"), cols=4, language="cs"
+    )
+    seen = web_deck.seen
+    assert (seen["slots"], seen["host"], seen["port"]) == (13, "127.0.0.1", 8800)
+    assert seen["icons_dir"] == "~/herdeck-icons"
+    assert (seen["cols"], seen["language"]) == (4, "cs")
 
 
-def test_make_deck_wires_icons_dir_to_hardware_drivers(monkeypatch):
-    from herdeck.config import HardwareConfig
+def test_hardware_drivers_get_icons_dir(monkeypatch):
+    from herdeck.host import _d200_driver, _elgato_driver
 
     seen = {}
 
@@ -190,38 +227,23 @@ def test_make_deck_wires_icons_dir_to_hardware_drivers(monkeypatch):
     monkeypatch.setattr("herdeck.driver.elgato.ElgatoDriver", ElgatoDriver)
     hw = HardwareConfig(icons_dir="~/herdeck-icons")
 
-    make_deck("d200", 13, hardware=hw)
-    make_deck("elgato", 13, hardware=hw)
+    _d200_driver(hw)
+    _elgato_driver(hw)
 
     assert seen == {"d200": "~/herdeck-icons", "elgato": "~/herdeck-icons"}
 
 
-def test_make_deck_prefers_env_web_bind_and_port(monkeypatch):
-    from herdeck.config import HardwareConfig
-
-    seen = {}
-
-    def web_factory(host=None, port=None):
-        seen["host"] = host
-        seen["port"] = port
-        return _Web()
-
+def test_web_deck_prefers_env_web_bind_and_port(web_deck, monkeypatch):
     monkeypatch.setenv("HERDECK_WEB_BIND", "127.9.9.9")
     monkeypatch.setenv("HERDECK_WEB_PORT", "9911")
 
     hw = HardwareConfig(web_bind="100.1.2.3", web_port=1234)
-    make_deck("web", 13, web_factory=web_factory, hardware=hw)
+    build_web_deck(13, hardware=hw, cols=5, language="en")
 
-    assert seen == {"host": "127.9.9.9", "port": 9911}
+    assert (web_deck.seen["host"], web_deck.seen["port"]) == ("127.9.9.9", 9911)
 
 
-def test_make_deck_wires_reverse_proxy_environment(monkeypatch):
-    seen = {}
-
-    def web_factory(**kwargs):
-        seen.update(kwargs)
-        return _Web()
-
+def test_web_deck_wires_reverse_proxy_environment(web_deck, monkeypatch):
     monkeypatch.setenv("HERDECK_WEB_BASE_PATH", "/cockpit/herdeck")
     monkeypatch.setenv("HERDECK_WEB_PUBLIC_ORIGIN", "https://cockpit.example")
     monkeypatch.setenv(
@@ -229,8 +251,9 @@ def test_make_deck_wires_reverse_proxy_environment(monkeypatch):
         "https://cockpit.example, https://admin.example",
     )
 
-    make_deck("web", 13, web_factory=web_factory)
+    build_web_deck(13, hardware=HardwareConfig(), cols=5, language="en")
 
+    seen = web_deck.seen
     assert seen["base_path"] == "/cockpit/herdeck"
     assert seen["public_origin"] == "https://cockpit.example"
     assert seen["frame_ancestors"] == (
@@ -240,8 +263,8 @@ def test_make_deck_wires_reverse_proxy_environment(monkeypatch):
 
 
 def test_runtime_startup_settings_prefer_env_over_local(monkeypatch):
-    from herdeck.app import _resolve_deck_kind, _resolve_socket_path, _resolve_tick_interval
-    from herdeck.config import Config, HardwareConfig
+    from herdeck.bootstrap import resolve_socket_path
+    from herdeck.host import resolve_deck_kind
 
     cfg = Config(servers=[], profiles={}, overview_order=[], grid=(5, 3))
     cfg.hardware = HardwareConfig(deck="web", herdr_socket="/local.sock", tick_interval=1.25)
@@ -249,14 +272,13 @@ def test_runtime_startup_settings_prefer_env_over_local(monkeypatch):
     monkeypatch.setenv("HERDECK_DECK", "fake")
     monkeypatch.setenv("HERDR_SOCKET", "/env.sock")
 
-    assert _resolve_deck_kind(cfg) == "fake"
-    assert _resolve_socket_path(cfg) == "/env.sock"
-    assert _resolve_tick_interval(cfg) == 1.25
+    assert resolve_deck_kind(cfg) == "fake"
+    assert resolve_socket_path(cfg) == "/env.sock"
 
 
 def test_runtime_startup_settings_use_local_when_env_absent(monkeypatch):
-    from herdeck.app import _resolve_deck_kind, _resolve_socket_path, _resolve_tick_interval
-    from herdeck.config import Config, HardwareConfig
+    from herdeck.bootstrap import resolve_socket_path
+    from herdeck.host import resolve_deck_kind
 
     cfg = Config(servers=[], profiles={}, overview_order=[], grid=(5, 3))
     cfg.hardware = HardwareConfig(deck="web", herdr_socket="/local.sock", tick_interval=1.25)
@@ -267,20 +289,19 @@ def test_runtime_startup_settings_use_local_when_env_absent(monkeypatch):
     monkeypatch.delenv("HERDR_SOCKET_PATH", raising=False)
     monkeypatch.delenv("HERDR_SESSION", raising=False)
 
-    assert _resolve_deck_kind(cfg) == "web"
-    assert _resolve_socket_path(cfg) == "/local.sock"
-    assert _resolve_tick_interval(cfg) == 1.25
+    assert resolve_deck_kind(cfg) == "web"
+    assert resolve_socket_path(cfg) == "/local.sock"
 
 
 def test_unknown_explicit_deck_kind_raises():
     with pytest.raises(ValueError, match="unsupported deck kind"):
-        make_deck("dw00", 13, d200_factory=_boom, web_factory=_Web)
+        _front("dw00", d200_factory=_boom, web_factory=_Web)
 
 
 def test_default_web_deck_redacts_capability_url_from_logs(monkeypatch, capsys):
     monkeypatch.setenv("HERDECK_WEB_PORT", "0")
     monkeypatch.delenv("HERDECK_SHOW_URL_TOKEN", raising=False)
-    deck = make_deck("web", 4)
+    deck = build_web_deck(4, hardware=HardwareConfig(), cols=5, language="en")
     try:
         out = capsys.readouterr().out
         assert "authenticated browser session required" in out
@@ -294,7 +315,7 @@ def test_web_deck_can_explicitly_print_capability_url(monkeypatch, capsys):
     monkeypatch.setenv("HERDECK_WEB_PORT", "0")
     monkeypatch.setenv("HERDECK_SHOW_URL_TOKEN", "1")
     monkeypatch.setenv("HERDECK_WEB_ALLOW_QUERY_TOKEN", "1")
-    deck = make_deck("web", 4)
+    deck = build_web_deck(4, hardware=HardwareConfig(), cols=5, language="en")
     try:
         out = capsys.readouterr().out
         assert "/?token=" in out
@@ -412,17 +433,17 @@ def test_discover_none_when_nothing(monkeypatch, tmp_path):
 def test_simulator_urls_expand_wildcard_binds(monkeypatch):
     """http://0.0.0.0:8800 is literally unroutable; a wildcard bind announces
     the Tailscale + default-route addresses instead (audit: websim-url-announce)."""
-    from herdeck import app as app_mod
+    from herdeck import host as host_mod
 
     def fake_iface(probe):
         return {"100.100.100.100": "100.64.1.2", "1.1.1.1": "192.168.1.5"}[probe]
 
-    monkeypatch.setattr(app_mod, "_iface_addr", fake_iface)
-    urls = app_mod._simulator_urls("0.0.0.0", 8800, "tok")
+    monkeypatch.setattr(host_mod, "_iface_addr", fake_iface)
+    urls = host_mod.simulator_urls("0.0.0.0", 8800, "tok")
     assert urls[0] == "http://100.64.1.2:8800/?token=tok"  # Tailscale first
     assert "http://192.168.1.5:8800/?token=tok" in urls
     assert urls[-1] == "http://127.0.0.1:8800/?token=tok"
     # explicit binds announce exactly what was bound
-    assert app_mod._simulator_urls("100.99.1.4", 8800, "t") == [
+    assert host_mod.simulator_urls("100.99.1.4", 8800, "t") == [
         "http://100.99.1.4:8800/?token=t"
     ]

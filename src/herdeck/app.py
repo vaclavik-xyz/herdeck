@@ -13,14 +13,11 @@ from pathlib import Path
 
 from .app_control import RuntimeAgentControl
 from .bootstrap import (
-    _discover_config_path,
-    _discover_local_config_path,
-    make_runtime_profile_switcher,
-    resolve_mode,
-    resolve_runtime_config,
+    local_config as local_config,
 )
 from .bootstrap import (
-    local_config as local_config,
+    make_runtime_profile_switcher,
+    resolve_runtime_config,
 )
 from .commands import Command, command_to_msg
 from .config import Config, ConfigError, ServerConfig
@@ -1575,89 +1572,11 @@ async def _amain_elgato(mode, file_config, socket_path, token) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    import os
-    import sys
+    """``python -m herdeck.app`` / ``from herdeck.app import main`` (older
+    console-script wrappers and service scripts): the one runtime."""
+    from .host import main as host_main
 
-    argv = sys.argv[1:] if argv is None else argv
-    if argv == ["--version"]:
-        from . import __version__
-
-        print(f"herdeck {__version__}")
-        return
-    if argv[:1] == ["update"]:
-        from .update import main as update_main
-
-        raise SystemExit(update_main(argv[1:]))
-
-    if os.environ.get("HERDECK_DEBUG"):
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s %(levelname)s %(message)s",
-        )
-    mock = bool(os.environ.get("HERDECK_MOCK"))
-    config_path = None if mock else _discover_config_path()
-    snapshot = None
-    switch_profile = None
-    config_reloader = None
-    config_paths = None
-    if config_path:
-        from .settings import load_settings, resolve_profile
-
-        local_config_path = _discover_local_config_path(config_path)
-        snapshot = load_settings(config_path, local_config_path)
-        file_config = resolve_profile(snapshot).config
-        switch_profile = make_profile_switcher(snapshot)
-        config_reloader = make_config_reloader(snapshot)
-        config_paths = [snapshot.config_path, snapshot.local_path]
-    else:
-        file_config = None
-    socket_path = _resolve_socket_path(file_config)
-    mode = resolve_mode(
-        mock=mock,
-        config_path=config_path,
-        config_has_servers=bool(file_config and file_config.servers),
-        socket_path=socket_path,
-        socket_exists=os.path.exists(socket_path),
-    )
-    if mode[0] == "error":
-        print(mode[1], file=sys.stderr)
-        sys.exit(2)
-
-    grid = file_config.grid if file_config else (5, 3)
-    slots = grid[0] * grid[1] - 2
-    kind = _resolve_deck_kind(file_config)
-    if kind == "elgato-plugin":
-        # The Elgato plugin is its own IPC front-end over the core; it does NOT use
-        # the grid Orchestrator/DeckDriver path, so route it before building a deck.
-        from .elgato.runtime import discover_ipc
-
-        sock, token = discover_ipc()
-        asyncio.run(_amain_elgato(mode, file_config, sock, token))
-        return
-    deck = make_deck(
-        kind,
-        slots,
-        hardware=file_config.hardware if file_config else None,
-        cols=grid[0],
-        language=file_config.view.language if file_config else "en",
-    )
-    try:
-        if mode[0] == "mock":
-            asyncio.run(_run_mock(_mock_config(), deck))
-        else:
-            asyncio.run(
-                _amain(
-                    mode,
-                    file_config,
-                    deck,
-                    switch_profile=switch_profile,
-                    tick_interval=_resolve_tick_interval(file_config),
-                    config_reloader=config_reloader,
-                    config_paths=config_paths,
-                )
-            )
-    finally:
-        deck.close()
+    host_main(argv)
 
 
 if __name__ == "__main__":

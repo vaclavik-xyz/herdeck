@@ -10,6 +10,6 @@ if __name__ == "__main__":
         from herdeck.elgato.runtime import run_import_selftest
 
         raise SystemExit(run_import_selftest())
-    from herdeck.app import main
+    from herdeck.host import main
 
     main()

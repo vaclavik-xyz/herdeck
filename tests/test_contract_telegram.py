@@ -296,13 +296,24 @@ def test_one_way_backend_sends_plain_alerts_and_never_polls(tmp_path):
 
 
 def test_agent_blocked_before_start(tmp_path):
-    """An agent already blocked when the runtime starts (e.g. a launchd restart)."""
+    """An agent already blocked when the runtime starts (e.g. a launchd restart).
+
+    Changed from the legacy App, which alerted here: every restart (launchd
+    KeepAlive, a deploy, a crash loop) re-sent an alert for every agent that was
+    already blocked — alert spam for episodes the user had already been told
+    about. The runtime's notification engine takes the first snapshot as the
+    baseline; only transitions after it alert (see the tests above)."""
     proc, bridge, telegram = start(tmp_path, [pane("p1", "blocked", label="alpha")], INTERACTIVE)
     try:
         telegram.wait_call("getUpdates")
         time.sleep(1.5)
         alerts = [f for f in telegram.sent("sendMessage") if "reply_markup" in f]
-        assert len(alerts) == 1
+        assert alerts == []
+        # the next transition of the same agent alerts as usual
+        bridge.push_event(pane("p1", "working", label="alpha"))
+        time.sleep(0.3)
+        bridge.push_event(pane("p1", "blocked", label="alpha"))
+        telegram.wait_call("sendMessage", lambda f: "reply_markup" in f)
     finally:
         proc.stop()
         bridge.close()

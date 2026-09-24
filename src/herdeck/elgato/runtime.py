@@ -19,10 +19,10 @@ from .session import ElgatoSession
 
 # Modules the frozen Elgato backend must be able to import. PyInstaller only
 # traces static imports, so anything reached lazily (resvg_py for SVG favicons,
-# the entry's herdeck.app dispatch) is proven here. Mirrors
+# the entry's herdeck.host dispatch) is proven here. Mirrors
 # herdeck.runtime.SELFTEST_IMPORTS for the desktop sidecar.
 SELFTEST_IMPORTS = (
-    "herdeck.app",
+    "herdeck.host",
     "herdeck.connector",
     "herdeck.elgato.runtime",
     "herdeck.elgato.session",

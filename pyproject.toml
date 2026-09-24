@@ -44,7 +44,7 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10", "resvg-py>=0.5", "ruff
 packaging = ["pyinstaller>=6", "resvg-py>=0.5", "pillow>=10", "websockets>=14", "keyring", "tomli-w"]
 
 [project.scripts]
-herdeck = "herdeck.app:main"
+herdeck = "herdeck.host:main"
 herdeck-bridge = "herdeck.bridge:main"
 herdeck-doctor = "herdeck.doctor:main"
 herdeck-ctl = "herdeck.ctl:main"

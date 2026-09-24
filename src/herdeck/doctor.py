@@ -492,7 +492,7 @@ def _read_config_facts(
 
 
 def collect_checks(web_url: str | None = None) -> list[Check]:
-    from .app import _discover_config_path
+    from .bootstrap import _discover_config_path
 
     config_path = _discover_config_path()
     has_servers, token_envs, config_error, servers = _read_config_facts(config_path)

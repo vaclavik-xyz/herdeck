@@ -4,14 +4,15 @@ import argparse
 import os
 import sys
 
-from .app import _simulator_urls, validate_web_bind
-from .app import main as _app_main
 from .driver.web import (
     _default_token_path,
     _load_or_create_token,
     normalize_web_base_path,
     normalize_web_origin,
 )
+from .host import main as _app_main
+from .host import simulator_urls as _simulator_urls
+from .host import validate_web_bind
 
 
 def _load_persisted_token(path: str) -> str:
