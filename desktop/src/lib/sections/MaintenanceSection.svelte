@@ -126,7 +126,13 @@
   let hooksConfirm = $state<{ server: string; agent: HookAgent; action: HooksAction } | null>(null);
   let hooksBusy = $state<Record<string, boolean>>({});
   let hooksNote = $state<Record<string, { ok: boolean; text: string }>>({});
-  const agentName = (agent: HookAgent): string => (agent === "claude" ? lm.hooks_agent_claude : lm.hooks_agent_codex);
+  const agentName = (agent: HookAgent): string =>
+    agent === "claude" ? lm.hooks_agent_claude : agent === "codex" ? lm.hooks_agent_codex : lm.hooks_agent_opencode;
+  // OpenCode's hook is a whole plugin file, not entries in a shared hook file.
+  const hooksConfirmText = (agent: HookAgent, action: HooksAction): string =>
+    agent === "opencode"
+      ? action === "install" ? lm.hooks_install_plugin_confirm : lm.hooks_uninstall_plugin_confirm
+      : action === "install" ? lm.hooks_install_confirm : lm.hooks_uninstall_confirm;
 
   async function hooks(server: string, agent: HookAgent, action: HooksAction): Promise<void> {
     const call = invoke;
@@ -304,7 +310,7 @@
               <span class="hooks-title">{lm.hooks_heading}</span>
               {#if server.hooks}
                 <p class="hint">{lm.hooks_hint}</p>
-                {#each HOOK_AGENTS as agent (agent)}
+                {#each HOOK_AGENTS.filter((a) => a !== "opencode" || server.hooks?.[a]) as agent (agent)}
                   {@const state = hookState(agent, server.hooks)}
                   {@const on = server.hooks[agent]?.installed === true}
                   {@const name = agentName(agent)}
@@ -327,7 +333,7 @@
                   </div>
                   {#if pending}
                     <div class="actions" data-confirm={`hooks-${pending.action}`}>
-                      <span class="confirm-text">{fmt(pending.action === "install" ? lm.hooks_install_confirm : lm.hooks_uninstall_confirm, { agent: name, id: server.id, file: server.hooks[agent]?.file ?? "?" })}</span>
+                      <span class="confirm-text">{fmt(hooksConfirmText(agent, pending.action), { agent: name, id: server.id, file: server.hooks[agent]?.file ?? "?" })}</span>
                       <button type="button" class="primary" data-action="hooks-confirm" onclick={() => hooks(server.id, agent, pending.action)}>{lm.confirm}</button>
                       <button type="button" data-action="hooks-cancel" onclick={() => (hooksConfirm = null)}>{lm.cancel}</button>
                     </div>

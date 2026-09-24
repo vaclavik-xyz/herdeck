@@ -7,6 +7,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- OpenCode subagent tracking: a shipped plugin (`herdeck-subagents.js`) reports
+  OpenCode child sessions (subagents, found by their `parentID`) to
+  `herdeck-subagent-hook --provider opencode`, which feeds the same per-pane
+  spool, `⑂N` badge and agent card list as Claude Code and Codex.
+  `herdeck-service hooks install|uninstall|status --agents opencode`, the
+  bridge `hooks` message and the Maintenance switch install it into
+  `~/.config/opencode/plugins/` (`$OPENCODE_CONFIG_DIR` / `$XDG_CONFIG_HOME`
+  honoured). The installer only ever writes or removes that one file, only
+  when it carries herdeck's marker, and backs it up first. A default `install`
+  adds it only where OpenCode is set up. README "Subagent tracking".
 - Bridge lifecycle events (capability `events`): the bridge gives every
   blocked and done episode a stable `episode_id` (it survives a bridge
   restart), streams `event` frames (`blocked` with the pre-read, sanitized

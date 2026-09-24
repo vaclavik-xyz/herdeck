@@ -58,7 +58,7 @@ herdeck-subagent-hook = "herdeck.subagent_hook:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-herdeck = ["assets/*.svg", "assets/*.png", "assets/web/*", "assets/fonts/*"]
+herdeck = ["assets/*.svg", "assets/*.png", "assets/web/*", "assets/fonts/*", "assets/opencode/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

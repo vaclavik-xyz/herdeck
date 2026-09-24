@@ -738,8 +738,9 @@ blocked agent.
 ### Subagent tracking
 
 An agent tile shows a fork badge with a count (`⑂3`) while the pane's agent has
-subagents running. Claude Code and Codex report subagents through hooks, and
-`herdeck-subagent-hook` turns them into a Herdr pane metadata token
+subagents running. Claude Code and Codex report subagents through hooks,
+OpenCode through a small plugin (see below), and `herdeck-subagent-hook` turns
+them into a Herdr pane metadata token
 `subagents=<running>/<total>` (source `herdeck:subagents`, 15-minute TTL) that
 the bridge forwards like any other token (`$subagents` also works in
 `tile_primary` / `tile_secondary`).
@@ -763,7 +764,7 @@ running time or total time, with nested subagents indented. The cockpit's
 **Install the hooks.** On the agents' Mac run
 
 ```bash
-herdeck-service hooks install            # both; or --agents claude / --agents codex
+herdeck-service hooks install            # all; or --agents claude,codex,opencode
 herdeck-service hooks status [--json]    # what is installed, per agent
 herdeck-service hooks uninstall
 ```
@@ -794,9 +795,29 @@ the new hooks (`/hooks` in a Codex session; `needs_trust` reminds you, since
 Codex keeps that trust record itself). Agents that are already running pick
 the hooks up after a restart. `herdeck-doctor` reports the state per agent.
 
+**OpenCode.** OpenCode has no subagent hooks, so herdeck ships a plugin,
+`herdeck-subagents.js`. The installer copies it into
+`~/.config/opencode/plugins/` (`$OPENCODE_CONFIG_DIR/plugins/` when that is
+set, else `$XDG_CONFIG_HOME/opencode/plugins/`), with the hook's absolute path
+filled in. Inside a herdr pane the plugin watches OpenCode's session events and
+reports child sessions (the ones with a `parentID`, which is how OpenCode runs
+a subagent) to `herdeck-subagent-hook --provider opencode`: `session.created`
+starts an entry, a busy `session.status` is a heartbeat (at most every 30 s),
+`session.idle` or `session.deleted` finishes it and `session.error` marks it
+failed. The title `<description> (@<agent> subagent)` gives the description and
+type. The plugin never waits for the hook. Without `--agents`, `install` only
+adds the plugin when OpenCode's config directory exists; `status` and
+`uninstall` always include it. The installer writes and removes only that one
+file and only when it carries herdeck's `HERDECK_INTEGRATION=subagents`
+marker. A different file with that name is reported and left alone, other
+plugins (herdr's `herdr-agent-state.js`, your own) are never touched, and a
+changed or removed plugin is backed up first to
+`herdeck-subagents.js.bak-herdeck-<timestamp>`, a name OpenCode does not load.
+Restart OpenCode to load it.
+
 The bridge offers the same thing to runtimes (capability `hooks`, **full token
 only**; the read-only token is refused): `{"type": "hooks", "req", "action":
-"status"|"install"|"uninstall", "agents": ["claude", "codex"]}` runs on the
+"status"|"install"|"uninstall", "agents": ["claude", "codex", "opencode"]}` runs on the
 bridge's machine off the event loop (at most 10 s) and answers `{"type":
 "result", "req", "data": {"action", "ok", "hook_path", "agents": {"claude":
 {...}, "codex": {...}}}}`, where each agent carries `installed`, `events`,
@@ -927,8 +948,9 @@ it offers **Update bridge**: the runtime asks that bridge to install the
 runtime's version into its managed install and restart, with progress shown
 live. A bridge that is not a managed install explains the one-time
 `herdeck-service install bridge --managed` instead. Under each connected bridge,
-**Subagent tracking** has an on/off switch for Claude Code and for Codex that
-installs or removes the subagent hooks on that bridge's machine, after a
+**Subagent tracking** has an on/off switch for Claude Code, for Codex and
+(when the bridge reports it) for the OpenCode plugin that installs or removes
+the subagent hooks on that bridge's machine, after a
 confirmation naming the file that changes and the backup it gets. The status
 next to it says whether the hooks are installed and, for Codex, whether hooks
 still have to be enabled in its config or trusted with `/hooks` (see
