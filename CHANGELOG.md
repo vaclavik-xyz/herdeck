@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-24
+
 ### Added
 - `[[servers]]` entries accept `token_file = "<path>"` (`~` expanded, content
   stripped) next to or instead of `token_env`. Tokens resolve from the
