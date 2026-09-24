@@ -10,17 +10,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Bridge self-update. A bridge running from a managed venv (a `managed.json`
   marker at `Path(sys.prefix)`, written by `herdeck-service install bridge
   --managed`) accepts a new full-token-only `update {req, version}` message:
-  it downloads the release wheel, checks it against the release `SHA256SUMS`,
-  installs it with pip or uv, verifies the installed version in a fresh
-  interpreter, answers and exits for its service to restart it (the `vX` git
-  tag is the fallback for releases without a wheel). Progress streams as
+  it downloads the release wheel, checks it against the release `SHA256SUMS`
+  (a missing wheel is an error), installs it with pip or uv, imports
+  `herdeck.bridge` and checks the installed version in a fresh interpreter,
+  answers and exits for its service to restart it. It refuses a downgrade
+  unless `allow_downgrade` is set, and never installs a version older than
+  0.10.0 (the first with self-update). Progress streams as
   `progress` frames; any failure keeps the old version running and reports
   the installer's output tail. The health probe reports `managed`, and the
   bridge advertises the `self_update` capability.
 - The runtime's `POST /maintenance/servers/{id}/update` (and `GET` of the same
   path to long-poll a running update) asks a bridge to update itself to the
-  runtime's version and answers `updated`, `pending`, `not_managed`,
-  `readonly`, `failed`, `busy`, `unsupported` or `disconnected`.
+  runtime's version and answers `updated`, `pending`, `current`, `newer`,
+  `not_managed`, `readonly`, `failed`, `downgrade`, `busy`, `unsupported` or
+  `disconnected`. A bridge already at or above the runtime's version is never
+  sent an update.
 - Tag releases publish the Python sdist and wheel plus a `SHA256SUMS` file.
 - Runtime maintenance API for the upcoming desktop Maintenance section:
   token-authenticated `GET /maintenance` (versions, runtime service, log paths,

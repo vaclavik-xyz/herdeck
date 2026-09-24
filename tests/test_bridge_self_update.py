@@ -222,7 +222,13 @@ async def test_successful_update_verifies_the_wheel_installs_checks_and_exits(tm
     install, verify = fakes.runs
     assert install[:4] == [fakes.env.python, "-m", "pip", "install"]
     assert install[-1].endswith(WHEEL) and Path(install[-1]).name == WHEEL
-    assert verify == [fakes.env.python, "-I", "-c", "import herdeck; print(herdeck.__version__)"]
+    # the bridge module itself must import in the new install, not just the package
+    assert verify == [
+        fakes.env.python,
+        "-I",
+        "-c",
+        "import herdeck.bridge, herdeck; print(herdeck.__version__)",
+    ]
     assert "PYTHONPATH" not in fakes.run_kwargs[0]["env"]
     stages = [p["stage"] for p in sink.progress]
     assert stages[0] == "download" and "install" in stages and stages[-1] == "verify"
@@ -230,7 +236,17 @@ async def test_successful_update_verifies_the_wheel_installs_checks_and_exits(tm
     assert any(p["message"] == "Successfully installed herdeck" for p in sink.progress)
     # the result goes out BEFORE the exit is requested
     assert fakes.exits == 1 and updater.exit_requested
-    assert fakes.markers == [(TARGET, "wheel")]
+    assert fakes.markers == [
+        (
+            TARGET,
+            {
+                "source": "wheel",
+                "source_url": su.asset_url(TARGET, WHEEL),
+                "sha256": hashlib.sha256(WHEEL_BYTES).hexdigest(),
+                "verified": True,
+            },
+        )
+    ]
     assert updater.busy  # the process is exiting: no second update
 
 
@@ -241,9 +257,16 @@ async def test_uv_is_used_when_the_venv_has_no_pip(tmp_path):
     assert sink.result["data"]["updated"] == TARGET
 
 
-async def test_no_wheel_asset_falls_back_to_the_git_tag(tmp_path):
+async def test_no_wheel_asset_falls_back_to_the_git_tag_only_for_pre_wheel_releases(
+    tmp_path, monkeypatch
+):
+    # Today both floors are 0.10.0, so the fallback is unreachable; move them
+    # apart to exercise it.
+    monkeypatch.setattr(su, "FIRST_SELF_UPDATE_VERSION", "0.0.1")
+    monkeypatch.setattr(su, "WHEELS_SINCE_VERSION", "9.0.0")
     fakes, sink = Fakes(tmp_path, assets={}), Sink()
     await fakes.updater().handle(_msg(), sink)
+    assert fakes.markers[0][1]["verified"] is False and fakes.markers[0][1]["sha256"] is None
     assert fakes.runs[0][-1] == f"git+https://github.com/vaclavik-xyz/herdeck@v{TARGET}"
     assert sink.result["data"] == {"updated": TARGET, "source": "git", "restarting": True}
     assert fakes.exits == 1
@@ -253,6 +276,60 @@ def _failure(sink):
     data = sink.result["data"]
     assert data["updated"] is None
     return data["error"]
+
+
+async def test_a_missing_wheel_of_a_wheel_era_release_is_an_error(tmp_path):
+    fakes, sink = Fakes(tmp_path, assets={}), Sink()
+    updater = fakes.updater()
+    await updater.handle(_msg(), sink)
+    error = _failure(sink)
+    assert error["code"] == "failed" and "no wheel asset" in error["message"]
+    assert fakes.runs == [] and fakes.exits == 0 and not updater.busy
+
+
+@pytest.mark.parametrize(
+    "version, allow",
+    [
+        ("0.99.0", False),  # older than the running 1.0.0
+        ("1.0.0rc1", False),
+        ("0.9.5", True),  # below the first self-updating release: never
+    ],
+)
+async def test_downgrades_are_refused(tmp_path, version, allow):
+    fakes, sink = Fakes(tmp_path), Sink()
+    msg = {**_msg(version), **({"allow_downgrade": True} if allow else {})}
+    await fakes.updater().handle(msg, sink)
+    assert _failure(sink)["code"] == "downgrade"
+    assert fakes.fetched == [] and fakes.runs == [] and fakes.exits == 0
+
+
+async def test_an_explicit_downgrade_is_allowed_above_the_floor(tmp_path):
+    fakes, sink = Fakes(tmp_path), Sink()
+    fakes.verify_out = "0.99.0"
+    fakes.assets = {
+        su.asset_url("0.99.0", su.wheel_name("0.99.0")): WHEEL_BYTES,
+        su.asset_url("0.99.0", "SHA256SUMS"): _sums(name=su.wheel_name("0.99.0")),
+    }
+    await fakes.updater().handle({**_msg("0.99.0"), "allow_downgrade": True}, sink)
+    assert sink.result["data"]["updated"] == "0.99.0" and fakes.exits == 1
+
+
+def test_version_ordering():
+    ordered = [
+        "1.0.0.dev1",
+        "1.0.0a1",
+        "1.0.0b2",
+        "1.0.0rc1",
+        "1.0.0",
+        "1.0.0.post1",
+        "1.0.1",
+        "1.10.0",
+    ]
+    keys = [su.version_key(v) for v in ordered]
+    assert keys == sorted(keys) and len(set(keys)) == len(keys)
+    assert su.compare_versions("0.10.0", "0.9.0") == 1
+    assert su.compare_versions("0.9.0", "0.9.0") == 0
+    assert su.compare_versions("x", "0.9.0") is None
 
 
 @pytest.mark.parametrize(
@@ -498,14 +575,32 @@ def test_main_exits_cleanly_after_a_restart_request(monkeypatch):
     assert bridge_mod.main([]) is None  # returns -> exit status 0
 
 
-def test_marker_is_rewritten_atomically_keeping_other_keys(tmp_path):
-    marker = {"version": "1.0.0", "source": "x", "k": 1}
+def test_marker_is_rewritten_atomically_describing_the_new_artifact(tmp_path, monkeypatch):
+    # managed.py's schema: stale artifact keys never survive an update
+    marker = {
+        "version": "1.0.0",
+        "source": "git+https://github.com/vaclavik-xyz/herdeck@v1.0.0",
+        "sha256": None,
+        "verified": False,
+        "venv": str(tmp_path),
+        "installed_at": 1,
+    }
     (tmp_path / su.MARKER_NAME).write_text(json.dumps(marker))
-    su._write_marker(su.ManagedEnv(prefix=tmp_path, python="py", marker=marker), TARGET, "wheel")
+    monkeypatch.setattr(su.time, "time", lambda: 1234)
+    installed = {
+        "source": "wheel",
+        "source_url": su.asset_url(TARGET, WHEEL),
+        "sha256": "ab" * 32,
+        "verified": True,
+    }
+    su._write_marker(su.ManagedEnv(prefix=tmp_path, python="py", marker=marker), TARGET, installed)
     assert json.loads((tmp_path / su.MARKER_NAME).read_text()) == {
         "version": TARGET,
-        "source": "wheel",
-        "k": 1,
+        "source": su.asset_url(TARGET, WHEEL),
+        "sha256": "ab" * 32,
+        "verified": True,
+        "venv": str(tmp_path),
+        "installed_at": 1234,
     }
     assert [p.name for p in tmp_path.iterdir()] == [su.MARKER_NAME]
 

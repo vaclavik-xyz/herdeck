@@ -9,7 +9,7 @@ Wire contract (full token only; a read-only token is refused by the bridge's
     <- {"type": "result", "req": "u1", "data": {"updated": "X.Y.Z", "source": "wheel",
                                                "restarting": true}}
     <- {"type": "result", "req": "u1", "data": {"updated": null, "error": {
-           "code": "not_managed" | "invalid_version" | "busy" | "failed",
+           "code": "not_managed" | "invalid_version" | "downgrade" | "busy" | "failed",
            "message": "...", "output": "<installer output tail>"}}}
 
 Managed-install contract (shared with ``herdeck-service install bridge
@@ -25,9 +25,16 @@ Install source, in order:
 1. the release wheel ``herdeck-X-py3-none-any.whl`` from the GitHub release
    ``vX``, verified against that release's ``SHA256SUMS`` asset before pip or
    uv ever sees it (a wheel without a matching checksum is refused);
-2. only when the release has *no wheel asset at all* (releases before the
-   Python assets were published): ``git+https://github.com/vaclavik-xyz/herdeck@vX``.
-   That path has no checksum — it trusts TLS and the tag — and needs ``git``.
+2. only for a version older than ``WHEELS_SINCE_VERSION`` (no release before
+   it has a wheel) and whose wheel is missing:
+   ``git+https://github.com/vaclavik-xyz/herdeck@vX``. That path has no
+   checksum — it trusts TLS and the tag — and needs ``git``. From
+   ``WHEELS_SINCE_VERSION`` on a missing wheel is an error.
+
+Versions: a target older than the running bridge is refused (``downgrade``)
+unless the message carries ``"allow_downgrade": true``; a target older than
+``FIRST_SELF_UPDATE_VERSION`` is always refused, since the bridge would come
+back unable to update itself.
 
 The installed version is then read back in a fresh interpreter. Any failure
 leaves the running (old) bridge serving and replies with the output tail; the
@@ -49,6 +56,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from collections import deque
@@ -82,10 +90,57 @@ OUTPUT_TAIL_LINES = 40
 PROGRESS_MAX_CHARS = 300
 # Delay between the result frame and the exit, so the reply flushes first.
 EXIT_GRACE_S = 0.5
+VERIFY_SNIPPET = "import herdeck.bridge, herdeck; print(herdeck.__version__)"
+
+
+# The first release that ships self-update (and the first whose tag workflow
+# publishes the Python wheel + SHA256SUMS). A bridge never installs anything
+# older: it would restart into a version that cannot update itself again, so
+# the next fix would need a shell on the bridge host.
+FIRST_SELF_UPDATE_VERSION = "0.10.0"
+# Releases before this have no wheel asset; only for them may a missing wheel
+# fall back to the (unchecksummed) git tag. From this release on a missing
+# wheel means a draft/broken release and is an error. Equal to the floor above
+# today, so the fallback is currently unreachable by construction — kept as a
+# separate constant because the two rules are independent.
+WHEELS_SINCE_VERSION = "0.10.0"
+
+_PARSE_RE = re.compile(
+    r"^(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?(?:\.post(\d+))?(?:\.dev(\d+))?$"
+)
+_PRE_RANK = {"a": 0, "b": 1, "rc": 2}
 
 
 def valid_version(version: object) -> bool:
     return isinstance(version, str) and bool(_VERSION_RE.fullmatch(version))
+
+
+def version_key(version: object) -> tuple | None:
+    """A sortable key for the accepted version format (PEP 440 order:
+    ``1.0.0.dev1 < 1.0.0a1 < 1.0.0rc1 < 1.0.0 < 1.0.0.post1``), or None."""
+    if not isinstance(version, str):
+        return None
+    match = _PARSE_RE.fullmatch(version)
+    if match is None:
+        return None
+    major, minor, patch, pre, pre_n, post, dev = match.groups()
+    if pre:
+        pre_key = (_PRE_RANK[pre], int(pre_n))
+    elif dev and not post:
+        pre_key = (-1, 0)  # X.Y.Z.devN sorts before every pre-release of X.Y.Z
+    else:
+        pre_key = (3, 0)
+    post_key = int(post) if post else -1
+    dev_key = int(dev) if dev else float("inf")
+    return (int(major), int(minor), int(patch), pre_key, post_key, dev_key)
+
+
+def compare_versions(left: str, right: str) -> int | None:
+    """-1/0/1 like ``cmp``; None when either side is not a parseable version."""
+    a, b = version_key(left), version_key(right)
+    if a is None or b is None:
+        return None
+    return (a > b) - (a < b)
 
 
 def wheel_name(version: str) -> str:
@@ -307,8 +362,21 @@ def parse_sums(text: str, name: str) -> str | None:
     return None
 
 
-def _write_marker(env: ManagedEnv, version: str, source: str) -> None:
-    marker = {**env.marker, "version": version, "source": source}
+# Marker keys that describe the installed artifact. They are all replaced on
+# an update (never inherited from the previous install): the schema written by
+# ``herdeck-service install bridge --managed`` (managed.py).
+_ARTIFACT_KEYS = ("version", "source", "sha256", "verified", "installed_at")
+
+
+def _write_marker(env: ManagedEnv, version: str, installed: dict) -> None:
+    marker = {key: value for key, value in env.marker.items() if key not in _ARTIFACT_KEYS}
+    marker.update(
+        version=version,
+        source=installed["source_url"],
+        sha256=installed["sha256"],
+        verified=installed["verified"],
+        installed_at=int(time.time()),
+    )
     path = env.prefix / MARKER_NAME
     fd, temporary = tempfile.mkstemp(prefix=".managed.", dir=env.prefix)
     try:
@@ -338,7 +406,7 @@ class BridgeUpdater:
         run: Callable[..., Awaitable[tuple[int | None, str]]] = run_installer,
         which: Callable[[str], str | None] = shutil.which,
         has_pip: Callable[[], bool] = _has_pip,
-        write_marker: Callable[[ManagedEnv, str, str], None] = _write_marker,
+        write_marker: Callable[[ManagedEnv, str, dict], None] = _write_marker,
         current_version: str = __version__,
     ):
         self._request_exit = request_exit
@@ -382,6 +450,23 @@ class BridgeUpdater:
             env, reason = self._probe()
             if env is None:
                 raise UpdateError("not_managed", reason)
+            if compare_versions(version, FIRST_SELF_UPDATE_VERSION) == -1:
+                # Never, not even with allow_downgrade: the bridge would come
+                # back as a version that cannot update itself remotely.
+                raise UpdateError(
+                    "downgrade",
+                    f"refusing {version}: versions before {FIRST_SELF_UPDATE_VERSION} "
+                    "cannot update themselves again",
+                )
+            order = compare_versions(version, self._current)
+            if order == -1 and msg.get("allow_downgrade") is not True:
+                # Several runtimes may share this bridge; an older one must not
+                # pull it back to its own version by accident.
+                raise UpdateError(
+                    "downgrade",
+                    f"refusing to downgrade from {self._current} to {version} "
+                    "(send allow_downgrade: true to force)",
+                )
         except UpdateError as exc:
             await send(_error_result(req, exc))
             return
@@ -399,7 +484,7 @@ class BridgeUpdater:
         self._busy = True
         succeeded = False
         try:
-            source = await self._install(req, version, env, send)
+            installed = await self._install(req, version, env, send)
             succeeded = True
         except UpdateError as exc:
             log.warning("bridge self-update to %s failed: %s", version, exc.message)
@@ -413,8 +498,9 @@ class BridgeUpdater:
         if not succeeded:
             return
         # Stays busy: this process is about to exit into the new version.
+        source = installed["source"]
         try:
-            self._write_marker(env, version, source)
+            self._write_marker(env, version, installed)
         except Exception as exc:
             log.warning("could not update %s: %s", MARKER_NAME, exc)
         await send(
@@ -455,15 +541,26 @@ class BridgeUpdater:
         except Exception as exc:
             raise UpdateError("failed", f"download failed: {url}: {exc}") from exc
 
-    async def _install(self, req: str, version: str, env: ManagedEnv, send: Send) -> str:
+    async def _install(self, req: str, version: str, env: ManagedEnv, send: Send) -> dict:
         with tempfile.TemporaryDirectory(prefix="herdeck-update-") as tmp:
             name = wheel_name(version)
             url = asset_url(version, name)
             await self._progress(send, req, "download", f"downloading {url}")
             wheel = await self._download(url, WHEEL_MAX_BYTES)
             if wheel is None:
+                if compare_versions(version, WHEELS_SINCE_VERSION) != -1:
+                    raise UpdateError(
+                        "failed",
+                        f"release v{version} has no wheel asset (draft or incomplete "
+                        "release?); refusing an unverified install",
+                    )
                 target = git_source(version)
-                source = "git"
+                installed = {
+                    "source": "git",
+                    "source_url": target,
+                    "sha256": None,
+                    "verified": False,
+                }
                 await self._progress(
                     send, req, "download", f"release v{version} has no wheel; using {target}"
                 )
@@ -487,7 +584,12 @@ class BridgeUpdater:
                 path = Path(tmp) / name
                 path.write_bytes(wheel)
                 target = str(path)
-                source = "wheel"
+                installed = {
+                    "source": "wheel",
+                    "source_url": url,
+                    "sha256": actual,
+                    "verified": True,
+                }
             argv = self._installer_argv(env, target)
             await self._progress(send, req, "install", f"installing with {Path(argv[0]).name}")
 
@@ -509,21 +611,23 @@ class BridgeUpdater:
                 return None
 
             code, output = await self._run(
-                [env.python, "-I", "-c", "import herdeck; print(herdeck.__version__)"],
+                # Importing the bridge module too catches a broken install
+                # (missing dependency, syntax error) before this process exits.
+                [env.python, "-I", "-c", VERIFY_SNIPPET],
                 VERIFY_TIMEOUT_S,
                 ignore,
                 env=_child_env(),
                 cwd=tmp,
             )
-            installed = output.strip().splitlines()[-1].strip() if output.strip() else ""
-            if code != 0 or installed != version:
+            reported = output.strip().splitlines()[-1].strip() if output.strip() else ""
+            if code != 0 or reported != version:
                 raise UpdateError(
                     "failed",
-                    f"installed version check failed (got {installed or 'nothing'}, "
+                    f"installed version check failed (got {reported or 'nothing'}, "
                     f"expected {version})",
                     output,
                 )
-        return source
+        return installed
 
     def _installer_argv(self, env: ManagedEnv, target: str) -> list[str]:
         if self._has_pip():

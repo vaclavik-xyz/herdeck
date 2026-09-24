@@ -152,9 +152,11 @@ editable install — migrate it with `--managed` first, or keep using
 `deploy-host.sh --role bridge`. `unsupported` means the bridge predates
 self-update and needs one update by hand.
 
-The wheel only exists for releases whose tag workflow published the Python
-assets; for an older tag the bridge installs `git+https://github.com/
-vaclavik-xyz/herdeck@v<version>` instead, which needs `git` on the bridge host.
+The runtime never sends an update to a bridge that already runs its version or
+a newer one (`current`/`newer`), so an older deck host sharing the bridge cannot
+pull it back. The bridge only installs releases from 0.10.0 on (the first that
+publishes the wheel and can update itself); a release without a wheel asset is
+refused rather than installed unverified.
 
 ### Migrating a hand-made runtime unit
 

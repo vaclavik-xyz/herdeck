@@ -20,9 +20,12 @@ Every answer is one JSON shape::
 
 ``code`` is one of ``updated`` · ``pending`` · ``not_managed`` · ``readonly`` ·
 ``failed`` · ``busy`` (another client's update is running on that bridge) ·
+``current`` / ``newer`` (the bridge already runs this runtime's version or a
+newer one: nothing is sent, the bridge is never pulled back) · ``downgrade``
+(the bridge refused an older target) ·
 ``unsupported`` (the bridge predates self-update, or is not a herdeck bridge)
 · ``disconnected`` (the server is not connected, so nothing was sent).
-``ok`` is true for ``updated`` and ``pending``.
+``ok`` is true for ``updated``, ``pending``, ``current`` and ``newer``.
 
 ``LiveSource`` mixes in ``BridgeUpdateMixin`` and routes its connector
 callbacks (result, error, progress, connection, snapshot) through the
@@ -40,6 +43,7 @@ from dataclasses import dataclass, field
 from urllib.parse import unquote
 
 from .. import __version__
+from ..self_update import compare_versions
 
 UPDATE_WAIT_DEFAULT_S = 15.0
 UPDATE_WAIT_MAX_S = 25.0
@@ -63,7 +67,8 @@ def route_server_id(path: str) -> str | None:
 
 
 def _outcome(code: str, message: str = "", **extra) -> dict:
-    return {"ok": code in ("updated", "pending"), "code": code, "message": message, **extra}
+    ok = code in ("updated", "pending", "current", "newer")
+    return {"ok": ok, "code": code, "message": message, **extra}
 
 
 def result_outcome(data: object) -> dict:
@@ -81,7 +86,7 @@ def result_outcome(data: object) -> dict:
     code = error.get("code")
     message = error.get("message") if isinstance(error.get("message"), str) else ""
     output = error.get("output") if isinstance(error.get("output"), str) else ""
-    if code in ("not_managed", "busy"):
+    if code in ("not_managed", "busy", "downgrade"):
         return _outcome(code, message)
     return _outcome("failed", message or str(code or "update failed"), output=output)
 
@@ -129,6 +134,11 @@ class BridgeUpdates:
     def latest(self, server_id: str) -> _Job | None:
         with self._cond:
             return self._jobs.get(server_id)
+
+    def latest_running(self, server_id: str) -> _Job | None:
+        with self._cond:
+            job = self._jobs.get(server_id)
+            return job if job is not None and job.outcome is None and not self._expired(job) else None
 
     def _finish(self, job: _Job, outcome: dict) -> None:
         if job.outcome is None:
@@ -188,21 +198,16 @@ class BridgeUpdates:
                 self._cond.notify_all()
 
     def on_bridge_version(self, server_id: str, version: str | None) -> None:
+        """Only the target version settles a job whose reply was lost. A
+        reconnect at the old version proves nothing (the bridge may still be
+        installing, or have restarted mid-install): the job stays pending,
+        bounded by ``JOB_DEADLINE_S``."""
         with self._cond:
             job = self._jobs.get(server_id)
             if job is None or job.outcome is not None or not job.disconnected:
                 return
             if version == job.target:
                 self._finish(job, _outcome("updated", f"bridge reconnected at {version}"))
-            else:
-                self._finish(
-                    job,
-                    _outcome(
-                        "failed",
-                        f"bridge reconnected at {version or 'an unknown version'} "
-                        f"without the update to {job.target}",
-                    ),
-                )
 
     # --- HTTP side -----------------------------------------------------------
     def wait(self, job: _Job, after: int, timeout: float) -> dict:
@@ -300,6 +305,17 @@ class BridgeUpdateMixin:
                     "this bridge cannot update itself (herdeck before self-update, or not "
                     "a herdeck bridge); update it by hand once",
                 ),
+                **base,
+            }
+        health = getattr(connector, "health", None)
+        bridge_version = health().get("bridge_version") if callable(health) else None
+        order = compare_versions(bridge_version, __version__) if bridge_version else None
+        if order is not None and order >= 0 and self._bridge_updates.latest_running(server_id) is None:
+            # Never pull a bridge back: several runtimes may share it, and an
+            # older one must not downgrade it to its own version.
+            code = "current" if order == 0 else "newer"
+            return {
+                **_outcome(code, f"the bridge already runs {bridge_version}"),
                 **base,
             }
         req = f"u{next(self._bridge_update_reqs)}"

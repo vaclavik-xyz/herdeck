@@ -179,18 +179,37 @@ def test_pending_then_long_poll_progress_and_outcome():
     assert done["code"] == "updated" and done["progress"] == []
 
 
-@pytest.mark.parametrize(
-    "version, code", [(__version__, "updated"), ("0.0.1", "failed")]
-)
-def test_a_lost_reply_is_settled_by_the_reconnect_snapshot(version, code):
+def test_a_lost_reply_is_settled_only_by_the_target_version():
     src, runner = make()
     src.bridge_update("prod", 0)
     src._on_connection("prod", False)
     assert "disconnected" in src.bridge_update_status("prod", 0, 0)["message"]
     src._on_connection("prod", True)
-    runner.version = version
+    # back at the old version: it may still be installing -> stays pending
     src._on_snapshot("prod", [])
-    assert src.bridge_update_status("prod", 0, 0)["code"] == code
+    assert src.bridge_update_status("prod", 0, 0)["code"] == "pending"
+    # a retry meanwhile joins the running update instead of sending again
+    assert src.bridge_update("prod", 0)["code"] == "pending"
+    assert len([m for m in runner.sent if m["type"] == "update"]) == 1
+    runner.version = __version__
+    src._on_snapshot("prod", [])
+    assert src.bridge_update_status("prod", 0, 0)["code"] == "updated"
+
+
+@pytest.mark.parametrize("bridge, code", [(__version__, "current"), ("99.0.0", "newer")])
+def test_a_bridge_at_or_above_the_runtime_version_is_never_sent_an_update(bridge, code):
+    src, runner = make(updated, version=bridge)
+    out = src.bridge_update("prod", 0)
+    assert (out["ok"], out["code"]) == (True, code)
+    assert runner.sent == []
+
+
+def test_downgrade_refusal_maps_through():
+    def refuse(runner, msg):
+        runner.result(msg, {"updated": None, "error": {"code": "downgrade", "message": "no"}})
+
+    out = make(refuse)[0].bridge_update("prod", 1.0)
+    assert (out["ok"], out["code"]) == (False, "downgrade")
 
 
 def test_a_snapshot_during_the_install_does_not_settle_it():
