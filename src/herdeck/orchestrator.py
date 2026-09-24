@@ -196,6 +196,8 @@ class Orchestrator:
         # Provider usage (CodexBar) shown on the calm overview panel; the host
         # app feeds it via set_usage from its UsagePoller.
         self._usage: list = []
+        # (server_id | None,) while the deck shows a config error (set_config_error).
+        self._config_error: tuple[str | None] | None = None
         self._usage_detail_until: float = 0.0
         self._usage_detail_page: int = 0
         # Ordering hysteresis state (see _ordered).
@@ -334,6 +336,27 @@ class Orchestrator:
     def set_usage(self, data: list) -> None:
         """Latest ProviderUsage list from the host's UsagePoller ([] = none)."""
         self._usage = list(data)
+
+    def set_config_error(self, active: bool, server_id: str | None = None) -> None:
+        """Show the config-error screen instead of a fleet: the config file exists
+        but cannot be loaded. ``server_id`` names the server whose bridge token is
+        missing (None = any other load error). The deck never falls back to demo
+        agents that would look like a healthy live fleet."""
+        self._config_error = (server_id,) if active else None
+
+    def _render_config_error(self) -> RenderState:
+        (server_id,) = self._config_error
+        reason = (
+            self._tr("config_error_token", name=server_id)
+            if server_id
+            else self._tr("config_error_invalid")
+        )
+        tiles = [TileView(i, "", "empty") for i in range(self.slots)]
+        color = self.config.theme.colors.get("offline", "red")
+        panel = PanelView(
+            self._tr("config_error_title"), [reason, self._tr("config_error_hint")], color
+        )
+        return RenderState(tiles, panel)
 
     def consume_expired_panel_hold(self) -> bool:
         """True ONCE when a held usage detail just expired — the hold is gated
@@ -729,6 +752,8 @@ class Orchestrator:
         return (oldest.label, self._elapsed_text(oldest.key))
 
     def render(self) -> RenderState:
+        if self._config_error is not None:
+            return self._render_config_error()
         if self._profile_menu:
             return self._render_profile_menu()
         if self._launcher:

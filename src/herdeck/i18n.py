@@ -19,6 +19,11 @@ STRINGS: dict[str, dict[str, str]] = {
         # overview panel (layout.panel_overview)
         "offline_title": "OFFLINE",
         "reconnecting": "reconnecting…",
+        # config that exists but cannot be loaded (deckapp ConfigErrorSource)
+        "config_error_title": "CONFIG ERROR",
+        "config_error_token": "no token for '{name}'",
+        "config_error_invalid": "config not loadable",
+        "config_error_hint": "see Maintenance",
         # partial outage: some, not all, servers down (note line on the calm panel)
         "server_offline": "{name} offline",
         "servers_offline": "{n} servers offline",
@@ -124,6 +129,10 @@ STRINGS: dict[str, dict[str, str]] = {
     "cs": {
         "offline_title": "OFFLINE",
         "reconnecting": "připojuji…",
+        "config_error_title": "CHYBA CONFIGU",
+        "config_error_token": "chybí token '{name}'",
+        "config_error_invalid": "config nejde načíst",
+        "config_error_hint": "viz Údržba",
         "server_offline": "{name} offline",
         "servers_offline": "servery offline: {n}",
         "blocked_count": "▲ blokováno: {n}",
