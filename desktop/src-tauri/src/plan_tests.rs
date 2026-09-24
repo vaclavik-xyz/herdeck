@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::notify_pump::*;
+use crate::tray::*;
 use crate::window_roles::*;
 
 #[test]

@@ -8,9 +8,10 @@ use std::path::Path;
 
 use tauri::{Emitter, LogicalPosition, Manager, PhysicalPosition};
 
+use crate::tray::TrayHandles;
 use crate::window_state::{self, WindowState};
 use crate::{
-    deck_prefs, default_config_path, http, AppState, TrayHandles, HDR_TOKEN,
+    deck_prefs, default_config_path, http, AppState, HDR_TOKEN,
     SETUP_CONNECT_TIMEOUT, SIDECAR_TIMEOUT,
 };
 
