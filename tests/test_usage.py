@@ -944,3 +944,43 @@ def test_codex_app_server_skips_notifications_and_server_requests(monkeypatch):
     assert usage is not None and usage.windows[0].used_percent == 100
     assert (usage.subscription, usage.plan) == ("paid", "pro")
     source.close()
+
+
+def test_codexbar_partial_failure_keeps_the_requested_providers(monkeypatch):
+    # CodexBar reports every provider enabled in ITS settings and exits 1 when
+    # any fails (an expired Cursor/Kimi login), even with --provider naming
+    # healthy ones: the requested numbers on stdout must still be used.
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codexbar")
+    cursor_failed = {"provider": "cursor", "error": {"kind": "provider", "code": 1}}
+    stdout = json.dumps(
+        [
+            _codexbar_entry("claude", "Claude Max 20x"),
+            _codexbar_entry("codex", "Plus"),
+            _codexbar_entry("gemini", "Pro"),  # not requested: dropped
+            cursor_failed,
+        ]
+    )
+    poller = UsagePoller(
+        ["claude", "codex"],
+        codex_source=_Source(None),
+        claude_reader=lambda _path: None,
+        runner=lambda argv, **kwargs: _Proc(stdout=stdout, returncode=1, stderr=""),
+    )
+
+    poller.poll_once()
+
+    assert sorted(usage.provider for usage in poller.snapshot()) == ["claude", "codex"]
+
+
+def test_codexbar_failure_without_numbers_still_yields_nothing(monkeypatch):
+    monkeypatch.setattr("herdeck.usage.resolve_cli", lambda p: "/fake/codexbar")
+    poller = UsagePoller(
+        ["claude"],
+        codex_source=_Source(None),
+        claude_reader=lambda _path: None,
+        runner=lambda argv, **kwargs: _Proc(stdout="not json", returncode=1, stderr="boom"),
+    )
+
+    poller.poll_once()
+
+    assert poller.snapshot() == []

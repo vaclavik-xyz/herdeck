@@ -64,6 +64,10 @@ class D200Sink:
     # Ticker frames are dropped in deliver(); telling DeckApp lets a headless
     # runtime skip rendering them at all.
     wants_ticker_frames = False
+    # How often the frozen spinner/elapsed text is allowed to catch up: ONE
+    # full frame for all tiles at once (a single blink), and only when some
+    # shown value actually changed.
+    VOLATILE_REFRESH_S = 60.0
 
     def __init__(
         self,
@@ -73,6 +77,7 @@ class D200Sink:
         slots: int,
         start_reader: bool = True,
         on_disconnect: Callable[[], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self._driver = driver
         self._slots = slots
@@ -83,7 +88,12 @@ class D200Sink:
         # for an otherwise identical tile; the driver then sees byte-identical
         # frames and safely suppresses the USB write. A real status/title/layout
         # change replaces the cached view and still repaints immediately.
+        # Frozen for good, though, the elapsed text read "0s" for as long as an
+        # agent stayed done/idle: every VOLATILE_REFRESH_S all tiles take their
+        # current view together.
         self._stable_tiles: dict[int, tuple[object, object]] = {}
+        self._clock = clock
+        self._volatile_refreshed_at = clock()
         driver.on_press(on_press)
         self._reader_thread: threading.Thread | None = None
         if start_reader:
@@ -117,6 +127,10 @@ class D200Sink:
     def _stabilize_volatile_tiles(self, tiles: list) -> list:
         stable = []
         current: dict[int, tuple[object, object]] = {}
+        now = self._clock()
+        catch_up = now - self._volatile_refreshed_at >= self.VOLATILE_REFRESH_S
+        if catch_up:
+            self._volatile_refreshed_at = now
         for tile in tiles:
             try:
                 # Spinner phase is volatile, spinner presence is a real
@@ -130,7 +144,7 @@ class D200Sink:
             except TypeError:  # lightweight non-dataclass test doubles
                 semantic = display = tile
             previous = self._stable_tiles.get(tile.index)
-            if previous is not None and previous[0] == semantic:
+            if previous is not None and previous[0] == semantic and not catch_up:
                 display = previous[1]
             current[tile.index] = (semantic, display)
             stable.append(display)

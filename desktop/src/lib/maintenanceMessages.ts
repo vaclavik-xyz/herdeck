@@ -155,11 +155,13 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     ua_state_running_now: "running · {providers}",
     ua_no_providers: "no providers yet",
     ua_state_stale: "installed, but its numbers are stale",
+    ua_state_no_numbers: "running, but no numbers yet — if it stays so, see ~/Library/Logs/herdeck-usage.log on that Mac",
     ua_state_stopped: "installed, but not running",
     ua_state_no_gui_session: "no login session on that Mac — log in to its desktop, then install again",
     ua_state_unsupported: "not supported by this bridge (an older herdeck or another system)",
     ua_state_error: "the last action failed",
     ua_empty: "This bridge offers usage limits but sends no numbers — install the helper.",
+    ua_empty_installed: "The helper is installed, but the bridge still sends no numbers — codex/codexbar fail for it; see ~/Library/Logs/herdeck-usage.log on that Mac.",
     ua_install: "Install",
     ua_remove: "Remove",
     ua_installing: "Installing…",
@@ -318,11 +320,13 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     ua_state_running_now: "běží · {providers}",
     ua_no_providers: "zatím žádní poskytovatelé",
     ua_state_stale: "nainstalováno, ale čísla jsou zastaralá",
+    ua_state_no_numbers: "běží, ale zatím bez čísel — pokud to vydrží, viz ~/Library/Logs/herdeck-usage.log na tom Macu",
     ua_state_stopped: "nainstalováno, ale neběží",
     ua_state_no_gui_session: "na tom Macu není přihlášené sezení — přihlas se do plochy a nainstaluj znovu",
     ua_state_unsupported: "tento bridge ho nepodporuje (starší herdeck nebo jiný systém)",
     ua_state_error: "poslední akce selhala",
     ua_empty: "Tento bridge nabízí limity, ale neposílá žádná čísla — nainstaluj pomocníka.",
+    ua_empty_installed: "Pomocník je nainstalovaný, ale bridge pořád neposílá žádná čísla — codex/codexbar mu selhávají; viz ~/Library/Logs/herdeck-usage.log na tom Macu.",
     ua_install: "Nainstalovat",
     ua_remove: "Odebrat",
     ua_installing: "Instaluji…",
@@ -446,6 +450,7 @@ export function usageAgentStateText(
       return fmt(m.ua_state_running, { providers, ago: ago(ua.fileAgeS * 1000 + Math.max(0, now - receivedAt)) });
     }
     case "stale": return m.ua_state_stale;
+    case "no_numbers": return m.ua_state_no_numbers;
     case "stopped": return m.ua_state_stopped;
     case "no_gui_session": return m.ua_state_no_gui_session;
     case "unsupported": return m.ua_state_unsupported;

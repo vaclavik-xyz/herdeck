@@ -295,13 +295,14 @@ describe("usage agent", () => {
   });
 
   it("derives the row state, the last action's code first", () => {
-    const ua = parseUsageAgent({ installed: true, running: true, fresh: true })!;
+    const ua = parseUsageAgent({ installed: true, running: true, fresh: true, providers: ["codex"] })!;
     expect(usageAgentState(ua)).toBe("running");
     expect(usageAgentState(ua, "no_gui_session")).toBe("no_gui_session");
     expect(usageAgentState(ua, "unsupported")).toBe("unsupported");
     expect(usageAgentState(ua, "timeout")).toBe("running");
     expect(usageAgentState({ ...ua, fresh: false })).toBe("stale");
     expect(usageAgentState({ ...ua, running: false })).toBe("stopped");
+    expect(usageAgentState({ ...ua, providers: [] })).toBe("no_numbers");
     expect(usageAgentState({ ...ua, installed: false })).toBe("not_installed");
     expect(usageAgentState({ ...ua, installed: false, guiSession: false })).toBe("no_gui_session");
     expect(usageAgentState({ ...ua, error: "boom" })).toBe("error");
