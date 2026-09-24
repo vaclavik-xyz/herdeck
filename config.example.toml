@@ -4,6 +4,10 @@ active_profile = "work"
 id = "workbox"
 url = "ws://100.x.y.z:8788"        # server Tailscale IP (WireGuard-encrypted)
 token_env = "HERDECK_WORKBOX_TOKEN" # token comes from this env var, never this file
+# Resolution order: env var (token_env) -> token_file -> keychain entry (token_env).
+# A launchd/systemd runtime has no shell env: give it a 0600 token file instead
+# (a file readable by group/others is refused). ~ is expanded.
+# token_file = "~/.config/herdeck/workbox-token"
 
 # ---------------------------------------------------------------------------
 # Base configuration — applies to all profiles (the "default" base)

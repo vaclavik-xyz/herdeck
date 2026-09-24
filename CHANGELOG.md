@@ -6,6 +6,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `[[servers]]` entries accept `token_file = "<path>"` (`~` expanded, content
+  stripped) next to or instead of `token_env`. Tokens resolve from the
+  `token_env` environment variable, then the token file, then the keychain
+  entry named by `token_env`. The file must be a regular, owner-only (`0600`)
+  file; anything else is refused with a config error. Works for herdr and T3
+  servers and is editable in the Connections editor. `herdeck-doctor` reports
+  which source resolved each server's token (never the value).
+
+### Fixed
+- A config file that exists but cannot be loaded (for example a runtime service
+  without the shell env its `token_env` needs, or a missing keychain entry) no
+  longer starts the demo fleet silently. The runtime shows an explicit error
+  state: empty tiles and a `CONFIG ERROR` panel (en/cs) on the D200 and in the
+  window, `config_error` on `/health` and `/maintenance`, `source:
+  "config_error"` in `runtime.json`, and an ERROR log line. HealthNotice and
+  the Maintenance section show the message. The runtime watches the config and
+  its token files and re-checks every 10 s, so a fix recovers the deck without
+  a restart. The demo still starts with `HERDECK_MOCK`, the demo choice in
+  onboarding, or no config at all.
+- A running remote deck whose config breaks on reload now shows that error
+  instead of switching to the demo fleet.
+
 ## [0.10.0] - 2026-09-24
 
 ### Added
