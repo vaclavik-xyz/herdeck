@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import subprocess
 import threading
@@ -10,11 +9,8 @@ import urllib.request
 import uuid
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Protocol
 
 from .i18n import tr
-from .model import AgentState
 from .secrets import get_secret
 
 log = logging.getLogger("herdeck.notify")
@@ -618,81 +614,3 @@ class Notifier:
             self._sink(title, body, sound, **_sink_kwargs(self._sink, icon, meta))
         except Exception as exc:
             _warn_failure(_sink_name(self._sink), exc)
-
-
-class NoopNotifier(Notifier):
-    def __init__(self):
-        super().__init__(sink=lambda *a: None)
-
-
-class BlockedAlertNotifier(Protocol):
-    async def notify_blocked(
-        self,
-        agent: AgentState,
-        *,
-        body: str,
-        sound: bool | str,
-        multi_server: bool,
-    ) -> None: ...
-
-
-class InboundNotificationPoller(Protocol):
-    async def poll_once(
-        self, *, timeout: int = 20, is_current: Callable[[], bool] | None = None
-    ) -> None: ...
-
-
-@dataclass(frozen=True)
-class BlockedNotificationRuntime:
-    notifier: BlockedAlertNotifier
-    poller: InboundNotificationPoller | None = None
-
-
-class NoopBlockedNotifier:
-    async def notify_blocked(
-        self,
-        agent: AgentState,
-        *,
-        body: str,
-        sound: bool | str,
-        multi_server: bool,
-    ) -> None:
-        return None
-
-
-class LegacyBlockedNotifier:
-    def __init__(self, notifier: Notifier, language: str = "en"):
-        self._notifier = notifier
-        self._language = language
-
-    async def notify_blocked(
-        self,
-        agent: AgentState,
-        *,
-        body: str,
-        sound: bool | str,
-        multi_server: bool,
-    ) -> None:
-        title = event_title(agent.agent_type, "blocked", self._language)
-        await asyncio.to_thread(self._notifier.notify, title, body, sound)
-
-
-class CompositeBlockedNotifier:
-    def __init__(self, notifiers: list[BlockedAlertNotifier]):
-        self._notifiers = notifiers
-
-    async def notify_blocked(
-        self,
-        agent: AgentState,
-        *,
-        body: str,
-        sound: bool | str,
-        multi_server: bool,
-    ) -> None:
-        for notifier in self._notifiers:
-            try:
-                await notifier.notify_blocked(
-                    agent, body=body, sound=sound, multi_server=multi_server
-                )
-            except Exception:
-                log.debug("blocked alert notifier failed", exc_info=True)

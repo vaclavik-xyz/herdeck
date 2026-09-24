@@ -557,7 +557,7 @@ class DeckApp:
         something actually animates (a WORKING tile) or on the periodic full
         refresh — bridge updates and presses trigger their own refresh, so an
         idle deck does no per-tick render/encode/device work at all (matching
-        the legacy App.handle_tick). Every FULL_REFRESH_TICKS-th tick is a full
+        the old App.handle_tick). Every FULL_REFRESH_TICKS-th tick is a full
         frame so idle elapsed text advances and every sink resyncs.
 
         The orchestrator tick + RenderState snapshot run under self._lock

@@ -103,31 +103,6 @@ def local_config(port, token, partial=None):
     )
 
 
-def make_runtime_profile_switcher(
-    runtime_config: Config,
-    switch_profile,
-    *,
-    local_bridge: bool = False,
-):
-    if switch_profile is None:
-        return None
-    local_server = (
-        runtime_config.servers[0]
-        if local_bridge and len(runtime_config.servers) == 1
-        else None
-    )
-
-    def switch(name: str) -> Config | None:
-        resolved = switch_profile(name)
-        if resolved is None:
-            return None
-        if local_server is None:
-            return resolved
-        return _local_config_for_server(local_server, resolved)
-
-    return switch
-
-
 def _discover_config_path():
     p = os.environ.get("HERDECK_CONFIG")
     if p:

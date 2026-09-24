@@ -1,6 +1,6 @@
 """Poll config file mtimes and fire a callback on change.
 
-Drives both the sidecar's in-app reload and app.py's standalone hot-reload. A
+Drives the runtime's in-app reload (desktop sidecar and ``herdeck.host``). A
 poll (not an OS watch) keeps it dependency-free and cross-platform; the interval
 is short enough for an interactive editor and cheap enough to ignore.
 """

@@ -419,19 +419,23 @@ another machine.
 
 **Browser simulator (recommended).** `HERDECK_DECK=web` runs a pixel-faithful
 deck in the browser — it renders tiles/panel with the exact device code and turns
-clicks into presses. Two ways to use it:
+clicks into presses. It is a front of the same runtime the desktop app and
+`herdeck.runtime` use (`herdeck.host`: DeckApp + LiveSource + Orchestrator), so
+alerts, drills and the cockpit API behave the same everywhere. Two ways to use it:
 
 - **Against the live bridge** (real agents, even remotely over Tailscale):
   ```bash
   HERDECK_DECK=web HERDECK_CONFIG=~/.config/herdeck/config.toml \
-  HERDECK_WORKBOX_TOKEN=<token> python -m herdeck.app
+  HERDECK_WORKBOX_TOKEN=<token> herdeck
   # open http://127.0.0.1:8800  (set HERDECK_WEB_BIND to a Tailscale IP for remote)
   ```
-- **Fully offline** (synthetic, lively agents — no bridge, config, or token):
+- **Fully offline** (the demo fleet — no bridge, config, or token):
   ```bash
-  HERDECK_MOCK=1 HERDECK_DECK=web python -m herdeck.app
+  HERDECK_MOCK=1 HERDECK_DECK=web herdeck
   # open http://127.0.0.1:8800
   ```
+
+`python -m herdeck.app` still works as an alias of `herdeck`.
 
 `HERDECK_WEB_PORT` (default 8800) and `HERDECK_WEB_BIND` (default 127.0.0.1)
 configure the server. Click a tile to press it; click the panel to page.
@@ -565,7 +569,7 @@ generate a fresh title for that exact pane. The action stays hidden when the
 plugin is missing or disabled and while approval controls take priority on a
 blocked agent.
 
-**Headless.** `HERDECK_FAKE_DECK=1 python -m herdeck.app` uses an in-memory
+**Headless.** `HERDECK_FAKE_DECK=1 herdeck` uses an in-memory
 renderer (no UI). `scripts/e2e_verify.py` connects the pipeline to a bridge and
 prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).
 
@@ -735,8 +739,8 @@ usage crosses a level (a jump past several levels sends only the highest);
 that reached 100 % (or the highest `alert_at` level) resets. The reset is also
 detected from the clock passing the known reset time, so it arrives within one
 `refresh_secs` even while the Claude snapshot is stale. The first poll after
-startup is a silent baseline. Both the desktop runtime and the legacy
-`herdeck` app send them; the demo deck does not.
+startup is a silent baseline. Both the desktop runtime and `herdeck` /
+`herdeck-web` send them; the demo deck does not.
 
 **Thin-client deck.** When the deck machine only displays the deck and the AI
 logins live on another Mac, point `codex_path` and `codexbar_path` at small
@@ -776,7 +780,7 @@ with the deck kind `elgato-plugin`. Normally the TS shell sets the socket/token
 HERDECK_DECK=elgato-plugin \
   HERDECK_ELGATO_SOCK=/tmp/herdeck-elgato.sock \
   HERDECK_ELGATO_TOKEN="$(openssl rand -hex 16)" \
-  python -m herdeck.app
+  herdeck
 ```
 
 Unlike the D200/web front-ends, `elgato-plugin` does **not** use the grid
@@ -968,7 +972,9 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   prompt, Approve/Deny/Stop/Read again buttons, and reply routing. Reply to this message
   to send text to that specific agent. Herdeck accepts inbound actions only from
   `allowed_user_ids`, only in the configured `chat_id`, and only in `message_thread_id`
-  when one is configured.
+  when one is configured. Interactive alerts run in `herdeck` / `herdeck-web`;
+  the desktop runtime keeps sending one-way Telegram alerts, so two processes
+  never compete for the bot's updates.
 - `on` defaults to both events (`["blocked", "done"]`); set `on = ["blocked"]`
   to mute done alerts. The desktop settings warn next to a per-event sound whose
   event is not in `on`.

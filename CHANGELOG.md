@@ -175,6 +175,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   URLs is refused and shows the monogram.
 
 ### Removed
+- The legacy `herdeck.app.App` runtime and its copies of the notification,
+  Telegram, cockpit-API and terminal-preview logic. `herdeck.app` remains only
+  as an alias entry point (`python -m herdeck.app`, `from herdeck.app import
+  main`); `scripts/e2e_verify.py` runs the one runtime.
 - The cairosvg dependency: resvg is now the only SVG rasterizer, at runtime
   and when baking the bundled glyph PNGs. Source installs and builds no longer
   need the native cairo library (`brew install cairo`).

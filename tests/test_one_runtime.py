@@ -545,3 +545,17 @@ def test_a_shell_less_host_posts_macos_banners_directly(caplog):
     assert posted == [("t", "/tmp/i.png")]
     assert feed.state()["items"] == []
     assert "fallback=osascript" not in caplog.text
+
+
+def test_newly_entered_detects_transition_and_avoids_dup():
+    from herdeck.notify_events import newly_entered
+
+    k = AgentKey("s", "p1")
+    s_block = [AgentState(k, "claude", "api", Status.BLOCKED)]
+    s_work = [AgentState(k, "claude", "api", Status.WORKING)]
+    to, seen = newly_entered(Status.BLOCKED, set(), s_block)  # first time -> notify
+    assert k in to and k in seen
+    to2, seen2 = newly_entered(Status.BLOCKED, seen, s_block)  # same blocked -> no dup
+    assert to2 == set() and seen2 == seen
+    to3, seen3 = newly_entered(Status.BLOCKED, seen2, s_work)  # left blocked -> reset
+    assert to3 == set() and k not in seen3

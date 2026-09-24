@@ -8,6 +8,12 @@ browser -> https://persos.example/herdeck/* -> reverse proxy
         -> http://<tailscale-ip>:8800/herdeck/* -> herdeck-web
 ```
 
+`herdeck-web` is the web-cockpit front of the one Herdeck runtime (the same
+DeckApp + LiveSource + notification engine the desktop app uses). This contract
+— routes, cookies, headers and payloads — is pinned by
+`tests/test_contract_web_cockpit.py`; a change there is a breaking change for
+persOS.
+
 Keep the Herdeck listener bound to the host's Tailscale address, preserve the
 `/herdeck` prefix, and expose it only through the cockpit's HTTPS origin. Do not
 publish port 8800 to the public internet.
