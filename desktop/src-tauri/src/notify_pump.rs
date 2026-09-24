@@ -401,3 +401,470 @@ where
         PumpStep::Delivered { items: delivered }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! The delivery contract, driven through fakes: which items are posted,
+    //! what is acknowledged or handed to the fallback, where the cursor ends
+    //! up, and which runtime each call goes to.
+
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::collections::{HashSet, VecDeque};
+    use std::rc::Rc;
+
+    fn runtime(port: u16) -> Discovery {
+        Discovery {
+            url: format!("http://127.0.0.1:{port}"),
+            host: "127.0.0.1".into(),
+            port,
+            token: format!("t{port}"),
+            source: "live".into(),
+        }
+    }
+
+    /// State the fakes share, so one fake can change what another sees
+    /// (a discovery swapped mid-loop).
+    #[derive(Default)]
+    struct World {
+        discovery: RefCell<Option<Discovery>>,
+        runtime_ok: Cell<usize>,
+        rediscovered: RefCell<VecDeque<Option<Discovery>>>,
+        rediscover_calls: Cell<usize>,
+        /// Scripted poll results, in order; an empty script is a failure.
+        polls: RefCell<VecDeque<Result<(u16, String), String>>>,
+        /// `(port, cursor)` of every poll.
+        polled: RefCell<Vec<(u16, NotifyCursor)>>,
+        /// Scripted ack results; an empty script acknowledges (204).
+        acks: RefCell<VecDeque<Result<u16, String>>>,
+        acked: RefCell<Vec<(u16, String, u64)>>,
+        /// Scripted fallback results; an empty script delivers (204).
+        fallbacks: RefCell<VecDeque<Result<u16, String>>>,
+        fell_back: RefCell<Vec<(u16, String, u64, String)>>,
+        /// Item ids whose native post fails.
+        failing: RefCell<HashSet<String>>,
+        posted: RefCell<Vec<String>>,
+        withdrawn: RefCell<Vec<banners::AgentRef>>,
+        /// Swap the discovery to this runtime when an item is posted.
+        swap_on_post: RefCell<Option<Discovery>>,
+        /// Swap the discovery to this runtime after this many sleeps.
+        swap_after_sleeps: RefCell<Option<(usize, Discovery)>>,
+        slept: RefCell<Vec<Duration>>,
+        elapsed: Cell<Duration>,
+    }
+
+    struct Fake(Rc<World>);
+
+    impl NotifyHost for Fake {
+        fn permission(&self) -> bool {
+            true
+        }
+        fn discovery(&self) -> Option<Discovery> {
+            self.0.discovery.borrow().clone()
+        }
+        fn rediscover(&self) -> Option<Discovery> {
+            self.0.rediscover_calls.set(self.0.rediscover_calls.get() + 1);
+            let next = self.0.rediscovered.borrow_mut().pop_front().flatten();
+            if let Some(d) = &next {
+                *self.0.discovery.borrow_mut() = Some(d.clone());
+            }
+            next
+        }
+        fn note_runtime_ok(&self) {
+            self.0.runtime_ok.set(self.0.runtime_ok.get() + 1);
+        }
+    }
+
+    impl NotifyTransport for Fake {
+        fn poll(&self, d: &Discovery, cursor: &NotifyCursor) -> Result<(u16, String), String> {
+            self.0.polled.borrow_mut().push((d.port, cursor.clone()));
+            self.0
+                .polls
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or_else(|| Err("connection refused".into()))
+        }
+        fn ack(&self, d: &Discovery, generation: &str, seq: u64) -> Result<u16, String> {
+            self.0.acked.borrow_mut().push((d.port, generation.into(), seq));
+            self.0.acks.borrow_mut().pop_front().unwrap_or(Ok(204))
+        }
+        fn fallback(
+            &self,
+            d: &Discovery,
+            generation: &str,
+            seq: u64,
+            error: &str,
+        ) -> Result<u16, String> {
+            self.0
+                .fell_back
+                .borrow_mut()
+                .push((d.port, generation.into(), seq, error.into()));
+            self.0.fallbacks.borrow_mut().pop_front().unwrap_or(Ok(204))
+        }
+    }
+
+    impl BannerPoster for Fake {
+        fn post(&self, item: &PendingNotification) -> Result<(), String> {
+            if let Some(d) = self.0.swap_on_post.borrow_mut().take() {
+                *self.0.discovery.borrow_mut() = Some(d);
+            }
+            if self.0.failing.borrow().contains(&item.id) {
+                return Err("no notification center".into());
+            }
+            self.0.posted.borrow_mut().push(item.id.clone());
+            Ok(())
+        }
+        fn withdraw(&self, agent: &banners::AgentRef) {
+            self.0.withdrawn.borrow_mut().push(agent.clone());
+        }
+    }
+
+    struct FakeClock {
+        world: Rc<World>,
+        base: Instant,
+    }
+
+    impl Clock for FakeClock {
+        fn now(&self) -> Instant {
+            self.base + self.world.elapsed.get()
+        }
+        fn sleep(&self, d: Duration) {
+            self.world.elapsed.set(self.world.elapsed.get() + d);
+            self.world.slept.borrow_mut().push(d);
+            let count = self.world.slept.borrow().len();
+            let mut swap = self.world.swap_after_sleeps.borrow_mut();
+            if swap.as_ref().is_some_and(|(n, _)| *n == count) {
+                let (_, d) = swap.take().unwrap();
+                *self.world.discovery.borrow_mut() = Some(d);
+            }
+        }
+        fn unix_ms(&self) -> Option<i64> {
+            Some(1_000)
+        }
+    }
+
+    type TestPump = NotifyPump<Fake, Fake, Fake, FakeClock>;
+
+    fn pump_on(port: u16) -> (TestPump, Rc<World>) {
+        let world = Rc::new(World::default());
+        *world.discovery.borrow_mut() = Some(runtime(port));
+        let pump = NotifyPump {
+            host: Fake(world.clone()),
+            transport: Fake(world.clone()),
+            poster: Fake(world.clone()),
+            clock: FakeClock {
+                world: world.clone(),
+                base: Instant::now(),
+            },
+            cursor: Arc::new(Mutex::new(NotifyCursor::default())),
+        };
+        (pump, world)
+    }
+
+    fn feed(generation: &str, acked_seq: u64, seqs: &[u64]) -> Result<(u16, String), String> {
+        let items: Vec<_> = seqs
+            .iter()
+            .map(|seq| {
+                serde_json::json!({
+                    "id": format!("{generation}:{seq}"), "seq": seq,
+                    "title": "t", "body": "b", "created_at_ms": 400,
+                })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "generation": generation, "acked_seq": acked_seq, "items": items,
+        });
+        Ok((200, body.to_string()))
+    }
+
+    fn script(world: &World, polls: Vec<Result<(u16, String), String>>) {
+        world.polls.borrow_mut().extend(polls);
+    }
+
+    fn cursor(pump: &TestPump) -> NotifyCursor {
+        pump.cursor.lock_or_recover().clone()
+    }
+
+    fn at(generation: &str, seq: u64) -> NotifyCursor {
+        NotifyCursor {
+            generation: Some(generation.into()),
+            seq,
+        }
+    }
+
+    #[test]
+    fn items_are_posted_and_acknowledged_in_sequence_order() {
+        let (pump, world) = pump_on(1);
+        script(&world, vec![feed("g", 0, &[3, 1, 2])]);
+
+        assert_eq!(pump.step(), PumpStep::Delivered { items: 3 });
+        assert_eq!(*world.posted.borrow(), ["g:1", "g:2", "g:3"]);
+        assert_eq!(
+            *world.acked.borrow(),
+            [(1, "g".into(), 1), (1, "g".into(), 2), (1, "g".into(), 3)]
+        );
+        assert_eq!(cursor(&pump), at("g", 3));
+        assert_eq!(world.runtime_ok.get(), 1);
+        assert!(world.slept.borrow().is_empty(), "a clean batch never sleeps");
+        // The first poll starts from nothing; the cursor rides the next one.
+        script(&world, vec![feed("g", 3, &[])]);
+        pump.step();
+        assert_eq!(world.polled.borrow()[0].1, NotifyCursor::default());
+        assert_eq!(world.polled.borrow()[1].1, at("g", 3));
+    }
+
+    #[test]
+    fn already_acknowledged_items_are_not_posted_again() {
+        let (pump, world) = pump_on(1);
+        script(&world, vec![feed("g", 2, &[1, 2, 3])]);
+        assert_eq!(pump.step(), PumpStep::Delivered { items: 1 });
+        assert_eq!(*world.posted.borrow(), ["g:3"]);
+        assert_eq!(cursor(&pump), at("g", 3));
+    }
+
+    #[test]
+    fn a_failed_native_post_hands_the_item_to_the_fallback() {
+        let (pump, world) = pump_on(1);
+        world.failing.borrow_mut().insert("g:2".into());
+        script(&world, vec![feed("g", 0, &[1, 2, 3])]);
+
+        assert_eq!(pump.step(), PumpStep::FellBack { fallback_ok: true });
+        assert_eq!(*world.posted.borrow(), ["g:1"]);
+        assert_eq!(
+            *world.fell_back.borrow(),
+            [(1, "g".into(), 2, "no notification center".into())]
+        );
+        // The failed item is never acknowledged; the batch stops there.
+        assert_eq!(*world.acked.borrow(), [(1, "g".into(), 1)]);
+        // A delivered fallback counts as delivery: the cursor passes it.
+        assert_eq!(cursor(&pump), at("g", 2));
+        assert_eq!(*world.slept.borrow(), [NOTIFY_RETRY_DELAY]);
+    }
+
+    #[test]
+    fn a_refused_fallback_leaves_the_item_pending_for_the_next_poll() {
+        let (pump, world) = pump_on(1);
+        world.failing.borrow_mut().insert("g:2".into());
+        world.fallbacks.borrow_mut().push_back(Ok(409));
+        script(&world, vec![feed("g", 0, &[1, 2]), feed("g", 1, &[1, 2])]);
+
+        assert_eq!(pump.step(), PumpStep::FellBack { fallback_ok: false });
+        assert_eq!(cursor(&pump), at("g", 1), "cursor stops before the failed item");
+
+        // Native posting works again: the next poll retries item 2.
+        world.failing.borrow_mut().clear();
+        assert_eq!(pump.step(), PumpStep::Delivered { items: 1 });
+        assert_eq!(world.polled.borrow()[1].1, at("g", 1));
+        assert_eq!(*world.posted.borrow(), ["g:1", "g:2"]);
+        assert_eq!(cursor(&pump), at("g", 2));
+    }
+
+    #[test]
+    fn a_fallback_transport_error_is_a_refusal() {
+        let (pump, world) = pump_on(1);
+        world.failing.borrow_mut().insert("g:1".into());
+        world.fallbacks.borrow_mut().push_back(Err("timed out".into()));
+        script(&world, vec![feed("g", 0, &[1])]);
+        assert_eq!(pump.step(), PumpStep::FellBack { fallback_ok: false });
+        assert_eq!(cursor(&pump), at("g", 0));
+    }
+
+    #[test]
+    fn a_failed_ack_stops_the_batch_but_never_reposts_the_banner() {
+        let (pump, world) = pump_on(1);
+        world.acks.borrow_mut().push_back(Err("reset".into()));
+        script(&world, vec![feed("g", 0, &[1, 2]), feed("g", 0, &[1, 2])]);
+
+        assert_eq!(pump.step(), PumpStep::AckFailed);
+        assert_eq!(*world.posted.borrow(), ["g:1"]);
+        // Shown, so the local cursor moves even though the server never heard.
+        assert_eq!(cursor(&pump), at("g", 1));
+        assert_eq!(*world.slept.borrow(), [NOTIFY_RETRY_DELAY]);
+
+        // The runtime still says acked_seq 0; the shell must not show g:1 twice.
+        assert_eq!(pump.step(), PumpStep::Delivered { items: 1 });
+        assert_eq!(world.polled.borrow()[1].1, at("g", 1));
+        assert_eq!(*world.posted.borrow(), ["g:1", "g:2"]);
+    }
+
+    #[test]
+    fn a_non_204_ack_is_a_failure_too() {
+        let (pump, world) = pump_on(1);
+        world.acks.borrow_mut().push_back(Ok(409));
+        script(&world, vec![feed("g", 0, &[1, 2])]);
+        assert_eq!(pump.step(), PumpStep::AckFailed);
+        assert_eq!(*world.posted.borrow(), ["g:1"]);
+    }
+
+    #[test]
+    fn a_runtime_restart_resets_the_cursor_and_delivers_low_sequence_items() {
+        let (pump, world) = pump_on(1);
+        *pump.cursor.lock_or_recover() = at("old", 10);
+        script(&world, vec![feed("new", 0, &[1, 2])]);
+
+        assert_eq!(pump.step(), PumpStep::Delivered { items: 2 });
+        assert_eq!(*world.posted.borrow(), ["new:1", "new:2"]);
+        assert_eq!(
+            *world.acked.borrow(),
+            [(1, "new".into(), 1), (1, "new".into(), 2)]
+        );
+        assert_eq!(cursor(&pump), at("new", 2));
+    }
+
+    #[test]
+    fn a_new_generation_adopts_the_runtimes_acked_sequence() {
+        let (pump, world) = pump_on(1);
+        *pump.cursor.lock_or_recover() = at("old", 10);
+        script(&world, vec![feed("new", 4, &[])]);
+        assert_eq!(pump.step(), PumpStep::Delivered { items: 0 });
+        assert_eq!(cursor(&pump), at("new", 4));
+    }
+
+    #[test]
+    fn a_feedless_runtime_backs_off_without_rediscovering() {
+        let (pump, world) = pump_on(1);
+        script(&world, vec![Ok((404, String::new()))]);
+
+        assert_eq!(pump.step(), PumpStep::Unsupported);
+        assert_eq!(world.runtime_ok.get(), 1, "a 404 is an answer, not an outage");
+        assert_eq!(world.rediscover_calls.get(), 0);
+        let slept: Duration = world.slept.borrow().iter().sum();
+        assert_eq!(slept, NOTIFY_UNSUPPORTED_BACKOFF);
+        assert!(world.slept.borrow().iter().all(|d| *d <= NOTIFY_RETRY_DELAY));
+    }
+
+    #[test]
+    fn the_unsupported_backoff_ends_when_the_shell_is_repointed() {
+        let (pump, world) = pump_on(1);
+        script(&world, vec![Ok((404, String::new())), feed("g", 0, &[1])]);
+        *world.swap_after_sleeps.borrow_mut() = Some((3, runtime(2)));
+
+        assert_eq!(pump.step(), PumpStep::Unsupported);
+        assert_eq!(world.slept.borrow().len(), 3, "woke on the discovery swap");
+        // The next iteration polls the new runtime and acks there.
+        assert_eq!(pump.step(), PumpStep::Delivered { items: 1 });
+        assert_eq!(world.polled.borrow()[1].0, 2);
+        assert_eq!(*world.acked.borrow(), [(2, "g".into(), 1)]);
+    }
+
+    #[test]
+    fn a_failed_poll_rediscovers_and_retries_against_the_new_runtime() {
+        let (pump, world) = pump_on(1);
+        world.rediscovered.borrow_mut().push_back(Some(runtime(2)));
+        script(&world, vec![Err("connection refused".into()), feed("g", 0, &[1])]);
+
+        assert_eq!(pump.step(), PumpStep::Delivered { items: 1 });
+        assert_eq!(world.rediscover_calls.get(), 1);
+        let ports: Vec<u16> = world.polled.borrow().iter().map(|(p, _)| *p).collect();
+        assert_eq!(ports, [1, 2]);
+        assert_eq!(*world.acked.borrow(), [(2, "g".into(), 1)]);
+        assert!(world.slept.borrow().is_empty(), "the retry is immediate");
+    }
+
+    #[test]
+    fn a_failed_poll_with_nothing_to_rediscover_idles() {
+        let (pump, world) = pump_on(1);
+        script(&world, vec![Ok((500, String::new()))]);
+        assert_eq!(pump.step(), PumpStep::PollFailed);
+        assert_eq!(world.rediscover_calls.get(), 1);
+        assert_eq!(world.runtime_ok.get(), 0);
+        assert_eq!(*world.slept.borrow(), [NOTIFY_RETRY_DELAY]);
+    }
+
+    #[test]
+    fn a_rediscovered_runtime_that_also_fails_idles_once() {
+        let (pump, world) = pump_on(1);
+        world.rediscovered.borrow_mut().push_back(Some(runtime(2)));
+        script(&world, vec![Err("down".into()), Err("down too".into())]);
+        assert_eq!(pump.step(), PumpStep::PollFailed);
+        assert_eq!(world.polled.borrow().len(), 2);
+        assert_eq!(*world.slept.borrow(), [NOTIFY_RETRY_DELAY]);
+    }
+
+    #[test]
+    fn a_rediscovered_feedless_runtime_backs_off() {
+        let (pump, world) = pump_on(1);
+        world.rediscovered.borrow_mut().push_back(Some(runtime(2)));
+        script(&world, vec![Err("down".into()), Ok((404, String::new()))]);
+        assert_eq!(pump.step(), PumpStep::Unsupported);
+        let slept: Duration = world.slept.borrow().iter().sum();
+        assert_eq!(slept, NOTIFY_UNSUPPORTED_BACKOFF);
+    }
+
+    #[test]
+    fn withdraw_items_remove_banners_and_are_acknowledged() {
+        let (pump, world) = pump_on(1);
+        let body = serde_json::json!({"generation": "g", "acked_seq": 0, "items": [
+            {"id": "g:1", "seq": 1, "kind": "withdraw",
+             "agent": {"server_id": "prod", "pane_id": "p1"}},
+            {"id": "g:2", "seq": 2, "kind": "someday-kind", "title": "t"},
+            {"id": "g:3", "seq": 3, "kind": "alert", "title": "t"},
+        ]});
+        script(&world, vec![Ok((200, body.to_string()))]);
+
+        assert_eq!(pump.step(), PumpStep::Delivered { items: 3 });
+        assert_eq!(
+            *world.withdrawn.borrow(),
+            [banners::AgentRef {
+                server_id: "prod".into(),
+                pane_id: "p1".into()
+            }]
+        );
+        assert_eq!(*world.posted.borrow(), ["g:3"], "withdraw and unknown kinds post nothing");
+        let acked: Vec<u64> = world.acked.borrow().iter().map(|(_, _, s)| *s).collect();
+        assert_eq!(acked, [1, 2, 3]);
+        assert_eq!(cursor(&pump), at("g", 3));
+    }
+
+    #[test]
+    fn a_discovery_swap_mid_batch_keeps_acking_the_runtime_that_served_it() {
+        let (pump, world) = pump_on(1);
+        *world.swap_on_post.borrow_mut() = Some(runtime(2));
+        world.failing.borrow_mut().insert("g:2".into());
+        script(&world, vec![feed("g", 0, &[1, 2]), feed("g", 2, &[])]);
+
+        assert_eq!(pump.step(), PumpStep::FellBack { fallback_ok: true });
+        // Both the ack and the fallback went to the runtime whose generation
+        // and sequence numbers they name, not to the freshly swapped one.
+        assert_eq!(*world.acked.borrow(), [(1, "g".into(), 1)]);
+        assert_eq!(world.fell_back.borrow()[0].0, 1);
+        // The next iteration follows the swap, carrying the cursor with it.
+        pump.step();
+        assert_eq!(world.polled.borrow()[1], (2, at("g", 2)));
+    }
+
+    #[test]
+    fn without_a_runtime_the_pump_idles_instead_of_polling() {
+        let (pump, world) = pump_on(1);
+        *world.discovery.borrow_mut() = None;
+        assert_eq!(pump.step(), PumpStep::Idle);
+        assert!(world.polled.borrow().is_empty());
+        assert_eq!(*world.slept.borrow(), [NOTIFY_RETRY_DELAY]);
+    }
+
+    #[test]
+    fn an_unparseable_feed_idles_without_touching_the_cursor() {
+        let (pump, world) = pump_on(1);
+        *pump.cursor.lock_or_recover() = at("g", 5);
+        script(&world, vec![Ok((200, "not json".into())), Ok((200, "{}".into()))]);
+        assert_eq!(pump.step(), PumpStep::BadFeed);
+        assert_eq!(pump.step(), PumpStep::BadFeed, "no generation is no feed");
+        assert_eq!(cursor(&pump), at("g", 5));
+        assert!(world.posted.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_poisoned_cursor_does_not_take_the_pump_down() {
+        let (pump, world) = pump_on(1);
+        let cursor_lock = pump.cursor.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = cursor_lock.lock();
+            panic!("poison the cursor");
+        })
+        .join();
+        assert!(pump.cursor.is_poisoned());
+        script(&world, vec![feed("g", 0, &[1])]);
+        assert_eq!(pump.step(), PumpStep::Delivered { items: 1 });
+        assert_eq!(cursor(&pump), at("g", 1));
+    }
+}
