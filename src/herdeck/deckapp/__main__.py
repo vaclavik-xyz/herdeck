@@ -6,8 +6,9 @@ WebView. This is the ONLY place the access token is emitted; it is never written
 to a file, never in request logs, and never in /state or /health.
 
 The source is chosen at startup: a LiveSource (real bridge via Connector) when a
-server + bridge token are configured, otherwise the deterministic MockSource. The
-bridge token never appears in the discovery line — only the loopback access token
+server + bridge token are configured; an explicit config-error state when a
+config exists but does not load; otherwise (first run, HERDECK_MOCK, the demo
+choice) the deterministic MockSource. The bridge token never appears in the discovery line — only the loopback access token
 (``token``) and the chosen source name do.
 """
 

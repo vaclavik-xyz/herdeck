@@ -2,7 +2,7 @@ import type { Lang } from "./i18n.svelte";
 
 const LABELS: Record<Lang, Record<string, string>> = {
   en: {
-    id: "Server name", url: "Bridge address", token_env: "Token reference",
+    id: "Server name", url: "Bridge address", token_env: "Token reference", token_file: "Token file",
     grid: "Grid size", overview_order: "Server order", deck: "Deck type",
     herdr_socket: "Herdr socket", web_bind: "Simulator address", web_port: "Simulator port",
     icons_dir: "Custom icons folder", terminal_app: "Terminal app", brightness: "Display brightness", debounce: "Press debounce",
@@ -29,7 +29,7 @@ const LABELS: Record<Lang, Record<string, string>> = {
     desktop_read_state: "Read T3 desktop state",
   },
   cs: {
-    id: "Název serveru", url: "Adresa bridge", token_env: "Reference tokenu",
+    id: "Název serveru", url: "Adresa bridge", token_env: "Reference tokenu", token_file: "Soubor s tokenem",
     grid: "Rozměr mřížky", overview_order: "Pořadí serverů", deck: "Typ decku",
     herdr_socket: "Herdr socket", web_bind: "Adresa simulátoru", web_port: "Port simulátoru",
     icons_dir: "Složka vlastních ikon", terminal_app: "Aplikace terminálu", brightness: "Jas displeje", debounce: "Ochrana proti dvojstisku",

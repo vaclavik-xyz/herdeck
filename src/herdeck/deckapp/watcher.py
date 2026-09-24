@@ -22,9 +22,14 @@ class ConfigWatcher:
         clock=time.monotonic,
         adopt_before_fire: bool = True,
         paths_provider: Callable[[], list[str]] | None = None,
+        state_provider: Callable[[], object] | None = None,
     ):
         self._paths = [Path(p) for p in paths]
         self._paths_provider = paths_provider
+        # Extra non-file state folded into the snapshot: a change fires the
+        # callback like an edited file (e.g. a config error that went away
+        # because a keychain entry appeared — nothing on disk changed).
+        self._state_provider = state_provider
         self._on_change = on_change
         self._interval = interval
         self._clock = clock
@@ -46,9 +51,16 @@ class ConfigWatcher:
             paths.extend(Path(p) for p in self._paths_provider())
         for p in dict.fromkeys(paths):
             try:
-                out[p] = p.stat().st_mtime_ns
+                st = p.stat()
+                # The mode too: `chmod 600` on a refused token file changes no mtime.
+                out[p] = (st.st_mtime_ns, st.st_mode)
             except OSError:
                 out[p] = None
+        if self._state_provider is not None:
+            try:
+                out["state"] = self._state_provider()
+            except Exception:
+                out["state"] = None
         return out
 
     def start(self) -> None:

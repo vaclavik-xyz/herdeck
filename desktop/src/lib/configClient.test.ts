@@ -301,6 +301,20 @@ describe("server mutations", () => {
     const next = updateServer(p, 0, "url", "http://127.0.0.1:3774");
     expect(serversOf(next)[0].desktop_read_state).toBe(true);
   });
+  it("keeps a server's token_file through edits and drops it when cleared", () => {
+    const p = parseConfig(rawConfig())!;
+    p.base.servers = [{ id: "local", url: "ws://x", token_env: "TOK", token_file: "~/.config/herdeck/local-token" }];
+    const edited = updateServer(p, 0, "url", "ws://y");
+    expect(serversOf(edited)[0].token_file).toBe("~/.config/herdeck/local-token");
+    const cleared = updateServer(edited, 0, "token_file", "  ");
+    expect(cleared.base.servers).toEqual([{ id: "local", url: "ws://y", token_env: "TOK" }]);
+  });
+  it("a token_file server writes no blank token_env", () => {
+    const p = addServer(parseConfig({})!);
+    const next = updateServer(p, 0, "token_file", "/etc/herdeck/token");
+    expect(next.base.servers).toEqual([{ id: "", url: "", token_file: "/etc/herdeck/token" }]);
+    expect(serversOf(next)[0]).toMatchObject({ token_env: "", token_file: "/etc/herdeck/token" });
+  });
   it("serversOf returns the base server list or []", () => {
     expect(serversOf(parseConfig(rawConfig())!)).toEqual([
       { id: "local", url: "ws://x", token_env: "TOK" },

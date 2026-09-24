@@ -101,7 +101,8 @@ def validate_extra_env(pairs, *, reserved=()) -> tuple[tuple[str, str], ...]:
         if _SECRET_ENV_RE.search(key):
             raise ValueError(
                 f"--env {key}: secrets never go into a service unit; store them in the "
-                "keychain (the herdeck config's token_env) or the bridge token file"
+                "keychain (the herdeck config's token_env), a [[servers]] token_file, or the "
+                "bridge token file"
             )
         if key in reserved or key == "HERDECK_RUNTIME_MANAGED":
             raise ValueError(f"--env {key}: set by herdeck-service itself")

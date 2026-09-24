@@ -60,7 +60,9 @@ def renew(args):
         raise ValueError("No T3 connection with this ID")
     if not args.restart_label:
         raise ValueError("Renewal requires --restart-label so the running runtime adopts the new credential")
-    env = server["token_env"]
+    env = server.get("token_env")
+    if not env:
+        raise ValueError("Renewal requires a Keychain credential (token_env); token_file servers are renewed by hand")
     if os.environ.get(env):
         raise ValueError("Renewal requires Keychain credentials; remove the environment override")
     old = peek_keychain(env)  # An unreadable Keychain must never be overwritten.

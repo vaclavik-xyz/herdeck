@@ -149,8 +149,15 @@ export function classifyValidationIssue(message: string, payload?: RoutingPayloa
     answerProfile[1],
   );
 
-  const serverToken = body.match(/^env var .* for server '([^']+)' is not set/);
-  if (serverToken) return issue(message, "servers", "token_env", null, serverToken[1]);
+  const serverToken = body.match(
+    /^(?:env var .* for server '([^']+)' is not set|bridge token for server '([^']+)' not found|server '([^']+)' needs token_env or token_file|server '([^']+)': token_env )/,
+  );
+  if (serverToken) {
+    const id = serverToken[1] ?? serverToken[2] ?? serverToken[3] ?? serverToken[4];
+    return issue(message, "servers", "token_env", null, id);
+  }
+  const serverTokenFile = body.match(/^server '([^']+)': (?:cannot read )?token_file /);
+  if (serverTokenFile) return issue(message, "servers", "token_file", null, serverTokenFile[1]);
 
   const unknownServer = body.match(/^unknown server '([^']+)'/);
   if (unknownServer) {

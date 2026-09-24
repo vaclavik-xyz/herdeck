@@ -153,6 +153,12 @@
   </div>
 
   {#if status}
+    {#if status.configError}
+      <div class="config-error" data-config-error>
+        <p class="note bad" role="alert">{fmt(lm.config_error, { error: status.configError })}</p>
+        <p class="hint">{lm.config_error_hint}</p>
+      </div>
+    {/if}
     <section class="block" aria-labelledby="mt-versions">
       <h3 id="mt-versions">{lm.versions}</h3>
       <p class="hint">{lm.versions_hint}</p>

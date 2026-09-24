@@ -17,6 +17,10 @@ describe("validation issue routing", () => {
     ["active: hardware.brightness must be an integer from 0 to 100", "deck", "brightness"],
     ["night: profile 'codex' missing 'deny'", "answer_profiles", "deny"],
     ["active: env var 'REMOTE_TOKEN' for server 'bench' is not set", "servers", "token_env"],
+    ["active: bridge token for server 'bench' not found (env var 'T' is not set; no keychain entry 'T')", "servers", "token_env"],
+    ["active: server 'bench' needs token_env or token_file", "servers", "token_env"],
+    ["active: server 'bench': token_file '/t' is readable by group/others (mode 0644); run chmod 600 on it", "servers", "token_file"],
+    ["active: server 'bench': cannot read token_file '/t' (Permission denied)", "servers", "token_file"],
   ])("routes %s", (message, section, fieldKey) => {
     expect(classifyValidationIssue(message)).toMatchObject({ section, fieldKey });
   });

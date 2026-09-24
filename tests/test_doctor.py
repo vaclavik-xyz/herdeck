@@ -315,7 +315,8 @@ def test_collect_checks_reports_notifications_when_server_token_missing(tmp_path
     checks = {check.name: check for check in collect_checks()}
 
     assert checks["configuration"].ok is False
-    assert "MISSING_SERVER_TOKEN=missing" in checks["configuration"].detail
+    detail = checks["configuration"].detail
+    assert "remote=missing" in detail and "MISSING_SERVER_TOKEN" in detail
     assert checks["notifications"].ok is False
     assert "interactive=missing allowed_user_ids" in checks["notifications"].detail
     assert "disabled" not in checks["notifications"].detail
@@ -546,3 +547,49 @@ def test_collect_checks_uses_the_config_socket_override(tmp_path, monkeypatch):
 
     checks = {c.name: c for c in collect_checks()}
     assert checks["herdr socket"].ok is True  # found via [hardware].herdr_socket
+
+
+def test_check_config_reports_token_source_per_server_without_values():
+    c = check_config(
+        config_path="/c",
+        has_servers=True,
+        socket_exists=False,
+        token_sources=[("local", "file", None), ("t3", "keychain", None)],
+    )
+    assert c.ok is True
+    assert "local=file" in c.detail and "t3=keychain" in c.detail
+
+
+def test_check_config_token_sources_missing_is_red_with_reason():
+    c = check_config(
+        config_path="/c",
+        has_servers=True,
+        socket_exists=False,
+        token_sources=[("local", None, "bridge token for server 'local' not found")],
+    )
+    assert c.ok is False
+    assert "local=missing" in c.detail and "not found" in c.detail
+
+
+def test_token_sources_reads_each_server(tmp_path, monkeypatch):
+    from herdeck import secrets
+    from herdeck.doctor import token_sources
+
+    class Empty:
+        def get_password(self, service, name):
+            return None
+
+    monkeypatch.setattr(secrets, "_keyring", lambda: Empty())
+    monkeypatch.delenv("DOC_TOK", raising=False)
+    token = tmp_path / "tok"
+    token.write_text("very-secret-value")
+    token.chmod(0o600)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        f'[[servers]]\nid="a"\nurl="ws://x"\ntoken_file="{token}"\n'
+        '[[servers]]\nid="b"\nurl="ws://y"\ntoken_env="DOC_TOK"\n'
+    )
+    facts = token_sources(str(cfg))
+    assert facts[0] == ("a", "file", None)
+    assert facts[1][0] == "b" and facts[1][1] is None and "DOC_TOK" in facts[1][2]
+    assert "very-secret-value" not in repr(facts)

@@ -449,6 +449,9 @@ class Maintenance:
             },
             "d200": self.d200_status(),
             "servers": servers,
+            # Why the existing config does not load (None = it loads): the
+            # runtime then shows an error state, never demo agents.
+            "config_error": getattr(app, "config_error", None),
         }
 
     # --- actions -------------------------------------------------------------
