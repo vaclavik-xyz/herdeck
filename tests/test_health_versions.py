@@ -190,3 +190,133 @@ async def test_connector_counts_failed_attempts():
     assert health["attempt"] >= 2
     assert health["connected"] is False
     assert health["last_error"]
+
+
+# --- runtime /health --------------------------------------------------------
+
+
+def test_runtime_health_explains_a_dark_deck():
+    from test_deckapp_live import FakeRunner, make_live
+
+    app, src, server, _ = make_live()
+
+    class StubConnector:
+        def health(self):
+            return {
+                "connected": True,  # the source's own flag wins
+                "last_error": "token rejected (close 4401)",
+                "since": 123,
+                "attempt": 4,
+                "bridge_version": "0.7.9",
+                "protocol": 3,
+                "protocol_supported": True,
+            }
+
+    src.attach_runner(FakeRunner(StubConnector()), server.id)
+
+    class StubSink:
+        def deliver(self, frame):
+            pass
+
+        def close(self):
+            pass
+
+        def health(self):
+            return {"connected": False, "since": 1, "last_frame_at": None,
+                    "last_error": "disconnected", "lock_owner": 42}
+
+    app.add_sink(StubSink())
+    src._notify_feed.push("t", "b", False)
+    health = app._health()
+    assert health["version"] == __version__
+    assert health["protocol"] == WIRE_PROTOCOL
+    assert isinstance(health["pid"], int) and health["uptime_s"] >= 0
+    assert health["servers"][server.id] == {
+        "connected": False,
+        "last_error": "token rejected (close 4401)",
+        "since": 123,
+        "attempt": 4,
+        "bridge_version": "0.7.9",
+        "protocol": 3,
+        "protocol_supported": True,
+    }
+    assert health["d200"]["lock_owner"] == 42
+    assert health["notifications"] == {
+        "queued": 1, "acked": 0, "fallback": 0, "dropped": 0, "pending": 1,
+    }
+    app.close()
+
+
+def test_notification_stats_count_acks_and_fallbacks():
+    from herdeck.notify import NotificationFeed
+
+    feed = NotificationFeed()
+    first = feed.push("a", "b", False)
+    second = feed.push("c", "d", False)
+    assert feed.ack(first["generation"], first["seq"])
+    assert feed.fallback(second["generation"], second["seq"], lambda *a: None)
+    assert feed.stats() == {
+        "queued": 2, "acked": 2, "fallback": 1, "dropped": 0, "pending": 0,
+    }
+
+
+def test_d200_sink_health_reports_frames_errors_and_lock_owner(tmp_path):
+    import os
+
+    from test_d200_sink import _RS, _held_driver, _Tile, _wait
+
+    from herdeck.deckapp.device_lock import DeviceLock
+    from herdeck.deckapp.sinks import ReconnectingD200Sink, RenderFrame
+
+    path = str(tmp_path / "d200.lock")
+    opens = []
+    driver = _held_driver()
+
+    def factory():
+        opens.append(1)
+        if len(opens) == 1:
+            raise OSError("device busy")
+        return driver
+
+    sink = ReconnectingD200Sink(
+        factory, on_press=lambda i: None, slots=13, retry_interval=0.01,
+        device_lock=DeviceLock(path),
+    )
+    other = None
+    try:
+        assert _wait(lambda: sink.health()["connected"])
+        health = sink.health()
+        assert health["last_error"] is None and health["lock_owner"] is None
+        assert health["last_frame_at"] is None  # nothing rendered yet
+        sink.deliver(RenderFrame(render=_RS([_Tile(0)]), working=None, full=True))
+        assert isinstance(sink.health()["last_frame_at"], int)
+
+        other = ReconnectingD200Sink(
+            _held_driver, on_press=lambda i: None, slots=13,
+            device_lock=DeviceLock(path), lock_retry_interval=0.02,
+        )
+        assert _wait(lambda: other.health()["last_error"] is not None)
+        blocked = other.health()
+        assert blocked["connected"] is False
+        assert blocked["lock_owner"] == os.getpid()
+        assert "another herdeck runtime" in blocked["last_error"]
+    finally:
+        sink.close()
+        if other is not None:
+            other.close()
+
+
+def test_d200_sink_health_keeps_the_open_error():
+    from test_d200_sink import _wait
+
+    from herdeck.deckapp.sinks import ReconnectingD200Sink
+
+    def factory():
+        raise OSError("device busy")
+
+    sink = ReconnectingD200Sink(factory, on_press=lambda i: None, slots=13, retry_interval=0.01)
+    try:
+        assert _wait(lambda: sink.health()["last_error"] == "device busy")
+        assert sink.health()["connected"] is False
+    finally:
+        sink.close()
