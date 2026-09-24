@@ -80,6 +80,10 @@ PROMPT_WAIT_S = 2.0
 # looking at it" while the deck host saw input within this many seconds (an
 # unknown idle time, e.g. on Linux, counts as present).
 FOCUS_PRESENT_S = 120.0
+# [notifications].remind_after: at most this many reminders per block episode,
+# checked by a small background thread every REMIND_POLL_S seconds.
+REMIND_MAX = 3
+REMIND_POLL_S = 15.0
 
 
 def sanitize_reply(text: object) -> str:
@@ -138,7 +142,12 @@ class LiveSource(StateSource):
         self._notify_baselined_servers: set[str] = set()
         # Cooldown per agent+event and "done right after you answered it"
         # suppression (see notify.NotifyThrottle).
-        self._notify_throttle = NotifyThrottle(clock=notify_clock or time.monotonic)
+        self._notify_clock = notify_clock or time.monotonic
+        self._notify_throttle = NotifyThrottle(clock=self._notify_clock)
+        # Blocked episodes that may get reminders: key -> (episode, since, sent).
+        self._reminders: dict[AgentKey, tuple[str, float, int]] = {}
+        self._reminder_stop = threading.Event()
+        self._reminder_thread: threading.Thread | None = None
         self._notify_schedule = notify_schedule or _thread_notify_schedule
         self._prompt_wait_s = prompt_wait_s
         self._idle_probe = idle_probe or IdleProbe()
@@ -435,6 +444,7 @@ class LiveSource(StateSource):
         return self._notify_feed.stats()
 
     def close(self) -> None:
+        self._reminder_stop.set()
         for runner in list(self._runners.values()):
             runner.close()
         self._runners.clear()
@@ -491,6 +501,8 @@ class LiveSource(StateSource):
         n = self._config.notifications
         if event not in n.on:
             return
+        if event == "blocked":
+            self._track_reminder(agent.key)
         sound = False if not n.sound else n.sounds.get(event, True)
         multi = len(self._config.overview_order) > 1
         if not self._notify_throttle.allow(event, agent.key):
@@ -512,6 +524,87 @@ class LiveSource(StateSource):
             time.time_ns() // 1_000_000,
         )
         self._notify_schedule(lambda: self._deliver_alert(event, agent, title, body, sound, meta))
+
+    # --- reminders ([notifications].remind_after) -----------------------------
+
+    def _track_reminder(self, key: AgentKey) -> None:
+        """A block episode began: remember when, for its reminders."""
+        if self._config.notifications.remind_after <= 0:
+            return
+        with self._lock:
+            episode = self._block_episode.get(key)
+            if episode is None:
+                return
+            self._reminders[key] = (episode, self._notify_clock(), 0)
+        self._ensure_reminder_thread()
+
+    def _ensure_reminder_thread(self) -> None:
+        if self._reminder_thread is not None or self._reminder_stop.is_set():
+            return
+        self._reminder_thread = threading.Thread(
+            target=self._reminder_loop, name="herdeck-remind", daemon=True
+        )
+        self._reminder_thread.start()
+
+    def _reminder_loop(self) -> None:
+        while not self._reminder_stop.wait(REMIND_POLL_S):
+            try:
+                self.check_reminders()
+            except Exception:
+                log.warning("reminder check failed", exc_info=True)
+
+    def check_reminders(self) -> int:
+        """Alert again for every agent still blocked in the same episode
+        ``remind_after`` minutes (x1, x2, x3) after it began. Returns how many
+        reminders were scheduled."""
+        n = self._config.notifications
+        if self._notifier is None or n.remind_after <= 0:
+            return 0
+        interval = n.remind_after * 60.0
+        now = self._notify_clock()
+        due: list[tuple[AgentState, str, float]] = []
+        with self._lock:
+            for key, (episode, since, sent) in list(self._reminders.items()):
+                state = self._agents.get(key)
+                if (
+                    state is None
+                    or state.status is not Status.BLOCKED
+                    or self._block_episode.get(key) != episode
+                    or sent >= REMIND_MAX
+                ):
+                    del self._reminders[key]
+                    continue
+                if now - since >= interval * (sent + 1):
+                    self._reminders[key] = (episode, since, sent + 1)
+                    due.append((state, episode, now - since))
+        lang = self._config.view.language
+        sound = False if not n.sound else n.sounds.get("blocked", True)
+        multi = len(self._config.overview_order) > 1
+        for state, episode, elapsed in due:
+            title = tr(
+                lang,
+                "notify.title_reminder",
+                agent=state.agent_type or "agent",
+                minutes=int(elapsed // 60),
+            )
+            body = event_notification_body(state, multi_server=multi)
+            meta = {
+                "agent": {"server_id": state.key.server_id, "pane_id": state.key.pane_id},
+                "event": "blocked",
+                "episode": episode,
+            }
+            log.info(
+                "notification reminder agent=%s:%s minutes=%d",
+                state.key.server_id,
+                state.key.pane_id,
+                int(elapsed // 60),
+            )
+            self._notify_schedule(
+                lambda s=state, t=title, b=body, m=meta: self._deliver_alert(
+                    "blocked", s, t, b, sound, m
+                )
+            )
+        return len(due)
 
     def _deliver_alert(
         self, event: str, agent: AgentState, title: str, body: str, sound, meta: dict

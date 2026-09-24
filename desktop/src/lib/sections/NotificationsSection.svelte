@@ -26,12 +26,13 @@
   const SEC = "notifications";
   const overlay = $derived(editProfile != null && editProfile !== "default");
   const prof = $derived(editProfile ?? "");
-  const NOTIF_DEFAULTS: Record<string, boolean> = {
+  const NOTIF_DEFAULTS: Record<string, boolean | number> = {
     enabled: defaults.notifications.enabled,
     sound: defaults.notifications.sound,
     banner_actions: defaults.notifications.banner_actions,
     banner_prompt: defaults.notifications.banner_prompt,
     skip_focused: defaults.notifications.skip_focused,
+    remind_after: defaults.notifications.remind_after,
   };
   const NOTIF_LIST_DEFAULTS: Record<string, string[]> = {
     on: [...defaults.notifications.on],
@@ -125,6 +126,7 @@
   const sound = $derived((getAt(payload, "base", "notifications", "sound") as boolean) ?? NOTIF_DEFAULTS.sound);
   const bannerActions = $derived((getAt(payload, "base", "notifications", "banner_actions") as boolean) ?? NOTIF_DEFAULTS.banner_actions);
   const skipFocused = $derived((getAt(payload, "base", "notifications", "skip_focused") as boolean) ?? NOTIF_DEFAULTS.skip_focused);
+  const remindAfter = $derived((getAt(payload, "base", "notifications", "remind_after") as number) ?? NOTIF_DEFAULTS.remind_after as number);
   const bannerPrompt = $derived((getAt(payload, "base", "notifications", "banner_prompt") as boolean) ?? NOTIF_DEFAULTS.banner_prompt);
   const on = $derived((getAt(payload, "base", "notifications", "on") as string[]) ?? NOTIF_LIST_DEFAULTS.on);
   const onState = $derived(listFieldState(payload, "base", "notifications", "on"));
@@ -225,6 +227,11 @@
   function setScState(key: string, s: "inherit" | "override"): void {
     payload = { ...payload, profiles: s === "inherit" ? clearOverride(payload.profiles, prof, SEC, key) : setOverride(payload.profiles, prof, SEC, key, inheritedFor(payload, prof, SEC, key) ?? NOTIF_DEFAULTS[key]) };
     onChange();
+  }
+  function scNumber(key: string): number | null {
+    const own = overrideValue(payload, prof, SEC, key);
+    const v = own === undefined ? (inheritedFor(payload, prof, SEC, key) ?? NOTIF_DEFAULTS[key]) : own;
+    return typeof v === "number" ? v : null;
   }
   function setSc(key: string, v: unknown): void { payload = { ...payload, profiles: setOverride(payload.profiles, prof, SEC, key, v) }; onChange(); }
 
@@ -407,6 +414,9 @@
   <OverrideField label="skip_focused" help={HELP.skip_focused} state={scState("skip_focused")} inheritedDisplay={scHint("skip_focused")} onstate={(s) => setScState("skip_focused", s)}>
     <BooleanField label="" value={scBool("skip_focused")} onchange={(v) => setSc("skip_focused", v)} />
   </OverrideField>
+  <OverrideField label="remind_after" help={HELP.remind_after} state={scState("remind_after")} inheritedDisplay={scHint("remind_after")} onstate={(s) => setScState("remind_after", s)}>
+    <NumberField label="" int min={0} max={1440} value={scNumber("remind_after")} onchange={(v) => setSc("remind_after", v ?? 0)} />
+  </OverrideField>
   <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} customSeed={effectiveList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} resetKey={`${prof}:${reloadRev}:notifications:backends`} onchange={(s, l) => setOvList("backends", s, l)} />
   <FieldGroup title={lm.group_sounds}>
     <p class="hint">{lm.sounds_hint_overlay}</p>
@@ -451,6 +461,7 @@
   <BooleanField label="banner_actions" help={HELP.banner_actions} value={bannerActions} onchange={(v) => set("banner_actions", v)} />
   <BooleanField label="banner_prompt" help={HELP.banner_prompt} value={bannerPrompt} onchange={(v) => set("banner_prompt", v)} />
   <BooleanField label="skip_focused" help={HELP.skip_focused} value={skipFocused} onchange={(v) => set("skip_focused", v)} />
+  <NumberField label="remind_after" help={HELP.remind_after} int min={0} max={1440} value={remindAfter} onchange={(v) => set("remind_after", v ?? 0)} />
   <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} resetKey={`base:${reloadRev}:notifications:backends`} onchange={(s, l) => setTri("backends", s, l)} />
   <FieldGroup title={lm.group_sounds}>
     <p class="hint">{lm.sounds_hint}</p>

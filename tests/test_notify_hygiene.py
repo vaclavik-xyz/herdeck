@@ -202,3 +202,82 @@ def test_shell_features_header_reaches_the_source():
         assert src._notify_features() == frozenset({"withdraw", "future-thing"})
     finally:
         app.close()
+
+
+# --- reminders ------------------------------------------------------------------
+
+
+def _reminding(remind_after=10, lang="en"):
+    config, server = notify_config()
+    config.notifications.remind_after = remind_after
+    config.view.language = lang
+    now = [1000.0]
+    src, notifier, _probe = _live(config, server, clock=lambda: now[0])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))
+    return src, server, notifier, now
+
+
+def test_a_still_blocked_agent_is_reminded_once_per_interval_at_most_three_times():
+    src, server, notifier, now = _reminding()
+    try:
+        assert len(notifier.calls) == 1
+        now[0] += 9 * 60
+        assert src.check_reminders() == 0
+        now[0] += 60
+        assert src.check_reminders() == 1
+        assert notifier.calls[-1][0] == "claude · still needs input (10 min)"
+        assert notifier.metas[-1]["episode"] == src._block_episode[agent(server.id, "p0", Status.BLOCKED).key]
+        assert src.check_reminders() == 0  # once per interval
+        for minutes in (20, 30):
+            now[0] = 1000.0 + minutes * 60
+            assert src.check_reminders() == 1
+        now[0] = 1000.0 + 40 * 60
+        assert src.check_reminders() == 0  # max three per episode
+        assert len(notifier.calls) == 4
+    finally:
+        src.close()
+
+
+def test_no_reminder_once_the_agent_left_the_episode():
+    src, server, notifier, now = _reminding()
+    try:
+        src._on_event(server.id, agent(server.id, "p0", Status.WORKING))
+        src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))  # new episode
+        now[0] += 10 * 60
+        # Only the NEW episode (begun at the same clock time here) reminds.
+        assert src.check_reminders() == 1
+        src._on_event(server.id, agent(server.id, "p0", Status.WORKING))
+        now[0] += 10 * 60
+        assert src.check_reminders() == 0
+        assert src._reminders == {}
+    finally:
+        src.close()
+
+
+def test_reminder_title_is_localized_and_off_by_default():
+    src, _server, notifier, now = _reminding(lang="cs")
+    try:
+        now[0] += 25 * 60
+        src.check_reminders()
+        assert notifier.calls[-1][0] == "claude · pořád čeká na tebe (25 min)"
+    finally:
+        src.close()
+    off, _server, notifier, now = _reminding(remind_after=0)
+    now[0] += 60 * 60
+    assert off.check_reminders() == 0
+    assert off._reminder_thread is None
+
+
+def test_remind_after_validates_minutes():
+    import pytest
+
+    from herdeck.config import ConfigError, parse_notifications
+    from herdeck.settings import _notifications_config
+
+    for parse in (parse_notifications, _notifications_config):
+        assert parse({}).remind_after == 0
+        assert parse({"remind_after": 15}).remind_after == 15
+        for bad in (-1, 1.5, "10", True, 2000):
+            with pytest.raises(ConfigError, match="notifications.remind_after"):
+                parse({"remind_after": bad})
