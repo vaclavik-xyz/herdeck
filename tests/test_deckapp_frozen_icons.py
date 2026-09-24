@@ -16,13 +16,13 @@ def test_default_icons_frozen_uses_baked_assets_and_png_rasterizer(tmp_path, mon
     icons = server._default_icons()
 
     assert icons._assets_dir == str(tmp_path)
-    # The frozen rasterizer loads the pre-baked PNG (no cairosvg).
+    # The frozen rasterizer loads the pre-baked PNG (no SVG rendering).
     img = icons._rasterize(svg, ICON_SIZE)
     assert img.size == (ICON_SIZE, ICON_SIZE)
     assert img.getpixel((0, 0)) == (5, 6, 7, 255)
 
 
-def test_default_icons_non_frozen_keeps_cairosvg_defaults(monkeypatch):
+def test_default_icons_non_frozen_keeps_source_defaults(monkeypatch):
     monkeypatch.setattr(frozen, "is_frozen", lambda: False)
     icons = server._default_icons()
     assert icons._assets_dir == _ASSETS_DIR  # default source-tree assets dir

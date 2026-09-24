@@ -1128,10 +1128,10 @@ def test_svg_without_a_rasteriser_falls_back_to_the_monogram(tmp_path):
     store = ProjectIconStore()
     svg = _stored(store, b"<svg/>", "image/svg+xml")
 
-    def no_cairo(text, size):
-        raise OSError("no library called cairo was found")
+    def no_rasterizer(text, size):
+        raise OSError("SVG rasterizer unavailable")
 
-    p = _project_provider(tmp_path, store, rasterize=no_cairo)
+    p = _project_provider(tmp_path, store, rasterize=no_rasterizer)
     broken = p.render_tile_bytes(_project_tile(project_icon=svg))
     mono = p.render_tile_bytes(_project_tile(project_icon=None))
     assert Image.open(_io.BytesIO(broken)).tobytes() == Image.open(_io.BytesIO(mono)).tobytes()
@@ -1300,6 +1300,31 @@ def test_svg_favicon_decodes_with_the_default_rasterizer():
     )
     img = decode_project_icon(StoredIcon("image/svg+xml", svg))
     assert img.getpixel((img.width // 2, img.height // 2))[:3] == (0, 170, 0)
+
+
+def test_default_rasterizer_is_resvg_and_never_imports_cairosvg(monkeypatch):
+    """resvg is the only SVG path: cairosvg needed the native cairo library,
+    which is absent on fresh Macs and CI runners."""
+    import builtins
+
+    from herdeck import icons
+
+    real_import = builtins.__import__
+
+    def guard(name, *a, **k):
+        assert name != "cairosvg", "the default rasterizer must not import cairosvg"
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", guard)
+    calls = []
+    real = icons.resvg_rasterize
+    monkeypatch.setattr(
+        icons, "resvg_rasterize", lambda svg, size: calls.append(size) or real(svg, size)
+    )
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 2"><rect width="2" height="2" fill="#f00"/></svg>'
+    img = icons._default_rasterize(svg, 16)
+    assert calls == [16]
+    assert img.size == (16, 16) and img.getpixel((8, 8))[:3] == (255, 0, 0)
 
 
 @pytest.mark.parametrize(

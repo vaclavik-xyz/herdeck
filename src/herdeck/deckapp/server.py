@@ -1307,8 +1307,8 @@ def _default_icons(overrides_dir: str | None = None):
     deck renders deterministically and offline (bundled SVG assets, else a letter
     glyph). Reuses herdeck.icons — no rendering logic is reimplemented here.
 
-    When running frozen (PyInstaller bundle) there is no cairosvg, so glyphs are
-    served from pre-baked PNGs: pass BOTH the PNG rasterizer and the bundled
+    When running frozen (PyInstaller bundle) bundled glyphs are served from the
+    pre-baked PNGs (resvg only renders unbaked SVGs): pass BOTH the PNG rasterizer and the bundled
     assets dir, matching the Elgato frozen session."""
     import os
     import tempfile

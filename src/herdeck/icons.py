@@ -232,17 +232,12 @@ def resvg_rasterize(svg: str, size: int) -> Image.Image:
 
 
 def _default_rasterize(svg: str, size: int) -> Image.Image:
-    """resvg when installed, else cairosvg (needs the native cairo library)."""
-    try:
-        import resvg_py  # noqa: F401
-    except ImportError:
-        pass
-    else:
-        return resvg_rasterize(svg, size)
-    import cairosvg
+    """The one SVG path: resvg (a self-contained wheel in every rendering extra).
 
-    png = cairosvg.svg2png(bytestring=svg.encode(), output_width=size, output_height=size)
-    return Image.open(io.BytesIO(png)).convert("RGBA")
+    There is deliberately no cairosvg fallback — it needed the native cairo
+    library, which broke fresh Macs and CI runners.
+    """
+    return resvg_rasterize(svg, size)
 
 
 # Candidate scalable fonts for the letter fallback (macOS, then Linux).
@@ -995,7 +990,7 @@ def decode_project_icon(
         svg = stored.data.decode("utf-8")
         if _svg_references_outside(svg):
             raise ValueError("SVG references external resources")
-        # resvg / cairosvg (or the frozen rasterizer); any of them raises for
+        # resvg (or the frozen rasterizer); either raises for
         # an SVG it cannot render -> monogram.
         raw = rasterize(svg, ICON_SIZE)
     else:
@@ -1092,9 +1087,9 @@ class IconProvider:
                     img = self._rasterize(svg, ICON_SIZE)
                 except Exception:
                     img = None
-                # Source installs using the ``elgato`` extra intentionally omit
-                # CairoSVG. They can still consume the same committed baked PNGs
-                # as the frozen app instead of degrading a bundled mark to text.
+                # If resvg is unavailable or fails (e.g. an install without a
+                # rendering extra), still use the same committed baked PNGs as
+                # the frozen app instead of degrading a bundled mark to text.
                 if img is None and svg:
                     baked_asset = os.path.join(
                         self._assets_dir, _baked_glyph_png_name(svg)

@@ -56,10 +56,9 @@ def test_macos_release_signs_and_verifies_the_frozen_sidecar():
     spec = (ROOT / "desktop/herdeck-deckapp.spec").read_text()
     build_script = (ROOT / "desktop/scripts/build-sidecar.sh").read_text()
 
-    assert "brew install cairo" in macos_job
-    assert 'CAIRO_LIB="$(brew --prefix cairo)/lib"' in freeze_step
-    assert 'export DYLD_FALLBACK_LIBRARY_PATH="$CAIRO_LIB' in freeze_step
-    assert '.venv/bin/python -c "import cairosvg"' in freeze_step
+    # resvg-py is a self-contained wheel: no native cairo library to install.
+    assert "cairo" not in macos_job
+    assert '.venv/bin/python -c "import resvg_py"' in freeze_step
     assert "xcrun notarytool submit" in macos_job
     assert "xcrun stapler staple" in macos_job
     assert "xcrun stapler validate" in macos_job

@@ -24,8 +24,9 @@ a = Analysis(
         "herdeck.elgato.ipc",
         "websockets",
     ],
-    # cairosvg (+ its native cffi/cairocffi chain) is build-time only — the frozen session uses
-    # the Pillow PNG rasterizer. Also drop the native HID driver stack (StreamDeck + hid →
+    # cairosvg (+ its native cffi/cairocffi chain) is no longer a dependency — SVGs render via
+    # resvg_py or the pre-baked PNGs — but stays excluded so a stale dev venv that still has it
+    # installed cannot drag the native cairo chain in. Also drop the native HID driver stack (StreamDeck + hid →
     # hidapi/libusb) that only the lazy, unreached make_deck importers pull, so the bundle stays
     # slim. Do NOT drop websockets (core Connector dep). pyserial/serial is not a repo dep.
     # NEVER list anything in the serve_elgato import graph here.

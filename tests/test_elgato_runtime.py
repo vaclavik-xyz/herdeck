@@ -156,10 +156,6 @@ def _copy_assets_and_bake(tmp_path):
     import os
     import shutil
 
-    import pytest
-
-    pytest.importorskip("cairosvg")
-
     from herdeck.elgato import frozen
 
     src = "src/herdeck/assets"
@@ -183,7 +179,7 @@ def test_frozen_session_uses_png_rasterizer(tmp_path):
     # PNG-loading rasterizer + bundled assets dir + offline fetch.
     assert icons._assets_dir == baked
     assert icons._fetch("claude") is None  # no network when frozen
-    # The bundled-asset agent (codex.svg -> baked PNG) renders without cairosvg.
+    # The bundled-asset agent (codex.svg -> baked PNG) renders from the baked PNG.
     name = icons.icon_for("codex", "green")
     assert os.path.exists(os.path.join(icons._cache_dir, name))
 

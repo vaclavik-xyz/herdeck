@@ -42,8 +42,9 @@ a = Analysis(
         "websockets",
         "tomli_w",
     ],
-    # cairosvg (+ native cffi/cairocffi) is build-time only — the frozen runtime
-    # uses the Pillow PNG rasterizer. The Elgato StreamDeck package is not part of
+    # cairosvg (+ native cffi/cairocffi) is no longer a dependency — SVGs render via
+    # resvg_py or the pre-baked PNGs — but stays excluded so a stale dev venv that
+    # still has it installed cannot drag the native cairo chain in. The Elgato StreamDeck package is not part of
     # this D200-first desktop installer. Never exclude strmdck, hid, or websockets.
     excludes=["cairosvg", "cffi", "cairocffi", "tkinter", "StreamDeck"],
     noarchive=False,

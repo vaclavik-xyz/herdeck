@@ -1,7 +1,7 @@
 """Project favicon discovery for the bridge (stdlib only).
 
 The bridge runs on the herdr host with base dependencies only (no Pillow, no
-cairosvg), so nothing here decodes an image: it finds a pane's repository
+resvg), so nothing here decodes an image: it finds a pane's repository
 root, picks the first favicon-like file and serves its bytes by content hash.
 A pane whose cwd is not inside any repo (a workspace folder grouping several
 repos) falls back to that folder: its own candidates first, then those of its

@@ -94,7 +94,8 @@ def test_check_config_remote_token_present_not_leaked():
 def test_check_optional_deps_reports_missing():
     c = check_optional_deps(is_available=lambda mod: mod == "PIL")
     assert "PIL" in c.detail
-    assert "cairosvg" in c.detail
+    assert "resvg_py=missing" in c.detail
+    assert "cairosvg" not in c.detail  # no longer a dependency
 
 
 def test_check_deck_non_invasive():

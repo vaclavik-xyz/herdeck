@@ -57,14 +57,12 @@ def make_png_rasterizer(baked_dir: str) -> Callable[[str, int], Image.Image]:
 def prerasterize_assets(src_dir: str, out_dir: str, size: int = BAKE_SIZE) -> list[str]:
     """Build-time: rasterize each ``*.svg`` in ``src_dir`` to a content-keyed PNG.
 
-    Uses cairosvg (build-time only; excluded from the frozen bundle). Returns the
+    Uses resvg (the same rasterizer the runtime uses). Returns the
     baked PNG filenames (the bundle's glyph manifest). A PNG that already exists is
     left untouched — no re-encode, no mtime churn — so iterating only ``*.svg`` makes
     baking into the source assets dir (``out_dir == src_dir``) safe and idempotent.
     """
-    import io
-
-    import cairosvg  # build-time only — never bundled (see the .spec excludes)
+    from .icons import resvg_rasterize
 
     os.makedirs(out_dir, exist_ok=True)
     baked: list[str] = []
@@ -76,7 +74,6 @@ def prerasterize_assets(src_dir: str, out_dir: str, size: int = BAKE_SIZE) -> li
         name = glyph_png_name(svg)
         dst = os.path.join(out_dir, name)
         if not os.path.exists(dst):
-            png = cairosvg.svg2png(bytestring=svg.encode(), output_width=size, output_height=size)
-            Image.open(io.BytesIO(png)).convert("RGBA").save(dst)
+            resvg_rasterize(svg, size).save(dst)
         baked.append(name)
     return baked

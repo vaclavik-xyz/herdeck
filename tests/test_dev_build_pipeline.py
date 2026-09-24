@@ -28,6 +28,9 @@ def test_dev_build_has_an_isolated_unsigned_macos_artifact():
     assert "APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}" not in workflow
     assert "notarytool" not in workflow
     assert "gh release" not in workflow
+    # SVGs render with the self-contained resvg-py wheel: no native cairo.
+    assert "cairo" not in workflow
+    assert '.venv/bin/python -c "import resvg_py"' in workflow
 
     assert config["productName"] == "Herdeck Dev"
     assert config["identifier"] == "xyz.vaclavik.herdeck.desktop.dev"
