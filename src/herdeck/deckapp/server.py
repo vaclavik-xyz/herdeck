@@ -18,6 +18,7 @@ from ..model import AgentKey
 from ..orchestrator import Orchestrator
 from ..pins import PinStore
 from ..protocol import WIRE_PROTOCOL
+from . import agent_card
 from .sinks import RenderFrame
 from .source import StateSource
 
@@ -400,6 +401,9 @@ class DeckApp:
         self._applied_seq = self._render_seq  # newest frame: supersedes any in flight
         self._ticker_stale = False
         self._apply_rendered_locked(tiles, panel_png, sections, labels)
+        # Commit the tile -> agent map of the frame just served (the desktop
+        # agent card resolves a clicked tile through agent_for_preview).
+        self._orch.confirm_rendered_preview()
         self._fan_out_locked(rs, working, full, ticker)
 
     def _refresh_split(self, rs, seq, orch, slots, *, working, full, ticker) -> bool:
@@ -416,6 +420,10 @@ class DeckApp:
             self._applied_seq = seq
             self._ticker_stale = False
             self._apply_rendered_locked(tiles, panel_png, sections, labels)
+            # Safe to confirm now: any orchestrator mutation since `rs` was
+            # taken re-rendered under the lock and bumped _applied_seq, so a
+            # frame that reaches this point still matches the orchestrator.
+            orch.confirm_rendered_preview()
             self._fan_out_locked(rs, working, full, ticker)
             return True
 
@@ -1211,8 +1219,19 @@ class DeckApp:
                     if not self._require_query_token(url):
                         return
                     self._send(200, json.dumps(app._setup_status()).encode(), "application/json")
+                elif path.startswith("/agent/"):
+                    if not self._require_query_token(url):
+                        return
+                    code, payload = agent_card.handle_get(app._source, path, parse_qs(url.query))
+                    self._send_agent(code, payload)
                 else:
                     self._send(404)
+
+            def _send_agent(self, code, payload):
+                if payload is None:
+                    self._send(code)
+                else:
+                    self._send(code, json.dumps(payload).encode(), "application/json")
 
             def _read_body(self, length):
                 self._body_consumed = True
@@ -1364,6 +1383,16 @@ class DeckApp:
                         self._send(409)
                         return
                     self._send(204)
+                elif path.startswith("/agent/"):
+                    # Desktop agent card actions (agent_card.py). A card action
+                    # waits up to CARD_REPLY_TIMEOUT_S for the bridge reply.
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    code, payload = agent_card.handle_post(app._source, path, body)
+                    self._send_agent(code, payload)
                 elif path == "/setup/connect":
                     if not self._require_header_token():
                         return

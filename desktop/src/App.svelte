@@ -9,6 +9,7 @@
   import { appSurface, desktopSetupVisible, windowRole } from "./lib/appSurface";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport } from "./lib/deckClient";
+  import { agentCallTransport } from "./lib/agentCardClient";
   import {
     DECK_ZOOM_EVENT,
     floatingScaleCommandFromEvent,
@@ -110,6 +111,11 @@
   );
   const setup = $derived(
     discovery ? setupTransport((cmd, args) => invoke(cmd, args)) : null,
+  );
+  // The agent card (Option-click / long-press a tile): /agent/* via the Rust
+  // `agent_call` proxy, which injects the token.
+  const agentTransport = $derived(
+    discovery ? agentCallTransport((cmd, args) => invoke(cmd, args)) : null,
   );
   // Runtime /health (the shell adds its own app_version) for HealthNotice.
   const fetchHealth = $derived(discovery ? () => invoke("check_health") : null);
@@ -607,7 +613,7 @@
     />
     <HealthNotice {fetchHealth} />
     {#if view === "deck"}
-      <DeckView {transport} compact />
+      <DeckView {transport} {agentTransport} compact />
     {:else}
       <Onboarding
         variant="compact"

@@ -18,6 +18,8 @@
   } from "./deckClient";
   import { defineMessages, fmt, locale, setLang } from "./i18n.svelte";
   import { visibilityGatedLoop, type GatedLoop } from "./pollGate";
+  import AgentCard from "./AgentCard.svelte";
+  import type { AgentTransport } from "./agentCardClient";
 
   const M = defineMessages({
     en: {
@@ -32,6 +34,7 @@
       press_failed: "Press didn't reach the runtime",
       press_forbidden: "Press refused: the runtime's access token changed",
       press_rejected: "The runtime rejected the press (HTTP {status})",
+      card_hint: "Option-click or long-press a tile for the agent card",
     },
     cs: {
       tile: "dlaždice {n}",
@@ -45,6 +48,7 @@
       press_failed: "Stisk se nedostal k runtime",
       press_forbidden: "Stisk odmítnut: změnil se přístupový token runtime",
       press_rejected: "Runtime stisk odmítl (HTTP {status})",
+      card_hint: "Option-klik nebo dlouhý stisk dlaždice otevře kartu agenta",
     },
   });
   const m = $derived(M[locale.lang]);
@@ -55,6 +59,7 @@
     onJump = undefined,
     onView = undefined,
     compact = false,
+    agentTransport = null,
   }: {
     // Live transport (built from the sidecar url + token via sidecar.ts). Null
     // until the shell reports both; the deck then renders its offline state.
@@ -67,6 +72,9 @@
     onJump?: (section: string) => void;
     onView?: (view: DeckViewModel) => void;
     compact?: boolean;
+    // The agent card's /agent/* transport. Null (config preview, plain
+    // browser) leaves tiles press-only.
+    agentTransport?: AgentTransport | null;
   } = $props();
 
   let view = $state<DeckViewModel>(initialView());
@@ -232,19 +240,78 @@
   // Config-window preview passes onJump → "jump mode": a tile click switches the editor
   // to that tile's config section and NEVER actuates the deck. The floating deck leaves
   // onJump undefined and keeps the press behavior below.
-  function clickTile(i: number): void {
+  function clickTile(i: number, e?: MouseEvent): void {
     if (onJump) {
       const section = view.sections[i];
       if (section) onJump(section);
       return;
     }
+    if (suppressClick) {
+      // The long press already opened the card; its trailing click must not
+      // also actuate the deck.
+      suppressClick = false;
+      return;
+    }
+    if (e?.altKey && openCard(i)) return;
     void press(i);
+  }
+
+  // --- agent card: Option/Alt-click, Option/Alt+digit, or a long press ------
+  // Right-click is the window's own context menu, so the card takes the
+  // modifier-click (and a touch-style long press) instead. A tile resolves to
+  // its agent once, on the runtime; the card then follows that agent.
+  const LONG_PRESS_MS = 500;
+  let card = $state<{ index: number; seq: number } | null>(null);
+  let cardSeq = 0;
+  let longPressTimer: ReturnType<typeof setTimeout> | undefined;
+  let suppressClick = false;
+  const cardEnabled = $derived(!onJump && agentTransport != null);
+
+  function openCard(i: number): boolean {
+    if (!cardEnabled) return false;
+    card = { index: i, seq: ++cardSeq };
+    return true;
+  }
+
+  function closeCard(): void {
+    card = null;
+  }
+
+  function cancelLongPress(): void {
+    if (longPressTimer) clearTimeout(longPressTimer);
+    longPressTimer = undefined;
+  }
+
+  function startLongPress(i: number, e: PointerEvent): void {
+    cancelLongPress();
+    suppressClick = false;
+    if (!cardEnabled || e.button !== 0) return;
+    longPressTimer = setTimeout(() => {
+      longPressTimer = undefined;
+      if (openCard(i)) suppressClick = true;
+    }, LONG_PRESS_MS);
   }
 
   // Keyboard parity with the simulator: 1..9 -> tiles 0..8, 0 -> tile 9.
   function onKey(e: KeyboardEvent): void {
     if (onJump) return; // jump-mode preview never actuates via keyboard
-    if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (e.repeat || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      target.matches("input, textarea, select, [contenteditable='true']")
+    ) {
+      return; // typing a reply in the agent card
+    }
+    if (e.altKey) {
+      // Option+digit opens the card. e.key is a composed glyph there on macOS
+      // (Option+1 = "¡"), so read the physical key.
+      const digit = /^Digit(\d)$/.exec(e.code)?.[1];
+      if (digit !== undefined && openCard(digit === "0" ? 9 : Number(digit) - 1)) {
+        e.preventDefault();
+      }
+      return;
+    }
     if (e.key >= "1" && e.key <= "9") void press(e.key.charCodeAt(0) - 49);
     else if (e.key === "0") void press(9);
   }
@@ -284,6 +351,7 @@
       loop?.stop();
       loop = null;
       clearActive();
+      cancelLongPress();
       window.removeEventListener("keydown", onKey);
     };
   });
@@ -313,8 +381,12 @@
         class:active={active === i}
         class:alt={pressParity}
         class:failed={failed?.index === i}
-        title={failed?.index === i ? failed.message : undefined}
-        onclick={() => clickTile(i)}
+        title={failed?.index === i ? failed.message : cardEnabled ? m.card_hint : undefined}
+        onclick={(e) => clickTile(i, e)}
+        onpointerdown={(e) => startLongPress(i, e)}
+        onpointerup={cancelLongPress}
+        onpointerleave={cancelLongPress}
+        onpointercancel={cancelLongPress}
         aria-label={view.labels[i] ?? fmt(m.tile, { n: i + 1 })}
       >
         {#if src}<img {src} alt="" onerror={() => void imageFailed(i, src)} />{/if}
@@ -348,6 +420,12 @@
     <div class="press-error" role="status">{failed.message}</div>
   {/if}
   </div>
+
+  {#if card && agentTransport}
+    {#key card.seq}
+      <AgentCard transport={agentTransport} target={{ index: card.index }} onClose={closeCard} />
+    {/key}
+  {/if}
 
   <footer class="summary" aria-live="polite">
     <span

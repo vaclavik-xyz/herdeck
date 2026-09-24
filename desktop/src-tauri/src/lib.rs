@@ -9,6 +9,7 @@
 //! the frontend can reach the sidecar over loopback. The sidecar is restarted on
 //! crash and killed on quit.
 
+mod agent_card;
 pub mod app_log;
 pub mod banners;
 pub mod build_channel;
@@ -4259,6 +4260,7 @@ pub fn run() {
         ))
         .invoke_handler(tauri::generate_handler![
             get_discovery,
+            agent_card::agent_call,
             update_check,
             update_install,
             check_health,

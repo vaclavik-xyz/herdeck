@@ -16,6 +16,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   banner opens the drill instead. Opt-in `[notifications].banner_prompt`
   appends a short, sanitized prompt excerpt to blocked alerts. Both are
   editable under Notifications.
+- Desktop agent card: Option-click, long-press or ⌥digit a tile in the deck
+  window to see that agent in full (header, status and since, the whole blocked
+  prompt, the drill's parsed options, a free-text reply, Focus and Stop). New
+  token-authenticated runtime routes `GET /agent/detail` and
+  `POST /agent/{answer,text,stop,focus}`; an answer carries the prompt revision
+  the user saw and is refused as stale when the prompt changed. Card actions
+  wait for the bridge's reply, so a read-only bridge token is reported instead
+  of being dropped silently (bridge `error` frames now keep their `req`).
+- Live terminal in the desktop agent card: a read-only xterm.js view of the
+  agent's pane, relayed from the bridge's `observe` through new runtime routes
+  `POST /agent/term/open`, `GET /agent/term/poll` (bounded long-poll) and
+  `POST /agent/term/close`. Observation stops when the card closes, the
+  terminal is toggled off or the window hides; the runtime also stops previews
+  nobody polled for 15 s and runs at most two at once.
 - `herdeck-bridge --rotate-token [--token-file PATH] [--show]` writes a fresh
   random `0600` token atomically and prints the next steps (restart the
   bridge, update the runtime-side token); the token is printed only with

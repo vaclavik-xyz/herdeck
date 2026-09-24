@@ -594,6 +594,27 @@ npm ci
 npm run tauri dev   # opens the desktop control room (needs a real desktop session)
 ```
 
+**Agent card.** Option-click (Alt-click) a tile in the deck window, long-press
+it, or press **⌥1**…**⌥0**, and a card opens under the deck with that agent in
+full: agent type, repo/branch, workspace/tab, status and how long it has been
+in it, and the *whole* blocked prompt (the deck panel fits three lines). The
+card offers the same answers as the deck drill (same parsing, same
+`[safety]` confirmations), a free-text reply (Enter sends and submits, like
+`herdeck-ctl send`; Shift+Enter adds a line), **Focus** and **Stop**. An
+answer names the prompt you were reading; if the prompt changed meanwhile the
+runtime refuses it as stale instead of answering a question you have not
+seen. Every action says what happened, including a bridge that only accepts a
+read-only token (`HERDECK_READONLY_TOKEN_FILE`). The card talks to the
+runtime's token-authenticated `/agent/*` routes through the desktop shell, so
+the token never reaches the page. The demo deck has no card.
+
+**Live terminal** in the card shows the agent's pane read-only (the xterm.js
+view the browser dashboard uses, fed by the bridge's `observe`). It needs
+herdr 0.7.3+ on the bridge host. Watching stops when you toggle it off, close
+the card or hide the window, and the runtime stops any preview nobody has
+polled for 15 s. The runtime runs at most two previews at once (the bridge
+allows three per connection) and drops the oldest when you open another.
+
 The UI is dark-only by design: it mirrors the deck hardware's black tiles, so
 there is no light theme to switch to.
 
