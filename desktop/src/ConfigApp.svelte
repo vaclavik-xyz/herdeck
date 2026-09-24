@@ -20,6 +20,7 @@
   import SlidersHorizontal from "phosphor-svelte/lib/SlidersHorizontal";
   import StackSimple from "phosphor-svelte/lib/StackSimple";
   import TerminalWindow from "phosphor-svelte/lib/TerminalWindow";
+  import Wrench from "phosphor-svelte/lib/Wrench";
   import DeckView from "./lib/DeckView.svelte";
   import StatusRibbon from "./lib/StatusRibbon.svelte";
   import ServersSection from "./lib/sections/ServersSection.svelte";
@@ -34,6 +35,8 @@
   import AnswerProfilesSection from "./lib/sections/AnswerProfilesSection.svelte";
   import ProfilesSection from "./lib/sections/ProfilesSection.svelte";
   import DesktopSection from "./lib/sections/DesktopSection.svelte";
+  import MaintenanceSection from "./lib/sections/MaintenanceSection.svelte";
+  import { settingsRequest } from "./lib/settingsRequest.svelte";
   import Banner from "./lib/Banner.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import {
@@ -92,6 +95,7 @@
       "sec.answer_profiles": "Answer profiles",
       "sec.profiles": "Profiles",
       "sec.desktop": "Window",
+      "sec.maintenance": "Maintenance",
       "group.control": "Control",
       "group.deck": "Deck",
       "group.agents": "Agents",
@@ -109,6 +113,7 @@
       "desc.answer_profiles": "Map deck actions to the key sequences expected by each agent tool.",
       "desc.profiles": "Compose named working contexts from server selections and inherited settings.",
       "desc.desktop": "Set window behavior and the global shortcut that shows or hides the deck.",
+      "desc.maintenance": "Check versions, run the runtime as a service, restart the deck and update bridges.",
       search_settings: "Search settings",
       clear_search: "Clear search",
       no_search_results: "No settings match this search.",
@@ -198,6 +203,7 @@
       "sec.answer_profiles": "Profily odpovědí",
       "sec.profiles": "Profily",
       "sec.desktop": "Okno",
+      "sec.maintenance": "Údržba",
       "group.control": "Ovládání",
       "group.deck": "Deck",
       "group.agents": "Agenti",
@@ -215,6 +221,7 @@
       "desc.answer_profiles": "Namapuj akce decku na klávesy očekávané jednotlivými nástroji agentů.",
       "desc.profiles": "Sestav pojmenované pracovní kontexty z výběru serverů a zděděných nastavení.",
       "desc.desktop": "Nastav chování okna a globální zkratku pro zobrazení nebo skrytí decku.",
+      "desc.maintenance": "Zkontroluj verze, spouštěj runtime jako službu, restartuj deck a aktualizuj bridge.",
       search_settings: "Hledat nastavení",
       clear_search: "Vymazat hledání",
       no_search_results: "Žádné nastavení tomuto hledání neodpovídá.",
@@ -322,6 +329,7 @@
     { label: lm["group.system"], items: [
       { key: "profiles", icon: StackSimple, label: lm["sec.profiles"] },
       { key: "desktop", icon: SlidersHorizontal, label: lm["sec.desktop"] },
+      { key: "maintenance", icon: Wrench, label: lm["sec.maintenance"] },
     ] },
   ]);
 
@@ -338,6 +346,15 @@
     navQuery = "";
     validationEditProfile = undefined;
   }
+
+  // "Open Maintenance" from HealthNotice / the deck window (settingsRequest).
+  let seenRequest = settingsRequest.seq;
+  $effect(() => {
+    const seq = settingsRequest.seq;
+    if (seq === seenRequest) return;
+    seenRequest = seq;
+    if (settingsRequest.section) selectSection(settingsRequest.section);
+  });
 
   function searchKeydown(event: KeyboardEvent): void {
     if (event.key !== "Enter") return;
@@ -432,6 +449,7 @@
     answer_profiles: lm["desc.answer_profiles"],
     profiles: lm["desc.profiles"],
     desktop: lm["desc.desktop"],
+    maintenance: lm["desc.maintenance"],
   });
   const activeDescription = $derived(SECTION_DESCRIPTIONS[active] ?? lm.settings_hint);
   const filteredNavGroups = $derived.by(() => {
@@ -883,7 +901,10 @@
             <p>{activeDescription}</p>
           </div>
         </div>
-        {#if payload == null}
+        {#if active === "maintenance"}
+          <!-- Not a config section: live runtime facts + actions, no payload. -->
+          <article class="card form-card"><MaintenanceSection invoke={browserMode ? null : (cmd, args) => invoke(cmd, args)} /></article>
+        {:else if payload == null}
           <article class="card loading-card"><p class="hint">{lm.loading}</p></article>
         {:else if active === "servers"}
           <div class="connections-workbench">

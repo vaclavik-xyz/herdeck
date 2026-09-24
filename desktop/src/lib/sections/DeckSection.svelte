@@ -2,6 +2,7 @@
   import FieldGroup from "./FieldGroup.svelte";
   import TextField from "../fields/TextField.svelte";
   import NumberField from "../fields/NumberField.svelte";
+  import BooleanField from "../fields/BooleanField.svelte";
   import TriStateListField from "../fields/TriStateListField.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
@@ -84,6 +85,16 @@
   const debounce = $derived((getAt(payload, "local", "hardware", "debounce") as number | null) ?? HARDWARE_DEFAULTS.debounce);
   const keepAlive = $derived((getAt(payload, "local", "hardware", "keep_alive_interval") as number | null) ?? HARDWARE_DEFAULTS.keep_alive_interval);
   const tick = $derived((getAt(payload, "local", "hardware", "tick_interval") as number | null) ?? HARDWARE_DEFAULTS.tick_interval);
+  // D200 writer + USB power-cycle (Maintenance section), all optional.
+  const standardWriter = $derived(getAt(payload, "local", "hardware", "d200_standard_writer") === true);
+  const uhubctl = $derived((getAt(payload, "local", "hardware", "uhubctl") as string) ?? "");
+  const usbHub = $derived((getAt(payload, "local", "hardware", "usb_hub") as string) ?? "");
+  const usbPort = $derived((getAt(payload, "local", "hardware", "usb_port") as number | null) ?? null);
+  function setLocalBool(table: string, key: string, v: boolean): void {
+    // false is the default: drop the key rather than writing it.
+    payload = v ? setAt(payload, "local", table, key, true) : removeAt(payload, "local", table, key);
+    onChange();
+  }
   function setLocalStr(table: string, key: string, v: string): void {
     payload = v.trim() === "" ? removeAt(payload, "local", table, key) : setAt(payload, "local", table, key, v);
     onChange();
@@ -118,6 +129,10 @@
       <NumberField label="debounce" help={HELP.debounce} value={debounce} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
       <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step="any" min={Number.MIN_VALUE} max={86400} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
       <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
+      <BooleanField label="d200_standard_writer" help={HELP.d200_standard_writer} value={standardWriter} onchange={(v) => setLocalBool("hardware", "d200_standard_writer", v)} />
+      <TextField label="uhubctl" help={HELP.uhubctl} value={uhubctl} oninput={(v) => setLocalStr("hardware", "uhubctl", v)} />
+      <TextField label="usb_hub" help={HELP.usb_hub} value={usbHub} oninput={(v) => setLocalStr("hardware", "usb_hub", v)} />
+      <NumberField label="usb_port" help={HELP.usb_port} value={usbPort} int min={1} max={127} onchange={(v) => setLocalNum("hardware", "usb_port", v)} />
     </div>
   </details>
 </FieldGroup>

@@ -631,6 +631,23 @@ the card or hide the window, and the runtime stops any preview nobody has
 polled for 15 s. The runtime runs at most two previews at once (the bridge
 allows three per connection) and drops the oldest when you open another.
 
+**Maintenance** (Settings → System → Maintenance) does from the app what used
+to need a terminal: it lists the app, runtime and bridge versions (a mismatch
+is flagged), says where the runtime comes from and can make it a service of
+this app (`herdeck-service install runtime --from-app`, run by the bundled
+runtime binary, so it is restarted with every app update), restart that
+service and open the runtime or app log. For the D200 it explains the state in
+words and offers **Restart deck** (close, reopen, full redraw) and, with
+[uhubctl](https://github.com/mvp/uhubctl) installed, **Power-cycle USB port**;
+when uhubctl needs root the exact `sudo` command is shown to copy. Per bridge
+it offers **Update bridge**: the runtime asks that bridge to install the
+runtime's version into its managed install and restart, with progress shown
+live. A bridge that is not a managed install explains the one-time
+`herdeck-service install bridge --managed` instead. The status line under the
+deck (HealthNotice) offers the same fixes inline, the tray has **Restart
+deck**, and `[hotkeys].restart_deck` can bind it to a global shortcut (off by
+default).
+
 The UI is dark-only by design: it mirrors the deck hardware's black tiles, so
 there is no light theme to switch to.
 

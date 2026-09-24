@@ -8,6 +8,8 @@
     setToggleDeckHotkey,
     nextBlockedHotkey,
     setNextBlockedHotkey,
+    restartDeckHotkey,
+    setRestartDeckHotkey,
     deckAlwaysOnTop,
     setDeckAlwaysOnTop,
     type ConfigPayload,
@@ -38,6 +40,11 @@
     payload = setNextBlockedHotkey(payload, v);
     onChange();
   }
+  const restartDeck = $derived(restartDeckHotkey(payload));
+  function setRestartDeck(v: string): void {
+    payload = setRestartDeckHotkey(payload, v);
+    onChange();
+  }
   const alwaysOnTop = $derived(deckAlwaysOnTop(payload));
   function setHotkey(v: string): void {
     payload = setToggleDeckHotkey(payload, v);
@@ -56,6 +63,7 @@
 </p>
 <TextField label="toggle_deck" help={HELP.toggle_deck} value={hotkey} oninput={setHotkey} />
 <TextField label="next_blocked" help={HELP.next_blocked} value={nextBlocked} oninput={setNextBlocked} />
+<TextField label="restart_deck" help={HELP.restart_deck} value={restartDeck} oninput={setRestartDeck} />
 
 <style>
   .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }

@@ -36,24 +36,37 @@ function ago(sinceMs: number | null, now: number, m: HealthMessages): string {
   return fmt(m.hours, { n: Math.round(s / 3600) });
 }
 
-/** Every problem the /health payload shows, most actionable first. Empty
- *  when the deck is fine (or the runtime predates these fields). */
-export function healthProblems(raw: unknown, m: HealthMessages, now: number = Date.now()): string[] {
+/** What a HealthNotice button next to a problem does. */
+export type HealthAction =
+  | { kind: "update_bridge"; serverId: string }
+  | { kind: "restart_deck" }
+  | { kind: "open_maintenance" };
+
+export interface HealthItem {
+  text: string;
+  action: HealthAction;
+}
+
+/** Every problem the /health payload shows, most actionable first, each with
+ *  the action that addresses it. Empty when the deck is fine (or the runtime
+ *  predates these fields). */
+export function healthItems(raw: unknown, m: HealthMessages, now: number = Date.now()): HealthItem[] {
   const h = rec(raw);
-  const out: string[] = [];
+  const out: HealthItem[] = [];
+  const maintenance: HealthAction = { kind: "open_maintenance" };
   const runtime = str(h.version);
   const app = str(h.app_version);
   if (runtime && app && runtime !== app) {
-    out.push(fmt(m.runtime_mismatch, { runtime, app }));
+    out.push({ text: fmt(m.runtime_mismatch, { runtime, app }), action: maintenance });
   }
   for (const [id, value] of Object.entries(rec(h.servers))) {
     const s = rec(value);
     if (s.protocol_supported === false) {
-      out.push(fmt(m.bridge_protocol, { id }));
+      out.push({ text: fmt(m.bridge_protocol, { id }), action: maintenance });
     }
     const bridge = str(s.bridge_version);
     if (runtime && bridge && bridge !== runtime) {
-      out.push(fmt(m.bridge_mismatch, { id, bridge, runtime }));
+      out.push({ text: fmt(m.bridge_mismatch, { id, bridge, runtime }), action: { kind: "update_bridge", serverId: id } });
     }
     const since = num(s.since);
     if (s.connected === false && (since === null || now - since >= HEALTH_GRACE_MS)) {
@@ -61,20 +74,41 @@ export function healthProblems(raw: unknown, m: HealthMessages, now: number = Da
       // A server that never connected (configured but not running) is not an
       // outage; a rejected token still is — that is a misconfiguration.
       if (s.ever_connected === false && !token) continue;
-      out.push(fmt(token ? m.bridge_token : m.bridge_down, { id, since: ago(since, now, m) }).trim());
+      out.push({
+        text: fmt(token ? m.bridge_token : m.bridge_down, { id, since: ago(since, now, m) }).trim(),
+        action: maintenance,
+      });
     }
   }
   const d200 = rec(h.d200);
   const owner = num(d200.lock_owner);
   if (owner !== null) {
-    out.push(fmt(m.d200_locked, { pid: owner }));
+    out.push({ text: fmt(m.d200_locked, { pid: owner }), action: { kind: "restart_deck" } });
   } else if (d200.connected === false && num(d200.last_frame_at) !== null) {
     // Only a D200 this runtime has driven before counts as "disconnected":
     // a machine without one keeps failing to open it, and that is normal.
     const since = num(d200.since);
     if (since === null || now - since >= HEALTH_GRACE_MS) {
-      out.push(fmt(m.d200_down, { since: ago(since, now, m) }).trim());
+      out.push({ text: fmt(m.d200_down, { since: ago(since, now, m) }).trim(), action: { kind: "restart_deck" } });
     }
+  }
+  return out;
+}
+
+/** The problem texts alone (see `healthItems`). */
+export function healthProblems(raw: unknown, m: HealthMessages, now: number = Date.now()): string[] {
+  return healthItems(raw, m, now).map((item) => item.text);
+}
+
+/** The distinct actions of `items`, in order (one button each). */
+export function healthActions(items: HealthItem[]): HealthAction[] {
+  const seen = new Set<string>();
+  const out: HealthAction[] = [];
+  for (const { action } of items) {
+    const key = action.kind === "update_bridge" ? `${action.kind}:${action.serverId}` : action.kind;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(action);
   }
   return out;
 }

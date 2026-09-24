@@ -37,6 +37,7 @@
   import { visibilityGatedLoop } from "./lib/pollGate";
   import UpdateBanner from "./lib/UpdateBanner.svelte";
   import HealthNotice from "./lib/HealthNotice.svelte";
+  import { requestSettingsSection } from "./lib/settingsRequest.svelte";
   import {
     asUpdateCheckState,
     reasonOf,
@@ -119,6 +120,15 @@
   );
   // Runtime /health (the shell adds its own app_version) for HealthNotice.
   const fetchHealth = $derived(discovery ? () => invoke("check_health") : null);
+  // HealthNotice's inline actions (maintenance routes via `maintenance_call`).
+  const maintenanceInvoke = $derived(
+    discovery ? (cmd: string, args?: Record<string, unknown>) => invoke(cmd, args) : null,
+  );
+  // Same window as the settings (desktop surface): switch the section here.
+  function openMaintenanceHere(): void {
+    openDesktopSettings();
+    requestSettingsSection("maintenance");
+  }
 
   const view = $derived(shouldOnboard(status, reonboard));
   const showDesktopSetup = $derived(desktopSetupVisible(surface, view, desktopSetupHidden));
@@ -353,6 +363,10 @@
       reonboard = false;
       desktopSetupHidden = true;
     });
+    // `open_maintenance` (HealthNotice in the deck window) → this section.
+    const sectionListener = listen<string>("open-section", (event) => {
+      if (typeof event.payload === "string") requestSettingsSection(event.payload);
+    });
     const onFloatingScaleKey = (event: KeyboardEvent): void => {
       if (!borderless) return;
       const target = event.target;
@@ -479,6 +493,7 @@
       void discoveryListener.then((unlisten) => unlisten());
       void reonboardListener.then((unlisten) => unlisten());
       void settingsListener.then((unlisten) => unlisten());
+      void sectionListener.then((unlisten) => unlisten());
       void zoomListener.then((unlisten) => unlisten());
       void checkUpdateListener.then((unlisten) => unlisten());
       void updateResultListener.then((unlisten) => unlisten());
@@ -540,7 +555,7 @@
         onDismissError={() => (updateError = "")}
         onLater={laterUpdate}
       />
-      <HealthNotice {fetchHealth} />
+      <HealthNotice {fetchHealth} invoke={maintenanceInvoke} onOpenMaintenance={openMaintenanceHere} />
     </div>
     <div class="desktop-control-room" inert={showDesktopSetup} aria-hidden={showDesktopSetup}>
       <ConfigApp interactive={!showDesktopSetup} />
@@ -611,7 +626,7 @@
       onDismissError={() => (updateError = "")}
       onLater={laterUpdate}
     />
-    <HealthNotice {fetchHealth} />
+    <HealthNotice {fetchHealth} invoke={maintenanceInvoke} />
     {#if view === "deck"}
       <DeckView {transport} {agentTransport} compact />
     {:else}
