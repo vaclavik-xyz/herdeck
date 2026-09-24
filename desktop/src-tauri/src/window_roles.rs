@@ -8,12 +8,10 @@ use std::path::Path;
 
 use tauri::{Emitter, LogicalPosition, Manager, PhysicalPosition};
 
+use crate::runtime_plan::default_config_path;
 use crate::tray::TrayHandles;
 use crate::window_state::{self, WindowState};
-use crate::{
-    deck_prefs, default_config_path, http, AppState, HDR_TOKEN,
-    SETUP_CONNECT_TIMEOUT, SIDECAR_TIMEOUT,
-};
+use crate::{deck_prefs, http, AppState, HDR_TOKEN, SETUP_CONNECT_TIMEOUT, SIDECAR_TIMEOUT};
 
 /// The two fixed window roles. The labels are historical — `main` is the
 /// borderless deck overlay, `config` the decorated settings window — and are

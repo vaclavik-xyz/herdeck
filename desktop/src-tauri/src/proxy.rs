@@ -9,12 +9,10 @@ use std::time::Duration;
 use tauri::Manager;
 
 use crate::notifications::shell_gen;
+use crate::runtime_plan::{note_runtime_ok, rediscover_runtime};
 use crate::sidecar::Discovery;
 use crate::tray::update_tray_blocked;
-use crate::{
-    http, note_runtime_ok, rediscover_runtime, AppState, HDR_TOKEN, SETUP_CONNECT_TIMEOUT,
-    SIDECAR_TIMEOUT,
-};
+use crate::{http, AppState, HDR_TOKEN, SETUP_CONNECT_TIMEOUT, SIDECAR_TIMEOUT};
 
 /// The current discovery, or an error until the supervised sidecar has reported
 /// in. Shared by every proxy command so the token-pull lives in one place.

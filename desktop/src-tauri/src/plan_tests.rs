@@ -1,11 +1,15 @@
 //! Unit tests for the shell glue (runtime plan, notifications, window
 //! placement, tray labels), moved out of the inline `plan_tests` module.
 
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
 use super::*;
 use crate::banner_native::*;
 use crate::notifications::*;
 use crate::notify_pump::*;
 use crate::proxy::*;
+use crate::runtime_plan::*;
 use crate::tray::*;
 use crate::window_roles::*;
 
