@@ -48,6 +48,7 @@ REQUIRED_METHOD_PARAM_VARIANTS: dict[str, tuple[frozenset[str], ...]] = {
     "events.subscribe": (frozenset({"subscriptions"}),),
     "pane.list": (frozenset(),),
     "pane.read": (frozenset({"pane_id", "source"}),),
+    "pane.report_metadata": (frozenset({"pane_id", "source", "tokens", "ttl_ms", "seq"}),),
     "pane.send_keys": (frozenset({"pane_id", "keys"}),),
     "pane.send_text": (frozenset({"pane_id", "text"}),),
     "session.snapshot": (frozenset(),),

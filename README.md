@@ -761,6 +761,22 @@ description, status (running, done, failed, or "no signal" for a stale one),
 running time or total time, with nested subagents indented. The cockpit's
 `GET /api/v1/agents` carries the same list in each record's `subagents`.
 
+A stop hook can get lost (the agent was killed, or a background subagent
+finished while its parent was busy). So every 60 s the bridge also checks the
+transcripts of each pane that still has running or stale subagents. For Claude
+Code it reads the parent session's `.jsonl`, where a finished subagent shows up
+as a `<task-notification>` with its `<task-id>` and `<status>` (`completed` or
+`failed`), or as the `Agent` tool's result. A recently written
+`<session>/subagents/agent-<id>.jsonl` counts as a heartbeat. For Codex it
+reads the child thread's rollout under `~/.codex/sessions` (the one named for
+the subagent whose `session_meta` names the parent thread), which ends a
+finished turn with `task_complete` (done) or `turn_aborted` (failed). Only the
+newest record counts, only the last 1 MiB (256 KiB for a Codex rollout) is
+read, and anything it does not recognise leaves the entry as it is. The work
+runs off the bridge's event loop under the hook's spool lock, and a changed
+count goes to herdr as the same `subagents` token. The hook records where
+these transcripts are (in the spool only, never sent to clients).
+
 **Install the hooks.** On the agents' Mac run
 
 ```bash

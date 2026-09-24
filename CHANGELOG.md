@@ -17,6 +17,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   honoured). The installer only ever writes or removes that one file, only
   when it carries herdeck's marker, and backs it up first. A default `install`
   adds it only where OpenCode is set up. README "Subagent tracking".
+- Subagent transcript fallback on the bridge: every 60 s, for panes whose
+  spool still has running or stale subagents, the bridge reads the tail of
+  the provider's transcripts and marks a subagent done or failed when its
+  stop hook never arrived. For Claude Code that is a `task-notification` or
+  `Agent` tool result in the parent transcript; for Codex, `task_complete` or
+  `turn_aborted` in the child rollout. It then updates the `subagents` token
+  through herdr (`pane.report_metadata`). Unknown formats leave entries as
+  they are, and file reads are bounded and run off the event loop.
 - Bridge lifecycle events (capability `events`): the bridge gives every
   blocked and done episode a stable `episode_id` (it survives a bridge
   restart), streams `event` frames (`blocked` with the pre-read, sanitized

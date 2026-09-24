@@ -71,6 +71,15 @@ class SubagentSpoolReader:
         self._cache[pane_id] = (key, entries)
         return entries
 
+    def open_panes(self) -> list[str]:
+        """Panes of the last snapshot whose spool has running or stale
+        entries (the reconciler's work list; subagent_reconcile.py)."""
+        return [
+            pane
+            for pane, (_, entries) in self._cache.items()
+            if any(e.get("status") in ("running", "stale") for e in entries)
+        ]
+
     def entries_for(self, pane_id: str) -> list[dict]:
         """The pane's subagents as wire dicts, most recent first (<= 20)."""
         raw = self._raw_entries(pane_id)

@@ -57,7 +57,7 @@ def _schema() -> dict:
 def test_contract_accepts_complete_schema():
     message = contract.validate_schema(_schema())
 
-    assert "12 methods" in message
+    assert "13 methods" in message
     assert "response fields" in message
 
 
