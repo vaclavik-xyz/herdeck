@@ -1712,6 +1712,14 @@ class SocketHerdr:
         return merged
 
 
+# What a client authenticated with HERDECK_READONLY_TOKEN_FILE may send: fleet
+# snapshots (+ project icons), pane text reads, live terminal previews and the
+# health probe. Everything else — act, focus, refresh_title, send_text,
+# choose_if_blocked, start, and any future type — is rejected (an allowlist,
+# so a new mutating message is never open to view-only clients by default).
+READONLY_MESSAGES = frozenset({"list", "read", "observe", "observe_stop", "health"})
+
+
 async def _health_result(herdr: HerdrClient, req: object, clients: int) -> dict:
     """Answer an authenticated ``{"type": "health", "req": ...}`` probe: this
     bridge's version and wire protocol, whether herdr's socket answers right
@@ -1743,10 +1751,17 @@ async def _serve_connection(
     *,
     icons: ProjectIconIndex | None = None,
     icon_subs: dict | None = None,
+    readonly_token: str | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
-    if not hmac.compare_digest(auth, f"Bearer {token}"):
+    full = hmac.compare_digest(auth, f"Bearer {token}")
+    readonly = (
+        not full
+        and readonly_token is not None
+        and hmac.compare_digest(auth, f"Bearer {readonly_token}")
+    )
+    if not (full or readonly):
         await ws.close(code=4401, reason="unauthorized")
         return
     send_lock = asyncio.Lock()
@@ -1786,6 +1801,18 @@ async def _serve_connection(
             except ValueError:
                 msg = None
             kind = msg.get("type") if isinstance(msg, dict) else None
+            if readonly and kind not in READONLY_MESSAGES:
+                req = msg.get("req") if isinstance(msg, dict) else None
+                await send(
+                    encode(
+                        {
+                            "type": "error",
+                            "req": req if isinstance(req, str) else "",
+                            "message": f"read-only token: '{kind}' is not allowed",
+                        }
+                    )
+                )
+                continue
             if kind == "observe":
                 req = msg.get("req")
                 pane_id = msg.get("pane_id")
@@ -1993,7 +2020,15 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     return host, port, token, (server, btask)
 
 
-async def serve(socket_path: str, host: str, port: int, server_id: str, token: str):
+async def serve(
+    socket_path: str,
+    host: str,
+    port: int,
+    server_id: str,
+    token: str,
+    *,
+    readonly_token: str | None = None,
+):
     # SocketHerdr RPCs are unserialized one-shot connections (herdr accepts them
     # concurrently), so an on-demand read/focus/act never queues behind an
     # in-flight fleet snapshot. Separate instances for the event stream vs client
@@ -2016,6 +2051,7 @@ async def serve(socket_path: str, host: str, port: int, server_id: str, token: s
             socket_path,
             icons=icons,
             icon_subs=icon_subs,
+            readonly_token=readonly_token,
         )
 
     async with websockets.serve(handler, host, port):
@@ -2023,25 +2059,29 @@ async def serve(socket_path: str, host: str, port: int, server_id: str, token: s
         await _broadcast(events.stream(), clients, server_id, icon_subs=icon_subs, icons=icons)
 
 
+def _read_token_file(token_file: str, env_name: str) -> str:
+    if not token_file.strip():
+        raise SystemExit(f"{env_name} must not be empty")
+    path = os.path.abspath(os.path.expanduser(token_file))
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError as exc:
+        raise SystemExit(f"could not read {env_name}: {exc}") from exc
+    if mode & 0o077:
+        raise SystemExit(f"{env_name} permissions must be 0600 or stricter")
+    try:
+        token = open(path, encoding="utf-8").read().strip()
+    except OSError as exc:
+        raise SystemExit(f"could not read {env_name}: {exc}") from exc
+    if not token:
+        raise SystemExit(f"{env_name} must not be empty")
+    return token
+
+
 def load_bridge_token(*, getenv=os.environ.get) -> str:
     token_file = getenv("HERDECK_TOKEN_FILE")
     if token_file is not None:
-        if not token_file.strip():
-            raise SystemExit("HERDECK_TOKEN_FILE must not be empty")
-        path = os.path.abspath(os.path.expanduser(token_file))
-        try:
-            mode = stat.S_IMODE(os.stat(path).st_mode)
-        except OSError as exc:
-            raise SystemExit(f"could not read HERDECK_TOKEN_FILE: {exc}") from exc
-        if mode & 0o077:
-            raise SystemExit("HERDECK_TOKEN_FILE permissions must be 0600 or stricter")
-        try:
-            token = open(path, encoding="utf-8").read().strip()
-        except OSError as exc:
-            raise SystemExit(f"could not read HERDECK_TOKEN_FILE: {exc}") from exc
-        if not token:
-            raise SystemExit("HERDECK_TOKEN_FILE must not be empty")
-        return token
+        return _read_token_file(token_file, "HERDECK_TOKEN_FILE")
     inline = getenv("HERDECK_TOKEN")
     if inline is None:
         raise SystemExit("set HERDECK_TOKEN_FILE or HERDECK_TOKEN")
@@ -2050,13 +2090,101 @@ def load_bridge_token(*, getenv=os.environ.get) -> str:
     return inline.strip()
 
 
-def main() -> None:
-    socket_path = resolve_herdr_socket_path()
+def load_readonly_token(token: str, *, getenv=os.environ.get) -> str | None:
+    """The optional view-only token (``HERDECK_READONLY_TOKEN_FILE``, 0600).
+    It must differ from the full token, or every client would be read-only."""
+    token_file = getenv("HERDECK_READONLY_TOKEN_FILE")
+    if token_file is None:
+        return None
+    readonly = _read_token_file(token_file, "HERDECK_READONLY_TOKEN_FILE")
+    if hmac.compare_digest(readonly, token):
+        raise SystemExit("HERDECK_READONLY_TOKEN_FILE must differ from the bridge token")
+    return readonly
+
+
+DEFAULT_TOKEN_FILE = "~/.config/herdeck/bridge-token"
+
+
+def rotate_token(path: str, *, token_factory=None) -> str:
+    """Atomically replace the token file with a fresh random token (0600).
+    Returns the new token; the caller decides whether it may be printed."""
+    import secrets
+    import tempfile
+
+    target = os.path.abspath(os.path.expanduser(path))
+    directory = os.path.dirname(target)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    token = (token_factory or (lambda: secrets.token_urlsafe(32)))()
+    fd, temporary = tempfile.mkstemp(prefix=".bridge-token.", dir=directory)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token)
+        os.replace(temporary, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
+    return token
+
+
+_ROTATE_NEXT_STEPS = """\
+Wrote a new bridge token to {path} (mode 0600).
+The running bridge still accepts only the old token until it restarts:
+  1. Restart the bridge, e.g.
+       launchctl kickstart -k user/$(id -u)/dev.herdeck.bridge   (macOS, user service)
+       sudo launchctl kickstart -k system/dev.herdeck.bridge     (macOS, --system)
+       systemctl --user restart herdeck-bridge                   (Linux)
+  2. Give the new token to every deck runtime that connects to this bridge:
+     the desktop app's Connections (keychain), or the server's token_env.
+     Transfer it over a private channel; print it here with --show."""
+
+
+def _parse_args(argv: list[str] | None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="herdeck-bridge",
+        description="Serve one herdr session to herdeck deck runtimes over an "
+        "authenticated WebSocket (configured through HERDECK_* environment variables).",
+    )
+    parser.add_argument(
+        "--rotate-token",
+        action="store_true",
+        help="write a new random token to the token file and exit",
+    )
+    parser.add_argument(
+        "--token-file",
+        help=f"token file to rotate (default: $HERDECK_TOKEN_FILE or {DEFAULT_TOKEN_FILE})",
+    )
+    parser.add_argument(
+        "--show", action="store_true", help="with --rotate-token: also print the new token"
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+    if args.rotate_token:
+        path = args.token_file or os.environ.get("HERDECK_TOKEN_FILE") or DEFAULT_TOKEN_FILE
+        token = rotate_token(path)
+        print(_ROTATE_NEXT_STEPS.format(path=os.path.abspath(os.path.expanduser(path))))
+        if args.show:
+            print(f"\nnew token: {token}")
+        return
+    from .bind import validate_bind
+
     host = os.environ.get("HERDECK_BIND", "127.0.0.1")  # set to Tailscale IP
+    try:
+        validate_bind(host, env_name="HERDECK_BIND")
+    except ValueError as exc:
+        raise SystemExit(f"herdeck-bridge: refusing to start: {exc}") from None
+    socket_path = resolve_herdr_socket_path()
     port = int(os.environ.get("HERDECK_PORT", "8788"))
     server_id = os.environ.get("HERDECK_SERVER_ID", "server")
     token = load_bridge_token()
-    asyncio.run(serve(socket_path, host, port, server_id, token))
+    readonly = load_readonly_token(token)
+    asyncio.run(serve(socket_path, host, port, server_id, token, readonly_token=readonly))
 
 
 if __name__ == "__main__":

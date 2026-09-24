@@ -194,6 +194,17 @@ which is what keeps the token out of `ps eww` in the first place. The legacy
 `HERDECK_TOKEN` env var is still accepted, but passing the value that way is the
 reason it shows up in process listings at all.
 
+If the token is lost or leaked, replace it instead of recovering it:
+`herdeck-bridge --rotate-token` writes a new one to the same file and lists the
+restart and runtime-side steps. Until the bridge restarts it keeps accepting the
+old token only.
+
+A bridge that suddenly will not start after an update may be refusing its
+address: since 0.8.1 `herdeck-bridge` enforces the same bind policy as
+`herdeck-web` (loopback or Tailscale). The log says `refusing to start:
+HERDECK_BIND must be loopback or a Tailscale address`; fix `HERDECK_BIND`, or set
+`HERDECK_ALLOW_UNSAFE_BIND=1` if the exposure is deliberate.
+
 ## Rebuilding the desktop app
 
 ```bash

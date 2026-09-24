@@ -7,6 +7,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `herdeck-bridge --rotate-token [--token-file PATH] [--show]` writes a fresh
+  random `0600` token atomically and prints the next steps (restart the
+  bridge, update the runtime-side token); the token is printed only with
+  `--show`.
+- Optional read-only bridge token (`HERDECK_READONLY_TOKEN_FILE`): clients using
+  it get snapshots, icons, pane reads, live previews and health, and every
+  other message (`act`, `focus`, `refresh_title`, `send_text`,
+  `choose_if_blocked`, `start`, unknown types) is rejected with an error.
 - Version handshake: bridge snapshots carry `herdeck_version`, and the runtime
   `/health` reports its own `version` and `protocol` plus each server's
   `bridge_version`. The desktop window shows a small warning when the runtime
@@ -77,6 +85,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `herdeck: runtime plan=attach|spawn reason=…`, at launch and on every switch.
 
 ### Changed
+- `herdeck-bridge` now refuses to start unless `HERDECK_BIND` is loopback or a
+  Tailscale address, like `herdeck-web` and `herdeck-service` already did;
+  `HERDECK_ALLOW_UNSAFE_BIND=1` overrides it.
 - Blocked agents are ordered by how long they have been waiting, longest
   first, instead of by pane id: on the overview (D200, desktop window, web
   simulator) and in the Elgato pager. With `agent_order = "status"` the wait
