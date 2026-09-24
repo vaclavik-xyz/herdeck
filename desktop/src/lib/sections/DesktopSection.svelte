@@ -6,6 +6,8 @@
     DEFAULT_TOGGLE_DECK_HOTKEY,
     toggleDeckHotkey,
     setToggleDeckHotkey,
+    nextBlockedHotkey,
+    setNextBlockedHotkey,
     deckAlwaysOnTop,
     setDeckAlwaysOnTop,
     type ConfigPayload,
@@ -31,6 +33,11 @@
   const lm = $derived(LM[locale.lang]);
 
   const hotkey = $derived(toggleDeckHotkey(payload));
+  const nextBlocked = $derived(nextBlockedHotkey(payload));
+  function setNextBlocked(v: string): void {
+    payload = setNextBlockedHotkey(payload, v);
+    onChange();
+  }
   const alwaysOnTop = $derived(deckAlwaysOnTop(payload));
   function setHotkey(v: string): void {
     payload = setToggleDeckHotkey(payload, v);
@@ -48,6 +55,7 @@
   <code>{DEFAULT_TOGGLE_DECK_HOTKEY}</code>{lm.hotkey_rest}
 </p>
 <TextField label="toggle_deck" help={HELP.toggle_deck} value={hotkey} oninput={setHotkey} />
+<TextField label="next_blocked" help={HELP.next_blocked} value={nextBlocked} oninput={setNextBlocked} />
 
 <style>
   .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }

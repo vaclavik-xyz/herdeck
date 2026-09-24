@@ -48,6 +48,7 @@ from .project_icons import ingest_project_icon
 from .protocol import ProjectIcon, TermClosed, TermFrame
 from .secrets import get_secret
 from .telegram import TelegramBotClient, TelegramInteractor
+from .terminal_app import activate_terminal_app
 
 TICK_INTERVAL = 0.4
 # Every Nth tick, fully re-render so elapsed-time text on non-working tiles
@@ -325,6 +326,7 @@ class App:
             on_terminal(self.open_terminal, self.close_terminal)
         self._req = 0
         self._active_read_req: str | None = None
+        self._focus_reqs: dict[str, bool] = {}  # outstanding focus reqs (terminal_app)
         self._ticks = 0
         self._status_panel: PanelView | None = None
         self._status_panel_until = 0.0
@@ -394,6 +396,10 @@ class App:
         req = f"r{self._req}"
         if cmd.kind == "read":
             self._active_read_req = req
+        if cmd.kind == "focus":
+            self._focus_reqs[req] = True
+            while len(self._focus_reqs) > 32:  # bounded if results never come
+                self._focus_reqs.pop(next(iter(self._focus_reqs)))
         return req
 
     def _held_status_panel(self) -> PanelView | None:
@@ -668,6 +674,9 @@ class App:
                 if handled.kind != "read":
                     self._send(Command("list", handled.server_id))
                 return
+        if self._focus_reqs.pop(req, False) and data.get("focused"):
+            # opt-in [local].terminal_app: bring the herdr client forward
+            activate_terminal_app(self.config.hardware.terminal_app)
         text = data.get("text")
         if text is not None:
             accepted = req == self._active_read_req and self.orch.is_drill_pane(

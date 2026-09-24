@@ -23,7 +23,8 @@
     "tile_fill": "none",
     "tile_icon": "agent",
     "project_icons": {},
-    "language": "en"
+    "language": "en",
+    "collapse_idle": false
   },
   "safety": {
     "approve_always": true,

@@ -68,6 +68,7 @@
   const agentOrder = $derived((getAt(payload, "base", SEC, "agent_order") as string) ?? defaults.view.agent_order);
   const agentSlots = $derived((getAt(payload, "base", SEC, "agent_slots") as string) ?? defaults.view.agent_slots);
   const showProfile = $derived((getAt(payload, "base", SEC, "show_profile_on_panel") as boolean) ?? defaults.view.show_profile_on_panel);
+  const collapseIdle = $derived((getAt(payload, "base", SEC, "collapse_idle") as boolean) ?? defaults.view.collapse_idle);
   const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? defaults.view.working_animation);
   const tileFill = $derived((getAt(payload, "base", SEC, "tile_fill") as string) ?? defaults.view.tile_fill);
   const tileIcon = $derived((getAt(payload, "base", SEC, "tile_icon") as string) ?? defaults.view.tile_icon);
@@ -184,6 +185,9 @@
     <OverrideField label="language" help={HELP.language} state={scState("language")} inheritedDisplay={hint("language")} onstate={(s) => setScState("language", s)}>
       <SelectField label="" value={String(scValue("language") ?? "en")} options={UI_LANGUAGES} onchange={(v) => setSc("language", v)} />
     </OverrideField>
+    <OverrideField label="collapse_idle" help={HELP.collapse_idle} state={scState("collapse_idle")} inheritedDisplay={hint("collapse_idle")} onstate={(s) => setScState("collapse_idle", s)}>
+      <BooleanField label="" value={Boolean(scValue("collapse_idle"))} onchange={(v) => setSc("collapse_idle", v)} />
+    </OverrideField>
     <details class="advanced-settings"><summary>{lm.advanced}</summary>
       <OverrideField label="agent_slots" help={HELP.agent_slots} state={scState("agent_slots")} inheritedDisplay={hint("agent_slots")} onstate={(s) => setScState("agent_slots", s)}>
         <TextField label="" value={String(scValue("agent_slots") ?? "")} oninput={(v) => setSc("agent_slots", v)} />
@@ -217,6 +221,7 @@
     <SelectField label="management" help={HELP.management} value={management} options={MANAGEMENT} onchange={(v) => set("management", v)} />
     <SelectField label="agent_order" help={HELP.agent_order} value={agentOrder} options={AGENT_ORDERS} onchange={(v) => set("agent_order", v)} />
     <SelectField label="language" help={HELP.language} value={uiLanguage} options={UI_LANGUAGES} onchange={(v) => set("language", v)} />
+    <BooleanField label="collapse_idle" help={HELP.collapse_idle} value={collapseIdle} onchange={(v) => set("collapse_idle", v)} />
     <details class="advanced-settings"><summary>{lm.advanced}</summary>
       <TextField label="agent_slots" help={HELP.agent_slots} value={agentSlots} oninput={(v) => set("agent_slots", v)} />
       <BooleanField label="show_profile_on_panel" help={HELP.show_profile_on_panel} value={showProfile} onchange={(v) => set("show_profile_on_panel", v)} />

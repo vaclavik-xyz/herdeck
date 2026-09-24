@@ -36,6 +36,10 @@ tile_fields = ["repo", "title", "tab", "branch", "status", "time", "server"]
 # Language of rendered deck text (tiles/panel/websim) AND the desktop app UI.
 # "en" (default) or "cs".
 language = "en"
+# Fold idle agents into one "+N" tile at the end of the overview (press it to
+# unfold them, "hide" folds them back). Handy with 15-20 agents; the Elgato
+# plugin ignores it.
+collapse_idle = false
 # Tile icon: "agent" (default) = the agent's logo, "project" = the project's
 # favicon (found in the repo by the bridge; a coloured letter when none),
 # "both" = the agent's logo with a small project badge. In "project" mode the

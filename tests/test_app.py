@@ -62,6 +62,22 @@ def test_press_forwards_commands():
     assert Command("act_if_blocked", "dev", "p1", keys=["1", "enter"]) in sent
 
 
+def test_focus_result_activates_configured_terminal_app(monkeypatch):
+    import herdeck.app as app_mod
+
+    activated = []
+    monkeypatch.setattr(app_mod, "activate_terminal_app", activated.append)
+    cfg = make_config()
+    cfg.hardware.terminal_app = "iTerm"
+    app = App(cfg, FakeRenderer(13), send=lambda c: None)
+    focus_req = app.next_req_for(Command("focus", "dev", "p1"))
+    other_req = app.next_req_for(Command("send_text", "dev", "p1", text="x"))
+    app.handle_result("dev", other_req, {"focused": True})
+    assert activated == []
+    app.handle_result("dev", focus_req, {"focused": True})
+    assert activated == ["iTerm"]
+
+
 def test_read_result_shows_detection_in_panel():
     deck = FakeRenderer(13)
     app = App(make_config(), deck, send=lambda c: None)

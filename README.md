@@ -374,6 +374,7 @@ herdr_sessions = ["default"]       # select several named local sessions if want
 web_bind = "127.0.0.1"
 web_port = 8800
 icons_dir = "~/herdeck-icons"
+terminal_app = "Ghostty"           # optional, macOS: see below
 
 [hardware]
 brightness = 80
@@ -381,6 +382,14 @@ debounce = 0.25
 keep_alive_interval = 5.0
 tick_interval = 0.4
 ```
+
+A tile press asks herdr to focus that agent's pane, which switches the pane
+inside the herdr client but leaves its terminal window wherever it was. When
+the herdr client runs on the deck machine, set `[local].terminal_app` to the
+app hosting it (`"Ghostty"`, `"iTerm"`, `"Terminal"`, ...) and herdeck brings
+that app forward (`open -a`) once herdr confirms the focus. macOS only; empty
+(the default) leaves it off. It does nothing useful when the pane is shown on
+another machine.
 
 ## Development without hardware
 
@@ -576,7 +585,16 @@ orchestrator takes the real button count from the driver: agent tiles fill the
 slots up to the reserved **+ New** launcher tile. With more agents than tiles,
 pressing the status window pages through them (the panel shows `· 1/2`), and a
 newly blocked agent automatically pulls the overview back to the first page
-where it sorts to the front. State is encoded by color: working = green,
+where it sorts to the front.
+
+**Triage.** While an agent is blocked the status window shows `▲ needs you`
+with the agent that has waited longest. Pressing it opens that agent's prompt;
+once you answer (or Stop it), the deck goes straight to the next-longest
+blocked agent, and back to the overview when none is left. **Back** leaves the
+loop at any time. While the spotlight is up the status window starts triage
+instead of paging. In the desktop app, `[hotkeys].next_blocked` (for example
+`"CmdOrCtrl+Shift+B"`, off by default) is a global shortcut that shows the deck
+and does the same; pressing it again skips to the next blocked agent. State is encoded by color: working = green,
 idle = blue, blocked = amber, done = cyan, waiting = violet, error/disconnected
 = red. **Waiting** is derived from a pane held by
 [herdwatch](https://github.com/vaclavik-xyz/herdwatch) (or any source using
@@ -607,9 +625,19 @@ running the deck; quote a repo name that contains a dot, e.g.
 SVG icons are rendered with resvg (bundled in the packaged app and the Elgato
 plugin). An SVG that references anything outside itself (a file path or URL in
 `href`/`url(...)`) is refused and shows the monogram.
-Agents are always grouped by attention priority. Set `[view].agent_order` to
+With many agents, set `[view].collapse_idle = true` to fold every idle agent
+into one `+N` tile at the end of the overview. Pressing it unfolds the idle
+agents (the deck jumps to the page with the first one) and a `hide` tile at the
+end folds them back; an unfolded list also folds back after a minute without a
+press. Pinned agents keep their tile. It applies to the D200, the desktop deck
+window and the web simulator; the Elgato plugin keeps one agent per key and
+ignores it.
+
+Agents are always grouped by attention priority. Blocked agents are ordered by
+how long they have been waiting, longest first. Set `[view].agent_order` to
 `"herdr"` to mirror Herdr's workspace and tab positions within the same state
-and server; the default `"status"` uses stable pane ids as the tie-breaker.
+and server (waiting time then only breaks ties); the default `"status"` uses
+stable pane ids as the tie-breaker for the other states.
 
 All rendered deck text (tile status words, the panel, the web simulator) and
 the desktop app UI speak `[view].language` — `"en"` (default) or `"cs"`; the
