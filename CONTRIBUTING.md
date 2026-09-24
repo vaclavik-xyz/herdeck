@@ -46,7 +46,7 @@ with `[view].language = "cs"`. Every new user-visible string must be added in
   languages.
 - Rendered deck text (tiles/panel/web simulator): `src/herdeck/i18n.py`
   `STRINGS` (`tr(lang, key)`), driven by `config.view.language`.
-- Tray menu (Rust): `tray_labels()` in `desktop/src-tauri/src/lib.rs`.
+- Tray menu (Rust): `tray_labels()` in `desktop/src-tauri/src/tray.rs`.
 
 The desktop field-help parity (`desktop/src/lib/sections/sections.help.test.ts`)
 and the rendered-string parity (`tests/test_i18n.py`) are enforced by tests in

@@ -2,7 +2,7 @@
 // faithful sibling of deckClient.ts: pure functions + an injected `invoke`, so
 // the whole client is unit-testable under Vitest without a Tauri WebView. The
 // sidecar access token is NEVER here — the Rust shell injects it inside the
-// token-free config_* commands (see src-tauri/src/lib.rs).
+// token-free config_* commands (see src-tauri/src/proxy.rs).
 import defaults from "./configDefaults.json";
 import { DEFAULT_STATUS_COLORS } from "./statusColors";
 

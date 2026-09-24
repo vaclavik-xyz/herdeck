@@ -246,7 +246,7 @@ describe("ConfigApp top bar deck-toggle control", () => {
 
   // The commit claims the labels are byte-identical to the tray's
   // `toggle_deck_label` in BOTH languages (see toggle_deck_label_reflects_-
-  // visibility_in_both_languages in lib.rs) — this is the half of that claim
+  // visibility_in_both_languages in plan_tests.rs) — this is the half of that claim
   // an English-only assertion can't catch.
   it("flips to the Czech labels, translated, on the same event-driven flip", async () => {
     // The editor's effective language follows the loaded config's

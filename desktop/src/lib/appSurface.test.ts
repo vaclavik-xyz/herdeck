@@ -28,9 +28,9 @@ describe("desktopSetupVisible", () => {
 
 // Rust stamps `document.documentElement.dataset.windowRole` with exactly "app"
 // or "deck" before first paint (`window_role_script` + its two call sites in
-// desktop/src-tauri/src/lib.rs, ~line 1227 and ~lines 1853/1873). Rust's own
-// test (`the_role_script_sets_the_attribute_the_frontend_reads`, same file,
-// ~line 740) pins the attribute-name/format half of that contract from its
+// desktop/src-tauri/src/window_roles.rs, called from `run()` in lib.rs). Rust's
+// own test (`the_role_script_sets_the_attribute_the_frontend_reads`, in
+// plan_tests.rs) pins the attribute-name/format half of that contract from its
 // side. This test pins the frontend's half: the exact dataset key AND both
 // literal role values, read through the real `windowRole()` helper that
 // App.svelte calls — so a typo in either language (a renamed key, a

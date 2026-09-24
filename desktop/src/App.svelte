@@ -340,7 +340,7 @@
       if (d) discovery = d;
     });
     // Rust emits both of these to APP_WINDOW only (`app.emit_to("config", ...)`
-    // in lib.rs's tray handlers), and Tauri delivers an emit_to'd event solely
+    // in tray.rs's tray handlers), and Tauri delivers an emit_to'd event solely
     // to the targeted webview's IPC channel — so this listener is registered
     // in both windows but only ever fires in the config window, where
     // `reonboard`/`desktopSetupHidden` actually affect the rendered surface
@@ -368,7 +368,7 @@
     window.addEventListener("keydown", onFloatingScaleKey);
 
     // Borderless-only: claim the deck's right-click for the native menu Rust
-    // pops via `show_deck_context_menu` (see lib.rs's `build_deck_context_menu`).
+    // pops via `show_deck_context_menu` (see tray.rs's `build_deck_context_menu`).
     // Shift+right-click deliberately falls through to the WebView's own
     // context menu instead, so "Inspect Element" stays reachable in dev
     // builds once the plain right-click is claimed by the custom menu.
@@ -382,7 +382,7 @@
     window.addEventListener("contextmenu", onDeckContextMenu);
 
     // Rust emits this to the DECK window only (`app.emit_to(DECK_WINDOW, ...)`
-    // from the context menu's zoom items in lib.rs) — same emit_to pattern as
+    // from the context menu's zoom items in tray.rs) — same emit_to pattern as
     // `reonboardListener`/`settingsListener` above: registered in both
     // windows, but Tauri only ever delivers it to the deck's own IPC channel.
     // The `borderless` guard is a second line of defense, not the only one —
@@ -396,7 +396,7 @@
     });
 
     // Rust emits this to the APP window only (tray's "Check for updates" item
-    // — see MENU_ID_CHECK_UPDATE in lib.rs), via the same emit_to pattern as
+    // — see MENU_ID_CHECK_UPDATE in tray.rs), via the same emit_to pattern as
     // `reonboardListener`/`settingsListener` above: registered in both
     // windows, but Tauri only ever delivers it to the app window's own IPC
     // channel. `show_role_window` already brought that window forward before
