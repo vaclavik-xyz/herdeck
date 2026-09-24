@@ -6,6 +6,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `[usage].source = "auto"` no longer leaves the deck without limits when a
+  bridge offers usage but sends no numbers (e.g. a LaunchDaemon bridge whose
+  `codex`/`codexbar` cannot reach the login keychain). After 180 s without
+  numbers the runtime falls back to its own poller and switches back once the
+  bridge sends numbers; `/health` lists such bridges under
+  `usage.bridges_empty`.
+
 ## [0.12.0] - 2026-09-24
 
 ### Changed
