@@ -53,6 +53,7 @@ from ..notify import (
 )
 from ..notify_icons import NotificationIconCache
 from ..orchestrator import Orchestrator, binary_answer
+from ..presence import IdleProbe
 from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
@@ -75,6 +76,10 @@ _ANSWERED_EPISODES_MAX = 256
 # / banner_prompt) waits for the background pre-read before it goes out
 # without it. The read normally lands in well under a second.
 PROMPT_WAIT_S = 2.0
+# [notifications].skip_focused: the herdr-focused pane only counts as "you are
+# looking at it" while the deck host saw input within this many seconds (an
+# unknown idle time, e.g. on Linux, counts as present).
+FOCUS_PRESENT_S = 120.0
 
 
 def sanitize_reply(text: object) -> str:
@@ -116,6 +121,7 @@ class LiveSource(StateSource):
         notify_clock=None,
         notify_icons: NotificationIconCache | None = None,
         prompt_wait_s: float = PROMPT_WAIT_S,
+        idle_probe: IdleProbe | None = None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -135,6 +141,7 @@ class LiveSource(StateSource):
         self._notify_throttle = NotifyThrottle(clock=notify_clock or time.monotonic)
         self._notify_schedule = notify_schedule or _thread_notify_schedule
         self._prompt_wait_s = prompt_wait_s
+        self._idle_probe = idle_probe or IdleProbe()
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
@@ -502,6 +509,14 @@ class LiveSource(StateSource):
         """Notify thread: enrich a blocked alert with its prompt when asked to
         ([notifications].banner_actions / banner_prompt), then send it."""
         n = self._config.notifications
+        if n.skip_focused and agent.focused and self._user_present():
+            log.info(
+                "notification skipped (herdr-focused pane) event=%s agent=%s:%s",
+                event,
+                agent.key.server_id,
+                agent.key.pane_id,
+            )
+            return
         if event == "blocked" and (n.banner_actions or n.banner_prompt):
             prompt = self._await_prompt(agent.key, meta.get("episode"))
             if prompt is None:
@@ -513,6 +528,11 @@ class LiveSource(StateSource):
                 return
             body = self._enrich_blocked(agent, body, prompt, meta)
         self._notifier.notify(title, body, sound, icon=self._banner_icon(agent), meta=meta)
+
+    def _user_present(self) -> bool:
+        """The user touched this host recently (notify thread: may run ioreg)."""
+        idle = self._idle_probe.idle_seconds()
+        return idle is None or idle < FOCUS_PRESENT_S
 
     def _await_prompt(self, key: AgentKey, episode: str | None) -> str | None:
         """The pre-read prompt of ``key``'s block ``episode`` ("" if it did not

@@ -71,6 +71,9 @@ class Notifications:
     banner_actions: bool = False
     # Opt-in: blocked alerts append a short, sanitized excerpt of the prompt.
     banner_prompt: bool = False
+    # No alert for the pane herdr reports focused at the transition while the
+    # user is at the deck host (you are looking at it). Noise-only: default on.
+    skip_focused: bool = True
 
 
 DEFAULT_STATUS_COLORS: dict[str, str] = {
@@ -379,6 +382,7 @@ def parse_notifications(n: dict) -> Notifications:
         telegram=telegram,
         banner_actions=notification_flag(n, "banner_actions", False),
         banner_prompt=notification_flag(n, "banner_prompt", False),
+        skip_focused=notification_flag(n, "skip_focused", True),
     )
 
 

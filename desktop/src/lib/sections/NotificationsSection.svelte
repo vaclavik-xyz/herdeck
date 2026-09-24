@@ -31,6 +31,7 @@
     sound: defaults.notifications.sound,
     banner_actions: defaults.notifications.banner_actions,
     banner_prompt: defaults.notifications.banner_prompt,
+    skip_focused: defaults.notifications.skip_focused,
   };
   const NOTIF_LIST_DEFAULTS: Record<string, string[]> = {
     on: [...defaults.notifications.on],
@@ -123,6 +124,7 @@
   const enabled = $derived((getAt(payload, "base", "notifications", "enabled") as boolean) ?? NOTIF_DEFAULTS.enabled);
   const sound = $derived((getAt(payload, "base", "notifications", "sound") as boolean) ?? NOTIF_DEFAULTS.sound);
   const bannerActions = $derived((getAt(payload, "base", "notifications", "banner_actions") as boolean) ?? NOTIF_DEFAULTS.banner_actions);
+  const skipFocused = $derived((getAt(payload, "base", "notifications", "skip_focused") as boolean) ?? NOTIF_DEFAULTS.skip_focused);
   const bannerPrompt = $derived((getAt(payload, "base", "notifications", "banner_prompt") as boolean) ?? NOTIF_DEFAULTS.banner_prompt);
   const on = $derived((getAt(payload, "base", "notifications", "on") as string[]) ?? NOTIF_LIST_DEFAULTS.on);
   const onState = $derived(listFieldState(payload, "base", "notifications", "on"));
@@ -402,6 +404,9 @@
   <OverrideField label="banner_prompt" help={HELP.banner_prompt} state={scState("banner_prompt")} inheritedDisplay={scHint("banner_prompt")} onstate={(s) => setScState("banner_prompt", s)}>
     <BooleanField label="" value={scBool("banner_prompt")} onchange={(v) => setSc("banner_prompt", v)} />
   </OverrideField>
+  <OverrideField label="skip_focused" help={HELP.skip_focused} state={scState("skip_focused")} inheritedDisplay={scHint("skip_focused")} onstate={(s) => setScState("skip_focused", s)}>
+    <BooleanField label="" value={scBool("skip_focused")} onchange={(v) => setSc("skip_focused", v)} />
+  </OverrideField>
   <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} customSeed={effectiveList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} resetKey={`${prof}:${reloadRev}:notifications:backends`} onchange={(s, l) => setOvList("backends", s, l)} />
   <FieldGroup title={lm.group_sounds}>
     <p class="hint">{lm.sounds_hint_overlay}</p>
@@ -445,6 +450,7 @@
   <TriStateListField label="on" help={HELP.on} state={onState} list={on} customSeed={NOTIF_LIST_DEFAULTS.on} defaultHint={NOTIF_LIST_DEFAULTS.on.join(" · ")} resetKey={`base:${reloadRev}:${onRev}:notifications:on`} onchange={(s, l) => setTri("on", s, l)} />
   <BooleanField label="banner_actions" help={HELP.banner_actions} value={bannerActions} onchange={(v) => set("banner_actions", v)} />
   <BooleanField label="banner_prompt" help={HELP.banner_prompt} value={bannerPrompt} onchange={(v) => set("banner_prompt", v)} />
+  <BooleanField label="skip_focused" help={HELP.skip_focused} value={skipFocused} onchange={(v) => set("skip_focused", v)} />
   <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} resetKey={`base:${reloadRev}:notifications:backends`} onchange={(s, l) => setTri("backends", s, l)} />
   <FieldGroup title={lm.group_sounds}>
     <p class="hint">{lm.sounds_hint}</p>

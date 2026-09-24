@@ -54,6 +54,7 @@
     "backends": ["macos"],
     "banner_actions": false,
     "banner_prompt": false,
+    "skip_focused": true,
     "telegram": {
       "message_thread_id": 0,
       "interactive": false,
