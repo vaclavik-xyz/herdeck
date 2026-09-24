@@ -67,6 +67,9 @@ function fakeTransport(opts: {
       calls.push({ action, ref, extra });
       return opts.outcome ?? { ok: true, code: "sent", message: "" };
     },
+    termOpen: async () => ({ ok: true, id: "s" }),
+    termPoll: () => new Promise<never>(() => {}),
+    termClose: async () => {},
   };
 }
 

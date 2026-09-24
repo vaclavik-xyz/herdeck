@@ -124,6 +124,7 @@ const CONVERTED = [
   "lib/StatusRibbon.svelte",
   "lib/DeckView.svelte",
   "lib/AgentCard.svelte",
+  "lib/AgentTerminal.svelte",
   "lib/Banner.svelte",
   "lib/UpdateBanner.svelte",
   "lib/HealthNotice.svelte",

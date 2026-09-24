@@ -297,6 +297,7 @@ class LiveSource(AgentCardMixin, StateSource):
         return self._notify_feed.stats()
 
     def close(self) -> None:
+        self._card_close()  # stop card terminal previews while runners still send
         for runner in list(self._runners.values()):
             runner.close()
         self._runners.clear()
@@ -830,6 +831,7 @@ def build_live_source(
             on_connection=source._on_connection,
             on_result=lambda req, data, sid=selected.id: source._on_result(sid, req, data),
             on_project_icon=source._on_project_icon,
+            on_term=source._on_term,
             on_request_error=lambda req, message, sid=selected.id: source._on_request_error(
                 sid, req, message
             ),

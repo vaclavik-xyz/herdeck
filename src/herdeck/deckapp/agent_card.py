@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from ..commands import Command, command_to_msg, profile_for
 from ..decisions import decision_revision
 from ..model import AgentKey, Status
+from .agent_term import CardTerminals
 
 # How long a card action waits for the bridge's reply before answering
 # "pending" (sent, but unconfirmed). Well under the desktop proxy's timeout.
@@ -155,6 +156,7 @@ class AgentCardMixin:
     def _card_init(self) -> None:
         self._card_replies = PendingReplies()
         self._card_reads: dict[AgentKey, float] = {}
+        self._card_terms = CardTerminals(self._card_term_send)
 
     # --- connector hooks ---------------------------------------------------
     def _card_on_result(self, req: str | None, data: dict) -> None:
@@ -173,6 +175,44 @@ class AgentCardMixin:
     def _card_on_connection(self, server_id: str, up: bool) -> None:
         if not up:
             self._card_replies.fail_server(server_id, outcome("disconnected"))
+            self._card_terms.close_server(server_id, "disconnected")
+
+    def _on_term(self, server_id: str, message) -> None:
+        """Connector callback: a live-terminal frame or close for a card preview."""
+        self._card_terms.on_term(server_id, message)
+
+    # --- live terminal -----------------------------------------------------
+    def _card_term_send(self, server_id: str, msg: dict) -> bool:
+        runner = self._runners.get(server_id)
+        with self._lock:
+            up = self._connected.get(server_id, False)
+        if runner is None or not up:
+            return False
+        runner.send(msg)
+        return True
+
+    def card_term_open(self, server_id: str, pane_id: str, cols, rows) -> dict | None:
+        """Start observing the agent's pane for the card (see agent_term)."""
+        agent, connected = self._card_agent(AgentKey(server_id, pane_id))
+        if agent is None:
+            return None
+        if agent.backend == "t3":
+            return outcome("invalid")
+        if not connected:
+            return outcome("disconnected")
+        session_id = self._card_terms.open(
+            server_id, pane_id, agent.terminal_id, cols=cols, rows=rows
+        )
+        return {**outcome("open", ok=True), "id": session_id}
+
+    def card_term_poll(self, session_id: str, after: int, wait_ms: int) -> dict | None:
+        return self._card_terms.poll(session_id, after, wait_ms / 1000.0)
+
+    def card_term_close(self, session_id: str) -> bool:
+        return self._card_terms.close(session_id)
+
+    def _card_close(self) -> None:
+        self._card_terms.close_all()
 
     # --- queries -----------------------------------------------------------
     def _card_deck_lock(self):
@@ -447,6 +487,15 @@ def handle_get(source, path: str, params: dict) -> tuple[int, dict | None]:
     """GET /agent/detail?index=N | ?server_id=&pane_id= [&refresh=1]."""
     if not callable(getattr(source, "card_detail", None)):
         return 404, None
+    if path == "/agent/term/poll":
+        try:
+            session_id = params["id"][0]
+            after = int(params.get("after", ["0"])[0])
+            wait_ms = int(params.get("wait_ms", ["0"])[0])
+        except (KeyError, IndexError, TypeError, ValueError):
+            return 400, None
+        polled = source.card_term_poll(session_id, after, wait_ms)
+        return (200, polled) if polled is not None else (404, None)
     if path != "/agent/detail":
         return 404, None
     if "index" in params:
@@ -470,6 +519,11 @@ def handle_post(source, path: str, body: dict) -> tuple[int, dict | None]:
     """POST /agent/{answer,text,stop,focus} with a JSON body naming the agent."""
     if not callable(getattr(source, "card_detail", None)):
         return 404, None
+    if path == "/agent/term/close":
+        session_id = body.get("id")
+        if not isinstance(session_id, str) or not session_id:
+            return 400, None
+        return 200, outcome("closed", ok=source.card_term_close(session_id))
     key = _key_from(body)
     if key is None:
         return 400, None
@@ -487,6 +541,8 @@ def handle_post(source, path: str, body: dict) -> tuple[int, dict | None]:
         result = source.card_stop(*key)
     elif path == "/agent/focus":
         result = source.card_focus(*key)
+    elif path == "/agent/term/open":
+        result = source.card_term_open(*key, body.get("cols"), body.get("rows"))
     else:
         return 404, None
     return (200, result) if result is not None else (404, None)
