@@ -210,6 +210,7 @@ def test_status_reports_versions_service_logs_d200_and_servers(tmp_path):
             "connected": True,
             "bridge_version": "0.9.0",
             "hooks": None,
+            "usage_agent": None,
         }
     }
     # persisted for when the device is gone

@@ -18,7 +18,7 @@ from ..model import AgentKey
 from ..orchestrator import Orchestrator
 from ..pins import PinStore
 from ..protocol import WIRE_PROTOCOL
-from . import agent_card, bridge_update, hooks_relay, stats
+from . import agent_card, bridge_update, hooks_relay, stats, usage_agent_relay
 from .sinks import RenderFrame
 from .source import StateSource
 
@@ -1414,6 +1414,12 @@ class DeckApp:
                         return
                     code, payload = hooks_relay.handle_get(app._source, path)
                     self._send_agent(code, payload)
+                elif usage_agent_relay.route_server_id(path) is not None:
+                    # Usage agent status on that bridge's machine (usage_agent_relay.py).
+                    if not self._require_query_token(url):
+                        return
+                    code, payload = usage_agent_relay.handle_get(app._source, path)
+                    self._send_agent(code, payload)
                 elif bridge_update.route_server_id(path) is not None:
                     # Bridge self-update status long-poll (bridge_update.py).
                     if not self._require_query_token(url):
@@ -1600,6 +1606,16 @@ class DeckApp:
                     if body is _BAD_BODY:
                         return
                     code, payload = hooks_relay.handle_post(app._source, path, body)
+                    self._send_agent(code, payload)
+                elif usage_agent_relay.route_server_id(path) is not None:
+                    # POST /maintenance/servers/{id}/usage-agent: install / remove
+                    # the usage agent on that bridge's machine (usage_agent_relay.py).
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    code, payload = usage_agent_relay.handle_post(app._source, path, body)
                     self._send_agent(code, payload)
                 elif bridge_update.route_server_id(path) is not None:
                     # POST /maintenance/servers/{id}/update: ask that bridge to
