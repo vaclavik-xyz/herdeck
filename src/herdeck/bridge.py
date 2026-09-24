@@ -23,6 +23,9 @@ from . import history as _history
 from . import hooks_install as _hooks_install
 from . import status_since as _status_since
 from .decisions import decision_choices, decision_revision
+from .events import CAPABILITY as _EVENTS_CAPABILITY
+from .events import STALE as _STALE
+from .events import EventHub, client_label, prompt_forms
 from .model import Status, WorkContext
 from .project_icon_discovery import ProjectIconIndex
 from .protocol import WIRE_PROTOCOL, encode
@@ -620,6 +623,7 @@ async def _wired_snapshot(
     icons: ProjectIconIndex | None = None,
     status_since: StatusSinceTracker | None = None,
     subagents: SubagentSpoolReader | None = None,
+    events: EventHub | None = None,
 ) -> list[dict]:
     """One session.snapshot carries the agent panes AND the workspace/tab
     labels; only branch labels need the extra per-workspace worktree fan-out
@@ -647,6 +651,8 @@ async def _wired_snapshot(
         status_since.stamp(panes)
     if subagents is not None:
         subagents.attach(panes)
+    if events is not None:
+        events.stamp(panes)  # after status_since: the episode id derives from it
     return panes
 
 
@@ -732,11 +738,12 @@ async def handle_client_message(
     status_since: StatusSinceTracker | None = None,
     extra_capabilities: tuple[str, ...] = (),
     subagents: SubagentSpoolReader | None = None,
+    events: EventHub | None = None,
 ) -> str:
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "list":
-        panes = await _wired_snapshot(herdr, icons, status_since, subagents)
+        panes = await _wired_snapshot(herdr, icons, status_since, subagents, events)
         return encode(_snapshot_message(server_id, panes, extra_capabilities))
     if kind == "read":
         if await _pane_identity_changed(herdr, msg):
@@ -832,13 +839,18 @@ async def handle_client_message(
                     "data": {"skipped": True, "message": "not_blocked"},
                 }
             )
-        current_revision = decision_revision(
-            server_id,
-            msg["pane_id"],
-            str(msg.get("terminal_id") or ""),
-            prompt,
-        )
-        if current_revision != msg.get("decision_revision"):
+        # An older runtime hashed the raw `read` capture; a newer one may
+        # hash the sanitized prompt of the bridge's blocked event instead.
+        current_revisions = {
+            decision_revision(
+                server_id,
+                msg["pane_id"],
+                str(msg.get("terminal_id") or ""),
+                form,
+            )
+            for form in prompt_forms(prompt)
+        }
+        if msg.get("decision_revision") not in current_revisions:
             return encode(
                 {
                     "type": "result",
@@ -1409,6 +1421,7 @@ async def _broadcast(
     icon_subs: dict | None = None,
     icons: ProjectIconIndex | None = None,
     extra_capabilities: tuple[str, ...] = (),
+    events: EventHub | None = None,
 ) -> None:
     """Forward each changed full agent list to all clients as a snapshot.
 
@@ -1418,9 +1431,13 @@ async def _broadcast(
     short per-client timeout, so a stalled laptop cannot freeze status
     updates for the physical deck. Clients that opted in to project icons
     (``icon_subs``: ws -> hashes already sent) get each newly referenced icon
-    right AFTER the snapshot that references it.
+    right AFTER the snapshot that references it. ``events`` (the lifecycle
+    event hub) sees each list after it went out, so an event never reaches a
+    client ahead of the snapshot that shows its status.
     """
     async for panes in snapshot_stream:
+        if events is not None:
+            events.stamp(panes)
         msg = encode(_snapshot_message(server_id, panes, extra_capabilities))
         if clients:
             await asyncio.gather(
@@ -1429,6 +1446,8 @@ async def _broadcast(
                     for ws, lock in list(clients.items())
                 )
             )
+        if events is not None:
+            events.observe(panes)
 
 
 async def _deliver_snapshot(ws, lock, msg, panes, server_id, icon_subs, icons) -> None:
@@ -1826,6 +1845,7 @@ async def _serve_connection(
     history: _history.BridgeHistory | None = None,
     usage: BridgeUsageFeed | None = None,
     subagents: SubagentSpoolReader | None = None,
+    events: EventHub | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
@@ -1843,8 +1863,11 @@ async def _serve_connection(
     async def send(msg: str) -> bool:
         return await _send_to_client(ws, msg, send_lock)
 
-    extra_capabilities = usage.capabilities if usage is not None else ()
-    panes = await _wired_snapshot(herdr, icons, status_since, subagents)
+    extra_capabilities = _extra_capabilities(usage, events)
+    # Who answered, for `answered` events: the label the client gave when it
+    # subscribed to events.
+    label = "client"
+    panes = await _wired_snapshot(herdr, icons, status_since, subagents, events)
     if not await send(encode(_snapshot_message(server_id, panes, extra_capabilities))):
         return
     clients[ws] = send_lock
@@ -2014,24 +2037,58 @@ async def _serve_connection(
                 else:
                     updater.start(msg, send)
                 continue
-            if kind == "list" and icons is not None and icon_subs is not None:
+            if kind == "list" and (
+                (icons is not None and icon_subs is not None) or events is not None
+            ):
                 features = msg.get("features")
-                if isinstance(features, list) and "project_icon" in features:
+                if (
+                    icon_subs is not None
+                    and isinstance(features, list)
+                    and "project_icon" in features
+                ):
                     icon_subs.setdefault(ws, set())  # opt-in: this connection renders icons
                 try:
-                    panes = await _wired_snapshot(herdr, icons, status_since, subagents)
+                    panes = await _wired_snapshot(herdr, icons, status_since, subagents, events)
                 except Exception as exc:
+                    # A transient herdr error must not cost the event
+                    # subscription below: the broadcast stream still serves
+                    # snapshots, and the runtime would otherwise wait for an
+                    # event_sync that never comes.
                     await send(encode({"type": "error", "message": str(exc)}))
-                    continue
-                if not await send(
-                    encode(_snapshot_message(server_id, panes, extra_capabilities))
-                ):
-                    continue
-                sent = icon_subs.get(ws)
-                if sent is not None:
-                    for frame in _project_icon_frames(server_id, panes, icons, sent):
-                        if not await send(frame):
-                            break
+                    panes = None
+                if panes is not None:
+                    if not await send(
+                        encode(_snapshot_message(server_id, panes, extra_capabilities))
+                    ):
+                        continue
+                    sent = icon_subs.get(ws) if icon_subs is not None else None
+                    if sent is not None and icons is not None:
+                        for frame in _project_icon_frames(server_id, panes, icons, sent):
+                            if not await send(frame):
+                                break
+                request = msg.get("events")
+                if events is not None and isinstance(request, dict):
+                    # Opt-in (an older runtime would choke on the frames):
+                    # replay after the client's cursor, then live events.
+                    label = client_label(request.get("client"))
+                    await events.subscribe(ws, send_lock, request)
+                continue
+            ticket = (
+                await events.begin_answer(msg, label)
+                if events is not None and isinstance(msg, dict)
+                else None
+            )
+            if ticket == _STALE:
+                req = msg.get("req")
+                await send(
+                    encode(
+                        {
+                            "type": "result",
+                            "req": req if isinstance(req, str) else "",
+                            "data": {"skipped": True, "message": _STALE},
+                        }
+                    )
+                )
                 continue
             try:
                 out = await handle_client_message(
@@ -2042,12 +2099,17 @@ async def _serve_connection(
                     status_since,
                     extra_capabilities,
                     subagents=subagents,
+                    events=events,
                 )
             except Exception as exc:
                 out = encode({"type": "error", "message": str(exc)})
+            if ticket is not None:
+                events.end_answer(ticket, sent=_answer_sent(out))
             await send(out)
     finally:
         clients.pop(ws, None)
+        if events is not None:
+            events.unsubscribe(ws)
         if icon_subs is not None:
             icon_subs.pop(ws, None)
         pending = list(observes)
@@ -2060,6 +2122,23 @@ async def _serve_connection(
                 *(observes[req][0] for req in pending if req in observes),
                 return_exceptions=True,
             )
+
+
+def _extra_capabilities(
+    usage: BridgeUsageFeed | None, events: EventHub | None
+) -> tuple[str, ...]:
+    """Capabilities that depend on how this bridge was started."""
+    caps = usage.capabilities if usage is not None else ()
+    return (*caps, _EVENTS_CAPABILITY) if events is not None else caps
+
+
+def _answer_sent(out: str) -> bool:
+    """Did an answer's reply say it went out to the pane?"""
+    try:
+        data = json.loads(out).get("data")
+    except (ValueError, AttributeError):
+        return False
+    return isinstance(data, dict) and data.get("sent") is True
 
 
 async def _require_snapshot_support(herdr: HerdrClient) -> None:
@@ -2151,6 +2230,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     )
     clients: dict = {}
     icon_subs: dict = {}
+    hub = EventHub(client_herdr, "local")
 
     async def handler(ws):
         await _serve_connection(
@@ -2165,13 +2245,29 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
             status_since=status_since,
             history=history,
             subagents=subagents,
+            events=hub,
         )
 
     server = await websockets.serve(handler, host, 0)
     port = server.sockets[0].getsockname()[1]
-    btask = asyncio.create_task(
-        _broadcast(events.stream(), clients, "local", icon_subs=icon_subs, icons=icons)
-    )
+
+    async def broadcast() -> None:
+        poll = asyncio.create_task(hub.run())
+        try:
+            await _broadcast(
+                events.stream(),
+                clients,
+                "local",
+                icon_subs=icon_subs,
+                icons=icons,
+                extra_capabilities=_extra_capabilities(None, hub),
+                events=hub,
+            )
+        finally:
+            poll.cancel()
+            await hub.close()
+
+    btask = asyncio.create_task(broadcast())
     btask.add_done_callback(_log_broadcast_task_failure)
     return host, port, token, (server, btask)
 
@@ -2214,6 +2310,7 @@ async def serve(
     )  # push + slow poll
     clients: dict = {}
     icon_subs: dict = {}
+    hub = EventHub(client_herdr, server_id)  # event-loop only too
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     # The exit seam: a verified self-update asks serve() to return (after a
@@ -2238,9 +2335,10 @@ async def serve(
             history=history,
             usage=usage,
             subagents=subagents,
+            events=hub,
         )
 
-    extra_capabilities = usage.capabilities if usage is not None else ()
+    extra_capabilities = _extra_capabilities(usage, hub)
     if usage is not None:
         usage.start()
     async with websockets.serve(handler, host, port):
@@ -2253,10 +2351,11 @@ async def serve(
                 icon_subs=icon_subs,
                 icons=icons,
                 extra_capabilities=extra_capabilities,
+                events=hub,
             )
         )
         stopper = asyncio.create_task(stop.wait())
-        tasks = {broadcast, stopper}
+        tasks = {broadcast, stopper, asyncio.create_task(hub.run())}
         if usage is not None:
             tasks.add(asyncio.create_task(usage.run(clients)))
         try:
@@ -2265,6 +2364,7 @@ async def serve(
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            await hub.close()
             status_since.close()  # a restart must not lose the debounced last write
             if history is not None:
                 # Flushes the queued episodes and joins the writer thread.

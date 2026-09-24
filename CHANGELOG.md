@@ -7,6 +7,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Bridge lifecycle events (capability `events`): the bridge gives every
+  blocked and done episode a stable `episode_id` (it survives a bridge
+  restart), streams `event` frames (`blocked` with the pre-read, sanitized
+  prompt and its revision, `done`, `unblocked`, `cleared`, `answered` with
+  who answered) to clients that subscribe, and replays the last 30 minutes
+  after a client's `seq`. An answer from any client marks the episode
+  answered for all of them; a later answer that names the same episode is
+  refused as `stale` unless the prompt changed. README "Lifecycle events".
 - `herdeck-service hooks install|uninstall|status [--agents claude,codex]
   [--hook-path PATH] [--json]` installs the subagent hooks into
   `~/.claude/settings.json` and `~/.codex/hooks.json`. It adds only its own
