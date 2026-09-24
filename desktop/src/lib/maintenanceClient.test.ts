@@ -173,7 +173,7 @@ describe("runtimeService", () => {
   it("passes the action and env and shapes the result", async () => {
     const f = fakeInvoke([{ ok: false, exit_code: 1, timed_out: false, stdout: "", stderr: "launchctl failed" }]);
     const r = await runtimeService(f.invoke, "restart");
-    expect(f.calls[0]).toEqual({ cmd: "runtime_service", args: { action: "restart", env: [] } });
+    expect(f.calls[0]).toEqual({ cmd: "runtime_service", args: { action: "restart", env: [], replace: false } });
     expect(r).toEqual({ ok: false, exitCode: 1, timedOut: false, detail: "launchctl failed" });
     const refused = await runtimeService(fakeInvoke([new Error("no bundled runtime")]).invoke, "install");
     expect(refused.ok).toBe(false);

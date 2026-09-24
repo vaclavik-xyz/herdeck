@@ -86,8 +86,49 @@ describe("MaintenanceSection", () => {
     expect(confirm).toBeTruthy();
     confirm!.click();
     await settle();
-    expect(g.calls.find((c) => c.cmd === "runtime_service")?.args).toEqual({ action: "install", env: [] });
+    expect(g.calls.find((c) => c.cmd === "runtime_service")?.args).toEqual({ action: "install", env: [], replace: false });
     expect(t.querySelector('[data-note="service"]')?.textContent).toBe("Done.");
+  });
+
+  it("never offers a plain install over a checkout unit: replacing it needs a confirm naming its program", async () => {
+    const program = "/Users/me/herdeck/.venv/bin/python";
+    const ok = () => ({ ok: true, exit_code: 0, timed_out: false, stdout: "", stderr: "" });
+    // origin service_checkout, and a checkout unit next to a self-spawned runtime
+    for (const process of [{ is_service: true }, { is_service: false }]) {
+      const status = rawStatus({ process, service: { installed: true, program, from_app: false } });
+      const g = fake(status, { runtime_service: ok });
+      const t = await render(g.invoke);
+      expect(t.querySelector('button[data-action="install"]')).toBeNull();
+      expect(t.querySelector('button[data-action="uninstall"]')).toBeNull();
+      expect(button(t, "restart-runtime").disabled).toBe(true);
+      expect(t.querySelector('[data-hint="not-ours"]')?.textContent).toContain(program);
+      button(t, "replace").click();
+      flushSync();
+      const confirm = t.querySelector('[data-confirm="replace"]')?.textContent ?? "";
+      expect(confirm).toContain(program);
+      expect(confirm).toContain("--config");
+      button(t, "confirm").click();
+      await settle();
+      expect(g.calls.find((c) => c.cmd === "runtime_service")?.args).toEqual({ action: "install", env: [], replace: true });
+      cleanup?.();
+      cleanup = null;
+    }
+  });
+
+  it("names another app's bundle in the remove confirm and sends replace", async () => {
+    const program = "/Users/me/Downloads/herdeck.app/Contents/Resources/herdeck-deckapp/herdeck-deckapp";
+    const g = fake(rawStatus({ service: { installed: true, program, from_app: true } }), {
+      runtime_service: () => ({ ok: true, exit_code: 0, timed_out: false, stdout: "", stderr: "" }),
+    });
+    const t = await render(g.invoke, "cs");
+    expect(t.querySelector("[data-origin]")?.getAttribute("data-origin")).toBe("service_other_app");
+    expect(button(t, "restart-runtime").disabled).toBe(true);
+    button(t, "uninstall").click();
+    flushSync();
+    expect(t.querySelector('[data-confirm="uninstall"]')?.textContent).toContain(program);
+    button(t, "confirm").click();
+    await settle();
+    expect(g.calls.find((c) => c.cmd === "runtime_service")?.args).toEqual({ action: "uninstall", env: [], replace: true });
   });
 
   it("disables install in a dev build without a bundled runtime", async () => {

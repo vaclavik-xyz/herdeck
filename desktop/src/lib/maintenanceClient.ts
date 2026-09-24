@@ -157,16 +157,28 @@ export type RuntimeOrigin =
   | "self_spawned" // this app's own child process
   | "attached"; // something else started it (a hand-written unit, a terminal)
 
+/** Who owns the INSTALLED runtime unit (whether or not it is the process
+ *  this window talks to) — mirrors the Rust `runtime_service::unit_owner`
+ *  guard: the app restarts only its own unit and replaces/removes another
+ *  one only after a confirmation that names it. */
+export type UnitOwner = "none" | "this_app" | "other_app" | "checkout";
+
+export function unitOwner(s: MaintenanceStatus): UnitOwner {
+  if (!s.service.installed) return "none";
+  const program = s.service.program ?? "";
+  const app = s.app;
+  const ours = app != null && (
+    (app.bundledRuntime != null && program === app.bundledRuntime)
+    || (app.bundle != null && program.startsWith(`${app.bundle}/`))
+  );
+  if (s.service.fromApp) return ours ? "this_app" : "other_app";
+  return "checkout";
+}
+
 export function runtimeOrigin(s: MaintenanceStatus): RuntimeOrigin {
   if (s.process.isService && s.service.installed) {
-    const program = s.service.program ?? "";
-    const app = s.app;
-    const ours = app != null && (
-      (app.bundledRuntime != null && program === app.bundledRuntime)
-      || (app.bundle != null && program.startsWith(`${app.bundle}/`))
-    );
-    if (s.service.fromApp) return ours ? "service_this_app" : "service_other_app";
-    return "service_checkout";
+    const owner = unitOwner(s);
+    return owner === "this_app" ? "service_this_app" : owner === "other_app" ? "service_other_app" : "service_checkout";
   }
   if (s.app?.spawnedRuntime) return "self_spawned";
   return "attached";
@@ -387,9 +399,15 @@ export interface ServiceResult {
   detail: string; // stderr (or stdout) tail, or the refusal
 }
 
-export async function runtimeService(invoke: InvokeFn, action: ServiceAction, env: string[] = []): Promise<ServiceResult> {
+/** `replace`: the user confirmed replacing/removing a unit this app does not
+ *  own (the Rust side refuses it otherwise). */
+export async function runtimeService(
+  invoke: InvokeFn,
+  action: ServiceAction,
+  opts: { env?: string[]; replace?: boolean } = {},
+): Promise<ServiceResult> {
   try {
-    const v = rec(await invoke("runtime_service", { action, env }));
+    const v = rec(await invoke("runtime_service", { action, env: opts.env ?? [], replace: opts.replace === true }));
     const stderr = str(v.stderr) ?? "";
     const stdout = str(v.stdout) ?? "";
     return {

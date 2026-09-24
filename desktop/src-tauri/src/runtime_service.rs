@@ -61,6 +61,51 @@ pub fn unit_runs_from_bundle(plist_xml: &str, bundles: &[PathBuf]) -> bool {
     })
 }
 
+/// Who owns the installed runtime unit, from the app's point of view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitOwner {
+    /// No unit installed.
+    None,
+    /// Runs the frozen runtime bundled in THIS app.
+    ThisApp,
+    /// Runs the frozen runtime of another app bundle.
+    OtherApp,
+    /// Runs anything else (a source checkout, a venv, a hand-written unit).
+    Checkout,
+}
+
+/// Classify an installed unit (`None` when there is no plist text).
+pub fn unit_owner(plist_xml: Option<&str>, bundles: &[PathBuf]) -> UnitOwner {
+    let Some(xml) = plist_xml else {
+        return UnitOwner::None;
+    };
+    if unit_runs_from_bundle(xml, bundles) {
+        return UnitOwner::ThisApp;
+    }
+    match program_of_plist(xml) {
+        Some(program) if program.ends_with(&format!("/{BUNDLED_RUNTIME}")) => UnitOwner::OtherApp,
+        _ => UnitOwner::Checkout,
+    }
+}
+
+/// The installed runtime unit's owner on this Mac (`None` elsewhere: only a
+/// launchd unit can run an app bundle's runtime).
+pub fn installed_unit_owner() -> UnitOwner {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let plist = Path::new(&home)
+            .join("Library/LaunchAgents")
+            .join(format!("{RUNTIME_LABEL}.plist"));
+        let xml = std::fs::read_to_string(plist).ok();
+        unit_owner(xml.as_deref(), &own_bundles())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        UnitOwner::None
+    }
+}
+
 /// This app's bundle path, as launched and canonicalised (the service resolves
 /// `--from-app`, so either spelling may be the one in the plist).
 #[cfg(target_os = "macos")]
@@ -181,6 +226,19 @@ mod tests {
     fn compares_against_the_xml_escaped_path() {
         let xml = plist("/Apps/R&amp;D/herdeck.app/Contents/Resources/herdeck-deckapp/herdeck-deckapp");
         assert!(unit_runs_from_bundle(&xml, &[PathBuf::from("/Apps/R&D/herdeck.app")]));
+    }
+
+    #[test]
+    fn classifies_the_unit_owner() {
+        let ours = [PathBuf::from("/Applications/herdeck.app")];
+        assert_eq!(unit_owner(None, &ours), UnitOwner::None);
+        let this = plist("/Applications/herdeck.app/Contents/Resources/herdeck-deckapp/herdeck-deckapp");
+        assert_eq!(unit_owner(Some(&this), &ours), UnitOwner::ThisApp);
+        let other = plist("/Users/me/Downloads/herdeck.app/Contents/Resources/herdeck-deckapp/herdeck-deckapp");
+        assert_eq!(unit_owner(Some(&other), &ours), UnitOwner::OtherApp);
+        let checkout = plist("/Users/me/herdeck/.venv/bin/python");
+        assert_eq!(unit_owner(Some(&checkout), &ours), UnitOwner::Checkout);
+        assert_eq!(unit_owner(Some("<dict></dict>"), &ours), UnitOwner::Checkout);
     }
 
     #[test]

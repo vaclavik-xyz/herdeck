@@ -11,7 +11,7 @@
   import { visibilityGatedLoop } from "../pollGate";
   import {
     fetchMaintenance, restartDeck, powerCycleDeck, runBridgeUpdate, runtimeService, openLog,
-    runtimeOrigin, versionRows, bridgeOffer, managedBridgeCommand,
+    runtimeOrigin, unitOwner, versionRows, bridgeOffer, managedBridgeCommand,
     type BridgeUpdateView, type MaintenanceStatus, type ServiceAction,
   } from "../maintenanceClient";
   import {
@@ -56,6 +56,8 @@
   });
 
   const origin = $derived(status ? runtimeOrigin(status) : null);
+  const owner = $derived(status ? unitOwner(status) : "none");
+  const program = $derived(status?.service.program ?? "?");
   const rows = $derived(status ? versionRows(status) : []);
 
   // --- runtime service ---
@@ -63,13 +65,13 @@
   let serviceNote = $state<{ ok: boolean; text: string } | null>(null);
   let confirming = $state<"install" | "uninstall" | null>(null);
 
-  async function service(action: ServiceAction): Promise<void> {
+  async function service(action: ServiceAction, replace = false): Promise<void> {
     const call = invoke;
     if (!call || serviceBusy) return;
     confirming = null;
     serviceBusy = action;
     serviceNote = null;
-    const r = await runtimeService(call, action);
+    const r = await runtimeService(call, action, { replace });
     if (!alive) return;
     serviceBusy = null;
     serviceNote = r.ok
@@ -172,20 +174,21 @@
       <p class="state" data-origin={origin}>{originText(origin ?? "attached", status.service.program, status.pid, lm)}</p>
       <p class="hint">{fmt(lm.pid_uptime, { pid: status.pid ?? "?", uptime: uptime(status.uptimeS) })}</p>
       <div class="actions">
-        {#if origin !== "service_this_app"}
+        {#if owner !== "this_app"}
+          {@const replacing = owner === "other_app" || owner === "checkout"}
           {#if confirming === "install"}
-            <span class="confirm-text">{lm.install_confirm}</span>
-            <button type="button" class="primary" onclick={() => service("install")}>{lm.confirm}</button>
+            <span class="confirm-text" data-confirm={replacing ? "replace" : "install"}>{replacing ? fmt(lm.replace_confirm, { program }) : lm.install_confirm}</span>
+            <button type="button" class="primary" data-action="confirm" onclick={() => service("install", replacing)}>{lm.confirm}</button>
             <button type="button" onclick={() => (confirming = null)}>{lm.cancel}</button>
           {:else}
-            <button type="button" class="primary" data-action="install" disabled={!status.app?.bundledRuntime || serviceBusy != null} onclick={() => (confirming = "install")}>{lm.install_service}</button>
+            <button type="button" class="primary" data-action={replacing ? "replace" : "install"} disabled={!status.app?.bundledRuntime || serviceBusy != null} onclick={() => (confirming = "install")}>{replacing ? lm.replace_service : lm.install_service}</button>
           {/if}
         {/if}
-        <button type="button" data-action="restart-runtime" disabled={!status.service.installed || serviceBusy != null} title={status.service.installed ? undefined : lm.restart_runtime_na} onclick={() => service("restart")}>{lm.restart_runtime}</button>
-        {#if status.service.installed && status.service.fromApp}
+        <button type="button" data-action="restart-runtime" disabled={owner !== "this_app" || serviceBusy != null} title={owner === "this_app" ? undefined : owner === "none" ? lm.restart_runtime_na : fmt(lm.restart_not_ours, { program })} onclick={() => service("restart")}>{lm.restart_runtime}</button>
+        {#if owner === "this_app" || owner === "other_app"}
           {#if confirming === "uninstall"}
-            <span class="confirm-text">{lm.uninstall_confirm}</span>
-            <button type="button" onclick={() => service("uninstall")}>{lm.confirm}</button>
+            <span class="confirm-text" data-confirm="uninstall">{owner === "other_app" ? fmt(lm.uninstall_other_confirm, { program }) : lm.uninstall_confirm}</span>
+            <button type="button" data-action="confirm" onclick={() => service("uninstall", owner === "other_app")}>{lm.confirm}</button>
             <button type="button" onclick={() => (confirming = null)}>{lm.cancel}</button>
           {:else}
             <button type="button" data-action="uninstall" disabled={serviceBusy != null} onclick={() => (confirming = "uninstall")}>{lm.uninstall_service}</button>
@@ -194,10 +197,10 @@
         <button type="button" data-action="runtime-log" disabled={!status.logs.runtime} onclick={() => open("runtime")}>{lm.open_runtime_log}</button>
         <button type="button" data-action="app-log" onclick={() => open("app")}>{lm.open_app_log}</button>
       </div>
-      {#if origin !== "service_this_app"}
+      {#if owner !== "this_app"}
         <p class="hint">{status.app?.bundledRuntime ? lm.install_hint : lm.install_dev}</p>
       {/if}
-      {#if !status.service.installed}<p class="hint">{lm.restart_runtime_na}</p>{/if}
+      {#if owner === "none"}<p class="hint">{lm.restart_runtime_na}</p>{:else if owner !== "this_app"}<p class="hint" data-hint="not-ours">{fmt(lm.restart_not_ours, { program })}</p>{/if}
       {#if !status.logs.runtime}<p class="hint">{lm.no_runtime_log}</p>{/if}
       {#if serviceBusy}<p class="note">{lm.service_running}</p>{/if}
       {#if serviceNote}<p class="note" class:bad={!serviceNote.ok} data-note="service">{serviceNote.text}</p>{/if}

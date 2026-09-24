@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use tauri::Manager;
 
 use crate::proxy::{current_discovery, run_blocking};
+use crate::runtime_service::{installed_unit_owner, UnitOwner};
 use crate::sidecar::Discovery;
 use crate::sync_util::LockExt;
 use crate::{app_log, build_channel, http, AppState, HDR_TOKEN};
@@ -370,6 +371,28 @@ pub fn service_argv(action: &str, bundle: Option<&Path>, env: &[String]) -> Resu
     Ok(argv)
 }
 
+/// Whether `action` may run against the installed unit. The app only
+/// restarts its OWN unit; it replaces or removes another unit only when the
+/// user confirmed exactly that (`replace`), and never removes a checkout unit
+/// (whose --config/--port/--env it cannot recreate).
+pub fn service_guard(action: &str, owner: UnitOwner, replace: bool) -> Result<(), String> {
+    use UnitOwner::*;
+    match (action, owner) {
+        ("status", _) => Ok(()),
+        ("restart", ThisApp) => Ok(()),
+        ("restart", None) => Err("no runtime service is installed".into()),
+        ("restart", _) => Err("the runtime service does not run from this app; restart it where it was installed".into()),
+        ("uninstall", ThisApp) => Ok(()),
+        ("uninstall", OtherApp) if replace => Ok(()),
+        ("uninstall", None) => Err("no runtime service is installed".into()),
+        ("uninstall", _) => Err("the runtime service does not run from this app; remove it where it was installed".into()),
+        ("install", None | ThisApp) => Ok(()),
+        ("install", _) if replace => Ok(()),
+        ("install", _) => Err("another runtime service is installed; replacing it needs an explicit confirmation".into()),
+        (other, _) => Err(format!("runtime_service: unknown action {other}")),
+    }
+}
+
 /// The last `limit` bytes of `text`, on a char boundary.
 fn tail(text: &str, limit: usize) -> String {
     let text = text.trim();
@@ -462,7 +485,9 @@ pub(crate) async fn runtime_service(
     app: tauri::AppHandle,
     action: String,
     env: Option<Vec<String>>,
+    replace: Option<bool>,
 ) -> Result<serde_json::Value, String> {
+    service_guard(&action, installed_unit_owner(), replace.unwrap_or(false))?;
     let binary = bundled_runtime_binary(&app)
         .ok_or("no bundled runtime in this build (dev build): use herdeck-service from the checkout")?;
     let bundle = std::env::current_exe()
@@ -695,6 +720,30 @@ mod tests {
         assert_eq!(timeout["ok"], false);
         assert_eq!(timeout["timed_out"], true);
         assert_eq!(tail("ééé", 3), "é");
+    }
+
+    #[test]
+    fn service_guard_only_touches_this_apps_unit_without_a_confirmed_replace() {
+        use UnitOwner::*;
+        for owner in [None, ThisApp, OtherApp, Checkout] {
+            assert!(service_guard("status", owner, false).is_ok());
+        }
+        assert!(service_guard("restart", ThisApp, false).is_ok());
+        for owner in [None, OtherApp, Checkout] {
+            assert!(service_guard("restart", owner, true).is_err(), "restart {owner:?}");
+        }
+        assert!(service_guard("uninstall", ThisApp, false).is_ok());
+        assert!(service_guard("uninstall", OtherApp, false).is_err());
+        assert!(service_guard("uninstall", OtherApp, true).is_ok());
+        assert!(service_guard("uninstall", Checkout, true).is_err());
+        assert!(service_guard("uninstall", None, true).is_err());
+        assert!(service_guard("install", None, false).is_ok());
+        assert!(service_guard("install", ThisApp, false).is_ok());
+        assert!(service_guard("install", Checkout, false).is_err());
+        assert!(service_guard("install", OtherApp, false).is_err());
+        assert!(service_guard("install", Checkout, true).is_ok());
+        assert!(service_guard("install", OtherApp, true).is_ok());
+        assert!(service_guard("bootstrap", ThisApp, true).is_err());
     }
 
     #[test]
