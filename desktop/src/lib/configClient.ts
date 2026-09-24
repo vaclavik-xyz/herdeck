@@ -222,6 +222,8 @@ export interface ServerRecord {
   id: string;
   url: string;
   token_env: string;
+  /** Path to a 0600 file holding the token; read after the env var, before the keychain. */
+  token_file?: string;
   backend?: string;
   /** T3 only: read this Mac's T3 desktop visited state (ServersSection toggle). */
   desktop_read_state?: boolean;
@@ -264,13 +266,28 @@ export function serversOf(payload: ConfigPayload): ServerRecord[] {
   return raw.map((s) => {
     const r = obj(s);
     return { id: str(r.id), url: str(r.url), token_env: str(r.token_env),
+      ...(typeof r.token_file === "string" ? { token_file: r.token_file } : {}),
       ...(typeof r.backend === "string" ? { backend: r.backend } : {}),
       ...(typeof r.desktop_read_state === "boolean" ? { desktop_read_state: r.desktop_read_state } : {}) };
   });
 }
 
+/** The TOML shape of a record: a blank `token_file` is dropped (the backend
+ *  rejects an empty path), and so is a blank `token_env` next to a token file —
+ *  a file-only server is valid, an empty env-var name is not. */
+function normalizeServer(s: ServerRecord): ServerRecord {
+  const { token_file, ...rest } = s;
+  const file = (token_file ?? "").trim() ? token_file : undefined;
+  if (file === undefined) return rest;
+  if (rest.token_env === "") {
+    const { token_env: _blank, ...fileOnly } = rest;
+    return { ...fileOnly, token_file: file } as ServerRecord;
+  }
+  return { ...rest, token_file: file };
+}
+
 function withServers(payload: ConfigPayload, servers: ServerRecord[]): ConfigPayload {
-  return { ...payload, base: { ...clone(payload.base), servers } };
+  return { ...payload, base: { ...clone(payload.base), servers: servers.map(normalizeServer) } };
 }
 
 /** NEW payload with a blank server appended. */

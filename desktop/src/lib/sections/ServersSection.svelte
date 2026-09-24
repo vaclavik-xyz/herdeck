@@ -61,7 +61,7 @@
   });
   const lm = $derived(LM[locale.lang]);
 
-  function set(i: number, field: "id" | "url" | "token_env", v: string): void {
+  function set(i: number, field: "id" | "url" | "token_env" | "token_file", v: string): void {
     payload = updateServer(payload, i, field, v);
     onChange();
   }
@@ -148,6 +148,7 @@
       onset={(val) => setSecret(s.token_env, val)}
       onclear={() => clearSecret(s.token_env)}
     />
+    <TextField label="token_file" help={HELP.token_file} owner={s.id} value={s.token_file ?? ""} oninput={(v) => set(i, "token_file", v)} />
     {#if s.backend === "t3"}
       <BooleanField label="desktop_read_state" help={HELP.desktop_read_state} value={s.desktop_read_state === true} onchange={(v) => setReadState(i, v)} />
     {/if}
