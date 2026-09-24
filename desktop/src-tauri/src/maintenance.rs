@@ -6,6 +6,8 @@
 //!   allow-list of EXACT paths rather than a prefix. `GET /maintenance` is
 //!   stamped with what only the shell knows (`app`: its version, bundle, the
 //!   bundled runtime binary and whether this shell spawned the runtime).
+//!   Also relays `GET /stats` (the Statistics view, deckapp/stats.py) with a
+//!   strictly validated query.
 //! - `open_log`: opens the runtime log `/maintenance` reports or the app's own
 //!   log, and nothing else (`validated_log_path`).
 //! - `runtime_service`: runs the bundled frozen runtime's `service` subcommand
@@ -34,6 +36,8 @@ pub const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 pub const DECK_RESTART_TIMEOUT: Duration = Duration::from_secs(20);
 /// A uhubctl listing (10 s) plus the cycle itself (30 s), with headroom.
 pub const POWER_CYCLE_TIMEOUT: Duration = Duration::from_secs(45);
+/// The runtime waits up to 10 s for the bridges' stats answers (STATS_WAIT_S).
+pub const STATS_TIMEOUT: Duration = Duration::from_secs(16);
 /// The runtime's default bridge-update wait (15 s) when the body names none.
 const UPDATE_DEFAULT_WAIT_MS: u64 = 15_000;
 
@@ -47,6 +51,26 @@ pub enum MaintRoute {
     UpdateStart,
     /// GET: long-poll a bridge update; carries the query's `wait_ms`.
     UpdatePoll { wait_ms: u64 },
+    /// GET: the bridges' status history (`/stats?range=&group=`).
+    Stats,
+}
+
+/// The stats query: only `range` (1, 7 or 30) and `group` (agent, repo,
+/// agent_type), each at most once, any order.
+fn stats_query_ok(query: &str) -> bool {
+    let mut range = false;
+    let mut group = false;
+    for kv in query.split('&') {
+        let Some((k, v)) = kv.split_once('=') else {
+            return false;
+        };
+        match k {
+            "range" if !range && matches!(v, "1" | "7" | "30") => range = true,
+            "group" if !group && matches!(v, "agent" | "repo" | "agent_type") => group = true,
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// A server id as a URL path segment: non-empty, URL-safe (percent-encoded by
@@ -87,6 +111,8 @@ pub fn maintenance_route(method: &str, path: &str) -> Option<MaintRoute> {
         ("GET", "/maintenance", None) => return Some(MaintRoute::Status),
         ("POST", "/maintenance/deck/restart", None) => return Some(MaintRoute::DeckRestart),
         ("POST", "/maintenance/deck/power-cycle", None) => return Some(MaintRoute::PowerCycle),
+        ("GET", "/stats", None) => return Some(MaintRoute::Stats),
+        ("GET", "/stats", Some(q)) => return stats_query_ok(q).then_some(MaintRoute::Stats),
         _ => {}
     }
     let seg = route
@@ -111,6 +137,7 @@ pub fn maintenance_timeout(route: &MaintRoute, body: Option<&serde_json::Value>)
         MaintRoute::Status => STATUS_TIMEOUT,
         MaintRoute::DeckRestart => DECK_RESTART_TIMEOUT,
         MaintRoute::PowerCycle => POWER_CYCLE_TIMEOUT,
+        MaintRoute::Stats => STATS_TIMEOUT,
         MaintRoute::UpdateStart => {
             let ms = body
                 .and_then(|b| b.get("wait_ms"))
@@ -551,6 +578,25 @@ pub(crate) fn restart_deck_from_shell(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_stats_route_takes_only_a_valid_range_and_group() {
+        assert_eq!(maintenance_route("GET", "/stats"), Some(MaintRoute::Stats));
+        assert_eq!(maintenance_route("GET", "/stats?range=7&group=repo"), Some(MaintRoute::Stats));
+        assert_eq!(maintenance_route("GET", "/stats?group=agent_type&range=30"), Some(MaintRoute::Stats));
+        for bad in [
+            "/stats?range=2",
+            "/stats?range=7&range=7",
+            "/stats?group=../x",
+            "/stats?token=x",
+            "/stats?range=7&",
+            "/stats/x",
+        ] {
+            assert_eq!(maintenance_route("GET", bad), None, "{bad}");
+        }
+        assert_eq!(maintenance_route("POST", "/stats"), None);
+        assert_eq!(maintenance_timeout(&MaintRoute::Stats, None), STATS_TIMEOUT);
+    }
 
     #[test]
     fn only_the_exact_maintenance_routes_are_allowed() {

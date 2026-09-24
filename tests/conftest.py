@@ -16,3 +16,12 @@ def _isolated_status_since_state(tmp_path, monkeypatch):
         "herdeck.status_since.default_state_path",
         lambda name="bridge-status-since.json": str(tmp_path / "state" / name),
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_history_store(tmp_path, monkeypatch):
+    """The bridge's episode history (history.py) never touches ~/.local/state."""
+    monkeypatch.setattr(
+        "herdeck.history.default_path",
+        lambda name="history.sqlite": str(tmp_path / "state" / name),
+    )

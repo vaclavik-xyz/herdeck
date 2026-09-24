@@ -451,6 +451,31 @@ Telegram) agrees, and a runtime that was asleep catches up. Details live in
   already answered, unless the prompt has changed since. Answers without
   `episode_id` (older runtimes) are never refused.
 
+### Status history and statistics
+
+A bridge that advertises the `history` capability records how its agents
+spend their time. Each time a pane's status changes (working, blocked, idle,
+waiting, done; the same effective status the deck shows), the bridge appends
+one row for the stretch that just ended: pane and terminal id, agent type,
+repo/project/label, the old and new status, start and end time, and whether a
+blocked stretch ended after an answer sent through herdeck (`act`,
+`send_text`, `choose_if_blocked`). An answer typed straight into the terminal
+cannot be seen by the bridge, so it only ends the block. The rows live in
+`~/.local/state/herdeck/history.sqlite` (or `$XDG_STATE_HOME`; the embedded
+local bridge uses `local-bridge-history.sqlite`), mode `0600`, SQLite WAL,
+kept for 30 days and at most 200,000 rows. Writes run on a background thread
+in batches, and a store error only logs a warning. A corrupt file is moved
+aside and a new one is started.
+
+Clients ask with `{"type": "stats", "req", "range_days": 1|7|30, "group_by":
+"agent"|"repo"|"agent_type", "tz_offset_min"}` (the read-only token is enough).
+The answer sums working/blocked/idle/waiting/done time per group and per day
+(calendar days in the client's timezone; 1 = today), counts blocked episodes,
+answers and entries into done, and gives the median and p90 time to answer
+(the length of blocked stretches that ended with the pane moving on). The
+runtime serves it as `GET /stats?range=7&group=repo` (token auth), asks every
+connected bridge with the capability and sums their answers.
+
 ### Bridge self-update
 
 A bridge installed as a **managed** service (`herdeck-service install bridge
@@ -853,6 +878,14 @@ problem as a compact notice with the same fix as its one button (results show
 as toasts; × hides a notice until that problem changes), the deck window shows
 a status dot that opens Maintenance, the tray has **Restart deck**, and `[hotkeys].restart_deck` can bind it to a global shortcut (off by
 default).
+
+**Statistics** (Settings → Control → Statistics) shows that history for
+today, 7 or 30 days, grouped by agent, repository or agent type: how long
+agents waited for you, how many answers you gave, the median time to answer,
+done tasks, a per-day stacked bar chart and a per-group table. It needs
+bridges with status history (see [Status history and
+statistics](#status-history-and-statistics)); for an older bridge it says to
+update it.
 
 The UI is dark-only by design: it mirrors the deck hardware's black tiles, so
 there is no light theme to switch to.
@@ -1277,8 +1310,8 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   never the token itself unless you pass `--show`.
 - Optional view-only access: point `HERDECK_READONLY_TOKEN_FILE` at a second
   `0600` token file (it must differ from the main token). A client that
-  authenticates with it may send only `list`, `read`, `observe`, `observe_stop`
-  and `health`; `act`, `focus`, `refresh_title`, `send_text`,
+  authenticates with it may send only `list`, `read`, `observe`, `observe_stop`,
+  `health` and `stats`; `act`, `focus`, `refresh_title`, `send_text`,
   `choose_if_blocked`, `start` and any unknown message type get an `error`
   frame and never reach herdr.
 

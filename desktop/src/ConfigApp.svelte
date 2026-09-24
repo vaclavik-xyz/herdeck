@@ -8,6 +8,7 @@
   import ArrowSquareIn from "phosphor-svelte/lib/ArrowSquareIn";
   import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
   import BellSimple from "phosphor-svelte/lib/BellSimple";
+  import ChartBar from "phosphor-svelte/lib/ChartBar";
   import Command from "phosphor-svelte/lib/Command";
   import Gauge from "phosphor-svelte/lib/Gauge";
   import GridFour from "phosphor-svelte/lib/GridFour";
@@ -36,6 +37,7 @@
   import ProfilesSection from "./lib/sections/ProfilesSection.svelte";
   import DesktopSection from "./lib/sections/DesktopSection.svelte";
   import MaintenanceSection from "./lib/sections/MaintenanceSection.svelte";
+  import StatisticsSection from "./lib/sections/StatisticsSection.svelte";
   import { settingsRequest } from "./lib/settingsRequest.svelte";
   import { healthState, maintenanceBadge } from "./lib/healthState.svelte";
   import Banner from "./lib/Banner.svelte";
@@ -85,6 +87,7 @@
     en: {
       "sec.overview": "Overview",
       "sec.servers": "Connections",
+      "sec.statistics": "Statistics",
       "sec.deck": "Deck",
       "sec.view": "View",
       "sec.theme": "Colors",
@@ -115,6 +118,7 @@
       "desc.profiles": "Compose named working contexts from server selections and inherited settings.",
       "desc.desktop": "Set window behavior and the global shortcut that shows or hides the deck.",
       "desc.maintenance": "Check versions, run the runtime as a service, restart the deck and update bridges.",
+      "desc.statistics": "See how your agents spent their time and how long they waited for your answers.",
       search_settings: "Search settings",
       clear_search: "Clear search",
       no_search_results: "No settings match this search.",
@@ -206,6 +210,7 @@
       "sec.profiles": "Profily",
       "sec.desktop": "Okno",
       "sec.maintenance": "Údržba",
+      "sec.statistics": "Statistiky",
       "group.control": "Ovládání",
       "group.deck": "Deck",
       "group.agents": "Agenti",
@@ -224,6 +229,7 @@
       "desc.profiles": "Sestav pojmenované pracovní kontexty z výběru serverů a zděděných nastavení.",
       "desc.desktop": "Nastav chování okna a globální zkratku pro zobrazení nebo skrytí decku.",
       "desc.maintenance": "Zkontroluj verze, spouštěj runtime jako službu, restartuj deck a aktualizuj bridge.",
+      "desc.statistics": "Podívej se, jak agenti trávili čas a jak dlouho čekali na tvé odpovědi.",
       search_settings: "Hledat nastavení",
       clear_search: "Vymazat hledání",
       no_search_results: "Žádné nastavení tomuto hledání neodpovídá.",
@@ -313,6 +319,7 @@
     { label: lm["group.control"], items: [
       { key: "overview", icon: HouseSimple, label: lm["sec.overview"] },
       { key: "servers", icon: PlugsConnected, label: lm["sec.servers"] },
+      { key: "statistics", icon: ChartBar, label: lm["sec.statistics"] },
     ] },
     { label: lm["group.deck"], items: [
       { key: "deck", icon: GridFour, label: lm["sec.deck"] },
@@ -457,6 +464,7 @@
     profiles: lm["desc.profiles"],
     desktop: lm["desc.desktop"],
     maintenance: lm["desc.maintenance"],
+    statistics: lm["desc.statistics"],
   });
   const activeDescription = $derived(SECTION_DESCRIPTIONS[active] ?? lm.settings_hint);
   const filteredNavGroups = $derived.by(() => {
@@ -916,6 +924,9 @@
         {#if active === "maintenance"}
           <!-- Not a config section: live runtime facts + actions, no payload. -->
           <article class="card form-card"><MaintenanceSection invoke={browserMode ? null : (cmd, args) => invoke(cmd, args)} /></article>
+        {:else if active === "statistics"}
+          <!-- Not a config section: the bridges' status history (GET /stats). -->
+          <article class="card form-card"><StatisticsSection invoke={browserMode ? null : (cmd, args) => invoke(cmd, args)} /></article>
         {:else if payload == null}
           <article class="card loading-card"><p class="hint">{lm.loading}</p></article>
         {:else if active === "servers"}
