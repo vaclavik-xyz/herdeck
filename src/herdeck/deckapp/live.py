@@ -190,6 +190,9 @@ class LiveSource(AgentCardMixin, StateSource):
         # so a stale banner can never answer a later prompt.
         self._block_episode: dict[AgentKey, str] = {}
         self._answered_episodes: dict[str, None] = {}
+        # Outstanding fire-and-forget banner answers (req -> agent, bounded):
+        # a bridge refusal is logged, since nobody else waits for the result.
+        self._banner_reqs: dict[str, AgentKey] = {}
         self._agents: dict[AgentKey, AgentState] = {}
         self._connected: dict[str, bool] = {sid: False for sid in self._servers}
         self._req = 0
@@ -358,7 +361,7 @@ class LiveSource(AgentCardMixin, StateSource):
         runner = self._runners.get(key.server_id)
         if runner is None or not connected:
             return "unavailable"
-        self._spend_answered_prompt(key)
+        self._spend_answered_prompt(key, episode)
         self._notify_throttle.note_interaction(key)
         if self._orch is not None:
             self._orch.note_external_answer(key)
@@ -368,7 +371,12 @@ class LiveSource(AgentCardMixin, StateSource):
             key.pane_id,
             choice or "reply",
         )
-        runner.send(command_to_msg(cmd, self._next_req(cmd)))
+        req = self._next_req(cmd)
+        with self._lock:
+            self._banner_reqs[req] = key
+            while len(self._banner_reqs) > 32:
+                self._banner_reqs.pop(next(iter(self._banner_reqs)))
+        runner.send(command_to_msg(cmd, req))
         return "ok"
 
     def _note_episode_answered_locked(self, episode: str) -> None:
@@ -931,6 +939,17 @@ class LiveSource(AgentCardMixin, StateSource):
             return
         # A desktop agent card may be waiting on this reply (never consumes it).
         self._card_on_result(req, data)
+        with self._lock:
+            banner_key = self._banner_reqs.pop(req, None) if req is not None else None
+        if banner_key is not None and isinstance(data, dict) and (
+            data.get("skipped") or data.get("error")
+        ):
+            log.warning(
+                "banner answer refused by the bridge agent=%s:%s reason=%s",
+                banner_key.server_id,
+                banner_key.pane_id,
+                data.get("message") or data.get("error") or "skipped",
+            )
         # Mirrors App.handle_result.
         with self._lock:
             focused = req is not None and self._focus_reqs.pop(req, False)

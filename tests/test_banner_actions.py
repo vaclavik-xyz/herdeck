@@ -235,11 +235,78 @@ def test_an_agent_card_answer_makes_the_banner_of_that_episode_stale():
     try:
         runner.connector = None
         revision = decision_revision(key.server_id, key.pane_id, "", CLAUDE_PROMPT)
-        src._card_send = lambda cmd: {"ok": True}  # no bridge reply to wait for
+        src._card_send = lambda cmd: {"ok": True, "code": "sent", "message": ""}
         src.card_answer(key.server_id, key.pane_id, "1", revision)
         sig = binary_answer(CLAUDE_PROMPT, DEFAULT_PROFILES["claude"], SafetyConfig()).sig
         assert src.answer_agent(key, episode, choice="approve", sig=sig) == "stale"
         assert src.answer_agent(key, episode, text="also this") == "stale"
+    finally:
+        app.close()
+
+
+def _second_prompt():
+    return CLAUDE_PROMPT.replace("app.py", "other.py")
+
+
+def test_card_answer_does_not_spend_a_new_episode_that_began_during_its_wait():
+    """Card answers prompt A; while it waits for the bridge the agent answers,
+    re-blocks on B (a new episode). B's banner must still be answerable."""
+    from herdeck.decisions import decision_revision
+
+    app, src, server, runner, key, episode_a = _blocked_with_prompt()
+    try:
+        runner.connector = None
+        revision = decision_revision(key.server_id, key.pane_id, "", CLAUDE_PROMPT)
+        state = {}
+
+        def slow_send(cmd):
+            # The deck lock is not held here (as during the real 6 s wait).
+            src._on_event(server.id, agent(server.id, "p0", Status.WORKING))
+            src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))
+            read = [m for m in runner.sent if m["type"] == "read"][-1]
+            src._on_result(server.id, read["req"], {"text": _second_prompt(), "pane_id": "p0"})
+            state["episode_b"] = src._block_episode[key]
+            return {"ok": True, "code": "sent", "message": ""}
+
+        src._card_send = slow_send
+        src.card_answer(key.server_id, key.pane_id, "1", revision)
+        episode_b = state["episode_b"]
+        assert episode_b != episode_a
+        assert src._preread[key] == _second_prompt()  # B's prompt survives
+        sig_b = binary_answer(_second_prompt(), DEFAULT_PROFILES["claude"], SafetyConfig()).sig
+        runner.sent.clear()
+        assert src.answer_agent(key, episode_b, choice="approve", sig=sig_b) == "ok"
+        assert src.answer_agent(key, episode_a, text="late") == "stale"
+    finally:
+        app.close()
+
+
+def test_a_failed_card_answer_leaves_the_banner_answerable():
+    from herdeck.decisions import decision_revision
+
+    app, src, _server, runner, key, episode = _blocked_with_prompt()
+    try:
+        runner.connector = None
+        revision = decision_revision(key.server_id, key.pane_id, "", CLAUDE_PROMPT)
+        src._card_send = lambda cmd: {"ok": False, "code": "stale", "message": ""}
+        src.card_answer(key.server_id, key.pane_id, "1", revision)
+        assert episode not in src._answered_episodes
+    finally:
+        app.close()
+
+
+def test_a_bridge_refusal_of_a_banner_answer_is_logged(caplog):
+    import logging
+
+    app, src, server, runner, key, episode = _blocked_with_prompt()
+    try:
+        sig = binary_answer(CLAUDE_PROMPT, DEFAULT_PROFILES["claude"], SafetyConfig()).sig
+        assert src.answer_agent(key, episode, choice="approve", sig=sig) == "ok"
+        req = runner.sent[-1]["req"]
+        with caplog.at_level(logging.WARNING, logger="herdeck.deckapp.live"):
+            src._on_result(server.id, req, {"skipped": True, "message": "stale_choice"})
+        assert "banner answer refused by the bridge" in caplog.text
+        assert "stale_choice" in caplog.text
     finally:
         app.close()
 
