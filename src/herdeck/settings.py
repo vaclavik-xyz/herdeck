@@ -260,6 +260,10 @@ def _view_config(raw: dict | None) -> ViewConfig:
         view.project_icons = _project_icons(raw["project_icons"])
     if "show_profile_on_panel" in raw:
         view.show_profile_on_panel = bool(raw["show_profile_on_panel"])
+    if "collapse_idle" in raw:
+        if not isinstance(raw["collapse_idle"], bool):
+            raise ConfigError("view.collapse_idle must be true or false")
+        view.collapse_idle = raw["collapse_idle"]
     if "language" in raw:
         val = raw["language"]
         if val not in LANGUAGES:

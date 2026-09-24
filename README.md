@@ -620,6 +620,14 @@ running the deck; quote a repo name that contains a dot, e.g.
 SVG icons are rendered with resvg (bundled in the packaged app and the Elgato
 plugin). An SVG that references anything outside itself (a file path or URL in
 `href`/`url(...)`) is refused and shows the monogram.
+With many agents, set `[view].collapse_idle = true` to fold every idle agent
+into one `+N` tile at the end of the overview. Pressing it unfolds the idle
+agents (the deck jumps to the page with the first one) and a `hide` tile at the
+end folds them back; an unfolded list also folds back after a minute without a
+press. Pinned agents keep their tile. It applies to the D200, the desktop deck
+window and the web simulator; the Elgato plugin keeps one agent per key and
+ignores it.
+
 Agents are always grouped by attention priority. Blocked agents are ordered by
 how long they have been waiting, longest first. Set `[view].agent_order` to
 `"herdr"` to mirror Herdr's workspace and tab positions within the same state

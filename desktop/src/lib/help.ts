@@ -43,6 +43,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_primary: "Primary line tokens; unset = project (Herdr workspace/T3 title), $name = metadata, empty = off.",
       tile_secondary: "Second line from built-in fields or $name metadata tokens; unset = session title when available, otherwise tab then branch; empty = off.",
       language: "Language of the deck and this app: en (English) or cs (Czech). Applies after Apply.",
+      collapse_idle: "Fold idle agents into one '+N' tile at the end of the overview; press it to show them (off by default; not Elgato).",
     },
     theme: {
       working: "Tile color of an agent that is currently working (default green).",
@@ -142,6 +143,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_primary: "První řádek z tokenů; nevyplněno = project (workspace Herdr/projekt T3), $name = metadata, prázdné = vypnuto.",
       tile_secondary: "Druhý řádek z polí nebo tokenů $name; nevyplněno = název session, pokud existuje, jinak tab a branch; prázdné = vypnuto.",
       language: "Jazyk decku i této aplikace: en (angličtina) nebo cs (čeština). Projeví se po Použít.",
+      collapse_idle: "Sbalí nečinné agenty do jedné dlaždice „+N“ na konci přehledu; stiskem se ukážou (výchozí vypnuto; ne Elgato).",
     },
     theme: {
       working: "Barva dlaždice agenta, který právě pracuje (výchozí green).",

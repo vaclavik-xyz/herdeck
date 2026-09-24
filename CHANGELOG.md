@@ -18,6 +18,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   focuses an agent's pane, the deck machine brings that app forward with
   `open -a` (macOS only, off the event loop, failures only logged). Only useful
   when the herdr client runs on the deck machine.
+- Opt-in `[view].collapse_idle`: idle agents fold into one `+N` tile at the
+  end of the overview, so 15-20 agents fit without paging; pressing it
+  unfolds them and a `hide` tile folds them back (also after a minute idle).
+  Pinned agents keep their tile. D200, desktop deck window and web simulator;
+  the Elgato plugin ignores it. Editable under View.
 - The desktop app keeps a log when launched outside a terminal: its own and
   the sidecar runtime's stderr, timestamped, in
   `~/Library/Logs/herdeck/herdeck.log` (Linux: `~/.local/state/herdeck/`),

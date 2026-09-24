@@ -133,6 +133,9 @@ class ViewConfig:
     project_icons: dict[str, str] = field(default_factory=dict)
     # Language of RENDERED deck text (tiles, panel, websim) and the desktop UI.
     language: str = "en"
+    # Fold IDLE agents into one "+N idle" overview tile (press = unfold). The
+    # Elgato plugin keeps sticky per-key slots and ignores it.
+    collapse_idle: bool = False
 
 
 # Actions that need a second confirming press by default. Stop (act_force) is an

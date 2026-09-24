@@ -174,6 +174,16 @@ def test_hardware_rejects_invalid_types_and_ranges(tmp_path, local_text, error):
         resolve_profile(load_settings(config, local))
 
 
+def test_view_collapse_idle_parses_and_defaults_off(tmp_path):
+    config = write(tmp_path / "config.toml", '[deck]\ngrid = "5x3"\n')
+    assert resolve_profile(load_settings(config)).config.view.collapse_idle is False
+    config = write(tmp_path / "config.toml", '[view]\ncollapse_idle = true\n')
+    assert resolve_profile(load_settings(config)).config.view.collapse_idle is True
+    config = write(tmp_path / "config.toml", '[view]\ncollapse_idle = "yes"\n')
+    with pytest.raises(ConfigError, match="view.collapse_idle"):
+        resolve_profile(load_settings(config))
+
+
 def test_terminal_app_defaults_to_off(tmp_path):
     config = write(tmp_path / "config.toml", '[deck]\ngrid = "5x3"\n')
     local = write(tmp_path / "local.toml", "[local]\n")

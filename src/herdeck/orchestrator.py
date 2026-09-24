@@ -65,6 +65,22 @@ def _looks_like_deny(label: str) -> bool:
     return normalized == "no" or normalized.startswith(("no,", "no "))
 
 
+@dataclass(frozen=True)
+class IdleGroup:
+    """Overview placeholder for the idle agents folded by [view].collapse_idle.
+
+    Sits after the agents in the display list: ``expanded=False`` is the
+    "+N idle" tile (press = show them), ``expanded=True`` the "hide idle" tile
+    at the end of the unfolded list (press = fold them back)."""
+
+    count: int
+    expanded: bool = False
+
+
+# Slot-tracking identity of the group tile (it has no AgentKey).
+_IDLE_GROUP_SLOT = "idle-group"
+
+
 @dataclass
 class RenderState:
     tiles: list[TileView]
@@ -115,6 +131,8 @@ class Orchestrator:
         # The agent stays BLOCKED until the bridge round-trip lands, so without
         # this the triage loop would hand the same prompt straight back.
         self._answered: dict[AgentKey, float] = {}
+        # [view].collapse_idle: the idle agents are unfolded on the overview.
+        self._idle_expanded: bool = False
         self._pending_confirm: tuple[str, AgentKey] | None = None
         self._pending_confirm_at: float = 0.0
         self._sent_note: tuple[str, float] | None = None  # (agent label, sent at)
@@ -277,13 +295,20 @@ class Orchestrator:
         return expired
 
     def _expire_idle_view(self) -> bool:
-        """Leave an untouched drill/launcher/profile menu for the overview."""
-        if self._drill is None and not self._launcher and not self._profile_menu:
+        """Leave an untouched drill/launcher/profile menu (or an unfolded idle
+        list) for the plain overview."""
+        if (
+            self._drill is None
+            and not self._launcher
+            and not self._profile_menu
+            and not self._idle_expanded
+        ):
             return False
         if self._clock() - self._last_press_at < MENU_IDLE_TIMEOUT_S:
             return False
         self._drill = None
         self._triage = False
+        self._idle_expanded = False
         self._launcher = False
         self._profile_menu = False
         self._profile_menu_origin = "overview"
@@ -387,7 +412,7 @@ class Orchestrator:
         drop out immediately; new agents append at the end until the next
         adoption."""
         target = layout.order_agents(
-            (s for s in self._agents.values() if s.lifecycle == "active"),
+            self._overview_candidates(),
             self.config.overview_order,
             self.config.view.agent_order,
             blocked_since=self._blocked_since_map(),
@@ -414,12 +439,66 @@ class Orchestrator:
             display += [k for k in target_keys if k not in display]
         self._display_order = display
         placed = self._place_pins([by_key[k] for k in display])
-        keys = [agent.key if agent else None for agent in placed]
+        group = self._idle_group()
+        if group is not None:
+            placed = [*placed, group]
+        keys = [
+            _IDLE_GROUP_SLOT if isinstance(agent, IdleGroup) else agent.key if agent else None
+            for agent in placed
+        ]
         for i, key in enumerate(keys):
             if i < len(self._placed_order) and self._placed_order[i] != key:
                 self._slot_changed_at[i] = now
         self._placed_order = keys
         return placed
+
+    def _collapsed_idle(self) -> list[AgentKey]:
+        """Idle agents folded into the group tile (collapse_idle on, the list
+        not unfolded). Pinned agents keep their tile and are never folded."""
+        if not self.config.view.collapse_idle:
+            return []
+        pinned = set(self.pins.values())
+        return [
+            s.key
+            for s in self._agents.values()
+            if s.lifecycle == "active" and s.status is Status.IDLE and s.key not in pinned
+        ]
+
+    def _overview_candidates(self) -> list[AgentState]:
+        """Agents that get their own overview tile."""
+        folded = set() if self._idle_expanded else set(self._collapsed_idle())
+        return [
+            s for s in self._agents.values() if s.lifecycle == "active" and s.key not in folded
+        ]
+
+    def _idle_group(self) -> IdleGroup | None:
+        count = len(self._collapsed_idle())
+        if not count:
+            return None
+        return IdleGroup(count, expanded=self._idle_expanded)
+
+    def _toggle_idle_group(self) -> None:
+        """Unfold (or fold back) the idle agents and land on the page that
+        shows the result: the first idle agent, or the "+N idle" tile."""
+        self._idle_expanded = not self._idle_expanded
+        self._resettle()
+        ordered = self._ordered()
+        target = next(
+            (
+                pos
+                for pos, entry in enumerate(ordered)
+                if (
+                    isinstance(entry, IdleGroup)
+                    if not self._idle_expanded
+                    else entry is not None
+                    and not isinstance(entry, IdleGroup)
+                    and entry.status is Status.IDLE
+                    and entry.key not in self.pins.values()
+                )
+            ),
+            0,
+        )
+        self._page = target // self._agent_slots()
 
     def _place_pins(self, ordered):
         """Absolute overview positions, including holes for temporarily absent agents.
@@ -567,6 +646,28 @@ class Orchestrator:
                 tiles.append(
                     TileView(i, self._tr("new_agent"), "launcher", section="start_profiles")
                 )
+            elif i < len(shown) and isinstance(shown[i], IdleGroup):
+                group = shown[i]
+                if group.expanded:
+                    tiles.append(
+                        TileView(
+                            i,
+                            self._tr("idle_group_hide"),
+                            "grey",
+                            subtext=self._tr("idle_group_hide_sub"),
+                            section="view",
+                        )
+                    )
+                else:
+                    tiles.append(
+                        TileView(
+                            i,
+                            self._tr("idle_group", n=group.count),
+                            "grey",
+                            subtext=self._tr("idle_group_show"),
+                            section="view",
+                        )
+                    )
             elif i < len(shown) and shown[i] is not None:
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
@@ -759,7 +860,7 @@ class Orchestrator:
             display = [
                 s.key
                 for s in layout.order_agents(
-                    (s for s in self._agents.values() if s.lifecycle == "active"),
+                    self._overview_candidates(),
                     self.config.overview_order,
                     self.config.view.agent_order,
                     blocked_since=self._blocked_since_map(),
@@ -1089,6 +1190,9 @@ class Orchestrator:
             if self._clock() - self._slot_changed_at.get(pos, float("-inf")) < _SLOT_PRESS_GUARD_S:
                 return []
             selected = shown[index]
+            if isinstance(selected, IdleGroup):
+                self._toggle_idle_group()
+                return []
             if selected is None:
                 if pos in self.pins:
                     key = self.pins[pos]
@@ -1130,7 +1234,7 @@ class Orchestrator:
     def _overview_position(self, key: AgentKey) -> int:
         """Where ``key`` sits in the overview (pin position for its drill)."""
         for pos, agent in enumerate(self._ordered()):
-            if agent is not None and agent.key == key:
+            if isinstance(agent, AgentState) and agent.key == key:
                 return pos
         return 0
 
@@ -1286,6 +1390,7 @@ class Orchestrator:
         self._profile_menu_origin = "overview"
         self._drill = None
         self._triage = False
+        self._idle_expanded = False
         self._detection = ""
         self._page = 0
         self._pending_confirm = None
