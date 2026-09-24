@@ -51,6 +51,9 @@ class TelegramConfig:
     interactive: bool = False
     allowed_user_ids: list[int] = field(default_factory=list)
     prompt_max_chars: int = 1200
+    # Minutes (0 = off, always send): send only while the deck host's user has
+    # been idle this long and the deck was not pressed in that window.
+    only_when_away: int = 0
 
 
 @dataclass
@@ -322,6 +325,9 @@ def _parse_telegram_config(tg_raw: dict) -> TelegramConfig | None:
         ),
         prompt_max_chars=_parse_telegram_int(
             "prompt_max_chars", tg_raw.get("prompt_max_chars", 1200)
+        ),
+        only_when_away=notification_minutes(
+            tg_raw, "only_when_away", section="notifications.telegram"
         ),
     )
 

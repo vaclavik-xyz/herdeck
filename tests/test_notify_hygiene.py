@@ -281,3 +281,91 @@ def test_remind_after_validates_minutes():
         for bad in (-1, 1.5, "10", True, 2000):
             with pytest.raises(ConfigError, match="notifications.remind_after"):
                 parse({"remind_after": bad})
+
+
+# --- Telegram only when away ------------------------------------------------------
+
+
+def _tg_config(only_when_away):
+    from herdeck.config import TelegramConfig
+
+    config, server = notify_config()
+    config.notifications.backends = ["telegram"]
+    config.notifications.telegram = TelegramConfig(
+        token_env="TG", chat_id="1", only_when_away=only_when_away
+    )
+    return config
+
+
+def _tg_sink(config, away):
+    from herdeck.notify import NotificationFeed, deckapp_sink
+
+    sent = []
+    asked = []
+
+    def is_away(seconds):
+        asked.append(seconds)
+        return away
+
+    sink = deckapp_sink(
+        NotificationFeed(),
+        lambda: True,
+        config,
+        getenv=lambda name: "token",
+        telegram_factory=lambda *a: (lambda t, b, s, **kw: sent.append(t)),
+        away=is_away,
+    )
+    return sink, sent, asked
+
+
+def test_telegram_only_when_away_gates_on_the_away_predicate():
+    sink, sent, asked = _tg_sink(_tg_config(10), away=False)
+    sink("claude · needs input", "shop", "Glass")
+    assert sent == [] and asked == [600.0]
+
+    sink, sent, _asked = _tg_sink(_tg_config(10), away=True)
+    sink("claude · needs input", "shop", "Glass")
+    assert sent == ["claude · needs input"]
+
+
+def test_telegram_always_sends_when_the_gate_is_off():
+    sink, sent, asked = _tg_sink(_tg_config(0), away=False)
+    sink("claude · done", "shop", "Hero")
+    assert sent == ["claude · done"] and asked == []
+
+
+def test_away_needs_idle_input_and_no_recent_deck_press():
+    config, server = notify_config()
+    src, _notifier, probe = _live(config, server, idle=900.0)
+    assert src._user_away(600) is True
+    src._last_deck_press = __import__("time").monotonic()  # the deck was just pressed
+    assert src._user_away(600) is False
+    src._last_deck_press = None
+    probe.idle = 30.0
+    assert src._user_away(600) is False
+    probe.idle = None  # Linux: idle unknown -> only deck presses decide
+    assert src._user_away(600) is True
+
+
+def test_a_deck_press_counts_as_presence():
+    from tests.test_deckapp_live import make_live
+
+    app, src, _server, _runner = make_live()
+    try:
+        assert src._last_deck_press is None
+        app.press(0)
+        assert src._last_deck_press is not None
+    finally:
+        app.close()
+
+
+def test_only_when_away_validates_minutes():
+    import pytest
+
+    from herdeck.config import ConfigError, parse_notifications
+
+    tg = {"token_env": "T", "chat_id": "1"}
+    assert parse_notifications({"telegram": tg}).telegram.only_when_away == 0
+    assert parse_notifications({"telegram": {**tg, "only_when_away": 5}}).telegram.only_when_away == 5
+    with pytest.raises(ConfigError, match="notifications.telegram.only_when_away"):
+        parse_notifications({"telegram": {**tg, "only_when_away": -5}})

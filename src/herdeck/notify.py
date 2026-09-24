@@ -499,8 +499,12 @@ def deckapp_sink(
     telegram_factory=make_telegram_sink,
     macos_sink=_macos_sink,
     claim_age: Callable[[], float | None] | None = None,
+    away: Callable[[float], bool] | None = None,
 ) -> Callable[[str, str, bool | str], None]:
     """Deckapp runtime sink honoring ``[notifications.backends]``.
+
+    ``away(seconds)`` answers "has the user been away from the deck host that
+    long?" for ``[notifications.telegram].only_when_away``.
 
     The shell claim pipeline (feed + osascript fallback) serves the
     "macos" backend; telegram fires independently and always. When
@@ -532,7 +536,11 @@ def deckapp_sink(
         tg = n.telegram
         token = getenv(tg.token_env) if tg else None
         if tg and token and tg.chat_id:
-            sinks.append(telegram_factory(token, tg.chat_id, tg.message_thread_id))
+            tg_sink = telegram_factory(token, tg.chat_id, tg.message_thread_id)
+            away_min = getattr(tg, "only_when_away", 0)
+            if away_min > 0 and away is not None:
+                tg_sink = away_only_sink(tg_sink, lambda: away(away_min * 60.0))
+            sinks.append(tg_sink)
         else:
             log.warning(
                 "telegram notifications enabled but token/chat_id "
@@ -544,6 +552,20 @@ def deckapp_sink(
     if len(sinks) == 1:
         return sinks[0]
     return composite_sink(sinks)
+
+
+def away_only_sink(sink, is_away: Callable[[], bool]):
+    """Deliver through ``sink`` only while ``is_away()`` (evaluated on the
+    notify thread at send time — it may spawn ``ioreg``)."""
+
+    def gated(title: str, body: str, sound: bool | str, **kwargs) -> None:
+        if not is_away():
+            log.info("%s alert skipped (user at the deck host) title=%r", _sink_name(sink), title)
+            return
+        sink(title, body, sound, **kwargs)
+
+    gated._notify_name = _sink_name(sink)
+    return gated
 
 
 def composite_sink(

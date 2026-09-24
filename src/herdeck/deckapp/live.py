@@ -151,6 +151,9 @@ class LiveSource(StateSource):
         self._notify_schedule = notify_schedule or _thread_notify_schedule
         self._prompt_wait_s = prompt_wait_s
         self._idle_probe = idle_probe or IdleProbe()
+        # When the deck (a key, the triage hotkey, a banner drill) was last
+        # used; None = not since start. [notifications.telegram].only_when_away.
+        self._last_deck_press: float | None = None
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
@@ -164,7 +167,11 @@ class LiveSource(StateSource):
         if config.notifications.enabled:
             factory = notify_sink_factory or (
                 lambda feed, gate: deckapp_sink(
-                    feed, gate, self._config, claim_age=lambda: self._notify_claim_age()
+                    feed,
+                    gate,
+                    self._config,
+                    claim_age=lambda: self._notify_claim_age(),
+                    away=self._user_away,
                 )
             )
             self._notifier = Notifier(sink=factory(self._notify_feed, lambda: self._notify_gate()))
@@ -370,6 +377,7 @@ class LiveSource(StateSource):
         return "ok"
 
     def _drive(self, orch, step) -> list[Command]:
+        self._last_deck_press = time.monotonic()
         drilled_before = orch.drill_key()
         cmds = step()
         for key in _interaction_keys(orch, cmds):
@@ -666,6 +674,16 @@ class LiveSource(StateSource):
             return
         for key in keys:
             self._notify_feed.withdraw({"server_id": key.server_id, "pane_id": key.pane_id})
+
+    def _user_away(self, seconds: float) -> bool:
+        """Idle on the deck host (HIDIdleTime) AND no deck press for ``seconds``
+        (notify thread). An unknown idle time (Linux) leaves only the deck
+        press to decide."""
+        pressed = self._last_deck_press
+        if pressed is not None and time.monotonic() - pressed < seconds:
+            return False
+        idle = self._idle_probe.idle_seconds()
+        return idle is None or idle >= seconds
 
     def _user_present(self) -> bool:
         """The user touched this host recently (notify thread: may run ioreg)."""

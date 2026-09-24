@@ -160,6 +160,7 @@
     interactive: boolean;
     allowed_user_ids: number[] | string;
     prompt_max_chars: number;
+    only_when_away: number;
   } => {
     const v = getAt(payload, "base", "notifications", "telegram");
     const t = v != null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -174,6 +175,9 @@
       prompt_max_chars: typeof t.prompt_max_chars === "number"
         ? t.prompt_max_chars
         : TELEGRAM_DEFAULTS.prompt_max_chars as number,
+      only_when_away: typeof t.only_when_away === "number"
+        ? t.only_when_away
+        : TELEGRAM_DEFAULTS.only_when_away as number,
     };
   })());
 
@@ -453,6 +457,9 @@
     <OverrideField label="prompt_max_chars" help={HELP.prompt_max_chars} state={tgFieldState("prompt_max_chars")} inheritedDisplay={tgInheritedDisplay("prompt_max_chars")} onstate={(s) => setTgFieldState("prompt_max_chars", s)}>
       <NumberField label="" int value={tgNumber("prompt_max_chars")} onchange={(v) => setTgScalar("prompt_max_chars", v)} />
     </OverrideField>
+    <OverrideField label="only_when_away" help={HELP.only_when_away} state={tgFieldState("only_when_away")} inheritedDisplay={tgInheritedDisplay("only_when_away")} onstate={(s) => setTgFieldState("only_when_away", s)}>
+      <NumberField label="" int min={0} max={1440} value={tgNumber("only_when_away")} onchange={(v) => setTgScalar("only_when_away", v ?? 0)} />
+    </OverrideField>
   </FieldGroup>
 {:else}
   <BooleanField label="enabled" help={HELP.enabled} value={enabled} onchange={(v) => set("enabled", v)} />
@@ -477,6 +484,7 @@
     <BooleanField label="interactive" help={HELP.interactive} value={telegram.interactive} onchange={(v) => setTelegram("interactive", v)} />
     <TextField label="allowed_user_ids" help={HELP.allowed_user_ids} value={integerListText(telegram.allowed_user_ids)} oninput={setBaseAllowedUsers} />
     <NumberField label="prompt_max_chars" help={HELP.prompt_max_chars} int value={telegram.prompt_max_chars} onchange={(v) => setTelegram("prompt_max_chars", v)} />
+    <NumberField label="only_when_away" help={HELP.only_when_away} int min={0} max={1440} value={telegram.only_when_away} onchange={(v) => setTelegram("only_when_away", v ?? 0)} />
   </FieldGroup>
 {/if}
 

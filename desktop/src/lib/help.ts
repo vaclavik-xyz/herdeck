@@ -81,6 +81,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       interactive: "Allow Telegram users to approve, deny, or stop blocked agents from the notification.",
       allowed_user_ids: "Comma-separated Telegram user ids allowed to use interactive controls; keep this allow-list strict.",
       prompt_max_chars: "Maximum blocked-prompt characters included in an interactive Telegram message (default 1200).",
+      only_when_away: "Minutes: send Telegram alerts only after this long without input on this Mac or deck presses; 0 = always.",
     },
     safety: {
       approve_always: "Whether a blocked agent also offers an Approve! button (approve and don't ask again); turn off to hide it.",
@@ -187,6 +188,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       interactive: "Povolí uživatelům Telegramu schválit, zamítnout nebo zastavit blokovaného agenta přímo z notifikace.",
       allowed_user_ids: "Čárkami oddělená Telegram user ID oprávněná používat interaktivní ovládání; seznam držte striktní.",
       prompt_max_chars: "Maximum znaků blokujícího promptu vložených do interaktivní Telegram zprávy (výchozí 1200).",
+      only_when_away: "Minuty: Telegram upozorní jen po takové době bez vstupu na tomto Macu i bez stisku decku; 0 = vždy.",
     },
     safety: {
       approve_always: "Zda se u blokovaného agenta nabízí i tlačítko Approve! (schválit a příště se neptat); vypnutím ho skryjete.",
