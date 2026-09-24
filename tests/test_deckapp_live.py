@@ -1763,3 +1763,67 @@ def test_build_live_source_wires_project_icons_into_the_shared_store():
     finally:
         src.close()
         default_store().clear()
+
+
+# --- triage (NEEDS YOU panel press / desktop "next blocked" hotkey) ----------
+
+
+def _two_blocked_with_prereads(src, server, runner):
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "pa", Status.BLOCKED)])
+    time.sleep(0.002)  # pb blocks strictly later than pa
+    src._on_event(server.id, agent(server.id, "pb", Status.BLOCKED))
+    for msg in _reads(runner):
+        src._on_result(msg["req"], {"text": f"1. Approve {msg['pane_id']}", "pane_id": msg["pane_id"]})
+    runner.sent.clear()
+
+
+def test_triage_opens_longest_blocked_drill_and_seeds_its_prompt():
+    app, src, server, runner = make_live()
+    _two_blocked_with_prereads(src, server, runner)
+    assert app.triage() is True
+    assert [(m["type"], m["pane_id"]) for m in runner.sent] == [("focus", "pa"), ("read", "pa")]
+    assert app._orch._detection == "1. Approve pa"
+
+
+def test_triage_answer_continues_into_next_drill_with_seeded_prompt():
+    app, src, server, runner = make_live()
+    _two_blocked_with_prereads(src, server, runner)
+    app.press(13)  # the NEEDS YOU panel press starts the loop
+    runner.sent.clear()
+    app.press(0)  # answer pa -> straight into pb's drill
+    assert [(m["type"], m["pane_id"]) for m in runner.sent] == [
+        ("act", "pa"),
+        ("focus", "pb"),
+        ("read", "pb"),
+    ]
+    # drill-to-drill still seeds the next prompt: no empty-drill flash
+    assert app._orch._detection == "1. Approve pb"
+
+
+def test_http_triage_requires_token():
+    import urllib.error
+
+    import pytest
+
+    config, server = live_config()
+    src = LiveSource(config, server)
+    src.attach_runner(FakeRunner())
+    app = DeckApp(src, serve=True, icon_provider=StubIcons())
+    try:
+        url = f"http://{app.host}:{app.port}/triage"
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(urllib.request.Request(url, method="POST"), timeout=2)
+        assert exc.value.code == 403
+        req = urllib.request.Request(url, method="POST", headers={"X-Herdeck-Token": app.token})
+        with urllib.request.urlopen(req, timeout=2) as r:
+            assert r.status == 204
+    finally:
+        app.close()
+
+
+def test_mock_source_has_no_triage():
+    from herdeck.deckapp.mock import MockSource
+
+    app = DeckApp(MockSource(), serve=False, icon_provider=StubIcons())
+    assert app.triage() is False

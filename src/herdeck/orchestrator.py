@@ -107,6 +107,14 @@ class Orchestrator:
         # When the current drill was opened: blocks that start later are
         # counted on the drill panel ("▲ 2 more blocked").
         self._drill_since: float = 0.0
+        # True while the open drill belongs to the triage loop (NEEDS YOU panel
+        # press / desktop hotkey): answering it moves straight on to the next
+        # longest-blocked agent instead of back to the overview.
+        self._triage: bool = False
+        # Blocked episodes already answered from a drill ({key: episode start}).
+        # The agent stays BLOCKED until the bridge round-trip lands, so without
+        # this the triage loop would hand the same prompt straight back.
+        self._answered: dict[AgentKey, float] = {}
         self._pending_confirm: tuple[str, AgentKey] | None = None
         self._pending_confirm_at: float = 0.0
         self._sent_note: tuple[str, float] | None = None  # (agent label, sent at)
@@ -275,6 +283,7 @@ class Orchestrator:
         if self._clock() - self._last_press_at < MENU_IDLE_TIMEOUT_S:
             return False
         self._drill = None
+        self._triage = False
         self._launcher = False
         self._profile_menu = False
         self._profile_menu_origin = "overview"
@@ -469,17 +478,48 @@ class Orchestrator:
         if agent is not None:
             self._sent_note = (agent.label, self._clock())
 
-    def _blocked_spotlight(self) -> tuple[str, str] | None:
-        """The longest-waiting BLOCKED agent as (label, elapsed), or None."""
-        blocked = [s for s in self._agents.values() if s.status is Status.BLOCKED]
-        if not blocked:
-            return None
+    def _blocked_queue(self) -> list[AgentKey]:
+        """Active BLOCKED agents, longest-waiting first (the triage order).
+
+        The spotlight names the head of this queue and a spotlight press opens
+        it, so both must come from the same ordering."""
 
         def started(s):
             rec = self._since.get(s.key)
             return rec[1] if rec else 0.0
 
-        oldest = min(blocked, key=started)
+        blocked = [
+            s
+            for s in self._agents.values()
+            if s.status is Status.BLOCKED and s.lifecycle == "active"
+        ]
+        return [s.key for s in sorted(blocked, key=lambda s: (started(s), s.key.server_id, s.key.pane_id))]
+
+    def _triage_queue(self) -> list[AgentKey]:
+        """The blocked queue minus episodes already answered from a drill."""
+        live = {}
+        for key, at in self._answered.items():
+            rec = self._since.get(key)
+            if rec is not None and rec[0] is Status.BLOCKED and rec[1] == at:
+                live[key] = at
+        self._answered = live  # a new status (or episode) forgets the answer
+        return [key for key in self._blocked_queue() if key not in live]
+
+    def _note_answered(self, key: AgentKey) -> None:
+        rec = self._since.get(key)
+        if rec is not None and rec[0] is Status.BLOCKED:
+            self._answered[key] = rec[1]
+
+    def _blocked_since_map(self) -> dict[AgentKey, float]:
+        """When each currently BLOCKED agent entered BLOCKED (overview sort)."""
+        return {key: at for key, (status, at) in self._since.items() if status is Status.BLOCKED}
+
+    def _blocked_spotlight(self) -> tuple[str, str] | None:
+        """The longest-waiting BLOCKED agent as (label, elapsed), or None."""
+        queue = self._blocked_queue()
+        if not queue:
+            return None
+        oldest = self._agents[queue[0]]
         return (oldest.label, self._elapsed_text(oldest.key))
 
     def render(self) -> RenderState:
@@ -930,6 +970,14 @@ class Orchestrator:
                     [self._tr("others_blocked", n=others), *panel.lines],
                     panel.color,
                 )
+            if self._triage and self._sent_note is not None:
+                # The triage loop moved straight on to the next agent: confirm
+                # the previous answer went out, as the overview would have.
+                label, at = self._sent_note
+                if self._clock() - at <= _SENT_NOTE_TTL_S and agent.label != label:
+                    panel = PanelView(
+                        panel.title, [self._tr("sent", label=label), *panel.lines], panel.color
+                    )
         return RenderState(tiles, panel)
 
     def _blocked_since_drill(self) -> int:
@@ -975,6 +1023,13 @@ class Orchestrator:
 
     def _press_overview(self, index: int) -> list[Command]:
         if index in self._panel_indices():
+            if not self._all_down() and self._blocked_queue():
+                # The panel shows the NEEDS YOU spotlight: its press starts the
+                # triage loop at the agent that has waited longest. (Agents just
+                # answered are skipped; if that is all of them the press waits
+                # for the bridge rather than paging under the spotlight.)
+                self._usage_detail_until = 0.0
+                return self.triage()
             _, pages = layout.page(self._ordered(), self._page, self._agent_slots())
             detail_can_show = (
                 self._usage and not self._all_down() and self._blocked_spotlight() is None
@@ -1035,32 +1090,82 @@ class Orchestrator:
                     key = self.pins[pos]
                     return [Command("toggle_pin", key.server_id, key.pane_id, payload={"position": pos})]
                 return []
-            self._drill_position = pos
-            key = selected.key
-            self._drill = key
-            self._drill_since = self._clock()
-            self._detection = ""
-            self._pending_confirm = None
-            self._resettle()  # returning from drill re-sorts anyway
-            if selected.backend == "t3":
-                self._detection = selected.preview
-                return [Command("read", key.server_id, key.pane_id)]
-            # Focus the agent in the on-screen herdr session AND read its prompt.
-            return [
-                Command(
-                    "focus",
-                    key.server_id,
-                    key.pane_id,
-                    terminal_id=selected.terminal_id or None,
-                ),
-                Command(
-                    "read",
-                    key.server_id,
-                    key.pane_id,
-                    source="detection",
-                    terminal_id=selected.terminal_id or None,
-                ),
-            ]
+            self._triage = False
+            return self._open_drill(selected, pos)
+        return []
+
+    def _open_drill(self, selected: AgentState, pos: int) -> list[Command]:
+        """Enter the drill view for ``selected`` (overview position ``pos``)."""
+        self._drill_position = pos
+        key = selected.key
+        self._drill = key
+        self._drill_since = self._clock()
+        self._detection = ""
+        self._pending_confirm = None
+        self._resettle()  # returning from drill re-sorts anyway
+        if selected.backend == "t3":
+            self._detection = selected.preview
+            return [Command("read", key.server_id, key.pane_id)]
+        # Focus the agent in the on-screen herdr session AND read its prompt.
+        return [
+            Command(
+                "focus",
+                key.server_id,
+                key.pane_id,
+                terminal_id=selected.terminal_id or None,
+            ),
+            Command(
+                "read",
+                key.server_id,
+                key.pane_id,
+                source="detection",
+                terminal_id=selected.terminal_id or None,
+            ),
+        ]
+
+    def _overview_position(self, key: AgentKey) -> int:
+        """Where ``key`` sits in the overview (pin position for its drill)."""
+        for pos, agent in enumerate(self._ordered()):
+            if agent is not None and agent.key == key:
+                return pos
+        return 0
+
+    def triage(self) -> list[Command]:
+        """Open the drill of the agent that has been blocked longest.
+
+        Entry point of the triage loop — the NEEDS YOU panel press and the
+        desktop's "next blocked agent" hotkey. Repeating it while a triage
+        drill is open jumps to the next blocked agent (wrapping around).
+        Answering inside a triage drill continues with the next one (see
+        _press_drill). No blocked agent -> nothing changes."""
+        self._last_press_at = self._clock()
+        queue = self._triage_queue()
+        if not queue:
+            return []
+        target = queue[0]
+        if self._drill is not None and self._drill in queue and len(queue) > 1:
+            target = queue[(queue.index(self._drill) + 1) % len(queue)]
+        self._launcher = False
+        self._profile_menu = False
+        self._profile_menu_origin = "overview"
+        self._usage_detail_until = 0.0
+        self._triage = True
+        self._drill = None  # position lookup below must read the overview order
+        return self._open_drill(self._agents[target], self._overview_position(target))
+
+    def _after_drill_action(self, acted: AgentKey) -> list[Command]:
+        """Leave a drill after an action: in triage, straight into the next
+        longest-blocked agent's drill; otherwise back to the overview. The
+        agent just answered is still BLOCKED until the bridge round-trip
+        lands, so it is skipped explicitly."""
+        self._drill = None
+        self._note_answered(acted)
+        if self._triage:
+            queue = self._triage_queue()
+            if queue:
+                return self._open_drill(self._agents[queue[0]], self._overview_position(queue[0]))
+        self._triage = False
+        self._resettle()
         return []
 
     def _press_launcher(self, index: int) -> list[Command]:
@@ -1107,11 +1212,13 @@ class Orchestrator:
         actions, stop_i, back_i = self._drill_layout()
         if index == back_i:  # Back to overview
             self._drill = None
+            self._triage = False
             self._pending_confirm = None
             self._resettle()
             return []
         if key not in self._agents:
             self._drill = None
+            self._triage = False
             self._pending_confirm = None
             self._resettle()
             return []
@@ -1144,9 +1251,7 @@ class Orchestrator:
                 cmd = Command("backend_action", key.server_id, key.pane_id,
                               action="stop", decision_revision=target.backend_revision)
             self._note_sent(key)
-            self._drill = None  # return to the fleet overview
-            self._resettle()
-            return [cmd]
+            return [cmd, *self._after_drill_action(key)]
         if index < len(actions):  # send option number or macro text
             action_id = actions[index].get("id")
             confirm_key = actions[index].get("confirm_key") or f"idx:{index}"
@@ -1158,9 +1263,7 @@ class Orchestrator:
             self._pending_confirm = None
             cmd = actions[index]["make"](key)
             self._note_sent(key)
-            self._drill = None  # return to the fleet overview
-            self._resettle()
-            return [cmd]
+            return [cmd, *self._after_drill_action(key)]
         return []  # blank tile
 
     def update_config(self, config: Config) -> None:
@@ -1178,6 +1281,7 @@ class Orchestrator:
         self._profile_menu = False
         self._profile_menu_origin = "overview"
         self._drill = None
+        self._triage = False
         self._detection = ""
         self._page = 0
         self._pending_confirm = None
@@ -1193,6 +1297,7 @@ class Orchestrator:
         }
         if self._drill is not None and self._drill.server_id in server_ids:
             self._drill = None
+            self._triage = False
             self._detection = ""
             self._pending_confirm = None
         self._resettle()

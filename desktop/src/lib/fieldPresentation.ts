@@ -22,7 +22,7 @@ const LABELS: Record<Lang, Record<string, string>> = {
     codex_path: "Codex executable", claude_cache_path: "Claude usage cache", codexbar_path: "CodexBar executable",
     approve: "Approve keys", deny: "Deny keys", stop: "Stop keys", keys: "Key mappings",
     extends: "Inherits from", servers: "Remote servers", deck_always_on_top: "Deck always on top",
-    toggle_deck: "Show or hide shortcut",
+    toggle_deck: "Show or hide shortcut", next_blocked: "Next blocked agent shortcut",
   },
   cs: {
     id: "Název serveru", url: "Adresa bridge", token_env: "Reference tokenu",
@@ -46,7 +46,7 @@ const LABELS: Record<Lang, Record<string, string>> = {
     codexbar_path: "Spustitelný soubor CodexBar", approve: "Klávesy pro schválení",
     deny: "Klávesy pro zamítnutí", stop: "Klávesy pro zastavení", keys: "Mapování kláves",
     extends: "Dědí z profilu", servers: "Vzdálené servery", deck_always_on_top: "Deck vždy navrchu",
-    toggle_deck: "Zkratka pro zobrazení",
+    toggle_deck: "Zkratka pro zobrazení", next_blocked: "Zkratka na dalšího blokovaného",
   },
 };
 

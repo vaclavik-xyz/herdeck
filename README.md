@@ -571,7 +571,16 @@ orchestrator takes the real button count from the driver: agent tiles fill the
 slots up to the reserved **+ New** launcher tile. With more agents than tiles,
 pressing the status window pages through them (the panel shows `· 1/2`), and a
 newly blocked agent automatically pulls the overview back to the first page
-where it sorts to the front. State is encoded by color: working = green,
+where it sorts to the front.
+
+**Triage.** While an agent is blocked the status window shows `▲ needs you`
+with the agent that has waited longest. Pressing it opens that agent's prompt;
+once you answer (or Stop it), the deck goes straight to the next-longest
+blocked agent, and back to the overview when none is left. **Back** leaves the
+loop at any time. While the spotlight is up the status window starts triage
+instead of paging. In the desktop app, `[hotkeys].next_blocked` (for example
+`"CmdOrCtrl+Shift+B"`, off by default) is a global shortcut that shows the deck
+and does the same; pressing it again skips to the next blocked agent. State is encoded by color: working = green,
 idle = blue, blocked = amber, done = cyan, waiting = violet, error/disconnected
 = red. **Waiting** is derived from a pane held by
 [herdwatch](https://github.com/vaclavik-xyz/herdwatch) (or any source using

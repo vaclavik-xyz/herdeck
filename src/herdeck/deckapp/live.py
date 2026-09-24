@@ -203,15 +203,26 @@ class LiveSource(StateSource):
         orch = self._orch
         if orch is None:
             return []
-        was_drilling = orch.is_drilling()
-        cmds = orch.on_press(index)
+        return self._drive(orch, lambda: orch.on_press(index))
+
+    def triage(self) -> list[Command]:
+        """Open the longest-blocked agent's drill (desktop "next blocked" hotkey)."""
+        orch = self._orch
+        if orch is None:
+            return []
+        return self._drive(orch, orch.triage)
+
+    def _drive(self, orch, step) -> list[Command]:
+        drilled_before = orch.drill_key()
+        cmds = step()
         for key in _interaction_keys(orch, cmds):
             self._notify_throttle.note_interaction(key)
-        # If this press just opened a drill into a blocked pane whose prompt we
+        # If this step just opened a drill into a blocked pane whose prompt we
         # pre-read, seed the detection so the very first render shows the options —
         # no wait for the read round-trip, no empty-drill flash. The drill's own
         # read (in cmds) still fires as a refresh, correcting any in-place change.
-        if not was_drilling:
+        # A triage step moves drill-to-drill, so compare keys, not just "drilling".
+        if orch.drill_key() != drilled_before:
             self._seed_detection_from_preread(orch)
         local_commands: list[Command] = []
         for cmd in cmds:

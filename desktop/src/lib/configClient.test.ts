@@ -41,6 +41,8 @@ import {
   clearProfileServers,
   DEFAULT_TOGGLE_DECK_HOTKEY,
   toggleDeckHotkey,
+  nextBlockedHotkey,
+  setNextBlockedHotkey,
   setToggleDeckHotkey,
   deckAlwaysOnTop,
   setDeckAlwaysOnTop,
@@ -961,6 +963,20 @@ describe("toggle-deck hotkey helpers", () => {
     const p = setToggleDeckHotkey(emptyPayload(), "Ctrl+Shift+K");
     expect(toggleDeckHotkey(p)).toBe("Ctrl+Shift+K");
     expect((p.base.hotkeys as Record<string, unknown>).toggle_deck).toBe("Ctrl+Shift+K");
+  });
+});
+
+describe("next-blocked hotkey helpers", () => {
+  it("is opt-in: an absent key reads as empty (no hotkey)", () => {
+    expect(nextBlockedHotkey(emptyPayload())).toBe("");
+  });
+
+  it("round-trips an accelerator through base.hotkeys.next_blocked", () => {
+    const p = setNextBlockedHotkey(emptyPayload(), "CmdOrCtrl+Shift+B");
+    expect(nextBlockedHotkey(p)).toBe("CmdOrCtrl+Shift+B");
+    expect((p.base.hotkeys as Record<string, unknown>).next_blocked).toBe("CmdOrCtrl+Shift+B");
+    // the deck toggle keeps its own default alongside
+    expect(toggleDeckHotkey(p)).toBe(DEFAULT_TOGGLE_DECK_HOTKEY);
   });
 });
 

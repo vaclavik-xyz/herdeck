@@ -751,6 +751,16 @@ pub fn send_press(
     )
 }
 
+/// The runtime route behind the "next blocked agent" hotkey.
+pub const TRIAGE_PATH: &str = "/triage";
+
+/// Proxy `POST /triage` (open the longest-blocked agent's drill) with the token
+/// in the `X-Herdeck-Token` header, returning the HTTP status code (204 ok,
+/// 403 bad token, 404 a source without drills, e.g. the demo mock).
+pub fn send_triage(host: &str, port: u16, token: &str, timeout: Duration) -> Result<u16, String> {
+    http_post(host, port, TRIAGE_PATH, ("X-Herdeck-Token", token), timeout)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -843,6 +853,26 @@ mod tests {
         assert!(req.contains("X-Herdeck-Token: tok\r\n"));
         assert!(req.contains("Content-Length: 0\r\n"));
         assert!(req.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn send_triage_posts_the_token_to_the_triage_route() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let n = sock.read(&mut buf).unwrap();
+            sock.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+        let code = send_triage("127.0.0.1", port, "tok", Duration::from_secs(2)).unwrap();
+        let req = server.join().unwrap();
+        assert_eq!(code, 204);
+        assert!(req.starts_with("POST /triage HTTP/1.1\r\n"));
+        assert!(req.contains("X-Herdeck-Token: tok\r\n"));
     }
 
     #[test]

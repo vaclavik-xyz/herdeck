@@ -7,6 +7,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Triage loop: pressing the `▲ needs you` status panel opens the drill of the
+  agent blocked longest; answering (or stopping) it moves straight on to the
+  next-longest blocked agent, and back to the overview when none is left.
+  Back still returns to the overview. The desktop app gets an opt-in global
+  shortcut, `[hotkeys].next_blocked` (no default), that shows the deck and
+  does the same through the runtime's new `POST /triage` route; pressing it
+  again skips to the next blocked agent.
 - The desktop app keeps a log when launched outside a terminal: its own and
   the sidecar runtime's stderr, timestamped, in
   `~/Library/Logs/herdeck/herdeck.log` (Linux: `~/.local/state/herdeck/`),

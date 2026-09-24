@@ -103,6 +103,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     desktop: {
       deck_always_on_top: "Keeps the floating deck window above other windows; applied immediately, no restart.",
       toggle_deck: "Global shortcut to show/hide the deck; default Cmd/Ctrl+Shift+D, empty field = disabled.",
+      next_blocked: "Global shortcut that shows the deck and opens the longest-blocked agent (again = next one); empty = off (default).",
     },
   },
   cs: {
@@ -200,6 +201,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     desktop: {
       deck_always_on_top: "Drží plovoucí okno decku nad ostatními okny; použije se hned, bez restartu.",
       toggle_deck: "Globální zkratka pro zobrazení/skrytí decku; výchozí Cmd/Ctrl+Shift+D, prázdné pole = vypnuto.",
+      next_blocked: "Globální zkratka: ukáže deck a otevře nejdéle blokovaného agenta (znovu = další); prázdné = vypnuto (výchozí).",
     },
   },
 };
