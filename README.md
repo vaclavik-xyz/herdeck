@@ -413,6 +413,44 @@ bridge answers `{"type": "result", "req": "<id>", "data": {"herdeck_version",
 older than 0.8.1 answers with an `error` frame instead. `managed` says whether
 the bridge may update itself (below).
 
+### Lifecycle events (capability `events`)
+
+The bridge is the single source of truth for "an agent just blocked / just
+finished", so every runtime attached to it (several decks, the web cockpit,
+Telegram) agrees, and a runtime that was asleep catches up. Details live in
+`src/herdeck/events.py`; the wire shapes:
+
+- **Episodes.** Each BLOCKED and DONE stretch of a pane is an episode. Its
+  `episode_id` hashes pane id, terminal id, kind and `status_since_ms`, so it
+  survives a bridge restart. Every snapshot pane carries `episode_id` (`""`
+  outside an episode).
+- **Subscribe** by adding `events` to a `list`:
+  `{"type": "list", "events": {"after": <seq>|null, "epoch": "<epoch>"|null,
+  "client": "deck@studio"}}`. A client that never asks gets no event frames
+  (older runtimes keep working unchanged).
+- **Event frames**: `{"type": "event", "server_id", "epoch", "seq", "kind",
+  "episode_id", "pane_id", "terminal_id", "at_ms", ...}` with `kind` one of
+  `blocked` (plus `prompt`, `prompt_revision`, `prompt_truncated`), `done`,
+  `unblocked`, `cleared` (a done episode ended) and `answered` (plus `by`, the
+  answering client's label, and `via`). The bridge pre-reads the blocked
+  prompt itself (sanitized, at most 8000 characters, the tail kept), sends
+  `blocked` once it has it (or after 2 s without), re-reads it every 5 s and
+  sends `blocked` again when its revision changes within the episode.
+- **Replay.** The last 30 minutes (at most 500 events) stay in memory. After
+  the replayed frames (`"replay": true`) the bridge sends `{"type":
+  "event_sync", "server_id", "epoch", "seq", "gap"}`. The same `epoch` and a
+  `seq` still in the ring give exactly the missed events. A restarted bridge
+  (new epoch) or an evicted `seq` gives everything still known with `gap:
+  true`; the client dedupes by `episode_id`. `after: null` gives only the open
+  episodes, as a fresh client's baseline.
+- **Answers.** A guarded `act`, `send_text` or `choose_if_blocked` that goes
+  through to a pane with an open blocked episode marks it answered and
+  broadcasts `answered`. An answer that names `episode_id` (and optionally the
+  `prompt_revision` it answers) is refused with `{"skipped": true, "message":
+  "stale"}` when that episode is over, is being answered right now, or was
+  already answered, unless the prompt has changed since. Answers without
+  `episode_id` (older runtimes) are never refused.
+
 ### Bridge self-update
 
 A bridge installed as a **managed** service (`herdeck-service install bridge
