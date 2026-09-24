@@ -11,7 +11,7 @@
   import { visibilityGatedLoop } from "../pollGate";
   import {
     fetchMaintenance, restartDeck, powerCycleDeck, runBridgeUpdate, runtimeService, openLog,
-    runtimeOrigin, versionRows,
+    runtimeOrigin, versionRows, bridgeOffer, managedBridgeCommand,
     type BridgeUpdateView, type MaintenanceStatus, type ServiceAction,
   } from "../maintenanceClient";
   import {
@@ -228,20 +228,31 @@
       {#each status.servers as server (server.id)}
         {@const upd = updates[server.id]}
         {@const text = upd?.view ? bridgeUpdateText(upd.view, lm) : null}
+        {@const offer = bridgeOffer(server, status.version)}
         <div class="bridge" data-server={server.id}>
           <div class="bridge-head">
             <strong>{server.id}</strong>
             <span class:ok={server.connected === true}>{server.connected ? lm.connected : lm.disconnected}</span>
             <span class:flag={server.bridgeVersion != null && status.version != null && server.bridgeVersion !== status.version}>{server.bridgeVersion ?? lm.unknown}</span>
             <span class="dim">{server.managed === true ? lm.managed : server.managed === false ? lm.not_managed : lm.managed_unknown}</span>
-            <button
-              type="button"
-              data-action="update-bridge"
-              disabled={upd?.running === true || server.connected !== true}
-              title={fmt(lm.update_bridge_title, { id: server.id, version: status.version ?? "?" })}
-              onclick={() => updateBridge(server.id)}
-            >{upd?.running ? lm.updating : lm.update_bridge}</button>
+            {#if offer === "update" || upd?.running}
+              <button
+                type="button"
+                data-action="update-bridge"
+                disabled={upd?.running === true || server.connected !== true}
+                title={fmt(lm.update_bridge_title, { id: server.id, version: status.version ?? "?" })}
+                onclick={() => updateBridge(server.id)}
+              >{upd?.running ? lm.updating : lm.update_bridge}</button>
+            {/if}
           </div>
+          {#if !upd?.view}
+            {#if offer === "install_managed"}
+              <p class="hint" data-offer="install_managed">{lm.upd_not_managed}</p>
+              {@render commandBox(managedBridgeCommand(status.version))}
+            {:else if offer === "unknown" || offer === "unsupported"}
+              <p class="hint" data-offer={offer}>{offer === "unknown" ? lm.offer_unknown : lm.offer_unsupported}</p>
+            {/if}
+          {/if}
           {#if server.lastError && server.connected !== true}<p class="hint">{fmt(lm.last_error, { error: server.lastError })}</p>{/if}
           {#if upd?.view && upd.view.progress.length > 0}
             <ol class="progress">

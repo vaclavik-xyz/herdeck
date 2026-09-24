@@ -2,7 +2,7 @@
 // the pure outcome → text mapping both share (every runtime outcome code of
 // deckapp/maintenance.py and bridge_update.py has its own sentence).
 import { defineMessages, fmt } from "./i18n.svelte";
-import { MANAGED_BRIDGE_COMMAND, type BridgeUpdateView, type D200Status, type DeckOutcome, type RuntimeOrigin } from "./maintenanceClient";
+import { managedBridgeCommand, type BridgeUpdateView, type D200Status, type DeckOutcome, type RuntimeOrigin } from "./maintenanceClient";
 
 export const MAINTENANCE_MESSAGES = defineMessages({
   en: {
@@ -100,6 +100,10 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     upd_disconnected: "The server is not connected, so nothing was sent.",
     upd_newer: "The bridge is newer than this runtime — update the app instead.",
     upd_current: "The bridge already runs this version.",
+    upd_downgrade: "The bridge refused to go back to an older version.",
+    offer_unknown: "Install type unknown (an older bridge, or T3) — update it by hand.",
+    offer_unsupported: "This bridge predates self-update; update it by hand once.",
+    offer_none: "Up to date.",
     upd_http: "The runtime refused the update: {message}",
     upd_unreachable: "The runtime does not answer: {message}",
     upd_other: "{code}: {message}",
@@ -196,6 +200,10 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     upd_disconnected: "Server není připojený, nic se neodeslalo.",
     upd_newer: "Bridge je novější než tento runtime — aktualizuj raději aplikaci.",
     upd_current: "Bridge už tuto verzi má.",
+    upd_downgrade: "Bridge odmítl přejít na starší verzi.",
+    offer_unknown: "Typ instalace neznámý (starší bridge nebo T3) — aktualizuj ho ručně.",
+    offer_unsupported: "Tento bridge je starší než samoaktualizace; jednou ho aktualizuj ručně.",
+    offer_none: "Aktuální.",
     upd_http: "Runtime aktualizaci odmítl: {message}",
     upd_unreachable: "Runtime neodpovídá: {message}",
     upd_other: "{code}: {message}",
@@ -243,7 +251,8 @@ export function bridgeUpdateText(v: BridgeUpdateView, m: MaintenanceMessages): {
   switch (v.code) {
     case "updated": return plain(fmt(m.upd_updated, { message }));
     case "pending": return plain(fmt(m.upd_pending, { message }));
-    case "not_managed": return { text: m.upd_not_managed, command: MANAGED_BRIDGE_COMMAND };
+    case "not_managed": return { text: m.upd_not_managed, command: managedBridgeCommand(v.target) };
+    case "downgrade": return plain(m.upd_downgrade);
     case "readonly": return plain(m.upd_readonly);
     case "failed": return plain(fmt(m.upd_failed, { message }));
     case "busy": return plain(m.upd_busy);

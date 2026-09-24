@@ -36,7 +36,11 @@ export interface D200Status {
 
 export interface ServerStatus {
   id: string;
+  /** true = its install may update itself, false = not a managed install,
+   *  null = unknown (an older bridge, T3, or not asked yet). */
   managed: boolean | null;
+  /** The bridge understands the `update` message. */
+  selfUpdate: boolean;
   connected: boolean | null;
   bridgeVersion: string | null;
   protocolSupported: boolean | null;
@@ -125,6 +129,7 @@ export function parseMaintenance(raw: unknown): MaintenanceStatus | null {
       return {
         id,
         managed: bool(s.managed),
+        selfUpdate: s.self_update === true,
         connected: bool(s.connected),
         bridgeVersion: str(s.bridge_version),
         protocolSupported: bool(s.protocol_supported),
@@ -185,6 +190,39 @@ export function versionRows(s: MaintenanceStatus): VersionRow[] {
     rows.push({ kind: "bridge", id: server.id, version: server.bridgeVersion, mismatch: differs(server.bridgeVersion) });
   }
   return rows;
+}
+
+/** Compare dotted release versions ("0.9.1", "v1.2.0rc1" → its numbers);
+ *  null when either has no number at all. */
+export function compareVersions(a: string, b: string): number | null {
+  const parts = (v: string): number[] | null => {
+    const m = v.match(/\d+(?:\.\d+)*/);
+    return m ? m[0].split(".").map(Number) : null;
+  };
+  const x = parts(a);
+  const y = parts(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return Math.sign(d);
+  }
+  return 0;
+}
+
+/** What the Maintenance section offers for one bridge:
+ *  - `update`: a managed, self-updating bridge older than the runtime;
+ *  - `install_managed`: not a managed install — the one-time command;
+ *  - `unknown`: install type unknown (older bridge / T3) — neutral text;
+ *  - `unsupported`: managed but predates self-update — update it by hand;
+ *  - `none`: up to date (or newer). */
+export type BridgeOffer = "update" | "install_managed" | "unknown" | "unsupported" | "none";
+
+export function bridgeOffer(server: ServerStatus, runtimeVersion: string | null): BridgeOffer {
+  if (server.managed === false) return "install_managed";
+  if (server.managed === null) return "unknown";
+  if (!server.selfUpdate) return "unsupported";
+  if (!server.bridgeVersion || !runtimeVersion) return "none";
+  return compareVersions(server.bridgeVersion, runtimeVersion) === -1 ? "update" : "none";
 }
 
 // --- calls -------------------------------------------------------------------
@@ -267,7 +305,8 @@ export interface UpdateProgress {
 
 export interface BridgeUpdateView {
   ok: boolean;
-  /** updated · pending · not_managed · readonly · failed · busy · unsupported ·
+  /** updated · pending · current · newer (ok) · not_managed · readonly · failed ·
+   *  busy · downgrade · unsupported ·
    *  disconnected · newer · current (runtime), http · unreachable (transport). */
   code: string;
   message: string;
@@ -372,5 +411,8 @@ export async function openLog(invoke: InvokeFn, kind: "runtime" | "app"): Promis
   }
 }
 
-/** The one-time command that turns a hand-run bridge into a managed one. */
-export const MANAGED_BRIDGE_COMMAND = "herdeck-service install bridge --managed";
+/** The one-time command (run on the bridge's machine) that turns a hand-run
+ *  bridge into a managed one at `version` (the runtime's). */
+export function managedBridgeCommand(version: string | null): string {
+  return version ? `herdeck-service install bridge --managed --version ${version}` : "herdeck-service install bridge --managed";
+}

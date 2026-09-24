@@ -170,6 +170,25 @@ describe("MaintenanceSection", () => {
     expect(t.querySelector(".command code")?.textContent).toBe("herdeck-service install bridge --managed");
   });
 
+  it("offers Update bridge only to a managed, self-updating bridge behind the runtime", async () => {
+    const servers = {
+      old: { managed: true, self_update: true, connected: true, bridge_version: "0.8.9" },
+      same: { managed: true, self_update: true, connected: true, bridge_version: "0.9.1" },
+      newer: { managed: true, self_update: true, connected: true, bridge_version: "0.10.0" },
+      hand: { managed: false, self_update: true, connected: true, bridge_version: "0.8.9" },
+      t3: { managed: null, self_update: false, connected: true, bridge_version: null },
+      legacy: { managed: true, self_update: false, connected: true, bridge_version: "0.8.9" },
+    };
+    const t = await render(fake(rawStatus({ servers })).invoke);
+    const has = (id: string) => t.querySelector(`[data-server="${id}"] button[data-action="update-bridge"]`) != null;
+    expect(["old", "same", "newer", "hand", "t3", "legacy"].map(has)).toEqual([true, false, false, false, false, false]);
+    expect(t.querySelector('[data-server="hand"] [data-offer="install_managed"]')).not.toBeNull();
+    expect(t.querySelector('[data-server="hand"] .command code')?.textContent)
+      .toBe("herdeck-service install bridge --managed --version 0.9.1");
+    expect(t.querySelector('[data-server="t3"] [data-offer="unknown"]')?.textContent).toContain("Install type unknown");
+    expect(t.querySelector('[data-server="legacy"] [data-offer="unsupported"]')).not.toBeNull();
+  });
+
   it("reports an unreachable runtime", async () => {
     const t = await render(async () => { throw new Error("sidecar not ready"); });
     expect(t.querySelector('[role="alert"]')?.textContent).toContain("sidecar not ready");

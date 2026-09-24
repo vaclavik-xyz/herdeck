@@ -25,7 +25,7 @@ describe("healthItems actions", () => {
         version: "0.9.1",
         app_version: "0.8.9",
         servers: {
-          m4: { connected: true, bridge_version: "0.8.9" },
+          m4: { connected: true, bridge_version: "0.8.9", self_update: true, managed: true },
           ci: { connected: false, since: 0, ever_connected: true },
         },
         d200: { connected: false, last_frame_at: 1, since: 0 },
@@ -77,7 +77,7 @@ describe("HealthNotice actions", () => {
       calls.push(args ?? {});
       return { status: 200, body: { ok: true, code: "updated", message: "updated to 0.9.1; restarting", progress: [], next: 0 } };
     };
-    const instance = mountWith({ version: "0.9.1", servers: { m4: { connected: true, bridge_version: "0.8.9" } } }, invoke);
+    const instance = mountWith({ version: "0.9.1", servers: { m4: { connected: true, bridge_version: "0.8.9", self_update: true, managed: true } } }, invoke);
     await settle();
     const button = target.querySelector<HTMLButtonElement>('button[data-action="update:m4"]');
     expect(button?.textContent?.trim()).toBe("Update bridge m4");
@@ -86,6 +86,18 @@ describe("HealthNotice actions", () => {
     expect(calls[0]).toMatchObject({ method: "POST", path: "/maintenance/servers/m4/update" });
     expect(target.querySelector(".health-result")?.textContent).toContain("updated to 0.9.1");
     unmount(instance);
+  });
+
+  it("sends a mismatch it cannot fix inline to Maintenance", () => {
+    const actions = (s: Record<string, unknown>) =>
+      healthItems({ version: "0.9.1", servers: { m4: { connected: true, bridge_version: "0.8.9", ...s } } }, M, NOW)
+        .map((i) => i.action.kind);
+    expect(actions({ self_update: true, managed: false })).toEqual(["open_maintenance"]);
+    expect(actions({ self_update: true, managed: null })).toEqual(["open_maintenance"]);
+    expect(actions({ self_update: false, managed: true })).toEqual(["open_maintenance"]);
+    // a bridge NEWER than the runtime is never "updated" back
+    expect(healthItems({ version: "0.9.1", servers: { m4: { bridge_version: "0.10.0", self_update: true, managed: true } } }, M, NOW)
+      .map((i) => i.action.kind)).toEqual(["open_maintenance"]);
   });
 
   it("offers Restart deck on a D200 problem", async () => {

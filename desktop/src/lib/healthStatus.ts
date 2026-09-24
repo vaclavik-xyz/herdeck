@@ -4,6 +4,7 @@
 // framework-free so every rule is unit-testable; HealthNotice.svelte polls
 // and renders it with its en/cs catalog.
 import { fmt } from "./i18n.svelte";
+import { compareVersions } from "./maintenanceClient";
 
 /** The catalog keys the line is assembled from (HealthNotice owns en+cs). */
 export interface HealthMessages {
@@ -66,7 +67,14 @@ export function healthItems(raw: unknown, m: HealthMessages, now: number = Date.
     }
     const bridge = str(s.bridge_version);
     if (runtime && bridge && bridge !== runtime) {
-      out.push({ text: fmt(m.bridge_mismatch, { id, bridge, runtime }), action: { kind: "update_bridge", serverId: id } });
+      // Only a managed, self-updating bridge that is BEHIND the runtime can be
+      // updated from here; anything else needs the Maintenance section's
+      // explanation (managed install command, update the app, …).
+      const updatable = s.self_update === true && s.managed === true && compareVersions(bridge, runtime) === -1;
+      out.push({
+        text: fmt(m.bridge_mismatch, { id, bridge, runtime }),
+        action: updatable ? { kind: "update_bridge", serverId: id } : maintenance,
+      });
     }
     const since = num(s.since);
     if (s.connected === false && (since === null || now - since >= HEALTH_GRACE_MS)) {

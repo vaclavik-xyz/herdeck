@@ -20,7 +20,7 @@ export function rawStatus(over: Record<string, unknown> = {}): Record<string, un
       power_cycle: { available: true, reason: null, uhubctl: "/opt/homebrew/bin/uhubctl", hub: "20-1", port: 2, source: "last_seen" },
     },
     servers: {
-      m4: { managed: true, connected: true, bridge_version: "0.8.9", protocol: 3, last_error: null, ever_connected: true },
+      m4: { managed: true, self_update: true, connected: true, bridge_version: "0.8.9", protocol: 3, last_error: null, ever_connected: true },
     },
     app: {
       version: "0.9.1", channel: "stable", bundle: "/Applications/herdeck.app",

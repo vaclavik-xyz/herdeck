@@ -56,11 +56,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   runtime**, **Remove service** and **Open runtime/app log**; the D200 state in
   words with **Restart deck** and **Power-cycle USB port** (disabled with the
   reason when uhubctl or the hub port is missing; `needs_admin` shows the exact
-  command with a copy button); and per bridge an **Update bridge** button with
-  live progress and an explanation for every outcome (`not_managed` shows the
-  one-time `herdeck-service install bridge --managed` command).
-- HealthNotice offers the fix inline: **Update bridge** on a bridge version
-  mismatch, **Restart deck** on a D200 problem, **Open Maintenance** otherwise.
+  command with a copy button); and per bridge an **Update bridge** button (only
+  for a managed, self-updating bridge older than the runtime) with live
+  progress and an explanation for every outcome. A bridge that is not a managed
+  install shows the one-time `herdeck-service install bridge --managed --version
+  <runtime version>` command; an unknown install type (older bridge, T3) gets a
+  neutral note.
+- HealthNotice offers the fix inline: **Update bridge** on a version mismatch
+  of such a bridge, **Restart deck** on a D200 problem, **Open Maintenance**
+  otherwise.
 - Tray item **Restart deck** and an optional `[hotkeys].restart_deck` global
   shortcut (default off).
 - Editor fields for `[hardware].d200_standard_writer`, `uhubctl`, `usb_hub`,

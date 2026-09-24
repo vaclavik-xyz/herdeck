@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   fetchMaintenance, parseDeckOutcome, parseMaintenance, powerCycleDeck, restartDeck, runBridgeUpdate,
-  runtimeOrigin, runtimeService, serverSegment, versionRows, type MaintenanceStatus,
+  compareVersions, runtimeOrigin, runtimeService, serverSegment, versionRows, type MaintenanceStatus,
 } from "./maintenanceClient";
 import {
   MAINTENANCE_MESSAGES, bridgeUpdateText, d200StateText, deckOutcomeText, powerCycleReasonText,
@@ -21,7 +21,7 @@ describe("parseMaintenance", () => {
     expect(s.d200.state).toBe("connected");
     expect(s.d200.powerCycle).toMatchObject({ available: true, hub: "20-1", port: 2 });
     expect(s.servers).toEqual([
-      { id: "m4", managed: true, connected: true, bridgeVersion: "0.8.9", protocolSupported: null, lastError: null, everConnected: true },
+      { id: "m4", managed: true, selfUpdate: true, connected: true, bridgeVersion: "0.8.9", protocolSupported: null, lastError: null, everConnected: true },
     ]);
     expect(s.app?.bundle).toBe("/Applications/herdeck.app");
   });
@@ -65,6 +65,15 @@ describe("versionRows", () => {
       ["m4", "0.8.9", true],
     ]);
     expect(versionRows(status({ servers: { a: { bridge_version: "0.9.1" } } }))[2].mismatch).toBe(false);
+  });
+});
+
+describe("compareVersions", () => {
+  it("compares dotted numbers, not strings", () => {
+    expect(compareVersions("0.9.1", "0.10.0")).toBe(-1);
+    expect(compareVersions("1.0", "1.0.0")).toBe(0);
+    expect(compareVersions("v2.1.0", "2.0.9")).toBe(1);
+    expect(compareVersions("dev", "1.0")).toBeNull();
   });
 });
 
@@ -174,7 +183,7 @@ describe("runtimeService", () => {
 
 describe("outcome texts", () => {
   const DECK = ["reopened", "not_present", "failed", "locked_by", "timeout", "busy", "unsupported", "cycled", "needs_admin", "unavailable", "http", "unreachable"];
-  const BRIDGE = ["updated", "pending", "not_managed", "readonly", "failed", "busy", "unsupported", "disconnected", "newer", "current", "http", "unreachable"];
+  const BRIDGE = ["updated", "pending", "not_managed", "downgrade", "readonly", "failed", "busy", "unsupported", "disconnected", "newer", "current", "http", "unreachable"];
 
   for (const lang of ["en", "cs"] as const) {
     const m = MAINTENANCE_MESSAGES[lang];
