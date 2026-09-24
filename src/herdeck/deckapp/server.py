@@ -733,6 +733,10 @@ class DeckApp:
         fanned out a full frame so physical sinks repaint immediately on swap."""
         slots, orch, clk, icons, icons_dir, rs, tiles, panel_png, sections, labels = prepared
         usage_changed = self._adopt_usage_config(new_source.config)
+        # A swapped-in live source (profile switch, config reload, connect from
+        # the demo) must keep posting through the shell; without this its gate
+        # stayed at the "no shell" default and every alert fell back to osascript.
+        self._wire_notify_gate(new_source)
         with self._lock:
             old = self._source
             hardware_changed = self._d200_hardware_signature(
@@ -833,6 +837,12 @@ class DeckApp:
             claim_log.info(
                 "notification shell claim moved gen=%s -> %s", previous_gen, shell_gen
             )
+
+    def _wire_notify_gate(self, source) -> None:
+        """Hand a notifying source the shell-claim predicates (banner duty)."""
+        setter = getattr(source, "set_notify_gate", None)
+        if callable(setter):
+            setter(self.shell_claims_banners, claim_age=self.shell_claim_age)
 
     def shell_claim_age(self) -> float | None:
         """Seconds since a shell last claimed banner duty; None if none ever did."""
@@ -1631,11 +1641,10 @@ def create_live_app(
     )
     if local_runners:
         app._set_local_bridges(local_runners)
-    if hasattr(source, "set_notify_gate"):
-        # The shell claims banner duty only while it polls /state with a
-        # granted notification permission; otherwise the runtime falls back
-        # to plain osascript alerts.
-        source.set_notify_gate(app.shell_claims_banners, claim_age=app.shell_claim_age)
+    # The shell claims banner duty only while it polls /state with a
+    # granted notification permission; otherwise the runtime falls back
+    # to plain osascript alerts.
+    app._wire_notify_gate(source)
     return app
 
 

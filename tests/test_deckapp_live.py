@@ -2007,3 +2007,19 @@ def test_mock_source_has_no_triage():
 
     app = DeckApp(MockSource(), serve=False, icon_provider=StubIcons())
     assert app.triage() is False
+
+
+def test_swapped_in_live_source_keeps_the_shell_banner_gate():
+    """A profile switch / reload swaps in a fresh LiveSource; it must still
+    hand banners to the shell instead of falling back to osascript forever."""
+    app, _src, _server, _runner = make_live()
+    try:
+        config, server = live_config()
+        fresh = LiveSource(config, server)
+        app.swap_source(fresh)
+        assert fresh._notify_gate() is False  # no shell has claimed yet
+        app.note_shell_claim("gen-1")
+        assert fresh._notify_gate() is True
+        assert fresh._notify_claim_age() is not None
+    finally:
+        app.close()
