@@ -63,7 +63,7 @@ log = logging.getLogger(__name__)
 
 # A banner reply is typed into the agent's pane: bounded, and stripped of
 # control / bidi-override characters (a terminal escape must never ride in on
-# notification text). Newlines and tabs stay; the bridge normalizes further.
+# notification text). Line breaks collapse to spaces (below); tabs stay.
 REPLY_MAX_CHARS = 2000
 _REPLY_STRIP_RE = re.compile("[\x00-\x08\x0e-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
 # herdr types the text and then presses enter: a line break inside a reply
@@ -282,9 +282,12 @@ class LiveSource(AgentCardMixin, StateSource):
         Exactly one of ``choice`` ("approve"/"deny", with the option signature
         ``sig`` the banner was built from) or ``text`` (an inline reply).
         Returns "ok", "invalid" (malformed request), "unknown" (no such agent),
-        "stale" (no longer blocked in ``episode``, already answered, or the
-        prompt's options changed) or "unavailable" (its server is offline). A
-        stale banner therefore never answers a later prompt.
+        "stale" (no longer blocked in ``episode``, already answered — from a
+        banner or the agent card — the prompt's options changed, or
+        banner_actions / the macos backend was turned off since) or
+        "unavailable" (its server is offline). A stale banner therefore never
+        answers a later prompt. Approve/Deny go out through the same guarded
+        command as the agent card (``_blocked_option_command``).
         """
         n = self._config.notifications
         if not n.banner_actions or "macos" not in n.backends:
@@ -320,14 +323,7 @@ class LiveSource(AgentCardMixin, StateSource):
             if answer is None or answer.sig != sig:
                 return "stale"
             option = answer.approve if choice == "approve" else answer.deny
-            # Same keys as the drill's option tile: the digit selects, enter submits.
-            cmd = Command(
-                "act_if_blocked",
-                key.server_id,
-                key.pane_id,
-                keys=[option, "enter"],
-                terminal_id=terminal_id,
-            )
+            cmd = self._blocked_option_command(key, state, option, prompt)
         else:
             cmd = Command(
                 "send_text", key.server_id, key.pane_id, text=clean, terminal_id=terminal_id
@@ -335,10 +331,7 @@ class LiveSource(AgentCardMixin, StateSource):
         runner = self._runners.get(key.server_id)
         if runner is None or not connected:
             return "unavailable"
-        with self._lock:
-            self._answered_episodes[episode] = None
-            while len(self._answered_episodes) > _ANSWERED_EPISODES_MAX:
-                self._answered_episodes.pop(next(iter(self._answered_episodes)))
+        self._spend_answered_prompt(key)
         self._notify_throttle.note_interaction(key)
         if self._orch is not None:
             self._orch.note_external_answer(key)
@@ -350,6 +343,12 @@ class LiveSource(AgentCardMixin, StateSource):
         )
         runner.send(command_to_msg(cmd, self._next_req(cmd)))
         return "ok"
+
+    def _note_episode_answered_locked(self, episode: str) -> None:
+        """Remember an answered block episode (bounded). Caller holds self._lock."""
+        self._answered_episodes[episode] = None
+        while len(self._answered_episodes) > _ANSWERED_EPISODES_MAX:
+            self._answered_episodes.pop(next(iter(self._answered_episodes)))
 
     def _drive(self, orch, step) -> list[Command]:
         drilled_before = orch.drill_key()

@@ -209,6 +209,41 @@ def test_sanitize_reply_bounds_length():
 # --- HTTP routes ---------------------------------------------------------------
 
 
+def test_banner_approve_uses_the_cards_revision_guard_on_a_protocol_3_bridge():
+    from types import SimpleNamespace
+
+    from herdeck.decisions import decision_revision
+
+    app, src, _server, runner, key, episode = _blocked_with_prompt()
+    try:
+        runner.connector = SimpleNamespace(protocol=3)
+        sig = binary_answer(CLAUDE_PROMPT, DEFAULT_PROFILES["claude"], SafetyConfig()).sig
+        assert src.answer_agent(key, episode, choice="deny", sig=sig) == "ok"
+        [msg] = runner.sent
+        assert msg["type"] == "choose_if_blocked" and msg["choice"] == "3"
+        assert msg["decision_revision"] == decision_revision(
+            key.server_id, key.pane_id, "", CLAUDE_PROMPT
+        )
+    finally:
+        app.close()
+
+
+def test_an_agent_card_answer_makes_the_banner_of_that_episode_stale():
+    from herdeck.decisions import decision_revision
+
+    app, src, _server, runner, key, episode = _blocked_with_prompt()
+    try:
+        runner.connector = None
+        revision = decision_revision(key.server_id, key.pane_id, "", CLAUDE_PROMPT)
+        src._card_send = lambda cmd: {"ok": True}  # no bridge reply to wait for
+        src.card_answer(key.server_id, key.pane_id, "1", revision)
+        sig = binary_answer(CLAUDE_PROMPT, DEFAULT_PROFILES["claude"], SafetyConfig()).sig
+        assert src.answer_agent(key, episode, choice="approve", sig=sig) == "stale"
+        assert src.answer_agent(key, episode, text="also this") == "stale"
+    finally:
+        app.close()
+
+
 def _post(app, path, body, *, token=True):
     headers = {"Content-Type": "application/json"}
     if token:

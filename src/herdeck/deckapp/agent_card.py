@@ -389,45 +389,64 @@ class AgentCardMixin:
                 )
                 if option is None:
                     return outcome("invalid")
-                if option["kind"] == "option" and self._card_bridge_protocol(server_id) >= 3:
-                    # The bridge re-reads the prompt and refuses ("stale_choice")
-                    # unless it still hashes to the revision the user saw: an
-                    # agent that moved from prompt A straight to prompt B (never
-                    # seen leaving BLOCKED here) cannot get A's answer typed
-                    # into B. Every protocol-3 bridge handles this message.
-                    cmd = Command(
-                        "choose_if_blocked",
-                        server_id,
-                        pane_id,
-                        text=choice,
-                        terminal_id=agent.terminal_id or None,
-                        decision_revision=revision,
-                    )
-                    keys = None
-                elif option["kind"] == "option":
-                    # Older bridge: the deck drill's own path ([digit, enter],
-                    # blocked + identity guarded).
-                    keys = [choice, "enter"]
+                if option["kind"] == "option":
+                    cmd = self._blocked_option_command(key, agent, choice, prompt)
                 else:
                     profile = profile_for(self._config, agent.agent_type)
-                    keys = list(getattr(profile, option["id"]))
-                if keys is not None:
                     cmd = Command(
                         "act_if_blocked",
                         server_id,
                         pane_id,
-                        keys=keys,
+                        keys=list(getattr(profile, option["id"])),
                         terminal_id=agent.terminal_id or None,
                     )
         self._notify_throttle.note_interaction(key)
         result = self._card_send(cmd)
         if agent.backend != "t3":
-            # The answered prompt is spent: drop it so the next answer needs a
-            # fresh read (a second click on the still-shown prompt is stale).
-            with self._lock:
-                self._preread.pop(key, None)
-                self._preread_req.pop(key, None)
+            self._spend_answered_prompt(key)
         return result
+
+    # --- guards shared with banner answers (LiveSource.answer_agent) --------
+    def _blocked_option_command(self, key: AgentKey, agent, option_key: str, prompt: str) -> Command:
+        """The command that selects numbered option ``option_key`` of the
+        blocked ``prompt`` — for the card and for a banner Approve/Deny alike.
+
+        On a protocol-3 bridge it is ``choose_if_blocked`` with the prompt's
+        decision revision: the bridge re-reads the prompt and refuses
+        ("stale_choice") unless it still hashes to that revision, so an agent
+        that moved from prompt A straight to prompt B (never seen leaving
+        BLOCKED here) cannot get A's answer typed into B. An older bridge gets
+        the deck drill's own path ([digit, enter], blocked + identity guarded).
+        """
+        if self._card_bridge_protocol(key.server_id) >= 3:
+            return Command(
+                "choose_if_blocked",
+                key.server_id,
+                key.pane_id,
+                text=option_key,
+                terminal_id=agent.terminal_id or None,
+                decision_revision=decision_revision(
+                    key.server_id, key.pane_id, agent.terminal_id, prompt
+                ),
+            )
+        return Command(
+            "act_if_blocked",
+            key.server_id,
+            key.pane_id,
+            keys=[option_key, "enter"],
+            terminal_id=agent.terminal_id or None,
+        )
+
+    def _spend_answered_prompt(self, key: AgentKey) -> None:
+        """An answer (card or banner) went out: its prompt is spent. Drop the
+        cached prompt so the next answer needs a fresh read, and mark the
+        current block episode answered so a banner of it can no longer act."""
+        with self._lock:
+            self._preread.pop(key, None)
+            self._preread_req.pop(key, None)
+            episode = self._block_episode.get(key)
+            if episode is not None:
+                self._note_episode_answered_locked(episode)
 
     def _card_bridge_protocol(self, server_id: str) -> int:
         connector = getattr(self._runners.get(server_id), "connector", None)
