@@ -60,6 +60,10 @@ class ServiceConfig:
     # Extra non-secret launch environment (--env KEY=VALUE), e.g. the deck
     # Mac's HERDECK_D200_STANDARD_WRITER=1. Validated by validate_extra_env.
     extra_env: tuple[tuple[str, str], ...] = ()
+    # bridge only: run the provider usage poller on the bridge host and push
+    # usage frames (HERDECK_BRIDGE_USAGE=1; ``config_path`` becomes
+    # HERDECK_USAGE_CONFIG, whose [usage] table configures the poll).
+    usage: bool = False
 
     @property
     def label(self) -> str:
@@ -84,6 +88,9 @@ class ServiceConfig:
         login (gui/Aqua) session, which is also where the desktop updater
         kickstarts it; the bridge and web servers are background agents."""
         return f"gui/{uid}" if self.kind == "runtime" else f"user/{uid}"
+
+
+USAGE_SERVICE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 
 def app_runtime_binary(app: Path) -> Path:
@@ -169,6 +176,15 @@ def _base_program_and_environment(
             "HERDECK_SERVER_ID": config.server_id,
             "HERDECK_TOKEN_FILE": str(config.token_file),
         }
+        if config.usage:
+            environment["HERDECK_BRIDGE_USAGE"] = "1"
+            if config.config_path is not None:
+                environment["HERDECK_USAGE_CONFIG"] = str(config.config_path)
+            if not any(key == "PATH" for key, _value in config.extra_env):
+                # launchd/systemd start with a minimal PATH; `codex` is a Node
+                # script (#!/usr/bin/env node), so Homebrew's bin must be on it.
+                # Override with --env PATH=... (e.g. for an nvm-installed node).
+                environment["PATH"] = USAGE_SERVICE_PATH
     else:
         arguments = [config.python, "-m", "herdeck.web", "run"]
         if config.allow_query_token:
@@ -583,6 +599,15 @@ def _parser() -> argparse.ArgumentParser:
                 ),
             )
             command.add_argument(
+                "--usage",
+                action="store_true",
+                help=(
+                    "bridge only: poll Codex/Claude usage on this host and push it to "
+                    "every runtime (sets HERDECK_BRIDGE_USAGE=1; --config PATH becomes "
+                    "HERDECK_USAGE_CONFIG, whose [usage] table configures the poll)"
+                ),
+            )
+            command.add_argument(
                 "--managed",
                 action="store_true",
                 help=(
@@ -630,6 +655,9 @@ def _config_from_args(args) -> ServiceConfig:
         # Resolve here: the desktop updater compares the unit's program path
         # against its own (canonical) bundle path.
         from_app = from_app.expanduser().resolve()
+    usage = getattr(args, "usage", False)
+    if usage and kind != "bridge":
+        raise SystemExit("--usage is supported only for the bridge")
     managed = getattr(args, "managed", False)
     if managed and kind != "bridge":
         raise SystemExit("--managed is supported only for the bridge")
@@ -678,6 +706,7 @@ def _config_from_args(args) -> ServiceConfig:
         from_app=from_app,
         platform=sys.platform,
         extra_env=extra_env,
+        usage=usage,
     )
 
 

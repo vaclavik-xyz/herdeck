@@ -1329,6 +1329,10 @@ def test_deckapp_builds_its_usage_poller_with_the_alert_route(monkeypatch):
         usage_mod, "poller_from_config", lambda cfg, on_alert=None: seen.append(on_alert)
     )
     config, server = notify_config()
+    # source = "local": the hub builds the own poller at once (auto would
+    # wait for the bridge's answer first, see test_usage_hub.py).
+    config.usage.providers = ["claude"]
+    config.usage.source = "local"
     src, _notifier = make_notifying_live(config, server)
     app = DeckApp(src, serve=False, icon_provider=StubIcons())
     try:

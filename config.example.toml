@@ -103,6 +103,10 @@ codexbar_path = "codexbar"    # empty string disables the fallback
 # the highest alert_at level), within one refresh_secs of the reset time.
 alert_at = []                 # e.g. [80, 95]; 1-100, sorted + deduped
 alert_reset = false
+# Where the numbers come from: "auto" = a connected bridge started with
+# HERDECK_BRIDGE_USAGE=1 (herdeck-service install bridge --usage), else this
+# machine's own poll; "local" = always poll here; "bridge" = bridge data only.
+source = "auto"
 
 [[macros]]
 label = "continue"

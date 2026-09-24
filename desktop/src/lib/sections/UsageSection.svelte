@@ -2,6 +2,7 @@
   import BooleanField from "../fields/BooleanField.svelte";
   import ListField from "../fields/ListField.svelte";
   import NumberField from "../fields/NumberField.svelte";
+  import SelectField from "../fields/SelectField.svelte";
   import TextField from "../fields/TextField.svelte";
   import ProviderPicker from "../fields/ProviderPicker.svelte";
   import OverrideField from "../fields/OverrideField.svelte";
@@ -23,6 +24,8 @@
   const USAGE_DEFAULTS: Record<string, unknown> = defaults.usage;
 
   const HELP = $derived(fieldHelp("usage"));
+  // [usage].source values (backend: config.USAGE_SOURCES, usage_hub.py).
+  const USAGE_SOURCES = ["auto", "local", "bridge"];
 
   const LM = defineMessages({
     en: {
@@ -53,6 +56,7 @@
   const codexPath = $derived((getAt(payload, "base", SEC, "codex_path") as string) ?? defaults.usage.codex_path);
   const claudeCachePath = $derived((getAt(payload, "base", SEC, "claude_cache_path") as string) ?? defaults.usage.claude_cache_path);
   const codexbarPath = $derived((getAt(payload, "base", SEC, "codexbar_path") as string) ?? defaults.usage.codexbar_path);
+  const usageSource = $derived((getAt(payload, "base", SEC, "source") as string) ?? defaults.usage.source);
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   // Empty text / cleared number returns the key to the backend default instead
   // of persisting "" (rejected by validation) or a hard-coded literal.
@@ -119,6 +123,9 @@
   <OverrideField label="paid_only" help={HELP.paid_only} state={scState("paid_only")} inheritedDisplay={hint("paid_only")} onstate={(s) => setScState("paid_only", s)}>
     <BooleanField label={lm.enabled} help={HELP.paid_only} value={Boolean(scValue("paid_only"))} onchange={(v) => setSc("paid_only", v)} />
   </OverrideField>
+  <OverrideField label="source" help={HELP.source} state={scState("source")} inheritedDisplay={hint("source")} onstate={(s) => setScState("source", s)}>
+    <SelectField label="" value={String(scValue("source") ?? "auto")} options={USAGE_SOURCES} onchange={(v) => setSc("source", v)} />
+  </OverrideField>
   <OverrideField label="refresh_secs" help={HELP.refresh_secs} state={scState("refresh_secs")} inheritedDisplay={hint("refresh_secs")} onstate={(s) => setScState("refresh_secs", s)}>
     <NumberField label="" int min={30} value={Number(scValue("refresh_secs"))} onchange={(v) => setScOrInherit("refresh_secs", v)} />
   </OverrideField>
@@ -147,6 +154,7 @@
     <ListField label={lm.provider_ids} help={HELP.providers} value={providers} onchange={setBaseProviders} />
   </details>
   <BooleanField label={lm.active_only} help={HELP.paid_only} value={paidOnly} onchange={(v) => set("paid_only", v)} />
+  <SelectField label="source" help={HELP.source} value={usageSource} options={USAGE_SOURCES} onchange={(v) => set("source", v)} />
   <NumberField label="refresh_secs" help={HELP.refresh_secs} int min={30} value={refreshSecs} onchange={(v) => setOrRemove("refresh_secs", v)} />
   <TextField label="alert_at" help={HELP.alert_at} value={levelsText(alertAt)} oninput={setBaseLevels} />
   <BooleanField label="alert_reset" help={HELP.alert_reset} value={alertReset} onchange={(v) => set("alert_reset", v)} />
