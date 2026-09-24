@@ -7,6 +7,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `GET /maintenance` now reports per server `self_update` (the bridge
+  advertises the capability) and `managed` (`true`/`false` from one health
+  probe per connection; `null` while unknown, on timeout or for older bridges).
 - Bridge self-update. A bridge running from a managed venv (a `managed.json`
   marker at `Path(sys.prefix)`, written by `herdeck-service install bridge
   --managed`) accepts a new full-token-only `update {req, version}` message:

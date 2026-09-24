@@ -203,7 +203,9 @@ def test_status_reports_versions_service_logs_d200_and_servers(tmp_path):
         "available": True, "reason": None, "uhubctl": "/opt/bin/uhubctl",
         "hub": "20-1", "port": 2, "source": "last_seen",
     }
-    assert status["servers"] == {"box": {"managed": None, "connected": True, "bridge_version": "0.9.0"}}
+    assert status["servers"] == {
+        "box": {"self_update": False, "managed": None, "connected": True, "bridge_version": "0.9.0"}
+    }
     # persisted for when the device is gone
     assert mt.load_usb_location(tmp_path / "d200-usb.json")["hub"] == "20-1"
 
