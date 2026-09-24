@@ -23,9 +23,16 @@ in one order: **bridge first**. An old render host ignores a key it does not
 know. The reverse runs new render code against an old snapshot, and
 `_pane_to_state` defaults every missing field to `""` or `{}` — so the new field
 renders blank, with no error and nothing in the log, until the bridge catches up.
+Since 0.8.1 the mismatch is at least visible: every snapshot carries the
+bridge's `herdeck_version`, the runtime's `/health` lists it per server next to
+its own `version`, and both the desktop window and `herdeck-doctor` report a
+bridge whose version differs from the runtime's.
 
 Changing `protocol.py`'s encode/decode contract has no safe order at all; both
-hosts move together.
+hosts move together, and `WIRE_PROTOCOL` in `protocol.py` must be bumped. A
+runtime that receives a newer protocol than it knows logs a WARNING
+(`bridge '<id>' speaks unsupported wire protocol …`) and reports
+`protocol_supported: false` for that server in `/health`.
 
 The desktop app is the exception: its frontend is compiled into the bundle, so
 it does **not** pick up changes from a source sync. It needs a rebuild.
@@ -205,7 +212,7 @@ gets declared healthy:
 |---|---|---|
 | source | `LiveSource._agents`, fed by bridge pushes | `/state`'s `summary`, `/health`'s `connected` |
 | render | tiles and panel rasterised into the HTTP buffer | `/state`'s `version`, `/panel`, `/tile/N` |
-| delivery | the frame handed to each sink and written to the device | the log, and your eyes |
+| delivery | the frame handed to each sink and written to the device | `/health`'s `d200` (`last_frame_at`, `last_error`, `lock_owner`), the log, and your eyes |
 
 **Source.** `/health` reports the runtime's own view of its bridge links, and
 `summary` is counted from the agent records at request time — neither touches
@@ -215,6 +222,13 @@ the render pipeline:
 curl "$URL/health?token=$TOKEN"   # {"ok": true, "connected": true, ...}
 curl "$URL/state?token=$TOKEN"    # slots, panel, tile versions, agent summary
 ```
+
+`/health` also carries `version` (proof the new code is what is running),
+`uptime_s` (proof it restarted), and per server under `servers` the
+`last_error`, `attempt` count and the `bridge_version` the bridge announced.
+`herdeck-doctor` on the render host reads the same data and additionally asks
+each bridge for its own health (`herdr_reachable`, attached `clients`) — the
+`clients` count is the bridge-side view described next, without `lsof`.
 
 From the bridge host, `lsof` is the other end of the same layer:
 

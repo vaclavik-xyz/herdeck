@@ -7,6 +7,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Version handshake: bridge snapshots carry `herdeck_version`, and the runtime
+  `/health` reports its own `version` and `protocol` plus each server's
+  `bridge_version`. The desktop window shows a small warning when the runtime
+  differs from the app or a bridge from the runtime
+  (`runtime 0.8.0 ≠ app 0.8.1 — restart the runtime`), and `herdeck-doctor`
+  reports versions and mismatches. A bridge speaking a newer wire protocol is
+  now logged as a WARNING and flagged `protocol_supported: false` instead of
+  rendering blank in silence.
+- `/health` explains a dark deck: per-server `connected`, `last_error`, `since`,
+  `attempt`; the D200 sink's `connected`, `last_frame_at`, `last_error` and
+  `lock_owner` (another runtime holding `d200.lock`); `pid`, `uptime_s`; and
+  notification counters (`queued`, `acked`, `fallback`, `dropped`, `pending`).
+  The window shows a concise line when something is wrong
+  (`bridge local: token rejected 3 min · D200: disconnected 2 min`).
+- Bridge health: an authenticated `{"type": "health"}` WebSocket message
+  returns the bridge's version, wire protocol, whether herdr answers and the
+  number of attached clients; `herdeck-doctor` uses it.
 - Opt-in usage-limit notifications: `[usage].alert_at` (used-% levels, e.g.
   `[80, 95]`) notifies once per limit window when a provider window crosses a
   level, and `[usage].alert_reset` announces when a window that reached 100 %

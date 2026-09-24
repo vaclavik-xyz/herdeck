@@ -818,8 +818,8 @@ def _snapshot_message(server_id: str, panes: list[dict]) -> dict:
         "server_id": server_id,
         "protocol": _WIRE_PROTOCOL,
         "capabilities": list(_WIRE_CAPABILITIES),
-        # Additive: an older runtime ignores the key; a newer one compares it
-        # with its own version and reports a mismatch in /health.
+        # Additive: an older runtime ignores the key; a newer one lists it per
+        # server in /health, where the window and herdeck-doctor compare it.
         "herdeck_version": __version__,
         "panes": panes,
     }
