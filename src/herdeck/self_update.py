@@ -97,13 +97,13 @@ VERIFY_SNIPPET = "import herdeck.bridge, herdeck; print(herdeck.__version__)"
 # publishes the Python wheel + SHA256SUMS). A bridge never installs anything
 # older: it would restart into a version that cannot update itself again, so
 # the next fix would need a shell on the bridge host.
-FIRST_SELF_UPDATE_VERSION = "0.10.0"
+FIRST_SELF_UPDATE_VERSION = "0.10.0"  # version-scan: fixed (a floor, not the release)
 # Releases before this have no wheel asset; only for them may a missing wheel
 # fall back to the (unchecksummed) git tag. From this release on a missing
 # wheel means a draft/broken release and is an error. Equal to the floor above
 # today, so the fallback is currently unreachable by construction — kept as a
 # separate constant because the two rules are independent.
-WHEELS_SINCE_VERSION = "0.10.0"
+WHEELS_SINCE_VERSION = "0.10.0"  # version-scan: fixed (a floor, not the release)
 
 _PARSE_RE = re.compile(
     r"^(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?(?:\.post(\d+))?(?:\.dev(\d+))?$"
