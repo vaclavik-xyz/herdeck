@@ -146,6 +146,10 @@ class LiveSource(StateSource):
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
         self._notify_claim_age: Callable[[], float | None] = lambda: None
+        self._notify_features: Callable[[], frozenset[str]] = lambda: frozenset()
+        # Events each agent was alerted for and has not left yet; leaving one
+        # withdraws that agent's delivered shell banners.
+        self._bannered: dict[AgentKey, set[str]] = {}
         # Banners carry the agent's project mark (favicon or monogram).
         self._notify_icons = notify_icons or NotificationIconCache()
         if config.notifications.enabled:
@@ -441,17 +445,23 @@ class LiveSource(StateSource):
         self,
         gate: Callable[[], bool],
         claim_age: Callable[[], float | None] | None = None,
+        features: Callable[[], frozenset[str]] | None = None,
     ) -> None:
         """Set the "a shell can post banners" predicate.
 
         True -> the runtime leaves both banner and sound to the shell; False ->
         alerts fall back to a plain osascript banner carrying the sound.
         The DeckApp wires this to its shell-claim heartbeat; ``claim_age``
-        (seconds since the last claim, None = never) feeds the fallback reason.
+        (seconds since the last claim, None = never) feeds the fallback reason;
+        ``features`` names what the claiming shell understands (e.g.
+        "withdraw" — an older shell would post a withdraw item as an empty
+        banner, so it only gets one when it says so).
         """
         self._notify_gate = gate
         if claim_age is not None:
             self._notify_claim_age = claim_age
+        if features is not None:
+            self._notify_features = features
 
     def notifications_feed_state(self) -> dict:
         """Recent event notifications for the shell to post natively."""
@@ -527,7 +537,42 @@ class LiveSource(StateSource):
                 )
                 return
             body = self._enrich_blocked(agent, body, prompt, meta)
+        with self._lock:
+            if not self._alert_current(event, agent.key, meta.get("episode")):
+                log.info(
+                    "notification dropped (agent already left %s) agent=%s:%s",
+                    event,
+                    agent.key.server_id,
+                    agent.key.pane_id,
+                )
+                return
+            self._bannered.setdefault(agent.key, set()).add(event)
         self._notifier.notify(title, body, sound, icon=self._banner_icon(agent), meta=meta)
+
+    def _alert_current(self, event: str, key: AgentKey, episode: str | None) -> bool:
+        """Is ``key`` still in ``event``'s status (and block episode)? Caller
+        holds self._lock. A stale alert must not outlive its withdraw."""
+        state = self._agents.get(key)
+        if state is None or state.status is not NOTIFY_EVENT_STATUSES[event]:
+            return False
+        return event != "blocked" or episode is None or self._block_episode.get(key) == episode
+
+    def _withdraw_left(self, event: str, left: set) -> None:
+        """Agents that left ``event``'s status (answered anywhere, back to
+        work, gone): ask the shell to remove their delivered banners."""
+        if not left:
+            return
+        with self._lock:
+            keys = [key for key in left if event in self._bannered.get(key, ())]
+            for key in keys:
+                events = self._bannered[key]
+                events.discard(event)
+                if not events:
+                    del self._bannered[key]
+        if not keys or not self._notify_gate() or "withdraw" not in self._notify_features():
+            return
+        for key in keys:
+            self._notify_feed.withdraw({"server_id": key.server_id, "pane_id": key.pane_id})
 
     def _user_present(self) -> bool:
         """The user touched this host recently (notify thread: may run ioreg)."""
@@ -615,15 +660,19 @@ class LiveSource(StateSource):
             return None
         return self._notify_icons.path_for(agent, self._config.view.project_icons)
 
-    def _notify_entered(self, event: str, states: list[AgentState], scope: set) -> None:
-        """Notify keys that just entered `event`'s status within `scope`."""
+    def _notify_entered(self, event: str, states: list[AgentState], scope: set) -> list[AgentState]:
+        """Advance `event`'s episode bookkeeping within `scope`: withdraw the
+        banners of keys that left the status and return the states that just
+        entered it (to alert). The caller fires alerts only after EVERY event
+        withdrew — a done->blocked agent's new blocked banner must never be
+        removed by the withdraw of its old done banner."""
         if self._notifier is None or event not in self._config.notifications.on:
-            return
+            return []
         tracked = self._notify_keys[event]
         to, entered_here = newly_entered(NOTIFY_EVENT_STATUSES[event], tracked & scope, states)
         self._notify_keys[event] = (tracked - scope) | entered_here
-        for s in (x for x in states if x.key in to):
-            self._fire_notify(event, s)
+        self._withdraw_left(event, (tracked & scope) - entered_here)
+        return [x for x in states if x.key in to]
 
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         new_by_key = {s.key: s for s in states}
@@ -676,13 +725,16 @@ class LiveSource(StateSource):
         self._notify_all(server_id, states, prev_keys)
 
     def _notify_all(self, server_id: str, states: list[AgentState], prev_keys: set) -> None:
-        scope = set(prev_keys) | {s.key for s in states}
-        for event in NOTIFY_EVENT_STATUSES:
-            self._notify_entered(event, states, scope)
+        self._notify_all_events(states, set(prev_keys) | {s.key for s in states})
 
     def _notify_all_events(self, states: list[AgentState], scope: set) -> None:
-        for event in NOTIFY_EVENT_STATUSES:
-            self._notify_entered(event, states, scope)
+        entered = [
+            (event, state)
+            for event in NOTIFY_EVENT_STATUSES
+            for state in self._notify_entered(event, states, scope)
+        ]
+        for event, state in entered:
+            self._fire_notify(event, state)
 
     def _on_event(self, server_id: str, state: AgentState) -> None:
         def mutate():

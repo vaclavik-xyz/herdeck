@@ -122,6 +122,7 @@ fn fetch_notifications_carries_cursor_claim_and_generation() {
     ));
     assert!(req.contains("X-Herdeck-Shell: 1\r\n"));
     assert!(req.contains("X-Herdeck-Shell-Gen: shell-a\r\n"));
+    assert!(req.contains("X-Herdeck-Shell-Features: withdraw\r\n"));
 }
 
 #[test]

@@ -182,6 +182,9 @@ struct PendingNotification {
     created_at_ms: Option<i64>,
     /// Which agent the banner is about, plus answer buttons / reply field.
     meta: banners::BannerMeta,
+    /// Feed item kind: "alert" (a banner) or "withdraw" (remove the agent's
+    /// delivered banners); None from a runtime that predates kinds.
+    kind: Option<String>,
 }
 
 /// Minimum interval between on-disk re-discovery attempts.
@@ -719,6 +722,7 @@ fn notification_batch(
             icon: item.get("icon").and_then(|v| v.as_str()).map(str::to_string),
             created_at_ms: item.get("created_at_ms").and_then(|v| v.as_i64()),
             meta: banners::BannerMeta::from_item(item),
+            kind: item.get("kind").and_then(|v| v.as_str()).map(str::to_string),
         });
     }
     items.sort_by_key(|item| item.seq);
@@ -929,6 +933,7 @@ async fn test_notification(
         icon: None,
         created_at_ms: None,
         meta: banners::BannerMeta::default(),
+        kind: None,
     };
     run_blocking(move || {
         post_native_notification(&app, &item)?;
@@ -1104,7 +1109,7 @@ fn start_notify_pump(app: tauri::AppHandle) {
             }
         }
         for item in items {
-            if let Err(err) = post_native_notification(&app, &item) {
+            if let Err(err) = deliver_feed_item(&app, &item) {
                 eprintln!("herdeck: native notification failed id={}: {err}", item.id);
                 let code = http::fallback_notification(
                     &active_discovery.host,
@@ -1166,6 +1171,35 @@ fn start_notify_pump(app: tauri::AppHandle) {
             );
         }
     });
+}
+
+/// Deliver one feed item: post its banner, or withdraw the agent's delivered
+/// banners (answered / back to work — the runtime says when), or skip a kind
+/// this shell does not know. Every outcome but a failed post is acknowledged.
+fn deliver_feed_item(app: &tauri::AppHandle, item: &PendingNotification) -> Result<(), String> {
+    match banners::feed_item_action(item.kind.as_deref(), &item.meta) {
+        banners::FeedItemAction::Post => post_native_notification(app, item),
+        banners::FeedItemAction::Withdraw => {
+            if let Some(agent) = item.meta.agent.as_ref() {
+                withdraw_banners(agent);
+            }
+            Ok(())
+        }
+        banners::FeedItemAction::Skip => Ok(()),
+    }
+}
+
+/// Remove this agent's banners from Notification Center (only the ones this
+/// shell delivered and still remembers — the book is bounded).
+fn withdraw_banners(agent: &banners::AgentRef) {
+    let identifiers = BANNER_BOOK
+        .lock()
+        .map(|mut book| book.take_agent(agent))
+        .unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    banner_post::remove_delivered(&identifiers);
+    #[cfg(not(target_os = "macos"))]
+    let _ = identifiers; // the plugin's banners cannot be withdrawn
 }
 
 /// Attribute our banners to this app's bundle — the same choice the
@@ -1331,6 +1365,26 @@ mod banner_post {
         center.deliverNotification(&banner);
         Ok(())
     }
+
+    /// Remove every delivered banner whose identifier is in `identifiers`.
+    /// `deliveredNotifications` is a synchronous XPC round trip: called only
+    /// for a withdraw item, on the pump thread, never on a timer.
+    pub fn remove_delivered(identifiers: &[String]) {
+        if identifiers.is_empty() {
+            return;
+        }
+        let Some(center) = default_center() else {
+            return;
+        };
+        for banner in center.deliveredNotifications().iter() {
+            let ours = banner
+                .identifier()
+                .is_some_and(|id| identifiers.iter().any(|want| *want == id.to_string()));
+            if ours {
+                center.removeDeliveredNotification(&banner);
+            }
+        }
+    }
 }
 
 /// Carry out what a banner activation asked for (main thread; the HTTP calls
@@ -1426,7 +1480,7 @@ fn should_present_banner(inner_answer: Option<bool>) -> bool {
 ///
 /// `install_at_startup` makes the crate create its delegate (normally done
 /// lazily inside its first send) and wraps it before any banner is posted, so
-/// the first banner already goes through the proxy. `ensure_installed` after
+/// the first banner already goes through the proxy. `ensure_installed` before
 /// each post is a cheap guard in case anything replaced the delegate since.
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // NSUserNotification*: the legacy API mac-notification-sys posts through

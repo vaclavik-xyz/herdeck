@@ -111,3 +111,94 @@ def test_skip_focused_parses_default_on():
         assert parse({"skip_focused": False}).skip_focused is False
         with pytest.raises(ConfigError, match="notifications.skip_focused"):
             parse({"skip_focused": 0})
+
+
+# --- withdraw stale banners ---------------------------------------------------
+
+
+def _feed_live(features=frozenset({"withdraw"}), *, clock=None):
+    from herdeck.notify import runtime_sink
+
+    config, server = notify_config()
+    src = LiveSource(
+        config,
+        server,
+        notify_schedule=lambda fn: fn(),
+        notify_clock=clock,
+        notify_sink_factory=lambda feed, gate: runtime_sink(feed, gate, fallback=lambda *a: None),
+        idle_probe=FakeIdle(0.0),
+    )
+    src.set_notify_gate(lambda: True, features=lambda: features)
+    return src, server
+
+
+def _kinds(src):
+    return [(i["kind"], i.get("agent", {}).get("pane_id")) for i in src._notify_feed.state()["items"]]
+
+
+def test_answered_blocked_agent_withdraws_its_banner():
+    src, server = _feed_live()
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))
+    src._on_event(server.id, agent(server.id, "p0", Status.WORKING))  # answered anywhere
+    assert _kinds(src) == [("alert", "p0"), ("withdraw", "p0")]
+    # Nothing left to withdraw: a second change queues nothing.
+    src._on_event(server.id, agent(server.id, "p0", Status.IDLE))
+    assert len(_kinds(src)) == 2
+
+
+def test_done_agent_working_again_withdraws_and_a_new_block_alerts_after_it():
+    now = [100.0]
+    src, server = _feed_live(clock=lambda: now[0])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_event(server.id, agent(server.id, "p0", Status.DONE))
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))
+    assert _kinds(src) == [("alert", "p0"), ("withdraw", "p0"), ("alert", "p0")]
+
+
+def test_a_vanished_agent_withdraws_its_banner():
+    src, server = _feed_live()
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
+    src._on_snapshot(server.id, [])
+    assert _kinds(src)[-1] == ("withdraw", "p0")
+
+
+def test_no_withdraw_without_a_banner_or_for_an_old_shell():
+    src, server = _feed_live()
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])  # baseline, no alert
+    src._on_event(server.id, agent(server.id, "p0", Status.WORKING))
+    assert _kinds(src) == []
+
+    old, server = _feed_live(features=frozenset())
+    old._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    old._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))
+    old._on_event(server.id, agent(server.id, "p0", Status.WORKING))
+    assert _kinds(old) == [("alert", "p0")]  # would show as an empty banner
+
+
+def test_withdraw_fallback_is_acked_without_an_osascript_banner():
+    from herdeck.notify import NotificationFeed
+
+    feed = NotificationFeed()
+    item = feed.withdraw({"server_id": "s", "pane_id": "p"})
+    delivered = []
+    assert feed.fallback(item["generation"], item["seq"], lambda *a: delivered.append(a))
+    assert delivered == []
+    assert feed.state()["acked_seq"] == item["seq"]
+
+
+def test_shell_features_header_reaches_the_source():
+    from herdeck.deckapp import DeckApp
+    from tests.test_deckapp_live import StubIcons, live_config
+
+    config, server = live_config()
+    src = LiveSource(config, server)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    try:
+        app._wire_notify_gate(src)
+        assert src._notify_features() == frozenset()
+        app.note_shell_features("withdraw, future-thing,")
+        assert src._notify_features() == frozenset({"withdraw", "future-thing"})
+    finally:
+        app.close()

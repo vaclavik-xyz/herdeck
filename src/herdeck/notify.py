@@ -187,6 +187,8 @@ class NotificationFeed:
         sound: bool | str,
         icon: str | None = None,
         meta: dict | None = None,
+        *,
+        kind: str = "alert",
     ) -> dict:
         """Queue one banner. ``meta`` (see FEED_META_KEYS) tells the shell which
         agent the banner is about, so a click can open that agent's drill and a
@@ -198,7 +200,7 @@ class NotificationFeed:
                 "id": f"{self._generation}:{self._seq}",
                 "generation": self._generation,
                 "seq": self._seq,
-                "kind": "alert",
+                "kind": kind,
                 "title": title,
                 "body": body,
                 "sound": sound,
@@ -212,7 +214,10 @@ class NotificationFeed:
             self._items.append(item)
             dropped = self._trim_locked()
             self._changed.notify_all()
-        log.info("notification queued id=%s title=%r", item["id"], title)
+        if kind == "alert":
+            log.info("notification queued id=%s title=%r", item["id"], title)
+        else:
+            log.info("notification %s queued id=%s agent=%s", kind, item["id"], item.get("agent"))
         if dropped:
             log.warning(
                 "notification feed overflow: dropped %d undelivered item(s) "
@@ -260,6 +265,12 @@ class NotificationFeed:
                 "dropped": self.dropped,
                 "pending": max(0, self._seq - self._acked_seq),
             }
+
+    def withdraw(self, agent: dict) -> dict:
+        """Queue a "remove this agent's delivered banners" item (``kind`` =
+        "withdraw", no banner of its own). It rides the same acknowledged
+        sequence as alerts, so ordering and replay safety are unchanged."""
+        return self.push("", "", False, None, {"agent": agent}, kind="withdraw")
 
     def reset(self) -> None:
         """Drop everything and restart the sequence from zero.
@@ -362,11 +373,17 @@ class NotificationFeed:
             item = next((item for item in self._items if item["seq"] == seq), None)
             if item is None:
                 return False
-            payload = (item["title"], item["body"], item["sound"])
+            # osascript cannot remove a banner: a withdraw item is just acked.
+            payload = (
+                None
+                if item.get("kind", "alert") != "alert"
+                else (item["title"], item["body"], item["sound"])
+            )
             self._fallback_seq = seq
             self._changed.notify_all()
         try:
-            deliver(*payload)
+            if payload is not None:
+                deliver(*payload)
         except Exception:
             with self._changed:
                 self._fallback_seq = None

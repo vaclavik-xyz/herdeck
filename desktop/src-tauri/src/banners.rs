@@ -157,6 +157,25 @@ pub fn banner_identifier(generation: &str, seq: u64) -> String {
     format!("herdeck:{generation}:{seq}")
 }
 
+/// What the pump does with one feed item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedItemAction {
+    /// Post a banner (`kind` "alert", or absent from an older runtime).
+    Post,
+    /// Remove the agent's delivered banners, post nothing.
+    Withdraw,
+    /// A kind this shell does not know: acknowledge it without a banner.
+    Skip,
+}
+
+pub fn feed_item_action(kind: Option<&str>, meta: &BannerMeta) -> FeedItemAction {
+    match kind {
+        None | Some("alert") => FeedItemAction::Post,
+        Some("withdraw") if meta.agent.is_some() => FeedItemAction::Withdraw,
+        _ => FeedItemAction::Skip,
+    }
+}
+
 /// What a banner activation asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BannerIntent {
@@ -373,6 +392,17 @@ mod tests {
         assert_eq!(book.len(), BANNER_BOOK_MAX / 2);
         book.forget(&banner_identifier("g", (BANNER_BOOK_MAX + 4) as u64));
         assert_eq!(book.len(), BANNER_BOOK_MAX / 2 - 1);
+    }
+
+    #[test]
+    fn feed_item_kinds_map_to_pump_actions() {
+        let with_agent = BannerMeta { agent: Some(agent("p1")), ..BannerMeta::default() };
+        assert_eq!(feed_item_action(None, &BannerMeta::default()), FeedItemAction::Post);
+        assert_eq!(feed_item_action(Some("alert"), &with_agent), FeedItemAction::Post);
+        assert_eq!(feed_item_action(Some("withdraw"), &with_agent), FeedItemAction::Withdraw);
+        // A withdraw without an agent, or an unknown kind, never posts a banner.
+        assert_eq!(feed_item_action(Some("withdraw"), &BannerMeta::default()), FeedItemAction::Skip);
+        assert_eq!(feed_item_action(Some("future"), &with_agent), FeedItemAction::Skip);
     }
 
     #[test]
