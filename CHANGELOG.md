@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-24
+
 ### Added
 - Actionable macOS banners. Clicking an agent banner brings the deck forward
   and opens that agent's drill (new token-authenticated `POST /agents/drill`).
