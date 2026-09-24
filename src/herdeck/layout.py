@@ -96,6 +96,7 @@ def agent_tile_view(
         server_tag=server_tag,
         server_accent=server_accent,
         section=section,
+        subagents=state.subagents_running,
         **tile_icon_fields(view, state, project_icons),
     )
 

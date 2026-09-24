@@ -1386,3 +1386,59 @@ def test_svg_favicon_with_internal_references_is_allowed():
         '<svg><defs><linearGradient id="g"/></defs><rect fill="url(#g)"/>'
         '<use href="#g"/><image href="data:image/png;base64,AAAA"/></svg>'
     )
+
+
+# --- running-subagents badge ------------------------------------------------
+
+
+def _subagent_tile(n, **kw):
+    base = dict(
+        agent_type="claude",
+        repo="herdeck",
+        branch="main",
+        status_text="WORKING",
+        time_text="3m",
+        subagents=n,
+    )
+    base.update(kw)
+    return _TileView(0, "herdeck", "green", **base)
+
+
+def _pixels(p, tile):
+    return Image.open(_io.BytesIO(p.render_tile_bytes(tile))).convert("RGB")
+
+
+def test_subagent_badge_draws_only_when_running(tmp_path):
+    p = make_provider(tmp_path)
+    plain = _pixels(p, _subagent_tile(0))
+    badged = _pixels(p, _subagent_tile(3))
+    # only the bottom band changes: the rest of the tile is untouched
+    assert plain.crop((0, 0, 196, 160)).tobytes() == badged.crop((0, 0, 196, 160)).tobytes()
+    assert plain.crop((0, 160, 196, 188)).tobytes() != badged.crop((0, 160, 196, 188)).tobytes()
+    assert p._tile_name(_subagent_tile(0)) != p._tile_name(_subagent_tile(3))
+    assert p._tile_name(_subagent_tile(3)) != p._tile_name(_subagent_tile(4))
+
+
+def test_subagent_badge_caps_the_count_and_shortens_the_tag(tmp_path):
+    p = make_provider(tmp_path)
+    d = ImageDraw.Draw(Image.new("RGB", (196, 196)))
+    assert IconProvider._draw_subagent_badge(d, 0, 184, (255, 255, 255)) == 0
+    two = IconProvider._draw_subagent_badge(d, 12, 184, (255, 255, 255))
+    capped = IconProvider._draw_subagent_badge(d, 250, 184, (255, 255, 255))
+    assert 0 < two < capped < 80
+    # a long backend tag is truncated to leave the badge room
+    tagged = _pixels(p, _subagent_tile(250, server_tag="W" * 40, pinned=True))
+    untagged = _pixels(p, _subagent_tile(250, pinned=True))
+    # the badge's own pixels (right of the tag's truncated end) are identical
+    right = 196 - 12 - 26 - capped
+    assert tagged.crop((right, 160, 196, 188)).tobytes() == untagged.crop(
+        (right, 160, 196, 188)
+    ).tobytes()
+
+
+def test_label_tiles_never_draw_the_badge(tmp_path):
+    p = make_provider(tmp_path)
+    assert (
+        _pixels(p, _TileView(0, "Back", "grey")).tobytes()
+        == _pixels(p, _TileView(0, "Back", "grey", subagents=5)).tobytes()
+    )

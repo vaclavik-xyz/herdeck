@@ -52,6 +52,7 @@ def _config() -> Config:
 def _state() -> AgentState:
     s = AgentState(AgentKey("dev", "p1"), "claude", "herdeck", Status.WORKING)
     s.repo, s.branch = "herdeck", "main"
+    s.subagents_running, s.subagents_total = 2, 3
     return s
 
 
@@ -119,3 +120,4 @@ def test_agent_tile_view_fills_the_view_settings():
     assert (tile.working_animation, tile.tile_fill, tile.tile_icon) == ("pulse", "solid", "both")
     assert tile.project_name == "herdeck"
     assert tile.spinner is None and tile.section is None and tile.pinned is False
+    assert tile.subagents == 2

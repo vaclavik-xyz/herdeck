@@ -3416,3 +3416,19 @@ async def test_local_bridge_opt_in_gates_icon_frames(tmp_path):
             await btask
         server.close()
         await server.wait_closed()
+
+
+def test_subagents_token_reaches_agent_state_through_the_wire():
+    # herdeck-subagent-hook reports `subagents=<running>/<total>` as a herdr
+    # pane metadata token; the bridge forwards tokens verbatim as "metadata".
+    from herdeck.protocol import _pane_to_state
+
+    raw = raw_pane(agent="claude", status="working", cwd="/x/api")
+    raw["tokens"] = {"subagents": "2/3"}
+    wire = _herdr_pane_to_wire(raw)
+    assert wire["metadata"]["subagents"] == "2/3"
+    state = _pane_to_state("dev", json.loads(json.dumps(wire)))
+    assert (state.subagents_running, state.subagents_total) == (2, 3)
+    raw["tokens"] = {"subagents": "garbage"}
+    state = _pane_to_state("dev", _herdr_pane_to_wire(raw))
+    assert (state.subagents_running, state.subagents_total) == (0, 0)

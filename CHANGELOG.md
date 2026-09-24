@@ -6,6 +6,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Subagent badge: an agent tile shows `⑂N` in its bottom band while the pane's
+  agent has N subagents running, on the D200, the desktop deck window, the web
+  simulator and the Elgato plugin. The new `herdeck-subagent-hook` command,
+  run as a Claude Code (`SubagentStart`/`SubagentStop`, `PostToolUse` on
+  `Agent`, `PreToolUse` heartbeat) or Codex (`SubagentStart`/`SubagentStop`)
+  hook, keeps a small per-pane spool in `~/.cache/herdeck/subagents/` and
+  reports the Herdr metadata token `subagents=<running>/<total>`. The runtime
+  reads that token into the agent state. You add the hooks by hand for now
+  (README "Subagent tracking"); a later release will install them.
+
 ## [0.10.2] - 2026-09-24
 
 ### Changed

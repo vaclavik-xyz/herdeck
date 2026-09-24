@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from .model import AgentKey, AgentState, Status, WorkContext
+from .model import AgentKey, AgentState, Status, WorkContext, parse_subagents_token
 from .project_icon_discovery import ICON_MIMES, MAX_ICON_BYTES, icon_hash
 
 _ICON_HASH_RE = re.compile(r"[0-9a-f]{16}")
@@ -64,6 +64,9 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         if isinstance(raw_capabilities, list)
         else ()
     )
+    # The hook-written ``subagents`` token rides in plain pane metadata, so
+    # any bridge that forwards metadata carries it (no capability needed).
+    subagents_running, subagents_total = parse_subagents_token(metadata.get("subagents"))
     work_tokens = {
         "work_source": wire_work.get("source", ""),
         "work_item": wire_work.get("item", ""),
@@ -100,6 +103,8 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         project_icon=_icon_ref(pane.get("project_icon")),
         focused=pane.get("focused") is True,
         status_since_ms=_since_ms(pane.get("status_since_ms")),
+        subagents_running=subagents_running,
+        subagents_total=subagents_total,
     )
 
 

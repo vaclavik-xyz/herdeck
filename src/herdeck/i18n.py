@@ -81,6 +81,7 @@ STRINGS: dict[str, dict[str, str]] = {
         # accessible tile descriptions (desktop aria-label via /state)
         "a11y.empty_tile": "empty tile {n}",
         "a11y.pinned": "pinned",
+        "a11y.subagents": "{n} subagents running",
         # Elgato plugin action keys
         "act.approve": "Approve",
         "act.approve_always": "Approve!",
@@ -180,6 +181,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "notify.usage_reset_body": "můžeš pokračovat",
         "a11y.empty_tile": "prázdná dlaždice {n}",
         "a11y.pinned": "připnuto",
+        "a11y.subagents": "běžící subagenti: {n}",
         "act.approve": "Schválit",
         "act.approve_always": "Schválit!",
         "act.deny": "Zamítnout",
