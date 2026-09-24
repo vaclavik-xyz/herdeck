@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-24
+
 ### Added
 - `GET /maintenance` now reports per server `self_update` (the bridge
   advertises the capability) and `managed` (`true`/`false` from one health
