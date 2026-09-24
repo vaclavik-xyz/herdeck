@@ -225,7 +225,8 @@ class ReconnectingD200Sink:
             active = self._active
         if active is not None:
             active.deliver(frame)
-            self._last_frame_at = _now_ms()
+            if not frame.ticker:  # D200Sink drops ticker frames: no USB write
+                self._last_frame_at = _now_ms()
 
     def health(self) -> dict:
         """D200 facts for the runtime /health: is the device driven, since
