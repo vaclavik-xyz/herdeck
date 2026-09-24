@@ -72,6 +72,23 @@ class StatusSinceTracker:
         self._restored: dict[str, tuple[str, str, int]] = self._load() if path else {}
         self._dirty = False
         self._save_handle: asyncio.TimerHandle | None = None
+        # Observers of every stamped FULL snapshot (history.BridgeHistory):
+        # ``observe(panes, now_ms)`` and ``note_answer(pane_id)``.
+        self._observers: list = []
+
+    def add_observer(self, observer) -> None:
+        self._observers.append(observer)
+
+    def note_answer(self, pane_id: object) -> None:
+        """The bridge delivered an answer to ``pane_id`` (act / send_text /
+        choose_if_blocked); observers decide whether it ended a block."""
+        if not isinstance(pane_id, str):
+            return
+        for observer in self._observers:
+            try:
+                observer.note_answer(pane_id)
+            except Exception:
+                log.exception("status observer failed (note_answer)")
 
     def _now_ms(self) -> int:
         return int(self._clock() * 1000)
@@ -100,6 +117,11 @@ class StatusSinceTracker:
         self._restored = {}
         if self._dirty:
             self._schedule_save()
+        for observer in self._observers:
+            try:
+                observer.observe(panes, now)
+            except Exception:
+                log.exception("status observer failed")
         return panes
 
     def _since_for(self, pane_id: str, terminal_id: str, status: str, now: int) -> int:

@@ -1198,8 +1198,8 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   never the token itself unless you pass `--show`.
 - Optional view-only access: point `HERDECK_READONLY_TOKEN_FILE` at a second
   `0600` token file (it must differ from the main token). A client that
-  authenticates with it may send only `list`, `read`, `observe`, `observe_stop`
-  and `health`; `act`, `focus`, `refresh_title`, `send_text`,
+  authenticates with it may send only `list`, `read`, `observe`, `observe_stop`,
+  `health` and `stats`; `act`, `focus`, `refresh_title`, `send_text`,
   `choose_if_blocked`, `start` and any unknown message type get an `error`
   frame and never reach herdr.
 

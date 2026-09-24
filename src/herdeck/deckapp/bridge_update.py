@@ -270,6 +270,9 @@ class BridgeUpdateMixin:
         anonymous one still reaches the card requests too (it may be theirs)."""
         if self._bridge_update_on_error(server_id, req, message) and req is not None:
             return
+        stats_error = getattr(self, "_stats_on_error", None)
+        if callable(stats_error) and stats_error(req, message):
+            return  # a GET /stats request's own error (stats.py)
         self._on_request_error(server_id, req, message)
 
     def _on_progress(self, server_id: str, req: str | None, stage: str, message: str) -> None:

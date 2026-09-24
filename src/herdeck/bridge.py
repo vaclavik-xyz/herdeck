@@ -19,6 +19,7 @@ from typing import Protocol
 import websockets
 
 from . import __version__
+from . import history as _history
 from . import status_since as _status_since
 from .decisions import decision_choices, decision_revision
 from .model import Status, WorkContext
@@ -75,6 +76,8 @@ _WIRE_CAPABILITIES = (
     "self_update",
     # Each pane carries status_since_ms (see status_since.py).
     _STATUS_SINCE_CAPABILITY,
+    # Answers {"type": "stats"} from its episode history (history.py).
+    _history.CAPABILITY,
 )
 
 _TITLE_PLUGIN_ID = "zhangzujian.auto-session-title"
@@ -702,6 +705,13 @@ class StubHerdr:
         self.refreshed_titles.append(pane_id)
 
 
+def _note_answer(status_since: StatusSinceTracker | None, msg: dict) -> None:
+    """Input the bridge delivered to a pane; a BLOCKED episode it ends is
+    recorded as answered (history.py)."""
+    if status_since is not None:
+        status_since.note_answer(msg.get("pane_id"))
+
+
 async def handle_client_message(
     herdr: HerdrClient,
     server_id: str,
@@ -733,6 +743,7 @@ async def handle_client_message(
             if pane.get("agent_status") != "blocked":
                 return encode({"type": "result", "req": msg["req"], "data": {"skipped": True}})
         await herdr.send_keys(msg["pane_id"], msg["keys"])
+        _note_answer(status_since, msg)
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "focus":
         if await _pane_identity_changed(herdr, msg):
@@ -781,6 +792,7 @@ async def handle_client_message(
                     }
                 )
             await herdr.answer_blocked(msg["pane_id"], normalized_text)
+        _note_answer(status_since, msg)
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "choose_if_blocked":
         pane = await herdr.get_pane(msg["pane_id"])
@@ -830,6 +842,7 @@ async def handle_client_message(
                 }
             )
         await herdr.answer_blocked(msg["pane_id"], msg["choice"])
+        _note_answer(status_since, msg)
         return encode({"type": "result", "req": msg["req"], "data": {"sent": True}})
     if kind == "start":
         await herdr.start_agent(msg["name"], msg["argv"])
@@ -1747,7 +1760,7 @@ class SocketHerdr:
 # choose_if_blocked, start, update (bridge self-update), and any future type —
 # is rejected (an allowlist, so a new mutating message is never open to
 # view-only clients by default).
-READONLY_MESSAGES = frozenset({"list", "read", "observe", "observe_stop", "health"})
+READONLY_MESSAGES = frozenset({"list", "read", "observe", "observe_stop", "health", "stats"})
 
 
 async def _health_result(
@@ -1786,6 +1799,7 @@ async def _serve_connection(
     readonly_token: str | None = None,
     updater: BridgeUpdater | None = None,
     status_since: StatusSinceTracker | None = None,
+    history: _history.BridgeHistory | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
@@ -1938,6 +1952,19 @@ async def _serve_connection(
                     )
                 )
                 continue
+            if kind == "stats":
+                # Read-only data (history.py); computed off the event loop.
+                if history is None:
+                    req = msg.get("req")
+                    reply = {
+                        "type": "error",
+                        "req": req if isinstance(req, str) else "",
+                        "message": "stats unavailable: no history on this bridge",
+                    }
+                else:
+                    reply = await history.stats_reply(msg)
+                await send(encode(reply))
+                continue
             if kind == "update":
                 # Full token only (not in READONLY_MESSAGES, refused above).
                 # Runs in the background: pip can take minutes, and the
@@ -2015,6 +2042,20 @@ async def _require_snapshot_support(herdr: HerdrClient) -> None:
         )
 
 
+def _open_history(
+    name: str, status_since: StatusSinceTracker
+) -> _history.BridgeHistory | None:
+    """The bridge's episode history (history.py), fed by the status-since
+    tracker. None when it cannot start — the bridge runs without it."""
+    try:
+        history = _history.BridgeHistory(_history.default_path(name))
+    except Exception as exc:
+        log.warning("status history disabled: %s", exc)
+        return None
+    status_since.add_observer(history)
+    return history
+
+
 def _log_broadcast_task_failure(task: asyncio.Task) -> None:
     """serve() awaits _broadcast in its own foreground, so a fatal stream
     error (e.g. an old herdr surfacing after a transient-down startup probe)
@@ -2050,6 +2091,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     status_since = StatusSinceTracker(
         _status_since.default_state_path("local-bridge-status-since.json")
     )
+    history = _open_history("local-bridge-history.sqlite", status_since)
     events = HerdrEvents(
         events_herdr, socket_path=socket_path, icons=icons, status_since=status_since
     )
@@ -2067,6 +2109,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
             icons=icons,
             icon_subs=icon_subs,
             status_since=status_since,
+            history=history,
         )
 
     server = await websockets.serve(handler, host, 0)
@@ -2103,6 +2146,7 @@ async def serve(
     await _require_snapshot_support(events_herdr)
     icons = ProjectIconIndex()  # event-loop only (not thread-safe), see start_local_bridge
     status_since = StatusSinceTracker(_status_since.default_state_path())  # event-loop only too
+    history = _open_history("history.sqlite", status_since)
     events = HerdrEvents(
         events_herdr, socket_path=socket_path, icons=icons, status_since=status_since
     )  # push + slow poll
@@ -2129,6 +2173,7 @@ async def serve(
             readonly_token=readonly_token,
             updater=updater,
             status_since=status_since,
+            history=history,
         )
 
     async with websockets.serve(handler, host, port):
@@ -2144,6 +2189,8 @@ async def serve(
                 task.cancel()
             await asyncio.gather(broadcast, stopper, return_exceptions=True)
             status_since.close()  # a restart must not lose the debounced last write
+            if history is not None:
+                history.close()  # flushes the queued episodes
         if broadcast.done() and not broadcast.cancelled() and broadcast.exception() is not None:
             raise broadcast.exception()
     return updater.exit_requested

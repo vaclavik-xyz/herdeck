@@ -62,6 +62,7 @@ from ..usage_alerts import usage_alert_message, usage_alert_sound
 from .agent_card import AgentCardMixin
 from .bridge_update import BridgeUpdateMixin
 from .source import StateSource
+from .stats import StatsMixin
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ def _thread_notify_schedule(fn) -> None:
     threading.Thread(target=fn, daemon=True, name="herdeck-notify").start()
 
 
-class LiveSource(AgentCardMixin, BridgeUpdateMixin, StateSource):
+class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, StateSource):
     """A StateSource fed by one or more real bridges through ``Connector``.
 
     The connector callbacks buffer the latest fleet state and re-render the deck;
@@ -240,6 +241,7 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StateSource):
         self._runners: dict[str, object] = {}
         self._card_init()  # desktop agent card (agent_card.AgentCardMixin)
         self._bridge_update_init()  # bridge self-update (bridge_update.BridgeUpdateMixin)
+        self._stats_init()  # GET /stats relay (stats.StatsMixin)
 
     # --- StateSource surface ---
     @property
@@ -1065,6 +1067,7 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StateSource):
         self._apply(mutate)
         self._card_on_connection(server_id, up)
         self._bridge_update_on_connection(server_id, up)
+        self._stats_on_connection(server_id, up)
 
     def _on_result(self, *args) -> None:
         """Handle a connector result.
@@ -1083,6 +1086,8 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StateSource):
             return
         if self._bridge_update_on_result(req, data):
             return  # a bridge self-update reply (bridge_update.py), not a deck command
+        if self._stats_on_result(req, data):
+            return  # a GET /stats reply (stats.py), not a deck command
         tap = self._result_tap
         if tap is not None and req is not None:
             claimed = tap(server_id, req, data)
