@@ -125,6 +125,7 @@ const CONVERTED = [
   "lib/DeckView.svelte",
   "lib/Banner.svelte",
   "lib/UpdateBanner.svelte",
+  "lib/HealthNotice.svelte",
   "ConfigApp.svelte",
   "App.svelte",
   "lib/Onboarding.svelte",

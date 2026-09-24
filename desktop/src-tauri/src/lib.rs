@@ -529,7 +529,8 @@ fn probe_runtime_health(d: &Discovery) -> bool {
 /// Probe the sidecar's token-authed `GET /health` and return its JSON. Done
 /// Rust-side (not via WebView `fetch`) so it isn't blocked by CORS, and so the
 /// access token never has to live in JS. `Err` if the sidecar isn't ready yet
-/// or is unreachable.
+/// or is unreachable. The shell adds its own `app_version`, so the window can
+/// warn when it is attached to a runtime of a different release.
 #[tauri::command]
 async fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let d = current_discovery(&state)?;
@@ -540,10 +541,19 @@ async fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::V
             &format!("/health?token={}", d.token),
             SIDECAR_TIMEOUT,
         )?;
-        serde_json::from_str::<serde_json::Value>(&body)
-            .map_err(|e| format!("invalid /health JSON from sidecar: {e}"))
+        let health = serde_json::from_str::<serde_json::Value>(&body)
+            .map_err(|e| format!("invalid /health JSON from sidecar: {e}"))?;
+        Ok(with_app_version(health, env!("CARGO_PKG_VERSION")))
     })
     .await
+}
+
+/// Stamp the shell's version onto a `/health` object (non-objects pass through).
+fn with_app_version(mut health: serde_json::Value, version: &str) -> serde_json::Value {
+    if let Some(map) = health.as_object_mut() {
+        map.insert("app_version".into(), serde_json::Value::from(version));
+    }
+    health
 }
 
 /// Proxy `GET /state` (token injected Rust-side) → its JSON. This is the deck's
@@ -1821,6 +1831,15 @@ fn start_app_log() {
 #[cfg(test)]
 mod plan_tests {
     use super::*;
+
+    #[test]
+    fn health_carries_the_shell_version_for_mismatch_warnings() {
+        let health = serde_json::json!({"ok": true, "version": "0.8.0"});
+        let stamped = with_app_version(health, "0.8.1");
+        assert_eq!(stamped["app_version"], "0.8.1");
+        assert_eq!(stamped["version"], "0.8.0");
+        assert_eq!(with_app_version(serde_json::json!(null), "1"), serde_json::json!(null));
+    }
 
     #[test]
     fn notification_generation_change_delivers_low_sequence_item() {
