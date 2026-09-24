@@ -13,6 +13,7 @@ import shutil
 import stat
 import time
 import unicodedata
+from collections.abc import Callable
 from typing import Protocol
 
 import websockets
@@ -22,6 +23,7 @@ from .decisions import decision_choices, decision_revision
 from .model import Status, WorkContext
 from .project_icon_discovery import ProjectIconIndex
 from .protocol import WIRE_PROTOCOL, encode
+from .self_update import EXIT_GRACE_S, BridgeUpdater, not_managed_result
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +66,10 @@ _WIRE_CAPABILITIES = (
     "state_labels",
     "herdr_order",
     "project_icon",
+    # Understands {"type": "update"} (self_update.py). Whether THIS bridge may
+    # update itself is a separate question, answered by the health probe's
+    # `managed` and by the update reply itself.
+    "self_update",
 )
 
 _TITLE_PLUGIN_ID = "zhangzujian.auto-session-title"
@@ -1718,30 +1724,33 @@ class SocketHerdr:
 # What a client authenticated with HERDECK_READONLY_TOKEN_FILE may send: fleet
 # snapshots (+ project icons), pane text reads, live terminal previews and the
 # health probe. Everything else — act, focus, refresh_title, send_text,
-# choose_if_blocked, start, and any future type — is rejected (an allowlist,
-# so a new mutating message is never open to view-only clients by default).
+# choose_if_blocked, start, update (bridge self-update), and any future type —
+# is rejected (an allowlist, so a new mutating message is never open to
+# view-only clients by default).
 READONLY_MESSAGES = frozenset({"list", "read", "observe", "observe_stop", "health"})
 
 
-async def _health_result(herdr: HerdrClient, req: object, clients: int) -> dict:
+async def _health_result(
+    herdr: HerdrClient, req: object, clients: int, *, managed: bool | None = None
+) -> dict:
     """Answer an authenticated ``{"type": "health", "req": ...}`` probe: this
     bridge's version and wire protocol, whether herdr's socket answers right
-    now, and how many deck clients are attached (herdeck-doctor uses it)."""
+    now, and how many deck clients are attached (herdeck-doctor uses it).
+    ``managed`` (whether ``update`` can succeed here) is included when known."""
     try:
         await asyncio.wait_for(herdr.snapshot(), timeout=_HEALTH_HERDR_TIMEOUT)
         reachable = True
     except Exception:
         reachable = False
-    return {
-        "type": "result",
-        "req": req if isinstance(req, str) else "",
-        "data": {
-            "herdeck_version": __version__,
-            "protocol": _WIRE_PROTOCOL,
-            "herdr_reachable": reachable,
-            "clients": clients,
-        },
+    data = {
+        "herdeck_version": __version__,
+        "protocol": _WIRE_PROTOCOL,
+        "herdr_reachable": reachable,
+        "clients": clients,
     }
+    if managed is not None:
+        data["managed"] = managed
+    return {"type": "result", "req": req if isinstance(req, str) else "", "data": data}
 
 
 async def _serve_connection(
@@ -1755,6 +1764,7 @@ async def _serve_connection(
     icons: ProjectIconIndex | None = None,
     icon_subs: dict | None = None,
     readonly_token: str | None = None,
+    updater: BridgeUpdater | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
@@ -1900,7 +1910,23 @@ async def _serve_connection(
                     await stop_observe(req)
                 continue
             if kind == "health":
-                await send(encode(await _health_result(herdr, msg.get("req"), len(clients))))
+                managed = updater.managed if updater is not None else False
+                await send(
+                    encode(
+                        await _health_result(herdr, msg.get("req"), len(clients), managed=managed)
+                    )
+                )
+                continue
+            if kind == "update":
+                # Full token only (not in READONLY_MESSAGES, refused above).
+                # Runs in the background: pip can take minutes, and the
+                # connection keeps serving snapshots meanwhile.
+                if updater is None:
+                    await send(
+                        not_managed_result(msg.get("req"), "this bridge cannot update itself")
+                    )
+                else:
+                    updater.start(msg, send)
                 continue
             if kind == "list" and icons is not None and icon_subs is not None:
                 features = msg.get("features")
@@ -2031,7 +2057,14 @@ async def serve(
     token: str,
     *,
     readonly_token: str | None = None,
-):
+    updater_factory: Callable[[Callable[[], None]], BridgeUpdater] = (
+        lambda request_exit: BridgeUpdater(request_exit=request_exit)
+    ),
+) -> bool:
+    """Serve until a verified self-update requests a restart (returns True).
+    ``updater_factory`` receives the exit seam and builds the self-updater
+    (injectable for tests); a managed install may update itself, see
+    self_update.py."""
     # SocketHerdr RPCs are unserialized one-shot connections (herdr accepts them
     # concurrently), so an on-demand read/focus/act never queues behind an
     # in-flight fleet snapshot. Separate instances for the event stream vs client
@@ -2043,6 +2076,13 @@ async def serve(
     events = HerdrEvents(events_herdr, socket_path=socket_path, icons=icons)  # push + slow poll
     clients: dict = {}
     icon_subs: dict = {}
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    # The exit seam: a verified self-update asks serve() to return (after a
+    # short grace so the result frame flushes); main() then exits 0 and the
+    # service manager (launchd KeepAlive / systemd Restart=always) starts the
+    # freshly installed version.
+    updater = updater_factory(lambda: loop.call_later(EXIT_GRACE_S, stop.set))
 
     async def handler(ws):
         await _serve_connection(
@@ -2055,11 +2095,24 @@ async def serve(
             icons=icons,
             icon_subs=icon_subs,
             readonly_token=readonly_token,
+            updater=updater,
         )
 
     async with websockets.serve(handler, host, port):
-        # runs forever
-        await _broadcast(events.stream(), clients, server_id, icon_subs=icon_subs, icons=icons)
+        # runs until a verified self-update asks for a restart
+        broadcast = asyncio.create_task(
+            _broadcast(events.stream(), clients, server_id, icon_subs=icon_subs, icons=icons)
+        )
+        stopper = asyncio.create_task(stop.wait())
+        try:
+            await asyncio.wait({broadcast, stopper}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (broadcast, stopper):
+                task.cancel()
+            await asyncio.gather(broadcast, stopper, return_exceptions=True)
+        if broadcast.done() and not broadcast.cancelled() and broadcast.exception() is not None:
+            raise broadcast.exception()
+    return updater.exit_requested
 
 
 def _read_token_file(token_file: str, env_name: str) -> str:
@@ -2187,7 +2240,10 @@ def main(argv: list[str] | None = None) -> None:
     server_id = os.environ.get("HERDECK_SERVER_ID", "server")
     token = load_bridge_token()
     readonly = load_readonly_token(token)
-    asyncio.run(serve(socket_path, host, port, server_id, token, readonly_token=readonly))
+    restart = asyncio.run(serve(socket_path, host, port, server_id, token, readonly_token=readonly))
+    if restart:
+        # Clean exit (0): the service unit restarts it (KeepAlive / Restart=always).
+        log.info("herdeck-bridge exiting to restart into the updated version")
 
 
 if __name__ == "__main__":
