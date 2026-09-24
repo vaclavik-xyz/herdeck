@@ -122,6 +122,10 @@ describe("onboardingDecision (exhaustive on reason, defaults to deck)", () => {
     expect(onboardingDecision(at("something_new"))).toBe("deck");
   });
 
+  it("config_error -> deck (the deck shows the error; not first-run onboarding)", () => {
+    expect(onboardingDecision({ ...at("config_error"), mode: "error" })).toBe("deck");
+  });
+
   it("null status (not ready / unreadable) -> deck", () => {
     expect(onboardingDecision(null)).toBe("deck");
   });

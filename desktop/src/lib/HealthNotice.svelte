@@ -1,5 +1,6 @@
 <script lang="ts">
-  // A small, non-blocking status line that explains a dark deck: version
+  // A small, non-blocking status line that explains a dark deck: a config
+  // that does not load (the runtime then shows an error, never demo agents), version
   // mismatches (app ≠ runtime, runtime ≠ bridge), a bridge that dropped or
   // rejected its token, a D200 that disconnected or is held by another
   // runtime. Polls the runtime /health through the Rust shell (never the
@@ -25,6 +26,7 @@
 
   const LM = defineMessages({
     en: {
+      config_error: "config error: {error} — see Maintenance",
       runtime_mismatch: "runtime {runtime} ≠ app {app} — restart the runtime",
       bridge_mismatch: "bridge {id} {bridge} ≠ runtime {runtime} — update the bridge",
       bridge_protocol: "bridge {id} speaks a newer protocol — update the runtime",
@@ -38,6 +40,7 @@
       update_bridge_id: "Update bridge {id}",
     },
     cs: {
+      config_error: "chyba configu: {error} — viz Údržba",
       runtime_mismatch: "runtime {runtime} ≠ aplikace {app} — restartuj runtime",
       bridge_mismatch: "bridge {id} {bridge} ≠ runtime {runtime} — aktualizuj bridge",
       bridge_protocol: "bridge {id} mluví novějším protokolem — aktualizuj runtime",

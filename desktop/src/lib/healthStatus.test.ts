@@ -5,6 +5,7 @@ import { HEALTH_GRACE_MS, healthLine, type HealthMessages } from "./healthStatus
 import { setLang } from "./i18n.svelte";
 
 const M: HealthMessages = {
+  config_error: "config error: {error}",
   runtime_mismatch: "runtime {runtime} ≠ app {app}",
   bridge_mismatch: "bridge {id} {bridge} ≠ runtime {runtime}",
   bridge_protocol: "bridge {id} protocol",
@@ -19,6 +20,12 @@ const M: HealthMessages = {
 const NOW = 10_000_000;
 
 describe("healthLine", () => {
+  it("puts a config error first, pointing at Maintenance", () => {
+    expect(
+      healthLine({ config_error: "invalid grid 'wide'", version: "0.9.0", app_version: "0.9.1" }, M, NOW),
+    ).toBe("config error: invalid grid 'wide' · runtime 0.9.0 ≠ app 0.9.1");
+  });
+
   it("is empty for a healthy runtime and for an old runtime without the fields", () => {
     expect(healthLine({ ok: true }, M, NOW)).toBe("");
     expect(
@@ -115,6 +122,20 @@ describe("HealthNotice", () => {
     cleanup();
     cleanup = await render(payload, "cs");
     expect(target.textContent).toContain("runtime 0.8.0 ≠ aplikace 0.8.1 — restartuj runtime");
+    cleanup();
+  });
+
+  it("renders the runtime's config error in English and Czech", async () => {
+    const payload = { source: "config_error", config_error: "bridge token for server 'local' not found" };
+    let cleanup = await render(payload, "en");
+    expect(target.textContent).toContain(
+      "config error: bridge token for server 'local' not found — see Maintenance",
+    );
+    cleanup();
+    cleanup = await render(payload, "cs");
+    expect(target.textContent).toContain(
+      "chyba configu: bridge token for server 'local' not found — viz Údržba",
+    );
     cleanup();
   });
 
