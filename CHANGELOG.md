@@ -24,6 +24,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   missing GUI login session is reported as `no_gui_session`. The runtime relays
   it at `GET|POST /maintenance/servers/<id>/usage-agent`, and `GET
   /maintenance` carries a `usage_agent` summary per server.
+- Desktop Maintenance: a "Usage limits helper" row per connected bridge that
+  serves usage shows the agent's state (not installed / running with its
+  providers and data age / stale / not running / no login session /
+  unsupported / failed) with Install / Remove and a result toast; a bridge
+  listed under `/health` `usage.bridges_empty` is highlighted. The shell's
+  `maintenance_call` proxy allows the `usage-agent` route.
 
 ### Fixed
 - Subagent badges never appeared on the deck: `herdeck-subagent-hook`

@@ -3,6 +3,7 @@ import {
   fetchMaintenance, parseDeckOutcome, parseMaintenance, powerCycleDeck, restartDeck, runBridgeUpdate,
   compareVersions, runtimeOrigin, runtimeService, serverSegment, versionRows, type MaintenanceStatus,
   hookState, parseHooksSummary, runHooksAction,
+  parseUsageAgent, runUsageAgentAction, usageAgentState,
 } from "./maintenanceClient";
 import {
   MAINTENANCE_MESSAGES, bridgeUpdateText, d200StateText, deckOutcomeText, powerCycleReasonText,
@@ -23,7 +24,7 @@ describe("parseMaintenance", () => {
     expect(s.d200.state).toBe("connected");
     expect(s.d200.powerCycle).toMatchObject({ available: true, hub: "20-1", port: 2 });
     expect(s.servers).toEqual([
-      { id: "m4", managed: true, selfUpdate: true, connected: true, bridgeVersion: "0.8.9", protocolSupported: null, lastError: null, everConnected: true, hooks: null },
+      { id: "m4", managed: true, selfUpdate: true, connected: true, bridgeVersion: "0.8.9", protocolSupported: null, lastError: null, everConnected: true, hooks: null, usageAgent: null },
     ]);
     expect(s.app?.bundle).toBe("/Applications/herdeck.app");
   });
@@ -279,5 +280,50 @@ describe("subagent hooks", () => {
       expect(text.ok).toBe(false);
       expect(text.text.length).toBeGreaterThan(5);
     }
+  });
+});
+
+describe("usage agent", () => {
+  it("parses the summary and the full answer", () => {
+    expect(parseUsageAgent(null)).toBeNull();
+    expect(parseUsageAgent({ installed: true, running: true, fresh: true, bridge_usage: true, file_age_s: 3.5, providers: ["codex", 1, ""], error: null })).toEqual({
+      installed: true, running: true, fresh: true, bridgeUsage: true, fileAgeS: 3.5, providers: ["codex"], error: null, guiSession: null,
+    });
+    expect(parseUsageAgent({ gui_session: false })?.guiSession).toBe(false);
+    const s = parseMaintenance(rawStatus({ servers: { m4: { connected: true, usage_agent: { installed: true, bridge_usage: true } } } }));
+    expect(s?.servers[0].usageAgent?.installed).toBe(true);
+  });
+
+  it("derives the row state, the last action's code first", () => {
+    const ua = parseUsageAgent({ installed: true, running: true, fresh: true })!;
+    expect(usageAgentState(ua)).toBe("running");
+    expect(usageAgentState(ua, "no_gui_session")).toBe("no_gui_session");
+    expect(usageAgentState(ua, "unsupported")).toBe("unsupported");
+    expect(usageAgentState(ua, "timeout")).toBe("running");
+    expect(usageAgentState({ ...ua, fresh: false })).toBe("stale");
+    expect(usageAgentState({ ...ua, running: false })).toBe("stopped");
+    expect(usageAgentState({ ...ua, installed: false })).toBe("not_installed");
+    expect(usageAgentState({ ...ua, installed: false, guiSession: false })).toBe("no_gui_session");
+    expect(usageAgentState({ ...ua, error: "boom" })).toBe("error");
+  });
+
+  it("GETs the status and POSTs install / uninstall through the proxy", async () => {
+    const calls: unknown[] = [];
+    const invoke = async (cmd: string, args?: Record<string, unknown>) => {
+      calls.push({ cmd, args });
+      return { status: 200, body: { ok: true, code: "ok", message: "", server_id: "local:b", agent: { installed: true } } };
+    };
+    await runUsageAgentAction(invoke, "local:b", "status");
+    const o = await runUsageAgentAction(invoke, "local:b", "install");
+    await runUsageAgentAction(invoke, "local:b", "uninstall");
+    expect(calls).toEqual([
+      { cmd: "maintenance_call", args: { method: "GET", path: "/maintenance/servers/local%3Ab/usage-agent" } },
+      { cmd: "maintenance_call", args: { method: "POST", path: "/maintenance/servers/local%3Ab/usage-agent", body: { action: "install" } } },
+      { cmd: "maintenance_call", args: { method: "POST", path: "/maintenance/servers/local%3Ab/usage-agent", body: { action: "uninstall" } } },
+    ]);
+    expect(o).toMatchObject({ ok: true, code: "ok" });
+    expect(o.agent?.installed).toBe(true);
+    expect(await runUsageAgentAction(async () => ({ status: 404, body: null }), "x", "install")).toMatchObject({ ok: false, code: "http" });
+    expect(await runUsageAgentAction(async () => { throw new Error("gone"); }, "x", "install")).toMatchObject({ ok: false, code: "unreachable" });
   });
 });

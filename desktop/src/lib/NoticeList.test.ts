@@ -113,6 +113,16 @@ describe("NoticeList rows", () => {
     expect(healthState.problems.map((p) => p.kind)).toEqual(["config_error", "runtime_mismatch"]);
   });
 
+  it("publishes the bridges that offer usage without numbers", async () => {
+    mountList({ fetchHealth: async () => ({ usage: { source: "bridge", active: "bridge", bridges: ["m4", "t3"], bridges_empty: ["m4"] } }) });
+    await settle();
+    expect(healthState.usageBridgesEmpty).toEqual(["m4"]);
+    for (const c of cleanups.splice(0)) c();
+    mountList({ fetchHealth: async () => ({}) });
+    await settle();
+    expect(healthState.usageBridgesEmpty).toEqual([]);
+  });
+
   it("shows a new app version as an info row with Install, release notes and Later", async () => {
     let installs = 0;
     let later = 0;

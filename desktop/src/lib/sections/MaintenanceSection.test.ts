@@ -3,6 +3,9 @@ import { flushSync, mount, tick, unmount } from "svelte";
 import MaintenanceSection from "./MaintenanceSection.svelte";
 import { rawStatus } from "../maintenanceFixture";
 import { setLang } from "../i18n.svelte";
+import { MAINTENANCE_MESSAGES } from "../maintenanceMessages";
+import { clearToasts, toasts } from "../toastStore.svelte";
+import { setUsageBridgesEmpty } from "../healthState.svelte";
 
 type Handler = (args: Record<string, unknown> | undefined) => unknown;
 
@@ -379,6 +382,162 @@ describe("MaintenanceSection", () => {
     expect(hookRow(t, "claude").dataset.state).toBe("error");
     expect(hookRow(t, "claude").textContent).toContain("not valid JSON");
     expect(button(t, "hooks-claude").disabled).toBe(true);
+  });
+
+  describe("usage limits helper", () => {
+    const agent = (over: Record<string, unknown> = {}) => ({
+      action: "status", ok: true, code: "ok", error: null, installed: false, running: false, managed: true,
+      gui_session: true, bridge_usage: true, file: "/Users/me/.local/state/herdeck/usage.json",
+      file_age_s: null, fresh: false, providers: [], ...over,
+    });
+    const summary = (over: Record<string, unknown> = {}) => ({
+      installed: false, running: false, fresh: false, bridge_usage: true, file_age_s: null, providers: [], error: null, ...over,
+    });
+    const withUa = (ua: unknown, over: Record<string, unknown> = {}) =>
+      rawStatus({ servers: { m4: { managed: true, self_update: true, connected: true, bridge_version: "0.9.1", usage_agent: ua, ...over } } });
+    const row = (t: HTMLElement) => t.querySelector<HTMLElement>('[data-usage-agent="m4"]');
+    const stateText = (t: HTMLElement) => row(t)?.querySelector("[data-ua-state]")?.textContent ?? "";
+    /** GET status answers `live` (null = the bridge does not answer). */
+    const statusRoute = (live: Record<string, unknown> | null) => (): unknown =>
+      live ? { status: 200, body: { ok: true, code: "ok", message: "", server_id: "m4", agent: live } } : { status: 200, body: { ok: false, code: "timeout", message: "late", server_id: "m4", agent: null } };
+
+    afterEach(() => { clearToasts(); setUsageBridgesEmpty([]); });
+
+    it("shows each state in English and Czech", async () => {
+      const cases: [Record<string, unknown>, string, string, string][] = [
+        [agent(), "not_installed", "not installed", "nenainstalováno"],
+        [agent({ installed: true, running: true, fresh: true, providers: ["codex", "claude"], file_age_s: 12 }), "running", "running · codex, claude · updated 12 s ago", "běží · codex, claude · aktualizováno před 12 s"],
+        [agent({ installed: true, running: true, fresh: false, file_age_s: 900 }), "stale", "installed, but its numbers are stale", "nainstalováno, ale čísla jsou zastaralá"],
+        [agent({ installed: true, running: false }), "stopped", "installed, but not running", "nainstalováno, ale neběží"],
+        [agent({ gui_session: false }), "no_gui_session", "no login session on that Mac", "není přihlášené sezení"],
+        [agent({ ok: false, code: "failed", error: "launchctl bootstrap failed: 5" }), "error", "the last action failed", "poslední akce selhala"],
+      ];
+      for (const [live, state, en, cs] of cases) {
+        for (const [lang, text] of [["en", en], ["cs", cs]] as const) {
+          const t = await render(fake(withUa(summary()), { "GET /maintenance/servers/m4/usage-agent": statusRoute(live) }).invoke, lang);
+          expect(row(t)?.dataset.state, `${state} ${lang}`).toBe(state);
+          expect(stateText(t)).toContain(text);
+          cleanup?.();
+          cleanup = null;
+        }
+      }
+    });
+
+    it("uses the GET /maintenance summary until the live status answers, without an age", async () => {
+      const t = await render(fake(withUa(summary({ installed: true, running: true, fresh: true, providers: ["codex"], file_age_s: 40 })), {
+        "GET /maintenance/servers/m4/usage-agent": statusRoute(null),
+      }).invoke);
+      expect(row(t)?.dataset.state).toBe("running");
+      expect(stateText(t)).toBe("running · codex");
+      expect(button(t, "usage-agent-uninstall").getAttribute("title")).toBe("Remove the usage limits helper from m4");
+    });
+
+    it("is shown only for a connected bridge that serves usage", async () => {
+      let t = await render(fake(withUa(summary({ bridge_usage: false }))).invoke);
+      expect(row(t)).toBeNull();
+      cleanup?.();
+      t = await render(fake(withUa(null)).invoke);
+      expect(row(t)).toBeNull();
+      cleanup?.();
+      t = await render(fake(withUa(summary(), { connected: false })).invoke);
+      expect(row(t)).toBeNull();
+      cleanup?.();
+      // installed on a bridge that stopped serving usage: still removable
+      t = await render(fake(withUa(summary({ installed: true, bridge_usage: false }))).invoke);
+      expect(button(t, "usage-agent-uninstall")).toBeTruthy();
+    });
+
+    it("installs through POST with the action, shows busy, toasts and refreshes", async () => {
+      const posted: { method: unknown; body: unknown }[] = [];
+      let release: () => void = () => {};
+      const gate = new Promise<void>((r) => { release = r; });
+      const f = fake(withUa(summary()), {
+        "GET /maintenance/servers/m4/usage-agent": statusRoute(agent()),
+        "POST /maintenance/servers/m4/usage-agent": async (args) => {
+          posted.push({ method: args?.method, body: args?.body });
+          await gate;
+          return { status: 200, body: { ok: true, code: "ok", message: "", server_id: "m4", agent: agent({ action: "install", installed: true, running: true, fresh: false }) } };
+        },
+      });
+      const t = await render(f.invoke);
+      const statusGets = () => f.calls.filter((c) => c.args?.path === "/maintenance").length;
+      const before = statusGets();
+      button(t, "usage-agent-install").click();
+      await settle();
+      expect(posted).toEqual([{ method: "POST", body: { action: "install" } }]);
+      expect(button(t, "usage-agent-install").disabled).toBe(true);
+      expect(button(t, "usage-agent-install").textContent).toBe("Installing…");
+      expect(toasts.items.at(-1)).toMatchObject({ kind: "progress", text: "Installing the usage limits helper on m4…" });
+      release();
+      await settle();
+      expect(toasts.items).toHaveLength(1);
+      expect(toasts.items[0]).toMatchObject({ kind: "success", text: "Usage limits helper installed on m4." });
+      expect(row(t)?.dataset.state).toBe("stale");
+      expect(button(t, "usage-agent-uninstall").disabled).toBe(false);
+      expect(statusGets()).toBeGreaterThan(before);
+    });
+
+    it("removes through POST uninstall and toasts refusals from the code, with the raw message as detail", async () => {
+      const posted: unknown[] = [];
+      const f = fake(withUa(summary({ installed: true, running: true })), {
+        "GET /maintenance/servers/m4/usage-agent": statusRoute(null),
+        "POST /maintenance/servers/m4/usage-agent": (args) => {
+          posted.push(args?.body);
+          return { status: 200, body: { ok: false, code: "readonly", message: "read-only token: usage_agent", server_id: "m4", agent: null } };
+        },
+      });
+      const t = await render(f.invoke, "cs");
+      button(t, "usage-agent-uninstall").click();
+      await settle();
+      expect(posted).toEqual([{ action: "uninstall" }]);
+      expect(toasts.items[0]).toMatchObject({ kind: "error", text: "m4: bridge odmítl — token tohoto serveru je jen pro čtení.", detail: "read-only token: usage_agent" });
+    });
+
+    it("keeps a no-login-session or unsupported install visible in the row", async () => {
+      for (const code of ["no_gui_session", "unsupported"]) {
+        const f = fake(withUa(summary()), {
+          "GET /maintenance/servers/m4/usage-agent": statusRoute(null),
+          "POST /maintenance/servers/m4/usage-agent": () => ({
+            status: 200,
+            body: { ok: false, code, message: "raw english", server_id: "m4", agent: code === "unsupported" ? null : agent({ action: "install", ok: false, code, error: "no GUI session", gui_session: false }) },
+          }),
+        });
+        const t = await render(f.invoke);
+        button(t, "usage-agent-install").click();
+        await settle();
+        expect(row(t)?.dataset.state).toBe(code);
+        expect(toasts.items[0].kind).toBe("error");
+        expect(toasts.items[0].text).not.toContain("raw english");
+        cleanup?.();
+        cleanup = null;
+        clearToasts();
+      }
+    });
+
+    it("points out a bridge that offers usage without numbers", async () => {
+      setUsageBridgesEmpty(["m4"]);
+      let t = await render(fake(withUa(summary()), { "GET /maintenance/servers/m4/usage-agent": statusRoute(null) }).invoke);
+      expect(row(t)?.classList.contains("attention")).toBe(true);
+      expect(t.querySelector("[data-ua-empty]")?.textContent).toBe("This bridge offers usage limits but sends no numbers — install the helper.");
+      cleanup?.();
+      t = await render(fake(withUa(summary({ installed: true, running: true, fresh: true })), { "GET /maintenance/servers/m4/usage-agent": statusRoute(null) }).invoke);
+      expect(t.querySelector("[data-ua-empty]")).toBeNull();
+    });
+
+    it("words every outcome code in both languages", async () => {
+      const { usageAgentOutcomeText } = await import("../maintenanceMessages");
+      for (const lang of ["en", "cs"] as const) {
+        const m = MAINTENANCE_MESSAGES[lang];
+        const texts = ["ok", "failed", "no_gui_session", "unsupported", "readonly", "disconnected", "timeout"].map(
+          (code) => usageAgentOutcomeText({ ok: code === "ok", code, message: "RAW", agent: null }, "install", "m4", m).text,
+        );
+        expect(new Set(texts).size).toBe(texts.length);
+        for (const text of texts) {
+          expect(text).toContain("m4");
+          expect(text).not.toContain("RAW");
+        }
+      }
+    });
   });
 
   it("reports an unreachable runtime", async () => {

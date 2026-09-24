@@ -49,6 +49,28 @@ export interface ServerStatus {
   /** Subagent hooks on that bridge's machine (null = unknown: an older bridge,
    *  a read-only token, T3, or not asked yet). */
   hooks: HooksSummary | null;
+  /** The usage limits helper on that bridge's machine (null = unknown: an
+   *  older bridge, a read-only token, disconnected, or not answered yet). */
+  usageAgent: UsageAgentStatus | null;
+}
+
+/** The usage agent ("usage limits helper") on a bridge's machine
+ *  (usage_agent_relay.summary / usage_agent_install.py reply data). */
+export interface UsageAgentStatus {
+  installed: boolean;
+  running: boolean;
+  /** The bridge uses the agent's numbers now. */
+  fresh: boolean;
+  /** That bridge serves usage limits at all (HERDECK_BRIDGE_USAGE=1). */
+  bridgeUsage: boolean;
+  /** Age of the agent's output file when the bridge answered (null = no file). */
+  fileAgeS: number | null;
+  providers: string[];
+  /** Why the last action failed (raw bridge text: a detail, never the sentence). */
+  error: string | null;
+  /** macOS: a GUI login session exists (null = not reported: the
+   *  GET /maintenance summary does not carry it). */
+  guiSession: boolean | null;
 }
 
 export type HookAgent = "claude" | "codex" | "opencode";
@@ -162,6 +184,7 @@ export function parseMaintenance(raw: unknown): MaintenanceStatus | null {
         lastError: str(s.last_error),
         everConnected: bool(s.ever_connected),
         hooks: parseHooksSummary(s.hooks),
+        usageAgent: parseUsageAgent(s.usage_agent),
       };
     }),
     app: app
@@ -194,6 +217,44 @@ export function parseHooksSummary(raw: unknown): HooksSummary | null {
     };
   }
   return out;
+}
+
+/** The usage agent view (GET /maintenance `usage_agent`, or the `agent` of a
+ *  usage-agent answer); null when it is not an object. */
+export function parseUsageAgent(raw: unknown): UsageAgentStatus | null {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const v = raw as Rec;
+  return {
+    installed: v.installed === true,
+    running: v.running === true,
+    fresh: v.fresh === true,
+    bridgeUsage: v.bridge_usage === true,
+    fileAgeS: num(v.file_age_s),
+    providers: Array.isArray(v.providers) ? v.providers.filter((p): p is string => typeof p === "string" && p !== "") : [],
+    error: str(v.error),
+    guiSession: bool(v.gui_session),
+  };
+}
+
+/** What the "Usage limits helper" row says:
+ *  - `no_gui_session` / `unsupported`: the last action's code (install cannot work);
+ *  - `error`: the last action failed otherwise;
+ *  - `not_installed`, `stopped` (installed, not running), `stale` (running,
+ *    but the bridge does not use its numbers), `running`. */
+export type UsageAgentState = "not_installed" | "running" | "stale" | "stopped" | "no_gui_session" | "unsupported" | "error";
+
+export function usageAgentState(ua: UsageAgentStatus, lastCode: string | null = null): UsageAgentState {
+  if (lastCode === "no_gui_session" || lastCode === "unsupported") return lastCode;
+  if (ua.error) return "error";
+  if (!ua.installed) return ua.guiSession === false ? "no_gui_session" : "not_installed";
+  if (!ua.running) return "stopped";
+  return ua.fresh ? "running" : "stale";
+}
+
+/** Whether a bridge gets the helper row: it serves usage limits (or the helper
+ *  is installed there anyway, so it can be removed). */
+export function showsUsageAgent(server: ServerStatus): boolean {
+  return server.connected === true && server.usageAgent != null && (server.usageAgent.bridgeUsage || server.usageAgent.installed);
 }
 
 /** What the "Subagent tracking" row says about one agent. */
@@ -487,6 +548,42 @@ export async function runHooksAction(
     return { ok: b.ok === true, code: b.code, message: str(b.message) ?? "", agents: parseHooksSummary(b.agents) };
   } catch (e) {
     return { ok: false, code: "unreachable", message: String(e), agents: null };
+  }
+}
+
+// --- usage agent ------------------------------------------------------------------
+
+export type UsageAgentAction = "install" | "uninstall" | "status";
+
+export interface UsageAgentOutcome {
+  ok: boolean;
+  /** ok · failed · no_gui_session · unsupported · readonly · disconnected ·
+   *  timeout (runtime), http · unreachable (transport). */
+  code: string;
+  /** Raw (English) detail — a tooltip at most, never the visible sentence. */
+  message: string;
+  /** The helper's state after the action (null when the bridge did not answer). */
+  agent: UsageAgentStatus | null;
+}
+
+/** Ask `serverId`'s bridge about its usage agent (`status`, GET) or install /
+ *  remove it (POST /maintenance/servers/{id}/usage-agent; the Rust proxy adds
+ *  the token: `?token=` on GET, `X-Herdeck-Token` on POST). */
+export async function runUsageAgentAction(
+  invoke: InvokeFn,
+  serverId: string,
+  action: UsageAgentAction,
+): Promise<UsageAgentOutcome> {
+  const path = `/maintenance/servers/${serverSegment(serverId)}/usage-agent`;
+  try {
+    const r = action === "status" ? await call(invoke, "GET", path) : await call(invoke, "POST", path, { action });
+    const b = rec(r.body);
+    if (r.status !== 200 || typeof b.code !== "string") {
+      return { ok: false, code: "http", message: `HTTP ${r.status}`, agent: null };
+    }
+    return { ok: b.ok === true, code: b.code, message: str(b.message) ?? "", agent: parseUsageAgent(b.agent) };
+  } catch (e) {
+    return { ok: false, code: "unreachable", message: String(e), agent: null };
   }
 }
 
