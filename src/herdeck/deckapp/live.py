@@ -61,7 +61,9 @@ from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
 from .agent_card import AgentCardMixin
 from .bridge_update import BridgeUpdateMixin
+from .event_cursor import EventCursorStore
 from .hooks_relay import HooksMixin
+from .live_events import BridgeEventsMixin
 from .source import StateSource
 from .stats import StatsMixin
 
@@ -109,7 +111,9 @@ def _thread_notify_schedule(fn) -> None:
     threading.Thread(target=fn, daemon=True, name="herdeck-notify").start()
 
 
-class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, StateSource):
+class LiveSource(
+    AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, BridgeEventsMixin, StateSource
+):
     """A StateSource fed by one or more real bridges through ``Connector``.
 
     The connector callbacks buffer the latest fleet state and re-render the deck;
@@ -137,6 +141,7 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
         prompt_wait_s: float = PROMPT_WAIT_S,
         idle_probe: IdleProbe | None = None,
         shell_banners: bool = True,
+        event_store: EventCursorStore | None = None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -248,6 +253,7 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
         self._usage_sink = None
         self._card_init()  # desktop agent card (agent_card.AgentCardMixin)
         self._bridge_update_init()  # bridge self-update (bridge_update.BridgeUpdateMixin)
+        self._bridge_events_init(event_store)  # bridge lifecycle events (live_events.py)
         self._stats_init()  # GET /stats relay (stats.StatsMixin)
         self._hooks_init()  # subagent hook install relay (hooks_relay.HooksMixin)
 
@@ -302,7 +308,8 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
         """
         sid = server_id or self.server_id
         if sid is not None:
-            self._runners[sid] = runner
+            # Answers leave stamped with the bridge episode (live_events.py).
+            self._runners[sid] = self._wrap_runner(sid, runner)
 
     def apply_to(self, orch: Orchestrator) -> None:
         self._orch = orch
@@ -630,15 +637,16 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
         )
 
     # --- connector callbacks (run on the connector's loop thread) ---
-    def _fire_notify(self, event: str, agent: AgentState) -> None:
-        """Schedule one event alert (never raises, never blocks the loop)."""
+    def _fire_notify(self, event: str, agent: AgentState, *, at_ms: int | None = None) -> None:
+        """Schedule one event alert (never raises, never blocks the loop).
+        ``at_ms``: when the bridge saw the transition (reminders count from it)."""
         if self._notifier is None:
             return
         n = self._config.notifications
         if event not in n.on:
             return
         if event == "blocked":
-            self._track_reminder(agent.key)
+            self._track_reminder(agent.key, at_ms)
         sound = False if not n.sound else n.sounds.get(event, True)
         multi = len(self._config.overview_order) > 1
         if not self._notify_throttle.allow(event, agent.key):
@@ -649,6 +657,10 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
                 agent.key.pane_id,
             )
             return
+        if agent.episode_id:
+            # This episode is alerted: a replay of the bridge's events (after
+            # a restart, or a failed subscription recovering) must not repeat it.
+            self._ev_store.note(agent.key.server_id, episodes=(agent.episode_id,))
         title = event_title(agent.agent_type, event, self._config.view.language)
         body = event_notification_body(agent, multi_server=multi)
         meta = self._alert_meta(event, agent)
@@ -663,15 +675,18 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
 
     # --- reminders ([notifications].remind_after) -----------------------------
 
-    def _track_reminder(self, key: AgentKey) -> None:
-        """A block episode began: remember when, for its reminders."""
+    def _track_reminder(self, key: AgentKey, at_ms: int | None = None) -> None:
+        """A block episode began: remember when, for its reminders. With the
+        bridge's ``at_ms`` they count from bridge time, not from when this
+        runtime heard of it (a replay after sleep)."""
         if self._config.notifications.remind_after <= 0:
             return
+        since, sent = self._reminder_start(at_ms)
         with self._lock:
             episode = self._block_episode.get(key)
             if episode is None:
                 return
-            self._reminders[key] = (episode, self._notify_clock(), 0)
+            self._reminders[key] = (episode, since, sent)
         self._ensure_reminder_thread()
 
     def _ensure_reminder_thread(self) -> None:
@@ -798,6 +813,8 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
         state = self._agents.get(key)
         if state is None or state.status is not NOTIFY_EVENT_STATUSES[event]:
             return False
+        if event == "blocked" and self._episode_spent(key.server_id, episode):
+            return False  # answered (here or on another client) while it waited
         return event != "blocked" or episode is None or self._block_episode.get(key) == episode
 
     def _withdraw_left(self, event: str, left: set) -> None:
@@ -975,21 +992,27 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
             return True
 
         self._apply(mutate)
-        if server_id not in self._notify_baselined_servers:
+        if server_id not in self._notify_baselined_servers or self._bridge_events(server_id):
             # A process/source restart observes current truth, not lifecycle
             # transitions. Seed the episode sets without replaying stale alerts.
-            if self._notifier is not None:
-                scope = set(prev_keys) | {s.key for s in states}
-                for event, status in NOTIFY_EVENT_STATUSES.items():
-                    tracked = self._notify_keys[event]
-                    entered_here = {s.key for s in states if s.status is status}
-                    self._notify_keys[event] = (tracked - scope) | entered_here
+            # A bridge with lifecycle events drives the alerts itself
+            # (live_events.py): the sets only follow along, silently, so a
+            # later fallback to an older bridge starts from the truth.
+            self._notify_seed(states, set(prev_keys) | {s.key for s in states})
             self._notify_baselined_servers.add(server_id)
             return
         # Notifications reconcile AFTER the buffer update: `scope` is every key
         # this snapshot is authoritative for (previous + current), matching
         # a server-scoped reconciliation.
         self._notify_all(server_id, states, prev_keys)
+
+    def _notify_seed(self, states: list[AgentState], scope: set) -> None:
+        if self._notifier is None:
+            return
+        for event, status in NOTIFY_EVENT_STATUSES.items():
+            tracked = self._notify_keys[event]
+            entered_here = {s.key for s in states if s.status is status}
+            self._notify_keys[event] = (tracked - scope) | entered_here
 
     def _notify_all(self, server_id: str, states: list[AgentState], prev_keys: set) -> None:
         self._notify_all_events(states, set(prev_keys) | {s.key for s in states})
@@ -1031,6 +1054,9 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
             return True
 
         self._apply(mutate)
+        if self._bridge_events(server_id):
+            self._notify_seed([state], {state.key})
+            return
         self._notify_all_events([state], {state.key})
 
     @staticmethod
@@ -1074,6 +1100,7 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
             return True
 
         self._apply(mutate)
+        self._events_on_connection(server_id, up)
         self._card_on_connection(server_id, up)
         self._bridge_update_on_connection(server_id, up)
         self._stats_on_connection(server_id, up)
@@ -1246,8 +1273,12 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
                 del self._block_episode[key]
                 episodes_changed = True
             for key in blocked:
-                if key not in self._block_episode:
-                    self._block_episode[key] = uuid.uuid4().hex[:16]
+                # The bridge's episode id when it has one (capability events),
+                # so banners, answers and lifecycle events name the same one.
+                wanted = self._agents[key].episode_id
+                have = self._block_episode.get(key)
+                if have is None or (wanted and have != wanted):
+                    self._block_episode[key] = wanted or uuid.uuid4().hex[:16]
                     episodes_changed = True
             if episodes_changed:
                 self._preread_cv.notify_all()
@@ -1258,6 +1289,12 @@ class LiveSource(AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, Stat
             for key in blocked:
                 if key in self._preread_req:
                     continue  # a current-episode read is already out (pre-read or drill read)
+                if self._bridge_events(key.server_id) and key not in self._ev_prompt_missing:
+                    # The bridge pre-reads the prompt and sends it with the
+                    # blocked event; a drilled pane shows nothing stale meanwhile.
+                    if key == drilled and not self._preread.get(key):
+                        clear_detection = True
+                    continue
                 self._bg_req += 1
                 bg_req = f"p{self._bg_req}"
                 self._preread_req[key] = bg_req  # register so the poll won't re-issue
@@ -1451,6 +1488,8 @@ def build_live_source(
                 sid, req, stage, message
             ),
             on_usage=source._on_usage,
+            on_lifecycle=source._on_lifecycle,
+            events_cursor=source._events_cursor,
         )
         runner = runner_factory(connector)
         source.attach_runner(runner, selected.id)

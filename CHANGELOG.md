@@ -15,6 +15,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after a client's `seq`. An answer from any client marks the episode
   answered for all of them; a later answer that names the same episode is
   refused as `stale` unless the prompt changed. README "Lifecycle events".
+- Runtimes (deck, web cockpit, Telegram) take their blocked/done alerts,
+  reminders and banner withdrawals from a bridge that offers `events`, and
+  stop detecting transitions locally for it, so no alert arrives twice. The
+  blocked prompt comes with the event (no extra read for drill, card or banner
+  excerpt). An answer on any client withdraws the banners elsewhere, closes a
+  drill left open on that prompt, and makes banner and card answers for it
+  return `stale`. Outgoing answers carry the bridge `episode_id`. Reminders
+  count from bridge time. The last seen event per server is kept per runtime
+  in `~/.cache/herdeck/bridge-events-<runtime>-<profile>.json`, so a
+  restarted or woken runtime only alerts what it missed. A subscription the
+  bridge does not confirm within 10 s falls back to local detection and is
+  retried. Older bridges keep local detection.
 - `herdeck-service hooks install|uninstall|status [--agents claude,codex]
   [--hook-path PATH] [--json]` installs the subagent hooks into
   `~/.claude/settings.json` and `~/.codex/hooks.json`. It adds only its own

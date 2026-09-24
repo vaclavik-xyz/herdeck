@@ -1341,6 +1341,24 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   event is not in `on`.
 - Titles name the agent and the event in the deck language (`[view].language`),
   e.g. `claude · needs input` / `claude · done`.
+- **How alerts flow.** With a bridge that offers lifecycle events (capability
+  `events`, see "Lifecycle events" above), that bridge decides when an agent
+  blocked, finished or was answered, and every runtime attached to it (each
+  deck, the web cockpit, Telegram) alerts from those events. The runtime's
+  own snapshot comparison is then switched off for that server, so an alert
+  is never sent twice. The blocked prompt arrives with the event, so drills,
+  the agent card and banner excerpts need no extra read. An answer given on
+  any client withdraws the banners on all the others, closes a drill left
+  open on that prompt, and turns their Approve/Deny/Reply buttons for it into
+  "stale" (the card asks the bridge, which also accepts the next question of
+  a multi-step prompt). Reminders count from the moment the bridge saw the
+  block. Each runtime keeps its place in the event stream in
+  `~/.cache/herdeck/bridge-events-<runtime>-<profile>.json`, so after sleep
+  or a restart it only alerts what it missed, never again what it already
+  showed. A first start alerts nothing that was already under way. If the
+  bridge does not confirm the subscription within 10 s, the runtime alerts
+  from its own detection and re-subscribes every 30 s. Older bridges keep the
+  previous behaviour, where each runtime detects transitions itself.
 - Notifications fire once per event episode (re-arming after the agent leaves
   the notified state) and never block the UI loop. An agent that flaps is
   throttled per agent and event (60 s for **done**, a 5 s flap guard for
