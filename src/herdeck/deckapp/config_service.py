@@ -14,7 +14,13 @@ import tomli_w
 
 from .. import secrets as secret_store
 from ..config import ConfigError
-from ..settings import SettingsSnapshot, load_settings, set_active_profile, validate_settings
+from ..settings import (
+    SettingsSnapshot,
+    assume_tokens_present,
+    load_settings,
+    set_active_profile,
+    validate_settings,
+)
 
 
 class ConfigService:
@@ -214,7 +220,8 @@ class ConfigService:
                 if not os.environ.get(n):
                     saved[n] = os.environ.get(n)  # None if absent, "" if empty
                     os.environ[n] = "x"  # placeholder; never written to TOML
-            return self.validate(data)
+            with assume_tokens_present():  # token_file-only servers have no env to fake
+                return self.validate(data)
         finally:
             for n, original in saved.items():
                 if original is None:

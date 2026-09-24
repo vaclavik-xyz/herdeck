@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import math
 import os
 import re
+import stat
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -187,13 +190,129 @@ def _profile_overlays(profiles: dict, name: str) -> list[dict]:
     return [profiles[n] for n in reversed(chain)]
 
 
-def _server_config(raw: dict) -> ServerConfig:
-    from .secrets import get_secret
+class TokenNotFoundError(ConfigError):
+    """A server's bridge token resolved from none of its sources (env, token_file,
+    keychain). Carries the server id so a deck can say which one — never a value."""
 
-    env = raw["token_env"]
-    token = get_secret(env)
+    def __init__(self, message: str, server_id: str):
+        super().__init__(message)
+        self.server_id = server_id
+
+
+# Set while ConfigService validates a pending edit STRUCTURALLY: a token that
+# does not resolve yet (not typed into the keychain, token file not created)
+# must not block writing the config that references it.
+_ASSUME_TOKENS_PRESENT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "herdeck_assume_tokens_present", default=False
+)
+
+
+@contextlib.contextmanager
+def assume_tokens_present():
+    """Resolve every server token as a placeholder inside this block (structural
+    validation only — the resulting Config must never be used to connect)."""
+    reset = _ASSUME_TOKENS_PRESENT.set(True)
+    try:
+        yield
+    finally:
+        _ASSUME_TOKENS_PRESENT.reset(reset)
+
+
+def _token_sources(raw: dict) -> tuple[str | None, Path | None]:
+    """The validated ``(token_env, token_file)`` pair of a ``[[servers]]`` entry."""
+    sid = raw.get("id")
+    env = raw.get("token_env")
+    if env is not None and (not isinstance(env, str) or not env):
+        raise ConfigError(f"server '{sid}': token_env must be a non-empty name")
+    value = raw.get("token_file")
+    path = None
+    if value is not None:
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"server '{sid}': token_file must be a non-empty path")
+        path = Path(os.path.expanduser(value.strip()))
+    if env is None and path is None:
+        raise ConfigError(f"server '{sid}' needs token_env or token_file")
+    return env, path
+
+
+def _read_token_file(server_id: str, path: Path) -> str | None:
+    """The stripped token in ``path``; None when the file does not exist.
+
+    Same rules as the bridge's own token file: a regular file readable by its
+    owner only (0600 or stricter). Anything else is refused loudly — a token
+    other users can read is a leaked token."""
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ConfigError(
+            f"server '{server_id}': cannot read token_file '{path}' ({exc.strerror})"
+        ) from None
+    if not stat.S_ISREG(st.st_mode):
+        raise ConfigError(f"server '{server_id}': token_file '{path}' is not a regular file")
+    mode = stat.S_IMODE(st.st_mode)
+    if mode & 0o077:
+        raise ConfigError(
+            f"server '{server_id}': token_file '{path}' is readable by group/others "
+            f"(mode {mode:04o}); run chmod 600 on it"
+        )
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        reason = getattr(exc, "strerror", None) or "not UTF-8 text"
+        raise ConfigError(
+            f"server '{server_id}': cannot read token_file '{path}' ({reason})"
+        ) from None
     if not token:
-        raise ConfigError(f"env var '{env}' for server '{raw['id']}' is not set")
+        raise ConfigError(f"server '{server_id}': token_file '{path}' is empty")
+    return token
+
+
+def resolve_server_token(raw: dict) -> tuple[str, str]:
+    """``(token, source)`` for a ``[[servers]]`` entry; source is ``"env"``,
+    ``"file"`` or ``"keychain"``.
+
+    Order: the ``token_env`` environment variable, then ``token_file``, then the
+    OS keychain entry named ``token_env``. A launchd/systemd service has no
+    shell env (and refuses TOKEN env names by design), so ``token_file`` is how
+    a service gets a token the keychain does not hold. Raises ConfigError —
+    ``TokenNotFoundError`` when no source has it; the message never carries a
+    token value."""
+    from . import secrets
+
+    sid = str(raw.get("id"))
+    env, path = _token_sources(raw)
+    if env and os.environ.get(env):
+        return os.environ[env], "env"
+    if path is not None:
+        token = _read_token_file(sid, path)
+        if token:
+            return token, "file"
+    if env:
+        # The env var is known unset here, so get_secret answers from the keychain
+        # (and never raises when there is no keychain backend).
+        token = secrets.get_secret(env)
+        if token:
+            return token, "keychain"
+    tried = []
+    if env:
+        tried.append(f"env var '{env}' is not set")
+    if path is not None:
+        tried.append(f"token_file '{path}' does not exist")
+    if env:
+        tried.append(f"no keychain entry '{env}'")
+    raise TokenNotFoundError(
+        f"bridge token for server '{sid}' not found ({'; '.join(tried)})", sid
+    )
+
+
+def _server_config(raw: dict) -> ServerConfig:
+    if _ASSUME_TOKENS_PRESENT.get():
+        _token_sources(raw)  # a malformed token_env/token_file is still structural
+        token = "x"
+    else:
+        token, _source = resolve_server_token(raw)
     backend = raw.get("backend", "herdr")
     if backend not in ("herdr", "t3"):
         raise ConfigError("unsupported server backend")
