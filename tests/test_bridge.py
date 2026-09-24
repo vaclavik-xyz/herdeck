@@ -224,6 +224,7 @@ async def test_list_returns_mapped_filtered_snapshot(herdr):
         "project_icon",
         "self_update",
         "status_since",
+        "history",
         "subagents",
     ]
     p = msg["panes"][0]

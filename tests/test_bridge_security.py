@@ -211,4 +211,4 @@ async def test_full_token_still_mutates_and_bad_token_is_refused():
 
 
 def test_readonly_allowlist_is_exactly_the_documented_set():
-    assert READONLY_MESSAGES == {"list", "read", "observe", "observe_stop", "health"}
+    assert READONLY_MESSAGES == {"list", "read", "observe", "observe_stop", "health", "stats"}
