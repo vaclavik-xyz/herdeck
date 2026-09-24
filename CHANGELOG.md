@@ -6,6 +6,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Usage agent for a bridge installed as a system LaunchDaemon, where
+  `codex app-server` and `codexbar` cannot reach the login keychain and time
+  out (the bridge's usage frames stayed empty). `herdeck-service install usage
+  [--managed] [--config PATH]` installs a LaunchAgent in the login (Aqua)
+  session (`dev.herdeck.usage`; a systemd `--user` unit on Linux) that runs the
+  bridge's usage poller (`herdeck-usage-agent`, `python -m herdeck.usage_agent`)
+  and writes `~/.local/state/herdeck/bridge-usage.json` (0600, atomic) on every
+  change and at least every `refresh_secs`. A `HERDECK_BRIDGE_USAGE=1` bridge
+  uses that file while it exists (data older than `max(3 × refresh_secs,
+  5 min)` sends no providers) and polls itself only without it. Uninstalling
+  removes the file. `--managed` runs the agent from the managed bridge venv, and
+  a bridge self-update restarts it too. README "Usage agent".
+- Bridge message `usage_agent` (`install` / `uninstall` / `status`, full token
+  only, capability `usage_agent`) manages the agent for the bridge's user; a
+  missing GUI login session is reported as `no_gui_session`. The runtime relays
+  it at `GET|POST /maintenance/servers/<id>/usage-agent`, and `GET
+  /maintenance` carries a `usage_agent` summary per server.
+
 ## [0.12.0] - 2026-09-24
 
 ### Changed
