@@ -1834,10 +1834,10 @@ mod plan_tests {
 
     #[test]
     fn health_carries_the_shell_version_for_mismatch_warnings() {
-        let health = serde_json::json!({"ok": true, "version": "0.8.0"});
-        let stamped = with_app_version(health, "0.8.1");
-        assert_eq!(stamped["app_version"], "0.8.1");
-        assert_eq!(stamped["version"], "0.8.0");
+        let health = serde_json::json!({"ok": true, "version": "1.2.3"});
+        let stamped = with_app_version(health, "1.2.4");
+        assert_eq!(stamped["app_version"], "1.2.4");
+        assert_eq!(stamped["version"], "1.2.3");
         assert_eq!(with_app_version(serde_json::json!(null), "1"), serde_json::json!(null));
     }
 
