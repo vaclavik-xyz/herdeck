@@ -52,6 +52,7 @@ from ..orchestrator import Orchestrator
 from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
+from .agent_card import AgentCardMixin
 from .source import StateSource
 
 log = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ def _thread_notify_schedule(fn) -> None:
     threading.Thread(target=fn, daemon=True, name="herdeck-notify").start()
 
 
-class LiveSource(StateSource):
+class LiveSource(AgentCardMixin, StateSource):
     """A StateSource fed by one or more real bridges through ``Connector``.
 
     The connector callbacks buffer the latest fleet state and re-render the deck;
@@ -144,6 +145,7 @@ class LiveSource(StateSource):
         self._deck_lock = None
         self._refresh_locked_cb = None
         self._runners: dict[str, object] = {}
+        self._card_init()  # desktop agent card (agent_card.AgentCardMixin)
 
     # --- StateSource surface ---
     @property
@@ -528,6 +530,7 @@ class LiveSource(StateSource):
             return True
 
         self._apply(mutate)
+        self._card_on_connection(server_id, up)
 
     def _on_result(self, *args) -> None:
         """Handle a connector result.
@@ -544,6 +547,8 @@ class LiveSource(StateSource):
             raise TypeError("_on_result expects (server_id, req, data) or (req, data)")
         if server_id is None:
             return
+        # A desktop agent card may be waiting on this reply (never consumes it).
+        self._card_on_result(req, data)
         # Mirrors App.handle_result.
         with self._lock:
             focused = req is not None and self._focus_reqs.pop(req, False)
@@ -825,6 +830,9 @@ def build_live_source(
             on_connection=source._on_connection,
             on_result=lambda req, data, sid=selected.id: source._on_result(sid, req, data),
             on_project_icon=source._on_project_icon,
+            on_request_error=lambda req, message, sid=selected.id: source._on_request_error(
+                sid, req, message
+            ),
         )
         runner = runner_factory(connector)
         source.attach_runner(runner, selected.id)
