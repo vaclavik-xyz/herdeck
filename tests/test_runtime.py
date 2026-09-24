@@ -216,3 +216,35 @@ def test_logging_keeps_notification_routes_at_info(monkeypatch):
 
     runtime.configure_logging(debug=True)
     assert calls[1] == {"level": logging.DEBUG}
+
+
+def test_two_runtimes_share_one_d200_owner(monkeypatch, tmp_path):
+    """The launchd runtime and an app's own sidecar must not both open the D200."""
+    _runtime_dir(monkeypatch, tmp_path)
+    first_opens, second_opens = [], []
+
+    def factory(opens):
+        def make(config):
+            opens.append(1)
+            return FakeDriver()
+
+        return make
+
+    _, first, _, _ = runtime.build_runtime(
+        app_factory=lambda host, port: FakeApp(), driver_factory=factory(first_opens)
+    )
+    second = None
+    try:
+        assert _wait_until(lambda: first_opens == [1])
+        _, second, _, _ = runtime.build_runtime(
+            app_factory=lambda host, port: FakeApp(),
+            driver_factory=factory(second_opens),
+            write_discovery=False,
+        )
+        time.sleep(0.1)
+        assert second_opens == []
+        assert os.path.exists(tmp_path / "d200.lock")
+    finally:
+        first.close()
+        if second is not None:
+            second.close()
