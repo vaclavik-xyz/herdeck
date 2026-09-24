@@ -70,8 +70,17 @@ def test_herdr_pane_to_wire_maps_fields():
         "display_agent": "",
         "capabilities": [],
         "project_icon": "",
+        "focused": False,
         "work": {"source": "", "item": "", "run": "", "url": ""},
     }
+
+
+def test_herdr_pane_to_wire_carries_herdrs_focus_flag():
+    raw = raw_pane()
+    raw["focused"] = True
+    assert _herdr_pane_to_wire(raw)["focused"] is True
+    raw["focused"] = "yes"  # only a real boolean counts
+    assert _herdr_pane_to_wire(raw)["focused"] is False
 
 
 def test_herdr_pane_to_wire_passes_waiting_on_through():

@@ -84,6 +84,7 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         work=WorkContext.from_tokens(work_tokens),
         capabilities=capabilities,
         project_icon=_icon_ref(pane.get("project_icon")),
+        focused=pane.get("focused") is True,
     )
 
 

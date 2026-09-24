@@ -100,3 +100,6 @@ class AgentState:
     # Content hash of the project's favicon (bridge discovery), "" when none or
     # when the bridge predates the "project_icon" capability.
     project_icon: str = ""
+    # herdr reports this pane as the focused one in its session. False from a
+    # bridge that predates the field.
+    focused: bool = False
