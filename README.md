@@ -377,6 +377,7 @@ herdr_sessions = ["default"]       # select several named local sessions if want
 web_bind = "127.0.0.1"
 web_port = 8800
 icons_dir = "~/herdeck-icons"
+terminal_app = "Ghostty"           # optional, macOS: see below
 
 [hardware]
 brightness = 80
@@ -384,6 +385,14 @@ debounce = 0.25
 keep_alive_interval = 5.0
 tick_interval = 0.4
 ```
+
+A tile press asks herdr to focus that agent's pane, which switches the pane
+inside the herdr client but leaves its terminal window wherever it was. When
+the herdr client runs on the deck machine, set `[local].terminal_app` to the
+app hosting it (`"Ghostty"`, `"iTerm"`, `"Terminal"`, ...) and herdeck brings
+that app forward (`open -a`) once herdr confirms the focus. macOS only; empty
+(the default) leaves it off. It does nothing useful when the pane is shown on
+another machine.
 
 ## Development without hardware
 

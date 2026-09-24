@@ -14,6 +14,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shortcut, `[hotkeys].next_blocked` (no default), that shows the deck and
   does the same through the runtime's new `POST /triage` route; pressing it
   again skips to the next blocked agent.
+- Opt-in `[local].terminal_app` (for example `"Ghostty"`): after a tile press
+  focuses an agent's pane, the deck machine brings that app forward with
+  `open -a` (macOS only, off the event loop, failures only logged). Only useful
+  when the herdr client runs on the deck machine.
 - The desktop app keeps a log when launched outside a terminal: its own and
   the sidecar runtime's stderr, timestamped, in
   `~/Library/Logs/herdeck/herdeck.log` (Linux: `~/.local/state/herdeck/`),

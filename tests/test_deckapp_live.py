@@ -1822,6 +1822,41 @@ def test_http_triage_requires_token():
         app.close()
 
 
+def test_successful_focus_brings_the_terminal_app_forward(monkeypatch):
+    import herdeck.deckapp.live as live_mod
+
+    activated = []
+    monkeypatch.setattr(live_mod, "activate_terminal_app", activated.append)
+    app, src, server, runner = make_live()
+    src._config.hardware.terminal_app = "Ghostty"
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    app.press(0)
+    focus = next(m for m in runner.sent if m["type"] == "focus")
+    read = next(m for m in runner.sent if m["type"] == "read")
+    src._on_result(server.id, read["req"], {"text": "x", "pane_id": "p0"})
+    assert activated == []  # only the focus result counts
+    src._on_result(server.id, focus["req"], {"focused": True})
+    assert activated == ["Ghostty"]
+    src._on_result(server.id, focus["req"], {"focused": True})  # a duplicate is ignored
+    assert activated == ["Ghostty"]
+
+
+def test_unacknowledged_focus_does_not_activate_the_terminal_app(monkeypatch):
+    import herdeck.deckapp.live as live_mod
+
+    activated = []
+    monkeypatch.setattr(live_mod, "activate_terminal_app", activated.append)
+    app, src, server, runner = make_live()
+    src._config.hardware.terminal_app = "Ghostty"
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    app.press(0)
+    focus = next(m for m in runner.sent if m["type"] == "focus")
+    src._on_result(server.id, focus["req"], {"sent": False})
+    assert activated == []
+
+
 def test_mock_source_has_no_triage():
     from herdeck.deckapp.mock import MockSource
 

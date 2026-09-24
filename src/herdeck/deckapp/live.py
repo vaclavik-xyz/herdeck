@@ -50,6 +50,7 @@ from ..notify import (
 from ..notify_icons import NotificationIconCache
 from ..orchestrator import Orchestrator
 from ..project_icons import ingest_project_icon
+from ..terminal_app import activate_terminal_app
 from .source import StateSource
 
 log = logging.getLogger(__name__)
@@ -124,6 +125,9 @@ class LiveSource(StateSource):
         self._req = 0
         self._bg_req = 0
         self._active_read_req: str | None = None
+        # Outstanding focus requests (insertion-ordered, bounded): a successful
+        # result brings [local].terminal_app forward.
+        self._focus_reqs: dict[str, bool] = {}
         # Pre-read cache: the last-read prompt per BLOCKED pane, read in the
         # background so a drill paints its options in one frame (no read round-trip,
         # no empty flash). ``_preread`` holds the cached prompt text; ``_preread_req``
@@ -492,6 +496,12 @@ class LiveSource(StateSource):
         if server_id is None:
             return
         # Mirrors App.handle_result.
+        with self._lock:
+            focused = req is not None and self._focus_reqs.pop(req, False)
+        if focused and data.get("focused"):
+            # herdr switched to the pane; bring its terminal window forward too
+            # (opt-in [local].terminal_app, off the connector loop).
+            activate_terminal_app(self._config.hardware.terminal_app)
         text = data.get("text")
         if text is None:
             # An act/send/start ack: resync this server with a fresh list so a
@@ -677,6 +687,11 @@ class LiveSource(StateSource):
         with self._lock:
             self._req += 1
             req = f"r{self._req}"
+            if cmd.kind == "focus":
+                self._focus_reqs[req] = True
+                # Results normally arrive; bound the map if a connector drops them.
+                while len(self._focus_reqs) > 32:
+                    self._focus_reqs.pop(next(iter(self._focus_reqs)))
             if cmd.kind == "read":
                 self._active_read_req = req
                 # Register the drill read as the episode's read ONLY when the pane is

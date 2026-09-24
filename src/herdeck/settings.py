@@ -391,6 +391,10 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
     ):
         raise ConfigError("local.web_port must be an integer from 0 to 65535")
 
+    terminal_app = raw.get("terminal_app", "")
+    if not isinstance(terminal_app, str):
+        raise ConfigError("local.terminal_app must be an app name string (empty = off)")
+
     brightness = hw.get("brightness", 80)
     if (
         not isinstance(brightness, int)
@@ -424,6 +428,7 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
         web_bind=raw.get("web_bind"),
         web_port=web_port,
         icons_dir=raw.get("icons_dir"),
+        terminal_app=terminal_app.strip(),
         brightness=brightness,
         debounce=intervals["debounce"],
         keep_alive_interval=intervals["keep_alive_interval"],

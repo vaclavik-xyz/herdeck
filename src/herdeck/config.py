@@ -170,6 +170,9 @@ class HardwareConfig:
     web_bind: str | None = None
     web_port: int | None = None
     icons_dir: str | None = None
+    # App to bring forward after a tile press focused a pane ("" = off). Only
+    # useful when the herdr client runs on the deck machine (see terminal_app.py).
+    terminal_app: str = ""
     brightness: int = 80
     debounce: float = 0.25
     keep_alive_interval: float = 5.0

@@ -78,6 +78,7 @@
   const hwSocket = $derived((getAt(payload, "local", "local", "herdr_socket") as string) ?? "");
   const hwBind = $derived((getAt(payload, "local", "local", "web_bind") as string) ?? "");
   const hwIcons = $derived((getAt(payload, "local", "local", "icons_dir") as string) ?? "");
+  const hwTerminal = $derived((getAt(payload, "local", "local", "terminal_app") as string) ?? "");
   const hwPort = $derived((getAt(payload, "local", "local", "web_port") as number | null) ?? null);
   const brightness = $derived((getAt(payload, "local", "hardware", "brightness") as number | null) ?? HARDWARE_DEFAULTS.brightness);
   const debounce = $derived((getAt(payload, "local", "hardware", "debounce") as number | null) ?? HARDWARE_DEFAULTS.debounce);
@@ -113,6 +114,7 @@
       <TextField label="web_bind" help={HELP.web_bind} value={hwBind} oninput={(v) => setLocalStr("local", "web_bind", v)} />
       <NumberField label="web_port" help={HELP.web_port} value={hwPort} int min={0} max={65535} onchange={(v) => setLocalNum("local", "web_port", v)} />
       <TextField label="icons_dir" help={HELP.icons_dir} value={hwIcons} oninput={(v) => setLocalStr("local", "icons_dir", v)} />
+      <TextField label="terminal_app" help={HELP.terminal_app} value={hwTerminal} oninput={(v) => setLocalStr("local", "terminal_app", v)} />
       <NumberField label="debounce" help={HELP.debounce} value={debounce} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "debounce", v)} />
       <NumberField label="keep_alive_interval" help={HELP.keep_alive_interval} value={keepAlive} step="any" min={Number.MIN_VALUE} max={86400} onchange={(v) => setLocalNum("hardware", "keep_alive_interval", v)} />
       <NumberField label="tick_interval" help={HELP.tick_interval} value={tick} step="any" min={Number.MIN_VALUE} max={60} onchange={(v) => setLocalNum("hardware", "tick_interval", v)} />
