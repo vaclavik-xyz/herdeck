@@ -277,3 +277,63 @@ async def test_rejected_dispatch_is_retryable_but_ambiguous_delivery_is_locked(c
     assert len(calls) == (1 if ambiguous else 2)
     assert bool(c._uncertain) == ambiguous
     assert results[0].get('uncertain' if ambiguous else 'rejected') is True
+
+
+class _FlakyHttp(FakeHttp):
+    """Fails `failures` shell reads, then serves; stops the connector after
+    `rounds` shell reads so run() returns."""
+
+    def __init__(self, t, owner, failures, rounds):
+        super().__init__(t)
+        self.owner, self.failures, self.rounds = owner, failures, rounds
+
+    def get(self, path):
+        if path.endswith("/shell"):
+            self.rounds -= 1
+            if self.rounds <= 0:
+                self.owner._stop = True
+            if self.failures > 0:
+                self.failures -= 1
+                raise T3Error("connection refused")
+        return super().get(path)
+
+
+async def _no_sleep(_s):
+    return None
+
+
+def test_t3_health_before_any_connect_reports_never_connected():
+    c, _ = connector(thread())
+    h = c.health()
+    assert h["connected"] is False
+    assert h["ever_connected"] is False
+    assert h["self_update"] is False and h["managed"] is None and h["bridge_version"] is None
+
+
+@pytest.mark.asyncio
+async def test_t3_that_never_answers_stays_never_connected(monkeypatch):
+    monkeypatch.setattr("herdeck.t3.asyncio.sleep", _no_sleep)
+    c, _ = connector(thread())
+    c.http = _FlakyHttp(thread(), c, failures=5, rounds=3)
+    await c.run()
+    h = c.health()
+    assert h["connected"] is False
+    assert h["ever_connected"] is False
+    assert h["attempt"] == 3
+    assert h["last_error"]
+
+
+@pytest.mark.asyncio
+async def test_t3_health_remembers_a_past_connection(monkeypatch):
+    monkeypatch.setattr("herdeck.t3.asyncio.sleep", _no_sleep)
+    seen = []
+    c, _ = connector(thread())
+    c._on_connection = lambda sid, up: seen.append(up)
+    c.http = _FlakyHttp(thread(), c, failures=1, rounds=2)
+    await c.run()
+    h = c.health()
+    assert h["ever_connected"] is True
+    assert h["attempt"] == 0 and h["last_error"] is None
+    assert seen[:2] == [False, True]
+    # after run() returns the connector is down but still "was connected"
+    assert h["connected"] is False

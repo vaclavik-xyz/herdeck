@@ -268,6 +268,13 @@ class T3Connector:
         self._lock = asyncio.Lock()
         self._stop = False
         self.last_connect_error = None
+        # /health diagnostics, same shape as the herdr Connector.health(): a
+        # T3 server that never answered (configured but not running) is not
+        # "down", so the window stays quiet about it (ever_connected=False).
+        self._connected = False
+        self._ever_connected = False
+        self._since_ms = int(time.time() * 1000)
+        self._attempt = 0
         self._features = None
         self._environment_id = None
         # Config key first ([[servers]] desktop_read_state), env as the fallback
@@ -283,6 +290,34 @@ class T3Connector:
 
     def stop(self):
         self._stop = True
+
+    def health(self) -> dict:
+        """Non-secret connection facts for the runtime's /health and GET
+        /maintenance, mirroring connector.Connector.health(). T3 is not a
+        herdeck bridge: no bridge version and no self-update."""
+        return {
+            "connected": self._connected,
+            "ever_connected": self._ever_connected,
+            "last_error": self.last_connect_error,
+            "since": self._since_ms,
+            "attempt": self._attempt,
+            "bridge_version": None,
+            "protocol": self.protocol,
+            "protocol_supported": True,
+            "self_update": False,
+            "managed": None,
+        }
+
+    def _set_connected(self, up: bool) -> None:
+        if up:
+            self._ever_connected = True
+            self._attempt = 0
+        else:
+            self._attempt += 1
+        if up != self._connected:
+            self._connected = up
+            self._since_ms = int(time.time() * 1000)
+        self._on_connection(self.server.id, up)
 
     async def refresh(self, force=None):
         if self._features is None:
@@ -367,7 +402,7 @@ class T3Connector:
                 async with self._lock:
                     await self.refresh()
                 self.last_connect_error = None
-                self._on_connection(self.server.id, True)
+                self._set_connected(True)
                 online = True
             except (T3Error, KeyError, TypeError, ValueError):
                 self.last_connect_error = "T3 unavailable or incompatible; check connection and credential"
@@ -376,8 +411,9 @@ class T3Connector:
                     self._features = None
                     self._cache.clear()
                 online = False
-                self._on_connection(self.server.id, False)
+                self._set_connected(False)
             await asyncio.sleep(1)
+        self._connected = False
         self._on_connection(self.server.id, False)
 
     async def send(self, msg):
