@@ -27,6 +27,7 @@ import asyncio
 import logging
 import threading
 import time
+import uuid
 from collections.abc import Callable
 
 from ..app import (
@@ -124,6 +125,13 @@ class LiveSource(StateSource):
         if not self._servers and server is not None:
             self._servers = {server.id: server}
         self._lock = threading.Lock()
+        # Signalled (under self._lock) when a pre-read lands or a block episode
+        # changes, so an alert waiting for its prompt wakes at once.
+        self._preread_cv = threading.Condition(self._lock)
+        # Block episode per BLOCKED pane: a fresh opaque id each time the pane
+        # enters BLOCKED (or its terminal is recycled). Banner answers carry it,
+        # so a stale banner can never answer a later prompt.
+        self._block_episode: dict[AgentKey, str] = {}
         self._agents: dict[AgentKey, AgentState] = {}
         self._connected: dict[str, bool] = {sid: False for sid in self._servers}
         self._req = 0
@@ -357,6 +365,7 @@ class LiveSource(StateSource):
             return
         title = event_title(agent.agent_type, event, self._config.view.language)
         body = event_notification_body(agent, multi_server=multi)
+        meta = self._alert_meta(event, agent)
         log.info(
             "notification transition event=%s agent=%s:%s observed_at_ms=%s",
             event,
@@ -365,8 +374,24 @@ class LiveSource(StateSource):
             time.time_ns() // 1_000_000,
         )
         self._notify_schedule(
-            lambda: self._notifier.notify(title, body, sound, icon=self._banner_icon(agent))
+            lambda: self._notifier.notify(
+                title, body, sound, icon=self._banner_icon(agent), meta=meta
+            )
         )
+
+    def _alert_meta(self, event: str, agent: AgentState) -> dict:
+        """Feed fields naming the agent (and, for blocked, its episode) so a
+        banner click can open that agent's drill."""
+        meta: dict = {
+            "agent": {"server_id": agent.key.server_id, "pane_id": agent.key.pane_id},
+            "event": event,
+        }
+        if event == "blocked":
+            with self._lock:
+                episode = self._block_episode.get(agent.key)
+            if episode is not None:
+                meta["episode"] = episode
+        return meta
 
     def notify_usage(self, alerts) -> None:
         """Send usage-limit alerts (usage_alerts.UsageAlert, from the DeckApp's
@@ -428,6 +453,7 @@ class LiveSource(StateSource):
                 for key in recycled:
                     self._preread.pop(key, None)
                     self._preread_req.pop(key, None)
+                    self._block_episode.pop(key, None)
                     self._notify_throttle.forget(key)
             if self._drilled_key() in recycled:
                 self._active_read_req = None
@@ -476,6 +502,7 @@ class LiveSource(StateSource):
                 if recycled:
                     self._preread.pop(state.key, None)
                     self._preread_req.pop(state.key, None)
+                    self._block_episode.pop(state.key, None)
                     self._notify_throttle.forget(state.key)
             # Same rule for a single-pane event: only a real unblock clears the
             # drilled prompt (App.handle_event).
@@ -634,6 +661,16 @@ class LiveSource(StateSource):
         clear_detection = False
         with self._lock:
             blocked = {k for k, s in self._agents.items() if s.status is Status.BLOCKED}
+            episodes_changed = False
+            for key in [k for k in self._block_episode if k not in blocked]:
+                del self._block_episode[key]
+                episodes_changed = True
+            for key in blocked:
+                if key not in self._block_episode:
+                    self._block_episode[key] = uuid.uuid4().hex[:16]
+                    episodes_changed = True
+            if episodes_changed:
+                self._preread_cv.notify_all()
             for key in set(self._preread) | set(self._preread_req):
                 if key not in blocked:  # left BLOCKED -> prompt + pending read are stale
                     self._preread.pop(key, None)
@@ -688,7 +725,7 @@ class LiveSource(StateSource):
         if pane_id is None or req is None:
             return
         key = AgentKey(server_id, pane_id)
-        with self._lock:
+        with self._preread_cv:
             state = self._agents.get(key)
             if (
                 state is not None
@@ -696,6 +733,7 @@ class LiveSource(StateSource):
                 and req == self._preread_req.get(key)
             ):
                 self._preread[key] = text
+                self._preread_cv.notify_all()
 
     # --- read invalidation (callers hold the deck lock) ---
     def _drilled_key(self) -> AgentKey | None:

@@ -478,3 +478,38 @@ def test_icon_is_only_passed_to_sinks_when_set():
     # No icon -> both run with three args; with one, the icon-aware sink gets it
     # (the plain one raises, which composite_sink isolates and logs).
     assert got == ["plain", None, "/i.png"]
+
+
+def test_agent_meta_rides_the_feed_only():
+    """The shell needs the agent key + episode to open a drill / answer from a
+    banner; sinks that know nothing about it (osascript, Telegram) never see it."""
+    import herdeck.notify as notify_mod
+
+    feed = notify_mod.NotificationFeed()
+    plain = []
+    sink = notify_mod.composite_sink(
+        [notify_mod.runtime_sink(feed, lambda: True), lambda t, b, s: plain.append((t, b, s))]
+    )
+    meta = {
+        "agent": {"server_id": "prod", "pane_id": "p1"},
+        "event": "blocked",
+        "episode": "ep1",
+        "bogus": "dropped",
+        "reply": None,
+    }
+    Notifier(sink=sink).notify("claude · needs input", "shop", "Glass", meta=meta)
+
+    [item] = feed.state()["items"]
+    assert item["kind"] == "alert"
+    assert item["agent"] == {"server_id": "prod", "pane_id": "p1"}
+    assert item["event"] == "blocked" and item["episode"] == "ep1"
+    assert "bogus" not in item and "reply" not in item  # unknown / unset keys stay out
+    assert plain == [("claude · needs input", "shop", "Glass")]
+
+
+def test_meta_is_not_passed_to_a_sink_that_does_not_accept_it():
+    got = []
+    Notifier(sink=lambda t, b, s, icon=None: got.append(icon)).notify(
+        "t", "b", True, icon="/i.png", meta={"event": "done"}
+    )
+    assert got == ["/i.png"]

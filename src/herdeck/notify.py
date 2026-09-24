@@ -142,6 +142,16 @@ def _macos_sink(title: str, body: str, sound: bool | str, icon: str | None = Non
     )
 
 
+# Optional per-item fields beside title/body/sound/icon. ``agent`` is
+# ``{"server_id", "pane_id"}``; ``event`` is "blocked"/"done"; a blocked alert
+# also carries ``episode`` (the block episode it belongs to — an answer is only
+# applied while the agent is still blocked in that episode), and with
+# [notifications].banner_actions either ``actions`` (``[{"id", "label"}]`` for a
+# binary approve/deny prompt, plus its option signature ``sig``) or ``reply``
+# (the inline reply field's placeholder).
+FEED_META_KEYS = frozenset({"agent", "event", "episode", "sig", "actions", "reply"})
+
+
 class NotificationFeed:
     """In-process record of recent event notifications.
 
@@ -171,8 +181,16 @@ class NotificationFeed:
         self._changed = threading.Condition()
 
     def push(
-        self, title: str, body: str, sound: bool | str, icon: str | None = None
+        self,
+        title: str,
+        body: str,
+        sound: bool | str,
+        icon: str | None = None,
+        meta: dict | None = None,
     ) -> dict:
+        """Queue one banner. ``meta`` (see FEED_META_KEYS) tells the shell which
+        agent the banner is about, so a click can open that agent's drill and a
+        blocked banner can carry answer buttons bound to its block episode."""
         with self._changed:
             self._seq += 1
             self.queued += 1
@@ -180,6 +198,7 @@ class NotificationFeed:
                 "id": f"{self._generation}:{self._seq}",
                 "generation": self._generation,
                 "seq": self._seq,
+                "kind": "alert",
                 "title": title,
                 "body": body,
                 "sound": sound,
@@ -187,6 +206,9 @@ class NotificationFeed:
                 "icon": icon,
                 "created_at_ms": time.time_ns() // 1_000_000,
             }
+            for key, value in (meta or {}).items():
+                if key in FEED_META_KEYS and value is not None:
+                    item[key] = value
             self._items.append(item)
             dropped = self._trim_locked()
             self._changed.notify_all()
@@ -387,9 +409,15 @@ def runtime_sink(
     fallback is abnormal, and the age tells a lapsed claim from a missing app.
     """
 
-    def sink(title: str, body: str, sound: bool | str, icon: str | None = None) -> None:
+    def sink(
+        title: str,
+        body: str,
+        sound: bool | str,
+        icon: str | None = None,
+        meta: dict | None = None,
+    ) -> None:
         if gate():
-            feed.push(title, body, sound, icon)
+            feed.push(title, body, sound, icon, meta)
             return
         age = format_claim_age(claim_age()) if claim_age is not None else "unknown"
         log.warning(
@@ -399,7 +427,20 @@ def runtime_sink(
         )
         fallback(title, body, sound)
 
+    sink._accepts_meta = True
     return sink
+
+
+def _sink_kwargs(sink, icon: str | None, meta: dict | None) -> dict:
+    """Optional keyword arguments for one sink: ``icon`` only when set (plain
+    three-argument sinks keep working) and ``meta`` only for sinks that declare
+    ``_accepts_meta`` (the shell feed; Telegram and osascript ignore it)."""
+    kwargs: dict = {}
+    if icon is not None:
+        kwargs["icon"] = icon
+    if meta is not None and getattr(sink, "_accepts_meta", False):
+        kwargs["meta"] = meta
+    return kwargs
 
 
 def _http_post(url: str, fields: dict[str, str]) -> None:
@@ -493,16 +534,20 @@ def composite_sink(
 ) -> Callable[[str, str, bool | str], None]:
     """Fan out to multiple sinks; one failing sink never stops the others."""
 
-    def sink(title: str, body: str, sound: bool | str, icon: str | None = None) -> None:
+    def sink(
+        title: str,
+        body: str,
+        sound: bool | str,
+        icon: str | None = None,
+        meta: dict | None = None,
+    ) -> None:
         for s in sinks:
             try:
-                if icon is None:
-                    s(title, body, sound)
-                else:
-                    s(title, body, sound, icon=icon)
+                s(title, body, sound, **_sink_kwargs(s, icon, meta))
             except Exception as exc:
                 _warn_failure(_sink_name(s), exc)
 
+    sink._accepts_meta = True
     return sink
 
 
@@ -513,15 +558,18 @@ class Notifier:
         self._sink = sink
 
     def notify(
-        self, title: str, body: str, sound: bool | str = False, icon: str | None = None
+        self,
+        title: str,
+        body: str,
+        sound: bool | str = False,
+        icon: str | None = None,
+        meta: dict | None = None,
     ) -> None:
         """``icon`` (a PNG path for the banner) is passed on only when set, so
-        plain three-argument sinks keep working."""
+        plain three-argument sinks keep working; ``meta`` (the feed's agent
+        fields, FEED_META_KEYS) only reaches sinks that accept it."""
         try:
-            if icon is None:
-                self._sink(title, body, sound)
-            else:
-                self._sink(title, body, sound, icon=icon)
+            self._sink(title, body, sound, **_sink_kwargs(self._sink, icon, meta))
         except Exception as exc:
             _warn_failure(_sink_name(self._sink), exc)
 
