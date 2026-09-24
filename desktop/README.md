@@ -14,8 +14,10 @@ the same loopback discovery contract. A spawned sidecar gets
 `HERDECK_PARENT_WATCH=1` and a stdin pipe the shell keeps open. When the shell
 dies for any reason the pipe closes, and the sidecar shuts down cleanly on EOF
 (`herdeck.deckapp.parent_watch`). A quit closes the same pipe and sends SIGKILL
-only after 2 s. A stable shell on its own sidecar re-checks `runtime.json`
-every 12 s and switches to a healthy launchd runtime when one appears. Every
+only after 5 s. A stable shell on its own sidecar re-checks `runtime.json`
+every 12 s and switches to a healthy launchd runtime when one appears. If that
+runtime then stays unreachable (3 failed re-discoveries over at least 30 s),
+the shell starts a fresh sidecar supervisor. Every
 plan choice is logged as `herdeck: runtime plan=attach|spawn reason=…`. The
 shell reads the runtime's `url` +
 access `token` and proxies `/state`, `/tile`, and `/press` through Rust commands,

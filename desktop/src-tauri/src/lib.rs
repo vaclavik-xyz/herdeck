@@ -107,11 +107,58 @@ struct AppState {
     /// may attach the shared runtime: a healthy launchd runtime appearing in
     /// runtime.json then takes over (see `try_reattach`). Cleared by the switch.
     reattach_eligible: Arc<AtomicBool>,
-    /// The supervised sidecar child + its supervisor's stop flag (the same
-    /// `Arc`s the exit handler uses), so a switch to the launchd runtime can
-    /// stop our own sidecar for good.
-    sidecar_child: Arc<Mutex<Option<Child>>>,
-    sidecar_stop: Arc<AtomicBool>,
+    /// The CURRENT supervisor (stop flag + child slot). A switch to the
+    /// launchd runtime stops it; losing that runtime again starts a fresh one
+    /// with its own flag + slot, so a late-waking old supervisor can never
+    /// restart itself or reap the new child. The exit handler stops whichever
+    /// is current.
+    supervisor: Arc<Mutex<Supervisor>>,
+    /// The spawn recipe of our own sidecar (set only when this shell spawned
+    /// one), kept for `fall_back_to_spawn`.
+    spawn_spec: Arc<Mutex<Option<CommandSpec>>>,
+    /// True after `switch_to_runtime` moved us off our own sidecar: only then
+    /// may a lost launchd runtime bring our own sidecar back.
+    switched_from_spawn: Arc<AtomicBool>,
+    /// Consecutive failed re-discoveries of the attached runtime.
+    attach_loss: Arc<Mutex<AttachLoss>>,
+    /// Set by the exit handler: no fallback may spawn a sidecar after it.
+    quitting: Arc<AtomicBool>,
+}
+
+/// One supervisor generation: its stop flag and its child slot.
+#[derive(Clone, Default)]
+struct Supervisor {
+    stop: Arc<AtomicBool>,
+    child: Arc<Mutex<Option<Child>>>,
+}
+
+/// Failed re-discoveries before a switched shell gives up on the launchd
+/// runtime and spawns its own sidecar again. BOTH thresholds must be met, so a
+/// runtime restart (new port within seconds) never triggers it, and a runtime
+/// that answers one probe and dies cannot make the shell flap faster than
+/// once per `ATTACH_LOST_AFTER` (+ `REATTACH_CHECK_INTERVAL` to switch back).
+const ATTACH_LOST_FAILURES: u32 = 3;
+const ATTACH_LOST_AFTER: Duration = Duration::from_secs(30);
+
+/// Streak of failed re-discoveries of the attached runtime. Any successful
+/// poll or re-discovery resets it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct AttachLoss {
+    failures: u32,
+    since: Option<std::time::Instant>,
+}
+
+impl AttachLoss {
+    fn record_ok(&mut self) {
+        *self = AttachLoss::default();
+    }
+
+    /// Record one failure at `now`; true once the runtime counts as lost.
+    fn record_failure(&mut self, now: std::time::Instant) -> bool {
+        self.failures = self.failures.saturating_add(1);
+        let since = *self.since.get_or_insert(now);
+        self.failures >= ATTACH_LOST_FAILURES && now.duration_since(since) >= ATTACH_LOST_AFTER
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -304,14 +351,16 @@ fn switch_to_runtime(app: &tauri::AppHandle, d: Discovery, reason: &str) -> bool
         if !state.reattach_eligible.swap(false, Ordering::SeqCst) {
             return false; // another caller switched first
         }
-        state.sidecar_stop.store(true, Ordering::SeqCst);
+        state.supervisor.lock().unwrap().stop.store(true, Ordering::SeqCst);
         state.attached_from_runtime_json.store(true, Ordering::Relaxed);
+        state.switched_from_spawn.store(true, Ordering::SeqCst);
+        state.attach_loss.lock().unwrap().record_ok();
         *current = Some(d.clone());
     }
     eprintln!("{}", plan_log_line("attach", reason, Some(&d.url)));
     register_toggle_hotkey_logged(app, &d);
     let _ = app.emit("discovery", DiscoveryView::from(&d)); // token-free
-    let child = state.sidecar_child.clone();
+    let child = state.supervisor.lock().unwrap().child.clone();
     std::thread::spawn(move || {
         let taken = child.lock().unwrap().take();
         if let Some(mut c) = taken {
@@ -345,12 +394,51 @@ fn start_reattach_watch(app: tauri::AppHandle) {
         std::thread::sleep(REATTACH_CHECK_INTERVAL);
         let state = app.state::<AppState>();
         if !state.reattach_eligible.load(Ordering::SeqCst)
-            || state.sidecar_stop.load(Ordering::SeqCst)
+            || state.supervisor.lock().unwrap().stop.load(Ordering::SeqCst)
         {
             return; // switched already, or quitting
         }
         try_reattach(&app, "launchd_runtime_appeared");
     });
+}
+
+/// A proxied poll of the current runtime succeeded: the attached runtime is
+/// alive, so any failure streak is over.
+fn note_runtime_ok(state: &AppState) {
+    let mut loss = state.attach_loss.lock().unwrap();
+    if loss.failures != 0 {
+        loss.record_ok();
+    }
+}
+
+/// The launchd runtime we switched to is gone for good (uninstalled, booted
+/// out, crash-looping): without this the window would have no runtime at all
+/// until the app restarts, since we stopped our own sidecar to switch. Start a
+/// fresh supervisor (new stop flag + child slot), and make the shell eligible
+/// to re-adopt a launchd runtime that becomes healthy later.
+fn fall_back_to_spawn(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let Some(spec) = state.spawn_spec.lock().unwrap().clone() else {
+        return;
+    };
+    let fresh = Supervisor::default();
+    {
+        let mut current = state.discovery.lock().unwrap();
+        if !state.switched_from_spawn.swap(false, Ordering::SeqCst) {
+            return; // not switched, or another caller already fell back
+        }
+        if state.quitting.load(Ordering::SeqCst) {
+            return; // the app is quitting: spawn nothing
+        }
+        *state.supervisor.lock().unwrap() = fresh.clone();
+        state.attached_from_runtime_json.store(false, Ordering::Relaxed);
+        *current = None; // "sidecar not ready" until the new one reports in
+    }
+    state.attach_loss.lock().unwrap().record_ok();
+    eprintln!("{}", plan_log_line("spawn", "attached_runtime_lost", None));
+    start_supervisor(app.clone(), spec, fresh);
+    state.reattach_eligible.store(true, Ordering::SeqCst);
+    start_reattach_watch(app.clone());
 }
 
 /// Re-read `runtime.json` from disk and, when it describes a LIVE runtime
@@ -385,10 +473,20 @@ fn rediscover_runtime(app: &tauri::AppHandle) -> Option<Discovery> {
     if eligible {
         return try_reattach(app, "own_sidecar_unreachable");
     }
-    let d = sidecar::read_runtime_discovery(&sidecar::runtime_file_path())?;
-    if sidecar::decide_runtime_attach(Some(d.clone()), probe_runtime_health).is_none() {
+    let healthy = sidecar::read_runtime_discovery(&sidecar::runtime_file_path())
+        .and_then(|d| sidecar::decide_runtime_attach(Some(d), probe_runtime_health));
+    let Some(d) = healthy else {
+        let lost = state
+            .attach_loss
+            .lock()
+            .unwrap()
+            .record_failure(std::time::Instant::now());
+        if lost && state.switched_from_spawn.load(Ordering::SeqCst) {
+            fall_back_to_spawn(app);
+        }
         return None;
-    }
+    };
+    state.attach_loss.lock().unwrap().record_ok();
     let changed = {
         let mut current = state.discovery.lock().unwrap();
         let changed = current.as_ref().map(discovery_key) != Some(discovery_key(&d));
@@ -489,7 +587,10 @@ async fn deck_state(
         })
     };
     let body = match fetch(d).await {
-        Ok(body) => body,
+        Ok(body) => {
+            note_runtime_ok(&state);
+            body
+        }
         Err(first_err) => {
             // Stale external sidecar (launchd restart → fresh port): re-read
             // runtime.json once and retry against the live runtime.
@@ -931,8 +1032,12 @@ fn start_notify_pump(app: tauri::AppHandle) {
             });
         };
         let (body, active_discovery) = match poll(&d) {
-            NotifyPoll::Deliver(body) => (body, d),
+            NotifyPoll::Deliver(body) => {
+                note_runtime_ok(&state);
+                (body, d)
+            }
             NotifyPoll::Unsupported => {
+                note_runtime_ok(&state);
                 unsupported_backoff(&d);
                 continue;
             }
@@ -2346,6 +2451,30 @@ mod plan_tests {
     }
 
     #[test]
+    fn an_attached_runtime_counts_as_lost_only_after_three_failures_and_30s() {
+        let t0 = std::time::Instant::now();
+        let mut loss = AttachLoss::default();
+        // Three quick failures (a runtime restarting) are not a loss.
+        assert!(!loss.record_failure(t0));
+        assert!(!loss.record_failure(t0 + Duration::from_secs(5)));
+        assert!(!loss.record_failure(t0 + Duration::from_secs(10)));
+        // Nor is a long gap with too few failures.
+        let mut sparse = AttachLoss::default();
+        assert!(!sparse.record_failure(t0));
+        assert!(!sparse.record_failure(t0 + Duration::from_secs(40)));
+        // Both thresholds met -> lost.
+        assert!(!loss.record_failure(t0 + Duration::from_secs(29)));
+        assert!(loss.record_failure(t0 + ATTACH_LOST_AFTER));
+        // Any success restarts the clock: no flapping faster than the window.
+        loss.record_ok();
+        let t1 = t0 + Duration::from_secs(60);
+        for i in 0..10 {
+            assert!(!loss.record_failure(t1 + Duration::from_secs(i)));
+        }
+        assert!(loss.record_failure(t1 + ATTACH_LOST_AFTER));
+    }
+
+    #[test]
     fn a_self_spawned_shell_reattaches_only_to_a_different_healthy_runtime() {
         let own = discovery_on(51000);
         let launchd = stable_runtime();
@@ -3712,13 +3841,7 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
 /// is exported as `HERDECK_CONFIG` so the spawned sidecar reads the SAME config
 /// file Rust resolved the deck preferences from (mooting the sidecar's CWD-relative
 /// branch — important for the frozen `.app`, where CWD is nondeterministic).
-fn start_sidecar(
-    app: &tauri::App,
-    discovery: Arc<Mutex<Option<Discovery>>>,
-    child: Arc<Mutex<Option<Child>>>,
-    stop: Arc<AtomicBool>,
-    config_path: &Path,
-) {
+fn start_sidecar(app: &tauri::App, discovery: Arc<Mutex<Option<Discovery>>>, config_path: &Path) {
     let primary_resource_dir = app.path().resource_dir().ok();
     let executable = env::current_exe().ok();
     let resource_dir = sidecar::resolve_resource_dir(
@@ -3750,40 +3873,46 @@ fn start_sidecar(
                 spec.envs
                     .push(("HERDECK_KEYRING_SERVICE".to_string(), service.to_string()));
             }
-            let handle = app.handle().clone();
-            let callback_stop = stop.clone();
-            std::thread::spawn(move || {
-                supervise(SupervisorConfig::new(spec), child, stop, move |d| {
-                    if let Some(state) = handle.try_state::<AppState>() {
-                        let mut current = state.discovery.lock().unwrap();
-                        if callback_stop.load(Ordering::SeqCst) {
-                            // Switched to the launchd runtime (or quitting)
-                            // while this sidecar booted: never repoint back.
-                            return;
-                        }
-                        *current = Some(d.clone());
-                    }
-                    let view = DiscoveryView::from(&d);
-                    register_toggle_hotkey_logged(&handle, &d);
-                    let _ = handle.emit("discovery", view); // token-free
-                });
-            });
+            let Some(state) = app.try_state::<AppState>() else {
+                return;
+            };
+            *state.spawn_spec.lock().unwrap() = Some(spec.clone());
+            let sup = state.supervisor.lock().unwrap().clone();
+            start_supervisor(app.handle().clone(), spec, sup);
             if build_channel::shared_runtime_attach_enabled() {
-                if let Some(state) = app.try_state::<AppState>() {
-                    state.reattach_eligible.store(true, Ordering::SeqCst);
-                }
+                state.reattach_eligible.store(true, Ordering::SeqCst);
                 start_reattach_watch(app.handle().clone());
             }
         }
     }
 }
 
+/// Run one supervisor generation on its own thread. Its discovery callback
+/// checks ITS stop flag under the discovery lock, so once this generation is
+/// stopped (switch to the launchd runtime, quit) a late report never repoints
+/// the shell.
+fn start_supervisor(handle: tauri::AppHandle, spec: CommandSpec, sup: Supervisor) {
+    let callback_stop = sup.stop.clone();
+    std::thread::spawn(move || {
+        supervise(SupervisorConfig::new(spec), sup.child, sup.stop, move |d| {
+            if let Some(state) = handle.try_state::<AppState>() {
+                let mut current = state.discovery.lock().unwrap();
+                if callback_stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                *current = Some(d.clone());
+            }
+            let view = DiscoveryView::from(&d);
+            register_toggle_hotkey_logged(&handle, &d);
+            let _ = handle.emit("discovery", view); // token-free
+        });
+    });
+}
+
 /// Tauri entry point.
 pub fn run() {
     start_app_log();
     let discovery: Arc<Mutex<Option<Discovery>>> = Arc::new(Mutex::new(None));
-    let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
-    let stop = Arc::new(AtomicBool::new(false));
 
     // Resolve config.toml with the sidecar's existence-check order and read it
     // ONCE. Both answers below can fall back to the legacy window_mode the fixed
@@ -3807,12 +3936,7 @@ pub fn run() {
 
     // Clones for the setup closure and the supervisor.
     let setup_discovery = discovery.clone();
-    let setup_child = child.clone();
-    let setup_stop = stop.clone();
     let setup_config_path = config_path.clone();
-    // Clones for the exit handler.
-    let exit_child = child.clone();
-    let exit_stop = stop.clone();
 
     let state = AppState {
         discovery,
@@ -3823,8 +3947,11 @@ pub fn run() {
         rediscover_last: Arc::new(Mutex::new(None)),
         attached_from_runtime_json: Arc::new(AtomicBool::new(false)),
         reattach_eligible: Arc::new(AtomicBool::new(false)),
-        sidecar_child: child.clone(),
-        sidecar_stop: stop.clone(),
+        supervisor: Arc::new(Mutex::new(Supervisor::default())),
+        spawn_spec: Arc::new(Mutex::new(None)),
+        switched_from_spawn: Arc::new(AtomicBool::new(false)),
+        attach_loss: Arc::new(Mutex::new(AttachLoss::default())),
+        quitting: Arc::new(AtomicBool::new(false)),
     };
     let notify_permission = state.notify_permission.clone();
 
@@ -4005,13 +4132,7 @@ pub fn run() {
             }
 
             build_tray(app, deck_always_on_top, startup.deck_visible)?;
-            start_sidecar(
-                app,
-                setup_discovery,
-                setup_child,
-                setup_stop,
-                &setup_config_path,
-            );
+            start_sidecar(app, setup_discovery, &setup_config_path);
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -4032,8 +4153,21 @@ pub fn run() {
                 // closing its stdin runs its clean shutdown (D200 released,
                 // files removed); SIGKILL only after SIDECAR_STOP_GRACE. A crash
                 // skips this handler, but the kernel closes the same pipe then.
-                exit_stop.store(true, Ordering::SeqCst);
-                if let Some(mut c) = exit_child.lock().unwrap().take() {
+                let state = app_handle.state::<AppState>();
+                let sup = {
+                    // Same lock order as fall_back_to_spawn (discovery, then
+                    // supervisor): a fallback racing the quit either sees
+                    // `quitting` or its fresh supervisor is the one stopped here.
+                    let _discovery = state.discovery.lock().unwrap();
+                    state.quitting.store(true, Ordering::SeqCst);
+                    let sup = state.supervisor.lock().unwrap().clone();
+                    sup.stop.store(true, Ordering::SeqCst);
+                    sup
+                };
+                // Take the child out first so the slot's lock is not held
+                // through the stop grace.
+                let taken = sup.child.lock().unwrap().take();
+                if let Some(mut c) = taken {
                     sidecar::stop_child(&mut c, sidecar::SIDECAR_STOP_GRACE);
                 }
             }

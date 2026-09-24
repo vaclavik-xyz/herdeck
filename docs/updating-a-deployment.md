@@ -169,6 +169,10 @@ Other reasons: `runtime_json_healthy` (normal attach at launch),
 `no_runtime_json`, `own_sidecar_unreachable` (switched after a failed poll),
 `runtime_restarted` (the launchd runtime came back on a new port),
 `env_override`, and `attach_disabled_for_channel` (dev builds never attach).
+`plan=spawn reason=attached_runtime_lost` means the app had switched to the
+launchd runtime, which then stayed unreachable (3 failed re-discoveries over at
+least 30 s), so the app started its own sidecar again. It switches back once
+the runtime is healthy.
 A third process that stays for longer than about 15 s means the launchd runtime
 is not answering `/health`; check the runtime itself.
 

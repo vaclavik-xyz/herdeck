@@ -24,7 +24,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A sidecar spawned by the desktop app no longer outlives it. It used to keep
   running (and holding the D200) after a crash, SIGKILL or Force Quit. It now
   exits cleanly when the app's stdin pipe closes, with a parent-pid check as a
-  fallback. A normal quit closes the pipe and kills the sidecar only after 2 s.
+  fallback. A normal quit closes the pipe and kills the sidecar only after 5 s.
 - Two runtimes no longer fight over one D200. The owner holds
   `~/.cache/herdeck/d200.lock` (`$HERDECK_RUNTIME_DIR` respected). Another
   runtime leaves the device alone, keeps serving its window, and takes over
@@ -33,7 +33,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was not answering at launch (e.g. right after an auto-update relaunch) now
   switches to that runtime once it is healthy and stops its sidecar. It
   checks every 12 s and after any failed poll. Before, the two runtimes stayed
-  until the app restarted, and banners fell back to `osascript`.
+  until the app restarted, and banners fell back to `osascript`. If the
+  runtime it switched to then stays unreachable (3 failed re-discoveries over
+  at least 30 s), the app starts its own sidecar again.
 - SVG project favicons now render in the packaged desktop app and the Elgato
   plugin (they showed the monogram): SVG goes through resvg (`resvg-py`, a
   self-contained wheel bundled into both). An SVG favicon referencing external files or

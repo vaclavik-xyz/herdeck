@@ -197,7 +197,9 @@ pub const PARENT_WATCH_ENV: &str = "HERDECK_PARENT_WATCH";
 
 /// How long a clean stop waits for the sidecar to shut its D200 + runtime
 /// files down after its stdin closes, before falling back to SIGKILL.
-pub const SIDECAR_STOP_GRACE: Duration = Duration::from_secs(2);
+/// The runtime's own shutdown joins its D200 reconnect thread for up to 7 s,
+/// but a normal close takes well under a second.
+pub const SIDECAR_STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// Stop a sidecar the way a dying shell would: close its stdin (the parent
 /// watch then runs the same cleanup as SIGTERM — closes the D200, removes its
@@ -395,7 +397,8 @@ pub fn supervise<F>(
         backoff = next_backoff(backoff, cfg.max_backoff);
     }
     // Make sure no child outlives us (clean stop first, SIGKILL as a backstop).
-    if let Some(mut child) = shared_child.lock().unwrap().take() {
+    let taken = shared_child.lock().unwrap().take(); // never hold the slot through the grace
+    if let Some(mut child) = taken {
         stop_child(&mut child, SIDECAR_STOP_GRACE);
     }
 }
