@@ -383,7 +383,7 @@ def test_direct_http_default_port_uses_browser_normalized_origin(monkeypatch):
     class FakeServer:
         server_address = ("cockpit.example", 80)
 
-        def serve_forever(self):
+        def serve_forever(self, poll_interval=0.5):
             pass
 
         def shutdown(self):
@@ -1334,3 +1334,16 @@ def test_embedded_page_javascript_parses_with_node():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_served_deck_polls_shutdown_quickly():
+    # serve_forever's stdlib default poll_interval (0.5 s) makes every close()
+    # wait up to half a second; the server thread must use the short interval.
+    from herdeck.driver import web
+
+    deck = WebDeck(slots=13, host="127.0.0.1", port=0, icon_provider=StubIcons())
+    try:
+        assert deck._thread._kwargs == {"poll_interval": web._SERVE_POLL_INTERVAL}
+        assert web._SERVE_POLL_INTERVAL <= 0.1
+    finally:
+        deck.close()

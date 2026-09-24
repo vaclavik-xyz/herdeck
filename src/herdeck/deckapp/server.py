@@ -32,6 +32,11 @@ log = logging.getLogger(__name__)
 # object (parse error or wrong type). Using a distinct singleton means callers
 # can safely distinguish it from None, False, or any other falsy value.
 _BAD_BODY = object()
+# serve_forever() polls its shutdown flag every poll_interval seconds; the stdlib
+# default (0.5 s) makes every close() block up to half a second, which adds up
+# fast in tests that start/stop servers constantly. 50 ms keeps shutdown snappy
+# at a negligible idle-wakeup cost.
+_SERVE_POLL_INTERVAL = 0.05
 
 # Body returned for any unauthenticated request: plain text (never
 # octet-stream, which browsers offer to download) and free of any token.
@@ -180,7 +185,11 @@ class DeckApp:
         if serve:
             self._server = ThreadingHTTPServer((host, port), self._handler_class())
             self.host, self.port = self._server.server_address[0], self._server.server_address[1]
-            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+            self._thread = threading.Thread(
+                target=self._server.serve_forever,
+                kwargs={"poll_interval": _SERVE_POLL_INTERVAL},
+                daemon=True,
+            )
             self._thread.start()
         else:
             self.host, self.port = host, port

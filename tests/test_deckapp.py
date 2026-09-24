@@ -1400,3 +1400,16 @@ def test_long_poll_state_wakes_on_connection_flip_without_image_change():
     waiter.join(timeout=2)
     assert got and got[0]["version"] > v
     assert got[0]["connected"] is False
+
+
+def test_served_app_polls_shutdown_quickly():
+    # serve_forever's stdlib default poll_interval (0.5 s) makes every close()
+    # wait up to half a second; the server thread must use the short interval.
+    from herdeck.deckapp import server
+
+    app = DeckApp(MockSource(), host="127.0.0.1", port=0, icon_provider=StubIcons())
+    try:
+        assert app._thread._kwargs == {"poll_interval": server._SERVE_POLL_INTERVAL}
+        assert server._SERVE_POLL_INTERVAL <= 0.1
+    finally:
+        app.close()
