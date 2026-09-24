@@ -71,6 +71,7 @@ class Connector:
         backoff_max: float = 30.0,
         on_term: Callable[[str, TermFrame | TermClosed], None] | None = None,
         on_project_icon: Callable[[str, ProjectIcon], None] | None = None,
+        on_request_error: Callable[[str | None, str], None] | None = None,
     ):
         self.server = server
         self._on_snapshot = on_snapshot
@@ -79,6 +80,9 @@ class Connector:
         self._on_result = on_result or (lambda req, data: None)
         self._on_error = on_error or (lambda message: None)
         self._on_term = on_term or (lambda server_id, message: None)
+        # (req, message) for every bridge error frame, in addition to
+        # on_error: lets a consumer fail exactly the request the bridge refused.
+        self._on_request_error = on_request_error
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._stop = False
@@ -277,6 +281,8 @@ class Connector:
             return  # a newer bridge's frame type: ignored by design
         elif isinstance(msg, Error):
             self._on_error(msg.message)
+            if self._on_request_error is not None:
+                self._on_request_error(msg.req, msg.message)
 
     def _maybe_request_icons(self) -> None:
         """Opt in to project_icon frames once per connection — only when this

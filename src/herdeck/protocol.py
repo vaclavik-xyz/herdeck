@@ -118,6 +118,9 @@ class Result:
 @dataclass
 class Error:
     message: str
+    # The request the bridge refused, when it names one (e.g. a read-only
+    # token rejecting a mutating message). None for connection-level errors.
+    req: str | None = None
 
 
 @dataclass
@@ -204,7 +207,8 @@ def decode_inbound(
     if kind == "result":
         return Result(msg["req"], msg.get("data", {}))
     if kind == "error":
-        return Error(msg.get("message", ""))
+        req = msg.get("req")
+        return Error(msg.get("message", ""), req=req if isinstance(req, str) and req else None)
     if kind == "term_frame":
         req = msg.get("req")
         if not isinstance(req, str) or not req:
