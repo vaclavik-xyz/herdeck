@@ -1718,9 +1718,9 @@ def select_live():
     Returns ``(config, first_server)`` for compatibility; LiveSource connects
     every selected server in ``config.servers``. Returns ``None`` to fall back to
     the deterministic mock. Mock wins when ``HERDECK_MOCK`` is set, when no config
-    file is discovered, or when the resolved server has no bridge token — the token
-    lives in env/keychain (``ServerConfig.token``), never in the config file, so a
-    missing one means we cannot connect and should show the mock + hint.
+    file is discovered, or when the resolved server has no bridge token. None does
+    NOT mean "show the demo": callers ask ``_config_load_error()`` whether an
+    existing config failed to load and then show the error state instead.
     """
     if os.environ.get("HERDECK_MOCK"):
         return None
@@ -1736,7 +1736,7 @@ def select_live():
         config = resolve_profile(snapshot).config
     except (ConfigError, OSError):
         # A config that needs a token whose env var is unset raises ConfigError;
-        # treat any unreadable/invalid config as "no live target" -> mock.
+        # no live target; _config_load_error() turns it into the error state.
         return None
     if not config.servers:
         return None
@@ -2925,7 +2925,8 @@ def create_app(
     reloader=None,
 ) -> DeckApp:
     """Build the sidecar with the right source: live when a server + token are
-    configured, otherwise the deterministic mock. Wires up a default ConfigService
+    configured, the config-error state when an existing config does not load,
+    otherwise the deterministic mock. Wires up a default ConfigService
     and a disk-re-select reloader so the GUI can edit + reload in place.
 
     Also starts a ``ConfigWatcher`` over the same paths the ConfigService reads so
