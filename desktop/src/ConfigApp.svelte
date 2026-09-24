@@ -37,6 +37,7 @@
   import DesktopSection from "./lib/sections/DesktopSection.svelte";
   import MaintenanceSection from "./lib/sections/MaintenanceSection.svelte";
   import { settingsRequest } from "./lib/settingsRequest.svelte";
+  import { healthState, maintenanceBadge } from "./lib/healthState.svelte";
   import Banner from "./lib/Banner.svelte";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import {
@@ -157,6 +158,7 @@
       remote_servers: "Remote servers",
       deck_device: "Deck runtime",
       section_has_errors: "has validation errors",
+      health_problems: "{n} health problem(s) — see Maintenance",
       open_connections: "Open connections",
       automatic: "Automatic",
       settings_eyebrow: "Settings",
@@ -265,6 +267,7 @@
       remote_servers: "Vzdálené servery",
       deck_device: "Runtime decku",
       section_has_errors: "obsahuje chyby",
+      health_problems: "Problémy se stavem: {n} — viz Údržba",
       open_connections: "Otevřít připojení",
       automatic: "Automaticky",
       settings_eyebrow: "Nastavení",
@@ -347,8 +350,12 @@
     validationEditProfile = undefined;
   }
 
-  // "Open Maintenance" from HealthNotice / the deck window (settingsRequest).
+  // "Details" / "Fix config…" from a notice, or the deck window's status dot
+  // (settingsRequest).
   let seenRequest = settingsRequest.seq;
+  // Problem count + worst severity for the Maintenance nav entry (NoticeList
+  // publishes the app window's /health problems).
+  const healthBadge = $derived(maintenanceBadge(healthState.problems));
   $effect(() => {
     const seq = settingsRequest.seq;
     if (seq === seenRequest) return;
@@ -850,6 +857,11 @@
             >
               <span class="nav-icon" aria-hidden="true"><Icon size={14} weight="regular" /></span>
               <span>{item.label}</span>
+              {#if item.key === "maintenance" && healthBadge}
+                {@const badgeTitle = fmt(lm.health_problems, { n: healthBadge.count })}
+                <span class="health-badge {healthBadge.severity}" data-health-badge={healthBadge.count} title={badgeTitle} aria-hidden="true">{healthBadge.count}</span>
+                <span class="sr-only">({badgeTitle})</span>
+              {/if}
               {#if validationSections.has(item.key)}
                 <!-- Not colour alone: the dot carries a tooltip and the name is
                      announced with the problem. -->
@@ -1073,6 +1085,8 @@
   .sidebar button.active { color: var(--text); background: var(--accent-soft); }
   .problem-dot { flex: none; width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--st-offline); }
   .sidebar button.problem { color: var(--st-offline-text); }
+  .health-badge { flex: none; min-width: 16px; height: 16px; margin-left: auto; padding: 0 4px; border-radius: 8px; background: var(--sev-warning); color: var(--canvas); font: 700 10px/16px var(--font-ui); text-align: center; }
+  .health-badge.error { background: var(--sev-error); color: var(--text); }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   .nav-icon { width: 16px; color: var(--text-faint); text-align: center; }
   .sidebar button.active .nav-icon { color: var(--accent-strong); }

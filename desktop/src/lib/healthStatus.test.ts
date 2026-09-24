@@ -1,147 +1,189 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { flushSync, mount, tick, unmount } from "svelte";
-import HealthNotice from "./HealthNotice.svelte";
-import { HEALTH_GRACE_MS, healthLine, type HealthMessages } from "./healthStatus";
-import { setLang } from "./i18n.svelte";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  HEALTH_GRACE_MS, bySeverity, configErrorSection, healthProblems, worstSeverity,
+  type HealthProblem,
+} from "./healthStatus";
+import { maintenanceBadge } from "./healthState.svelte";
+import { NOTICE_MESSAGES, problemText } from "./noticeMessages";
+import { dismiss, isDismissed, pruneDismissals, readDismissals, writeDismissals, DISMISSALS_KEY } from "./noticeDismissals";
 
-const M: HealthMessages = {
-  config_error: "config error: {error}",
-  runtime_mismatch: "runtime {runtime} ≠ app {app}",
-  bridge_mismatch: "bridge {id} {bridge} ≠ runtime {runtime}",
-  bridge_protocol: "bridge {id} protocol",
-  bridge_token: "bridge {id}: token rejected {since}",
-  bridge_down: "bridge {id}: disconnected {since}",
-  d200_down: "D200: disconnected {since}",
-  d200_locked: "D200 locked by {pid}",
-  seconds: "{n} s",
-  minutes: "{n} min",
-  hours: "{n} h",
-};
 const NOW = 10_000_000;
+const kinds = (raw: unknown, now = NOW) => healthProblems(raw, now).map((p) => p.kind);
+const text = (p: HealthProblem, lang: "en" | "cs" = "en") => problemText(p, NOTICE_MESSAGES[lang], NOW);
 
-describe("healthLine", () => {
-  it("puts a config error first, pointing at Maintenance", () => {
-    expect(
-      healthLine({ config_error: "invalid grid 'wide'", version: "0.9.0", app_version: "0.9.1" }, M, NOW),
-    ).toBe("config error: invalid grid 'wide' · runtime 0.9.0 ≠ app 0.9.1");
-  });
-
+describe("healthProblems", () => {
   it("is empty for a healthy runtime and for an old runtime without the fields", () => {
-    expect(healthLine({ ok: true }, M, NOW)).toBe("");
+    expect(healthProblems({ ok: true }, NOW)).toEqual([]);
     expect(
-      healthLine(
-        {
-          version: "0.8.1",
-          app_version: "0.8.1",
-          servers: { local: { connected: true, bridge_version: "0.8.1", since: NOW - 1 } },
-          d200: { connected: true, last_frame_at: NOW },
-        },
-        M,
-        NOW,
-      ),
-    ).toBe("");
+      healthProblems({
+        version: "0.8.1",
+        app_version: "0.8.1",
+        servers: { local: { connected: true, bridge_version: "0.8.1", since: NOW - 1 } },
+        d200: { connected: true, last_frame_at: NOW },
+      }, NOW),
+    ).toEqual([]);
   });
 
-  it("reports app/runtime and runtime/bridge version mismatches", () => {
-    expect(
-      healthLine(
-        {
-          version: "0.8.0",
-          app_version: "0.8.1",
-          servers: { box: { connected: true, bridge_version: "0.7.9", protocol_supported: false } },
-        },
-        M,
-        NOW,
-      ),
-    ).toBe("runtime 0.8.0 ≠ app 0.8.1 · bridge box protocol · bridge box 0.7.9 ≠ runtime 0.8.0");
-  });
-
-  it("explains a dropped bridge only after the grace period, token first", () => {
-    const fresh = { servers: { local: { connected: false, since: NOW - 1000, last_error: "x" } } };
-    expect(healthLine(fresh, M, NOW)).toBe("");
-    const token = {
+  it("orders by severity: errors, then warnings, then info — payload order within one", () => {
+    const problems = healthProblems({
+      version: "0.9.1",
+      app_version: "0.9.0",
+      config_error: "invalid grid 'wide'",
       servers: {
-        local: {
-          connected: false,
-          since: NOW - 3 * 60_000,
-          last_error: "token rejected (close 4401) — check token_env/keychain",
-        },
+        newer: { connected: true, bridge_version: "0.9.2" },
+        m4: { connected: true, bridge_version: "0.8.9", self_update: true, managed: true },
+        box: { connected: false, since: 0, ever_connected: true, last_error: "token rejected (close 4401)" },
       },
-    };
-    expect(healthLine(token, M, NOW)).toBe("bridge local: token rejected 3 min");
-    const down = { servers: { box: { connected: false, since: NOW - HEALTH_GRACE_MS } } };
-    expect(healthLine(down, M, NOW)).toBe("bridge box: disconnected 15 s");
+      d200: { connected: false, last_frame_at: 1, since: 0 },
+    }, NOW);
+    expect(problems.map((p) => [p.severity, p.kind])).toEqual([
+      ["error", "config_error"],
+      ["error", "bridge_token"],
+      ["warning", "runtime_mismatch"],
+      ["warning", "bridge_mismatch"],
+      ["warning", "d200_down"],
+      ["info", "bridge_newer"],
+    ]);
+    expect(worstSeverity(problems)).toBe("error");
+    expect(worstSeverity(problems.filter((p) => p.severity !== "error"))).toBe("warning");
+    expect(worstSeverity([])).toBeNull();
   });
 
-  it("stays quiet about a server that never connected, unless its token was rejected", () => {
-    const unused = { servers: { t3: { connected: false, ever_connected: false, since: NOW - 3_600_000, last_error: "connection refused" } } };
-    expect(healthLine(unused, M, NOW)).toBe("");
-    const lost = { servers: { t3: { connected: false, ever_connected: true, since: NOW - HEALTH_GRACE_MS } } };
-    expect(healthLine(lost, M, NOW)).toBe("bridge t3: disconnected 15 s");
+  it("maps each problem to the one action that fixes it", () => {
+    const actions = Object.fromEntries(healthProblems({
+      version: "0.9.1",
+      app_version: "0.9.0",
+      config_error: "x",
+      servers: { m4: { connected: true, bridge_version: "0.8.9", self_update: true, managed: true } },
+      d200: { lock_owner: 5 },
+    }, NOW).map((p) => [p.kind, p.action]));
+    expect(actions).toEqual({
+      config_error: { kind: "fix_config" },
+      runtime_mismatch: { kind: "restart_runtime" },
+      bridge_mismatch: { kind: "update_bridge", serverId: "m4" },
+      d200_locked: { kind: "restart_deck" },
+    });
+  });
+
+  it("offers no inline update for a bridge it cannot update", () => {
+    const action = (s: Record<string, unknown>) =>
+      healthProblems({ version: "0.9.1", servers: { m4: { connected: true, bridge_version: "0.8.9", ...s } } }, NOW)[0].action;
+    expect(action({ self_update: true, managed: false })).toBeNull();
+    expect(action({ self_update: true, managed: null })).toBeNull();
+    expect(action({ self_update: false, managed: true })).toBeNull();
+  });
+
+  it("explains a dropped bridge only after the grace period", () => {
+    expect(kinds({ servers: { local: { connected: false, since: NOW - 1000, ever_connected: true } } })).toEqual([]);
+    expect(kinds({ servers: { box: { connected: false, since: NOW - HEALTH_GRACE_MS, ever_connected: true } } }))
+      .toEqual(["bridge_down"]);
+  });
+
+  it("stays quiet about a server that never connected (an unused T3), unless its token was rejected", () => {
+    const unused = { servers: { t3: { connected: false, ever_connected: false, since: NOW - 3_600_000, last_error: "T3 unavailable" } } };
+    expect(kinds(unused)).toEqual([]);
     const badToken = { servers: { t3: { connected: false, ever_connected: false, since: NOW - 60_000, last_error: "token rejected (close 4401)" } } };
-    expect(healthLine(badToken, M, NOW)).toBe("bridge t3: token rejected 1 min");
+    expect(kinds(badToken)).toEqual(["bridge_token"]);
   });
 
   it("reports a D200 only once it has been driven, and a foreign lock owner", () => {
-    const neverAttached = { d200: { connected: false, last_frame_at: null, since: 0, last_error: "no device" } };
-    expect(healthLine(neverAttached, M, NOW)).toBe("");
-    const lost = { d200: { connected: false, last_frame_at: 5, since: NOW - 2 * 3_600_000 } };
-    expect(healthLine(lost, M, NOW)).toBe("D200: disconnected 2 h");
-    expect(healthLine({ d200: { connected: false, lock_owner: 4242 } }, M, NOW)).toBe(
-      "D200 locked by 4242",
-    );
+    expect(kinds({ d200: { connected: false, last_frame_at: null, since: 0 } })).toEqual([]);
+    expect(kinds({ d200: { connected: false, last_frame_at: 5, since: NOW - 2 * 3_600_000 } })).toEqual(["d200_down"]);
+    expect(kinds({ d200: { connected: false, lock_owner: 4242 } })).toEqual(["d200_locked"]);
+  });
+
+  it("keys dismissal on content that does not tick with the clock", () => {
+    const outage = { servers: { box: { connected: false, since: NOW - 60_000, ever_connected: true } } };
+    const a = healthProblems(outage, NOW)[0];
+    const b = healthProblems(outage, NOW + 120_000)[0];
+    expect(a.key).toBe(b.key);
+    expect(a.content).toBe(b.content);
+    const next = healthProblems({ servers: { box: { connected: false, since: NOW + 1, ever_connected: true } } }, NOW + 60_000)[0];
+    expect(next.key).toBe(a.key);
+    expect(next.content).not.toBe(a.content);
+  });
+
+  it("keeps raw backend text out of the sentence (it goes to title=)", () => {
+    const [p] = healthProblems({ config_error: "bridge token for server 'local' not found" }, NOW);
+    expect(text(p)).not.toContain("not found");
+    expect(p.detail).toBe("bridge token for server 'local' not found");
   });
 });
 
-describe("HealthNotice", () => {
-  let target: HTMLElement;
-  beforeEach(() => {
-    target = document.createElement("div");
-    document.body.appendChild(target);
+describe("problem sentences (en + cs)", () => {
+  it("reads like a human sentence in both languages", () => {
+    const [down] = healthProblems({ servers: { local: { connected: false, since: NOW - 3 * 60_000, ever_connected: true } } }, NOW);
+    expect(text(down, "en")).toBe("Bridge local is disconnected (3 min)");
+    expect(text(down, "cs")).toBe("Bridge local je odpojený (3 min)");
+    const [mismatch] = healthProblems({ version: "0.10.0", app_version: "0.10.1" }, NOW);
+    expect(text(mismatch, "cs")).toBe("Runtime 0.10.0 se liší od aplikace 0.10.1 — restartuj runtime");
+    expect(text(mismatch, "en")).toBe("Runtime 0.10.0 differs from the app 0.10.1 — restart the runtime");
+    const [token] = healthProblems({ servers: { t3: { connected: false, since: NOW - 60_000, last_error: "token rejected" } } }, NOW);
+    expect(text(token, "cs")).toBe("Bridge t3 odmítl token (1 min)");
   });
-  afterEach(() => {
-    target.remove();
-    setLang("en");
+});
+
+describe("configErrorSection", () => {
+  it("sends Fix config… to the section the error most likely lives in", () => {
+    expect(configErrorSection("bridge token for server 'local' not found")).toBe("servers");
+    expect(configErrorSection("invalid grid 'wide'")).toBe("deck");
+    expect(configErrorSection("[view].language must be en or cs")).toBe("view");
+    expect(configErrorSection("something odd")).toBe("maintenance");
+  });
+});
+
+describe("bySeverity", () => {
+  it("is stable within one severity", () => {
+    const items = [
+      { severity: "info" as const, n: 1 },
+      { severity: "error" as const, n: 2 },
+      { severity: "info" as const, n: 3 },
+      { severity: "warning" as const, n: 4 },
+      { severity: "error" as const, n: 5 },
+    ];
+    expect(bySeverity(items).map((i) => i.n)).toEqual([2, 5, 4, 1, 3]);
+  });
+});
+
+describe("maintenanceBadge", () => {
+  it("counts real problems (not info facts) and takes the worst colour", () => {
+    const problems = healthProblems({
+      version: "0.9.1",
+      app_version: "0.9.0",
+      servers: { newer: { bridge_version: "0.9.2" }, box: { connected: false, since: 0, ever_connected: true } },
+    }, NOW);
+    expect(maintenanceBadge(problems)).toEqual({ count: 2, severity: "warning" });
+    expect(maintenanceBadge(healthProblems({ config_error: "x", version: "1", app_version: "2" }, NOW)))
+      .toEqual({ count: 2, severity: "error" });
+    expect(maintenanceBadge(healthProblems({ version: "0.9.1", servers: { n: { bridge_version: "0.9.2" } } }, NOW))).toBeNull();
+    expect(maintenanceBadge([])).toBeNull();
+  });
+});
+
+describe("notice dismissals", () => {
+  afterEach(() => localStorage.clear());
+
+  it("hide a problem until its content changes, persisted in localStorage", () => {
+    const p = { key: "bridge_link:box", content: "down|1" };
+    let d = readDismissals();
+    expect(isDismissed(d, p)).toBe(false);
+    d = dismiss(d, p);
+    writeDismissals(d);
+    expect(isDismissed(readDismissals(), p)).toBe(true);
+    expect(isDismissed(readDismissals(), { ...p, content: "down|2" })).toBe(false);
   });
 
-  async function render(payload: unknown, lang: "en" | "cs") {
-    setLang(lang);
-    const instance = mount(HealthNotice, {
-      target,
-      props: { fetchHealth: async () => payload, intervalMs: 60_000 },
-    });
-    for (let i = 0; i < 5; i += 1) await tick();
-    flushSync();
-    return () => unmount(instance);
-  }
-
-  it("renders the mismatch in English and Czech", async () => {
-    const payload = { version: "0.8.0", app_version: "0.8.1" };
-    let cleanup = await render(payload, "en");
-    expect(target.textContent).toContain("runtime 0.8.0 ≠ app 0.8.1 — restart the runtime");
-    cleanup();
-    cleanup = await render(payload, "cs");
-    expect(target.textContent).toContain("runtime 0.8.0 ≠ aplikace 0.8.1 — restartuj runtime");
-    cleanup();
+  it("forget dismissals of problems that are gone", () => {
+    const d = { a: "1", b: "2" };
+    expect(pruneDismissals(d, ["a"])).toEqual({ a: "1" });
+    expect(pruneDismissals(d, ["a", "b"])).toBe(d);
   });
 
-  it("renders the runtime's config error in English and Czech", async () => {
-    const payload = { source: "config_error", config_error: "bridge token for server 'local' not found" };
-    let cleanup = await render(payload, "en");
-    expect(target.textContent).toContain(
-      "config error: bridge token for server 'local' not found — see Maintenance",
-    );
-    cleanup();
-    cleanup = await render(payload, "cs");
-    expect(target.textContent).toContain(
-      "chyba configu: bridge token for server 'local' not found — viz Údržba",
-    );
-    cleanup();
-  });
-
-  it("renders nothing while the deck is healthy", async () => {
-    const cleanup = await render({ version: "0.8.1", app_version: "0.8.1" }, "en");
-    expect(target.querySelector(".health-notice")).toBeNull();
-    cleanup();
+  it("survive broken or throwing storage", () => {
+    localStorage.setItem(DISMISSALS_KEY, "{not json");
+    expect(readDismissals()).toEqual({});
+    const throwing = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("full"); } };
+    expect(readDismissals(throwing)).toEqual({});
+    expect(() => writeDismissals({ a: "1" }, throwing)).not.toThrow();
   });
 });

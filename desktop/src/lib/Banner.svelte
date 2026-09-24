@@ -5,7 +5,7 @@
   // reliably announces a CONTENT change on an element that already existed;
   // WKWebView + VoiceOver (the actual macOS target) is unreliable about a
   // region that appears with its first message already in it. Callers that
-  // mount Banner unconditionally (see UpdateBanner) get a real persistent
+  // mount Banner unconditionally (see Toasts/NoticeList) get a real persistent
   // region this way; callers that mount it only once there is something to
   // say (ConfigApp) are unaffected either way, since their message is never
   // empty for as long as Banner exists.

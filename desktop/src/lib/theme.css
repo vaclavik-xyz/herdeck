@@ -66,6 +66,19 @@
      rings keep the raw status colour. */
   --st-offline-text: color-mix(in srgb, var(--st-offline) 55%, white);
 
+  /* notice severities (app health notices, the deck window's status dot,
+     toasts). Raw palette swatches, not the status aliases: a user may recolour
+     a status in ThemeSection, a severity keeps its meaning. `-text` variants
+     are lightened for copy on the dark UI (same reasoning as above). */
+  --sev-error: var(--st-red);
+  --sev-warning: var(--st-amber);
+  --sev-info: var(--st-blue);
+  --sev-success: var(--st-green);
+  --sev-error-text: color-mix(in srgb, var(--sev-error) 55%, white);
+  --sev-warning-text: color-mix(in srgb, var(--sev-warning) 70%, white);
+  --sev-info-text: color-mix(in srgb, var(--sev-info) 55%, white);
+  --sev-success-text: color-mix(in srgb, var(--sev-success) 60%, white);
+
   /* provider brand marks + form-affordance accents — deliberately NOT
      PALETTE swatches: a user can assign any PALETTE colour to a live status
      (ThemeSection), so reusing one here would let a status render

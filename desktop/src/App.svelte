@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { emit, listen } from "@tauri-apps/api/event";
   import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
@@ -33,10 +33,13 @@
     shouldOnboard,
     type SetupStatus,
   } from "./lib/onboardingClient";
-  import { defineMessages, locale } from "./lib/i18n.svelte";
+  import { defineMessages, fmt, locale } from "./lib/i18n.svelte";
   import { visibilityGatedLoop } from "./lib/pollGate";
-  import UpdateBanner from "./lib/UpdateBanner.svelte";
-  import HealthNotice from "./lib/HealthNotice.svelte";
+  import NoticeList from "./lib/NoticeList.svelte";
+  import DeckStatusDot from "./lib/DeckStatusDot.svelte";
+  import Toasts from "./lib/Toasts.svelte";
+  import { NOTICE_MESSAGES } from "./lib/noticeMessages";
+  import { closeToast, showToast, toastById, type Toast } from "./lib/toastStore.svelte";
   import { requestSettingsSection } from "./lib/settingsRequest.svelte";
   import {
     asUpdateCheckState,
@@ -83,8 +86,8 @@
   let updateState = $state<UpdateState>(initialUpdateState());
   // Install failures are kept separate from the check's own state: they can
   // only happen after installUpdate() is already running, on top of whatever
-  // updateState says, and must outrank it in UpdateBanner regardless of which
-  // check produced it.
+  // updateState says, and are shown as their own (sticky) error toast
+  // regardless of which check produced it.
   let updateError = $state("");
   // "Later" on an available update hides THAT version for this session (per
   // window). A manual tray check clears it: the user asked explicitly.
@@ -118,16 +121,58 @@
   const agentTransport = $derived(
     discovery ? agentCallTransport((cmd, args) => invoke(cmd, args)) : null,
   );
-  // Runtime /health (the shell adds its own app_version) for HealthNotice.
+  // Runtime /health (the shell adds its own app_version) for the notices
+  // (NoticeList in the app window, DeckStatusDot in the deck window).
   const fetchHealth = $derived(discovery ? () => invoke("check_health") : null);
-  // HealthNotice's inline actions (maintenance routes via `maintenance_call`).
+  // The notices' actions (maintenance routes via `maintenance_call`,
+  // `runtime_service`, `open_maintenance`).
   const maintenanceInvoke = $derived(
     discovery ? (cmd: string, args?: Record<string, unknown>) => invoke(cmd, args) : null,
   );
   // Same window as the settings (desktop surface): switch the section here.
-  function openMaintenanceHere(): void {
+  function openSectionHere(section: string): void {
     openDesktopSettings();
-    requestSettingsSection("maintenance");
+    requestSettingsSection(section);
+  }
+
+  // Update-check outcomes and install errors are action results: toasts in
+  // the app window (the deck window only shows its status dot). The toast
+  // mirrors `updateState.notice` — "checking" goes when the notice is swept,
+  // "up to date" leaves on the toast timer, a failure stays until closed.
+  const UPDATE_CHECK_TOAST = "update-check";
+  const UPDATE_INSTALL_TOAST = "update-install";
+  $effect(() => {
+    if (surface !== "desktop") return;
+    const n = updateState.notice;
+    untrack(() => {
+      const m = NOTICE_MESSAGES[locale.lang];
+      if (n === null) {
+        if (toastById(UPDATE_CHECK_TOAST)?.kind === "progress") closeToast(UPDATE_CHECK_TOAST);
+        return;
+      }
+      if (n.kind === "checking") showToast({ id: UPDATE_CHECK_TOAST, kind: "progress", text: m.update_checking });
+      else if (n.kind === "up-to-date") showToast({ id: UPDATE_CHECK_TOAST, kind: "success", text: m.update_up_to_date });
+      else showToast({ id: UPDATE_CHECK_TOAST, kind: "error", text: fmt(m.update_failed, { reason: n.reason }) });
+    });
+  });
+  $effect(() => {
+    if (surface !== "desktop") return;
+    const error = updateError;
+    untrack(() => {
+      if (error) {
+        showToast({
+          id: UPDATE_INSTALL_TOAST,
+          kind: "error",
+          text: fmt(NOTICE_MESSAGES[locale.lang].update_install_failed, { reason: error }),
+        });
+      } else {
+        closeToast(UPDATE_INSTALL_TOAST);
+      }
+    });
+  });
+  function toastClosed(t: Toast): void {
+    if (t.id === UPDATE_INSTALL_TOAST) updateError = "";
+    else if (t.id === UPDATE_CHECK_TOAST && updateState.notice !== null) updateState = { ...updateState, notice: null };
   }
 
   const view = $derived(shouldOnboard(status, reonboard));
@@ -252,8 +297,8 @@
   });
 
   // installError is NOT swept on a timer: it used to vanish after 8s, often
-  // before anyone read it. It stays until the user dismisses it (UpdateBanner's
-  // Dismiss) or retries the install.
+  // before anyone read it. It stays until the user closes its toast or
+  // retries the install.
 
   // Content-fit: size the borderless window to the intrinsic content height. Skips
   // redundant calls via fitDecision's anti-feedback guard. No-op (try/catch) when
@@ -363,7 +408,7 @@
       reonboard = false;
       desktopSetupHidden = true;
     });
-    // `open_maintenance` (HealthNotice in the deck window) → this section.
+    // `open_maintenance` (the deck window's status dot) → this section.
     const sectionListener = listen<string>("open-section", (event) => {
       if (typeof event.payload === "string") requestSettingsSection(event.payload);
     });
@@ -546,17 +591,17 @@
 {#if surface === "desktop"}
   <div class="desktop-app">
     <div class="desktop-banner">
-      <UpdateBanner
-        availableUpdate={shownUpdate}
-        notice={updateState.notice}
-        installError={updateError}
+      <NoticeList
+        {fetchHealth}
+        invoke={maintenanceInvoke}
+        onOpenSection={openSectionHere}
+        appUpdate={shownUpdate}
         installing={installingUpdate}
         onInstall={installUpdate}
-        onDismissError={() => (updateError = "")}
         onLater={laterUpdate}
       />
-      <HealthNotice {fetchHealth} invoke={maintenanceInvoke} onOpenMaintenance={openMaintenanceHere} />
     </div>
+    <Toasts onClose={toastClosed} />
     <div class="desktop-control-room" inert={showDesktopSetup} aria-hidden={showDesktopSetup}>
       <ConfigApp interactive={!showDesktopSetup} />
     </div>
@@ -617,16 +662,7 @@
         <span class="grabber" data-tauri-drag-region></span>
       </div>
     {/if}
-    <UpdateBanner
-      availableUpdate={shownUpdate}
-      notice={updateState.notice}
-      installError={updateError}
-      installing={installingUpdate}
-      onInstall={installUpdate}
-      onDismissError={() => (updateError = "")}
-      onLater={laterUpdate}
-    />
-    <HealthNotice {fetchHealth} invoke={maintenanceInvoke} />
+    <DeckStatusDot {fetchHealth} invoke={maintenanceInvoke} appUpdate={shownUpdate} />
     {#if view === "deck"}
       <DeckView {transport} {agentTransport} compact />
     {:else}
@@ -683,7 +719,7 @@
     top: 12px;
     left: 50%;
     z-index: 20;
-    width: min(560px, calc(100vw - 32px));
+    width: min(640px, calc(100vw - 32px));
     transform: translateX(-50%);
   }
   .shell {

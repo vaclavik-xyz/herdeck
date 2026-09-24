@@ -512,7 +512,7 @@ pub(crate) async fn runtime_service(
 /// Told to the app window: switch the settings to this section.
 pub(crate) const OPEN_SECTION_EVENT: &str = "open-section";
 
-/// HealthNotice's "Open Maintenance" (from either window): bring the settings
+/// A notice's "Details" / the deck window's status dot: bring the settings
 /// window forward on the Maintenance section.
 #[tauri::command]
 pub(crate) fn open_maintenance(app: tauri::AppHandle) {

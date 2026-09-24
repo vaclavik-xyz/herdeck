@@ -13,6 +13,8 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import { setLang } from "./lib/i18n.svelte";
+import { setHealthProblems } from "./lib/healthState.svelte";
+import { healthProblems } from "./lib/healthStatus";
 
 const { invokeMock, listenMock } = vi.hoisted(() => ({ invokeMock: vi.fn(), listenMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
@@ -398,6 +400,41 @@ describe("ConfigApp status chrome and navigation a11y", () => {
     try {
       const button = target.querySelector<HTMLButtonElement>(".connection-card .icon-button");
       expect(button?.title).toBe("Open connections");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("ConfigApp Maintenance health badge", () => {
+  afterEach(() => setHealthProblems([]));
+
+  it("shows the problem count, coloured by the worst, on the Maintenance entry", () => {
+    setHealthProblems(healthProblems({
+      version: "0.10.0",
+      app_version: "0.10.1",
+      config_error: "invalid grid",
+      servers: { newer: { bridge_version: "0.10.2" } },
+    }));
+    const { target, cleanup } = renderConfigApp();
+    try {
+      const entry = Array.from(target.querySelectorAll<HTMLButtonElement>(".sidebar button"))
+        .find((b) => b.textContent?.includes("Maintenance"))!;
+      const badge = entry.querySelector<HTMLElement>("[data-health-badge]");
+      // config error + runtime mismatch; the newer bridge is only info
+      expect(badge?.textContent).toBe("2");
+      expect(badge?.classList.contains("error")).toBe(true);
+      expect(badge?.getAttribute("title")).toBe("2 health problem(s) — see Maintenance");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("shows no badge when nothing is wrong", () => {
+    setHealthProblems([]);
+    const { target, cleanup } = renderConfigApp();
+    try {
+      expect(target.querySelector("[data-health-badge]")).toBeNull();
     } finally {
       cleanup();
     }

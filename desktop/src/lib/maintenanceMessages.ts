@@ -1,4 +1,4 @@
-// en/cs texts for the Maintenance section and the HealthNotice actions, plus
+// en/cs texts for the Maintenance section and the notice/toast actions, plus
 // the pure outcome → text mapping both share (every runtime outcome code of
 // deckapp/maintenance.py and bridge_update.py has its own sentence).
 import { defineMessages, fmt } from "./i18n.svelte";
@@ -90,14 +90,16 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     no_bridges: "No remote bridges are configured.",
     connected: "connected",
     disconnected: "disconnected",
+    not_in_use: "not in use",
+    not_in_use_title: "Configured, but it has never answered since the runtime started — nothing is reported about it.",
     managed: "managed install",
     not_managed: "not a managed install",
     managed_unknown: "install type unknown",
     update_bridge: "Update bridge",
     update_bridge_title: "Ask bridge {id} to install version {version} and restart",
     updating: "Updating…",
-    upd_updated: "Updated: {message}",
-    upd_pending: "Still running: {message}",
+    upd_updated: "Bridge {id} is updated to {version}.",
+    upd_pending: "The update is still running…",
     upd_not_managed: "This bridge was not installed as a managed service, so it cannot update itself. Run once on that machine:",
     upd_readonly: "The bridge refused: this server's token is read-only.",
     upd_failed: "The update failed: {message}",
@@ -112,9 +114,7 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     offer_none: "Up to date.",
     upd_http: "The runtime refused the update: {message}",
     upd_unreachable: "The runtime does not answer: {message}",
-    upd_other: "{code}: {message}",
-    // health notice
-    open_maintenance: "Open Maintenance",
+    upd_other: "Unexpected answer from the bridge: {message}",
   },
   cs: {
     versions: "Verze",
@@ -196,14 +196,16 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     no_bridges: "Nejsou nastavené žádné vzdálené bridge.",
     connected: "připojeno",
     disconnected: "odpojeno",
+    not_in_use: "nepoužívá se",
+    not_in_use_title: "Je nastavený, ale od startu runtime ani jednou neodpověděl — nic se o něm nehlásí.",
     managed: "spravovaná instalace",
     not_managed: "není spravovaná instalace",
     managed_unknown: "typ instalace neznámý",
     update_bridge: "Aktualizovat bridge",
     update_bridge_title: "Požádat bridge {id} o instalaci verze {version} a restart",
     updating: "Aktualizuji…",
-    upd_updated: "Aktualizováno: {message}",
-    upd_pending: "Stále běží: {message}",
+    upd_updated: "Bridge {id} je aktualizovaný na {version}.",
+    upd_pending: "Aktualizace stále běží…",
     upd_not_managed: "Tento bridge nebyl nainstalován jako spravovaná služba, takže se neumí aktualizovat sám. Jednou na tom stroji spusť:",
     upd_readonly: "Bridge odmítl: token tohoto serveru je jen pro čtení.",
     upd_failed: "Aktualizace selhala: {message}",
@@ -218,8 +220,7 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     offer_none: "Aktuální.",
     upd_http: "Runtime aktualizaci odmítl: {message}",
     upd_unreachable: "Runtime neodpovídá: {message}",
-    upd_other: "{code}: {message}",
-    open_maintenance: "Otevřít Údržbu",
+    upd_other: "Neočekávaná odpověď bridge: {message}",
   },
 });
 
@@ -256,13 +257,14 @@ export function powerCycleReasonText(reason: string, m: MaintenanceMessages): st
 }
 
 /** A bridge update's current state as one sentence (+ a copyable command for
- *  not_managed). */
-export function bridgeUpdateText(v: BridgeUpdateView, m: MaintenanceMessages): { text: string; command: string | null } {
+ *  not_managed). The bridge's own English `message` never becomes the
+ *  sentence of a known code (it stays in the details). */
+export function bridgeUpdateText(v: BridgeUpdateView, m: MaintenanceMessages, id = "", runtimeVersion: string | null = null): { text: string; command: string | null } {
   const message = v.message;
   const plain = (text: string) => ({ text, command: null });
   switch (v.code) {
-    case "updated": return plain(fmt(m.upd_updated, { message }));
-    case "pending": return plain(fmt(m.upd_pending, { message }));
+    case "updated": return plain(fmt(m.upd_updated, { id, version: v.target ?? runtimeVersion ?? "?" }));
+    case "pending": return plain(m.upd_pending);
     case "not_managed": return { text: m.upd_not_managed, command: managedBridgeCommand(v.target) };
     case "downgrade": return plain(m.upd_downgrade);
     case "readonly": return plain(m.upd_readonly);
@@ -274,7 +276,7 @@ export function bridgeUpdateText(v: BridgeUpdateView, m: MaintenanceMessages): {
     case "current": return plain(m.upd_current);
     case "http": return plain(fmt(m.upd_http, { message }));
     case "unreachable": return plain(fmt(m.upd_unreachable, { message }));
-    default: return plain(fmt(m.upd_other, { code: v.code, message }));
+    default: return plain(fmt(m.upd_other, { message: message || v.code }));
   }
 }
 
