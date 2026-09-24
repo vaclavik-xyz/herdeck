@@ -15,8 +15,8 @@ edits the hook files README "Subagent tracking" documents:
   itself, so ``needs_trust`` is simply true whenever our Codex hooks are
   installed: the UI reminds, it cannot verify.
 
-Our entries are recognised by their command containing
-``herdeck-subagent-hook``; every other hook (herdr, herdwatch, moshi, the
+Our entries are recognised by their command's program (first shell word)
+being named ``herdeck-subagent-hook``; every other hook (herdr, herdwatch, moshi, the
 user's own) and every other key stays as it was. A write goes through a JSON
 round-trip (``indent=2``), is preceded by a byte copy of the old file to
 ``<file>.bak-herdeck-<timestamp>`` and lands atomically (temp file + rename,
@@ -76,13 +76,26 @@ class HookFileError(Exception):
     """The hook file cannot be used safely (unreadable, not JSON, odd shape)."""
 
 
-def hook_file(agent: str, home: Path, env: Mapping[str, str] | None = None) -> Path:
+# The env var each agent reads for its config directory. The bridge usually
+# runs under launchd/systemd without the user's shell environment: a user who
+# relies on one of these must set it in the bridge service's env too
+# (``herdeck-service install bridge --env CLAUDE_CONFIG_DIR=...``); status
+# reports which directory was used and where it came from.
+CONFIG_DIR_ENV = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}
+
+
+def config_dir(agent: str, home: Path, env: Mapping[str, str] | None = None) -> tuple[Path, str]:
+    """(the agent's config directory, its source: the env var name or "home")."""
     env = os.environ if env is None else env
-    if agent == "claude":
-        base = env.get("CLAUDE_CONFIG_DIR")
-        return (Path(base) if base else home / ".claude") / "settings.json"
-    base = env.get("CODEX_HOME")
-    return (Path(base) if base else home / ".codex") / "hooks.json"
+    base = env.get(CONFIG_DIR_ENV[agent])
+    if base:
+        return Path(base), CONFIG_DIR_ENV[agent]
+    return home / (".claude" if agent == "claude" else ".codex"), "home"
+
+
+def hook_file(agent: str, home: Path, env: Mapping[str, str] | None = None) -> Path:
+    directory, _ = config_dir(agent, home, env)
+    return directory / ("settings.json" if agent == "claude" else "hooks.json")
 
 
 def codex_config_file(home: Path, env: Mapping[str, str] | None = None) -> Path:
@@ -105,7 +118,15 @@ def hook_command(hook_path: str, agent: str) -> str:
 
 
 def _is_ours(hook: object) -> bool:
-    return isinstance(hook, dict) and HOOK_NAME in str(hook.get("command", ""))
+    """Our entry: the command's program (first shell word) is named
+    ``herdeck-subagent-hook`` — never a command that merely mentions it."""
+    if not isinstance(hook, dict) or not isinstance(hook.get("command"), str):
+        return False
+    try:
+        words = shlex.split(hook["command"])
+    except ValueError:
+        return False
+    return bool(words) and os.path.basename(words[0]) == HOOK_NAME
 
 
 def _entry(agent: str, command: str, matcher: str | None) -> dict:
@@ -142,6 +163,12 @@ def _load(path: Path) -> tuple[dict | None, bytes | None]:
     for event, groups in (hooks or {}).items():
         if not isinstance(groups, list):
             raise HookFileError(f'"hooks.{event}" in {path} is not an array; not changed')
+        for group in groups:
+            if isinstance(group, dict) and not isinstance(group.get("hooks", []), list):
+                raise HookFileError(
+                    f'a "hooks.{event}" entry in {path} has "hooks" that is not an array; '
+                    "not changed"
+                )
     return doc, raw
 
 
@@ -183,10 +210,13 @@ def codex_features_hooks(home: Path, env: Mapping[str, str] | None = None) -> bo
 
 def agent_status(agent: str, home: Path, env: Mapping[str, str] | None = None) -> dict:
     path = hook_file(agent, home, env)
+    directory, source = config_dir(agent, home, env)
     wanted = [event for event, _ in EVENTS[agent]]
     out: dict = {
         "agent": agent,
         "file": str(path),
+        "config_dir": str(directory),
+        "config_dir_source": source,
         "file_exists": path.exists(),
         "installed": False,
         "events": [],
@@ -270,7 +300,12 @@ def _backup_path(path: Path, now: float | None = None) -> Path:
 
 def _write(path: Path, doc: dict, original: bytes | None) -> str | None:
     """Back up ``original`` (when the file existed) and atomically replace the
-    file with ``doc``. Returns the backup path."""
+    file with ``doc``. Returns the backup path.
+
+    A symlinked hook file (dotfiles, stow) stays a symlink: the temp file,
+    mode, backup and rename all use the link's real target."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     # The file must not have changed since it was read (an agent may be
     # saving its settings right now): a lost update is worse than a retry.
@@ -424,6 +459,8 @@ def _describe(result: dict) -> list[str]:
         else:
             state = "not installed"
         lines.append(f"{name}: {state} [{r['file']}]")
+        if r.get("config_dir_source") not in (None, "home"):
+            lines.append(f"  config directory from ${r['config_dir_source']}")
         if r.get("backup"):
             lines.append(f"  backup: {r['backup']}")
         if agent == "codex" and r["events"]:

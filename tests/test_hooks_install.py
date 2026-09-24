@@ -430,3 +430,60 @@ def test_service_cli_rejects_unknown_agents(home):
     with pytest.raises(SystemExit) as e:
         service.main(["hooks", "status", "--agents", "claude,pi"])
     assert e.value.code == 2
+
+
+# --- security review follow-ups --------------------------------------------------------
+
+
+def test_a_symlinked_hook_file_keeps_its_link(home, tmp_path):
+    dotfiles = tmp_path / "dotfiles" / "claude-settings.json"
+    _write(dotfiles, CLAUDE_SETTINGS)
+    os.chmod(dotfiles, 0o644)
+    link = _claude(home)
+    link.parent.mkdir(parents=True)
+    link.symlink_to(dotfiles)
+
+    r = hi.apply("install", ["claude"], home=home, hook_path=HOOK)["agents"]["claude"]
+
+    assert r["installed"] is True
+    assert link.is_symlink() and link.resolve() == dotfiles.resolve()
+    assert _ours(_read(dotfiles), "SubagentStart")
+    assert stat.S_IMODE(dotfiles.stat().st_mode) == 0o644
+    (backup,) = _backups(dotfiles)
+    assert json.loads(backup.read_text()) == CLAUDE_SETTINGS
+    assert _backups(link) == []  # nothing lands beside the link itself
+
+    hi.apply("uninstall", ["claude"], home=home)
+    assert link.is_symlink() and _read(dotfiles) == CLAUDE_SETTINGS
+
+
+def test_only_our_program_counts_as_ours(home):
+    lookalikes = [
+        {"type": "command", "command": "echo herdeck-subagent-hook"},
+        {"type": "command", "command": "/bin/log --tag herdeck-subagent-hook"},
+        {"type": "command", "command": "/x/herdeck-subagent-hook-wrapper --provider claude"},
+    ]
+    doc = {"hooks": {"SubagentStart": [{"hooks": list(lookalikes)}]}}
+    _write(_claude(home), doc)
+    assert hi.agent_status("claude", home)["events"] == []
+    hi.apply("install", ["claude"], home=home, hook_path=HOOK)
+    hi.apply("uninstall", ["claude"], home=home)
+    assert _read(_claude(home)) == doc
+    assert hi._is_ours({"command": "'/a b/herdeck-subagent-hook' --provider codex"})
+    assert not hi._is_ours({"command": "'unterminated herdeck-subagent-hook"})
+
+
+def test_a_group_whose_hooks_is_not_an_array_is_a_file_shape_error(home):
+    raw = json.dumps({"hooks": {"SubagentStart": [{"hooks": "herdeck-subagent-hook"}]}})
+    _write(_claude(home), None, raw=raw)
+    for action in ("install", "uninstall", "status"):
+        r = hi.apply(action, ["claude"], home=home, hook_path=HOOK)["agents"]["claude"]
+        assert "not an array" in r["error"]
+    assert _claude(home).read_text() == raw
+
+
+def test_status_reports_which_config_directory_was_used(home, tmp_path):
+    r = hi.agent_status("claude", home, env={})
+    assert r["config_dir"] == str(home / ".claude") and r["config_dir_source"] == "home"
+    r = hi.agent_status("codex", home, env={"CODEX_HOME": str(tmp_path / "cx")})
+    assert r["config_dir"] == str(tmp_path / "cx") and r["config_dir_source"] == "CODEX_HOME"

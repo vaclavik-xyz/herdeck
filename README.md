@@ -737,7 +737,15 @@ indent). Running `install` again changes nothing. A file that is not valid
 JSON, or whose `hooks` is not an object of arrays, is reported and left as it
 is. The command uses `--hook-path`, else `herdeck-subagent-hook` next to the
 Python that runs it (a venv's `bin/`), else the one on `PATH`. It honours
-`CLAUDE_CONFIG_DIR` and `CODEX_HOME`. It never switches Codex's
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME`, and `status` reports the directory it
+used (`config_dir`, `config_dir_source`: the variable name or `home`). The
+bridge usually runs under launchd or systemd without your shell's environment,
+so if you rely on either variable, set it for the bridge service too
+(`herdeck-service install bridge --env CODEX_HOME=...`); otherwise the app's
+switches edit `~/.claude` / `~/.codex`. A symlinked hook file (dotfiles, stow)
+stays a symlink: the link's target is edited, and the backup lands next to the
+target. Only entries whose program (the command's first word) is
+`herdeck-subagent-hook` count as herdeck's. It never switches Codex's
 `[features] hooks` on: `status` reports whether it is on
 (`features_hooks_enabled`), and after an install Codex asks you once to trust
 the new hooks (`/hooks` in a Codex session; `needs_trust` reminds you, since
