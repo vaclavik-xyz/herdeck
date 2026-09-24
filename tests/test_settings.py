@@ -164,6 +164,13 @@ tick_interval = 1.25
         ('[hardware]\ntick_interval = 0\n', "hardware.tick_interval"),
         ('[hardware]\ntick_interval = 61\n', "hardware.tick_interval"),
         (f'[hardware]\ntick_interval = {10**400}\n', "hardware.tick_interval"),
+        ('[hardware]\nd200_standard_writer = 1\n', "hardware.d200_standard_writer"),
+        ('[hardware]\nuhubctl = 1\n', "hardware.uhubctl"),
+        ('[hardware]\nusb_hub = "-a cycle"\n', "hardware.usb_hub"),
+        ('[hardware]\nusb_hub = 1\n', "hardware.usb_hub"),
+        ('[hardware]\nusb_port = 0\n', "hardware.usb_port"),
+        ('[hardware]\nusb_port = "2"\n', "hardware.usb_port"),
+        ('[hardware]\nusb_port = true\n', "hardware.usb_port"),
     ],
 )
 def test_hardware_rejects_invalid_types_and_ranges(tmp_path, local_text, error):
@@ -900,3 +907,33 @@ def test_project_icons_overlay_merges_per_repo(tmp_path, monkeypatch):
         "api": "~/a.png",
         "web": "~/w2.png",
     }
+
+
+def test_hardware_maintenance_keys_parse_with_defaults(tmp_path):
+    config = write(tmp_path / "config.toml", '[deck]\ngrid = "5x3"\n')
+    hw = resolve_profile(load_settings(config)).config.hardware
+    assert (hw.d200_standard_writer, hw.uhubctl, hw.usb_hub, hw.usb_port) == (False, "", "", None)
+    local = write(
+        tmp_path / "local.toml",
+        '[hardware]\nd200_standard_writer = true\nuhubctl = " /opt/homebrew/bin/uhubctl "\n'
+        'usb_hub = "20-1.4"\nusb_port = 2\n',
+    )
+    hw = resolve_profile(load_settings(config, local)).config.hardware
+    assert hw.d200_standard_writer is True
+    assert hw.uhubctl == "/opt/homebrew/bin/uhubctl"
+    assert (hw.usb_hub, hw.usb_port) == ("20-1.4", 2)
+
+
+def test_t3_desktop_read_state_is_a_t3_server_option(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    base = '[[servers]]\nid = "t3"\nurl = "http://127.0.0.1:3773"\ntoken_env = "TOK"\n'
+    config = write(tmp_path / "config.toml", base + 'backend = "t3"\ndesktop_read_state = true\n')
+    assert resolve_profile(load_settings(config)).config.servers[0].desktop_read_state is True
+    config = write(tmp_path / "config.toml", base + 'backend = "t3"\n')
+    assert resolve_profile(load_settings(config)).config.servers[0].desktop_read_state is False
+    config = write(tmp_path / "config.toml", base + 'backend = "t3"\ndesktop_read_state = "yes"\n')
+    with pytest.raises(ConfigError, match="desktop_read_state must be"):
+        resolve_profile(load_settings(config))
+    config = write(tmp_path / "config.toml", base + "desktop_read_state = true\n")
+    with pytest.raises(ConfigError, match="T3 servers only"):
+        resolve_profile(load_settings(config))

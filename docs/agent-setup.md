@@ -711,8 +711,9 @@ show `T3` or `HERDR`; connection-specific accent colors remain unchanged.
 On macBench's D200, the user confirmed recovery from a stale `Offline /
 Reconnecting` page after switching from the optimized ZIP writer to strmdck's
 standard writer (2026-09-06). Successful HID writes and `/health` were insufficient
-to prove a visible update. Set `HERDECK_D200_STANDARD_WRITER=1` in the runtime's
-launch environment to retain that compatibility path. This selects disk-backed ZIP creation with standard file metadata while keeping
+to prove a visible update. Set `[hardware].d200_standard_writer = true` in
+`local.toml` (or, as before, `HERDECK_D200_STANDARD_WRITER=1` in the runtime's
+launch environment) to retain that compatibility path. This selects disk-backed ZIP creation with standard file metadata while keeping
 the panel as one native 458x196 image (`SmallViewMode=2`). It does not change other
 devices by default. The original two-cell stock fallback stretched the panel and
 is no longer used by this override. The exact firmware rejection mechanism is still undiagnosed.
@@ -819,7 +820,8 @@ Unknown API version families are read-only and explain why in the preview.
 ### Temporary local T3 desktop read-state sync (MacBench)
 
 Until upstream PR #9124 ships shared viewedAt state, the MacBench runtime helper
-sets `HERDECK_T3_DESKTOP_READ_STATE=1`. This reads the same machine's T3 0.0.38
+sets `HERDECK_T3_DESKTOP_READ_STATE=1` (the config equivalent is
+`desktop_read_state = true` on that T3 `[[servers]]` entry). This reads the same machine's T3 0.0.38
 Electron UI state (`t3code:ui-state:v1`, origin `t3code://app`) and compares the
 scoped environment/thread visit timestamp to the latest completion. Opening a
 completed thread in that T3 desktop clears the deck's Done. New unread completions

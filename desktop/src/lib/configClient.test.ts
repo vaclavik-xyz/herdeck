@@ -295,6 +295,12 @@ describe("server mutations", () => {
     const next = addServer(updateServer(p, 0, "id", "renamed"));
     expect(serversOf(next)[0].backend).toBe("t3");
   });
+  it("keeps a T3 server's desktop_read_state through edits", () => {
+    const p = parseConfig(rawConfig())!;
+    p.base.servers = [{ id: "t3", url: "http://127.0.0.1:3773", token_env: "T3", backend: "t3", desktop_read_state: true }];
+    const next = updateServer(p, 0, "url", "http://127.0.0.1:3774");
+    expect(serversOf(next)[0].desktop_read_state).toBe(true);
+  });
   it("serversOf returns the base server list or []", () => {
     expect(serversOf(parseConfig(rawConfig())!)).toEqual([
       { id: "local", url: "ws://x", token_env: "TOK" },

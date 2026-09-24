@@ -522,6 +522,7 @@ class DeckApp:
             hardware.debounce,
             hardware.keep_alive_interval,
             hardware.icons_dir,
+            hardware.d200_standard_writer,
         )
 
     def _adopt_tick_interval_locked(self, interval: float) -> None:
@@ -1063,6 +1064,17 @@ class DeckApp:
                 break
         return health
 
+    @property
+    def maintenance(self):
+        """The Maintenance facade behind /maintenance* (deckapp/maintenance.py);
+        built on first use so a test can install its own beforehand."""
+        existing = getattr(self, "_maintenance", None)
+        if existing is None:
+            from .maintenance import Maintenance
+
+            existing = self._maintenance = Maintenance(self)
+        return existing
+
     # /setup is polled by the desktop onboarding card. Its disk facts (two
     # TOML reads, the onboarding marker, a sessions glob and one socket probe
     # per session) are cached while the files they come from are unchanged,
@@ -1270,6 +1282,12 @@ class DeckApp:
                     if not self._require_query_token(url):
                         return
                     self._send(200, json.dumps(app._health()).encode(), "application/json")
+                elif path == "/maintenance":
+                    if not self._require_query_token(url):
+                        return
+                    self._send(
+                        200, json.dumps(app.maintenance.status()).encode(), "application/json"
+                    )
                 elif path == "/panel":
                     if not self._require_query_token(url):
                         return
@@ -1487,6 +1505,17 @@ class DeckApp:
                         return
                     code, payload = bridge_update.handle_post(app._source, path, body)
                     self._send_agent(code, payload)
+                elif path in ("/maintenance/deck/restart", "/maintenance/deck/power-cycle"):
+                    if not self._require_header_token():
+                        return
+                    if self._json_body() is _BAD_BODY:
+                        return
+                    action = (
+                        app.maintenance.restart_deck
+                        if path.endswith("/restart")
+                        else app.maintenance.power_cycle
+                    )
+                    self._send(200, json.dumps(action()).encode(), "application/json")
                 elif path == "/setup/connect":
                     if not self._require_header_token():
                         return

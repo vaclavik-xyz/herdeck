@@ -22,6 +22,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   runtime's version and answers `updated`, `pending`, `not_managed`,
   `readonly`, `failed`, `busy`, `unsupported` or `disconnected`.
 - Tag releases publish the Python sdist and wheel plus a `SHA256SUMS` file.
+- Runtime maintenance API for the upcoming desktop Maintenance section:
+  token-authenticated `GET /maintenance` (versions, runtime service, log paths,
+  D200 state incl. USB presence and last-seen hub port, per-bridge health),
+  `POST /maintenance/deck/restart` (close + reopen the D200 and repaint a full
+  frame, never releasing `d200.lock`; reports `locked_by <pid>` when another
+  runtime owns it) and `POST /maintenance/deck/power-cycle` (`uhubctl -l <hub>
+  -p <port> -a cycle -d 2`, reporting `needs_admin` with the exact command when
+  it needs root).
+- The D200's USB hub location is remembered in
+  `$HERDECK_RUNTIME_DIR/d200-usb.json`; `[hardware].uhubctl`, `usb_hub` and
+  `usb_port` configure the power-cycle.
+- Config keys for two env-only switches (the env vars remain a fallback):
+  `[hardware].d200_standard_writer` and `desktop_read_state` on a T3
+  `[[servers]]` entry.
+- `herdeck-service`: `--env KEY=VALUE` (non-secret launch environment),
+  `install bridge --managed [--version X]` (release install into its own venv
+  with a `managed.json` marker), `restart <kind>` and `status <kind> --json`.
+- The desktop app's bundled runtime binary runs the service CLI as
+  `herdeck-deckapp service ...`, so the runtime service can be installed from
+  the app without Python.
 
 ## [0.9.0] - 2026-09-24
 
