@@ -6,9 +6,10 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from .driver.base import PanelGauge, PanelView
+from .driver.base import PanelGauge, PanelView, TileView
 from .i18n import tr
 from .model import AgentState, Status
+from .project_icons import ProjectIconStore, tile_icon_fields
 
 # A numbered choice line in an agent prompt, e.g. "❯ 1. Yes" or "2. Cenotvorba".
 # Leading markers (cursor caret, bullets, whitespace) are skipped before the digit.
@@ -51,6 +52,52 @@ STATUS_COLOR = {
 
 def status_color(status: Status) -> str:
     return STATUS_COLOR.get(status, "grey")
+
+
+def agent_tile_view(
+    index: int,
+    state: AgentState,
+    view,
+    *,
+    color: str,
+    repo: str,
+    branch: str,
+    status_text: str | None,
+    project_icons: ProjectIconStore | None = None,
+    spinner: int | None = None,
+    time_text: str | None = None,
+    pinned: bool = False,
+    server_tag: str | None = None,
+    server_accent: str | None = None,
+    section: str | None = None,
+) -> TileView:
+    """The one TileView for an agent tile, shared by the deck (orchestrator)
+    and the Elgato plugin session.
+
+    Everything that comes from the agent or from ``[view]`` (label, agent
+    type, working_animation, tile_fill, the tile_icon fields) is filled here,
+    so a new view setting cannot reach one surface and be missed by the other.
+    The keyword extras are what only some surfaces show (animation phase,
+    elapsed time, pins, backend tags, click-to-jump section)."""
+    return TileView(
+        index,
+        state.label,
+        color,
+        icon=None,
+        agent_type=state.agent_type,
+        spinner=spinner,
+        working_animation=view.working_animation,
+        tile_fill=view.tile_fill,
+        repo=repo,
+        branch=branch,
+        status_text=status_text,
+        time_text=time_text,
+        pinned=pinned,
+        server_tag=server_tag,
+        server_accent=server_accent,
+        section=section,
+        **tile_icon_fields(view, state, project_icons),
+    )
 
 
 def project_name(state: AgentState) -> str:

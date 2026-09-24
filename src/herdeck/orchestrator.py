@@ -9,7 +9,7 @@ from .config import Config
 from .driver.base import PanelView, TileView
 from .i18n import tr
 from .model import AgentKey, AgentState, Status
-from .project_icons import ProjectIconStore, tile_icon_fields
+from .project_icons import ProjectIconStore
 
 _OPTION_LABEL_MAX = 14
 # An armed destructive-action confirmation expires after this long, so a stale
@@ -816,15 +816,12 @@ class Orchestrator:
                     else None
                 )
                 tiles.append(
-                    TileView(
+                    layout.agent_tile_view(
                         i,
-                        s.label,
-                        self._agent_color(s),
-                        icon=None,
-                        agent_type=s.agent_type,
+                        s,
+                        self.config.view,
+                        color=self._agent_color(s),
                         spinner=phase,
-                        working_animation=self.config.view.working_animation,
-                        tile_fill=self.config.view.tile_fill,
                         repo=primary,
                         branch=secondary,
                         status_text=layout.tile_status_text(
@@ -837,7 +834,7 @@ class Orchestrator:
                         server_tag=tag,
                         server_accent=accent,
                         section="view",
-                        **tile_icon_fields(self.config.view, s, self._project_icons),
+                        project_icons=self._project_icons,
                     )
                 )
             elif (self._page % pages) * agent_slots + i in self.pins:

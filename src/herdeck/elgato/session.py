@@ -9,7 +9,7 @@ from ..config import Config
 from ..driver.base import TileView
 from ..i18n import tr
 from ..model import AgentKey, AgentState, Status
-from ..project_icons import ProjectIconStore, tile_icon_fields
+from ..project_icons import ProjectIconStore
 from .slots import SlotLeases
 
 
@@ -398,16 +398,15 @@ class ElgatoSession:
                 primary = f"* {primary}"
             elif secondary:
                 secondary = f"* {secondary}"
-        return TileView(
+        return layout.agent_tile_view(
             ordinal,
-            s.label,
-            self._color(s),
-            agent_type=s.agent_type,
-            tile_fill=self.config.view.tile_fill,
+            s,
+            self.config.view,
+            color=self._color(s),
             repo=primary,
             branch=secondary,
             status_text=layout.tile_status_text(s, self.config.view.language, down),
-            **tile_icon_fields(self.config.view, s, self._project_icons),
+            project_icons=self._project_icons,
         )
 
     # --- render ---
