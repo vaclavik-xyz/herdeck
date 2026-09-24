@@ -35,6 +35,10 @@ The Svelte frontend has two complementary surfaces, one per window role:
   `/agent/*` routes (detail, answer, text, stop, focus). All of them go through
   one Rust command, `agent_call` (`src-tauri/src/agent_card.rs`), which only
   relays `/agent/…` paths and injects the token like the other proxies.
+  Its live terminal (`AgentTerminal.svelte`) long-polls `/agent/term/poll`
+  (the shell relays plain responses only, no chunked streams) and renders with
+  the dashboard's vendored xterm.js, loaded lazily through the `@herdeck-web`
+  alias in `vite.config.ts` (`lib/xtermLoader.ts`).
 - **Onboarding** - a first-run and change-connection flow inside the active
   surface, followed by a sectioned
   settings editor (servers, theme, view, macros, notifications, safety,
@@ -56,6 +60,8 @@ desktop/
       DeckView.svelte        # live deck render + press
       AgentCard.svelte       # one agent in full: prompt, options, reply, stop/focus
       agentCardClient.ts     # /agent/* transport (via the agent_call command)
+      AgentTerminal.svelte   # the card's read-only live terminal (long-polled)
+      xtermLoader.ts         # lazy load of the vendored xterm.js (@herdeck-web alias)
       Onboarding.svelte      # first-run onboarding flow
       configClient.ts        # config read/write transport
       onboardingClient.ts    # onboarding/setup transport

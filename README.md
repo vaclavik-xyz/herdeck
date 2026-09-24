@@ -608,6 +608,13 @@ read-only token (`HERDECK_READONLY_TOKEN_FILE`). The card talks to the
 runtime's token-authenticated `/agent/*` routes through the desktop shell, so
 the token never reaches the page. The demo deck has no card.
 
+**Live terminal** in the card shows the agent's pane read-only (the xterm.js
+view the browser dashboard uses, fed by the bridge's `observe`). It needs
+herdr 0.7.3+ on the bridge host. Watching stops when you toggle it off, close
+the card or hide the window, and the runtime stops any preview nobody has
+polled for 15 s. The runtime runs at most two previews at once (the bridge
+allows three per connection) and drops the oldest when you open another.
+
 The UI is dark-only by design: it mirrors the deck hardware's black tiles, so
 there is no light theme to switch to.
 

@@ -62,9 +62,33 @@ export type DetailResult =
 
 export type AgentAction = "answer" | "text" | "stop" | "focus";
 
+/** One live-terminal frame: base64 ANSI straight from herdr (via the bridge). */
+export interface TermFrame {
+  seq: number;
+  full: boolean; // a full repaint: reset the terminal first
+  cols: number;
+  rows: number;
+  data: string;
+}
+
+export type TermOpen = { ok: true; id: string } | { ok: false; outcome: ActionOutcome };
+
+/** A long-poll answer. `gone` = the runtime forgot the session (closed,
+ *  evicted by a newer preview, or reaped after the window stopped polling). */
+export type TermPoll =
+  | { kind: "frames"; frames: TermFrame[]; next: number; closed: string | null; gap: boolean }
+  | { kind: "gone" }
+  | { kind: "error"; message: string };
+
+/** How long a terminal long-poll may be held (runtime clamps to 15 s). */
+export const TERM_POLL_MS = 12000;
+
 export interface AgentTransport {
   detail(target: AgentTarget, refresh?: boolean): Promise<DetailResult>;
   act(action: AgentAction, ref: AgentRef, extra?: Record<string, string>): Promise<ActionOutcome>;
+  termOpen(ref: AgentRef, cols: number, rows: number): Promise<TermOpen>;
+  termPoll(id: string, after: number, waitMs: number): Promise<TermPoll>;
+  termClose(id: string): Promise<void>;
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -133,6 +157,32 @@ export function parseOutcome(status: number, body: unknown): ActionOutcome {
   return { ok: false, code: "http", message: String(status) };
 }
 
+function parseFrame(raw: unknown): TermFrame | null {
+  if (raw == null || typeof raw !== "object") return null;
+  const v = raw as Record<string, unknown>;
+  if (typeof v.data !== "string" || typeof v.seq !== "number") return null;
+  const n = (x: unknown, d: number) => (typeof x === "number" && Number.isFinite(x) ? x : d);
+  return { seq: v.seq, full: v.full === true, cols: n(v.cols, 80), rows: n(v.rows, 24), data: v.data };
+}
+
+/** Shape a raw /agent/term/poll body. */
+export function parseTermPoll(status: number, body: unknown): TermPoll {
+  if (status === 404) return { kind: "gone" };
+  if (status !== 200 || body == null || typeof body !== "object") {
+    return { kind: "error", message: `HTTP ${status}` };
+  }
+  const v = body as Record<string, unknown>;
+  return {
+    kind: "frames",
+    frames: Array.isArray(v.frames)
+      ? v.frames.map(parseFrame).filter((f): f is TermFrame => f !== null)
+      : [],
+    next: typeof v.next === "number" ? v.next : 0,
+    closed: typeof v.closed === "string" ? v.closed : null,
+    gap: v.gap === true,
+  };
+}
+
 /** Human "since" text: 42s, 5m, 2h (same buckets as the deck tiles). */
 export function formatSince(seconds: number | null): string {
   if (seconds == null || seconds < 0) return "";
@@ -169,7 +219,14 @@ export function agentCallTransport(invoke: InvokeFn): AgentTransport {
     method: "GET" | "POST",
     path: string,
     body?: Record<string, unknown>,
-  ): Promise<CallResult> => asCall(await invoke("agent_call", { method, path, body }));
+    waitMs?: number,
+  ): Promise<CallResult> =>
+    asCall(
+      await invoke(
+        "agent_call",
+        waitMs === undefined ? { method, path, body } : { method, path, body, waitMs },
+      ),
+    );
   return {
     async detail(target, refresh = false) {
       let r: CallResult;
@@ -192,6 +249,38 @@ export function agentCallTransport(invoke: InvokeFn): AgentTransport {
         return parseOutcome(r.status, r.body);
       } catch (e) {
         return { ok: false, code: "unreachable", message: String(e) };
+      }
+    },
+    async termOpen(ref, cols, rows) {
+      let r: CallResult;
+      try {
+        r = await call("POST", "/agent/term/open", {
+          server_id: ref.serverId,
+          pane_id: ref.paneId,
+          cols,
+          rows,
+        });
+      } catch (e) {
+        return { ok: false, outcome: { ok: false, code: "unreachable", message: String(e) } };
+      }
+      const v = (r.body ?? {}) as Record<string, unknown>;
+      if (r.status === 200 && v.ok === true && typeof v.id === "string") return { ok: true, id: v.id };
+      return { ok: false, outcome: parseOutcome(r.status, r.body) };
+    },
+    async termPoll(id, after, waitMs) {
+      const p = new URLSearchParams({ id, after: String(after), wait_ms: String(waitMs) });
+      try {
+        const r = await call("GET", `/agent/term/poll?${p.toString()}`, undefined, waitMs);
+        return parseTermPoll(r.status, r.body);
+      } catch (e) {
+        return { kind: "error", message: String(e) };
+      }
+    },
+    async termClose(id) {
+      try {
+        await call("POST", "/agent/term/close", { id });
+      } catch {
+        // best effort: the runtime reaps an unpolled session on its own
       }
     },
   };

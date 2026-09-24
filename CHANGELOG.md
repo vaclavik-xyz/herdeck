@@ -15,6 +15,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the user saw and is refused as stale when the prompt changed. Card actions
   wait for the bridge's reply, so a read-only bridge token is reported instead
   of being dropped silently (bridge `error` frames now keep their `req`).
+- Live terminal in the desktop agent card: a read-only xterm.js view of the
+  agent's pane, relayed from the bridge's `observe` through new runtime routes
+  `POST /agent/term/open`, `GET /agent/term/poll` (bounded long-poll) and
+  `POST /agent/term/close`. Observation stops when the card closes, the
+  terminal is toggled off or the window hides; the runtime also stops previews
+  nobody polled for 15 s and runs at most two at once.
 - `herdeck-bridge --rotate-token [--token-file PATH] [--show]` writes a fresh
   random `0600` token atomically and prints the next steps (restart the
   bridge, update the runtime-side token); the token is printed only with

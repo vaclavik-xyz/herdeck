@@ -18,6 +18,8 @@
   } from "./agentCardClient";
   import { defineMessages, fmt, locale } from "./i18n.svelte";
   import { visibilityGatedLoop, type GatedLoop } from "./pollGate";
+  import AgentTerminal from "./AgentTerminal.svelte";
+  import type { TerminalFactory } from "./xtermLoader";
 
   const M = defineMessages({
     en: {
@@ -38,6 +40,8 @@
       stop_title: "Interrupt the agent (sends its profile's stop keys)",
       focus: "Focus",
       focus_title: "Switch herdr to this pane and bring the terminal forward",
+      terminal: "Live terminal",
+      terminal_title: "Show or hide a read-only live view of the agent's pane",
       offline: "Server disconnected — actions are unavailable until it reconnects.",
       since: "for {since}",
       "status.blocked": "blocked",
@@ -80,6 +84,8 @@
       stop_title: "Přeruší agenta (pošle stop klávesy jeho profilu)",
       focus: "Zaměřit",
       focus_title: "Přepne herdr na tento panel a přenese terminál do popředí",
+      terminal: "Živý terminál",
+      terminal_title: "Zobrazí nebo skryje živý náhled panelu agenta (jen pro čtení)",
       offline: "Server je odpojený — akce nejsou dostupné, dokud se znovu nepřipojí.",
       since: "{since}",
       "status.blocked": "blokován",
@@ -113,11 +119,14 @@
     target,
     onClose,
     pollMs = 1500,
+    createTerminal = undefined,
   }: {
     transport: AgentTransport;
     target: AgentTarget;
     onClose: () => void;
     pollMs?: number;
+    // Test seam: a fake terminal instead of the lazily loaded xterm.js.
+    createTerminal?: TerminalFactory;
   } = $props();
 
   // The deck arms a destructive press for 5 s (orchestrator _CONFIRM_TTL_S).
@@ -131,6 +140,7 @@
   let armed = $state<string | null>(null);
   let armTimer: ReturnType<typeof setTimeout> | undefined;
   let reply = $state("");
+  let showTerminal = $state(false);
   let ref: AgentRef | null = null;
   let alive = true;
   let loop: GatedLoop | null = null;
@@ -333,12 +343,30 @@
       {#if detail.canFocus}
         <button type="button" disabled={actionsOff} title={m.focus_title} onclick={() => void run("focus")}>{m.focus}</button>
       {/if}
+      {#if detail.backend !== "t3"}
+        <button
+          type="button"
+          class:on={showTerminal}
+          aria-pressed={showTerminal}
+          title={m.terminal_title}
+          onclick={() => (showTerminal = !showTerminal)}
+        >{m.terminal}</button>
+      {/if}
       {#if detail.canStop}
         <button type="button" class="danger" class:armed={armed === "stop"} disabled={actionsOff} title={m.stop_title} onclick={stop}>
           {armed === "stop" ? m.confirm : m.stop}
         </button>
       {/if}
     </div>
+  {/if}
+
+  {#if showTerminal && detail && detail.backend !== "t3"}
+    <!-- Unmounting it (toggle off, card closed) stops the observation. -->
+    <AgentTerminal
+      {transport}
+      agent={{ serverId: detail.serverId, paneId: detail.paneId }}
+      {...createTerminal ? { createTerminal } : {}}
+    />
   {/if}
 
   {#if feedback}
@@ -434,6 +462,7 @@
   .opt.deny, .danger { border-color: var(--st-red); }
   .armed { background: color-mix(in srgb, var(--st-blocked) 22%, var(--key)); }
   .primary { background: var(--accent-soft); border-color: var(--accent); }
+  .on { border-color: var(--accent); background: var(--accent-soft); }
   .icon {
     display: grid;
     place-items: center;

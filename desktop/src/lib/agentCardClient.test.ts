@@ -79,6 +79,45 @@ describe("agentCallTransport", () => {
     expect(JSON.stringify(calls)).not.toContain("token");
   });
 
+  it("opens, long-polls (asking the proxy to hold) and closes a terminal session", async () => {
+    const calls: Record<string, unknown>[] = [];
+    const invoke = async (_cmd: string, args?: Record<string, unknown>) => {
+      calls.push(args ?? {});
+      if (args?.path === "/agent/term/open") return { status: 200, body: { ok: true, code: "open", id: "s1" } };
+      if (String(args?.path).startsWith("/agent/term/poll")) {
+        return {
+          status: 200,
+          body: { frames: [{ seq: 3, full: true, cols: 90, rows: 20, data: "aGk=" }, { bad: 1 }], next: 4, closed: null, gap: false },
+        };
+      }
+      return { status: 200, body: { ok: true, code: "closed", message: "" } };
+    };
+    const t = agentCallTransport(invoke);
+    expect(await t.termOpen({ serverId: "prod", paneId: "p0" }, 90, 20)).toEqual({ ok: true, id: "s1" });
+    const polled = await t.termPoll("s1", 3, 12000);
+    expect(polled).toEqual({
+      kind: "frames",
+      frames: [{ seq: 3, full: true, cols: 90, rows: 20, data: "aGk=" }],
+      next: 4,
+      closed: null,
+      gap: false,
+    });
+    await t.termClose("s1");
+    expect(calls[0]).toEqual({
+      method: "POST", path: "/agent/term/open", body: { server_id: "prod", pane_id: "p0", cols: 90, rows: 20 },
+    });
+    expect(calls[1]).toEqual({
+      method: "GET", path: "/agent/term/poll?id=s1&after=3&wait_ms=12000", body: undefined, waitMs: 12000,
+    });
+    expect(calls[2]).toEqual({ method: "POST", path: "/agent/term/close", body: { id: "s1" } });
+    const refused = agentCallTransport(async () => ({ status: 200, body: { ok: false, code: "disconnected", message: "" } }));
+    expect(await refused.termOpen({ serverId: "a", paneId: "b" }, 80, 24)).toEqual({
+      ok: false, outcome: { ok: false, code: "disconnected", message: "" },
+    });
+    const gone = agentCallTransport(async () => ({ status: 404, body: null }));
+    expect(await gone.termPoll("x", 0, 0)).toEqual({ kind: "gone" });
+  });
+
   it("turns a 404 into 'gone' and a proxy failure into 'unreachable'", async () => {
     const gone = agentCallTransport(async () => ({ status: 404, body: null }));
     expect(await gone.detail({ index: 1 })).toEqual({ kind: "gone" });
