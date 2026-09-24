@@ -385,6 +385,73 @@ class Orchestrator:
     def agents(self) -> list[AgentState]:
         return list(self._agents.values())
 
+    def status_elapsed(self, key: AgentKey) -> float | None:
+        """Seconds the agent has been in its current status (None if unknown)."""
+        rec = self._since.get(key)
+        if rec is None:
+            return None
+        return max(0.0, self._clock() - rec[1])
+
+    def answer_options(self, key: AgentKey, prompt: str) -> list[dict]:
+        """The drill's answer choices for ``key``'s prompt, as plain data.
+
+        Used by the desktop agent card, which shows the same choices as the deck
+        drill (``_drill_layout``): numbered options parsed from the prompt
+        (``kind="option"``, answered with ``[key, "enter"]``), else — once the
+        prompt was actually read — the profile's approve/deny fallback
+        (``kind="fallback"``); a T3 agent offers its backend actions
+        (``kind="backend"``). ``confirm`` marks choices the deck would arm first.
+        """
+        agent = self._agents.get(key)
+        if agent is None:
+            return []
+        safety = self.config.safety
+        confirm_for = set(safety.require_confirm_for)
+        out: list[dict] = []
+        if agent.backend == "t3":
+            for option in agent.backend_actions:
+                if option["id"] == "approve_always" and not safety.approve_always:
+                    continue
+                out.append({
+                    "key": option["id"],
+                    "label": option["label"],
+                    "id": option["id"],
+                    "kind": "backend",
+                    "confirm": bool(option.get("confirm")) or option["id"] in confirm_for,
+                })
+            return out
+        if agent.status is not Status.BLOCKED or not prompt.strip():
+            return []
+        profile = profile_for(self.config, agent.agent_type)
+        options = layout.parse_options(prompt)
+        if options:
+            for opt in options:
+                action_id = self._option_action_id(opt.key, opt.label, profile)
+                if action_id == "approve_always" and not safety.approve_always:
+                    continue
+                out.append({
+                    "key": opt.key,
+                    "label": opt.label,
+                    "id": action_id,
+                    "kind": "option",
+                    "confirm": action_id in confirm_for,
+                })
+            return out
+        fallback = ["approve"]
+        if safety.approve_always:
+            fallback.append("approve_always")
+        fallback.append("deny")
+        return [
+            {
+                "key": action_id,
+                "label": self._tr(f"act.{action_id}"),
+                "id": action_id,
+                "kind": "fallback",
+                "confirm": action_id in confirm_for,
+            }
+            for action_id in fallback
+        ]
+
     def is_drill_pane(self, server_id: str, pane_id: str | None) -> bool:
         return (
             self._drill is not None

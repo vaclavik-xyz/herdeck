@@ -57,13 +57,14 @@ from ..presence import IdleProbe
 from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
+from .agent_card import AgentCardMixin
 from .source import StateSource
 
 log = logging.getLogger(__name__)
 
 # A banner reply is typed into the agent's pane: bounded, and stripped of
 # control / bidi-override characters (a terminal escape must never ride in on
-# notification text). Newlines and tabs stay; the bridge normalizes further.
+# notification text). Line breaks collapse to spaces (below); tabs stay.
 REPLY_MAX_CHARS = 2000
 _REPLY_STRIP_RE = re.compile("[\x00-\x08\x0e-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
 # herdr types the text and then presses enter: a line break inside a reply
@@ -99,7 +100,7 @@ def _thread_notify_schedule(fn) -> None:
     threading.Thread(target=fn, daemon=True, name="herdeck-notify").start()
 
 
-class LiveSource(StateSource):
+class LiveSource(AgentCardMixin, StateSource):
     """A StateSource fed by one or more real bridges through ``Connector``.
 
     The connector callbacks buffer the latest fleet state and re-render the deck;
@@ -209,6 +210,7 @@ class LiveSource(StateSource):
         self._deck_lock = None
         self._refresh_locked_cb = None
         self._runners: dict[str, object] = {}
+        self._card_init()  # desktop agent card (agent_card.AgentCardMixin)
 
     # --- StateSource surface ---
     @property
@@ -307,9 +309,12 @@ class LiveSource(StateSource):
         Exactly one of ``choice`` ("approve"/"deny", with the option signature
         ``sig`` the banner was built from) or ``text`` (an inline reply).
         Returns "ok", "invalid" (malformed request), "unknown" (no such agent),
-        "stale" (no longer blocked in ``episode``, already answered, or the
-        prompt's options changed) or "unavailable" (its server is offline). A
-        stale banner therefore never answers a later prompt.
+        "stale" (no longer blocked in ``episode``, already answered — from a
+        banner or the agent card — the prompt's options changed, or
+        banner_actions / the macos backend was turned off since) or
+        "unavailable" (its server is offline). A stale banner therefore never
+        answers a later prompt. Approve/Deny go out through the same guarded
+        command as the agent card (``_blocked_option_command``).
         """
         n = self._config.notifications
         if not n.banner_actions or "macos" not in n.backends:
@@ -345,14 +350,7 @@ class LiveSource(StateSource):
             if answer is None or answer.sig != sig:
                 return "stale"
             option = answer.approve if choice == "approve" else answer.deny
-            # Same keys as the drill's option tile: the digit selects, enter submits.
-            cmd = Command(
-                "act_if_blocked",
-                key.server_id,
-                key.pane_id,
-                keys=[option, "enter"],
-                terminal_id=terminal_id,
-            )
+            cmd = self._blocked_option_command(key, state, option, prompt)
         else:
             cmd = Command(
                 "send_text", key.server_id, key.pane_id, text=clean, terminal_id=terminal_id
@@ -360,10 +358,7 @@ class LiveSource(StateSource):
         runner = self._runners.get(key.server_id)
         if runner is None or not connected:
             return "unavailable"
-        with self._lock:
-            self._answered_episodes[episode] = None
-            while len(self._answered_episodes) > _ANSWERED_EPISODES_MAX:
-                self._answered_episodes.pop(next(iter(self._answered_episodes)))
+        self._spend_answered_prompt(key)
         self._notify_throttle.note_interaction(key)
         if self._orch is not None:
             self._orch.note_external_answer(key)
@@ -375,6 +370,12 @@ class LiveSource(StateSource):
         )
         runner.send(command_to_msg(cmd, self._next_req(cmd)))
         return "ok"
+
+    def _note_episode_answered_locked(self, episode: str) -> None:
+        """Remember an answered block episode (bounded). Caller holds self._lock."""
+        self._answered_episodes[episode] = None
+        while len(self._answered_episodes) > _ANSWERED_EPISODES_MAX:
+            self._answered_episodes.pop(next(iter(self._answered_episodes)))
 
     def _drive(self, orch, step) -> list[Command]:
         self._last_deck_press = time.monotonic()
@@ -453,6 +454,7 @@ class LiveSource(StateSource):
 
     def close(self) -> None:
         self._reminder_stop.set()
+        self._card_close()  # stop card terminal previews while runners still send
         for runner in list(self._runners.values()):
             runner.close()
         self._runners.clear()
@@ -910,6 +912,7 @@ class LiveSource(StateSource):
             return True
 
         self._apply(mutate)
+        self._card_on_connection(server_id, up)
 
     def _on_result(self, *args) -> None:
         """Handle a connector result.
@@ -926,6 +929,8 @@ class LiveSource(StateSource):
             raise TypeError("_on_result expects (server_id, req, data) or (req, data)")
         if server_id is None:
             return
+        # A desktop agent card may be waiting on this reply (never consumes it).
+        self._card_on_result(req, data)
         # Mirrors App.handle_result.
         with self._lock:
             focused = req is not None and self._focus_reqs.pop(req, False)
@@ -1218,6 +1223,10 @@ def build_live_source(
             on_connection=source._on_connection,
             on_result=lambda req, data, sid=selected.id: source._on_result(sid, req, data),
             on_project_icon=source._on_project_icon,
+            on_term=source._on_term,
+            on_request_error=lambda req, message, sid=selected.id: source._on_request_error(
+                sid, req, message
+            ),
         )
         runner = runner_factory(connector)
         source.attach_runner(runner, selected.id)
