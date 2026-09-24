@@ -497,6 +497,7 @@ def deckapp_sink(
     claim_age: Callable[[], float | None] | None = None,
     away: Callable[[float], bool] | None = None,
     shell: bool = True,
+    local_gate: Callable[[], bool] | None = None,
 ) -> Callable[[str, str, bool | str], None]:
     """Deckapp runtime sink honoring ``[notifications.backends]``.
 
@@ -535,6 +536,20 @@ def deckapp_sink(
         sinks[0] = lambda t, b, s, icon=None: None  # noqa: E731
     elif not shell:
         sinks[0] = macos_sink
+    if local_gate is not None:
+        # ``local_gate()`` False silences only the local banner (shell feed /
+        # osascript) for this alert, e.g. [notifications].skip_focused;
+        # remote backends still fire.
+        local = sinks[0]
+
+        def gated_local(title, body, sound, icon=None, meta=None):
+            if not local_gate():
+                return
+            local(title, body, sound, **_sink_kwargs(local, icon, meta))
+
+        gated_local._accepts_meta = True
+        gated_local._notify_name = _sink_name(local)
+        sinks[0] = gated_local
     if "telegram" in n.backends:
         tg = n.telegram
         token = getenv(tg.token_env) if tg else None

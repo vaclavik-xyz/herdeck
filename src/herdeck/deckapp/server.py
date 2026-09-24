@@ -124,6 +124,10 @@ class DeckApp:
         cols, rows = config.grid
         # Match the established deck geometry: the two status-window cells are not
         # addressable tiles, so slots = grid - 2 (e.g. 13 for a 5x3 grid).
+        # An explicit `slots` is the physical deck's geometry (an Elgato Stream
+        # Deck's key count - 2, whatever the grid): it is kept across source
+        # swaps, as the device cannot change shape with a profile.
+        self._fixed_slots = slots
         self._slots = slots if slots is not None else cols * rows - 2
         # Store the clock so swap_source can rebuild the orchestrator with the same clock.
         self._clock = clock or (lambda: 0.0)
@@ -798,7 +802,8 @@ class DeckApp:
         the mock's frozen clock)."""
         clk = clock if clock is not None else self._clock
         cols, rows = new_source.config.grid
-        slots = cols * rows - 2
+        fixed = getattr(self, "_fixed_slots", None)
+        slots = fixed if fixed is not None else cols * rows - 2
         orch = Orchestrator(new_source.config, slots=slots, clock=clk)
         self._load_pins(orch)
         icons_dir = new_source.config.hardware.icons_dir

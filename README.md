@@ -888,7 +888,7 @@ on = ["blocked", "done"]
 sound = true
 banner_actions = false             # opt-in: Approve/Deny or Reply on blocked macOS banners
 banner_prompt = false              # opt-in: add a short prompt excerpt to blocked alerts
-skip_focused = true                # no alert for the herdr-focused pane while you use this Mac
+skip_focused = true                # no local banner for the herdr-focused pane while you use this Mac
 remind_after = 0                   # minutes; >0 re-alerts a still-blocked agent (max 3x)
 
 # Optional: which macOS system sound plays per event. A missing key falls
@@ -951,11 +951,11 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   — a blocked agent answered anywhere, a done agent working again, a pane
   closed — the runtime queues a `withdraw` item and the desktop app removes
   that agent's delivered banners from Notification Center.
-- `skip_focused = true` (default): no alert for the pane herdr reports as
-  focused at the moment of the transition, as long as this Mac saw keyboard or
-  mouse input within the last 2 minutes (macOS `HIDIdleTime`; on Linux the idle
-  time is unknown and the focused pane is always skipped). `false` alerts for
-  every pane.
+- `skip_focused = true` (default): no local banner for the pane herdr reports
+  as focused at the moment of the transition, as long as this Mac saw keyboard
+  or mouse input within the last 2 minutes (macOS `HIDIdleTime`; where the idle
+  time is unknown, e.g. Linux, the banner is shown). Telegram alerts are never
+  skipped for it. `false` alerts for every pane.
 - `remind_after = N` (minutes, 0 = off): an agent still blocked in the same
   episode alerts again after N, 2N and 3N minutes, titled
   `claude · still needs input (10 min)`.

@@ -63,8 +63,8 @@ banner_actions = false
 # Opt-in: blocked alerts add a short, sanitized excerpt of the prompt (every
 # backend, so it also shows on a locked screen).
 banner_prompt = false
-# No alert for the pane herdr reports focused while you used this Mac in the
-# last 2 minutes (default on; it only removes noise).
+# No local banner for the pane herdr reports focused while you used this Mac
+# in the last 2 minutes (default on; Telegram still alerts).
 skip_focused = true
 # Minutes (0 = off): alert again for an agent still blocked this long, once
 # per interval, at most three times per block episode.

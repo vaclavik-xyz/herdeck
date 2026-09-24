@@ -118,6 +118,49 @@ def test_unknown_deck_kinds_are_rejected():
 
 
 
+@pytest.mark.parametrize("keys", [6, 15, 32])
+def test_elgato_usb_deck_uses_its_own_key_layout(keys, tmp_path, monkeypatch):
+    """Mini (6), MK.2 (15), XL (32): tiles fill key_count - 2 keys, the last two
+    keys are the panel and their presses reach the runtime — whatever the
+    configured grid, and across a config reload."""
+    from test_driver_elgato import FakeDeck, FakeIcons, _wait_until
+
+    from herdeck.driver.elgato import ElgatoDriver
+    from herdeck.host import Host, _Front
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[[servers]]\nid = "local"\nurl = "ws://bridge"\ntoken_env = "HD_TOKEN"\n'
+        '[deck]\ngrid = "4x4"\noverview_order = ["local"]\n'
+    )
+    monkeypatch.setenv("HD_TOKEN", "tok")
+    device = FakeDeck(key_count=keys)
+    driver = ElgatoDriver(device=device, icon_provider=FakeIcons())
+    monkeypatch.setattr(driver, "_to_native", lambda image: image.tobytes())
+    host = Host(
+        make_config(),  # grid 5x3: 13 tiles if the grid decided
+        _Front("elgato", deck=driver),
+        mode="remote",
+        config_path=str(config_path),
+        local_path=str(tmp_path / "local.toml"),
+        source_factory=lambda cfg: live(cfg)[0],
+    )
+    host.start()
+    try:
+        slots = keys - 2
+        assert host.app.slots == slots
+        assert _wait_until(lambda: set(device.images) == set(range(keys)))
+        presses = []
+        host.app._source.press = lambda index: presses.append(index) or []
+        device.callback(device, slots, True)  # left panel key
+        device.callback(device, slots + 1, True)  # right panel key
+        assert presses == [slots, slots + 1]
+        host.app.reload()  # the 4x4 grid of the file must not reshape the deck
+        assert host.app.slots == slots and host.app._orch.slots == slots
+    finally:
+        host.close()
+
+
 def test_local_mode_reload_keeps_the_embedded_bridge(tmp_path):
     """A profile switch / reload in local mode applies the file settings but
     keeps talking to the embedded bridge the host started."""

@@ -559,3 +559,36 @@ def test_newly_entered_detects_transition_and_avoids_dup():
     assert to2 == set() and seen2 == seen
     to3, seen3 = newly_entered(Status.BLOCKED, seen2, s_work)  # left blocked -> reset
     assert to3 == set() and k not in seen3
+
+
+def test_shutdown_does_not_wait_for_an_in_flight_telegram_long_poll():
+    import asyncio
+    import threading
+
+    from herdeck.deckapp.services import RuntimeServices
+
+    started = threading.Event()
+
+    class SlowInteractor(FakeInteractor):
+        async def poll_once(self, *, timeout, is_current):
+            def long_poll():
+                started.set()
+                time.sleep(5)  # a getUpdates that nobody can cancel
+
+            await asyncio.to_thread(long_poll)
+
+    config = telegram_config(interactive=True, allowed_user_ids=[42])
+    source, _ = live(config)
+    services = RuntimeServices(
+        config,
+        current_source=lambda: source,
+        getenv=lambda name: "bot-token",
+        bot_client_factory=lambda token: object(),
+        interactor_factory=SlowInteractor,
+    )
+    assert started.wait(3)
+    begun = time.monotonic()
+    services.close()
+    assert time.monotonic() - begun < 2.5
+    workers = [t for t in threading.enumerate() if t.name == "herdeck-services-io"]
+    assert workers and all(t.daemon for t in workers)  # never joined at exit

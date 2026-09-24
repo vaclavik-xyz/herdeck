@@ -336,6 +336,10 @@ class Host:
         try:
             self.app = DeckApp(
                 source,
+                # The Elgato USB deck has a fixed key layout (key_count - 2 tiles
+                # + 2 panel keys) independent of the configured grid; every other
+                # front follows the grid.
+                slots=self.front.deck.slot_count() if self.front.kind == "elgato" else None,
                 serve=False,
                 run_ticker=True,
                 clock=time.monotonic,
