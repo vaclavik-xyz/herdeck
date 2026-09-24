@@ -58,6 +58,9 @@ export function healthProblems(raw: unknown, m: HealthMessages, now: number = Da
     const since = num(s.since);
     if (s.connected === false && (since === null || now - since >= HEALTH_GRACE_MS)) {
       const token = (str(s.last_error) ?? "").startsWith("token rejected");
+      // A server that never connected (configured but not running) is not an
+      // outage; a rejected token still is — that is a misconfiguration.
+      if (s.ever_connected === false && !token) continue;
       out.push(fmt(token ? m.bridge_token : m.bridge_down, { id, since: ago(since, now, m) }).trim());
     }
   }
