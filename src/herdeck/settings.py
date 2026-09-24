@@ -197,13 +197,20 @@ def _server_config(raw: dict) -> ServerConfig:
     backend = raw.get("backend", "herdr")
     if backend not in ("herdr", "t3"):
         raise ConfigError("unsupported server backend")
+    desktop_read_state = raw.get("desktop_read_state", False)
+    if not isinstance(desktop_read_state, bool):
+        raise ConfigError(f"server '{raw['id']}': desktop_read_state must be true or false")
+    if desktop_read_state and backend != "t3":
+        raise ConfigError(
+            f"server '{raw['id']}': desktop_read_state is an option of T3 servers only"
+        )
     if backend == "t3":
         from .t3 import T3Http
         try:
             T3Http(raw["url"], token)
         except ValueError as exc:
             raise ConfigError(str(exc)) from None
-    return ServerConfig(raw["id"], raw["url"], token, backend)
+    return ServerConfig(raw["id"], raw["url"], token, backend, desktop_read_state)
 
 
 def _theme_config(raw: dict | None) -> ThemeConfig:
@@ -399,6 +406,11 @@ def _launcher(raw) -> dict[str, list[str]]:
     return {k: list(v) for k, v in raw.items()}
 
 
+# A uhubctl hub location: bus, then an optional dotted port chain ("1", "1-1",
+# "20-1.4"). Validated so a config value can never smuggle an option into argv.
+_USB_HUB_RE = re.compile(r"[0-9]+(-[0-9]+(\.[0-9]+)*)?")
+
+
 def _hardware_config(local_data: dict) -> HardwareConfig:
     raw = local_data.get("local", {})
     hw = local_data.get("hardware", {})
@@ -444,6 +456,23 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
             )
         intervals[key] = float(value)
 
+    d200_standard_writer = hw.get("d200_standard_writer", False)
+    if not isinstance(d200_standard_writer, bool):
+        raise ConfigError("hardware.d200_standard_writer must be true or false")
+    uhubctl = hw.get("uhubctl", "")
+    if not isinstance(uhubctl, str):
+        raise ConfigError("hardware.uhubctl must be a path string (empty = auto-detect)")
+    usb_hub = hw.get("usb_hub", "")
+    if not isinstance(usb_hub, str) or (usb_hub and not _USB_HUB_RE.fullmatch(usb_hub)):
+        raise ConfigError(
+            "hardware.usb_hub must be a uhubctl hub location such as 1-1 or 20-1.4"
+        )
+    usb_port = hw.get("usb_port")
+    if usb_port is not None and (
+        not isinstance(usb_port, int) or isinstance(usb_port, bool) or not 1 <= usb_port <= 127
+    ):
+        raise ConfigError("hardware.usb_port must be an integer from 1 to 127")
+
     return HardwareConfig(
         deck=raw.get("deck"),
         herdr_socket=raw.get("herdr_socket"),
@@ -455,6 +484,10 @@ def _hardware_config(local_data: dict) -> HardwareConfig:
         debounce=intervals["debounce"],
         keep_alive_interval=intervals["keep_alive_interval"],
         tick_interval=intervals["tick_interval"],
+        d200_standard_writer=d200_standard_writer,
+        uhubctl=uhubctl.strip(),
+        usb_hub=usb_hub,
+        usb_port=usb_port,
     )
 
 

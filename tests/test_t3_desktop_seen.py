@@ -170,3 +170,21 @@ def test_incompatible_native_library_preserves_fallback(tmp_path, monkeypatch):
     assert reader.last_error
     assert reader.get(ENV, TID) is None
     assert reader._signature is None
+
+
+def test_desktop_read_state_comes_from_config_or_env(monkeypatch, tmp_path):
+    from herdeck.config import ServerConfig
+    from herdeck.t3 import T3Connector
+
+    monkeypatch.delenv('HERDECK_T3_DESKTOP_READ_STATE', raising=False)
+    monkeypatch.setenv('HERDECK_T3_DESKTOP_STORAGE', str(tmp_path / 'missing'))
+
+    def make(read_state):
+        server = ServerConfig('t3', 'http://127.0.0.1:13773', 'secret', 't3', read_state)
+        return T3Connector(server, on_snapshot=lambda *a: None, on_event=lambda *a: None,
+                           on_connection=lambda *a: None, seen_store=object())
+
+    assert make(False)._desktop_seen is None
+    assert isinstance(make(True)._desktop_seen, DesktopSeen)
+    monkeypatch.setenv('HERDECK_T3_DESKTOP_READ_STATE', '1')  # the env fallback
+    assert isinstance(make(False)._desktop_seen, DesktopSeen)

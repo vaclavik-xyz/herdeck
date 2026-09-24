@@ -17,6 +17,10 @@ class ServerConfig:
     url: str
     token: str
     backend: str = "herdr"
+    # T3 only: read this machine's T3 desktop "visited" state so opening a
+    # finished thread in the T3 desktop clears the deck's Done (t3_desktop_seen).
+    # HERDECK_T3_DESKTOP_READ_STATE=1 still enables it for every T3 server.
+    desktop_read_state: bool = False
 
 
 @dataclass
@@ -202,6 +206,17 @@ class HardwareConfig:
     debounce: float = 0.25
     keep_alive_interval: float = 5.0
     tick_interval: float = 0.4
+    # Use strmdck's disk-backed ZIP writer for the D200 (a firmware
+    # compatibility path, see docs/agent-setup.md). HERDECK_D200_STANDARD_WRITER=1
+    # still enables it when this is false.
+    d200_standard_writer: bool = False
+    # USB power-cycle of the D200's hub port (deckapp/maintenance.py). uhubctl =
+    # path to the tool ("" = look on PATH and the Homebrew prefixes); usb_hub +
+    # usb_port pin the location, otherwise the last location the D200 was seen
+    # at is used.
+    uhubctl: str = ""
+    usb_hub: str = ""
+    usb_port: int | None = None
 
 
 @dataclass
