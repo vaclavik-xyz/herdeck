@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-24
+
 ### Added
 - OpenCode subagent tracking: a shipped plugin (`herdeck-subagents.js`) reports
   OpenCode child sessions (subagents, found by their `parentID`) to
