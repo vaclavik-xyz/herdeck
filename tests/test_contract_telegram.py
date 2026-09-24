@@ -318,3 +318,27 @@ def test_agent_blocked_before_start(tmp_path):
         proc.stop()
         bridge.close()
         telegram.close()
+
+
+def test_a_focused_pane_still_alerts_on_telegram(interactive):
+    """herdr's focused pane (wire field ``focused``) must not silence Telegram:
+    that alert is for when you are away from the host, and whether you are is
+    only a guess (unknown on Linux)."""
+    _proc, bridge, telegram = interactive
+    time.sleep(0.3)  # the working snapshot is the baseline
+    bridge.push_event(pane("p1", "blocked", label="alpha", focused=True))
+    fields = telegram.wait_call("sendMessage", lambda f: "reply_markup" in f)
+    assert "local:p1" in fields["text"]
+
+
+def test_a_focused_pane_still_alerts_one_way(tmp_path):
+    proc, bridge, telegram = start(tmp_path, [pane("p1", "working", label="alpha")], ONE_WAY)
+    try:
+        time.sleep(0.3)
+        bridge.push_event(pane("p1", "done", label="alpha", focused=True))
+        fields = telegram.wait_call("sendMessage")
+        assert fields["text"] == "claude · done\nrepo-p1 · main"
+    finally:
+        proc.stop()
+        bridge.close()
+        telegram.close()
