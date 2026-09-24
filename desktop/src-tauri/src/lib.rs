@@ -27,6 +27,7 @@ pub mod build_channel;
 pub mod deck_prefs;
 pub mod hotkey;
 pub mod http;
+mod maintenance;
 mod notifications;
 mod notify_pump;
 mod proxy;
@@ -307,6 +308,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_discovery,
             agent_card::agent_call,
+            maintenance::maintenance_call,
+            maintenance::open_log,
+            maintenance::runtime_service,
+            maintenance::open_maintenance,
             update_check,
             update_install,
             proxy::check_health,

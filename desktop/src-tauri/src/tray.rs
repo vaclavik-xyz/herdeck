@@ -42,6 +42,7 @@ pub(crate) const MENU_ID_TOGGLE_DECK: &str = "toggle_deck";
 pub(crate) const MENU_ID_RECONNECT: &str = "reconnect";
 pub(crate) const MENU_ID_AUTOSTART: &str = "autostart";
 pub(crate) const MENU_ID_CHECK_UPDATE: &str = "check_update";
+pub(crate) const MENU_ID_RESTART_DECK: &str = "restart_deck";
 pub(crate) const MENU_ID_QUIT: &str = "quit";
 
 /// English/Czech texts for every tray item, keyed by the item order in
@@ -51,7 +52,7 @@ pub(crate) const MENU_ID_QUIT: &str = "quit";
 /// `toggle_deck` occupies TWO slots (show/hide) because its text also depends
 /// on the deck's current visibility, not just the language — see
 /// `toggle_deck_label`, which picks between them.
-pub(crate) fn tray_labels(lang: &str) -> [&'static str; 8] {
+pub(crate) fn tray_labels(lang: &str) -> [&'static str; 9] {
     match lang {
         "cs" => [
             "Otevřít Herdeck",
@@ -62,6 +63,7 @@ pub(crate) fn tray_labels(lang: &str) -> [&'static str; 8] {
             "Změnit připojení…",
             "Zkontrolovat aktualizace",
             "Ukončit",
+            "Restartovat deck",
         ],
         _ => [
             "Open Herdeck",
@@ -72,6 +74,7 @@ pub(crate) fn tray_labels(lang: &str) -> [&'static str; 8] {
             "Change connection…",
             "Check for updates",
             "Quit",
+            "Restart deck",
         ],
     }
 }
@@ -164,6 +167,7 @@ pub(crate) struct TrayMenuItems {
     autostart: CheckMenuItem<tauri::Wry>,
     reconnect: MenuItem<tauri::Wry>,
     check_update: MenuItem<tauri::Wry>,
+    restart_deck: MenuItem<tauri::Wry>,
     quit: MenuItem<tauri::Wry>,
     /// The language `retitle` was last called with. Needed so a
     /// visibility-only refresh of `toggle_deck` (`sync_toggle_deck_label`,
@@ -185,6 +189,7 @@ impl TrayMenuItems {
         let _ = self.reconnect.set_text(l[5]);
         let _ = self.check_update.set_text(l[6]);
         let _ = self.quit.set_text(l[7]);
+        let _ = self.restart_deck.set_text(l[8]);
         *self.lang.lock_or_recover() = lang.to_string();
     }
 
@@ -368,6 +373,7 @@ pub(crate) fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visibl
     )?;
     let reconnect = MenuItem::with_id(app, MENU_ID_RECONNECT, l[5], true, None::<&str>)?;
     let check_update = MenuItem::with_id(app, MENU_ID_CHECK_UPDATE, l[6], true, None::<&str>)?;
+    let restart_deck = MenuItem::with_id(app, MENU_ID_RESTART_DECK, l[8], true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_ID_QUIT, l[7], true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
@@ -377,6 +383,7 @@ pub(crate) fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visibl
             &deck_aot,
             &autostart,
             &reconnect,
+            &restart_deck,
             &check_update,
             &quit,
         ],
@@ -391,6 +398,7 @@ pub(crate) fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visibl
             autostart: autostart.clone(),
             reconnect: reconnect.clone(),
             check_update: check_update.clone(),
+            restart_deck: restart_deck.clone(),
             quit: quit.clone(),
             lang: Mutex::new("en".to_string()),
             blocked: Mutex::new(None),
@@ -481,6 +489,8 @@ pub(crate) fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visibl
                 }
                 let _ = autostart_cb.set_checked(mgr.is_enabled().unwrap_or(false));
             }
+            // Close + reopen the D200 and redraw it (POST /maintenance/deck/restart).
+            MENU_ID_RESTART_DECK => crate::maintenance::restart_deck_from_shell(app),
             MENU_ID_QUIT => app.exit(0),
             // The deck's own right-click context menu (`build_deck_context_menu`).
             // MENU_ID_HIDE_DECK is new; MENU_ID_DECK_AOT and MENU_ID_SHOW_APP
