@@ -130,6 +130,12 @@ Stable v1 fields are:
 - display: `agent_type`, `label`, `waiting_on`, `progress`, `metadata`, `state_labels`,
   `repository`, `branch`, `project`, `workspace`, `tab`
 - work: `source`, `item`, `run`, `url`
+- `subagents`: the pane agent's subagents, newest first, at most 20 (`[]` when
+  none or from a bridge without the `subagents` capability). Each entry has `id`,
+  `provider`, `type`, `description`, `model`, `depth` (1 = spawned by the agent
+  itself, `null` = unknown), `status` (`running`, `done`, `failed`, `stale`),
+  `started_ms` and `ended_ms` (unix ms on the agents' host; `ended_ms` is `null`
+  until it ends)
 
 Prompt text, terminal frames, raw backend messages, and credential values are
 never included. An unrecognized backend `status` normalizes to `unknown`

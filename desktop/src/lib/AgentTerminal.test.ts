@@ -206,7 +206,7 @@ describe("AgentCard live terminal toggle", () => {
         serverId: "prod", paneId: "p0", agentType: "codex", displayAgent: "", label: "x",
         title: "", repo: "", branch: "", workspace: "", tab: "", status: "working", sinceS: 5,
         backend: "herdr", connected: true, prompt: null, promptPending: false, revision: null,
-        options: [], canStop: true, stopConfirm: true, canText: true, canFocus: true,
+        options: [], canStop: true, stopConfirm: true, canText: true, canFocus: true, subagents: [],
       },
     });
     const target = document.createElement("div");

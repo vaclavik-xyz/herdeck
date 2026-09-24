@@ -1,5 +1,42 @@
 import { describe, it, expect } from "vitest";
-import { agentCallTransport, formatSince, parseDetail, parseOutcome } from "./agentCardClient";
+import {
+  agentCallTransport,
+  formatDuration,
+  formatSince,
+  parseDetail,
+  parseOutcome,
+  subagentIndent,
+} from "./agentCardClient";
+
+describe("subagents", () => {
+  it("parses rows, drops malformed ones and clamps durations", () => {
+    const d = parseDetail({
+      server_id: "prod",
+      pane_id: "p0",
+      subagents: [
+        { id: "a", provider: "claude", type: "Explore", description: "x", model: "", depth: 2, status: "running", duration_s: 12.7 },
+        { id: "b", status: "done", duration_s: -5, depth: "1" },
+        { id: "c", status: "weird", duration_s: 1 },
+        { status: "done" },
+        null,
+      ],
+    });
+    expect(d?.subagents).toEqual([
+      { id: "a", provider: "claude", type: "Explore", description: "x", model: "", depth: 2, status: "running", durationS: 12 },
+      { id: "b", provider: "", type: "", description: "", model: "", depth: null, status: "done", durationS: 0 },
+    ]);
+    expect(parseDetail({ server_id: "s", pane_id: "p" })?.subagents).toEqual([]);
+  });
+
+  it("formats durations and indents by depth", () => {
+    expect(formatDuration(0)).toBe("0s");
+    expect(formatDuration(59.9)).toBe("59s");
+    expect(formatDuration(65)).toBe("1m 05s");
+    expect(formatDuration(3600 + 5 * 60)).toBe("1h 05m");
+    expect(formatDuration(-3)).toBe("0s");
+    expect([null, 0, 1, 2, 3, 9].map(subagentIndent)).toEqual([0, 0, 0, 1, 2, 3]);
+  });
+});
 
 describe("parseDetail", () => {
   it("maps the runtime's snake_case detail and drops malformed options", () => {

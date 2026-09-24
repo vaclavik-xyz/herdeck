@@ -590,3 +590,31 @@ def test_mock_source_has_no_agent_card():
         assert e.value.code == 404
     finally:
         app.close()
+
+
+def test_detail_route_lists_subagents_with_durations():
+    import time
+
+    from herdeck.model import Subagent
+
+    now = int(time.time() * 1000)
+    app, src, runner = _serving_live()
+    try:
+        subs = (
+            Subagent("s2", "claude", "Plan", "plan it", "", 2, "running", now - 65_000, None),
+            Subagent("s1", "claude", "Explore", "look", "", 1, "done", now - 300_000, now - 240_000),
+        )
+        src._on_snapshot("prod", [blocked(subagents=subs)])
+        _, body = _get(app, "/agent/detail?server_id=prod&pane_id=p0")
+        rows = body["subagents"]
+        assert [(r["id"], r["type"], r["status"], r["depth"]) for r in rows] == [
+            ("s2", "Plan", "running", 2),
+            ("s1", "Explore", "done", 1),
+        ]
+        assert 65 <= rows[0]["duration_s"] <= 70
+        assert rows[1]["duration_s"] == 60
+        src._on_snapshot("prod", [blocked()])
+        _, body = _get(app, "/agent/detail?server_id=prod&pane_id=p0")
+        assert body["subagents"] == []
+    finally:
+        app.close()

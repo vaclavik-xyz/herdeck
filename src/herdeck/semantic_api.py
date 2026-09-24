@@ -85,6 +85,9 @@ def _agent_record(agent: AgentState, *, available: bool) -> dict:
             "run": _bounded(agent.work.run, 160),
             "url": _bounded(agent.work.url, 2048),
         },
+        # Additive (v1 allows new optional fields): already validated and
+        # bounded by protocol.parse_subagents; [] when the pane has none.
+        "subagents": [sub.to_wire() for sub in agent.subagents],
     }
 
 

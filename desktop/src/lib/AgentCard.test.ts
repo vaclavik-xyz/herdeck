@@ -44,6 +44,7 @@ function detail(over: Partial<AgentDetail> = {}): AgentDetail {
     stopConfirm: true,
     canText: true,
     canFocus: true,
+    subagents: [],
     ...over,
   };
 }
@@ -224,6 +225,65 @@ describe("AgentCard", () => {
       await settle();
       expect(transport.calls.map((c) => c.action)).toEqual(["stop", "focus"]);
     } finally { cleanup(); }
+  });
+
+  const SUBS: AgentDetail["subagents"] = [
+    { id: "c", provider: "claude", type: "Plan", description: "nested plan", model: "", depth: 2, status: "running", durationS: 65 },
+    { id: "b", provider: "claude", type: "Explore", description: "find callers", model: "", depth: 1, status: "failed", durationS: 30 },
+    { id: "a", provider: "codex", type: "", description: "", model: "", depth: null, status: "done", durationS: 4000 },
+    { id: "s", provider: "claude", type: "general", description: "silent", model: "", depth: 1, status: "stale", durationS: 900 },
+  ];
+
+  it("lists subagents most recent first with status, depth and durations", async () => {
+    const transport = fakeTransport({ detail: { kind: "ok", detail: detail({ subagents: SUBS }) } });
+    const { target, cleanup } = render({ transport, target: { index: 0 }, onClose: () => {} });
+    try {
+      await settle();
+      expect(target.textContent).toContain("Subagents");
+      const rows = [...target.querySelectorAll<HTMLElement>("li.sub")];
+      expect(rows.map((r) => r.querySelector(".sub-type")?.textContent)).toEqual(["Plan", "Explore", "codex", "general"]);
+      expect(rows.map((r) => [...r.classList].find((c) => c.startsWith("sub-")))).toEqual([
+        "sub-running", "sub-failed", "sub-done", "sub-stale",
+      ]);
+      expect(rows.map((r) => r.querySelector(".sub-state")?.textContent)).toEqual(["running", "failed", "done", "no signal"]);
+      expect(rows[0].style.getPropertyValue("--indent")).toBe("1");
+      expect(rows[1].style.getPropertyValue("--indent")).toBe("0");
+      expect(rows[0].querySelector(".sub-desc")?.textContent).toBe("nested plan");
+      expect(rows[2].querySelector(".sub-desc")).toBeNull();
+      const time = (i: number) => rows[i].querySelector(".sub-time");
+      expect(time(0)?.textContent).toBe("1m 05s");
+      expect(time(0)?.getAttribute("title")).toBe("Running for 1m 05s");
+      expect(time(1)?.getAttribute("title")).toBe("Took 30s");
+      expect(time(2)?.textContent).toBe("1h 06m");
+      // A running duration ticks between polls; finished ones stay put.
+      await vi.advanceTimersByTimeAsync(1000);
+      flushSync();
+      expect(time(0)?.textContent).toBe("1m 06s");
+      expect(time(1)?.textContent).toBe("30s");
+    } finally { cleanup(); }
+  });
+
+  it("hides the subagent section when there are none", async () => {
+    const transport = fakeTransport();
+    const { target, cleanup } = render({ transport, target: { index: 0 }, onClose: () => {} });
+    try {
+      await settle();
+      expect(target.querySelector("ul.subagents")).toBeNull();
+      expect(target.textContent).not.toContain("Subagents");
+    } finally { cleanup(); }
+  });
+
+  it("labels subagents in Czech", async () => {
+    setLang("cs");
+    const transport = fakeTransport({ detail: { kind: "ok", detail: detail({ subagents: SUBS }) } });
+    const { target, cleanup } = render({ transport, target: { index: 0 }, onClose: () => {} });
+    try {
+      await settle();
+      expect(target.textContent).toContain("Subagenti");
+      const states = [...target.querySelectorAll(".sub-state")].map((e) => e.textContent);
+      expect(states).toEqual(["běží", "selhal", "hotovo", "bez signálu"]);
+      expect(target.querySelector("li.sub-done .sub-time")?.getAttribute("title")).toBe("Trval 1h 06m");
+    } finally { cleanup(); setLang("en"); }
   });
 
   it("says so when the tile has no agent", async () => {

@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 
 from ..commands import Command, command_to_msg, profile_for
 from ..decisions import decision_revision
-from ..model import AgentKey, Status
+from ..model import AgentKey, Status, Subagent
 from .agent_term import CardTerminals
 
 # How long a card action waits for the bridge's reply before answering
@@ -63,6 +64,29 @@ def sanitize_prompt(text: str) -> str:
     if len(text) > PROMPT_MAX_CHARS:
         text = text[-PROMPT_MAX_CHARS:]
     return text
+
+
+def subagent_rows(subagents: tuple[Subagent, ...], now_ms: int) -> list[dict]:
+    """The card's "Subagents" list: bridge order (most recent first) plus
+    ``duration_s`` — so far for a running (or stale) one, total once it
+    ended. The runtime's clock stands in for the bridge host's; a small skew
+    only shifts a running duration, and it never goes negative."""
+    rows = []
+    for sub in subagents:
+        end = sub.ended_ms if sub.ended_ms is not None else now_ms
+        rows.append(
+            {
+                "id": sub.id,
+                "provider": sub.provider,
+                "type": sub.type,
+                "description": sub.description,
+                "model": sub.model,
+                "depth": sub.depth,
+                "status": sub.status,
+                "duration_s": max(0, (end - sub.started_ms) // 1000),
+            }
+        )
+    return rows
 
 
 def outcome(code: str, message: str = "", *, ok: bool | None = None) -> dict:
@@ -355,6 +379,7 @@ class AgentCardMixin:
             "stop_confirm": "act_force" in self._config.safety.require_confirm_for,
             "can_text": text_ok,
             "can_focus": agent.backend != "t3",
+            "subagents": subagent_rows(agent.subagents, int(time.time() * 1000)),
         }
 
     def _card_prepare_reread(self, key: AgentKey, agent):
@@ -362,8 +387,6 @@ class AgentCardMixin:
         (so the result lands in the pre-read cache, and in the deck drill when
         that agent is drilled) and return ``(runner, msg)`` for the caller to
         send once it released the deck lock. Rate limited; None when skipped."""
-        import time
-
         runner = self._runners.get(key.server_id)
         if runner is None:
             return None

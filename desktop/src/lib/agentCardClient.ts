@@ -15,6 +15,21 @@ export interface AgentOption {
   confirm: boolean; // the deck arms this first ([safety].require_confirm_for)
 }
 
+export type SubagentStatus = "running" | "done" | "failed" | "stale";
+
+/** One subagent of the agent (bridge capability "subagents", read from the
+ *  herdeck-subagent-hook spool). Most recent first, as the runtime sends it. */
+export interface SubagentRow {
+  id: string;
+  provider: string;
+  type: string;
+  description: string;
+  model: string;
+  depth: number | null; // 1 = spawned by the agent itself; null = unknown
+  status: SubagentStatus;
+  durationS: number; // running/stale: so far; done/failed: total
+}
+
 export interface AgentRef {
   serverId: string;
   paneId: string;
@@ -45,6 +60,7 @@ export interface AgentDetail extends AgentRef {
   stopConfirm: boolean;
   canText: boolean;
   canFocus: boolean;
+  subagents: SubagentRow[];
 }
 
 /** What a card action did. `code` is stable (agent_card.outcome on the runtime
@@ -108,6 +124,27 @@ function parseOption(raw: unknown): AgentOption | null {
   };
 }
 
+const SUBAGENT_STATUSES: readonly string[] = ["running", "done", "failed", "stale"];
+
+function parseSubagent(raw: unknown): SubagentRow | null {
+  if (raw == null || typeof raw !== "object") return null;
+  const v = raw as Record<string, unknown>;
+  const id = str(v.id);
+  if (!id || !SUBAGENT_STATUSES.includes(str(v.status))) return null;
+  const depth = typeof v.depth === "number" && Number.isInteger(v.depth) && v.depth >= 0 ? v.depth : null;
+  const duration = typeof v.duration_s === "number" && Number.isFinite(v.duration_s) ? v.duration_s : 0;
+  return {
+    id,
+    provider: str(v.provider),
+    type: str(v.type),
+    description: str(v.description),
+    model: str(v.model),
+    depth,
+    status: str(v.status) as SubagentStatus,
+    durationS: Math.max(0, Math.floor(duration)),
+  };
+}
+
 /** Shape a raw /agent/detail body, or null when it is not one. */
 export function parseDetail(raw: unknown): AgentDetail | null {
   if (raw == null || typeof raw !== "object") return null;
@@ -140,6 +177,9 @@ export function parseDetail(raw: unknown): AgentDetail | null {
     stopConfirm: v.stop_confirm === true,
     canText: v.can_text === true,
     canFocus: v.can_focus === true,
+    subagents: Array.isArray(v.subagents)
+      ? v.subagents.map(parseSubagent).filter((r): r is SubagentRow => r !== null)
+      : [],
   };
 }
 
@@ -189,6 +229,22 @@ export function formatSince(seconds: number | null): string {
   if (seconds < 60) return `${Math.floor(seconds)}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   return `${Math.floor(seconds / 3600)}h`;
+}
+
+/** A subagent's duration: 42s, 5m 03s, 2h 05m (finer than formatSince —
+ *  the list compares siblings that are often minutes apart). */
+export function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s}s`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (s < 3600) return `${Math.floor(s / 60)}m ${pad(s % 60)}s`;
+  return `${Math.floor(s / 3600)}h ${pad(Math.floor((s % 3600) / 60))}m`;
+}
+
+/** Indent level for a subagent row: depth 1 (direct child) is flush; nested
+ *  ones step in, capped so a deep chain cannot push the text off the card. */
+export function subagentIndent(depth: number | null): number {
+  return depth == null ? 0 : Math.min(3, Math.max(0, depth - 1));
 }
 
 function detailPath(target: AgentTarget, refresh: boolean): string {
