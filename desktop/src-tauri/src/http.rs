@@ -765,6 +765,25 @@ pub fn send_triage(host: &str, port: u16, token: &str, timeout: Duration) -> Res
     http_post(host, port, TRIAGE_PATH, ("X-Herdeck-Token", token), timeout)
 }
 
+/// The runtime routes behind an actionable banner (click / answer / reply).
+pub const AGENT_DRILL_PATH: &str = "/agents/drill";
+pub const AGENT_ANSWER_PATH: &str = "/agents/answer";
+
+/// POST a banner action's JSON body (`banners::drill_body` / `answer_body`)
+/// with the token header. Returns the HTTP status: 204 applied, 409 stale
+/// banner, 404 unknown agent, 503 server offline.
+pub fn post_agent_action(
+    host: &str,
+    port: u16,
+    token: &str,
+    timeout: Duration,
+    path: &str,
+    body: &str,
+) -> Result<u16, String> {
+    let (code, _) = http_post_json(host, port, path, ("X-Herdeck-Token", token), body, timeout)?;
+    Ok(code)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

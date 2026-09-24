@@ -10,6 +10,7 @@
 //! crash and killed on quit.
 
 pub mod app_log;
+pub mod banners;
 pub mod build_channel;
 pub mod deck_prefs;
 pub mod hotkey;
@@ -179,6 +180,8 @@ struct PendingNotification {
     /// PNG of the agent's project mark written by the runtime (notify_icons).
     icon: Option<String>,
     created_at_ms: Option<i64>,
+    /// Which agent the banner is about, plus answer buttons / reply field.
+    meta: banners::BannerMeta,
 }
 
 /// Minimum interval between on-disk re-discovery attempts.
@@ -715,6 +718,7 @@ fn notification_batch(
             sound: item.get("sound").cloned().unwrap_or(serde_json::Value::Bool(false)),
             icon: item.get("icon").and_then(|v| v.as_str()).map(str::to_string),
             created_at_ms: item.get("created_at_ms").and_then(|v| v.as_i64()),
+            meta: banners::BannerMeta::from_item(item),
         });
     }
     items.sort_by_key(|item| item.seq);
@@ -884,10 +888,9 @@ fn notification_sounds() -> Vec<String> {
 
 /// Show a localized test banner through the same native path real alerts take,
 /// carrying `sound` (a name; `None` = the default sound, `""` = silent). `Err`
-/// carries a message the settings UI shows as is. The native post blocks until
-/// Notification Center confirms delivery (up to ~2 s) and that confirmation
-/// arrives on the main thread, so it runs on the blocking pool — never on the
-/// main thread or an async worker.
+/// carries a message the settings UI shows as is. The native post may block on
+/// Notification Center (and, off macOS, on the notification plugin), so it runs
+/// on the blocking pool — never on the main thread or an async worker.
 #[tauri::command]
 async fn test_notification(
     app: tauri::AppHandle,
@@ -922,6 +925,7 @@ async fn test_notification(
         sound,
         icon: None,
         created_at_ms: None,
+        meta: banners::BannerMeta::default(),
     };
     run_blocking(move || {
         post_native_notification(&app, &item)?;
@@ -1178,54 +1182,221 @@ fn ensure_notification_application(app: &tauri::AppHandle) {
     });
 }
 
-/// Post one banner, fire-and-forget, with its sound attached. On macOS it goes
-/// straight through `mac-notification-sys`, which blocks this (non-main) thread
-/// only until Notification Center confirms delivery (at most ~2 s). Clicks are
-/// observed by `banner_clicks`, not by waiting on the banner: a parked
-/// wait-for-click thread per banner also parked a 0.5 s main-run-loop timer
-/// that called the synchronous `deliveredNotifications` XPC until the banner
-/// left Notification Center — i.e. forever for a banner the user never
-/// cleared. There is no per-agent grouping — the legacy `NSUserNotification`
-/// API has no thread id.
+/// Banners this shell delivered, by Notification Center identifier (bounded).
+/// Read on the main thread when a banner is activated.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+static BANNER_BOOK: Mutex<banners::BannerBook> = Mutex::new(banners::BannerBook::new());
+
+/// The answer context of a delivered banner, if this shell posted it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn banner_context(identifier: &str) -> Option<banners::BannerContext> {
+    BANNER_BOOK.lock().ok()?.get(identifier).cloned()
+}
+
+/// Post one banner, fire-and-forget, with its sound attached. On macOS it is
+/// built directly as an `NSUserNotification` (objc2) so it carries OUR
+/// identifier — the key the click handler and `BANNER_BOOK` use to know which
+/// agent (and block episode) a banner belongs to — and, for an actionable
+/// blocked alert, Approve/Deny buttons or an inline reply field.
+/// `mac-notification-sys` still provides the bundle attribution
+/// (`ensure_notification_application`) and the center delegate we proxy
+/// (`banner_clicks`); its own `send` could do neither (a random UUID per
+/// banner, and a blocking wait for any banner with buttons). Clicks are
+/// observed by `banner_clicks`, never by a parked per-banner thread.
 #[cfg(target_os = "macos")]
 fn post_native_notification(
     app: &tauri::AppHandle,
     item: &PendingNotification,
 ) -> Result<(), String> {
-    use mac_notification_sys::Notification;
-
     ensure_notification_application(app);
+    // Before the post, so even the very first banner's click is seen.
+    banner_clicks::ensure_installed(app);
     let sound = banner_sound_name(&item.sound, &sound_dirs()).unwrap_or_else(|err| {
         eprintln!("herdeck: {err}; posting id={} silently", item.id);
         None
     });
-    let mut banner = Notification::new();
-    banner
-        .title(&item.title)
-        .message(&item.body)
-        .maybe_sound(sound.as_deref())
-        .asynchronous(true);
-    // The project mark twice: `app_icon` swaps the left-hand app icon through
-    // a private key that newer macOS may ignore; `content_image` (public API)
-    // shows it on the right either way.
-    if let Some(image) = item.icon.as_deref().and_then(banner_image_path) {
-        banner.app_icon(image).content_image(image);
+    let identifier = banners::banner_identifier(&item.generation, item.seq);
+    if let Some(agent) = item.meta.agent.clone() {
+        // Recorded first: a click racing the delivery must find its context.
+        if let Ok(mut book) = BANNER_BOOK.lock() {
+            book.record(
+                identifier.clone(),
+                banners::BannerContext {
+                    agent,
+                    episode: item.meta.episode.clone(),
+                    sig: item.meta.sig.clone(),
+                    actions: item.meta.actions.clone(),
+                },
+            );
+        }
     }
-    banner
-        .send()
-        .map_err(|err| format!("native notification failed: {err}"))?;
-    // Guard: re-wrap if anything replaced the center delegate since startup.
-    banner_clicks::ensure_installed(app);
-    Ok(())
+    let image = item.icon.as_deref().and_then(banner_image_path);
+    banner_post::deliver(&identifier, item, sound.as_deref(), image).inspect_err(|_| {
+        if let Ok(mut book) = BANNER_BOOK.lock() {
+            book.forget(&identifier);
+        }
+    })
 }
 
-/// Whether a banner activation (the raw `NSUserNotificationActivationType`)
-/// should bring the deck forward: a click on the banner body or on one of its
-/// action buttons. `None` (0) and an inline reply (3) do not.
+/// Building and delivering one `NSUserNotification` (the legacy API
+/// `mac-notification-sys` uses too — no permission prompt, works unsigned).
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+mod banner_post {
+    use objc2::rc::{Allocated, Retained};
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2::{msg_send, ClassType};
+    use objc2_foundation::{
+        ns_string, NSArray, NSNumber, NSString, NSUserNotification, NSUserNotificationAction,
+        NSUserNotificationCenter,
+    };
+
+    use super::PendingNotification;
+
+    fn image(path: &str) -> Option<Retained<AnyObject>> {
+        let class = AnyClass::get(c"NSImage")?;
+        // SAFETY: -[NSImage initWithContentsOfFile:] takes an NSString and
+        // returns nil for an unreadable file.
+        unsafe {
+            let alloc: Allocated<AnyObject> = msg_send![class, alloc];
+            msg_send![alloc, initWithContentsOfFile: &*NSString::from_str(path)]
+        }
+    }
+
+    fn default_center() -> Option<Retained<NSUserNotificationCenter>> {
+        // Nil when the process has no bundle identity (an unbundled dev binary
+        // without the Terminal attribution).
+        unsafe { msg_send![NSUserNotificationCenter::class(), defaultUserNotificationCenter] }
+    }
+
+    pub fn deliver(
+        identifier: &str,
+        item: &PendingNotification,
+        sound: Option<&str>,
+        image_path: Option<&str>,
+    ) -> Result<(), String> {
+        let center = default_center().ok_or("no notification center for this process")?;
+        let banner = NSUserNotification::new();
+        banner.setIdentifier(Some(&NSString::from_str(identifier)));
+        banner.setTitle(Some(&NSString::from_str(&item.title)));
+        banner.setInformativeText(Some(&NSString::from_str(&item.body)));
+        if let Some(sound) = sound {
+            banner.setSoundName(Some(&NSString::from_str(sound)));
+        }
+        let meta = &item.meta;
+        if let Some((first, rest)) = meta.actions.split_first() {
+            // Approve on the action button, Deny in its drop-down
+            // (additionalActions, macOS 10.10+). `_showsButtons` (the private
+            // key mac-notification-sys sets for its own drop-down) keeps the
+            // buttons visible on a banner-style alert.
+            banner.setHasActionButton(true);
+            banner.setActionButtonTitle(&NSString::from_str(&first.label));
+            let extra: Vec<Retained<NSUserNotificationAction>> = rest
+                .iter()
+                .map(|action| {
+                    NSUserNotificationAction::actionWithIdentifier_title(
+                        Some(&NSString::from_str(&action.id)),
+                        Some(&NSString::from_str(&action.label)),
+                    )
+                })
+                .collect();
+            if !extra.is_empty() {
+                banner.setAdditionalActions(Some(&NSArray::from_retained_slice(&extra)));
+            }
+            // SAFETY: KVC on a key NSUserNotification has on every macOS that
+            // still ships the legacy API (mac-notification-sys relies on it).
+            unsafe {
+                let _: () = msg_send![&*banner, setValue: &*NSNumber::new_bool(true), forKey: ns_string!("_showsButtons")];
+            }
+        } else if let Some(placeholder) = meta.reply.as_deref() {
+            banner.setHasReplyButton(true);
+            banner.setResponsePlaceholder(Some(&NSString::from_str(placeholder)));
+        } else {
+            banner.setHasActionButton(false);
+        }
+        if let Some(image) = image_path.and_then(image) {
+            // The project mark twice: `_identityImage` swaps the left-hand app
+            // icon through a private key that newer macOS may ignore;
+            // `contentImage` (public API) shows it on the right either way.
+            // SAFETY: the same keys/selectors mac-notification-sys uses.
+            unsafe {
+                let _: () = msg_send![&*banner, setValue: &*image, forKey: ns_string!("_identityImage")];
+                let _: () = msg_send![&*banner, setValue: &*NSNumber::new_bool(false), forKey: ns_string!("_identityImageHasBorder")];
+                let _: () = msg_send![&*banner, setContentImage: &*image];
+            }
+        }
+        center.deliverNotification(&banner);
+        Ok(())
+    }
+}
+
+/// Carry out what a banner activation asked for (main thread; the HTTP calls
+/// run on their own thread). A successful answer does NOT bring the deck
+/// forward — answering from the banner is the point; a stale or failed one
+/// opens that agent's drill so the user sees the prompt as it is now.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn activation_reveals_deck(activation_type: isize) -> bool {
-    // ContentsClicked = 1, ActionButtonClicked = 2, AdditionalActionClicked = 4.
-    matches!(activation_type, 1 | 2 | 4)
+fn handle_banner_intent(app: &tauri::AppHandle, intent: banners::BannerIntent) {
+    use banners::BannerIntent;
+    match intent {
+        BannerIntent::Ignore => {}
+        BannerIntent::Reveal => reveal_deck(app),
+        BannerIntent::Drill(agent) => {
+            reveal_deck(app);
+            let app = app.clone();
+            std::thread::spawn(move || open_agent_drill(&app, &agent));
+        }
+        BannerIntent::Answer { ref agent, .. } | BannerIntent::Reply { ref agent, .. } => {
+            let agent = agent.clone();
+            let Some(body) = banners::answer_body(&intent) else {
+                return;
+            };
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let discovery = app.state::<AppState>().discovery.lock().unwrap().clone();
+                let result = match discovery {
+                    Some(d) => http::post_agent_action(
+                        &d.host,
+                        d.port,
+                        &d.token,
+                        SIDECAR_TIMEOUT,
+                        http::AGENT_ANSWER_PATH,
+                        &body,
+                    ),
+                    None => Err("runtime not discovered".to_string()),
+                };
+                eprintln!(
+                    "herdeck: banner answer agent={}:{} result={result:?}",
+                    agent.server_id, agent.pane_id
+                );
+                if banners::answer_needs_drill(&result) {
+                    reveal_deck(&app);
+                    open_agent_drill(&app, &agent);
+                }
+            });
+        }
+    }
+}
+
+/// `POST /agents/drill` for one agent (blocking; call off the main thread).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn open_agent_drill(app: &tauri::AppHandle, agent: &banners::AgentRef) {
+    let Some(d) = app.state::<AppState>().discovery.lock().unwrap().clone() else {
+        return;
+    };
+    let code = http::post_agent_action(
+        &d.host,
+        d.port,
+        &d.token,
+        SIDECAR_TIMEOUT,
+        http::AGENT_DRILL_PATH,
+        &banners::drill_body(agent),
+    );
+    if code != Ok(204) {
+        eprintln!(
+            "herdeck: banner drill agent={}:{} result={code:?}",
+            agent.server_id, agent.pane_id
+        );
+    }
 }
 
 /// Whether to present a banner while Herdeck is frontmost: the wrapped
@@ -1311,10 +1482,21 @@ mod banner_clicks {
 
             #[unsafe(method(userNotificationCenter:didActivateNotification:))]
             fn did_activate(&self, center: &NSUserNotificationCenter, notification: &NSUserNotification) {
-                if super::activation_reveals_deck(notification.activationType().0) {
-                    if let Some(app) = APP.get() {
-                        super::reveal_deck(app);
-                    }
+                let identifier = notification.identifier().map(|id| id.to_string());
+                let context = identifier.as_deref().and_then(super::banner_context);
+                let additional = notification
+                    .additionalActivationAction()
+                    .and_then(|action| action.identifier())
+                    .map(|id| id.to_string());
+                let reply = notification.response().map(|text| text.string().to_string());
+                let intent = super::banners::banner_intent(
+                    notification.activationType().0,
+                    context.as_ref(),
+                    additional.as_deref(),
+                    reply.as_deref(),
+                );
+                if let Some(app) = APP.get() {
+                    super::handle_banner_intent(app, intent);
                 }
                 if let Some(inner) = self.forward_to(sel!(userNotificationCenter:didActivateNotification:)) {
                     let _: () = unsafe {
@@ -2034,12 +2216,18 @@ mod plan_tests {
     }
 
     #[test]
-    fn only_a_banner_or_action_click_reveals_the_deck() {
-        assert!(!activation_reveals_deck(0)); // none
-        assert!(activation_reveals_deck(1)); // contents clicked
-        assert!(activation_reveals_deck(2)); // action button
-        assert!(!activation_reveals_deck(3)); // replied
-        assert!(activation_reveals_deck(4)); // additional action
+    fn a_feed_item_carries_its_agent_and_answers_into_the_batch() {
+        use serde_json::json;
+        let state = json!({"generation": "g", "acked_seq": 0, "items": [
+            {"seq": 1, "id": "g:1", "title": "t", "body": "b", "sound": false,
+             "agent": {"server_id": "prod", "pane_id": "p1"}, "event": "blocked",
+             "episode": "ep", "sig": "s", "actions": [{"id": "approve", "label": "Approve"}]},
+        ]});
+        let (_, _, items) = notification_batch(&state, &NotifyCursor::default()).unwrap();
+        let meta = &items[0].meta;
+        assert_eq!(meta.agent.as_ref().map(|a| a.pane_id.as_str()), Some("p1"));
+        assert_eq!(meta.actions.len(), 1);
+        assert_eq!(banners::banner_identifier(&items[0].generation, items[0].seq), "herdeck:g:1");
     }
 
     #[test]
