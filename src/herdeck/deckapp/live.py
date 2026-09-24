@@ -278,6 +278,22 @@ class LiveSource(StateSource):
             "waiting": counts.waiting,
         }
 
+    def server_health(self) -> dict[str, dict]:
+        """Per-server connector diagnostics for /health (no tokens: only the
+        connector's error text, timings and the bridge's announced version)."""
+        with self._lock:
+            connected = dict(self._connected)
+        out: dict[str, dict] = {}
+        for sid in self._servers:
+            connector = getattr(self._runners.get(sid), "connector", None)
+            health = getattr(connector, "health", None)
+            facts = health() if callable(health) else {}
+            out[sid] = {**facts, "connected": connected.get(sid, False)}
+        return out
+
+    def notification_stats(self) -> dict:
+        return self._notify_feed.stats()
+
     def close(self) -> None:
         for runner in list(self._runners.values()):
             runner.close()
@@ -750,6 +766,10 @@ class ConnectorRunner:
         self._conn = connector
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._serve, name="herdeck-live", daemon=True)
+
+    @property
+    def connector(self) -> Connector:
+        return self._conn
 
     def start(self) -> None:
         self._thread.start()

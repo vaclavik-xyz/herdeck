@@ -233,6 +233,11 @@ Run the same `herdeck-service install bridge ...` command again when its launchd
 definition or startup options change; the installer replaces the service and
 rolls its plist back if launchd rejects the update.
 
+To push a committed ref to a runtime or bridge host that runs from source —
+snapshot, install, restart its service, health-check, with a one-line
+rollback — use `scripts/deploy-host.sh --role runtime|bridge --host HOST`; see
+[updating a deployment](docs/updating-a-deployment.md).
+
 ### macOS dev build
 
 Maintainers can create a disposable Apple Silicon build from any branch with
@@ -297,7 +302,19 @@ is available as [`local.example.toml`](local.example.toml).
 
 Run `herdeck-doctor` to diagnose setup problems — it checks the herdr socket,
 config/mode, deck availability, and (for remote) token presence, printing a
-pass/fail checklist with hints (it never prints token values).
+pass/fail checklist with hints (it never prints token values). It also compares
+versions: the running runtime against this install, and every bridge against
+the runtime, and asks each bridge whether herdr answers it.
+
+When the deck goes dark, the runtime's token-gated `GET /health` says why: its
+`version`, `protocol`, `pid` and `uptime_s`; per server under `servers`
+(`connected`, `last_error`, `since` in unix ms, `attempt`, `bridge_version`,
+`protocol_supported`); the D200 under `d200` (`connected`, `last_frame_at`,
+`last_error`, `lock_owner` when another runtime holds `d200.lock`); and
+notification counters (`queued`, `acked`, `fallback`, `dropped`, `pending`).
+The desktop window turns the same data into a one-line warning, for example
+`runtime 0.8.0 ≠ app 0.8.1 — restart the runtime` or
+`bridge local: token rejected 3 min · D200: disconnected 2 min`.
 
 ## Controlling agents from the CLI (`herdeck-ctl`)
 
@@ -339,7 +356,8 @@ agents → herdr (Unix socket) → herdeck-bridge → WebSocket/Tailscale → Ma
 
 Herdr's default socket is `~/.config/herdr/herdr.sock` on macOS and Linux. The
 supported macOS system-service installer is shown under **Remote Herdr host**
-above; Linux uses [`deploy/herdeck-bridge.service`](deploy/herdeck-bridge.service).
+above; on Linux `herdeck-service install bridge` writes a systemd user unit
+(hand-written example: [`deploy/herdeck-bridge.service`](deploy/herdeck-bridge.service)).
 
 For pushing a new version to hosts that already run one — what needs updating
 where, rebuilding the desktop app, and how to verify a deploy landed without a
@@ -350,6 +368,12 @@ as one `[[servers]]` entry. The config `id` is the authoritative routing ID on
 the deck; `HERDECK_SERVER_ID` is only the bridge's self-reported label. Keep
 ports, config IDs, token environment names, and token files unique when several
 bridges share a host.
+
+Every bridge snapshot carries `herdeck_version`. An authenticated client can
+also send `{"type": "health", "req": "<id>"}` over the same WebSocket; the
+bridge answers `{"type": "result", "req": "<id>", "data": {"herdeck_version",
+"protocol", "herdr_reachable", "clients"}}`. `herdeck-doctor` uses it; a bridge
+older than 0.8.1 answers with an `error` frame instead.
 
 ## Profiles and customization
 
@@ -430,8 +454,17 @@ LaunchAgents:
 ```bash
 herdeck-service install bridge --system --bind 100.x.y.z --server-id workbox
 herdeck-service install web --bind 100.x.y.z --config ~/.config/herdeck/config.toml
+herdeck-service install runtime --config ~/.config/herdeck/config.toml
 herdeck-service status bridge --system
 ```
+
+The `runtime` kind runs the headless deck runtime (`herdeck.runtime`: D200 +
+the desktop window's API) as a login-session LaunchAgent, logging to
+`~/Library/Logs/herdeck-runtime.log`. With `--from-app [/Applications/herdeck.app]`
+it runs the frozen runtime bundled in the desktop app instead of a Python
+checkout, and the app's updater restarts it whenever it installs a new version.
+On Linux every kind installs as a systemd `--user` unit (`--system` is
+macOS-only).
 
 System installation asks for macOS administrator approval only for the
 root-owned LaunchDaemon operations. The daemon still runs as the invoking user.

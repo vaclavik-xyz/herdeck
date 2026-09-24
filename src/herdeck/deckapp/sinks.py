@@ -9,11 +9,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Protocol, runtime_checkable
 
 log = logging.getLogger(__name__)
+
+
+def _now_ms() -> int:
+    return time.time_ns() // 1_000_000
 
 
 @dataclass(frozen=True)
@@ -195,6 +200,10 @@ class ReconnectingD200Sink:
         self._device_lock = device_lock
         self._lock_retry_interval = max(0.01, lock_retry_interval)
         self._lock_warned = False
+        self._was_connected = False
+        self._since = _now_ms()
+        self._last_frame_at: int | None = None
+        self._last_error: str | None = None
         self._lock = threading.Lock()
         self._latest_frame: RenderFrame | None = None
         self._active: D200Sink | None = None
@@ -216,6 +225,31 @@ class ReconnectingD200Sink:
             active = self._active
         if active is not None:
             active.deliver(frame)
+            if not frame.ticker:  # D200Sink drops ticker frames: no USB write
+                self._last_frame_at = _now_ms()
+
+    def health(self) -> dict:
+        """D200 facts for the runtime /health: is the device driven, since
+        when, the newest write, why it is not, and who holds the lock."""
+        lock = self._device_lock
+        owner = None
+        if lock is not None and not lock.held:
+            owner = lock.owner_pid()
+        with self._lock:
+            connected = self._active is not None
+        return {
+            "connected": connected,
+            "since": self._since,
+            "last_frame_at": self._last_frame_at,
+            "last_error": self._last_error,
+            "lock_owner": owner,
+        }
+
+    def _mark(self, connected: bool, error: str | None) -> None:
+        if connected != self._was_connected:
+            self._was_connected = connected
+            self._since = _now_ms()
+        self._last_error = error
 
     def set_slots(self, slots: int) -> None:
         """Update both the current device and any future reconnected device."""
@@ -256,6 +290,7 @@ class ReconnectingD200Sink:
     def _run(self) -> None:
         while not self._stop.is_set():
             if not self._owns_device():
+                self._mark(False, "D200 owned by another herdeck runtime")
                 self._stop.wait(self._lock_retry_interval)
                 continue
             # If configuration changed while no device was attached, the next
@@ -264,6 +299,7 @@ class ReconnectingD200Sink:
             try:
                 driver = self._driver_factory()
             except Exception as exc:
+                self._mark(False, str(exc) or type(exc).__name__)
                 log.info(
                     "no D200 attached (%s); retrying in %.1fs",
                     exc,
@@ -302,6 +338,9 @@ class ReconnectingD200Sink:
                 if latest is not None:
                     active.deliver(latest)
                 self._active = active
+            self._mark(True, None)
+            if latest is not None and not latest.ticker:
+                self._last_frame_at = _now_ms()
             log.info("D200 attached")
 
             while not (
@@ -314,6 +353,7 @@ class ReconnectingD200Sink:
                 if self._active is active:
                     self._active = None
             active.close()
+            self._mark(False, "disconnected" if disconnected.is_set() else None)
             if disconnected.is_set() and not self._stop.is_set():
                 log.info("D200 disconnected; reopening")
             elif self._reconfigure.is_set() and not self._stop.is_set():

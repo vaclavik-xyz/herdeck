@@ -11,11 +11,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from .. import __version__
 from ..config import ConfigError
 from ..i18n import tr
 from ..model import AgentKey
 from ..orchestrator import Orchestrator
 from ..pins import PinStore
+from ..protocol import WIRE_PROTOCOL
 from .sinks import RenderFrame
 from .source import StateSource
 
@@ -106,6 +108,7 @@ class DeckApp:
         pin_store=None,
     ):
         self._serve_enabled = serve
+        self._started_at = time.monotonic()
         self._source = source
         config = source.config
         cols, rows = config.grid
@@ -924,6 +927,23 @@ class DeckApp:
         if isinstance(connections, dict):
             health["connections"] = connections
             health["server_ids"] = list(connections)
+        # "Why is the deck dark?" — everything below is token-gated like the
+        # route itself and carries no secrets (ids, versions, error text).
+        health["version"] = __version__
+        health["protocol"] = WIRE_PROTOCOL
+        health["pid"] = os.getpid()
+        health["uptime_s"] = int(time.monotonic() - getattr(self, "_started_at", time.monotonic()))
+        server_health = getattr(self._source, "server_health", None)
+        if callable(server_health):
+            health["servers"] = server_health()
+        stats = getattr(self._source, "notification_stats", None)
+        if callable(stats):
+            health["notifications"] = stats()
+        for sink in list(getattr(self, "_sinks", [])):
+            sink_health = getattr(sink, "health", None)
+            if callable(sink_health):
+                health["d200"] = sink_health()
+                break
         return health
 
     # /setup is polled by the desktop onboarding card. Its disk facts (two

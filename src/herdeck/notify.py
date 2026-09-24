@@ -160,6 +160,10 @@ class NotificationFeed:
         self._maxlen = max(1, maxlen)
         self._items: deque[dict] = deque()
         self.dropped = 0  # undelivered items evicted by overflow (observability)
+        # Lifetime counters for the runtime /health (they survive reset()).
+        self.queued = 0
+        self.acked = 0  # delivered: shell acknowledgements + runtime fallbacks
+        self.fallbacks = 0
         self._generation = uuid.uuid4().hex
         self._seq = 0
         self._acked_seq = 0
@@ -171,6 +175,7 @@ class NotificationFeed:
     ) -> dict:
         with self._changed:
             self._seq += 1
+            self.queued += 1
             item = {
                 "id": f"{self._generation}:{self._seq}",
                 "generation": self._generation,
@@ -217,6 +222,23 @@ class NotificationFeed:
         self.dropped += dropped
         return dropped
 
+    def _advance_acked_locked(self, seq: int) -> None:
+        if seq > self._acked_seq:
+            self.acked += seq - self._acked_seq
+            self._acked_seq = seq
+
+    def stats(self) -> dict:
+        """Delivery counters for the runtime /health: a banner that never
+        showed up is visible here as pending, dropped or a fallback."""
+        with self._changed:
+            return {
+                "queued": self.queued,
+                "acked": self.acked,
+                "fallback": self.fallbacks,
+                "dropped": self.dropped,
+                "pending": max(0, self._seq - self._acked_seq),
+            }
+
     def reset(self) -> None:
         """Drop everything and restart the sequence from zero.
 
@@ -251,7 +273,7 @@ class NotificationFeed:
                 and generation == self._generation
                 and 0 <= after_seq <= self._seq
             ):
-                self._acked_seq = max(self._acked_seq, after_seq)
+                self._advance_acked_locked(after_seq)
             self._changed.wait_for(
                 lambda: generation != self._generation
                 or (
@@ -287,7 +309,7 @@ class NotificationFeed:
             ):
                 return False
             item = next((item for item in self._items if item["seq"] == seq), None)
-            self._acked_seq = max(self._acked_seq, seq)
+            self._advance_acked_locked(seq)
         latency_ms = (
             max(0, time.time_ns() // 1_000_000 - item["created_at_ms"])
             if item is not None
@@ -331,7 +353,8 @@ class NotificationFeed:
         with self._changed:
             if generation != self._generation or self._fallback_seq != seq:
                 return False
-            self._acked_seq = max(self._acked_seq, seq)
+            self._advance_acked_locked(seq)
+            self.fallbacks += 1
             self._fallback_seq = None
             self._changed.notify_all()
         log.info("notification fallback delivered id=%s:%s", generation, seq)

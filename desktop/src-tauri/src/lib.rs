@@ -14,6 +14,7 @@ pub mod build_channel;
 pub mod deck_prefs;
 pub mod hotkey;
 pub mod http;
+pub mod runtime_service;
 pub mod sidecar;
 pub mod window_state;
 
@@ -279,6 +280,12 @@ async fn update_install(app: tauri::AppHandle) -> Result<bool, String> {
         .download_and_install(|_, _| {}, || {})
         .await
         .map_err(|e| e.to_string())?;
+    // A `herdeck-service install runtime --from-app` unit runs the runtime
+    // bundled in this .app; restart it now so runtime and app stay in step.
+    let _ = tauri::async_runtime::spawn_blocking(
+        runtime_service::restart_bundled_runtime_after_update,
+    )
+    .await;
     app.request_restart();
     Ok(true)
 }
@@ -529,7 +536,8 @@ fn probe_runtime_health(d: &Discovery) -> bool {
 /// Probe the sidecar's token-authed `GET /health` and return its JSON. Done
 /// Rust-side (not via WebView `fetch`) so it isn't blocked by CORS, and so the
 /// access token never has to live in JS. `Err` if the sidecar isn't ready yet
-/// or is unreachable.
+/// or is unreachable. The shell adds its own `app_version`, so the window can
+/// warn when it is attached to a runtime of a different release.
 #[tauri::command]
 async fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let d = current_discovery(&state)?;
@@ -540,10 +548,19 @@ async fn check_health(state: tauri::State<'_, AppState>) -> Result<serde_json::V
             &format!("/health?token={}", d.token),
             SIDECAR_TIMEOUT,
         )?;
-        serde_json::from_str::<serde_json::Value>(&body)
-            .map_err(|e| format!("invalid /health JSON from sidecar: {e}"))
+        let health = serde_json::from_str::<serde_json::Value>(&body)
+            .map_err(|e| format!("invalid /health JSON from sidecar: {e}"))?;
+        Ok(with_app_version(health, env!("CARGO_PKG_VERSION")))
     })
     .await
+}
+
+/// Stamp the shell's version onto a `/health` object (non-objects pass through).
+fn with_app_version(mut health: serde_json::Value, version: &str) -> serde_json::Value {
+    if let Some(map) = health.as_object_mut() {
+        map.insert("app_version".into(), serde_json::Value::from(version));
+    }
+    health
 }
 
 /// Proxy `GET /state` (token injected Rust-side) → its JSON. This is the deck's
@@ -1821,6 +1838,15 @@ fn start_app_log() {
 #[cfg(test)]
 mod plan_tests {
     use super::*;
+
+    #[test]
+    fn health_carries_the_shell_version_for_mismatch_warnings() {
+        let health = serde_json::json!({"ok": true, "version": "1.2.3"});
+        let stamped = with_app_version(health, "1.2.4");
+        assert_eq!(stamped["app_version"], "1.2.4");
+        assert_eq!(stamped["version"], "1.2.3");
+        assert_eq!(with_app_version(serde_json::json!(null), "1"), serde_json::json!(null));
+    }
 
     #[test]
     fn notification_generation_change_delivers_low_sequence_item() {

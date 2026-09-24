@@ -23,82 +23,157 @@ in one order: **bridge first**. An old render host ignores a key it does not
 know. The reverse runs new render code against an old snapshot, and
 `_pane_to_state` defaults every missing field to `""` or `{}` — so the new field
 renders blank, with no error and nothing in the log, until the bridge catches up.
+Since 0.8.1 the mismatch is at least visible: every snapshot carries the
+bridge's `herdeck_version`, the runtime's `/health` lists it per server next to
+its own `version`, and both the desktop window and `herdeck-doctor` report a
+bridge whose version differs from the runtime's.
 
 Changing `protocol.py`'s encode/decode contract has no safe order at all; both
-hosts move together.
+hosts move together, and `WIRE_PROTOCOL` in `protocol.py` must be bumped. A
+runtime that receives a newer protocol than it knows logs a WARNING
+(`bridge '<id>' speaks unsupported wire protocol …`) and reports
+`protocol_supported: false` for that server in `/health`.
 
 The desktop app is the exception: its frontend is compiled into the bundle, so
 it does **not** pick up changes from a source sync. It needs a rebuild.
 
-## Syncing source
+## Services, once per host
 
-Where the deploy target is a checkout rather than an installed package, a
-`git archive` stream is the simplest way in:
+Every long-running piece runs under `herdeck-service`, which writes a launchd
+unit on macOS or a systemd `--user` unit on Linux with `KeepAlive`/`Restart`,
+logs in `~/Library/Logs/herdeck-<kind>.log` (Linux: `journalctl --user -u
+herdeck-<kind>`) and token *files*, never token values:
 
-```bash
-git archive --format=tar main | ssh HOST 'tar -x -C ~/path/to/herdeck'
-```
+| host | kind | label / unit | install |
+|---|---|---|---|
+| bridge host | `bridge` | `dev.herdeck.bridge` / `herdeck-bridge.service` | `herdeck-service install bridge --system --bind <tailscale-ip> --server-id <id>` |
+| deck host, from source | `runtime` | `dev.herdeck.runtime` / `herdeck-runtime.service` | `herdeck-service install runtime --config ~/.config/herdeck/config.toml` |
+| deck host, from the app | `runtime` | `dev.herdeck.runtime` | `herdeck-service install runtime --from-app [/Applications/herdeck.app]` |
 
-Back the tree up first if the target has ever been hand-edited.
+The runtime unit runs in the login (`gui/<uid>`) session because it drives the
+D200 and posts notifications; the desktop window finds it through
+`~/.cache/herdeck/runtime.json`, not through the label. Run
+`herdeck-service` from the venv the service should use: `--python` defaults to
+the interpreter that runs the installer.
 
-`tar -x` only adds and overwrites — it never deletes. A module removed in the
-release stays on the target and stays importable, so the host can keep running
-deleted code with nothing to show for it. When a release removes files, clear
-the synced subtree first:
+**`--from-app`** points the unit at the frozen runtime bundled inside the signed
+desktop app (`Contents/Resources/herdeck-deckapp/herdeck-deckapp`) instead of a
+Python checkout. That keeps runtime and app on one version: when the app's
+updater installs a new release it restarts that unit (`launchctl kickstart -k
+gui/<uid>/dev.herdeck.runtime`, logged in the app log) before relaunching
+itself. The updater only touches a unit whose program lies inside its own
+bundle; a unit that runs from a source checkout is never restarted by it. On a
+host deployed from source, update the runtime with `deploy-host.sh` below.
 
-```bash
-ssh HOST 'rm -rf ~/herdeck-src.old && mv ~/path/to/herdeck/src/herdeck ~/herdeck-src.old'
-git archive --format=tar main | ssh HOST 'tar -x -C ~/path/to/herdeck'
-```
+### Migrating a bridge from `nohup`
 
-Move it aside rather than deleting it, and stop the service for that window.
-The runtime imports lazily well after startup, so an import landing in the gap
-raises `ImportError` on a live process — and if the stream or the connection
-dies mid-transfer, the moved-aside copy is the rollback:
-
-```bash
-ssh HOST 'test -d ~/herdeck-src.old \
-  && rm -rf ~/path/to/herdeck/src/herdeck \
-  && mv ~/herdeck-src.old ~/path/to/herdeck/src/herdeck'
-```
-
-The `test -d` is load-bearing. Without it, a restore run where the backup is
-missing — the move-aside was skipped, or the restore already succeeded once —
-deletes the current tree and then fails, leaving no `src/herdeck` at all. That
-is worse than the deploy it was rolling back, reached by running the documented
-rollback under exactly the stress it is written for.
-
-Clear the destination in both directions. `mv` into a directory that already
-exists nests inside it instead of replacing it, so a second deploy would leave
-the first deploy's tree at the documented rollback path and the real backup one
-level down.
-
-**Do not delete the whole checkout.** The venv usually lives inside it and is
-installed editable, so the launchd unit's `ProgramArguments` points straight at
-`.venv/bin/python` — removing the tree breaks the service on what was supposed
-to be a routine sync. It would take `node_modules` with it too.
-
-`rsync` in one step is possible but is not the same thing: it ships your working
-tree, uncommitted edits included, rather than the committed state of `main`, and
-`--delete` will remove build artifacts the rest of this document reads. If you
-use it, exclude all of them:
+A bridge started by hand (`nohup herdeck-bridge &`, or `python -m
+herdeck.bridge` in a tmux pane) survives neither a crash nor a reboot. Move it
+under launchd without a new token:
 
 ```bash
-rsync -a --delete --exclude .git --exclude .venv --exclude node_modules \
-  --exclude target --exclude desktop/build ./ HOST:~/path/to/herdeck/
+pgrep -fl herdeck.bridge                       # note the PID and its interpreter
+kill <PID>                                     # the deck reconnects on its own
+~/herdeck/.venv/bin/herdeck-service install bridge --system \
+  --bind "$(tailscale ip -4 | head -n 1)" --port 8788 \
+  --server-id <id> --token-file ~/.config/herdeck/bridge-token
+~/herdeck/.venv/bin/herdeck-service status bridge --system
 ```
 
-**`git archive` does not carry `node_modules`.** If the release added a frontend
-dependency, the synced `package.json` will reference a package that is not
-installed, and the Tauri build dies with `Rolldown failed to resolve import`.
-Run `npm ci` in `desktop/` before building whenever dependencies changed.
+Keep the same `--port`, `--server-id` and token file the `nohup` process used,
+so the deck's `[[servers]]` entry keeps working unchanged. If the old process
+got its token from `HERDECK_TOKEN`, write that value into the token file first
+(mode `0600`) — read it from where you stored it, not from `ps eww`. Then check
+the deck: `/health` should report `connected` again within a few seconds.
+
+### Migrating a hand-made runtime unit
+
+A deck host that runs the runtime from a custom plist and launcher script
+(for example label `com.herdeck.app`) moves the same way: `launchctl bootout
+gui/$(id -u)/<old-label>`, move the old plist out of `~/Library/LaunchAgents`,
+then `herdeck-service install runtime ...` from the venv (or `--from-app`).
+Anything that restarts the runtime by label — the `t3-renew` job's
+`--restart-label`, for instance — must switch to `dev.herdeck.runtime`.
+
+## Deploying a source checkout: `scripts/deploy-host.sh`
+
+For a runtime or bridge host that runs from source, one command ships a
+committed ref, installs it, restarts the unit and proves it came back:
+
+```bash
+scripts/deploy-host.sh --role runtime --host macbench            # deck host
+scripts/deploy-host.sh --role bridge  --host m4 --ref v0.9.0     # bridge host
+scripts/deploy-host.sh --role runtime                            # this machine
+```
+
+What it does, in order:
+
+1. `git archive` of `--ref` (default `HEAD`) — the committed state, never your
+   working tree — unpacked on the target as `~/herdeck-deploy/releases/<sha>/`.
+   A snapshot that already exists is reused, so re-running a deploy is safe.
+2. Refuses to go on if the `dev.herdeck.<role>` unit runs anything other than
+   the target venv (`~/herdeck-deploy/venv` by default): a `--from-app` runtime
+   or another checkout would restart unchanged and pass the health check
+   without running a line of what was deployed.
+3. `pip install -e <snapshot>[deck]` (runtime) or `-e <snapshot>` (bridge)
+   into the venv, creating it with `--python` on first use.
+4. Points `current` at the new snapshot and `previous` at the one it replaces.
+5. Restarts the unit (`launchctl kickstart -k`, `sudo -n` for a `--system`
+   bridge, or `systemctl --user restart`).
+6. Verifies. Runtime: waits for a *rewritten* `runtime.json`, then
+   `GET /health` with its token must say `ok` (it also reports whether the
+   bridge is connected). Bridge: its `HERDECK_BIND:HERDECK_PORT` from the unit
+   (or `--bridge-addr`) must accept TCP connections.
+7. Prunes old snapshots, keeping `current`, `previous` and `--keep` more.
+
+A failed health check exits 1, points at the log, and prints the command that
+undoes the deploy:
+
+```bash
+scripts/deploy-host.sh --role runtime --root herdeck-deploy --rollback --host macbench
+```
+
+`--rollback` re-installs `previous` into the venv, swaps the symlinks and runs
+the same restart and health check. The first deploy to a host stops with exit
+code 3 after installing, printing the one `herdeck-service install` command
+still missing; re-run the deploy after it. `--help` lists every flag.
+
+Snapshots are immutable directories, so none of the traps of syncing into a
+live tree apply: removed modules really disappear, a dropped connection leaves
+the running release untouched, and the venv lives outside the snapshot.
+
+**Still not covered by any source sync: the desktop app.** Its frontend is
+compiled into the bundle; see *Rebuilding the desktop app*. The app's own
+updater refreshes an app-bundled runtime (`--from-app`) with it.
+
+### Manual fallback
+
+Without the script — for a host with an older, hand-laid-out checkout — sync
+into a fresh directory and swap it in, rather than extracting over the live
+tree (`tar -x` never deletes, so a removed module would stay importable):
+
+```bash
+git archive --format=tar main | ssh HOST 'rm -rf ~/herdeck.new && mkdir ~/herdeck.new && tar -x -C ~/herdeck.new'
+ssh HOST 'test -d ~/herdeck.new/src/herdeck && rm -rf ~/herdeck.old \
+  && mv ~/herdeck/src/herdeck ~/herdeck.old && mv ~/herdeck.new/src/herdeck ~/herdeck/src/herdeck'
+ssh HOST '~/herdeck/.venv/bin/pip install -e "$HOME/herdeck[deck]"'
+ssh HOST 'launchctl kickstart -k gui/$(id -u)/dev.herdeck.runtime'
+```
+
+Roll back with `test -d ~/herdeck.old && rm -rf ~/herdeck/src/herdeck && mv
+~/herdeck.old ~/herdeck/src/herdeck`, then kickstart again. The `test -d` is
+load-bearing: without it a rollback with no backup deletes the live tree. Never
+delete the whole checkout — an editable venv inside it is what the unit runs.
+**`git archive` does not carry `node_modules`**: run `npm ci` in `desktop/`
+before building the app whenever frontend dependencies changed.
 
 ## Restarting services
 
-Under launchd:
-
 ```bash
-launchctl kickstart -k gui/$(id -u)/LABEL
+launchctl kickstart -k gui/$(id -u)/dev.herdeck.runtime   # runtime
+launchctl kickstart -k user/$(id -u)/dev.herdeck.bridge   # bridge LaunchAgent
+sudo launchctl kickstart -k system/dev.herdeck.bridge     # bridge --system
+systemctl --user restart herdeck-<kind>.service           # Linux
 ```
 
 Some long-running services drift out of launchd's supervision — a plist gets
@@ -109,14 +184,12 @@ nothing restarts it if you kill it. Check before restarting:
 launchctl list | awk -v pid=PID '$1 == pid'   # blank means nothing supervises it
 ```
 
-If it is unsupervised, restart it by hand with the same environment rather than
-re-enabling the plist — it was disabled deliberately.
+If it is unsupervised, move it under `herdeck-service` (see the migrations
+above) rather than restarting it by hand.
 
 **Do not recover a token by parsing `ps eww`.** It truncates, and a silently
 truncated token produces a service that starts, listens, and never connects.
-
-Restart with `HERDECK_TOKEN_FILE` pointing at the token file (mode `0600`), the
-way the generated launchd units do — they carry the path and never the value,
+The generated units carry `HERDECK_TOKEN_FILE` — the path, never the value —
 which is what keeps the token out of `ps eww` in the first place. The legacy
 `HERDECK_TOKEN` env var is still accepted, but passing the value that way is the
 reason it shows up in process listings at all.
@@ -216,7 +289,7 @@ gets declared healthy:
 |---|---|---|
 | source | `LiveSource._agents`, fed by bridge pushes | `/state`'s `summary`, `/health`'s `connected` |
 | render | tiles and panel rasterised into the HTTP buffer | `/state`'s `version`, `/panel`, `/tile/N` |
-| delivery | the frame handed to each sink and written to the device | the log, and your eyes |
+| delivery | the frame handed to each sink and written to the device | `/health`'s `d200` (`last_frame_at`, `last_error`, `lock_owner`), the log, and your eyes |
 
 **Source.** `/health` reports the runtime's own view of its bridge links, and
 `summary` is counted from the agent records at request time — neither touches
@@ -226,6 +299,13 @@ the render pipeline:
 curl "$URL/health?token=$TOKEN"   # {"ok": true, "connected": true, ...}
 curl "$URL/state?token=$TOKEN"    # slots, panel, tile versions, agent summary
 ```
+
+`/health` also carries `version` (proof the new code is what is running),
+`uptime_s` (proof it restarted), and per server under `servers` the
+`last_error`, `attempt` count and the `bridge_version` the bridge announced.
+`herdeck-doctor` on the render host reads the same data and additionally asks
+each bridge for its own health (`herdr_reachable`, attached `clients`) — the
+`clients` count is the bridge-side view described next, without `lsof`.
 
 From the bridge host, `lsof` is the other end of the same layer:
 
@@ -328,12 +408,10 @@ lands in the HTTP buffer, before it is handed to the sinks, and a sink that
 raises is isolated and only logged. A dark device with a rising version is a
 delivery problem — this repo has hit exactly that, with `/panel` and `/tile/N`
 correct while the device showed black. Look for `render sink ... failed to
-deliver a frame` in the runtime's log — the `StandardErrorPath` of the launchd
-job you restarted above. Check that the key is actually there: the shipped
-`deploy/com.herdeck.app.plist` sets neither `StandardErrorPath` nor
-`StandardOutPath`, so a job copied from it discards the one piece of evidence
-this layer has. The generated web and bridge jobs use
-`~/Library/Logs/herdeck-<kind>.log`; follow that convention and add it.
+deliver a frame` in the runtime's log: `~/Library/Logs/herdeck-runtime.log` for
+a `herdeck-service` unit, `journalctl --user -u herdeck-runtime` on Linux. A
+hand-made plist without `StandardErrorPath` discards the one piece of evidence
+this layer has — one more reason to migrate it (see above).
 
 ### Checking what the built UI says
 

@@ -35,6 +35,7 @@
   import { defineMessages, locale } from "./lib/i18n.svelte";
   import { visibilityGatedLoop } from "./lib/pollGate";
   import UpdateBanner from "./lib/UpdateBanner.svelte";
+  import HealthNotice from "./lib/HealthNotice.svelte";
   import {
     asUpdateCheckState,
     reasonOf,
@@ -110,6 +111,8 @@
   const setup = $derived(
     discovery ? setupTransport((cmd, args) => invoke(cmd, args)) : null,
   );
+  // Runtime /health (the shell adds its own app_version) for HealthNotice.
+  const fetchHealth = $derived(discovery ? () => invoke("check_health") : null);
 
   const view = $derived(shouldOnboard(status, reonboard));
   const showDesktopSetup = $derived(desktopSetupVisible(surface, view, desktopSetupHidden));
@@ -531,6 +534,7 @@
         onDismissError={() => (updateError = "")}
         onLater={laterUpdate}
       />
+      <HealthNotice {fetchHealth} />
     </div>
     <div class="desktop-control-room" inert={showDesktopSetup} aria-hidden={showDesktopSetup}>
       <ConfigApp interactive={!showDesktopSetup} />
@@ -601,6 +605,7 @@
       onDismissError={() => (updateError = "")}
       onLater={laterUpdate}
     />
+    <HealthNotice {fetchHealth} />
     {#if view === "deck"}
       <DeckView {transport} compact />
     {:else}

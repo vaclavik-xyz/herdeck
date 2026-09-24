@@ -181,6 +181,17 @@ async def test_readonly_client_gets_snapshots_but_no_mutations():
     assert herdr.refreshed_titles == []
 
 
+async def test_readonly_client_gets_a_health_reply():
+    herdr = StubHerdr(panes=[raw_pane()])
+    async with _bridge(herdr) as url:
+        headers = {"Authorization": "Bearer view-token"}
+        async with websockets.connect(url, additional_headers=headers) as ws:
+            await ws.recv()  # greeting snapshot
+            reply = await _roundtrip(ws, {"type": "health", "req": "h"})
+    assert reply["type"] == "result" and reply["req"] == "h"
+    assert reply["data"]["herdr_reachable"] is True
+
+
 async def test_full_token_still_mutates_and_bad_token_is_refused():
     herdr = StubHerdr(panes=[raw_pane()])
     async with _bridge(herdr) as url:
