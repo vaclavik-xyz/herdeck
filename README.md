@@ -405,6 +405,10 @@ brightness = 80
 debounce = 0.25
 keep_alive_interval = 5.0
 tick_interval = 0.4
+# d200_standard_writer = false     # D200 firmware compatibility writer (docs/agent-setup.md)
+# uhubctl = ""                     # path to uhubctl for the USB power-cycle ("" = auto)
+# usb_hub = "20-1"                 # pin the D200's hub location + port for the power-cycle
+# usb_port = 2                     # (otherwise the last place the D200 was seen is used)
 ```
 
 A tile press asks herdr to focus that agent's pane, which switches the pane
@@ -460,7 +464,15 @@ herdeck-service install bridge --system --bind 100.x.y.z --server-id workbox
 herdeck-service install web --bind 100.x.y.z --config ~/.config/herdeck/config.toml
 herdeck-service install runtime --config ~/.config/herdeck/config.toml
 herdeck-service status bridge --system
+herdeck-service restart runtime
 ```
+
+`install bridge --managed [--version X]` installs the herdeck release into its
+own venv (`~/.local/share/herdeck/bridge-venv`) and runs the bridge from there;
+`--env KEY=VALUE` (repeatable, non-secret names only) adds launch environment;
+`status <kind> --json` prints a machine-readable status. The desktop app's
+bundled runtime binary runs the same CLI as `herdeck-deckapp service ...`. See
+[docs/updating-a-deployment.md](docs/updating-a-deployment.md).
 
 The `runtime` kind runs the headless deck runtime (`herdeck.runtime`: D200 +
 the desktop window's API) as a login-session LaunchAgent, logging to
