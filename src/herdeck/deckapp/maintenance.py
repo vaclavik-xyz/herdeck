@@ -416,6 +416,7 @@ class Maintenance:
         spawned_by_app = os.environ.get("HERDECK_RUNTIME_MANAGED") == "1"
         servers = {}
         server_health = getattr(app._source, "server_health", None)
+        hooks_summary = getattr(app._source, "hooks_summary", None)
         if callable(server_health):
             for sid, facts in server_health().items():
                 # self_update: the bridge understands {"type": "update"}.
@@ -427,6 +428,10 @@ class Maintenance:
                     **facts,
                     "self_update": facts.get("self_update") is True,
                     "managed": managed if isinstance(managed, bool) else None,
+                    # Subagent hooks on that bridge's machine (hooks_relay.py):
+                    # {claude: {installed, ...}, codex: {...}}; None = unknown
+                    # (not asked yet, an older bridge, a read-only token, T3).
+                    "hooks": hooks_summary(sid) if callable(hooks_summary) else None,
                 }
         return {
             "version": __version__,
