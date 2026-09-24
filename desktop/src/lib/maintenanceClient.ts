@@ -46,7 +46,27 @@ export interface ServerStatus {
   protocolSupported: boolean | null;
   lastError: string | null;
   everConnected: boolean | null;
+  /** Subagent hooks on that bridge's machine (null = unknown: an older bridge,
+   *  a read-only token, T3, or not asked yet). */
+  hooks: HooksSummary | null;
 }
+
+export type HookAgent = "claude" | "codex";
+export const HOOK_AGENTS: readonly HookAgent[] = ["claude", "codex"];
+
+export interface HookAgentStatus {
+  installed: boolean;
+  /** The hook file on the bridge's machine (~/.claude/settings.json, ~/.codex/hooks.json). */
+  file: string | null;
+  /** Why the file could not be used (not valid JSON, …); it was not changed. */
+  error: string | null;
+  /** Codex only: new hooks must be trusted once with /hooks in a session. */
+  needsTrust: boolean;
+  /** Codex only: `[features] hooks = true` in config.toml (null = unreadable). */
+  featuresHooksEnabled: boolean | null;
+}
+
+export type HooksSummary = Partial<Record<HookAgent, HookAgentStatus>>;
 
 export interface AppFacts {
   version: string;
@@ -138,6 +158,7 @@ export function parseMaintenance(raw: unknown): MaintenanceStatus | null {
         protocolSupported: bool(s.protocol_supported),
         lastError: str(s.last_error),
         everConnected: bool(s.ever_connected),
+        hooks: parseHooksSummary(s.hooks),
       };
     }),
     app: app
@@ -150,6 +171,47 @@ export function parseMaintenance(raw: unknown): MaintenanceStatus | null {
         }
       : null,
   };
+}
+
+/** The per-agent hooks view (GET /maintenance `hooks`, or the `agents` of a
+ *  hooks answer); null when it is not an object. */
+export function parseHooksSummary(raw: unknown): HooksSummary | null {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const v = raw as Rec;
+  const out: HooksSummary = {};
+  for (const agent of HOOK_AGENTS) {
+    if (!v[agent] || typeof v[agent] !== "object") continue;
+    const a = rec(v[agent]);
+    out[agent] = {
+      installed: a.installed === true,
+      file: str(a.file),
+      error: str(a.error),
+      needsTrust: a.needs_trust === true,
+      featuresHooksEnabled: bool(a.features_hooks_enabled),
+    };
+  }
+  return out;
+}
+
+/** What the "Subagent tracking" row says about one agent. */
+export type HookState =
+  | "unknown" // the bridge did not report it
+  | "error" // the hook file cannot be used
+  | "not_installed"
+  | "enable_features" // Codex: hooks installed, but [features] hooks is off
+  | "needs_trust" // Codex: installed and enabled; trust them once with /hooks
+  | "installed";
+
+export function hookState(agent: HookAgent, hooks: HooksSummary | null): HookState {
+  const a = hooks?.[agent];
+  if (!a) return "unknown";
+  if (a.error) return "error";
+  if (!a.installed) return "not_installed";
+  if (agent === "codex") {
+    if (a.featuresHooksEnabled !== true) return "enable_features";
+    if (a.needsTrust) return "needs_trust";
+  }
+  return "installed";
 }
 
 /** Where the runtime this window talks to comes from. */
@@ -389,6 +451,40 @@ export async function runBridgeUpdate(
     onUpdate(view);
   }
   return view;
+}
+
+// --- subagent hooks ---------------------------------------------------------------
+
+export type HooksAction = "install" | "uninstall";
+
+export interface HooksOutcome {
+  ok: boolean;
+  /** ok · failed · readonly · unsupported · disconnected · timeout (runtime),
+   *  http · unreachable (transport). */
+  code: string;
+  message: string;
+  /** The per-agent state after the action (null when the bridge did not answer). */
+  agents: HooksSummary | null;
+}
+
+/** Install or remove the subagent hooks of `agents` on `serverId`'s machine
+ *  (POST /maintenance/servers/{id}/hooks, relayed to that bridge). */
+export async function runHooksAction(
+  invoke: InvokeFn,
+  serverId: string,
+  action: HooksAction,
+  agents: HookAgent[],
+): Promise<HooksOutcome> {
+  try {
+    const r = await call(invoke, "POST", `/maintenance/servers/${serverSegment(serverId)}/hooks`, { action, agents });
+    const b = rec(r.body);
+    if (r.status !== 200 || typeof b.code !== "string") {
+      return { ok: false, code: "http", message: `HTTP ${r.status}`, agents: null };
+    }
+    return { ok: b.ok === true, code: b.code, message: str(b.message) ?? "", agents: parseHooksSummary(b.agents) };
+  } catch (e) {
+    return { ok: false, code: "unreachable", message: String(e), agents: null };
+  }
 }
 
 // --- runtime service + logs -------------------------------------------------------

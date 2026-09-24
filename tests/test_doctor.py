@@ -593,3 +593,55 @@ def test_token_sources_reads_each_server(tmp_path, monkeypatch):
     assert facts[0] == ("a", "file", None)
     assert facts[1][0] == "b" and facts[1][1] is None and "DOC_TOK" in facts[1][2]
     assert "very-secret-value" not in repr(facts)
+
+
+def test_check_subagent_hooks_reports_each_agent():
+    from herdeck.doctor import check_subagent_hooks
+
+    statuses = {
+        "claude": {"installed": True, "events": ["SubagentStart"], "error": None},
+        "codex": {"installed": False, "events": [], "error": None},
+    }
+    check = check_subagent_hooks(statuses.__getitem__)
+    assert check.ok is True
+    assert "Claude Code: installed" in check.detail
+    assert "Codex: not installed" in check.detail
+
+
+def test_check_subagent_hooks_flags_codex_without_the_features_flag():
+    from herdeck.doctor import check_subagent_hooks
+
+    statuses = {
+        "claude": {"installed": False, "events": [], "error": None},
+        "codex": {
+            "installed": True,
+            "events": ["SubagentStart"],
+            "error": None,
+            "features_hooks_enabled": False,
+        },
+    }
+    check = check_subagent_hooks(statuses.__getitem__)
+    assert check.ok is False and "[features] hooks" in check.detail
+
+
+def test_check_subagent_hooks_flags_unreadable_and_partial_files():
+    from herdeck.doctor import check_subagent_hooks
+
+    statuses = {
+        "claude": {"installed": False, "events": [], "error": "settings.json is not valid JSON"},
+        "codex": {"installed": False, "events": ["SessionStart"], "error": None},
+    }
+    check = check_subagent_hooks(statuses.__getitem__)
+    assert check.ok is False
+    assert "not valid JSON" in check.detail and "partly installed" in check.detail
+
+
+def test_collect_checks_includes_subagent_hooks(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERDECK_CONFIG", str(tmp_path / "missing.toml"))
+    monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "missing.sock"))
+    import herdeck.doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_probe_server", lambda url, token: None)
+    checks = {check.name: check for check in collect_checks()}
+    assert checks["subagent hooks"].ok is True
+    assert "not installed" in checks["subagent hooks"].detail

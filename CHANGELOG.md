@@ -25,6 +25,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   count from bridge time. The last seen event per server is kept in
   `~/.cache/herdeck/bridge-events.json`, so a restarted or woken runtime only
   alerts what it missed. Older bridges keep local detection.
+- `herdeck-service hooks install|uninstall|status [--agents claude,codex]
+  [--hook-path PATH] [--json]` installs the subagent hooks into
+  `~/.claude/settings.json` and `~/.codex/hooks.json`. It adds only its own
+  entries and leaves herdr, herdwatch, moshi and every other hook or setting
+  alone. It backs up each file before a change, writes atomically, changes
+  nothing on a second run and refuses a file that is not valid JSON. It
+  reports Codex's `[features] hooks` and the `/hooks` trust step but never
+  enables the feature. The bridge exposes it as the `hooks` message
+  (capability `hooks`, full token only), the runtime as `GET`/`POST
+  /maintenance/servers/<id>/hooks` plus a `hooks` summary per server in
+  `GET /maintenance`, and the desktop Maintenance section as an on/off switch
+  per agent under each bridge, with a confirmation first (en + cs).
+  `herdeck-doctor` reports the hook state per agent.
 - The bridge can poll provider usage itself: `herdeck-service install bridge
   --usage` (or `HERDECK_BRIDGE_USAGE=1`, settings from the `[usage]` table of
   `HERDECK_USAGE_CONFIG`) runs the usage poller on the agents' Mac and pushes
@@ -44,8 +57,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Agent`, `PreToolUse` heartbeat) or Codex (`SubagentStart`/`SubagentStop`)
   hook, keeps a small per-pane spool in `~/.cache/herdeck/subagents/` and
   reports the Herdr metadata token `subagents=<running>/<total>`. The runtime
-  reads that token into the agent state. You add the hooks by hand for now
-  (README "Subagent tracking"); a later release will install them.
+  reads that token into the agent state. Add the hooks with
+  `herdeck-service hooks install`, from Maintenance, or by hand (README
+  "Subagent tracking").
 - Status history and statistics. The bridge records every status stretch of
   every agent pane in a local SQLite store
   (`~/.local/state/herdeck/history.sqlite`, 0600, 30 days, at most 200,000

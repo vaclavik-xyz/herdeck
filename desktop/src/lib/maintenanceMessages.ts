@@ -2,7 +2,11 @@
 // the pure outcome → text mapping both share (every runtime outcome code of
 // deckapp/maintenance.py and bridge_update.py has its own sentence).
 import { defineMessages, fmt } from "./i18n.svelte";
-import { managedBridgeCommand, type BridgeUpdateView, type D200Status, type DeckOutcome, type RuntimeOrigin } from "./maintenanceClient";
+import {
+  hookState, managedBridgeCommand,
+  type BridgeUpdateView, type D200Status, type DeckOutcome, type HookAgent, type HooksOutcome, type HooksSummary,
+  type RuntimeOrigin,
+} from "./maintenanceClient";
 
 export const MAINTENANCE_MESSAGES = defineMessages({
   en: {
@@ -115,6 +119,31 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     upd_http: "The runtime refused the update: {message}",
     upd_unreachable: "The runtime does not answer: {message}",
     upd_other: "Unexpected answer from the bridge: {message}",
+    // subagent hooks
+    hooks_heading: "Subagent tracking",
+    hooks_hint: "Hooks in Claude Code and Codex on this bridge's machine report running subagents to the deck (⑂N badge).",
+    hooks_agent_claude: "Claude Code",
+    hooks_agent_codex: "Codex",
+    hooks_on: "On",
+    hooks_off: "Off",
+    hooks_turn_on_title: "Install herdeck's subagent hooks for {agent} on {id}",
+    hooks_turn_off_title: "Remove herdeck's subagent hooks for {agent} from {id}",
+    hooks_state_installed: "installed",
+    hooks_state_not_installed: "not installed",
+    hooks_state_enable_features: "installed — Codex: enable hooks in config ([features] hooks = true in {config})",
+    hooks_state_needs_trust: "installed — Codex: trust the hooks with /hooks in a session",
+    hooks_state_error: "the hook file cannot be used: {error}",
+    hooks_state_unknown: "not reported",
+    hooks_unavailable: "This bridge does not report subagent hooks (an older bridge, or a read-only token). Set them up by hand: README “Subagent tracking”.",
+    hooks_install_confirm: "Install the {agent} subagent hooks on {id}? herdeck adds its entries to {file} and keeps every other hook; a backup of the file is saved next to it first.",
+    hooks_uninstall_confirm: "Remove the {agent} subagent hooks from {id}? Only herdeck's entries leave {file}; a backup of the file is saved next to it first.",
+    hooks_done: "Done. Running agents pick it up after a restart.",
+    hooks_failed: "Failed: {message}",
+    hooks_readonly: "The bridge refused: this server's token is read-only.",
+    hooks_unsupported: "This bridge is too old to install subagent hooks.",
+    hooks_disconnected: "The server is not connected, so nothing was changed.",
+    hooks_timeout: "The bridge did not answer in time.",
+    hooks_other: "Unexpected answer: {message}",
   },
   cs: {
     versions: "Verze",
@@ -221,6 +250,30 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     upd_http: "Runtime aktualizaci odmítl: {message}",
     upd_unreachable: "Runtime neodpovídá: {message}",
     upd_other: "Neočekávaná odpověď bridge: {message}",
+    hooks_heading: "Sledování subagentů",
+    hooks_hint: "Hooky v Claude Code a Codexu na stroji tohoto bridge hlásí decku běžící subagenty (odznak ⑂N).",
+    hooks_agent_claude: "Claude Code",
+    hooks_agent_codex: "Codex",
+    hooks_on: "Zapnuto",
+    hooks_off: "Vypnuto",
+    hooks_turn_on_title: "Nainstalovat hooky herdecku pro subagenty {agent} na {id}",
+    hooks_turn_off_title: "Odebrat hooky herdecku pro subagenty {agent} z {id}",
+    hooks_state_installed: "nainstalováno",
+    hooks_state_not_installed: "nenainstalováno",
+    hooks_state_enable_features: "nainstalováno — Codex: zapni hooky v configu ([features] hooks = true v {config})",
+    hooks_state_needs_trust: "nainstalováno — Codex: potvrď důvěru hookům přes /hooks v sezení",
+    hooks_state_error: "soubor s hooky nejde použít: {error}",
+    hooks_state_unknown: "nehlášeno",
+    hooks_unavailable: "Tento bridge hooky pro subagenty nehlásí (starší bridge nebo token jen pro čtení). Nastav je ručně: README „Subagent tracking“.",
+    hooks_install_confirm: "Nainstalovat hooky pro subagenty {agent} na {id}? herdeck přidá své položky do {file} a ostatní hooky ponechá; předtím uloží zálohu souboru vedle něj.",
+    hooks_uninstall_confirm: "Odebrat hooky pro subagenty {agent} z {id}? Z {file} zmizí jen položky herdecku; předtím se vedle uloží záloha souboru.",
+    hooks_done: "Hotovo. Běžící agenti to převezmou po restartu.",
+    hooks_failed: "Selhalo: {message}",
+    hooks_readonly: "Bridge odmítl: token tohoto serveru je jen pro čtení.",
+    hooks_unsupported: "Tento bridge je příliš starý na instalaci hooků pro subagenty.",
+    hooks_disconnected: "Server není připojený, nic se nezměnilo.",
+    hooks_timeout: "Bridge neodpověděl včas.",
+    hooks_other: "Neočekávaná odpověď: {message}",
   },
 });
 
@@ -277,6 +330,37 @@ export function bridgeUpdateText(v: BridgeUpdateView, m: MaintenanceMessages, id
     case "http": return plain(fmt(m.upd_http, { message }));
     case "unreachable": return plain(fmt(m.upd_unreachable, { message }));
     default: return plain(fmt(m.upd_other, { message: message || v.code }));
+  }
+}
+
+/** One agent's hook state as the row's status text. */
+export function hookStateText(agent: HookAgent, hooks: HooksSummary | null, m: MaintenanceMessages): string {
+  const a = hooks?.[agent];
+  switch (hookState(agent, hooks)) {
+    case "installed": return m.hooks_state_installed;
+    case "not_installed": return m.hooks_state_not_installed;
+    case "enable_features": {
+      const file = a?.file ?? "~/.codex/hooks.json";
+      return fmt(m.hooks_state_enable_features, { config: file.replace(/[^/]*$/, "config.toml") });
+    }
+    case "needs_trust": return m.hooks_state_needs_trust;
+    case "error": return fmt(m.hooks_state_error, { error: a?.error ?? "" });
+    default: return m.hooks_state_unknown;
+  }
+}
+
+/** A hooks action's outcome as one sentence. */
+export function hooksOutcomeText(o: HooksOutcome, m: MaintenanceMessages): { ok: boolean; text: string } {
+  switch (o.code) {
+    case "ok": return { ok: true, text: m.hooks_done };
+    case "failed": return { ok: false, text: fmt(m.hooks_failed, { message: o.message }) };
+    case "readonly": return { ok: false, text: m.hooks_readonly };
+    case "unsupported": return { ok: false, text: m.hooks_unsupported };
+    case "disconnected": return { ok: false, text: m.hooks_disconnected };
+    case "timeout": return { ok: false, text: m.hooks_timeout };
+    case "http": return { ok: false, text: fmt(m.upd_http, { message: o.message }) };
+    case "unreachable": return { ok: false, text: fmt(m.upd_unreachable, { message: o.message }) };
+    default: return { ok: false, text: fmt(m.hooks_other, { message: o.message || o.code }) };
   }
 }
 

@@ -448,8 +448,12 @@ Telegram) agrees, and a runtime that was asleep catches up. Details live in
   broadcasts `answered`. An answer that names `episode_id` (and optionally the
   `prompt_revision` it answers) is refused with `{"skipped": true, "message":
   "stale"}` when that episode is over, is being answered right now, or was
-  already answered, unless the prompt has changed since. Answers without
-  `episode_id` (older runtimes) are never refused.
+  already answered, unless the prompt has changed since. Before refusing, the
+  bridge reads the prompt again, and after each answer it checks for the next
+  question within a few seconds, so the second question of a multi-step
+  prompt can be answered right away. Answers without `episode_id` (older
+  runtimes) are never refused. Prompt polling backs off to 30 s after five
+  unchanged reads and stops a minute after an answer.
 
 ### Status history and statistics
 
@@ -756,10 +760,59 @@ description, status (running, done, failed, or "no signal" for a stale one),
 running time or total time, with nested subagents indented. The cockpit's
 `GET /api/v1/agents` carries the same list in each record's `subagents`.
 
-A later release will install these hooks for you. For now, add them by hand. If
-`herdeck-subagent-hook` is not on the agents' `PATH`, use its absolute path
-(`command -v herdeck-subagent-hook`). If you already have hooks for an event,
-add the entry to that event's existing array.
+**Install the hooks.** On the agents' Mac run
+
+```bash
+herdeck-service hooks install            # both; or --agents claude / --agents codex
+herdeck-service hooks status [--json]    # what is installed, per agent
+herdeck-service hooks uninstall
+```
+
+or switch **Subagent tracking** on per agent in the desktop app (Maintenance,
+under each bridge; see below). The installer adds the entries shown below to
+each event's array and leaves every other hook (herdr, herdwatch, moshi, your
+own) and every other setting alone. Its own entries are the ones whose command
+contains `herdeck-subagent-hook`, and `uninstall` removes only those. Before a
+file changes, its old bytes are copied to `<file>.bak-herdeck-<timestamp>`, and
+the new file is written atomically with the old file mode (JSON with 2-space
+indent). Running `install` again changes nothing. A file that is not valid
+JSON, or whose `hooks` is not an object of arrays, is reported and left as it
+is. The command uses `--hook-path`, else `herdeck-subagent-hook` next to the
+Python that runs it (a venv's `bin/`), else the one on `PATH`. It honours
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME`, and `status` reports the directory it
+used (`config_dir`, `config_dir_source`: the variable name or `home`). The
+bridge usually runs under launchd or systemd without your shell's environment,
+so if you rely on either variable, set it for the bridge service too
+(`herdeck-service install bridge --env CODEX_HOME=...`); otherwise the app's
+switches edit `~/.claude` / `~/.codex`. A symlinked hook file (dotfiles, stow)
+stays a symlink: the link's target is edited, and the backup lands next to the
+target. Only entries whose program (the command's first word) is
+`herdeck-subagent-hook` count as herdeck's. It never switches Codex's
+`[features] hooks` on: `status` reports whether it is on
+(`features_hooks_enabled`), and after an install Codex asks you once to trust
+the new hooks (`/hooks` in a Codex session; `needs_trust` reminds you, since
+Codex keeps that trust record itself). Agents that are already running pick
+the hooks up after a restart. `herdeck-doctor` reports the state per agent.
+
+The bridge offers the same thing to runtimes (capability `hooks`, **full token
+only**; the read-only token is refused): `{"type": "hooks", "req", "action":
+"status"|"install"|"uninstall", "agents": ["claude", "codex"]}` runs on the
+bridge's machine off the event loop (at most 10 s) and answers `{"type":
+"result", "req", "data": {"action", "ok", "hook_path", "agents": {"claude":
+{...}, "codex": {...}}}}`, where each agent carries `installed`, `events`,
+`missing_events`, `file`, `command`, `error`, `changed`, `backup` and, for
+Codex, `needs_trust` and `features_hooks_enabled`. The runtime relays it as
+`GET /maintenance/servers/<id>/hooks` and `POST /maintenance/servers/<id>/hooks`
+`{"action", "agents"}` (token auth), answering `{"ok", "code", "message",
+"server_id", "agents"}` with `code` `ok`, `failed`, `readonly`, `unsupported`,
+`disconnected` or `timeout`. `GET /maintenance` carries a short summary per
+server under `hooks` (`null` when unknown). The runtime asks once per
+connection and refreshes it after every action.
+
+To add the hooks by hand instead: if `herdeck-subagent-hook` is not on the
+agents' `PATH`, use its absolute path (`command -v herdeck-subagent-hook`). If
+you already have hooks for an event, add the entry to that event's existing
+array.
 
 **Claude Code**: add to `~/.claude/settings.json`:
 
@@ -873,7 +926,13 @@ when uhubctl needs root the exact `sudo` command is shown to copy. Per bridge
 it offers **Update bridge**: the runtime asks that bridge to install the
 runtime's version into its managed install and restart, with progress shown
 live. A bridge that is not a managed install explains the one-time
-`herdeck-service install bridge --managed` instead. The app window lists each
+`herdeck-service install bridge --managed` instead. Under each connected bridge,
+**Subagent tracking** has an on/off switch for Claude Code and for Codex that
+installs or removes the subagent hooks on that bridge's machine, after a
+confirmation naming the file that changes and the backup it gets. The status
+next to it says whether the hooks are installed and, for Codex, whether hooks
+still have to be enabled in its config or trusted with `/hooks` (see
+[Subagent tracking](#subagent-tracking)). The app window lists each
 problem as a compact notice with the same fix as its one button (results show
 as toasts; × hides a notice until that problem changes), the deck window shows
 a status dot that opens Maintenance, the tray has **Restart deck**, and `[hotkeys].restart_deck` can bind it to a global shortcut (off by

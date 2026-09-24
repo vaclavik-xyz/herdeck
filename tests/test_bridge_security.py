@@ -159,11 +159,17 @@ MUTATING = [
     {"type": "start", "req": "6", "name": "x", "argv": ["claude"]},
     # bridge self-update: installs code and restarts the bridge (self_update.py)
     {"type": "update", "req": "8", "version": "9.9.9"},
+    # subagent hooks: edits the agents' hook files (hooks_install.py)
+    {"type": "hooks", "req": "9", "action": "install", "agents": ["claude"]},
+    {"type": "hooks", "req": "10", "action": "status"},
     {"type": "something_new", "req": "7"},
 ]
 
 
-async def test_readonly_client_gets_snapshots_but_no_mutations():
+async def test_readonly_client_gets_snapshots_but_no_mutations(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))  # a hooks message must not reach any file
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
     herdr = StubHerdr(panes=[raw_pane()])
     herdr.detection["w1:p1"] = "Allow?"
     async with _bridge(herdr) as url:
@@ -181,6 +187,7 @@ async def test_readonly_client_gets_snapshots_but_no_mutations():
                 assert f"read-only token: '{msg['type']}'" in reply["message"]
     assert herdr.sent == [] and herdr.focused == [] and herdr.started == []
     assert herdr.refreshed_titles == []
+    assert not (tmp_path / ".claude").exists()
 
 
 async def test_readonly_client_gets_a_health_reply():
@@ -208,6 +215,30 @@ async def test_full_token_still_mutates_and_bad_token_is_refused():
                 await asyncio.wait_for(ws.recv(), 3)
             assert info.value.rcvd.code == 4401
     assert herdr.sent == [("w1:p1", ["y"])]
+
+
+async def test_full_token_hooks_message_installs_and_reports(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setattr(
+        "herdeck.hooks_install.resolve_hook_path",
+        lambda explicit=None: explicit or "/opt/venv/bin/herdeck-subagent-hook",
+    )
+    herdr = StubHerdr(panes=[raw_pane()])
+    async with _bridge(herdr) as url:
+        full = {"Authorization": "Bearer full-token"}
+        async with websockets.connect(url, additional_headers=full) as ws:
+            greeting = json.loads(await ws.recv())
+            assert "hooks" in greeting["capabilities"]
+            msg = {"type": "hooks", "req": "h1", "action": "install", "agents": ["claude"]}
+            reply = await _roundtrip(ws, msg)
+            assert reply["type"] == "result" and reply["req"] == "h1"
+            assert reply["data"]["agents"]["claude"]["installed"] is True
+            bad = await _roundtrip(ws, {"type": "hooks", "req": "h2", "action": "wipe"})
+            assert bad["type"] == "error" and bad["req"] == "h2"
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert "SubagentStart" in settings["hooks"]
 
 
 def test_readonly_allowlist_is_exactly_the_documented_set():

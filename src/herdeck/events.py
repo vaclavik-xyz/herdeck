@@ -73,6 +73,15 @@ PROMPT_WAIT_S = 2.0
 # Open blocked episodes re-read their prompt this often (a dialog may change
 # in place: the next question of a multi-step prompt, with no status change).
 PROMPT_POLL_S = 5.0
+# ...backing off to this after PROMPT_BACKOFF_AFTER reads that found nothing
+# new, and not at all once an episode was answered this long ago (its agent
+# is at work; a next question in the same episode shows up well before).
+PROMPT_BACKOFF_S = 30.0
+PROMPT_BACKOFF_AFTER = 5
+ANSWERED_POLL_FOR_S = 60.0
+# After an answer went through, the next question of a multi-step prompt is
+# looked for at once, at these delays (seconds), instead of on the next poll.
+ANSWER_REREAD_DELAYS = (0.3, 1.0, 2.5)
 # The prompt rides in event frames: the question sits at the bottom of the
 # capture, so an overlong one keeps its tail.
 PROMPT_MAX_CHARS = 8000
@@ -165,7 +174,9 @@ class Episode:
     # None = not answered; "" = answered while the prompt was unknown.
     answered_revision: str | None = None
     answering: bool = False
+    answered_at: float = 0.0
     read_at: float = 0.0
+    unchanged_reads: int = 0
     reading: asyncio.Task | None = None
     # Latest frame per kind of this episode (a fresh subscriber's baseline).
     frames: dict[str, dict] = field(default_factory=dict)
@@ -202,7 +213,9 @@ class EventHub:
         prompt_wait_s: float = PROMPT_WAIT_S,
         prompt_poll_s: float = PROMPT_POLL_S,
         epoch: str | None = None,
+        answer_reread_delays: tuple[float, ...] = ANSWER_REREAD_DELAYS,
     ):
+        self._answer_reread_delays = answer_reread_delays
         self._herdr = herdr
         self._server_id = server_id
         self._clock = clock
@@ -293,8 +306,10 @@ class EventHub:
         prompt, truncated = sanitize_prompt(text)
         revision = prompt_revision(prompt)
         if revision == ep.revision:
+            ep.unchanged_reads += 1
             return False
         ep.prompt, ep.truncated, ep.revision = prompt, truncated, revision
+        ep.unchanged_reads = 0
         return True
 
     async def _first_read(self, ep: Episode) -> None:
@@ -328,15 +343,43 @@ class EventHub:
         now = self._monotonic()
         started = 0
         for ep in list(self._episodes.values()):
-            if (
-                ep.kind == "blocked"
-                and ep.announced
-                and ep.reading is None
-                and now - ep.read_at >= self._prompt_poll_s
-            ):
+            if ep.kind != "blocked" or not ep.announced or ep.reading is not None:
+                continue
+            if ep.answered and now - ep.answered_at >= ANSWERED_POLL_FOR_S:
+                continue
+            interval = (
+                max(self._prompt_poll_s, PROMPT_BACKOFF_S)
+                if ep.unchanged_reads >= PROMPT_BACKOFF_AFTER
+                else self._prompt_poll_s
+            )
+            if now - ep.read_at >= interval:
                 ep.reading = self._spawn(self._reread(ep))
                 started += 1
         return started
+
+    async def _fresh_read(self, ep: Episode) -> None:
+        """Read ``ep``'s prompt now (an answer depends on it); a changed
+        prompt of an announced episode is re-announced. Never raises."""
+        try:
+            changed = await asyncio.wait_for(self._read(ep), timeout=self._prompt_wait_s)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+        if changed and ep.announced and self._episodes.get(ep.pane_id) is ep:
+            self._announce(ep)
+
+    async def _after_answer(self, ep: Episode) -> None:
+        """Look for the next question of a multi-step prompt right after an
+        answer, so it is announced (and answerable) within a second or two."""
+        answered = ep.answered_revision
+        for delay in self._answer_reread_delays:
+            await asyncio.sleep(delay)
+            if self._episodes.get(ep.pane_id) is not ep or ep.answered_revision != answered:
+                return
+            await self._fresh_read(ep)
+            if ep.revision != answered:
+                return
 
     async def run(self) -> None:
         """The prompt poll loop (the fan-out pump starts on the first event)."""
@@ -348,33 +391,48 @@ class EventHub:
                 log.warning("prompt poll failed", exc_info=True)
 
     # --- answers ------------------------------------------------------------
-    def begin_answer(self, msg: dict, label: str) -> AnswerTicket | str | None:
+    def _answer_target(self, msg: dict) -> Episode | None:
+        pane_id = msg.get("pane_id")
+        ep = self._episodes.get(pane_id) if isinstance(pane_id, str) else None
+        if ep is None or ep.kind != "blocked":
+            return None
+        terminal_id = msg.get("terminal_id")
+        if isinstance(terminal_id, str) and terminal_id and ep.terminal_id not in ("", terminal_id):
+            return None
+        return ep
+
+    async def begin_answer(self, msg: dict, label: str) -> AnswerTicket | str | None:
         """Gate an answer message: a ticket to settle after the send, "stale"
         to refuse it, or None when it answers no episode (a forced act, a
-        pane with no open blocked episode and no claimed one)."""
+        pane with no open blocked episode and no claimed one).
+
+        An answered episode takes another answer once its prompt changed (the
+        next question of a multi-step prompt). The prompt is re-read before
+        such a refusal, so a client that has not heard of the new question
+        yet is not refused for it; and before any answer while the prompt is
+        still unknown, so the answer is pinned to a revision."""
         kind = msg.get("type")
         if kind not in ANSWER_MESSAGES or (kind == "act" and msg.get("guard", True) is False):
             return None
-        pane_id = msg.get("pane_id")
-        ep = self._episodes.get(pane_id) if isinstance(pane_id, str) else None
-        if ep is not None and ep.kind != "blocked":
-            ep = None
-        terminal_id = msg.get("terminal_id")
-        if ep is not None and isinstance(terminal_id, str) and terminal_id:
-            if ep.terminal_id and ep.terminal_id != terminal_id:
-                ep = None
         claimed = msg.get("episode_id")
-        if isinstance(claimed, str) and claimed:
+        claimed = claimed if isinstance(claimed, str) and claimed else None
+        ep = self._answer_target(msg)
+        if ep is not None and not ep.answering and (claimed is None or ep.id == claimed):
+            if ep.revision is None or (ep.answered and ep.revision == ep.answered_revision):
+                await self._fresh_read(ep)
+                ep = self._answer_target(msg)  # the pane may have moved on meanwhile
+        # From here on no await: the check and the reservation are atomic.
+        if claimed is not None:
             if ep is None or ep.id != claimed or ep.answering:
                 return STALE
             if ep.answered:
                 revision = msg.get("prompt_revision")
-                if not (
+                if ep.revision == ep.answered_revision or (
                     isinstance(revision, str)
                     and revision
-                    and revision == ep.revision
-                    and revision != ep.answered_revision
+                    and revision not in (ep.revision, ep.answered_revision)
                 ):
+                    # unchanged since the answer, or answering an older prompt
                     return STALE
         elif ep is None or ep.answering:
             return None  # an older client: never refused, only reported
@@ -388,10 +446,13 @@ class EventHub:
         if not sent:
             return
         ep.answered_revision = ep.revision or ""
+        ep.answered_at = self._monotonic()
         extra = {"by": ticket.by}
         if ticket.via:
             extra["via"] = ticket.via
         self._emit(ep, "answered", at_ms=self._now_ms(), **extra)
+        if self._episodes.get(ep.pane_id) is ep:
+            self._spawn(self._after_answer(ep))
 
     # --- the ring and the fan-out -------------------------------------------
     def _emit(self, ep: Episode, kind: str, *, at_ms: int, **extra) -> dict:

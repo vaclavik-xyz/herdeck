@@ -34,3 +34,11 @@ def _isolated_history_store(tmp_path, monkeypatch):
         "herdeck.history.default_path",
         lambda name="history.sqlite": str(tmp_path / "state" / name),
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_agent_hook_files(tmp_path, monkeypatch):
+    """The subagent-hook installer (hooks_install.py) and herdeck-doctor never
+    read or write the real ~/.claude/settings.json or ~/.codex/*."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))

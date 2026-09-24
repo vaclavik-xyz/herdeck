@@ -311,6 +311,47 @@ def _check_configured_notifications(config_path: str | None) -> Check:
         return Check("notifications", False, f"invalid config ({exc})")
 
 
+def check_subagent_hooks(status: Callable[[str], dict]) -> Check:
+    """Whether ``herdeck-subagent-hook`` is wired into Claude Code and Codex on
+    this machine (hooks_install.py). Not installed is fine (optional); a hook
+    file that cannot be read, a partial install, or Codex hooks without
+    ``[features] hooks`` are not."""
+    from .hooks_install import AGENTS
+
+    ok = True
+    parts = []
+    for agent in AGENTS:
+        name = "Claude Code" if agent == "claude" else "Codex"
+        info = status(agent)
+        if info.get("error"):
+            ok = False
+            parts.append(f"{name}: {info['error']}")
+        elif info.get("installed"):
+            note = f"{name}: installed"
+            if agent == "codex":
+                if info.get("features_hooks_enabled") is not True:
+                    ok = False
+                    note += " but [features] hooks is not enabled in Codex's config.toml"
+                else:
+                    note += " (trust it once with /hooks in a Codex session)"
+            parts.append(note)
+        elif info.get("events"):
+            ok = False
+            parts.append(
+                f"{name}: partly installed ({', '.join(info['events'])}); "
+                "run herdeck-service hooks install"
+            )
+        else:
+            parts.append(f"{name}: not installed (optional: herdeck-service hooks install)")
+    return Check("subagent hooks", ok, "; ".join(parts))
+
+
+def _subagent_hook_status(agent: str) -> dict:
+    from .hooks_install import agent_status
+
+    return agent_status(agent, Path.home())
+
+
 def format_report(checks: Iterable[Check]) -> str:
     lines = ["herdeck doctor"]
     for check in checks:
@@ -574,6 +615,7 @@ def collect_checks(web_url: str | None = None) -> list[Check]:
             check_deck(_module_available),
             check_runtime(read_runtime_file, _runtime_health),
             _check_configured_notifications(config_path),
+            check_subagent_hooks(_subagent_hook_status),
         ]
     )
     if web_url:

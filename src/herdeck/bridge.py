@@ -20,6 +20,7 @@ import websockets
 
 from . import __version__
 from . import history as _history
+from . import hooks_install as _hooks_install
 from . import status_since as _status_since
 from .decisions import decision_choices, decision_revision
 from .events import CAPABILITY as _EVENTS_CAPABILITY
@@ -86,6 +87,9 @@ _WIRE_CAPABILITIES = (
     _history.CAPABILITY,
     # A pane with subagents carries `subagents` (see subagent_spool.py).
     _SUBAGENTS_CAPABILITY,
+    # Answers {"type": "hooks"} (full token only): installs, removes or
+    # reports the subagent hooks on this machine (hooks_install.py).
+    _hooks_install.CAPABILITY,
 )
 
 _TITLE_PLUGIN_ID = "zhangzujian.auto-session-title"
@@ -1795,7 +1799,8 @@ class SocketHerdr:
 # What a client authenticated with HERDECK_READONLY_TOKEN_FILE may send: fleet
 # snapshots (+ project icons), pane text reads, live terminal previews and the
 # health probe. Everything else — act, focus, refresh_title, send_text,
-# choose_if_blocked, start, update (bridge self-update), and any future type —
+# choose_if_blocked, start, update (bridge self-update), hooks (edits the
+# agents' hook files), and any future type —
 # is rejected (an allowlist, so a new mutating message is never open to
 # view-only clients by default).
 READONLY_MESSAGES = frozenset({"list", "read", "observe", "observe_stop", "health", "stats"})
@@ -2016,6 +2021,11 @@ async def _serve_connection(
                     reply = await history.stats_reply(msg)
                 await send(encode(reply))
                 continue
+            if kind == "hooks":
+                # Full token only (not in READONLY_MESSAGES, refused above):
+                # edits the agents' hook files; file IO off the event loop.
+                await send(encode(await _hooks_install.bridge_reply(msg)))
+                continue
             if kind == "update":
                 # Full token only (not in READONLY_MESSAGES, refused above).
                 # Runs in the background: pip can take minutes, and the
@@ -2040,17 +2050,22 @@ async def _serve_connection(
                 try:
                     panes = await _wired_snapshot(herdr, icons, status_since, subagents, events)
                 except Exception as exc:
+                    # A transient herdr error must not cost the event
+                    # subscription below: the broadcast stream still serves
+                    # snapshots, and the runtime would otherwise wait for an
+                    # event_sync that never comes.
                     await send(encode({"type": "error", "message": str(exc)}))
-                    continue
-                if not await send(
-                    encode(_snapshot_message(server_id, panes, extra_capabilities))
-                ):
-                    continue
-                sent = icon_subs.get(ws) if icon_subs is not None else None
-                if sent is not None and icons is not None:
-                    for frame in _project_icon_frames(server_id, panes, icons, sent):
-                        if not await send(frame):
-                            break
+                    panes = None
+                if panes is not None:
+                    if not await send(
+                        encode(_snapshot_message(server_id, panes, extra_capabilities))
+                    ):
+                        continue
+                    sent = icon_subs.get(ws) if icon_subs is not None else None
+                    if sent is not None and icons is not None:
+                        for frame in _project_icon_frames(server_id, panes, icons, sent):
+                            if not await send(frame):
+                                break
                 request = msg.get("events")
                 if events is not None and isinstance(request, dict):
                     # Opt-in (an older runtime would choke on the frames):
@@ -2059,7 +2074,7 @@ async def _serve_connection(
                     await events.subscribe(ws, send_lock, request)
                 continue
             ticket = (
-                events.begin_answer(msg, label)
+                await events.begin_answer(msg, label)
                 if events is not None and isinstance(msg, dict)
                 else None
             )
