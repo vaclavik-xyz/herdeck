@@ -18,7 +18,7 @@ from ..model import AgentKey
 from ..orchestrator import Orchestrator
 from ..pins import PinStore
 from ..protocol import WIRE_PROTOCOL
-from . import agent_card
+from . import agent_card, bridge_update
 from .sinks import RenderFrame
 from .source import StateSource
 
@@ -1300,6 +1300,14 @@ class DeckApp:
                         return
                     code, payload = agent_card.handle_get(app._source, path, parse_qs(url.query))
                     self._send_agent(code, payload)
+                elif bridge_update.route_server_id(path) is not None:
+                    # Bridge self-update status long-poll (bridge_update.py).
+                    if not self._require_query_token(url):
+                        return
+                    code, payload = bridge_update.handle_get(
+                        app._source, path, parse_qs(url.query)
+                    )
+                    self._send_agent(code, payload)
                 else:
                     self._send(404)
 
@@ -1468,6 +1476,16 @@ class DeckApp:
                     if body is _BAD_BODY:
                         return
                     code, payload = agent_card.handle_post(app._source, path, body)
+                    self._send_agent(code, payload)
+                elif bridge_update.route_server_id(path) is not None:
+                    # POST /maintenance/servers/{id}/update: ask that bridge to
+                    # update itself to this runtime's version (bridge_update.py).
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    code, payload = bridge_update.handle_post(app._source, path, body)
                     self._send_agent(code, payload)
                 elif path == "/setup/connect":
                     if not self._require_header_token():
