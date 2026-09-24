@@ -51,6 +51,9 @@ class TelegramConfig:
     interactive: bool = False
     allowed_user_ids: list[int] = field(default_factory=list)
     prompt_max_chars: int = 1200
+    # Minutes (0 = off, always send): send only while the deck host's user has
+    # been idle this long and the deck was not pressed in that window.
+    only_when_away: int = 0
 
 
 @dataclass
@@ -71,6 +74,12 @@ class Notifications:
     banner_actions: bool = False
     # Opt-in: blocked alerts append a short, sanitized excerpt of the prompt.
     banner_prompt: bool = False
+    # No alert for the pane herdr reports focused at the transition while the
+    # user is at the deck host (you are looking at it). Noise-only: default on.
+    skip_focused: bool = True
+    # Minutes (0 = off): an agent still blocked this long after its episode
+    # began alerts again, once per interval, at most REMIND_MAX times.
+    remind_after: int = 0
 
 
 DEFAULT_STATUS_COLORS: dict[str, str] = {
@@ -317,6 +326,9 @@ def _parse_telegram_config(tg_raw: dict) -> TelegramConfig | None:
         prompt_max_chars=_parse_telegram_int(
             "prompt_max_chars", tg_raw.get("prompt_max_chars", 1200)
         ),
+        only_when_away=notification_minutes(
+            tg_raw, "only_when_away", section="notifications.telegram"
+        ),
     )
 
 
@@ -353,6 +365,14 @@ def notification_flag(raw: dict, name: str, default: bool) -> bool:
     return value
 
 
+def notification_minutes(raw: dict, name: str, section: str = "notifications") -> int:
+    """A whole-minutes option, 0 = off (shared by both config loaders)."""
+    value = raw.get(name, 0)
+    if type(value) is not int or not 0 <= value <= 1440:
+        raise ConfigError(f"{section}.{name} must be whole minutes 0-1440 (0 = off)")
+    return value
+
+
 def normalize_notify_on(raw) -> list[str]:
     """`[notifications].on` with surrounding whitespace stripped from each event,
     so a hand-written " done" still fires (the app matches with `in`)."""
@@ -379,6 +399,8 @@ def parse_notifications(n: dict) -> Notifications:
         telegram=telegram,
         banner_actions=notification_flag(n, "banner_actions", False),
         banner_prompt=notification_flag(n, "banner_prompt", False),
+        skip_focused=notification_flag(n, "skip_focused", True),
+        remind_after=notification_minutes(n, "remind_after"),
     )
 
 

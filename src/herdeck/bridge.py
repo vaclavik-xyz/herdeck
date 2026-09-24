@@ -531,6 +531,9 @@ def _herdr_pane_to_wire(
         "display_agent": (p.get("display_agent") or "")[:160],
         "capabilities": ["refresh_title"] if can_refresh_title and title_refresh_supported else [],
         "project_icon": project_icon,
+        # herdr's own "this pane has focus" (session.snapshot agents). Read by
+        # the runtime to skip an alert for the pane the user is looking at.
+        "focused": p.get("focused") is True,
         "work": {
             "source": work.source,
             "item": work.item,

@@ -63,6 +63,12 @@ banner_actions = false
 # Opt-in: blocked alerts add a short, sanitized excerpt of the prompt (every
 # backend, so it also shows on a locked screen).
 banner_prompt = false
+# No alert for the pane herdr reports focused while you used this Mac in the
+# last 2 minutes (default on; it only removes noise).
+skip_focused = true
+# Minutes (0 = off): alert again for an agent still blocked this long, once
+# per interval, at most three times per block episode.
+remind_after = 0
 # Per-event macOS system sound (played with the alert). A missing key falls
 # back to the default: Glass for "blocked", Hero for "done".
 # [notifications.sounds]
@@ -153,3 +159,6 @@ chat_id = "123456789"
 interactive = false
 allowed_user_ids = []
 prompt_max_chars = 1200
+# Minutes (0 = off): only alert after this long without input on the deck
+# host (macOS idle time; Linux: deck presses only) and without a deck press.
+only_when_away = 0

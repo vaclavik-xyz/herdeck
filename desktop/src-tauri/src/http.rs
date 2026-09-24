@@ -598,7 +598,11 @@ pub fn fetch_notifications_status(
     let req = build_get_request_with_headers(
         host,
         &path,
-        &[("X-Herdeck-Shell", "1"), ("X-Herdeck-Shell-Gen", shell_gen)],
+        &[
+            ("X-Herdeck-Shell", "1"),
+            ("X-Herdeck-Shell-Gen", shell_gen),
+            ("X-Herdeck-Shell-Features", SHELL_FEATURES),
+        ],
     );
     send_request(host, port, req.as_bytes(), timeout).map(|(code, body)| (code, body_string(body)))
 }
@@ -754,6 +758,11 @@ pub fn send_press(
         timeout,
     )
 }
+
+/// Feed item kinds this shell understands beyond plain alerts, announced on
+/// every `/notifications` poll. The runtime only queues a `withdraw` item for
+/// a shell that lists it (an older shell would post it as an empty banner).
+pub const SHELL_FEATURES: &str = "withdraw";
 
 /// The runtime route behind the "next blocked agent" hotkey.
 pub const TRIAGE_PATH: &str = "/triage";

@@ -874,7 +874,22 @@ class DeckApp:
         """Hand a notifying source the shell-claim predicates (banner duty)."""
         setter = getattr(source, "set_notify_gate", None)
         if callable(setter):
-            setter(self.shell_claims_banners, claim_age=self.shell_claim_age)
+            setter(
+                self.shell_claims_banners,
+                claim_age=self.shell_claim_age,
+                features=self.shell_features,
+            )
+
+    def note_shell_features(self, raw: str | None) -> None:
+        """Remember what the polling shell understands (X-Herdeck-Shell-Features,
+        comma-separated, e.g. "withdraw"). A shell that sends none gets none."""
+        features = frozenset(part.strip() for part in (raw or "").split(",") if part.strip())
+        with self._shell_claim_lock:
+            self._shell_features = features
+
+    def shell_features(self) -> frozenset[str]:
+        with self._shell_claim_lock:
+            return getattr(self, "_shell_features", frozenset())
 
     def shell_claim_age(self) -> float | None:
         """Seconds since a shell last claimed banner duty; None if none ever did."""
@@ -1177,6 +1192,7 @@ class DeckApp:
                     shell_gen = self.headers.get("X-Herdeck-Shell-Gen")
                     if self.headers.get("X-Herdeck-Shell") == "1":
                         app.note_shell_claim(shell_gen)
+                        app.note_shell_features(self.headers.get("X-Herdeck-Shell-Features"))
                     params = parse_qs(url.query)
                     generation = params.get("generation", [None])[0] or None
                     try:

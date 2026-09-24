@@ -187,6 +187,8 @@ class NotificationFeed:
         sound: bool | str,
         icon: str | None = None,
         meta: dict | None = None,
+        *,
+        kind: str = "alert",
     ) -> dict:
         """Queue one banner. ``meta`` (see FEED_META_KEYS) tells the shell which
         agent the banner is about, so a click can open that agent's drill and a
@@ -198,7 +200,7 @@ class NotificationFeed:
                 "id": f"{self._generation}:{self._seq}",
                 "generation": self._generation,
                 "seq": self._seq,
-                "kind": "alert",
+                "kind": kind,
                 "title": title,
                 "body": body,
                 "sound": sound,
@@ -212,7 +214,10 @@ class NotificationFeed:
             self._items.append(item)
             dropped = self._trim_locked()
             self._changed.notify_all()
-        log.info("notification queued id=%s title=%r", item["id"], title)
+        if kind == "alert":
+            log.info("notification queued id=%s title=%r", item["id"], title)
+        else:
+            log.info("notification %s queued id=%s agent=%s", kind, item["id"], item.get("agent"))
         if dropped:
             log.warning(
                 "notification feed overflow: dropped %d undelivered item(s) "
@@ -260,6 +265,12 @@ class NotificationFeed:
                 "dropped": self.dropped,
                 "pending": max(0, self._seq - self._acked_seq),
             }
+
+    def withdraw(self, agent: dict) -> dict:
+        """Queue a "remove this agent's delivered banners" item (``kind`` =
+        "withdraw", no banner of its own). It rides the same acknowledged
+        sequence as alerts, so ordering and replay safety are unchanged."""
+        return self.push("", "", False, None, {"agent": agent}, kind="withdraw")
 
     def reset(self) -> None:
         """Drop everything and restart the sequence from zero.
@@ -362,11 +373,17 @@ class NotificationFeed:
             item = next((item for item in self._items if item["seq"] == seq), None)
             if item is None:
                 return False
-            payload = (item["title"], item["body"], item["sound"])
+            # osascript cannot remove a banner: a withdraw item is just acked.
+            payload = (
+                None
+                if item.get("kind", "alert") != "alert"
+                else (item["title"], item["body"], item["sound"])
+            )
             self._fallback_seq = seq
             self._changed.notify_all()
         try:
-            deliver(*payload)
+            if payload is not None:
+                deliver(*payload)
         except Exception:
             with self._changed:
                 self._fallback_seq = None
@@ -482,8 +499,12 @@ def deckapp_sink(
     telegram_factory=make_telegram_sink,
     macos_sink=_macos_sink,
     claim_age: Callable[[], float | None] | None = None,
+    away: Callable[[float], bool] | None = None,
 ) -> Callable[[str, str, bool | str], None]:
     """Deckapp runtime sink honoring ``[notifications.backends]``.
+
+    ``away(seconds)`` answers "has the user been away from the deck host that
+    long?" for ``[notifications.telegram].only_when_away``.
 
     The shell claim pipeline (feed + osascript fallback) serves the
     "macos" backend; telegram fires independently and always. When
@@ -515,7 +536,11 @@ def deckapp_sink(
         tg = n.telegram
         token = getenv(tg.token_env) if tg else None
         if tg and token and tg.chat_id:
-            sinks.append(telegram_factory(token, tg.chat_id, tg.message_thread_id))
+            tg_sink = telegram_factory(token, tg.chat_id, tg.message_thread_id)
+            away_min = getattr(tg, "only_when_away", 0)
+            if away_min > 0 and away is not None:
+                tg_sink = away_only_sink(tg_sink, lambda: away(away_min * 60.0))
+            sinks.append(tg_sink)
         else:
             log.warning(
                 "telegram notifications enabled but token/chat_id "
@@ -527,6 +552,20 @@ def deckapp_sink(
     if len(sinks) == 1:
         return sinks[0]
     return composite_sink(sinks)
+
+
+def away_only_sink(sink, is_away: Callable[[], bool]):
+    """Deliver through ``sink`` only while ``is_away()`` (evaluated on the
+    notify thread at send time — it may spawn ``ioreg``)."""
+
+    def gated(title: str, body: str, sound: bool | str, **kwargs) -> None:
+        if not is_away():
+            log.info("%s alert skipped (user at the deck host) title=%r", _sink_name(sink), title)
+            return
+        sink(title, body, sound, **kwargs)
+
+    gated._notify_name = _sink_name(sink)
+    return gated
 
 
 def composite_sink(

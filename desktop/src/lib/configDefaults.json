@@ -54,11 +54,14 @@
     "backends": ["macos"],
     "banner_actions": false,
     "banner_prompt": false,
+    "skip_focused": true,
+    "remind_after": 0,
     "telegram": {
       "message_thread_id": 0,
       "interactive": false,
       "allowed_user_ids": [],
-      "prompt_max_chars": 1200
+      "prompt_max_chars": 1200,
+      "only_when_away": 0
     }
   },
   "macros": [

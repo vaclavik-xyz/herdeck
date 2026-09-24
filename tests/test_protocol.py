@@ -37,6 +37,16 @@ def test_decode_snapshot_to_states():
     ]
 
 
+def test_decode_snapshot_reads_the_focus_flag_and_defaults_it_off():
+    raw = (
+        '{"type":"snapshot","server_id":"w","panes":['
+        '{"pane_id":"a","agent_type":"claude","status":"blocked","focused":true},'
+        '{"pane_id":"b","agent_type":"claude","status":"blocked"}]}'
+    )
+    msg = decode_inbound(raw)
+    assert [s.focused for s in msg.states] == [True, False]
+
+
 def test_decode_snapshot_preserves_repo_and_branch():
     raw = (
         '{"type":"snapshot","server_id":"workbox","panes":'

@@ -16,6 +16,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   banner opens the drill instead. Opt-in `[notifications].banner_prompt`
   appends a short, sanitized prompt excerpt to blocked alerts. Both are
   editable under Notifications.
+- Stale banners are withdrawn: when an alerted agent is answered anywhere,
+  starts working again or disappears, the desktop app removes its delivered
+  banners from Notification Center (a new `withdraw` feed item, only sent to a
+  shell that announces support).
+- No alert for the pane herdr reports as focused while you are using the deck
+  host (input within 2 minutes); `[notifications].skip_focused = false` turns
+  this off. The bridge now passes herdr's `focused` flag on the wire.
+- Opt-in `[notifications].remind_after` (minutes): an agent that stays blocked
+  alerts again once per interval, at most three times per episode.
+- Opt-in `[notifications.telegram].only_when_away` (minutes): Telegram alerts
+  only after that long without input on the deck host (macOS) and without a
+  deck press.
 - Desktop agent card: Option-click, long-press or ⌥digit a tile in the deck
   window to see that agent in full (header, status and since, the whole blocked
   prompt, the drill's parsed options, a free-text reply, Focus and Stop). New

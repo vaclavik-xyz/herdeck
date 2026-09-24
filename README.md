@@ -884,6 +884,8 @@ on = ["blocked", "done"]
 sound = true
 banner_actions = false             # opt-in: Approve/Deny or Reply on blocked macOS banners
 banner_prompt = false              # opt-in: add a short prompt excerpt to blocked alerts
+skip_focused = true                # no alert for the herdr-focused pane while you use this Mac
+remind_after = 0                   # minutes; >0 re-alerts a still-blocked agent (max 3x)
 
 # Optional: which macOS system sound plays per event. A missing key falls
 # back to the default (Glass for "blocked", Hero for "done").
@@ -904,6 +906,9 @@ message_thread_id = 456
 interactive = true
 allowed_user_ids = [123456789]
 prompt_max_chars = 1200
+
+# Optional: only send Telegram alerts after 15 idle minutes on the deck host.
+only_when_away = 15
 
 # Override per profile:
 [profiles.work.notifications]
@@ -938,6 +943,22 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   prompt. Prompts whose approve/deny needs an on-deck confirmation
   (`[safety].require_confirm_for`) never get buttons. Reply text is bounded and
   stripped of control characters.
+- **Stale banners are withdrawn.** When an alerted agent is no longer waiting
+  — a blocked agent answered anywhere, a done agent working again, a pane
+  closed — the runtime queues a `withdraw` item and the desktop app removes
+  that agent's delivered banners from Notification Center.
+- `skip_focused = true` (default): no alert for the pane herdr reports as
+  focused at the moment of the transition, as long as this Mac saw keyboard or
+  mouse input within the last 2 minutes (macOS `HIDIdleTime`; on Linux the idle
+  time is unknown and the focused pane is always skipped). `false` alerts for
+  every pane.
+- `remind_after = N` (minutes, 0 = off): an agent still blocked in the same
+  episode alerts again after N, 2N and 3N minutes, titled
+  `claude · still needs input (10 min)`.
+- `[notifications.telegram].only_when_away = N` (minutes, 0 = off): Telegram
+  alerts go out only when this Mac has been idle for N minutes AND the deck was
+  not pressed in that window. On Linux there is no idle source, so only deck
+  presses count. macOS banners are not affected.
 - `banner_prompt = true` (opt-in) appends a one-line, sanitized excerpt of the
   blocked prompt (about 180 characters) to the alert body — on every backend,
   so it also shows on a locked screen and in Telegram.

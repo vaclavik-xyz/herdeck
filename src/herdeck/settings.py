@@ -36,6 +36,7 @@ from .config import (
     _parse_telegram_config,
     normalize_notify_on,
     notification_flag,
+    notification_minutes,
     validate_event_sounds,
 )
 from .i18n import LANGUAGES
@@ -314,6 +315,8 @@ def _notifications_config(raw: dict | None) -> Notifications:
         telegram=telegram,
         banner_actions=notification_flag(raw, "banner_actions", False),
         banner_prompt=notification_flag(raw, "banner_prompt", False),
+        skip_focused=notification_flag(raw, "skip_focused", True),
+        remind_after=notification_minutes(raw, "remind_after"),
     )
 
 

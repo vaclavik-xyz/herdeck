@@ -72,6 +72,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       on: "Agent states that notify: 'blocked' (waiting for your input) and/or 'done' (task finished). Default: both.",
       backends: "Where notifications go: macos (Notification Center) and/or telegram (a bot message, e.g. to your phone).",
       banner_actions: "Blocked macOS banners get Approve/Deny buttons (plain permission prompt) or a reply field; default off.",
+      skip_focused: "No alert for the pane herdr has focused while you used this Mac in the last 2 min; default on, off = always alert.",
+      remind_after: "Minutes after which a still-blocked agent alerts again (once per interval, max 3); 0 = off (default).",
       banner_prompt: "Blocked alerts add a short, sanitized excerpt of the agent's prompt (~180 chars); default off.",
       token: "Name under which the Telegram bot token is stored (env var or keychain), not the token itself.",
       chat_id: "Numeric ID of the Telegram chat or group where the bot sends blocked-agent notifications.",
@@ -79,6 +81,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       interactive: "Allow Telegram users to approve, deny, or stop blocked agents from the notification.",
       allowed_user_ids: "Comma-separated Telegram user ids allowed to use interactive controls; keep this allow-list strict.",
       prompt_max_chars: "Maximum blocked-prompt characters included in an interactive Telegram message (default 1200).",
+      only_when_away: "Minutes: send Telegram alerts only after this long without input on this Mac or deck presses; 0 = always.",
     },
     safety: {
       approve_always: "Whether a blocked agent also offers an Approve! button (approve and don't ask again); turn off to hide it.",
@@ -176,6 +179,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       on: "Stavy agenta, které upozorní: „blocked“ (čeká na váš vstup) a/nebo „done“ (dokončil úkol). Výchozí: oba.",
       backends: "Kam se upozornění doručí: macos (oznamovací centrum) a/nebo telegram (zpráva botem, třeba na mobil).",
       banner_actions: "Banner blokovaného agenta na macOS dostane tlačítka Schválit/Zamítnout (prostý dotaz) nebo pole odpovědi; výchozí vyp.",
+      skip_focused: "Neupozorní na panel, který má herdr ve fokusu, pokud jsi Mac použil v posledních 2 min; výchozí zap., vyp. = vždy.",
+      remind_after: "Po kolika minutách agent, který pořád čeká, upozorní znovu (jednou za interval, max. 3×); 0 = vyp. (výchozí).",
       banner_prompt: "Upozornění na blokovaného agenta přidá krátký očištěný úryvek jeho dotazu (~180 znaků); výchozí vypnuto.",
       token: "Název, pod kterým je uložen token Telegram bota (proměnná prostředí či klíčenka), ne token samotný.",
       chat_id: "Číselné ID Telegram chatu či skupiny, kam bot posílá upozornění na zablokované agenty.",
@@ -183,6 +188,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       interactive: "Povolí uživatelům Telegramu schválit, zamítnout nebo zastavit blokovaného agenta přímo z notifikace.",
       allowed_user_ids: "Čárkami oddělená Telegram user ID oprávněná používat interaktivní ovládání; seznam držte striktní.",
       prompt_max_chars: "Maximum znaků blokujícího promptu vložených do interaktivní Telegram zprávy (výchozí 1200).",
+      only_when_away: "Minuty: Telegram upozorní jen po takové době bez vstupu na tomto Macu i bez stisku decku; 0 = vždy.",
     },
     safety: {
       approve_always: "Zda se u blokovaného agenta nabízí i tlačítko Approve! (schválit a příště se neptat); vypnutím ho skryjete.",

@@ -53,6 +53,7 @@ from ..notify import (
 )
 from ..notify_icons import NotificationIconCache
 from ..orchestrator import Orchestrator, binary_answer
+from ..presence import IdleProbe
 from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
@@ -76,6 +77,14 @@ _ANSWERED_EPISODES_MAX = 256
 # / banner_prompt) waits for the background pre-read before it goes out
 # without it. The read normally lands in well under a second.
 PROMPT_WAIT_S = 2.0
+# [notifications].skip_focused: the herdr-focused pane only counts as "you are
+# looking at it" while the deck host saw input within this many seconds (an
+# unknown idle time, e.g. on Linux, counts as present).
+FOCUS_PRESENT_S = 120.0
+# [notifications].remind_after: at most this many reminders per block episode,
+# checked by a small background thread every REMIND_POLL_S seconds.
+REMIND_MAX = 3
+REMIND_POLL_S = 15.0
 
 
 def sanitize_reply(text: object) -> str:
@@ -117,6 +126,7 @@ class LiveSource(AgentCardMixin, StateSource):
         notify_clock=None,
         notify_icons: NotificationIconCache | None = None,
         prompt_wait_s: float = PROMPT_WAIT_S,
+        idle_probe: IdleProbe | None = None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -133,19 +143,36 @@ class LiveSource(AgentCardMixin, StateSource):
         self._notify_baselined_servers: set[str] = set()
         # Cooldown per agent+event and "done right after you answered it"
         # suppression (see notify.NotifyThrottle).
-        self._notify_throttle = NotifyThrottle(clock=notify_clock or time.monotonic)
+        self._notify_clock = notify_clock or time.monotonic
+        self._notify_throttle = NotifyThrottle(clock=self._notify_clock)
+        # Blocked episodes that may get reminders: key -> (episode, since, sent).
+        self._reminders: dict[AgentKey, tuple[str, float, int]] = {}
+        self._reminder_stop = threading.Event()
+        self._reminder_thread: threading.Thread | None = None
         self._notify_schedule = notify_schedule or _thread_notify_schedule
         self._prompt_wait_s = prompt_wait_s
+        self._idle_probe = idle_probe or IdleProbe()
+        # When the deck (a key, the triage hotkey, a banner drill) was last
+        # used; None = not since start. [notifications.telegram].only_when_away.
+        self._last_deck_press: float | None = None
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
         self._notify_claim_age: Callable[[], float | None] = lambda: None
+        self._notify_features: Callable[[], frozenset[str]] = lambda: frozenset()
+        # Events each agent was alerted for and has not left yet; leaving one
+        # withdraws that agent's delivered shell banners.
+        self._bannered: dict[AgentKey, set[str]] = {}
         # Banners carry the agent's project mark (favicon or monogram).
         self._notify_icons = notify_icons or NotificationIconCache()
         if config.notifications.enabled:
             factory = notify_sink_factory or (
                 lambda feed, gate: deckapp_sink(
-                    feed, gate, self._config, claim_age=lambda: self._notify_claim_age()
+                    feed,
+                    gate,
+                    self._config,
+                    claim_age=lambda: self._notify_claim_age(),
+                    away=self._user_away,
                 )
             )
             self._notifier = Notifier(sink=factory(self._notify_feed, lambda: self._notify_gate()))
@@ -359,6 +386,7 @@ class LiveSource(AgentCardMixin, StateSource):
             self._answered_episodes.pop(next(iter(self._answered_episodes)))
 
     def _drive(self, orch, step) -> list[Command]:
+        self._last_deck_press = time.monotonic()
         drilled_before = orch.drill_key()
         cmds = step()
         for key in _interaction_keys(orch, cmds):
@@ -433,6 +461,7 @@ class LiveSource(AgentCardMixin, StateSource):
         return self._notify_feed.stats()
 
     def close(self) -> None:
+        self._reminder_stop.set()
         self._card_close()  # stop card terminal previews while runners still send
         for runner in list(self._runners.values()):
             runner.close()
@@ -444,17 +473,23 @@ class LiveSource(AgentCardMixin, StateSource):
         self,
         gate: Callable[[], bool],
         claim_age: Callable[[], float | None] | None = None,
+        features: Callable[[], frozenset[str]] | None = None,
     ) -> None:
         """Set the "a shell can post banners" predicate.
 
         True -> the runtime leaves both banner and sound to the shell; False ->
         alerts fall back to a plain osascript banner carrying the sound.
         The DeckApp wires this to its shell-claim heartbeat; ``claim_age``
-        (seconds since the last claim, None = never) feeds the fallback reason.
+        (seconds since the last claim, None = never) feeds the fallback reason;
+        ``features`` names what the claiming shell understands (e.g.
+        "withdraw" — an older shell would post a withdraw item as an empty
+        banner, so it only gets one when it says so).
         """
         self._notify_gate = gate
         if claim_age is not None:
             self._notify_claim_age = claim_age
+        if features is not None:
+            self._notify_features = features
 
     def notifications_feed_state(self) -> dict:
         """Recent event notifications for the shell to post natively."""
@@ -484,6 +519,8 @@ class LiveSource(AgentCardMixin, StateSource):
         n = self._config.notifications
         if event not in n.on:
             return
+        if event == "blocked":
+            self._track_reminder(agent.key)
         sound = False if not n.sound else n.sounds.get(event, True)
         multi = len(self._config.overview_order) > 1
         if not self._notify_throttle.allow(event, agent.key):
@@ -506,12 +543,101 @@ class LiveSource(AgentCardMixin, StateSource):
         )
         self._notify_schedule(lambda: self._deliver_alert(event, agent, title, body, sound, meta))
 
+    # --- reminders ([notifications].remind_after) -----------------------------
+
+    def _track_reminder(self, key: AgentKey) -> None:
+        """A block episode began: remember when, for its reminders."""
+        if self._config.notifications.remind_after <= 0:
+            return
+        with self._lock:
+            episode = self._block_episode.get(key)
+            if episode is None:
+                return
+            self._reminders[key] = (episode, self._notify_clock(), 0)
+        self._ensure_reminder_thread()
+
+    def _ensure_reminder_thread(self) -> None:
+        if self._reminder_thread is not None or self._reminder_stop.is_set():
+            return
+        self._reminder_thread = threading.Thread(
+            target=self._reminder_loop, name="herdeck-remind", daemon=True
+        )
+        self._reminder_thread.start()
+
+    def _reminder_loop(self) -> None:
+        while not self._reminder_stop.wait(REMIND_POLL_S):
+            try:
+                self.check_reminders()
+            except Exception:
+                log.warning("reminder check failed", exc_info=True)
+
+    def check_reminders(self) -> int:
+        """Alert again for every agent still blocked in the same episode
+        ``remind_after`` minutes (x1, x2, x3) after it began. Returns how many
+        reminders were scheduled."""
+        n = self._config.notifications
+        if self._notifier is None or n.remind_after <= 0:
+            return 0
+        interval = n.remind_after * 60.0
+        now = self._notify_clock()
+        due: list[tuple[AgentState, str, float]] = []
+        with self._lock:
+            for key, (episode, since, sent) in list(self._reminders.items()):
+                state = self._agents.get(key)
+                if (
+                    state is None
+                    or state.status is not Status.BLOCKED
+                    or self._block_episode.get(key) != episode
+                    or sent >= REMIND_MAX
+                ):
+                    del self._reminders[key]
+                    continue
+                if now - since >= interval * (sent + 1):
+                    self._reminders[key] = (episode, since, sent + 1)
+                    due.append((state, episode, now - since))
+        lang = self._config.view.language
+        sound = False if not n.sound else n.sounds.get("blocked", True)
+        multi = len(self._config.overview_order) > 1
+        for state, episode, elapsed in due:
+            title = tr(
+                lang,
+                "notify.title_reminder",
+                agent=state.agent_type or "agent",
+                minutes=int(elapsed // 60),
+            )
+            body = event_notification_body(state, multi_server=multi)
+            meta = {
+                "agent": {"server_id": state.key.server_id, "pane_id": state.key.pane_id},
+                "event": "blocked",
+                "episode": episode,
+            }
+            log.info(
+                "notification reminder agent=%s:%s minutes=%d",
+                state.key.server_id,
+                state.key.pane_id,
+                int(elapsed // 60),
+            )
+            self._notify_schedule(
+                lambda s=state, t=title, b=body, m=meta: self._deliver_alert(
+                    "blocked", s, t, b, sound, m
+                )
+            )
+        return len(due)
+
     def _deliver_alert(
         self, event: str, agent: AgentState, title: str, body: str, sound, meta: dict
     ) -> None:
         """Notify thread: enrich a blocked alert with its prompt when asked to
         ([notifications].banner_actions / banner_prompt), then send it."""
         n = self._config.notifications
+        if n.skip_focused and agent.focused and self._user_present():
+            log.info(
+                "notification skipped (herdr-focused pane) event=%s agent=%s:%s",
+                event,
+                agent.key.server_id,
+                agent.key.pane_id,
+            )
+            return
         if event == "blocked" and (n.banner_actions or n.banner_prompt):
             prompt = self._await_prompt(agent.key, meta.get("episode"))
             if prompt is None:
@@ -522,7 +648,57 @@ class LiveSource(AgentCardMixin, StateSource):
                 )
                 return
             body = self._enrich_blocked(agent, body, prompt, meta)
+        with self._lock:
+            if not self._alert_current(event, agent.key, meta.get("episode")):
+                log.info(
+                    "notification dropped (agent already left %s) agent=%s:%s",
+                    event,
+                    agent.key.server_id,
+                    agent.key.pane_id,
+                )
+                return
+            self._bannered.setdefault(agent.key, set()).add(event)
         self._notifier.notify(title, body, sound, icon=self._banner_icon(agent), meta=meta)
+
+    def _alert_current(self, event: str, key: AgentKey, episode: str | None) -> bool:
+        """Is ``key`` still in ``event``'s status (and block episode)? Caller
+        holds self._lock. A stale alert must not outlive its withdraw."""
+        state = self._agents.get(key)
+        if state is None or state.status is not NOTIFY_EVENT_STATUSES[event]:
+            return False
+        return event != "blocked" or episode is None or self._block_episode.get(key) == episode
+
+    def _withdraw_left(self, event: str, left: set) -> None:
+        """Agents that left ``event``'s status (answered anywhere, back to
+        work, gone): ask the shell to remove their delivered banners."""
+        if not left:
+            return
+        with self._lock:
+            keys = [key for key in left if event in self._bannered.get(key, ())]
+            for key in keys:
+                events = self._bannered[key]
+                events.discard(event)
+                if not events:
+                    del self._bannered[key]
+        if not keys or not self._notify_gate() or "withdraw" not in self._notify_features():
+            return
+        for key in keys:
+            self._notify_feed.withdraw({"server_id": key.server_id, "pane_id": key.pane_id})
+
+    def _user_away(self, seconds: float) -> bool:
+        """Idle on the deck host (HIDIdleTime) AND no deck press for ``seconds``
+        (notify thread). An unknown idle time (Linux) leaves only the deck
+        press to decide."""
+        pressed = self._last_deck_press
+        if pressed is not None and time.monotonic() - pressed < seconds:
+            return False
+        idle = self._idle_probe.idle_seconds()
+        return idle is None or idle >= seconds
+
+    def _user_present(self) -> bool:
+        """The user touched this host recently (notify thread: may run ioreg)."""
+        idle = self._idle_probe.idle_seconds()
+        return idle is None or idle < FOCUS_PRESENT_S
 
     def _await_prompt(self, key: AgentKey, episode: str | None) -> str | None:
         """The pre-read prompt of ``key``'s block ``episode`` ("" if it did not
@@ -605,15 +781,19 @@ class LiveSource(AgentCardMixin, StateSource):
             return None
         return self._notify_icons.path_for(agent, self._config.view.project_icons)
 
-    def _notify_entered(self, event: str, states: list[AgentState], scope: set) -> None:
-        """Notify keys that just entered `event`'s status within `scope`."""
+    def _notify_entered(self, event: str, states: list[AgentState], scope: set) -> list[AgentState]:
+        """Advance `event`'s episode bookkeeping within `scope`: withdraw the
+        banners of keys that left the status and return the states that just
+        entered it (to alert). The caller fires alerts only after EVERY event
+        withdrew — a done->blocked agent's new blocked banner must never be
+        removed by the withdraw of its old done banner."""
         if self._notifier is None or event not in self._config.notifications.on:
-            return
+            return []
         tracked = self._notify_keys[event]
         to, entered_here = newly_entered(NOTIFY_EVENT_STATUSES[event], tracked & scope, states)
         self._notify_keys[event] = (tracked - scope) | entered_here
-        for s in (x for x in states if x.key in to):
-            self._fire_notify(event, s)
+        self._withdraw_left(event, (tracked & scope) - entered_here)
+        return [x for x in states if x.key in to]
 
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         new_by_key = {s.key: s for s in states}
@@ -666,13 +846,16 @@ class LiveSource(AgentCardMixin, StateSource):
         self._notify_all(server_id, states, prev_keys)
 
     def _notify_all(self, server_id: str, states: list[AgentState], prev_keys: set) -> None:
-        scope = set(prev_keys) | {s.key for s in states}
-        for event in NOTIFY_EVENT_STATUSES:
-            self._notify_entered(event, states, scope)
+        self._notify_all_events(states, set(prev_keys) | {s.key for s in states})
 
     def _notify_all_events(self, states: list[AgentState], scope: set) -> None:
-        for event in NOTIFY_EVENT_STATUSES:
-            self._notify_entered(event, states, scope)
+        entered = [
+            (event, state)
+            for event in NOTIFY_EVENT_STATUSES
+            for state in self._notify_entered(event, states, scope)
+        ]
+        for event, state in entered:
+            self._fire_notify(event, state)
 
     def _on_event(self, server_id: str, state: AgentState) -> None:
         def mutate():
