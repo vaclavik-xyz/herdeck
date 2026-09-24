@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from .model import AgentKey, AgentState, Status, WorkContext, parse_subagents_token
 from .project_icon_discovery import ICON_MIMES, MAX_ICON_BYTES, icon_hash
+from .usage import usage_from_wire
 
 _ICON_HASH_RE = re.compile(r"[0-9a-f]{16}")
 # Base64 length of MAX_ICON_BYTES (whole 4-char groups): a cheap pre-decode cap.
@@ -184,6 +185,16 @@ class Progress:
 
 
 @dataclass
+class Usage:
+    """A bridge's provider usage snapshot (capability ``usage``), sent on
+    connect and whenever it changes. ``providers`` is the validated
+    ProviderUsage list, unfiltered by paid_only (usage.usage_to_wire)."""
+
+    server_id: str
+    providers: list
+
+
+@dataclass
 class Unknown:
     """A frame type this client does not know (a newer bridge). Ignored."""
 
@@ -210,7 +221,16 @@ def _decode_project_icon(msg: dict) -> ProjectIcon:
 def decode_inbound(
     raw: str,
 ) -> (
-    Snapshot | Event | Result | Error | TermFrame | TermClosed | ProjectIcon | Progress | Unknown
+    Snapshot
+    | Event
+    | Result
+    | Error
+    | TermFrame
+    | TermClosed
+    | ProjectIcon
+    | Progress
+    | Usage
+    | Unknown
 ):
     msg = json.loads(raw)
     kind = msg["type"]
@@ -282,6 +302,11 @@ def decode_inbound(
             stage[:32] if isinstance(stage, str) else "",
             message[:300] if isinstance(message, str) else "",
         )
+    if kind == "usage":
+        sid = msg.get("server_id")
+        if not isinstance(sid, str):
+            raise ValueError("usage frame missing server_id")
+        return Usage(sid, usage_from_wire(msg.get("providers")))
     # Forward compatibility: a newer bridge may add frame types. Raising here
     # would reach Connector's on_error (ctl fails every pending request on it).
     return Unknown(str(kind))
