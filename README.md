@@ -233,6 +233,11 @@ Run the same `herdeck-service install bridge ...` command again when its launchd
 definition or startup options change; the installer replaces the service and
 rolls its plist back if launchd rejects the update.
 
+To push a committed ref to a runtime or bridge host that runs from source —
+snapshot, install, restart its service, health-check, with a one-line
+rollback — use `scripts/deploy-host.sh --role runtime|bridge --host HOST`; see
+[updating a deployment](docs/updating-a-deployment.md).
+
 ### macOS dev build
 
 Maintainers can create a disposable Apple Silicon build from any branch with
@@ -339,7 +344,8 @@ agents → herdr (Unix socket) → herdeck-bridge → WebSocket/Tailscale → Ma
 
 Herdr's default socket is `~/.config/herdr/herdr.sock` on macOS and Linux. The
 supported macOS system-service installer is shown under **Remote Herdr host**
-above; Linux uses [`deploy/herdeck-bridge.service`](deploy/herdeck-bridge.service).
+above; on Linux `herdeck-service install bridge` writes a systemd user unit
+(hand-written example: [`deploy/herdeck-bridge.service`](deploy/herdeck-bridge.service)).
 
 For pushing a new version to hosts that already run one — what needs updating
 where, rebuilding the desktop app, and how to verify a deploy landed without a
@@ -430,8 +436,17 @@ LaunchAgents:
 ```bash
 herdeck-service install bridge --system --bind 100.x.y.z --server-id workbox
 herdeck-service install web --bind 100.x.y.z --config ~/.config/herdeck/config.toml
+herdeck-service install runtime --config ~/.config/herdeck/config.toml
 herdeck-service status bridge --system
 ```
+
+The `runtime` kind runs the headless deck runtime (`herdeck.runtime`: D200 +
+the desktop window's API) as a login-session LaunchAgent, logging to
+`~/Library/Logs/herdeck-runtime.log`. With `--from-app [/Applications/herdeck.app]`
+it runs the frozen runtime bundled in the desktop app instead of a Python
+checkout, and the app's updater restarts it whenever it installs a new version.
+On Linux every kind installs as a systemd `--user` unit (`--system` is
+macOS-only).
 
 System installation asks for macOS administrator approval only for the
 root-owned LaunchDaemon operations. The daemon still runs as the invoking user.

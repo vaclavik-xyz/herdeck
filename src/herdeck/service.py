@@ -14,6 +14,15 @@ from pathlib import Path
 from .app import validate_web_bind
 from .driver.web import normalize_web_base_path, normalize_web_origin
 
+KINDS = ("web", "bridge", "runtime")
+DEFAULT_APP = Path("/Applications/herdeck.app")
+# Where the signed desktop bundle carries its frozen converged runtime
+# (desktop/herdeck-deckapp.spec -> desktop/scripts/runtime-entry.py). The desktop
+# updater matches a unit's ProgramArguments against this same path to decide
+# whether to restart the runtime together with the app
+# (desktop/src-tauri/src/runtime_service.rs).
+APP_RUNTIME_BINARY = Path("Contents/Resources/herdeck-deckapp/herdeck-deckapp")
+
 
 @dataclass(frozen=True)
 class ServiceConfig:
@@ -34,15 +43,60 @@ class ServiceConfig:
     system: bool = False
     system_dir: Path = Path("/Library/LaunchDaemons")
     user_name: str | None = None
+    # runtime only: run the frozen runtime bundled in this desktop .app instead
+    # of `python -m herdeck.runtime`.
+    from_app: Path | None = None
+    # "darwin" -> launchd, anything else -> systemd --user. The CLI passes
+    # sys.platform; direct callers get launchd, the historical behaviour.
+    platform: str = "darwin"
 
     @property
     def label(self) -> str:
-        if self.kind not in {"web", "bridge"}:
-            raise ValueError("service kind must be web or bridge")
+        if self.kind not in KINDS:
+            raise ValueError("service kind must be web, bridge or runtime")
         return f"dev.herdeck.{self.kind}"
 
+    @property
+    def systemd_unit(self) -> str:
+        if self.kind not in KINDS:
+            raise ValueError("service kind must be web, bridge or runtime")
+        return f"herdeck-{self.kind}.service"
 
-def render_launch_agent(config: ServiceConfig) -> bytes:
+    @property
+    def uses_launchd(self) -> bool:
+        return self.platform == "darwin"
+
+    def launchd_domain(self, uid: int) -> str:
+        """The per-user launchd domain the unit is bootstrapped into.
+
+        The runtime drives the D200 and posts notifications, so it lives in the
+        login (gui/Aqua) session, which is also where the desktop updater
+        kickstarts it; the bridge and web servers are background agents."""
+        return f"gui/{uid}" if self.kind == "runtime" else f"user/{uid}"
+
+
+def app_runtime_binary(app: Path) -> Path:
+    return app / APP_RUNTIME_BINARY
+
+
+def _program_and_environment(config: ServiceConfig) -> tuple[list[str], dict[str, str]]:
+    if config.from_app is not None and config.kind != "runtime":
+        raise ValueError("--from-app is supported only for the runtime")
+    if config.kind == "runtime":
+        # The runtime mints its own per-process token and publishes it in
+        # runtime.json; bridge tokens come from the config it loads. So no token
+        # file of its own, and never HERDECK_RUNTIME_MANAGED (that would stop it
+        # writing runtime.json, and the desktop app could not attach).
+        if config.from_app is not None:
+            arguments = [str(app_runtime_binary(config.from_app))]
+        else:
+            arguments = [config.python, "-m", "herdeck.runtime"]
+        environment = {}
+        if config.port:
+            environment["HERDECK_DECKAPP_PORT"] = str(config.port)
+        if config.config_path is not None:
+            environment["HERDECK_CONFIG"] = str(config.config_path)
+        return arguments, environment
     if config.kind == "bridge":
         if config.socket_path is None or config.token_file is None:
             raise ValueError("bridge service needs socket_path and token_file")
@@ -74,13 +128,18 @@ def render_launch_agent(config: ServiceConfig) -> bytes:
         }
         if config.config_path is not None:
             environment["HERDECK_CONFIG"] = str(config.config_path)
+    return arguments, environment
+
+
+def render_launch_agent(config: ServiceConfig) -> bytes:
+    arguments, environment = _program_and_environment(config)
     log_path = config.home / "Library/Logs" / f"herdeck-{config.kind}.log"
     payload = {
         "Label": config.label,
         "ProgramArguments": arguments,
         "EnvironmentVariables": environment,
         "KeepAlive": True,
-        "LimitLoadToSessionType": "Background",
+        "LimitLoadToSessionType": "Aqua" if config.kind == "runtime" else "Background",
         "RunAtLoad": True,
         "StandardOutPath": str(log_path),
         "StandardErrorPath": str(log_path),
@@ -93,6 +152,54 @@ def render_launch_agent(config: ServiceConfig) -> bytes:
         payload["ProcessType"] = "Background"
         payload["ThrottleInterval"] = 10
     return plistlib.dumps(payload, sort_keys=True)
+
+
+_SYSTEMD_PLAIN = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-=:,+@")
+
+_SYSTEMD_DESCRIPTIONS = {
+    "bridge": "Herdeck bridge (herdr socket -> WebSocket)",
+    "runtime": "Herdeck deck runtime (D200 + desktop window API)",
+    "web": "Herdeck web deck",
+}
+
+
+def _systemd_quote(value: str, *, always: bool = False) -> str:
+    """One systemd word: `%` is a specifier (and `$` expands in ExecStart, which
+    is the only place unquoted words go); quote anything not plainly safe."""
+    if "\n" in value:
+        raise ValueError("systemd unit values cannot contain newlines")
+    escaped = value.replace("%", "%%")
+    if not always:
+        escaped = escaped.replace("$", "$$")
+    if not always and escaped and set(escaped) <= _SYSTEMD_PLAIN | {"%"}:
+        return escaped
+    return '"' + escaped.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def render_systemd_unit(config: ServiceConfig) -> str:
+    """A systemd --user unit. Logs go to the journal: journalctl --user -u <unit>."""
+    arguments, environment = _program_and_environment(config)
+    lines = [
+        "[Unit]",
+        f"Description={_SYSTEMD_DESCRIPTIONS[config.kind]}",
+        "After=network-online.target",
+        "",
+        "[Service]",
+    ]
+    lines += [
+        "Environment=" + _systemd_quote(f"{key}={value}", always=True)
+        for key, value in environment.items()
+    ]
+    lines += [
+        "ExecStart=" + " ".join(_systemd_quote(argument) for argument in arguments),
+        "Restart=always",
+        "RestartSec=2",
+        "",
+        "[Install]",
+        "WantedBy=default.target",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def _run(command: list[str]) -> int:
@@ -113,6 +220,42 @@ def _ensure_private_token(path: Path, token_factory) -> None:
         handle.write(token)
 
 
+def _validate_from_app(config: ServiceConfig) -> None:
+    if config.kind != "runtime":
+        raise ValueError("--from-app is supported only for the runtime")
+    if not config.uses_launchd:
+        raise SystemExit("--from-app needs macOS: the desktop .app bundle exists only there")
+    binary = app_runtime_binary(config.from_app)
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise SystemExit(
+            f"no bundled runtime in {config.from_app}: expected an executable {binary}"
+        )
+
+
+def _systemd_user_dir(config: ServiceConfig) -> Path:
+    return config.home / ".config/systemd/user"
+
+
+def _install_systemd(config: ServiceConfig, *, runner, token_factory) -> Path:
+    if config.kind == "bridge":
+        assert config.token_file is not None
+        _ensure_private_token(config.token_file, token_factory)
+    unit_dir = _systemd_user_dir(config)
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit_path = unit_dir / config.systemd_unit
+    unit_path.write_text(render_systemd_unit(config), encoding="utf-8")
+    unit_path.chmod(0o644)
+    for command in (
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", config.systemd_unit],
+        # restart, not start: a reinstall must pick up the new unit.
+        ["systemctl", "--user", "restart", config.systemd_unit],
+    ):
+        if runner(command) != 0:
+            raise SystemExit(f"{' '.join(command)} failed for {config.systemd_unit}")
+    return unit_path
+
+
 def install_service(
     config: ServiceConfig,
     *,
@@ -122,6 +265,12 @@ def install_service(
     validate_web_bind(config.bind)
     if config.system and config.kind != "bridge":
         raise ValueError("system services are supported only for the bridge")
+    if config.from_app is not None:
+        _validate_from_app(config)
+    if not config.uses_launchd:
+        if config.system:
+            raise SystemExit("--system is a launchd (macOS) option; systemd units are --user")
+        return _install_systemd(config, runner=runner, token_factory=token_factory)
     uid = os.getuid() if config.uid is None else config.uid
     if config.kind == "bridge":
         assert config.token_file is not None
@@ -221,20 +370,27 @@ def install_service(
         return system_path
     plist_path.write_bytes(render_launch_agent(config))
     plist_path.chmod(0o644)
-    result = runner(["launchctl", "bootstrap", f"user/{uid}", str(plist_path)])
+    result = runner(["launchctl", "bootstrap", config.launchd_domain(uid), str(plist_path)])
     if result != 0:
         raise SystemExit(f"launchctl bootstrap failed for {config.label}")
     return plist_path
 
 
 def service_status(config: ServiceConfig, *, runner=_run) -> int:
+    if not config.uses_launchd:
+        return runner(["systemctl", "--user", "status", "--no-pager", config.systemd_unit])
     if config.system:
         return runner(["launchctl", "print", f"system/{config.label}"])
     uid = os.getuid() if config.uid is None else config.uid
-    return runner(["launchctl", "print", f"user/{uid}/{config.label}"])
+    return runner(["launchctl", "print", f"{config.launchd_domain(uid)}/{config.label}"])
 
 
 def uninstall_service(config: ServiceConfig, *, runner=_run) -> None:
+    if not config.uses_launchd:
+        runner(["systemctl", "--user", "disable", "--now", config.systemd_unit])
+        (_systemd_user_dir(config) / config.systemd_unit).unlink(missing_ok=True)
+        runner(["systemctl", "--user", "daemon-reload"])
+        return
     if config.system:
         runner(["sudo", "launchctl", "bootout", f"system/{config.label}"])
         system_path = config.system_dir / f"{config.label}.plist"
@@ -255,7 +411,7 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     for action in ("install", "status", "uninstall"):
         command = sub.add_parser(action)
-        command.add_argument("kind", choices=("web", "bridge"))
+        command.add_argument("kind", choices=KINDS)
         command.add_argument("--home", type=Path, default=Path.home())
         command.add_argument("--uid", type=int, default=os.getuid())
         command.add_argument("--system", action="store_true")
@@ -271,16 +427,38 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--public-origin", default="")
             command.add_argument("--frame-ancestor", action="append", default=[])
             command.add_argument("--allow-query-token", action="store_true")
+            command.add_argument(
+                "--from-app",
+                type=Path,
+                nargs="?",
+                const=DEFAULT_APP,
+                default=None,
+                metavar="APP",
+                help=(
+                    "runtime only (macOS): run the frozen runtime bundled in this "
+                    f"desktop app (default {DEFAULT_APP}); the app's updater then "
+                    "restarts the runtime together with itself"
+                ),
+            )
     return parser
 
 
 def _config_from_args(args) -> ServiceConfig:
     home = args.home.expanduser().resolve()
     kind = args.kind
-    default_port = 8800 if kind == "web" else 8788
+    # The runtime picks a free loopback port and publishes it in runtime.json
+    # unless --port pins one.
+    default_port = {"web": 8800, "bridge": 8788, "runtime": 0}[kind]
     system = getattr(args, "system", False)
     if system and kind != "bridge":
         raise SystemExit("--system is supported only for the bridge")
+    from_app = getattr(args, "from_app", None)
+    if from_app is not None:
+        if kind != "runtime":
+            raise SystemExit("--from-app is supported only for the runtime")
+        # Resolve here: the desktop updater compares the unit's program path
+        # against its own (canonical) bundle path.
+        from_app = from_app.expanduser().resolve()
     user_name = None
     if system and args.command == "install":
         user_name = pwd.getpwuid(args.uid).pw_name
@@ -301,6 +479,8 @@ def _config_from_args(args) -> ServiceConfig:
         allow_query_token=getattr(args, "allow_query_token", False),
         system=system,
         user_name=user_name,
+        from_app=from_app,
+        platform=sys.platform,
     )
 
 

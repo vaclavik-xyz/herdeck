@@ -37,6 +37,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `~/Library/Logs/herdeck/herdeck.log` (Linux: `~/.local/state/herdeck/`),
   rotated at 5 MB. The runtime now also logs each notification's route
   (queued for the banner, or the `osascript` fallback) at INFO.
+- `herdeck-service install runtime` runs the deck runtime as a service:
+  a login-session LaunchAgent (`dev.herdeck.runtime`, KeepAlive, log in
+  `~/Library/Logs/herdeck-runtime.log`) or a systemd `--user` unit on Linux,
+  where the `bridge` and `web` kinds now install too. `--from-app
+  [/Applications/herdeck.app]` runs the frozen runtime bundled in the desktop
+  app; the app's updater then restarts that unit when it installs an update,
+  so runtime and app stay on one version (units running from a source
+  checkout are left alone).
+- `scripts/deploy-host.sh`: one command to deploy a committed ref to a
+  runtime or bridge host that runs from source (ssh or local) — immutable
+  snapshot, `pip install -e`, service restart, `/health` or TCP check, and a
+  printed `--rollback` command on failure. It replaces the manual recipe in
+  `docs/updating-a-deployment.md`, which now also covers moving a `nohup`
+  bridge under `herdeck-service`.
 - Every `osascript` notification fallback is logged at WARNING with its
   reason: `reason=no_shell_claim last_claim_age=…s` (or `never`) when no app
   claimed banner duty in the last 60 s, `reason=shell_native_failed error=…`
@@ -77,6 +91,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The cairosvg dependency: resvg is now the only SVG rasterizer, at runtime
   and when baking the bundled glyph PNGs. Source installs and builds no longer
   need the native cairo library (`brew install cairo`).
+- `deploy/com.herdeck.app.plist`: it launched the legacy `herdeck.app` with an
+  inline token and no log path. Use `herdeck-service install runtime`.
 
 ## [0.8.0] - 2026-09-23
 
