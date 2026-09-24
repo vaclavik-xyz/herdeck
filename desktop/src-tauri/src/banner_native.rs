@@ -7,10 +7,11 @@ use std::sync::Mutex;
 
 use tauri::Manager;
 
-use crate::notify_pump::PendingNotification;
-use crate::window_roles::reveal_deck;
 #[cfg(target_os = "macos")]
 use crate::notifications;
+use crate::notify_pump::PendingNotification;
+use crate::sync_util::LockExt;
+use crate::window_roles::reveal_deck;
 use crate::{banners, http, AppState, SIDECAR_TIMEOUT};
 
 /// Remove this agent's banners from Notification Center (only the ones this
@@ -72,10 +73,11 @@ pub(crate) fn post_native_notification(
     ensure_notification_application(app);
     // Before the post, so even the very first banner's click is seen.
     banner_clicks::ensure_installed(app);
-    let sound = notifications::banner_sound_name(&item.sound, &notifications::sound_dirs()).unwrap_or_else(|err| {
-        eprintln!("herdeck: {err}; posting id={} silently", item.id);
-        None
-    });
+    let sound = notifications::banner_sound_name(&item.sound, &notifications::sound_dirs())
+        .unwrap_or_else(|err| {
+            eprintln!("herdeck: {err}; posting id={} silently", item.id);
+            None
+        });
     let identifier = banners::banner_identifier(&item.generation, item.seq);
     if let Some(agent) = item.meta.agent.clone() {
         // Recorded first: a click racing the delivery must find its context.
@@ -233,7 +235,7 @@ pub(crate) fn handle_banner_intent(app: &tauri::AppHandle, intent: banners::Bann
             };
             let app = app.clone();
             std::thread::spawn(move || {
-                let discovery = app.state::<AppState>().discovery.lock().unwrap().clone();
+                let discovery = app.state::<AppState>().discovery.lock_or_recover().clone();
                 let result = match discovery {
                     Some(d) => http::post_agent_action(
                         &d.host,
@@ -261,7 +263,7 @@ pub(crate) fn handle_banner_intent(app: &tauri::AppHandle, intent: banners::Bann
 /// `POST /agents/drill` for one agent (blocking; call off the main thread).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn open_agent_drill(app: &tauri::AppHandle, agent: &banners::AgentRef) {
-    let Some(d) = app.state::<AppState>().discovery.lock().unwrap().clone() else {
+    let Some(d) = app.state::<AppState>().discovery.lock_or_recover().clone() else {
         return;
     };
     let code = http::post_agent_action(

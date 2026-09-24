@@ -43,6 +43,7 @@ use notify_pump::NotifyCursor;
 use proxy::{serve_image_request, IMAGE_SCHEME};
 use runtime_plan::{default_config_path, start_sidecar, AttachLoss, Supervisor};
 use sidecar::{CommandSpec, Discovery};
+use sync_util::LockExt;
 use tray::{build_tray, TrayHandles};
 use window_roles::{
     hide_role_window, persist_window_state, place_deck, placement_space_position,
@@ -196,8 +197,7 @@ async fn update_install(app: tauri::AppHandle) -> Result<bool, String> {
 fn get_discovery(state: tauri::State<'_, AppState>) -> Option<DiscoveryView> {
     state
         .discovery
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .as_ref()
         .map(DiscoveryView::from)
 }
@@ -480,15 +480,15 @@ pub fn run() {
                     // Same lock order as fall_back_to_spawn (discovery, then
                     // supervisor): a fallback racing the quit either sees
                     // `quitting` or its fresh supervisor is the one stopped here.
-                    let _discovery = state.discovery.lock().unwrap();
+                    let _discovery = state.discovery.lock_or_recover();
                     state.quitting.store(true, Ordering::SeqCst);
-                    let sup = state.supervisor.lock().unwrap().clone();
+                    let sup = state.supervisor.lock_or_recover().clone();
                     sup.stop.store(true, Ordering::SeqCst);
                     sup
                 };
                 // Take the child out first so the slot's lock is not held
                 // through the stop grace.
-                let taken = sup.child.lock().unwrap().take();
+                let taken = sup.child.lock_or_recover().take();
                 if let Some(mut c) = taken {
                     sidecar::stop_child(&mut c, sidecar::SIDECAR_STOP_GRACE);
                 }

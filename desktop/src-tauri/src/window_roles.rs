@@ -9,6 +9,7 @@ use std::path::Path;
 use tauri::{Emitter, LogicalPosition, Manager, PhysicalPosition};
 
 use crate::runtime_plan::default_config_path;
+use crate::sync_util::LockExt;
 use crate::tray::TrayHandles;
 use crate::window_state::{self, WindowState};
 use crate::{deck_prefs, http, AppState, HDR_TOKEN, SETUP_CONNECT_TIMEOUT, SIDECAR_TIMEOUT};
@@ -416,7 +417,7 @@ pub(crate) fn set_role_visible(state: &mut WindowState, label: &str, visible: bo
 /// drift apart. Snapshots under the lock and writes outside it. Best-effort:
 /// losing the file costs the next launch its remembered layout and nothing else.
 pub(crate) fn store_window_state(state: &AppState) {
-    let snapshot = *state.window_state.lock().unwrap();
+    let snapshot = *state.window_state.lock_or_recover();
     window_state::store(&window_state::state_dir(), &snapshot);
 }
 
@@ -425,7 +426,7 @@ pub(crate) fn update_window_state(app: &tauri::AppHandle, f: impl FnOnce(&mut Wi
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
-    f(&mut state.window_state.lock().unwrap());
+    f(&mut state.window_state.lock_or_recover());
     store_window_state(&state);
 }
 
@@ -443,7 +444,7 @@ pub(crate) fn persist_window_state(app: &tauri::AppHandle) {
 /// that changed.
 pub(crate) fn remember_deck_position(app: &tauri::AppHandle, position: (i32, i32)) {
     if let Some(state) = app.try_state::<AppState>() {
-        state.window_state.lock().unwrap().deck_position = Some(position);
+        state.window_state.lock_or_recover().deck_position = Some(position);
     }
 }
 
@@ -466,7 +467,7 @@ pub(crate) fn deck_label_refresh(label: &str, visible: bool) -> Option<bool> {
 /// reached from `TrayHandles` takes a window-state lock.
 pub(crate) fn sync_deck_tray_label(app: &tauri::AppHandle, deck_visible: bool) {
     if let Some(handles) = app.try_state::<TrayHandles>() {
-        if let Some(items) = handles.0.lock().unwrap().as_ref() {
+        if let Some(items) = handles.0.lock_or_recover().as_ref() {
             items.sync_toggle_deck_label(deck_visible);
         }
     }
@@ -565,8 +566,7 @@ pub(crate) fn toggle_deck_window(app: &tauri::AppHandle) {
 pub(crate) fn persist_deck_always_on_top(state: &AppState, target: bool) -> Result<(), String> {
     let d = state
         .discovery
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .clone()
         .ok_or_else(|| "sidecar not ready".to_string())?;
     let body = http::http_get(
@@ -654,8 +654,8 @@ pub(crate) fn reload_deck_always_on_top(
     if let Some(w) = app.get_webview_window(DECK_WINDOW) {
         let _ = w.set_always_on_top(target);
     }
-    *state.deck_always_on_top.lock().unwrap() = target;
-    if let Some(items) = tray.0.lock().unwrap().as_ref() {
+    *state.deck_always_on_top.lock_or_recover() = target;
+    if let Some(items) = tray.0.lock_or_recover().as_ref() {
         let _ = items.deck_aot.set_checked(target);
     }
 }

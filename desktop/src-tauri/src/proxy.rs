@@ -11,6 +11,7 @@ use tauri::Manager;
 use crate::notifications::shell_gen;
 use crate::runtime_plan::{note_runtime_ok, rediscover_runtime};
 use crate::sidecar::Discovery;
+use crate::sync_util::LockExt;
 use crate::tray::update_tray_blocked;
 use crate::{http, AppState, HDR_TOKEN, SETUP_CONNECT_TIMEOUT, SIDECAR_TIMEOUT};
 
@@ -19,8 +20,7 @@ use crate::{http, AppState, HDR_TOKEN, SETUP_CONNECT_TIMEOUT, SIDECAR_TIMEOUT};
 pub(crate) fn current_discovery(state: &tauri::State<'_, AppState>) -> Result<Discovery, String> {
     state
         .discovery
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .clone()
         .ok_or_else(|| "sidecar not ready".to_string())
 }
@@ -234,7 +234,7 @@ pub(crate) fn serve_image_request(app: &tauri::AppHandle, uri_path: &str) -> tau
     };
     let Some(d) = app
         .try_state::<AppState>()
-        .and_then(|s| s.discovery.lock().unwrap().clone())
+        .and_then(|s| s.discovery.lock_or_recover().clone())
     else {
         return image_response(503, Vec::new());
     };

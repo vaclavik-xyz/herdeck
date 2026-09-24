@@ -16,6 +16,7 @@ use tauri::{Emitter, Manager};
 use crate::notify_pump::discovery_key;
 use crate::shortcuts::register_toggle_hotkey_logged;
 use crate::sidecar::{self, supervise, CommandSpec, Discovery, SupervisorConfig};
+use crate::sync_util::LockExt;
 use crate::{build_channel, deck_prefs, http, AppState, DiscoveryView, SIDECAR_TIMEOUT};
 
 /// One supervisor generation: its stop flag and its child slot.
@@ -103,22 +104,22 @@ where
 pub(crate) fn switch_to_runtime(app: &tauri::AppHandle, d: Discovery, reason: &str) -> bool {
     let state = app.state::<AppState>();
     {
-        let mut current = state.discovery.lock().unwrap();
+        let mut current = state.discovery.lock_or_recover();
         if !state.reattach_eligible.swap(false, Ordering::SeqCst) {
             return false; // another caller switched first
         }
-        state.supervisor.lock().unwrap().stop.store(true, Ordering::SeqCst);
+        state.supervisor.lock_or_recover().stop.store(true, Ordering::SeqCst);
         state.attached_from_runtime_json.store(true, Ordering::Relaxed);
         state.switched_from_spawn.store(true, Ordering::SeqCst);
-        state.attach_loss.lock().unwrap().record_ok();
+        state.attach_loss.lock_or_recover().record_ok();
         *current = Some(d.clone());
     }
     eprintln!("{}", plan_log_line("attach", reason, Some(&d.url)));
     register_toggle_hotkey_logged(app, &d);
     let _ = app.emit("discovery", DiscoveryView::from(&d)); // token-free
-    let child = state.supervisor.lock().unwrap().child.clone();
+    let child = state.supervisor.lock_or_recover().child.clone();
     std::thread::spawn(move || {
-        let taken = child.lock().unwrap().take();
+        let taken = child.lock_or_recover().take();
         if let Some(mut c) = taken {
             eprintln!("herdeck: stopping own sidecar pid={}", c.id());
             sidecar::stop_child(&mut c, sidecar::SIDECAR_STOP_GRACE);
@@ -135,7 +136,7 @@ pub(crate) fn try_reattach(app: &tauri::AppHandle, reason: &str) -> Option<Disco
     if !eligible {
         return None;
     }
-    let current = state.discovery.lock().unwrap().clone();
+    let current = state.discovery.lock_or_recover().clone();
     let candidate = sidecar::read_runtime_discovery(&sidecar::runtime_file_path());
     let d = reattach_target(eligible, current.as_ref(), candidate, probe_runtime_health)?;
     switch_to_runtime(app, d.clone(), reason).then_some(d)
@@ -150,7 +151,7 @@ pub(crate) fn start_reattach_watch(app: tauri::AppHandle) {
         std::thread::sleep(REATTACH_CHECK_INTERVAL);
         let state = app.state::<AppState>();
         if !state.reattach_eligible.load(Ordering::SeqCst)
-            || state.supervisor.lock().unwrap().stop.load(Ordering::SeqCst)
+            || state.supervisor.lock_or_recover().stop.load(Ordering::SeqCst)
         {
             return; // switched already, or quitting
         }
@@ -161,7 +162,7 @@ pub(crate) fn start_reattach_watch(app: tauri::AppHandle) {
 /// A proxied poll of the current runtime succeeded: the attached runtime is
 /// alive, so any failure streak is over.
 pub(crate) fn note_runtime_ok(state: &AppState) {
-    let mut loss = state.attach_loss.lock().unwrap();
+    let mut loss = state.attach_loss.lock_or_recover();
     if loss.failures != 0 {
         loss.record_ok();
     }
@@ -174,23 +175,23 @@ pub(crate) fn note_runtime_ok(state: &AppState) {
 /// to re-adopt a launchd runtime that becomes healthy later.
 pub(crate) fn fall_back_to_spawn(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let Some(spec) = state.spawn_spec.lock().unwrap().clone() else {
+    let Some(spec) = state.spawn_spec.lock_or_recover().clone() else {
         return;
     };
     let fresh = Supervisor::default();
     {
-        let mut current = state.discovery.lock().unwrap();
+        let mut current = state.discovery.lock_or_recover();
         if !state.switched_from_spawn.swap(false, Ordering::SeqCst) {
             return; // not switched, or another caller already fell back
         }
         if state.quitting.load(Ordering::SeqCst) {
             return; // the app is quitting: spawn nothing
         }
-        *state.supervisor.lock().unwrap() = fresh.clone();
+        *state.supervisor.lock_or_recover() = fresh.clone();
         state.attached_from_runtime_json.store(false, Ordering::Relaxed);
         *current = None; // "sidecar not ready" until the new one reports in
     }
-    state.attach_loss.lock().unwrap().record_ok();
+    state.attach_loss.lock_or_recover().record_ok();
     eprintln!("{}", plan_log_line("spawn", "attached_runtime_lost", None));
     start_supervisor(app.clone(), spec, fresh);
     state.reattach_eligible.store(true, Ordering::SeqCst);
@@ -218,7 +219,7 @@ pub(crate) fn rediscover_runtime(app: &tauri::AppHandle) -> Option<Discovery> {
         return None;
     }
     {
-        let mut last = state.rediscover_last.lock().unwrap();
+        let mut last = state.rediscover_last.lock_or_recover();
         if let Some(t) = *last {
             if t.elapsed() < REDISCOVER_MIN_INTERVAL {
                 return None;
@@ -234,17 +235,16 @@ pub(crate) fn rediscover_runtime(app: &tauri::AppHandle) -> Option<Discovery> {
     let Some(d) = healthy else {
         let lost = state
             .attach_loss
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .record_failure(std::time::Instant::now());
         if lost && state.switched_from_spawn.load(Ordering::SeqCst) {
             fall_back_to_spawn(app);
         }
         return None;
     };
-    state.attach_loss.lock().unwrap().record_ok();
+    state.attach_loss.lock_or_recover().record_ok();
     let changed = {
-        let mut current = state.discovery.lock().unwrap();
+        let mut current = state.discovery.lock_or_recover();
         let changed = current.as_ref().map(discovery_key) != Some(discovery_key(&d));
         *current = Some(d.clone());
         changed
@@ -408,7 +408,7 @@ pub(crate) fn start_sidecar(app: &tauri::App, discovery: Arc<Mutex<Option<Discov
                     .attached_from_runtime_json
                     .store(from_runtime_json, Ordering::Relaxed);
             }
-            *discovery.lock().unwrap() = Some(d);
+            *discovery.lock_or_recover() = Some(d);
             let _ = app.handle().emit("discovery", view); // token-free
         }
         SidecarPlan::Spawn(mut spec) => {
@@ -425,8 +425,8 @@ pub(crate) fn start_sidecar(app: &tauri::App, discovery: Arc<Mutex<Option<Discov
             let Some(state) = app.try_state::<AppState>() else {
                 return;
             };
-            *state.spawn_spec.lock().unwrap() = Some(spec.clone());
-            let sup = state.supervisor.lock().unwrap().clone();
+            *state.spawn_spec.lock_or_recover() = Some(spec.clone());
+            let sup = state.supervisor.lock_or_recover().clone();
             start_supervisor(app.handle().clone(), spec, sup);
             if build_channel::shared_runtime_attach_enabled() {
                 state.reattach_eligible.store(true, Ordering::SeqCst);
@@ -445,7 +445,7 @@ pub(crate) fn start_supervisor(handle: tauri::AppHandle, spec: CommandSpec, sup:
     std::thread::spawn(move || {
         supervise(SupervisorConfig::new(spec), sup.child, sup.stop, move |d| {
             if let Some(state) = handle.try_state::<AppState>() {
-                let mut current = state.discovery.lock().unwrap();
+                let mut current = state.discovery.lock_or_recover();
                 if callback_stop.load(Ordering::SeqCst) {
                     return;
                 }

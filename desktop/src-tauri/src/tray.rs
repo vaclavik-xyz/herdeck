@@ -7,6 +7,7 @@ use tauri::menu::{CheckMenuItem, ContextMenu, Menu, MenuItem, PredefinedMenuItem
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager};
 
+use crate::sync_util::LockExt;
 use crate::window_roles::{
     deck_is_visible, hide_role_window, persist_deck_always_on_top, show_role_window,
     toggle_deck_window, APP_WINDOW, DECK_WINDOW,
@@ -184,7 +185,7 @@ impl TrayMenuItems {
         let _ = self.reconnect.set_text(l[5]);
         let _ = self.check_update.set_text(l[6]);
         let _ = self.quit.set_text(l[7]);
-        *self.lang.lock().unwrap() = lang.to_string();
+        *self.lang.lock_or_recover() = lang.to_string();
     }
 
     /// Refresh only `toggle_deck`'s text for a visibility change, in whichever
@@ -192,7 +193,7 @@ impl TrayMenuItems {
     /// which instead needs the visibility handed in because IT runs on a
     /// language change.
     pub(crate) fn sync_toggle_deck_label(&self, deck_visible: bool) {
-        let lang = self.lang.lock().unwrap().clone();
+        let lang = self.lang.lock_or_recover().clone();
         let _ = self.toggle_deck.set_text(toggle_deck_label(&lang, deck_visible));
     }
 
@@ -203,7 +204,7 @@ impl TrayMenuItems {
     /// (the context menu below) reads it from here instead of tracking it a
     /// second time.
     pub(crate) fn current_lang(&self) -> String {
-        self.lang.lock().unwrap().clone()
+        self.lang.lock_or_recover().clone()
     }
 }
 
@@ -212,9 +213,9 @@ impl TrayMenuItems {
 #[tauri::command]
 pub(crate) fn tray_set_language(app: tauri::AppHandle, lang: String, handles: tauri::State<'_, TrayHandles>) {
     let deck_visible = deck_is_visible(&app);
-    if let Some(items) = handles.0.lock().unwrap().as_ref() {
+    if let Some(items) = handles.0.lock_or_recover().as_ref() {
         items.retitle(&lang, deck_visible);
-        let blocked = *items.blocked.lock().unwrap();
+        let blocked = *items.blocked.lock_or_recover();
         set_tray_tooltip(&app, &lang, blocked);
     }
 }
@@ -233,11 +234,11 @@ pub(crate) fn update_tray_blocked(app: &tauri::AppHandle, blocked: Option<u64>) 
         return;
     };
     let lang = {
-        let guard = handles.0.lock().unwrap();
+        let guard = handles.0.lock_or_recover();
         let Some(items) = guard.as_ref() else {
             return;
         };
-        let mut last = items.blocked.lock().unwrap();
+        let mut last = items.blocked.lock_or_recover();
         if *last == blocked {
             return;
         }
@@ -314,12 +315,11 @@ pub(crate) fn show_deck_context_menu(
         .ok_or_else(|| "deck window missing".to_string())?;
     let lang = tray
         .0
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .as_ref()
         .map(TrayMenuItems::current_lang)
         .unwrap_or_else(|| "en".to_string());
-    let always_on_top = *state.deck_always_on_top.lock().unwrap();
+    let always_on_top = *state.deck_always_on_top.lock_or_recover();
     let menu = build_deck_context_menu(&app, &lang, always_on_top).map_err(|e| e.to_string())?;
     let webview: &tauri::Webview<tauri::Wry> = window.as_ref();
     menu.popup(webview.window()).map_err(|e| e.to_string())
@@ -384,7 +384,7 @@ pub(crate) fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visibl
     let autostart_cb = autostart.clone();
     let deck_aot_cb = deck_aot.clone();
     if let Some(handles) = app.try_state::<TrayHandles>() {
-        *handles.0.lock().unwrap() = Some(TrayMenuItems {
+        *handles.0.lock_or_recover() = Some(TrayMenuItems {
             show_app: show_app.clone(),
             toggle_deck: toggle_deck.clone(),
             deck_aot: deck_aot.clone(),
@@ -436,14 +436,14 @@ pub(crate) fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visibl
                 let Some(state) = app.try_state::<AppState>() else {
                     return;
                 };
-                let current = *state.deck_always_on_top.lock().unwrap();
+                let current = *state.deck_always_on_top.lock_or_recover();
                 let target = !current;
                 match persist_deck_always_on_top(&state, target) {
                     Ok(()) => {
                         if let Some(w) = app.get_webview_window(DECK_WINDOW) {
                             let _ = w.set_always_on_top(target);
                         }
-                        *state.deck_always_on_top.lock().unwrap() = target;
+                        *state.deck_always_on_top.lock_or_recover() = target;
                         let _ = deck_aot_cb.set_checked(target);
                     }
                     Err(e) => {

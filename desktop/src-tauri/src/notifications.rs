@@ -198,8 +198,7 @@ pub(crate) async fn test_notification(
 ) -> Result<(), String> {
     let lang = tray
         .0
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .as_ref()
         .map(TrayMenuItems::current_lang)
         .unwrap_or_else(|| "en".to_string());
