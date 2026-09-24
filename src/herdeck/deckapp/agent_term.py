@@ -148,8 +148,14 @@ class CardTerminals:
     def fail_fresh(self, server_id: str, reason: str) -> None:
         """An anonymous bridge error: end the sessions on that server that were
         opened moments ago and have not produced a frame (the error is most
-        likely their open failing), so the card never shows "live" forever."""
+        likely their open failing), so the card never shows "live" forever.
+
+        The error is only a heuristic match, so each closed session also gets
+        an ``observe_stop``: if the bridge did start that observe, its herdr
+        process must not keep running for a session nobody reads (a stop for
+        a refused req is harmless)."""
         now = self._clock()
+        stops: list[tuple[str, dict]] = []
         with self._cond:
             for session in self._sessions.values():
                 if (
@@ -159,7 +165,9 @@ class CardTerminals:
                     and now - session.opened_at <= FRESH_OPEN_S
                 ):
                     session.closed = reason
+                    stops.append((server_id, {"type": "observe_stop", "req": session.req}))
             self._cond.notify_all()
+        self._flush(stops)
 
     def close_all(self) -> None:
         with self._cond:

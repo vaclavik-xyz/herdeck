@@ -313,8 +313,11 @@ def test_anonymous_error_right_after_open_ends_the_preview():
     app, src, runner, _ = make()
     src._on_snapshot("prod", [blocked()])
     out = src.card_term_open("prod", "p0", 80, 24)
+    observe = [m for m in runner.sent if m["type"] == "observe"][-1]
     src._on_request_error("prod", None, "unknown message type: observe")
     assert src.card_term_poll(out["id"], 0, 0)["closed"] == "unknown message type: observe"
+    # The match is a heuristic: stop the observe in case the bridge did start it.
+    assert {"type": "observe_stop", "req": observe["req"]} in runner.sent
 
 
 def test_anonymous_error_leaves_a_streaming_preview_alone():
