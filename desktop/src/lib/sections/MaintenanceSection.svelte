@@ -435,7 +435,7 @@
                   {/if}
                 </div>
                 <p class="hint">{lm.ua_hint}</p>
-                {#if empty}<p class="note bad" data-ua-empty>{lm.ua_empty}</p>{/if}
+                {#if empty}<p class="note bad" data-ua-empty>{ua.agent.installed ? lm.ua_empty_installed : lm.ua_empty}</p>{/if}
               </div>
             {/if}
           {/if}

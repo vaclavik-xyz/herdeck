@@ -407,6 +407,7 @@ describe("MaintenanceSection", () => {
       const cases: [Record<string, unknown>, string, string, string][] = [
         [agent(), "not_installed", "not installed", "nenainstalováno"],
         [agent({ installed: true, running: true, fresh: true, providers: ["codex", "claude"], file_age_s: 12 }), "running", "running · codex, claude · updated 12 s ago", "běží · codex, claude · aktualizováno před 12 s"],
+        [agent({ installed: true, running: true, fresh: true, file_age_s: 5 }), "no_numbers", "running, but no numbers yet", "běží, ale zatím bez čísel"],
         [agent({ installed: true, running: true, fresh: false, file_age_s: 900 }), "stale", "installed, but its numbers are stale", "nainstalováno, ale čísla jsou zastaralá"],
         [agent({ installed: true, running: false }), "stopped", "installed, but not running", "nainstalováno, ale neběží"],
         [agent({ gui_session: false }), "no_gui_session", "no login session on that Mac", "není přihlášené sezení"],
@@ -520,8 +521,13 @@ describe("MaintenanceSection", () => {
       expect(row(t)?.classList.contains("attention")).toBe(true);
       expect(t.querySelector("[data-ua-empty]")?.textContent).toBe("This bridge offers usage limits but sends no numbers — install the helper.");
       cleanup?.();
-      t = await render(fake(withUa(summary({ installed: true, running: true, fresh: true })), { "GET /maintenance/servers/m4/usage-agent": statusRoute(null) }).invoke);
+      t = await render(fake(withUa(summary({ installed: true, running: true, fresh: true, providers: ["codex"] })), { "GET /maintenance/servers/m4/usage-agent": statusRoute(null) }).invoke);
       expect(t.querySelector("[data-ua-empty]")).toBeNull();
+      cleanup?.();
+      // Installed and writing, but without numbers: no "install" advice.
+      t = await render(fake(withUa(summary({ installed: true, running: true, fresh: true })), { "GET /maintenance/servers/m4/usage-agent": statusRoute(null) }).invoke);
+      expect(row(t)?.dataset.state).toBe("no_numbers");
+      expect(t.querySelector("[data-ua-empty]")?.textContent).toContain("The helper is installed");
     });
 
     it("words every outcome code in both languages", async () => {

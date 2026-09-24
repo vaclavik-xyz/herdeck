@@ -241,14 +241,17 @@ export function parseUsageAgent(raw: unknown): UsageAgentStatus | null {
  *  - `error`: the last action failed otherwise;
  *  - `not_installed`, `stopped` (installed, not running), `stale` (running,
  *    but the bridge does not use its numbers), `running`. */
-export type UsageAgentState = "not_installed" | "running" | "stale" | "stopped" | "no_gui_session" | "unsupported" | "error";
+export type UsageAgentState = "not_installed" | "running" | "no_numbers" | "stale" | "stopped" | "no_gui_session" | "unsupported" | "error";
 
 export function usageAgentState(ua: UsageAgentStatus, lastCode: string | null = null): UsageAgentState {
   if (lastCode === "no_gui_session" || lastCode === "unsupported") return lastCode;
   if (ua.error) return "error";
   if (!ua.installed) return ua.guiSession === false ? "no_gui_session" : "not_installed";
   if (!ua.running) return "stopped";
-  return ua.fresh ? "running" : "stale";
+  if (!ua.fresh) return "stale";
+  // Running and writing, but codex/codexbar give it nothing: the helper is not
+  // the fix yet (see its log), so the row must not read as healthy.
+  return ua.providers.length ? "running" : "no_numbers";
 }
 
 /** Whether a bridge gets the helper row: it serves usage limits (or the helper

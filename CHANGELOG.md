@@ -6,6 +6,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Usage limits: a CodexBar poll that exits 1 because some OTHER provider it
+  has enabled failed (an expired Cursor or Kimi login) no longer throws away
+  the Codex/Claude numbers it printed. This left the usage helper and the
+  bridge poller without numbers.
+- D200: the elapsed time on a tile no longer freezes at the value it had when
+  the agent entered its status (a done agent read "0s" for good). The frozen
+  spinner/elapsed text now catches up once a minute, all tiles in one write,
+  so the deck blinks at most once a minute and only when a shown value changed.
+- Maintenance: a usage helper that runs but gets no numbers now says so
+  ("running, but no numbers yet", with the log path) instead of reading as
+  healthy, and the "sends no numbers" hint no longer says to install a helper
+  that is already installed.
+
 ## [0.13.0] - 2026-09-24
 
 ### Added
