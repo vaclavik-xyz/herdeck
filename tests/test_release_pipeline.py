@@ -35,7 +35,7 @@ def test_tag_workflow_builds_macos_updater_and_publishes_after_all_builds():
     assert "scripts/generate-update-manifest.py" in workflow
     assert "dist/latest.json" in workflow
     assert "publish-release:" in workflow
-    assert "needs: [build-linux, build-macos]" in workflow
+    assert "needs: [build-linux, build-macos, build-python]" in workflow
     assert "if: startsWith(github.ref, 'refs/tags/v')" in workflow
     assert 'gh release upload "$GITHUB_REF_NAME"' in workflow
     assert "dist/herdeck-linux-x86_64/appimage/*" in workflow
@@ -152,3 +152,39 @@ def test_ci_freezes_and_smokes_both_bundles_on_prs():
     assert "HERDECK_SELFTEST=imports build/elgato-dist/herdeck-backend/herdeck-backend" in job
     entry = (ROOT / "streamdeck/scripts/herdeck-backend-entry.py").read_text()
     assert 'os.environ.get("HERDECK_SELFTEST") == "imports"' in entry
+
+
+def test_release_publishes_python_distributions_with_checksums():
+    """A managed bridge updates itself from the release wheel and refuses it
+    unless SHA256SUMS lists its hash (herdeck/self_update.py), so every tag
+    release must carry the sdist, the wheel and that file."""
+    from herdeck import self_update
+
+    workflow = (ROOT / ".github/workflows/release.yml").read_text()
+    job = workflow.split("\n  build-python:\n", maxsplit=1)[1].split("\n  build-linux:\n")[0]
+    publish = workflow.split("\n  publish-release:\n", maxsplit=1)[1]
+
+    assert "python -m build --sdist --wheel --outdir python-dist" in job
+    assert 'test -f "python-dist/herdeck-${VERSION}-py3-none-any.whl"' in job
+    assert 'test -f "python-dist/herdeck-${VERSION}.tar.gz"' in job
+    assert "python scripts/set-version.py --check" in job
+    # the wheel installs and reports the tagged version in a clean venv
+    assert "import herdeck; print(herdeck.__version__)" in job
+    assert "name: herdeck-python" in job
+
+    assert "needs: [build-linux, build-macos, build-python]" in publish
+    assert "working-directory: dist/herdeck-python" in publish
+    assert (
+        'sha256sum "herdeck-${VERSION}-py3-none-any.whl" "herdeck-${VERSION}.tar.gz" > SHA256SUMS'
+        in publish
+    )
+    assert "dist/herdeck-python/*" in publish
+    # the checksum step runs before the upload that publishes it
+    assert publish.index("> SHA256SUMS") < publish.index('gh release upload "$GITHUB_REF_NAME"')
+
+    # ...and the names match what the bridge downloads.
+    assert self_update.SUMS_NAME == "SHA256SUMS"
+    assert self_update.wheel_name("1.2.3") == "herdeck-1.2.3-py3-none-any.whl"
+    assert self_update.asset_url("1.2.3", "SHA256SUMS") == (
+        "https://github.com/vaclavik-xyz/herdeck/releases/download/v1.2.3/SHA256SUMS"
+    )
