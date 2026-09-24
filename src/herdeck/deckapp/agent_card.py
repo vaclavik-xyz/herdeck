@@ -375,6 +375,10 @@ class AgentCardMixin:
                     return outcome("not_blocked")
                 with self._lock:
                     prompt = self._preread.get(key)
+                    # The episode this answer is for, captured with the prompt:
+                    # the agent may re-block on another prompt while the send
+                    # below waits for the bridge.
+                    episode = self._block_episode.get(key)
                 if not isinstance(prompt, str) or not prompt:
                     return outcome("stale")
                 if revision != decision_revision(server_id, pane_id, agent.terminal_id, prompt):
@@ -403,7 +407,11 @@ class AgentCardMixin:
         self._notify_throttle.note_interaction(key)
         result = self._card_send(cmd)
         if agent.backend != "t3":
-            self._spend_answered_prompt(key)
+            # Only an answer that went out spends the episode (so a banner of
+            # it can no longer act); a refused / failed one leaves a retry open.
+            self._spend_answered_prompt(
+                key, episode, answered=result.get("code") in ("sent", "pending")
+            )
         return result
 
     # --- guards shared with banner answers (LiveSource.answer_agent) --------
@@ -437,16 +445,21 @@ class AgentCardMixin:
             terminal_id=agent.terminal_id or None,
         )
 
-    def _spend_answered_prompt(self, key: AgentKey) -> None:
-        """An answer (card or banner) went out: its prompt is spent. Drop the
-        cached prompt so the next answer needs a fresh read, and mark the
-        current block episode answered so a banner of it can no longer act."""
+    def _spend_answered_prompt(
+        self, key: AgentKey, episode: str | None, *, answered: bool = True
+    ) -> None:
+        """An answer (card or banner) for block ``episode`` was sent: mark that
+        episode answered (when ``answered``) so a banner of it can no longer
+        act, and drop the cached prompt so the next answer needs a fresh read —
+        but only while the agent is still in that episode. An agent that
+        already re-blocked on a new prompt keeps the new episode's prompt and
+        banner answerable."""
         with self._lock:
-            self._preread.pop(key, None)
-            self._preread_req.pop(key, None)
-            episode = self._block_episode.get(key)
-            if episode is not None:
+            if episode is not None and answered:
                 self._note_episode_answered_locked(episode)
+            if episode is None or self._block_episode.get(key) == episode:
+                self._preread.pop(key, None)
+                self._preread_req.pop(key, None)
 
     def _card_bridge_protocol(self, server_id: str) -> int:
         connector = getattr(self._runners.get(server_id), "connector", None)
