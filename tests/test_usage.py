@@ -129,6 +129,30 @@ def test_usage_detail_gauges_include_reset_hint():
     assert gauge_cs.hint.startswith("obnova ")
 
 
+def test_usage_detail_shows_the_pace_hint_only_with_a_projection():
+    data = [
+        ProviderUsage(
+            "claude",
+            [UsageWindow("5h", 60, None, full_early_s=40 * 60), UsageWindow("7d", 20, None)],
+        )
+    ]
+    paced, plain = usage_detail_gauges(data)
+    assert (paced.pace, plain.pace) == ("full ~40m early", "")
+    assert usage_detail_gauges(data, lang="cs")[0].pace == "plno ~40m dřív"
+    assert usage_detail_lines(data) == ["Claude 5h 60% · full ~40m early", "Claude 7d 20%"]
+    # The overview cards stay compact: no pace there.
+    assert all(g.pace == "" for g in usage_summary_gauges(data))
+
+
+def test_pace_hint_units_stay_short():
+    from herdeck.layout import _fmt_early
+
+    assert _fmt_early(30) == "1m"
+    assert _fmt_early(59 * 60) == "59m"
+    assert _fmt_early(3 * 3600 + 600) == "3h"
+    assert _fmt_early(3 * 86400) == "3d"
+
+
 def test_usage_summary_gauges_include_localized_reset_hint_when_available():
     from datetime import datetime
 

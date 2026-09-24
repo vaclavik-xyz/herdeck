@@ -741,7 +741,11 @@ class Orchestrator:
                 title = f"{title} · {page + 1}/{detail_pages}"
             panel = PanelView(
                 title,
-                layout.usage_detail_lines(self._usage, page=self._usage_detail_page),
+                layout.usage_detail_lines(
+                    self._usage,
+                    page=self._usage_detail_page,
+                    lang=self.config.view.language,
+                ),
                 "grey",
                 gauges=layout.usage_detail_gauges(
                     self._usage,
