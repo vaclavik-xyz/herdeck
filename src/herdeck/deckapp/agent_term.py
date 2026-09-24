@@ -32,6 +32,9 @@ COLS_MIN, COLS_MAX = 20, 240
 ROWS_MIN, ROWS_MAX = 5, 100
 # Longest a poll may hold (the desktop proxy allows its wait + 6 s).
 POLL_MAX_S = 15.0
+# An anonymous bridge error this soon after an open that has produced no frame
+# yet is taken as that open failing (e.g. a bridge that cannot observe).
+FRESH_OPEN_S = 5.0
 
 
 @dataclass
@@ -46,6 +49,7 @@ class _Session:
     next_index: int = 1
     dropped: bool = False  # frames were evicted since the last full frame
     closed: str | None = None
+    opened_at: float = 0.0
 
 
 def _clamp(value, low: int, high: int, default: int) -> int:
@@ -97,8 +101,9 @@ class CardTerminals:
                 oldest = min(self._sessions.values(), key=lambda s: s.last_seen)
                 stops += self._drop_locked(oldest, stop_remote=True)
             session_id = secrets.token_hex(8)
+            now = self._clock()
             session = _Session(
-                session_id, f"c{session_id}", server_id, pane_id, last_seen=self._clock()
+                session_id, f"c{session_id}", server_id, pane_id, last_seen=now, opened_at=now
             )
             self._sessions[session_id] = session
             self._by_req[session.req] = session_id
@@ -125,6 +130,34 @@ class CardTerminals:
         with self._cond:
             for session in self._sessions.values():
                 if session.server_id == server_id and session.closed is None:
+                    session.closed = reason
+            self._cond.notify_all()
+
+    def fail_request(self, server_id: str, req: str, reason: str) -> bool:
+        """The bridge refused the observe named ``req``: end that session."""
+        with self._cond:
+            session_id = self._by_req.get(req)
+            session = self._sessions.get(session_id) if session_id else None
+            if session is None or session.server_id != server_id:
+                return False
+            if session.closed is None:
+                session.closed = reason
+            self._cond.notify_all()
+            return True
+
+    def fail_fresh(self, server_id: str, reason: str) -> None:
+        """An anonymous bridge error: end the sessions on that server that were
+        opened moments ago and have not produced a frame (the error is most
+        likely their open failing), so the card never shows "live" forever."""
+        now = self._clock()
+        with self._cond:
+            for session in self._sessions.values():
+                if (
+                    session.server_id == server_id
+                    and session.closed is None
+                    and session.next_index == 1
+                    and now - session.opened_at <= FRESH_OPEN_S
+                ):
                     session.closed = reason
             self._cond.notify_all()
 

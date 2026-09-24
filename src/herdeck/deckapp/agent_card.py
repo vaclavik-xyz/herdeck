@@ -171,10 +171,12 @@ class AgentCardMixin:
         (a handler exception has no req) fails every card request waiting on
         that server — same stance as herdeck-ctl."""
         result = error_outcome(message)
-        if req and self._card_replies.fail(req, result):
+        if req:
+            if not self._card_replies.fail(req, result):
+                self._card_terms.fail_request(server_id, req, message or "bridge error")
             return
-        if not req:
-            self._card_replies.fail_server(server_id, result)
+        self._card_replies.fail_server(server_id, result)
+        self._card_terms.fail_fresh(server_id, message or "bridge error")
 
     def _card_on_connection(self, server_id: str, up: bool) -> None:
         if not up:
@@ -204,6 +206,10 @@ class AgentCardMixin:
             return outcome("invalid")
         if not connected:
             return outcome("disconnected")
+        connector = getattr(self._runners.get(server_id), "connector", None)
+        if "terminal_preview" not in getattr(connector, "capabilities", frozenset()):
+            # The bridge does not advertise observe: never show a blank "live" view.
+            return outcome("unsupported")
         session_id = self._card_terms.open(
             server_id, pane_id, agent.terminal_id, cols=cols, rows=rows
         )

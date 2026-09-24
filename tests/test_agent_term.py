@@ -300,6 +300,42 @@ def test_term_routes_404_on_the_mock():
         app.close()
 
 
+def test_open_is_refused_when_the_bridge_cannot_observe():
+    app, src, runner, _ = make()
+    src._on_snapshot("prod", [blocked()])
+    runner.connector.capabilities = frozenset()
+    runner.sent.clear()
+    assert src.card_term_open("prod", "p0", 80, 24)["code"] == "unsupported"
+    assert [m for m in runner.sent if m["type"] == "observe"] == []
+
+
+def test_anonymous_error_right_after_open_ends_the_preview():
+    app, src, runner, _ = make()
+    src._on_snapshot("prod", [blocked()])
+    out = src.card_term_open("prod", "p0", 80, 24)
+    src._on_request_error("prod", None, "unknown message type: observe")
+    assert src.card_term_poll(out["id"], 0, 0)["closed"] == "unknown message type: observe"
+
+
+def test_anonymous_error_leaves_a_streaming_preview_alone():
+    app, src, runner, _ = make()
+    src._on_snapshot("prod", [blocked()])
+    out = src.card_term_open("prod", "p0", 80, 24)
+    observe = [m for m in runner.sent if m["type"] == "observe"][-1]
+    src._on_term("prod", frame(observe["req"], 1, full=True))
+    src._on_request_error("prod", None, "something else failed")
+    assert src.card_term_poll(out["id"], 0, 0)["closed"] is None
+
+
+def test_error_naming_the_observe_ends_it():
+    app, src, runner, _ = make()
+    src._on_snapshot("prod", [blocked()])
+    out = src.card_term_open("prod", "p0", 80, 24)
+    observe = [m for m in runner.sent if m["type"] == "observe"][-1]
+    src._on_request_error("prod", observe["req"], "nope")
+    assert src.card_term_poll(out["id"], 0, 0)["closed"] == "nope"
+
+
 def test_t3_agents_have_no_terminal():
     app, src, runner, _ = make()
     src._on_snapshot(
