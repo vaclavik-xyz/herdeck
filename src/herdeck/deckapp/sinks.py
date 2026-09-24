@@ -339,7 +339,7 @@ class ReconnectingD200Sink:
                     active.deliver(latest)
                 self._active = active
             self._mark(True, None)
-            if latest is not None:
+            if latest is not None and not latest.ticker:
                 self._last_frame_at = _now_ms()
             log.info("D200 attached")
 

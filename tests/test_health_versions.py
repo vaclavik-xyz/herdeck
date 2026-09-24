@@ -288,6 +288,9 @@ def test_d200_sink_health_reports_frames_errors_and_lock_owner(tmp_path):
         health = sink.health()
         assert health["last_error"] is None and health["lock_owner"] is None
         assert health["last_frame_at"] is None  # nothing rendered yet
+        ticker = RenderFrame(render=_RS([_Tile(0)]), working=None, full=True, ticker=True)
+        sink.deliver(ticker)  # dropped by D200Sink: no USB write
+        assert sink.health()["last_frame_at"] is None
         sink.deliver(RenderFrame(render=_RS([_Tile(0)]), working=None, full=True))
         assert isinstance(sink.health()["last_frame_at"], int)
 
