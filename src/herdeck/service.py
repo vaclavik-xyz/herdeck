@@ -17,7 +17,12 @@ from pathlib import Path
 from .driver.web import normalize_web_base_path, normalize_web_origin
 from .host import validate_web_bind
 
-KINDS = ("web", "bridge", "runtime")
+KINDS = ("web", "bridge", "runtime", "usage")
+# Kinds that live in the login (gui/Aqua) session: the runtime drives the D200
+# and posts notifications; the usage agent needs the login keychain.
+GUI_KINDS = ("runtime", "usage")
+# Kinds `--managed` runs from the managed bridge venv (managed.py).
+MANAGED_KINDS = ("bridge", "usage")
 ACTIONS = ("install", "status", "restart", "uninstall")
 # --env names that look like credentials are refused: unit files are 0644 and
 # tokens belong in the keychain / token file, never in a launch environment.
@@ -68,13 +73,13 @@ class ServiceConfig:
     @property
     def label(self) -> str:
         if self.kind not in KINDS:
-            raise ValueError("service kind must be web, bridge or runtime")
+            raise ValueError("service kind must be web, bridge, runtime or usage")
         return f"dev.herdeck.{self.kind}"
 
     @property
     def systemd_unit(self) -> str:
         if self.kind not in KINDS:
-            raise ValueError("service kind must be web, bridge or runtime")
+            raise ValueError("service kind must be web, bridge, runtime or usage")
         return f"herdeck-{self.kind}.service"
 
     @property
@@ -86,8 +91,9 @@ class ServiceConfig:
 
         The runtime drives the D200 and posts notifications, so it lives in the
         login (gui/Aqua) session, which is also where the desktop updater
-        kickstarts it; the bridge and web servers are background agents."""
-        return f"gui/{uid}" if self.kind == "runtime" else f"user/{uid}"
+        kickstarts it; so does the usage agent, which needs the login keychain
+        (usage_agent.py). The bridge and web servers are background agents."""
+        return f"gui/{uid}" if self.kind in GUI_KINDS else f"user/{uid}"
 
 
 USAGE_SERVICE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -165,6 +171,16 @@ def _base_program_and_environment(
         if config.config_path is not None:
             environment["HERDECK_CONFIG"] = str(config.config_path)
         return arguments, environment
+    if config.kind == "usage":
+        # The usage agent (usage_agent.py): polls Codex/Claude in the login
+        # session and writes the file the bridge reads.
+        arguments = [config.python, "-m", "herdeck.usage_agent"]
+        environment = {}
+        if config.config_path is not None:
+            environment["HERDECK_USAGE_CONFIG"] = str(config.config_path)
+        if not any(key == "PATH" for key, _value in config.extra_env):
+            environment["PATH"] = USAGE_SERVICE_PATH
+        return arguments, environment
     if config.kind == "bridge":
         if config.socket_path is None or config.token_file is None:
             raise ValueError("bridge service needs socket_path and token_file")
@@ -216,7 +232,7 @@ def render_launch_agent(config: ServiceConfig) -> bytes:
         "ProgramArguments": arguments,
         "EnvironmentVariables": environment,
         "KeepAlive": True,
-        "LimitLoadToSessionType": "Aqua" if config.kind == "runtime" else "Background",
+        "LimitLoadToSessionType": "Aqua" if config.kind in GUI_KINDS else "Background",
         "RunAtLoad": True,
         "StandardOutPath": str(log_path),
         "StandardErrorPath": str(log_path),
@@ -236,6 +252,7 @@ _SYSTEMD_PLAIN = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345
 _SYSTEMD_DESCRIPTIONS = {
     "bridge": "Herdeck bridge (herdr socket -> WebSocket)",
     "runtime": "Herdeck deck runtime (D200 + desktop window API)",
+    "usage": "Herdeck usage agent (provider usage for the bridge)",
     "web": "Herdeck web deck",
 }
 
@@ -527,7 +544,37 @@ def service_status(config: ServiceConfig, *, runner=_run) -> int:
     return runner(["launchctl", "print", f"{config.launchd_domain(uid)}/{config.label}"])
 
 
+def _unit_environment(config: ServiceConfig, path: Path) -> dict[str, str]:
+    """The launch environment an installed unit sets ({} when unreadable)."""
+    try:
+        if config.uses_launchd:
+            env = plistlib.loads(path.read_bytes()).get("EnvironmentVariables") or {}
+            return {k: v for k, v in env.items() if isinstance(k, str) and isinstance(v, str)}
+        out = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("Environment="):
+                for word in shlex.split(line[len("Environment="):]):
+                    key, sep, value = word.partition("=")
+                    if sep:
+                        out[key] = value.replace("%%", "%")
+        return out
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return {}
+
+
+def usage_agent_file(config: ServiceConfig) -> Path:
+    """The file the installed usage agent writes: its unit's XDG_STATE_HOME
+    (a unit sets none unless --env gave one), else ~/.local/state."""
+    from .usage_agent import default_path
+
+    env = _unit_environment(config, _unit_path(config)) or dict(config.extra_env)
+    return default_path({"XDG_STATE_HOME": env.get("XDG_STATE_HOME", "")}, config.home)
+
+
 def uninstall_service(config: ServiceConfig, *, runner=_run) -> None:
+    if config.kind == "usage":
+        # Without the agent's file the bridge polls usage itself again.
+        usage_agent_file(config).unlink(missing_ok=True)
     if not config.uses_launchd:
         runner(["systemctl", "--user", "disable", "--now", config.systemd_unit])
         (_systemd_user_dir(config) / config.systemd_unit).unlink(missing_ok=True)
@@ -611,8 +658,10 @@ def _parser() -> argparse.ArgumentParser:
                 "--managed",
                 action="store_true",
                 help=(
-                    "bridge only: install the herdeck release into "
-                    "~/.local/share/herdeck/bridge-venv and run the bridge from it"
+                    "bridge: install the herdeck release into "
+                    "~/.local/share/herdeck/bridge-venv and run the bridge from it; "
+                    "usage: run the usage agent from that venv (installed first when "
+                    "missing), so a bridge self-update restarts it too"
                 ),
             )
             command.add_argument(
@@ -644,7 +693,7 @@ def _config_from_args(args) -> ServiceConfig:
     kind = args.kind
     # The runtime picks a free loopback port and publishes it in runtime.json
     # unless --port pins one.
-    default_port = {"web": 8800, "bridge": 8788, "runtime": 0}[kind]
+    default_port = {"web": 8800, "bridge": 8788, "runtime": 0, "usage": 0}[kind]
     system = getattr(args, "system", False)
     if system and kind != "bridge":
         raise SystemExit("--system is supported only for the bridge")
@@ -659,13 +708,13 @@ def _config_from_args(args) -> ServiceConfig:
     if usage and kind != "bridge":
         raise SystemExit("--usage is supported only for the bridge")
     managed = getattr(args, "managed", False)
-    if managed and kind != "bridge":
-        raise SystemExit("--managed is supported only for the bridge")
+    if managed and kind not in MANAGED_KINDS:
+        raise SystemExit("--managed is supported only for the bridge and the usage agent")
     if getattr(args, "managed_version", None) is not None and not managed:
         raise SystemExit("--version needs --managed")
     python = getattr(args, "python", None)
     if managed and python is not None:
-        raise SystemExit("--managed runs the bridge from its own venv; drop --python")
+        raise SystemExit("--managed runs from the managed bridge venv; drop --python")
     if python is None:
         python = sys.executable
         if (
@@ -676,8 +725,8 @@ def _config_from_args(args) -> ServiceConfig:
         ):
             # The app's frozen binary is not a Python interpreter.
             raise SystemExit(
-                "run from the desktop app, install supports only `runtime --from-app` "
-                "and `bridge --managed`; pass --python for anything else"
+                "run from the desktop app, install supports only `runtime --from-app`, "
+                "`bridge --managed` and `usage --managed`; pass --python for anything else"
             )
     try:
         extra_env = parse_env_args(getattr(args, "env", ()))
@@ -740,6 +789,46 @@ def install_managed_bridge(
     )
 
 
+def install_managed_usage(
+    config: ServiceConfig,
+    version: str | None = None,
+    *,
+    installer=None,
+    runner=_run,
+) -> Path:
+    """The usage agent from the managed bridge venv: reuse the venv the bridge
+    runs from (never re-install under a running bridge), or install the
+    herdeck release there first when there is none yet."""
+    from dataclasses import replace
+
+    from . import __version__
+    from .managed import (
+        ManagedInstaller,
+        ManagedInstallError,
+        managed_venv_dir,
+        read_marker,
+        validate_version,
+        venv_python,
+    )
+
+    if config.kind != "usage":
+        raise ValueError("install_managed_usage is for the usage agent")
+    venv = managed_venv_dir(config.home)
+    marker = read_marker(venv)
+    try:
+        if marker is None or not venv_python(venv).exists():
+            (installer or ManagedInstaller()).install(venv, version or __version__)
+        elif version is not None and validate_version(version) != marker.get("version"):
+            raise SystemExit(
+                f"the managed bridge venv {venv} holds herdeck {marker.get('version')}; "
+                "update the bridge (the desktop app's Maintenance section or "
+                "`herdeck-service install bridge --managed --version X`) instead"
+            )
+    except ManagedInstallError as error:
+        raise SystemExit(f"managed usage agent install failed: {error}") from None
+    return install_service(replace(config, python=str(venv_python(venv))), runner=runner)
+
+
 def main(argv: list[str] | None = None) -> None:
     raw = sys.argv[1:] if argv is None else argv
     if raw[:1] == ["hooks"]:
@@ -751,11 +840,21 @@ def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     config = _config_from_args(args)
     if args.command == "install":
-        if getattr(args, "managed", False):
+        if getattr(args, "managed", False) and config.kind == "usage":
+            path = install_managed_usage(config, args.managed_version)
+        elif getattr(args, "managed", False):
             path = install_managed_bridge(config, args.managed_version)
         else:
             path = install_service(config)
         print(path)
+        if config.kind == "bridge" and config.system and config.usage:
+            print(
+                "note: a system (LaunchDaemon) bridge cannot reach the login keychain, so "
+                "codex/codexbar time out there; install the usage agent in the login "
+                "session: herdeck-service install usage"
+                + (" --managed" if getattr(args, "managed", False) else ""),
+                file=sys.stderr,
+            )
     elif args.command == "status":
         if args.json:
             print(json.dumps(service_status_info(config)))
