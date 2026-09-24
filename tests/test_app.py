@@ -1837,6 +1837,24 @@ def test_apply_config_adopts_usage_changes(monkeypatch):
     assert app.orch._usage == []  # stale usage cleared from the panel
 
 
+def test_legacy_app_sends_usage_alerts_through_its_notifier():
+    from herdeck.notify import Notifier
+    from herdeck.usage_alerts import UsageAlert
+
+    sent = []
+    config = make_config()
+    config.notifications.enabled = True
+    config.notifications.sounds = {**config.notifications.sounds, "done": "Ping"}
+    app = App(
+        config,
+        FakeRenderer(13),
+        send=lambda c: None,
+        notifier=Notifier(sink=lambda t, b, s: sent.append((t, b, s))),
+    )
+    app._deliver_usage_alerts([UsageAlert("reset", "claude", "5h", 100, None)])
+    assert sent == [("Claude 5h reset", "you can continue", "Ping")]
+
+
 def test_project_icon_arrival_rerenders_waiting_tiles():
     from herdeck.project_icon_discovery import icon_hash
     from herdeck.project_icons import default_store

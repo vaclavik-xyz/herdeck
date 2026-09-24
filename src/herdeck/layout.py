@@ -297,6 +297,22 @@ def _fmt_reset(resets_at: str | None, now) -> str:
     return f"{dt.day}.{dt.month}. {hm}"
 
 
+def _fmt_early(seconds: int) -> str:
+    """Compact pace margin: '40m', '3h', '2d' (fits a 3-column detail card)."""
+    minutes = max(1, round(seconds / 60))
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = round(seconds / 3600)
+    if hours < 48:
+        return f"{hours}h"
+    return f"{round(seconds / 86400)}d"
+
+
+def _pace_hint(window, lang: str) -> str:
+    early = getattr(window, "full_early_s", None)
+    return tr(lang, "usage_pace", t=_fmt_early(early)) if early else ""
+
+
 def _provider_name(provider: str) -> str:
     return provider.capitalize() if provider.islower() else provider
 
@@ -341,7 +357,7 @@ def usage_detail_pages(data) -> int:
 
 
 def usage_detail_lines(
-    data, now=None, max_lines: int = _DETAIL_MAX_LINES, page: int = 0
+    data, now=None, max_lines: int = _DETAIL_MAX_LINES, page: int = 0, lang: str = "en"
 ) -> list[str]:
     """One panel page of per-window detail lines: 'Claude 5h 13% → 01:00'.
 
@@ -355,6 +371,9 @@ def usage_detail_lines(
         for w in p.windows:
             reset = _fmt_reset(w.resets_at, now)
             tail = f" → {reset}" if reset else ""
+            pace = _pace_hint(w, lang)
+            if pace:
+                tail += f" · {pace}"
             lines.append(f"{_provider_name(p.provider)} {w.label} {w.used_percent}%{tail}")
     page = min(max(0, page), usage_detail_pages(data) - 1)
     start = page * max_lines
@@ -362,7 +381,9 @@ def usage_detail_lines(
 
 
 def usage_detail_gauges(data, now=None, page: int = 0, lang: str = "en") -> list[PanelGauge]:
-    """One detail-page gauge per provider window, including its reset time."""
+    """One detail-page gauge per provider window, including its reset time and
+    the pace hint when the recent burn rate fills the window before it resets
+    (usage_alerts.UsageTracker sets ``full_early_s``)."""
     gauges: list[PanelGauge] = []
     for provider in data:
         for window in provider.windows:
@@ -374,6 +395,7 @@ def usage_detail_gauges(data, now=None, page: int = 0, lang: str = "en") -> list
                     used_percent=window.used_percent,
                     hint=f"{tr(lang, 'usage_reset')} {reset}" if reset else "",
                     color=_provider_gauge_color(provider.provider),
+                    pace=_pace_hint(window, lang),
                 )
             )
     page = min(max(0, page), usage_detail_pages(data) - 1)

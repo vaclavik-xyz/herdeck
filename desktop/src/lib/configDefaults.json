@@ -36,7 +36,9 @@
     "refresh_secs": 300,
     "codex_path": "codex",
     "claude_cache_path": "~/.cache/herdeck/claude-usage.json",
-    "codexbar_path": "codexbar"
+    "codexbar_path": "codexbar",
+    "alert_at": [],
+    "alert_reset": false
   },
   "hardware": {
     "brightness": 80,

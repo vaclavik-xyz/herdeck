@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 
-import { parseConfig } from "../configClient";
+import { getAt, parseConfig } from "../configClient";
 import UsageSection from "./UsageSection.svelte";
 
 function inputFor(target: HTMLElement, label: string): HTMLInputElement {
@@ -43,6 +43,38 @@ describe("UsageSection", () => {
       flushSync();
       expect(inputFor(target, "codexbar_path").value).toBe("");
       expect(changes).toBe(1);
+    } finally {
+      unmount(instance);
+    }
+  });
+
+  it("writes alert_at only when the typed list is valid", () => {
+    let payload = parseConfig({})!;
+    const target = document.createElement("div");
+    const instance = mount(UsageSection, {
+      target,
+      props: {
+        get payload() { return payload; },
+        set payload(v) { payload = v; },
+        onChange: () => {},
+        onError: () => {},
+      },
+    });
+    try {
+      const input = inputFor(target, "alert_at");
+      expect(input.value).toBe("");
+      input.value = "95, 80";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      expect(getAt(payload, "base", "usage", "alert_at")).toEqual([95, 80]);
+      input.value = "95, 180";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      expect(getAt(payload, "base", "usage", "alert_at")).toEqual([95, 80]);
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      expect(getAt(payload, "base", "usage", "alert_at")).toBeUndefined();
     } finally {
       unmount(instance);
     }

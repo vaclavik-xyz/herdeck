@@ -234,14 +234,22 @@ class DeckApp:
         self._state_changed.notify_all()
         return self._version
 
-    @staticmethod
-    def _build_usage_poller(usage_cfg):
+    def _build_usage_poller(self, usage_cfg):
         from ..usage import poller_from_config
 
-        poller = poller_from_config(usage_cfg)
+        poller = poller_from_config(usage_cfg, on_alert=self._deliver_usage_alerts)
         if poller is not None:
             poller.start()
         return poller
+
+    def _deliver_usage_alerts(self, alerts) -> None:
+        """Usage-limit alerts from the poller thread ride the CURRENT source's
+        agent notification pipeline (LiveSource: [notifications] enabled/
+        backends, shell banner feed, telegram). A source without one (the
+        mock/demo deck) drops them."""
+        deliver = getattr(self._source, "notify_usage", None)
+        if deliver is not None:
+            deliver(alerts)
 
     def _adopt_usage_config(self, config) -> bool:
         """Rebuild the poller when a config swap changed [usage] (providers,

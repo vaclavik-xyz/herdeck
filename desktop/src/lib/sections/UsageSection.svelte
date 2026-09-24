@@ -62,8 +62,30 @@
   }
   function setBaseProviders(list: string[]): void { set("providers", list); }
 
+  // alert_at edits as comma/space separated text ("80, 95"). Only a fully
+  // valid list is written (the backend sorts + dedupes it on load); a partial
+  // or invalid entry leaves the stored value untouched instead of saving
+  // something the config loader would reject.
+  const alertAt = $derived((getAt(payload, "base", SEC, "alert_at") as number[]) ?? defaults.usage.alert_at);
+  const alertReset = $derived((getAt(payload, "base", SEC, "alert_reset") as boolean) ?? defaults.usage.alert_reset);
+  function levelsText(v: unknown): string { return Array.isArray(v) ? v.join(", ") : ""; }
+  function parseLevels(text: string): number[] | null {
+    const parts = text.split(/[\s,]+/).filter((p) => p !== "");
+    const out = parts.map((p) => (/^\d+$/.test(p) ? Number(p) : NaN));
+    return out.every((n) => Number.isInteger(n) && n >= 1 && n <= 100) ? out : null;
+  }
+  function setBaseLevels(text: string): void {
+    const levels = parseLevels(text);
+    if (levels === null) return;
+    setOrRemove("alert_at", levels.length ? levels : null);
+  }
+  function setOvLevels(text: string): void {
+    const levels = parseLevels(text);
+    if (levels !== null) setSc("alert_at", levels);
+  }
+
   // --- overlay mode (same shape as SafetySection) ---
-  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? USAGE_DEFAULTS[key]; return Array.isArray(v) ? v.join(" · ") : v == null ? lm.none : String(v); }
+  function hint(key: string): string { const v = inheritedFor(payload, prof, SEC, key) ?? USAGE_DEFAULTS[key]; return Array.isArray(v) ? (v.length ? v.join(" · ") : lm.none) : v == null ? lm.none : String(v); }
   function scState(key: string): "inherit" | "override" { return overrideState(payload, prof, SEC, key) === "default" ? "inherit" : "override"; }
   function scValue(key: string): unknown { const v = overrideValue(payload, prof, SEC, key); return v === undefined ? (inheritedFor(payload, prof, SEC, key) ?? USAGE_DEFAULTS[key]) : v; }
   function setScState(key: string, s: "inherit" | "override"): void {
@@ -100,6 +122,12 @@
   <OverrideField label="refresh_secs" help={HELP.refresh_secs} state={scState("refresh_secs")} inheritedDisplay={hint("refresh_secs")} onstate={(s) => setScState("refresh_secs", s)}>
     <NumberField label="" int min={30} value={Number(scValue("refresh_secs"))} onchange={(v) => setScOrInherit("refresh_secs", v)} />
   </OverrideField>
+  <OverrideField label="alert_at" help={HELP.alert_at} state={scState("alert_at")} inheritedDisplay={hint("alert_at")} onstate={(s) => setScState("alert_at", s)}>
+    <TextField label="" value={levelsText(scValue("alert_at"))} oninput={setOvLevels} />
+  </OverrideField>
+  <OverrideField label="alert_reset" help={HELP.alert_reset} state={scState("alert_reset")} inheritedDisplay={hint("alert_reset")} onstate={(s) => setScState("alert_reset", s)}>
+    <BooleanField label={lm.enabled} help={HELP.alert_reset} value={Boolean(scValue("alert_reset"))} onchange={(v) => setSc("alert_reset", v)} />
+  </OverrideField>
   <details class="advanced-settings">
     <summary>{lm.technical_paths}</summary>
     <OverrideField label="codex_path" help={HELP.codex_path} state={scState("codex_path")} inheritedDisplay={hint("codex_path")} onstate={(s) => setScState("codex_path", s)}>
@@ -120,6 +148,8 @@
   </details>
   <BooleanField label={lm.active_only} help={HELP.paid_only} value={paidOnly} onchange={(v) => set("paid_only", v)} />
   <NumberField label="refresh_secs" help={HELP.refresh_secs} int min={30} value={refreshSecs} onchange={(v) => setOrRemove("refresh_secs", v)} />
+  <TextField label="alert_at" help={HELP.alert_at} value={levelsText(alertAt)} oninput={setBaseLevels} />
+  <BooleanField label="alert_reset" help={HELP.alert_reset} value={alertReset} onchange={(v) => set("alert_reset", v)} />
   <details class="advanced-settings">
     <summary>{lm.technical_paths}</summary>
     <TextField label="codex_path" help={HELP.codex_path} value={codexPath} oninput={(v) => setOrRemove("codex_path", v.trim() === "" ? "" : v)} />

@@ -55,6 +55,8 @@ class PanelGauge:
     used_percent: int
     hint: str = ""
     color: str = "grey"
+    # Usage-detail pace projection ("full ~40m early"); "" = none.
+    pace: str = ""
 
 
 @dataclass
@@ -75,7 +77,8 @@ class PanelView:
             tuple(self.lines),
             self.color,
             tuple(
-                (g.label, g.window, g.used_percent, g.hint, g.color) for g in self.gauges
+                (g.label, g.window, g.used_percent, g.hint, g.color, g.pace)
+                for g in self.gauges
             ),
             self.gauge_meta,
             self.note,

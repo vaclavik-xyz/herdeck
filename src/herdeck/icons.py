@@ -791,6 +791,15 @@ def _compose_gauge_panel(panel: PanelView, width: int) -> Image.Image:
             draw.text(
                 (x0 + 10, y0 + 34), f"{gauge.used_percent}%", font=value_font, fill=_GAUGE_TEXT
             )
+            if gauge.pace and cell_h >= 100:
+                # Pace projection above the reset hint, in the warning tone:
+                # the window fills before it resets at this burn rate.
+                draw.text(
+                    (x0 + 10, y1 - 54),
+                    _truncate(draw, gauge.pace, hint_font, cell_w - 20),
+                    font=hint_font,
+                    fill=COLORS["amber"],
+                )
             if gauge.hint:
                 draw.text(
                     (x0 + 10, y1 - 36),

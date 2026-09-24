@@ -366,6 +366,18 @@ def _usage_config(raw: dict | None) -> UsageConfig:
         if not isinstance(path, str) or (key != "codexbar_path" and not path.strip()):
             raise ConfigError(f"usage.{key} must be a non-empty string")
         setattr(usage, key, path)
+    if "alert_at" in raw:
+        levels = raw["alert_at"]
+        if not isinstance(levels, list) or any(
+            type(v) is not int or not 1 <= v <= 100 for v in levels
+        ):
+            raise ConfigError("usage.alert_at must be a list of integer percentages 1-100")
+        usage.alert_at = sorted(set(levels))
+    if "alert_reset" in raw:
+        alert_reset = raw["alert_reset"]
+        if type(alert_reset) is not bool:
+            raise ConfigError("usage.alert_reset must be true or false")
+        usage.alert_reset = alert_reset
     return usage
 
 

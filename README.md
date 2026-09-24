@@ -668,7 +668,21 @@ set `codexbar_path = ""` to disable it. Its `loginMethod` is the paid signal:
 Claude Pro/Max/Team/Enterprise and the paid ChatGPT plans (Plus, Pro, Team,
 Business, …) count as paid, so with `paid_only = true` the fallback still runs
 and keeps only those results. Pressing the status window holds a detail view
-with reset times. Blocked and offline alerts always take priority.
+with reset times. Blocked and offline alerts always take priority. When the
+recent burn rate (at least 10 minutes of polls; a fifth of the window, e.g. the
+last hour of a 5-hour limit) would fill a window before it resets, its detail
+card adds a pace hint such as `full ~40m early`.
+
+Usage can also **notify** (opt-in, through the same `[notifications]` backends
+as agent alerts, so `enabled` must be on; the sound is the `done` sound).
+`alert_at = [80, 95]` sends `Claude 5h · 80 % used` once per limit window when
+usage crosses a level (a jump past several levels sends only the highest);
+`alert_reset = true` sends `Claude 5h reset — you can continue` when a window
+that reached 100 % (or the highest `alert_at` level) resets. The reset is also
+detected from the clock passing the known reset time, so it arrives within one
+`refresh_secs` even while the Claude snapshot is stale. The first poll after
+startup is a silent baseline. Both the desktop runtime and the legacy
+`herdeck` app send them; the demo deck does not.
 
 **Thin-client deck.** When the deck machine only displays the deck and the AI
 logins live on another Mac, point `codex_path` and `codexbar_path` at small

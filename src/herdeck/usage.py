@@ -58,6 +58,10 @@ class UsageWindow:
     label: str
     used_percent: int
     resets_at: str | None
+    # Pace projection (usage_alerts.UsageTracker): seconds by which the
+    # recent burn rate fills this window BEFORE it resets; None = no signal
+    # or no early fill.
+    full_early_s: int | None = None
 
 
 @dataclass
@@ -488,7 +492,13 @@ class UsagePoller:
         clock=time.monotonic,
         codex_source=None,
         claude_reader=read_claude_cache,
+        alert_at=(),
+        alert_reset: bool = False,
+        on_alert=None,
+        wall_clock=time.time,
     ):
+        from .usage_alerts import UsageTracker
+
         self._providers = list(providers)
         self._paid_only = paid_only
         self._refresh = max(30.0, float(refresh_secs))
@@ -503,6 +513,10 @@ class UsagePoller:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._fallback_missing_logged = False
+        # Alerts + pace projection over consecutive polls (poller thread only).
+        self._tracker = UsageTracker(alert_at, alert_reset)
+        self._on_alert = on_alert
+        self._wall_clock = wall_clock
 
     def start(self) -> None:
         if self._thread is not None or not self._providers:
@@ -558,12 +572,35 @@ class UsagePoller:
             if self._paid_only and usage.subscription != "paid":
                 continue
             fresh[usage.provider] = usage
-        if not fresh:
+        # Always run the tracker, even with nothing fresh: a reset alert is
+        # also driven by the clock passing a known reset time.
+        annotated, alerts = self._tracker.observe(list(fresh.values()), self._wall_clock())
+        if fresh:
+            fetched_at = self._clock()
+            with self._lock:
+                for usage in annotated:
+                    self._data[usage.provider] = (usage, fetched_at)
+        self._deliver(alerts)
+
+    def _deliver(self, alerts) -> None:
+        if not alerts or self._on_alert is None:
             return
-        fetched_at = self._clock()
-        with self._lock:
-            for provider, usage in fresh.items():
-                self._data[provider] = (usage, fetched_at)
+        if self._paid_only:
+            # Same visibility rule as snapshot(): no alerts for a provider
+            # the panel hides.
+            with self._lock:
+                paid = {
+                    provider
+                    for provider, (usage, _at) in self._data.items()
+                    if usage.subscription == "paid"
+                }
+            alerts = [alert for alert in alerts if alert.provider in paid]
+            if not alerts:
+                return
+        try:
+            self._on_alert(alerts)
+        except Exception:
+            log.warning("usage alert delivery failed", exc_info=True)
 
     def _fetch_codexbar(self, providers: list[str]) -> list[ProviderUsage]:
         if not providers or not self._codexbar_path:
@@ -593,7 +630,9 @@ class UsagePoller:
         return parse_usage(proc.stdout or "")
 
 
-def poller_from_config(usage_config) -> UsagePoller | None:
+def poller_from_config(usage_config, on_alert=None) -> UsagePoller | None:
+    """Build the poller for ``[usage]``; ``on_alert`` receives each poll's
+    ``usage_alerts.UsageAlert`` list (on the poller thread)."""
     if usage_config is None or not usage_config.providers:
         return None
     return UsagePoller(
@@ -603,4 +642,7 @@ def poller_from_config(usage_config) -> UsagePoller | None:
         codex_path=usage_config.codex_path,
         claude_cache_path=usage_config.claude_cache_path,
         codexbar_path=usage_config.codexbar_path,
+        alert_at=usage_config.alert_at,
+        alert_reset=usage_config.alert_reset,
+        on_alert=on_alert,
     )

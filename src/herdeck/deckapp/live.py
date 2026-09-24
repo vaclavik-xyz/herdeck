@@ -51,6 +51,7 @@ from ..notify_icons import NotificationIconCache
 from ..orchestrator import Orchestrator
 from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
+from ..usage_alerts import usage_alert_message, usage_alert_sound
 from .source import StateSource
 
 log = logging.getLogger(__name__)
@@ -350,6 +351,28 @@ class LiveSource(StateSource):
         self._notify_schedule(
             lambda: self._notifier.notify(title, body, sound, icon=self._banner_icon(agent))
         )
+
+    def notify_usage(self, alerts) -> None:
+        """Send usage-limit alerts (usage_alerts.UsageAlert, from the DeckApp's
+        poller thread) through the same notifier as the agent alerts. Gated by
+        [notifications].enabled only (the `on` list names agent events); the
+        sound is the "done" sound (usage news is informational)."""
+        if self._notifier is None or not alerts:
+            return
+        lang = self._config.view.language
+        sound = usage_alert_sound(self._config.notifications)
+        for alert in alerts:
+            title, body = usage_alert_message(alert, lang)
+            log.info(
+                "usage notification kind=%s provider=%s window=%s percent=%s",
+                alert.kind,
+                alert.provider,
+                alert.window,
+                alert.percent,
+            )
+            self._notify_schedule(
+                lambda title=title, body=body: self._notifier.notify(title, body, sound)
+            )
 
     def _banner_icon(self, agent: AgentState) -> str | None:
         """PNG path of the agent's project mark for the macOS banner; runs on

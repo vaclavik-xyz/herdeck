@@ -1282,6 +1282,58 @@ def notify_config(on=("blocked", "done"), *, sound=True, sounds=None):
     return config, server
 
 
+def test_usage_alerts_go_through_the_agent_notifier():
+    from herdeck.usage_alerts import UsageAlert
+
+    config, server = notify_config(sounds={"done": "Ping"})
+    src, notifier = make_notifying_live(config, server)
+    src.notify_usage(
+        [UsageAlert("threshold", "claude", "5h", 80, None), UsageAlert("reset", "codex", "7d", 100, None)]
+    )
+    assert notifier.calls == [
+        ("Claude 5h · 80 % used", "usage limits", "Ping"),
+        ("Codex 7d reset", "you can continue", "Ping"),
+    ]
+
+
+def test_usage_alerts_are_dropped_when_notifications_are_off():
+    from herdeck.usage_alerts import UsageAlert
+
+    config, server = live_config()
+    src = LiveSource(config, server, notify_schedule=lambda fn: fn())
+    assert src._notifier is None
+    src.notify_usage([UsageAlert("threshold", "claude", "5h", 80, None)])  # no crash
+
+
+def test_deckapp_routes_usage_alerts_to_its_source():
+    from herdeck.usage_alerts import UsageAlert
+
+    config, server = notify_config()
+    src, notifier = make_notifying_live(config, server)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    try:
+        app._deliver_usage_alerts([UsageAlert("threshold", "claude", "5h", 95, None)])
+        assert notifier.calls[0][0] == "Claude 5h · 95 % used"
+    finally:
+        app.close()
+
+
+def test_deckapp_builds_its_usage_poller_with_the_alert_route(monkeypatch):
+    import herdeck.usage as usage_mod
+
+    seen = []
+    monkeypatch.setattr(
+        usage_mod, "poller_from_config", lambda cfg, on_alert=None: seen.append(on_alert)
+    )
+    config, server = notify_config()
+    src, _notifier = make_notifying_live(config, server)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    try:
+        assert seen == [app._deliver_usage_alerts]
+    finally:
+        app.close()
+
+
 def test_done_snapshot_fires_notification_once():
     config, server = notify_config()
     src, notifier = make_notifying_live(config, server)
