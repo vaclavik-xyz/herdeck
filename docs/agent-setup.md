@@ -269,7 +269,17 @@ for development or login-scoped services. Do not use that mode for an always-on
 remote bridge.
 
 The installer creates the token file when absent and rejects permissive token
-file modes. For Linux, copy
+file modes. On Linux the same command without `--system` writes and starts a
+systemd user unit, `~/.config/systemd/user/herdeck-bridge.service` (logs:
+`journalctl --user -u herdeck-bridge`):
+
+```bash
+herdeck-service install bridge --bind "$TAILSCALE_IP" --server-id workbox
+herdeck-service status bridge
+```
+
+Run `loginctl enable-linger "$USER"` once so the user unit also runs without a
+login session. To write the unit by hand instead, copy
 [`deploy/herdeck-bridge.service`](../deploy/herdeck-bridge.service) to
 `~/.config/systemd/user/herdeck-bridge.service`, replace its placeholder
 address and paths, securely create the token file named by
@@ -773,6 +783,9 @@ same GUI user domain and with the same Python interpreter as the runtime:
 python -m herdeck.t3_setup --id t3-headless --renew \
   --issuer-ssh admin@100.86.178.12 --restart-label com.herdeck.app
 ```
+
+`com.herdeck.app` is that host's hand-made runtime label. A runtime installed
+with `herdeck-service install runtime` uses `dev.herdeck.runtime` instead.
 
 The runtime restart label is required: replacing Keychain alone cannot update
 a running connector. Set PYTHONPATH to the deployed source's `src` directory in the renewal plist.
