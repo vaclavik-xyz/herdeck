@@ -204,6 +204,7 @@ class RuntimeServices:
         if signature == self._tg_signature:
             return
         self._tg_signature = signature
+        previous = self._interactor
         interactor = None
         if signature is not None:
             interactor = self._interactor_factory(
@@ -214,6 +215,8 @@ class RuntimeServices:
                 allowed_user_ids=tg.allowed_user_ids,
                 prompt_max_chars=tg.prompt_max_chars,
                 store=self._tg_store,
+                # continue from the old cursor: never re-run acted-on updates
+                offset=previous.offset if previous is not None else None,
             )
         self._interactor = interactor
         self._interactor_generation += 1
@@ -243,9 +246,11 @@ class RuntimeServices:
                 await asyncio.sleep(1)
                 continue
             if previous is not None and previous is not interactor:
-                # continue from the old cursor: never re-run acted-on updates
-                if interactor.offset is None and previous.offset is not None:
-                    interactor._offset = previous.offset
+                # the old interactor may have advanced its cursor after the
+                # new one copied it (a poll that was in flight): catch up
+                old, new = previous.offset, interactor.offset
+                if old is not None and (new is None or new < old):
+                    interactor._offset = old
             previous = interactor
             if getattr(interactor, "inbound_disabled", False):
                 await asyncio.sleep(60)

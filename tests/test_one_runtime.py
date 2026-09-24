@@ -194,12 +194,12 @@ def test_interactive_alerts_honor_only_when_away(monkeypatch):
 class FakeInteractor:
     instances: list = []
 
-    def __init__(self, client, control, *, store=None, **kwargs):
+    def __init__(self, client, control, *, store=None, offset=None, **kwargs):
         self.control = control
         self.store = store
         self.kwargs = kwargs
         self.alerts = []
-        self._offset = None
+        self._offset = offset
         self.polls = 0
         FakeInteractor.instances.append(self)
 
@@ -297,9 +297,6 @@ def test_interactive_telegram_is_built_from_config_and_keeps_its_cursor(services
     services.wire(source2)
     second = FakeInteractor.instances[-1]
     assert second is not first and second.store is first.store
-    deadline = time.monotonic() + 3
-    while second.offset is None and time.monotonic() < deadline:
-        time.sleep(0.01)
     assert second.offset == 17
 
 
