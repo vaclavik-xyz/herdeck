@@ -8,7 +8,8 @@
 
 use std::time::Duration;
 
-use crate::{current_discovery, http, run_blocking, AppState, HDR_TOKEN};
+use crate::proxy::{current_discovery, run_blocking};
+use crate::{http, AppState, HDR_TOKEN};
 
 /// Longest long-poll a card may ask the proxy to hold (the runtime clamps too).
 pub const AGENT_WAIT_MAX_MS: u64 = 20_000;

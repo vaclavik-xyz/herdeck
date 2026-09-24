@@ -4,9 +4,10 @@
 
 use tauri::Manager;
 
+use crate::proxy::{current_discovery, run_blocking};
 use crate::sidecar::Discovery;
 use crate::window_roles::{show_role_window, toggle_deck_window, DECK_WINDOW};
-use crate::{current_discovery, hotkey, http, run_blocking, AppState, SIDECAR_TIMEOUT};
+use crate::{hotkey, http, AppState, SIDECAR_TIMEOUT};
 
 /// (Re)register the global shortcuts from the sidecar's `/config`: the deck
 /// toggle and the opt-in "next blocked agent" hotkey. A failure leaves the deck

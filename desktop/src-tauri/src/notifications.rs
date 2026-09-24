@@ -10,11 +10,12 @@ use tauri::Manager;
 
 use crate::banner_native::{post_native_notification, withdraw_banners};
 use crate::notify_pump::{self, NotifyCursor, PendingNotification};
+use crate::proxy::run_blocking;
 use crate::sidecar::Discovery;
 use crate::sync_util::LockExt;
 use crate::tray::{TrayHandles, TrayMenuItems};
 use crate::{
-    banners, http, note_runtime_ok, rediscover_runtime, run_blocking, AppState, SIDECAR_TIMEOUT,
+    banners, http, note_runtime_ok, rediscover_runtime, AppState, SIDECAR_TIMEOUT,
 };
 
 /// Per-process shell identity for the banner claim. A fresh shell process

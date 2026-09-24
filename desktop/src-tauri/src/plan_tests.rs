@@ -5,6 +5,7 @@ use super::*;
 use crate::banner_native::*;
 use crate::notifications::*;
 use crate::notify_pump::*;
+use crate::proxy::*;
 use crate::tray::*;
 use crate::window_roles::*;
 
