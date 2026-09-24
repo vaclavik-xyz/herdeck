@@ -10,6 +10,10 @@ bridge.BridgeUsageFeed). ``[usage].source`` picks the input:
   thin client never spawns ``codex app-server`` just before its bridge shows
   up. A bridge that drops its offer (disconnect, restart without usage) keeps
   its last numbers for ``grace_s``; only then does ``auto`` fall back to local.
+  A bridge that offers usage but has no numbers (its poller failing, e.g. a
+  LaunchDaemon bridge whose codex/codexbar cannot reach the login keychain)
+  counts for ``empty_grace_s`` — long enough for a first poll — and then
+  ``auto`` falls back to local until the bridge sends numbers again.
 * ``local``: only the own poller (the pre-bridge behaviour).
 * ``bridge``: only bridge data; never a local poll.
 
@@ -44,6 +48,10 @@ log = logging.getLogger(__name__)
 # offer keeps its numbers (a network flap must not spawn a local poller).
 _GRACE_S = 15.0
 _TICK_S = 5.0
+# How long a bridge that offers usage may send no numbers before ``auto``
+# stops waiting for it: covers a first bridge poll (codex app-server start
+# <= 60 s, codexbar <= 120 s).
+_EMPTY_GRACE_S = 180.0
 
 
 @dataclass
@@ -51,6 +59,7 @@ class _Bridge:
     known: bool = False  # answered at least once on this hub (snapshot/frame/down)
     offered: bool = False
     lost_at: float | None = None
+    empty_since: float | None = None  # offered but no numbers since then
     data: dict = field(default_factory=dict)  # provider -> ProviderUsage
 
 
@@ -72,6 +81,7 @@ class UsageHub:
         clock=time.monotonic,
         wall_clock=time.time,
         grace_s: float = _GRACE_S,
+        empty_grace_s: float = _EMPTY_GRACE_S,
         tick_s: float = _TICK_S,
         run_thread: bool = True,
     ):
@@ -87,6 +97,7 @@ class UsageHub:
         self._clock = clock
         self._wall_clock = wall_clock
         self._grace = grace_s
+        self._empty_grace = empty_grace_s
         self._lock = threading.Lock()
         # Serializes evaluate(): the tracker is single-threaded and views must
         # reach it in order. Never held by a caller of the hub's own lock.
@@ -142,6 +153,10 @@ class UsageHub:
                 bridge.lost_at = None
                 if providers is not None:
                     bridge.data = {usage.provider: usage for usage in providers}
+                if bridge.data:
+                    bridge.empty_since = None
+                elif bridge.empty_since is None:
+                    bridge.empty_since = now
             elif bridge.offered:
                 bridge.offered = False
                 bridge.lost_at = now
@@ -172,6 +187,12 @@ class UsageHub:
                 "source": self._source,
                 "active": self._mode,
                 "bridges": [sid for sid in self._ordered_ids_locked() if self._live(sid, now)],
+                # offering usage but without numbers past the empty grace
+                "bridges_empty": [
+                    sid
+                    for sid in self._ordered_ids_locked()
+                    if self._live(sid, now) and not self._useful(sid, now)
+                ],
             }
 
     def close(self) -> None:
@@ -242,7 +263,7 @@ class UsageHub:
             return "local"
         if self._source == "bridge":
             return "bridge"
-        if any(self._live(sid, now) for sid in self._bridges):
+        if any(self._useful(sid, now) for sid in self._bridges):
             return "bridge"
         resolved = all(self._bridges.get(sid, _Bridge()).known for sid in self._order)
         if resolved or now - self._undecided_since >= self._grace:
@@ -256,6 +277,15 @@ class UsageHub:
         if bridge.offered:
             return True
         return bridge.lost_at is not None and now - bridge.lost_at < self._grace
+
+    def _useful(self, sid: str, now: float) -> bool:
+        """Live, and with numbers — or still inside its first-poll grace."""
+        if not self._live(sid, now):
+            return False
+        bridge = self._bridges[sid]
+        if bridge.data:
+            return True
+        return bridge.empty_since is not None and now - bridge.empty_since < self._empty_grace
 
     def _ordered_ids_locked(self) -> list[str]:
         extra = [sid for sid in self._bridges if sid not in self._order]

@@ -590,6 +590,10 @@ def herdr_cli_reporter(env: Mapping[str, str]) -> Reporter:
                 binary,
                 "pane",
                 "report-metadata",
+                # herdr 0.9.1 requires the pane id right after the subcommand:
+                # trailing it (as its --help usage suggests) fails with
+                # "unknown option: <source>" and the token never lands.
+                pane_id,
                 "--source",
                 METADATA_SOURCE,
                 "--token",
@@ -598,7 +602,6 @@ def herdr_cli_reporter(env: Mapping[str, str]) -> Reporter:
                 str(TOKEN_TTL_MS),
                 "--seq",
                 str(time.time_ns()),
-                pane_id,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
