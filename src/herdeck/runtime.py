@@ -130,15 +130,18 @@ def main() -> int:
     configure_logging(debug=bool(os.environ.get("HERDECK_DEBUG")))
     port = int(os.environ.get("HERDECK_DECKAPP_PORT", "0"))
     write_discovery = _should_write_discovery()
+    # Handlers go in before anything is published: a SIGTERM sent as soon as
+    # the discovery line (or runtime.json) appears must take the clean path
+    # below, not the default action that leaves a stale runtime.json behind.
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
     app, sink, info, path = build_runtime(
         host="127.0.0.1",
         port=port,
         write_discovery=write_discovery,
     )
     print(json.dumps(info), flush=True)  # stdout discovery fallback (parity with the sidecar)
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
     if parent_watch_enabled():
         # Spawned by the desktop shell: exit through this same clean path when
         # the shell dies (crash / SIGKILL / Force Quit), not just on SIGTERM.
