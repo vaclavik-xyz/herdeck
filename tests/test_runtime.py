@@ -213,6 +213,8 @@ def test_logging_keeps_notification_routes_at_info(monkeypatch):
     assert calls[0]["level"] == logging.WARNING
     assert logging.getLogger("herdeck.notify").getEffectiveLevel() == logging.INFO
     assert logging.getLogger("herdeck.deckapp.live").getEffectiveLevel() == logging.INFO
+    # The shell-claim timeline + fallback reasons ride the herdeck.notify tree.
+    assert logging.getLogger("herdeck.notify.claim").getEffectiveLevel() == logging.INFO
 
     runtime.configure_logging(debug=True)
     assert calls[1] == {"level": logging.DEBUG}

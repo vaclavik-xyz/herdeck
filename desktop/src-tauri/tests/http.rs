@@ -158,6 +158,7 @@ fn fallback_notification_identifies_shell_and_item() {
         "gen-1",
         7,
         "shell-a",
+        "no permission",
     )
     .unwrap();
     assert_eq!(code, 204);
@@ -165,7 +166,7 @@ fn fallback_notification_identifies_shell_and_item() {
     assert!(req.starts_with("POST /notifications/fallback HTTP/1.1"));
     assert!(req.contains("X-Herdeck-Token: TOKEN\r\n"));
     assert!(req.ends_with(
-        "{\"generation\":\"gen-1\",\"seq\":7,\"shell_gen\":\"shell-a\"}"
+        "{\"error\":\"no permission\",\"generation\":\"gen-1\",\"seq\":7,\"shell_gen\":\"shell-a\"}"
     ));
 }
 

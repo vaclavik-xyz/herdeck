@@ -20,6 +20,9 @@ from .sinks import RenderFrame
 from .source import StateSource
 
 log = logging.getLogger(__name__)
+# Under herdeck.notify so the runtime keeps these at INFO (runtime.configure_logging):
+# the claim timeline is what explains a banner that came via osascript.
+claim_log = logging.getLogger("herdeck.notify.claim")
 
 # NOTE: herdeck.icons (and its Pillow dependency) is imported lazily inside the
 # render path, not at module import time, so `import herdeck.deckapp` — and the
@@ -788,18 +791,57 @@ class DeckApp:
         shell never resets pending runtime state. This method tracks liveness
         only; resetting here used to race fallback and duplicate/drop alerts.
         """
+        now = time.monotonic()
         with self._shell_claim_lock:
+            last = getattr(self, "_shell_last_seen", None)
+            previous_gen = getattr(self, "_shell_gen", None)
+            live = last is not None and now - last < self._SHELL_CLAIM_TTL_S
             if shell_gen is not None:
                 self._shell_gen = shell_gen
-            self._shell_last_seen = time.monotonic()
+            self._shell_last_seen = now
+            self._shell_claim_lapse_logged = False
+        if not live:
+            claim_log.info(
+                "notification shell claim acquired gen=%s (%s)",
+                shell_gen,
+                "first claim" if last is None else f"after {now - last:.0f}s without one",
+            )
+        elif shell_gen is not None and previous_gen is not None and shell_gen != previous_gen:
+            claim_log.info(
+                "notification shell claim moved gen=%s -> %s", previous_gen, shell_gen
+            )
+
+    def shell_claim_age(self) -> float | None:
+        """Seconds since a shell last claimed banner duty; None if none ever did."""
+        with self._shell_claim_lock:
+            last = getattr(self, "_shell_last_seen", None)
+        return None if last is None else max(0.0, time.monotonic() - last)
 
     def shell_claims_banners(self) -> bool:
-        """True while a shell polled /state recently (within the claim TTL)."""
+        """True while a shell polled /state recently (within the claim TTL).
+
+        Consulted for every notification, so this is where a lapse (a shell that
+        stopped polling) is noticed and logged — once per lapse."""
+        now = time.monotonic()
         with self._shell_claim_lock:
-            return (
-                time.monotonic() - getattr(self, "_shell_last_seen", -1e9)
-                < self._SHELL_CLAIM_TTL_S
+            last = getattr(self, "_shell_last_seen", None)
+            live = last is not None and now - last < self._SHELL_CLAIM_TTL_S
+            report_lapse = (
+                not live
+                and last is not None
+                and not getattr(self, "_shell_claim_lapse_logged", False)
             )
+            if report_lapse:
+                self._shell_claim_lapse_logged = True
+            gen = getattr(self, "_shell_gen", None)
+        if report_lapse:
+            claim_log.warning(
+                "notification shell claim lapsed gen=%s last_claim_age=%.0fs (ttl %.0fs)",
+                gen,
+                now - last,
+                self._SHELL_CLAIM_TTL_S,
+            )
+        return live
 
     def shell_owns_claim(self, shell_gen: str | None) -> bool:
         with self._shell_claim_lock:
@@ -1191,6 +1233,14 @@ class DeckApp:
                     if not app.shell_owns_claim(shell_gen):
                         self._send(409)
                         return
+                    error = body.get("error")
+                    claim_log.warning(
+                        "notification fallback=osascript reason=shell_native_failed "
+                        "id=%s:%s error=%s",
+                        generation,
+                        seq,
+                        (error[:300] if isinstance(error, str) and error else "unknown"),
+                    )
                     try:
                         delivered = fallback(generation, seq)
                     except Exception:
@@ -1541,7 +1591,7 @@ def create_live_app(
         # The shell claims banner duty only while it polls /state with a
         # granted notification permission; otherwise the runtime falls back
         # to plain osascript alerts.
-        source.set_notify_gate(app.shell_claims_banners)
+        source.set_notify_gate(app.shell_claims_banners, claim_age=app.shell_claim_age)
     return app
 
 

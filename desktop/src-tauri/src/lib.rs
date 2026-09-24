@@ -985,6 +985,7 @@ fn start_notify_pump(app: tauri::AppHandle) {
                     &item.generation,
                     item.seq,
                     &shell_gen(),
+                    &err.to_string(),
                 );
                 if code == Ok(204) {
                     let mut cursor = state.notify_cursor.lock().unwrap();

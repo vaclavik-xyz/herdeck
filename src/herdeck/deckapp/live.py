@@ -106,11 +106,14 @@ class LiveSource(StateSource):
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
+        self._notify_claim_age: Callable[[], float | None] = lambda: None
         # Banners carry the agent's project mark (favicon or monogram).
         self._notify_icons = notify_icons or NotificationIconCache()
         if config.notifications.enabled:
             factory = notify_sink_factory or (
-                lambda feed, gate: deckapp_sink(feed, gate, self._config)
+                lambda feed, gate: deckapp_sink(
+                    feed, gate, self._config, claim_age=lambda: self._notify_claim_age()
+                )
             )
             self._notifier = Notifier(sink=factory(self._notify_feed, lambda: self._notify_gate()))
         else:
@@ -266,14 +269,21 @@ class LiveSource(StateSource):
 
     # --- notification plumbing (consumed by the deck shell via /state) -------
 
-    def set_notify_gate(self, gate: Callable[[], bool]) -> None:
+    def set_notify_gate(
+        self,
+        gate: Callable[[], bool],
+        claim_age: Callable[[], float | None] | None = None,
+    ) -> None:
         """Set the "a shell can post banners" predicate.
 
         True -> the runtime leaves both banner and sound to the shell; False ->
         alerts fall back to a plain osascript banner carrying the sound.
-        The DeckApp wires this to its shell-claim heartbeat.
+        The DeckApp wires this to its shell-claim heartbeat; ``claim_age``
+        (seconds since the last claim, None = never) feeds the fallback reason.
         """
         self._notify_gate = gate
+        if claim_age is not None:
+            self._notify_claim_age = claim_age
 
     def notifications_feed_state(self) -> dict:
         """Recent event notifications for the shell to post natively."""
