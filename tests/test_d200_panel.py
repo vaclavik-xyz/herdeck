@@ -820,11 +820,19 @@ def test_compose_panel_draws_offline_note_on_text_and_gauge_panels():
     assert plain.cache_key() != gauged.cache_key()
 
 
-def test_compose_panel_note_yields_to_a_full_body():
-    full = ["▲ 2 need you", "api", "blocked 5m"]
-    a = PanelView("x", full, "amber")
-    b = PanelView("x", full, "amber", note="t3 offline")
-    assert compose_panel(a).tobytes() == compose_panel(b).tobytes()
+def test_compose_panel_note_takes_the_footer_over_the_hint():
+    # The note and the press hint share the footer's left slot: an outage
+    # warning wins, and never eats into the headline/body above it.
+    hinted = PanelView("2 need you", [], "amber", headline="api", solid=True, hint="press · answer")
+    both = PanelView(
+        "2 need you", [], "amber", headline="api", solid=True, hint="press · answer",
+        note="t3 offline",
+    )
+    noted = PanelView("2 need you", [], "amber", headline="api", solid=True, note="t3 offline")
+    assert compose_panel(both).tobytes() == compose_panel(noted).tobytes()
+    assert compose_panel(both).tobytes() != compose_panel(hinted).tobytes()
+    top = (0, 0, 458, 140)  # above the footer
+    assert compose_panel(both).crop(top).tobytes() == compose_panel(hinted).crop(top).tobytes()
 
 
 def test_standard_writer_comes_from_config_or_env(tmp_path, monkeypatch):

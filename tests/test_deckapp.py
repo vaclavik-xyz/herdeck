@@ -1423,3 +1423,15 @@ def test_served_app_polls_shutdown_quickly():
         assert server._SERVE_POLL_INTERVAL <= 0.1
     finally:
         app.close()
+
+
+def test_held_panel_wraps_a_long_error_as_body_text():
+    from herdeck.deckapp.server import _held_panel
+    from herdeck.driver.base import PanelView
+
+    short = _held_panel(PanelView, "Pin not saved", ["Try again"], "red")
+    assert (short.headline, short.lines) == ("Try again", [])
+    err = "invalid value for [view].tile_fill: 'soldi' (expected none/tint/solid)"
+    long = _held_panel(PanelView, "reload failed", [err], "red")
+    # a one-line headline would cut off the cause; the body wraps it
+    assert (long.headline, long.lines) == ("", [err])

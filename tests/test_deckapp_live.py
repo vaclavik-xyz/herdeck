@@ -771,7 +771,7 @@ def test_offline_renders_offline_overview_panel():
     orch = Orchestrator(src.config, slots=13)
     src.apply_to(orch)
     panel = orch.render().panel
-    assert panel.title == "OFFLINE"  # reuses layout.panel_overview offline path
+    assert panel.title == "Offline"  # reuses layout.panel_overview offline path
     assert src.connected is False
 
 
@@ -1294,7 +1294,7 @@ def test_usage_alerts_go_through_the_agent_notifier():
         [UsageAlert("threshold", "claude", "5h", 80, None), UsageAlert("reset", "codex", "7d", 100, None)]
     )
     assert notifier.calls == [
-        ("Claude 5h · 80 % used", "usage limits", "Ping"),
+        ("Claude 5h · 80 % used", "Usage limits", "Ping"),
         ("Codex 7d reset", "you can continue", "Ping"),
     ]
 

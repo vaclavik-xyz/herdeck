@@ -171,6 +171,7 @@ class Orchestrator:
         # (status, started at, the bridge's status_since_ms it came from or None).
         self._since: dict[AgentKey, tuple[Status, float, int | None]] = {}
         self._down: set[str] = set()
+        self._down_since: dict[str, float] = {}  # server id -> when it went down
         # Servers seen connected at least once. A configured backend that never
         # came up (kept in config but not running, e.g. T3) is not announced
         # as offline on the panel; losing one that WAS up is a real outage.
@@ -187,7 +188,7 @@ class Orchestrator:
         # Last deck press (or view entry) — drives MENU_IDLE_TIMEOUT_S.
         self._last_press_at: float = self._clock()
         # When the current drill was opened: blocks that start later are
-        # counted on the drill panel ("▲ 2 more blocked").
+        # counted on the drill panel ("+2 more waiting").
         self._drill_since: float = 0.0
         # True while the open drill belongs to the triage loop (NEEDS YOU panel
         # press / desktop hotkey): answering it moves straight on to the next
@@ -294,7 +295,11 @@ class Orchestrator:
         rec = self._since.get(key)
         if rec is None:
             return ""
-        s = int(max(0, self._clock() - rec[1]))
+        return self._fmt_elapsed(self._clock() - rec[1])
+
+    @staticmethod
+    def _fmt_elapsed(seconds: float) -> str:
+        s = int(max(0, seconds))
         if s < 60:
             # 5s buckets: the text is part of the baked tile's render signature,
             # so per-second granularity minted a fresh cache entry (full PIL
@@ -369,6 +374,9 @@ class Orchestrator:
         self._down.discard(server_id) if up else self._down.add(server_id)
         if up:
             self._ever_up.add(server_id)
+            self._down_since.pop(server_id, None)
+        else:
+            self._down_since.setdefault(server_id, self._clock())
         if not up and self._pending_confirm is not None:
             # An armed confirmation must not survive an outage: the offline
             # drill hides it, so after a quick reconnect a single press could
@@ -380,6 +388,11 @@ class Orchestrator:
         """Servers the overview panel accounts for: the configured ones plus any
         unknown id reported down (so a stray id can never read as a partial)."""
         return len({s.id for s in self.config.servers} | self._down)
+
+    def _down_for(self) -> str:
+        """How long the longest current outage has lasted ("" = unknown)."""
+        since = [self._down_since[s] for s in self._down if s in self._down_since]
+        return self._fmt_elapsed(self._clock() - min(since)) if since else ""
 
     def _all_down(self) -> bool:
         """Every server is down -> the full OFFLINE panel. Some (not all) down
@@ -412,7 +425,12 @@ class Orchestrator:
         tiles = [TileView(i, "", "empty") for i in range(self.slots)]
         color = self.config.theme.colors.get("offline", "red")
         panel = PanelView(
-            self._tr("config_error_title"), [reason, self._tr("config_error_hint")], color
+            self._tr("config_error_title"),
+            [self._tr("config_error_hint")],
+            color,
+            headline=reason,
+            solid=True,
+            hint=self._tr("panel.recovers"),
         )
         return RenderState(tiles, panel)
 
@@ -803,13 +821,17 @@ class Orchestrator:
             key: at for key, (status, at, _ms) in self._since.items() if status is Status.BLOCKED
         }
 
-    def _blocked_spotlight(self) -> tuple[str, str] | None:
-        """The longest-waiting BLOCKED agent as (label, elapsed), or None."""
+    def _blocked_spotlight(self) -> layout.Spotlight | None:
+        """The longest-waiting BLOCKED agent (and who waits after it), or None."""
         queue = self._blocked_queue()
         if not queue:
             return None
         oldest = self._agents[queue[0]]
-        return (oldest.label, self._elapsed_text(oldest.key))
+        detail = " · ".join(part for part in (oldest.tab, oldest.agent_type) if part)
+        others = tuple(
+            (self._agents[key].label, self._elapsed_text(key)) for key in queue[1:3]
+        )
+        return layout.Spotlight(oldest.label, self._elapsed_text(oldest.key), detail, others)
 
     def render(self) -> RenderState:
         if self._config_error is not None:
@@ -941,37 +963,41 @@ class Orchestrator:
             # A full outage or a blocked agent takes the panel back at once; a
             # partial outage does not (the user still wants their limits).
             detail_pages = layout.usage_detail_pages(self._usage)
-            title = self._tr("usage_title")
-            if detail_pages > 1:
-                page = min(self._usage_detail_page, detail_pages - 1)
-                title = f"{title} · {page + 1}/{detail_pages}"
+            page = min(self._usage_detail_page, detail_pages - 1)
             panel = PanelView(
-                title,
-                layout.usage_detail_lines(
-                    self._usage,
-                    page=self._usage_detail_page,
-                    lang=self.config.view.language,
-                ),
-                "grey",
+                self._tr("usage_title"),
                 gauges=layout.usage_detail_gauges(
                     self._usage,
                     page=self._usage_detail_page,
                     lang=self.config.view.language,
                 ),
-                gauge_meta=self._tr("usage_meta"),
+                meta=self._tr("usage_meta"),
+                page=(page, detail_pages) if detail_pages > 1 else None,
+                hint=self._tr(
+                    "panel.press_more" if page + 1 < detail_pages else "panel.press_close"
+                ),
             )
             return RenderState(tiles, panel)
+        sent = ""
+        if self._sent_note is not None:
+            label, at = self._sent_note
+            if self._clock() - at <= _SENT_NOTE_TTL_S:
+                # acknowledge the action while its status change propagates —
+                # the tile stays amber until the bridge round-trip completes
+                sent = self._tr("sent", label=label)
+            else:
+                self._sent_note = None
+        all_down = self._all_down()
         panel = layout.panel_overview(
             layout.summary(self._agents.values()),
             self._page % pages,
             pages,
             # A full outage shows OFFLINE whatever connected before; in a
             # partial one only servers that were up once get the note.
-            self._down if self._all_down() else self._down & self._ever_up,
+            self._down if all_down else self._down & self._ever_up,
             sum(s.lifecycle == "active" for s in self._agents.values()),
             spotlight,
             lang=self.config.view.language,
-            usage_lines=layout.usage_summary_lines(self._usage) if self._usage else None,
             usage_gauges=(
                 layout.usage_summary_gauges(
                     self._usage,
@@ -981,19 +1007,11 @@ class Orchestrator:
                 else None
             ),
             servers=self._server_count(),
+            colors=self.config.theme.colors,
+            sent=sent,
+            down_for=self._down_for() if all_down else "",
+            left=len(self._triage_queue()) if sent else None,
         )
-        if panel.color == "red":
-            panel.color = self.config.theme.colors.get("offline", panel.color)
-        elif panel.color == "amber":
-            panel.color = self.config.theme.colors.get("blocked", panel.color)
-        if self._sent_note is not None:
-            label, at = self._sent_note
-            if self._clock() - at <= _SENT_NOTE_TTL_S:
-                # acknowledge the action while its status change propagates —
-                # the tile stays amber until the bridge round-trip completes
-                panel.lines = [self._tr("sent", label=label), *panel.lines]
-            else:
-                self._sent_note = None
         return RenderState(tiles, panel)
 
     def _render_profile_menu(self) -> RenderState:
@@ -1014,7 +1032,7 @@ class Orchestrator:
             if self.config.meta.env_locked_profile
             else self._tr("pick_profile")
         )
-        return RenderState(tiles, PanelView(self._tr("profiles_title"), [locked], "grey"))
+        return RenderState(tiles, PanelView(self._tr("profiles_title"), headline=locked))
 
     def _render_launcher(self) -> RenderState:
         types = list(self.config.start_profiles)
@@ -1041,13 +1059,14 @@ class Orchestrator:
                 tiles.append(TileView(i, self._tr("back"), "grey"))
             else:
                 tiles.append(TileView(i, "", "empty"))
-        lines = [self._tr("pick_type")]
+        lines = []
         target = self._launch_server()
         if target is not None and len(self.config.overview_order) > 1:
             # With several servers the new agent's destination is not obvious:
             # say where it will start instead of silently using the first one.
             lines.append(self._tr("launch_on", server=target))
-        return RenderState(tiles, PanelView(self._tr("new_agent_title"), lines, "grey"))
+        panel = PanelView(self._tr("new_agent_title"), lines, headline=self._tr("pick_type"))
+        return RenderState(tiles, panel)
 
     def _launch_server(self) -> str | None:
         """Where a launcher press starts the agent: the first overview server."""
@@ -1266,33 +1285,37 @@ class Orchestrator:
             else:
                 tiles.append(TileView(i, "", "empty"))
         panel = (
-            layout.panel_detail(agent, agent.preview if agent.backend == "t3" else self._detection, lang=self.config.view.language)
+            layout.panel_detail(
+                agent,
+                agent.preview if agent.backend == "t3" else self._detection,
+                lang=self.config.view.language,
+                elapsed=self._elapsed_text(agent.key),
+                color=self._agent_color(agent),
+            )
             if agent is not None
-            else PanelView("", [], "grey")
+            else PanelView("")
         )
         if down:
-            offline = self.config.theme.colors.get("offline", "red")
-            panel = PanelView(panel.title, [self._tr("offline_reconnecting")], offline)
-        elif armed is not None and agent is not None:
             panel = PanelView(
-                panel.title, [self._tr("press_to_confirm"), *panel.lines], panel.color
+                self._tr("offline_title"),
+                color=self.config.theme.colors.get("offline", "red"),
+                headline=self._tr("reconnecting"),
+                meta=panel.meta,
             )
+        elif armed is not None and agent is not None:
+            panel.title = self._tr("press_to_confirm")
+            panel.color = self.config.theme.colors.get("offline", "red")
+            panel.hint = ""
         elif agent is not None:
             others = self._blocked_since_drill()
             if others:
-                panel = PanelView(
-                    panel.title,
-                    [self._tr("others_blocked", n=others), *panel.lines],
-                    panel.color,
-                )
+                panel.aside = self._tr("others_blocked", n=others)
             if self._triage and self._sent_note is not None:
                 # The triage loop moved straight on to the next agent: confirm
                 # the previous answer went out, as the overview would have.
                 label, at = self._sent_note
                 if self._clock() - at <= _SENT_NOTE_TTL_S and agent.label != label:
-                    panel = PanelView(
-                        panel.title, [self._tr("sent", label=label), *panel.lines], panel.color
-                    )
+                    panel.sent = self._tr("sent", label=label)
         return RenderState(tiles, panel)
 
     def _blocked_since_drill(self) -> int:

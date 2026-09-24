@@ -7,9 +7,7 @@ from datetime import UTC
 
 from herdeck.layout import (
     usage_detail_gauges,
-    usage_detail_lines,
     usage_summary_gauges,
-    usage_summary_lines,
 )
 from herdeck.usage import (
     CodexAppServerSource,
@@ -82,14 +80,6 @@ def test_window_labels():
     assert _window_label(None) == "?"
 
 
-def test_usage_summary_lines_are_compact():
-    data = parse_usage(_CODEXBAR_JSON)
-    assert usage_summary_lines(data) == [
-        "Claude 5h 19% · 7d 43%",
-        "Codex 5h 2% · 7d 30%",
-    ]
-
-
 def test_usage_summary_gauges_keep_provider_identity_and_windows():
     gauges = usage_summary_gauges(parse_usage(_CODEXBAR_JSON))
     assert [(g.label, g.window, g.used_percent, g.color) for g in gauges] == [
@@ -98,23 +88,6 @@ def test_usage_summary_gauges_keep_provider_identity_and_windows():
         ("Codex", "5H", 2, "teal"),
         ("Codex", "7D", 30, "teal"),
     ]
-
-
-def test_usage_detail_lines_carry_reset_times():
-    from datetime import datetime
-
-    data = [
-        ProviderUsage(
-            "claude",
-            [UsageWindow("5h", 19, "2026-07-02T23:00:00Z")],
-        )
-    ]
-    now = datetime(2026, 7, 2, 20, 0, tzinfo=UTC)
-    (line,) = usage_detail_lines(data, now=now)
-    assert line.startswith("Claude 5h 19% → ")  # reset rendered in local time
-    data[0].windows[0].resets_at = None
-    (line,) = usage_detail_lines(data, now=now)
-    assert line == "Claude 5h 19%"  # no reset -> no dangling arrow
 
 
 def test_usage_detail_gauges_include_reset_hint():
@@ -139,7 +112,6 @@ def test_usage_detail_shows_the_pace_hint_only_with_a_projection():
     paced, plain = usage_detail_gauges(data)
     assert (paced.pace, plain.pace) == ("full ~40m early", "")
     assert usage_detail_gauges(data, lang="cs")[0].pace == "plno ~40m dřív"
-    assert usage_detail_lines(data) == ["Claude 5h 60% · full ~40m early", "Claude 7d 20%"]
     # The overview cards stay compact: no pace there.
     assert all(g.pace == "" for g in usage_summary_gauges(data))
 
@@ -166,7 +138,7 @@ def test_usage_summary_gauges_include_localized_reset_hint_when_available():
     assert usage_summary_gauges(data, now=now, lang="cs")[0].hint == ""
 
 
-def test_usage_detail_lines_page_through_all_windows():
+def test_usage_detail_gauges_page_through_all_windows():
     from herdeck.layout import usage_detail_pages
 
     data = [
@@ -176,9 +148,10 @@ def test_usage_detail_lines_page_through_all_windows():
     # 4 windows > the 3-line panel body: page 2 carries the rest — a silent
     # cap made e.g. Codex's weekly reset unobtainable on any surface.
     assert usage_detail_pages(data) == 2
-    assert len(usage_detail_lines(data, page=0)) == 3
-    assert usage_detail_lines(data, page=1) == ["Codex 7d 4%"]
-    assert usage_detail_lines(data, page=99) == ["Codex 7d 4%"]  # clamped, never empty
+    assert len(usage_detail_gauges(data, page=0)) == 3
+    assert [(g.label, g.window) for g in usage_detail_gauges(data, page=1)] == [("Codex", "7D")]
+    # clamped, never empty
+    assert [(g.label, g.window) for g in usage_detail_gauges(data, page=99)] == [("Codex", "7D")]
 
 
 class _Proc:

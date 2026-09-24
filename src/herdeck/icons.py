@@ -317,7 +317,7 @@ _font_cache: dict[tuple[int, bool], object] = {}  # (size, bold) -> font
 # 18: all text is drawn with the vendored Inter font (was Arial/Helvetica on
 #     macOS, DejaVu/Liberation on Linux).
 # 19: running subagents draw a fork badge + count in the bottom band.
-TILE_VERSION = 19
+TILE_VERSION = 20
 # The status word / elapsed time column: right of the logo box incl. the comet
 # ring (x < 66), inside the 12px right margin.
 STATUS_MAX_W = ICON_SIZE - 12 - 70
@@ -475,34 +475,6 @@ def _font(size: int, *, bold: bool = True):
 def _load_big_font():
     """A large scalable font for the letter fallback; None if none is available."""
     return _font(_GLYPH_FONT_SIZE)
-
-
-def _panel_bg(color: str) -> tuple[int, int, int]:
-    if color == "amber":
-        return (40, 30, 12)
-    if color == "grey":
-        return (30, 30, 34)
-    rgb = COLORS.get(color)
-    if rgb is None:
-        return (30, 30, 34)
-    return tuple(max(12, int(channel * 0.28)) for channel in rgb)
-
-
-_PANEL_BODY_LINES = 3
-
-
-def _panel_body_lines(draw, lines, font, max_w, max_lines=_PANEL_BODY_LINES) -> list[str]:
-    """Pixel-wrapped display lines for the panel body (<= max_lines total).
-
-    Panel lines are LOGICAL lines; wrapping them here with the actual font is
-    what keeps a long prompt readable — character-count wrapping upstream
-    systematically overflowed the pixel budget and ellipsized every full line."""
-    out: list[str] = []
-    for line in lines:
-        if len(out) == max_lines:
-            break
-        out.extend(_wrap(draw, line, font, max_w, max_lines - len(out)))
-    return out[:max_lines]
 
 
 def _anim_phase(raw_phase, animation: str):
@@ -712,52 +684,309 @@ def _plate_for(img: Image.Image, bg) -> tuple[int, int, int] | None:
     return max((_PLATE_LIGHT, _PLATE_DARK), key=lambda plate: _contrast(plate, mean))
 
 
+# --- status panel ---------------------------------------------------------
+# One layout for every panel state: a header (state chip left, meta right), a
+# main area (count cards, usage gauges, or a big headline with a line or two
+# under it, or body text such as an agent's prompt) and a footer (what a press
+# does, or a warning note, on the left; page dots or an accent aside on the
+# right). "Needs you", "offline" and "config error" fill the whole panel with
+# their colour; everything else sits on the dark calm background.
+_PANEL_SS = 2  # supersampling: drawn at 2x, downsampled (smooth pills/cards)
+_P_BG = (21, 23, 27)
+_P_INK = (242, 242, 239)
+_P_MUTE = (163, 168, 176)
+_P_CARD = (42, 46, 53)
+_P_DOT_DIM = (91, 96, 104)
+_P_NOTE = (255, 138, 126)
+_P_PAD_X, _P_PAD_Y = 18, 14
+_P_CHIP_H = 26
+_P_FOOT_H = 18
+
+
+def _mix(a, b, t: float) -> tuple[int, int, int]:
+    """``a`` moved ``t`` (0..1) of the way towards ``b``."""
+    return tuple(round(x + (y - x) * t) for x, y in zip(a, b, strict=True))
+
+
+def _panel_palette(panel: PanelView) -> dict:
+    """Background / ink / muted / chip colours for the panel's tone."""
+    if panel.solid:
+        bg = COLORS.get(panel.color, COLORS["grey"])
+        dark_ink = _ink_for(bg) == (0, 0, 0)
+        ink = _mix(bg, (0, 0, 0), 0.88) if dark_ink else _mix((255, 255, 255), bg, 0.06)
+        mute = _mix(bg, ink, 0.72)
+        return {"bg": bg, "ink": ink, "mute": mute, "chip": ink, "chip_ink": bg,
+                "dim": _mix(bg, ink, 0.35), "note": ink, "aside": ink}
+    chip = _P_CARD if panel.color == "grey" else COLORS.get(panel.color, _P_CARD)
+    return {"bg": _P_BG, "ink": _P_INK, "mute": _P_MUTE, "chip": chip,
+            "chip_ink": _P_INK if chip == _P_CARD else _ink_for(chip),
+            "dim": _P_DOT_DIM, "note": _P_NOTE, "aside": COLORS["amber"]}
+
+
+def _spaced_len(draw, text, font, spacing) -> float:
+    return draw.textlength(text, font=font) + spacing * max(0, len(text) - 1)
+
+
+def _draw_spaced(draw, xy, text, font, fill, spacing) -> None:
+    """Letter-spaced text (the uppercase chip and card labels)."""
+    x, y = xy
+    for ch in text:
+        draw.text((x, y), ch, font=font, fill=fill)
+        x += draw.textlength(ch, font=font) + spacing
+
+
+def _truncate_spaced(draw, text, font, max_w, spacing) -> str:
+    if _spaced_len(draw, text, font, spacing) <= max_w:
+        return text
+    while text and _spaced_len(draw, text + "…", font, spacing) > max_w:
+        text = text[:-1]
+    return text + "…" if text else ""
+
+
+_ink_mid_cache: dict[tuple[int, str], float] = {}
+
+
+def _ink_mid(font, sample: str = "Hg") -> float:
+    """The vertical middle of ``sample``'s ink box (fonts are cached forever,
+    so their id is a stable key; measuring per call doubled the panel's
+    text-raster cost)."""
+    key = (id(font), sample)
+    if key not in _ink_mid_cache:
+        top, bottom = font.getbbox(sample)[1::2]
+        _ink_mid_cache[key] = (top + bottom) / 2
+    return _ink_mid_cache[key]
+
+
+def _text_mid(draw, x, cy, text, font, fill) -> None:
+    """Draw ``text`` with its ink box vertically centred on ``cy``."""
+    draw.text((x, cy - _ink_mid(font)), text, font=font, fill=fill)
+
+
+def _draw_check(draw, x, cy, size, fill, width) -> None:
+    pts = [(x, cy), (x + size * 0.36, cy + size * 0.36), (x + size, cy - size * 0.42)]
+    draw.line(pts, fill=fill, width=width, joint="curve")
+
+
+def _panel_header(draw, panel, pal, w, k) -> None:
+    cy = (_P_PAD_Y + _P_CHIP_H / 2) * k
+    left, right = _P_PAD_X * k, w - _P_PAD_X * k
+    meta_w = 0
+    if panel.meta:
+        font = _font(15 * k)
+        meta = _truncate(draw, panel.meta, font, (w - 2 * _P_PAD_X * k) * 0.45)
+        meta_w = draw.textlength(meta, font=font)
+        _text_mid(draw, right - meta_w, cy, meta, font, pal["ink"] if panel.solid else pal["mute"])
+    room = right - left - meta_w - 14 * k
+    if panel.sent:
+        font = _font(16 * k)
+        _draw_check(draw, left + 2 * k, cy, 15 * k, pal["ink"], 3 * k)
+        x = left + 25 * k
+        _text_mid(draw, x, cy, _truncate(draw, panel.sent, font, room - 25 * k), font, pal["ink"])
+        return
+    if not panel.title:
+        return
+    font, spacing = _font(13 * k), 1.2 * k
+    pad = 11 * k
+    dot = 8 * k if panel.chip_dot and not panel.solid else 0
+    inner = room - 2 * pad - (dot + 7 * k if dot else 0)
+    text = _truncate_spaced(draw, panel.title.upper(), font, inner, spacing)
+    chip_w = 2 * pad + _spaced_len(draw, text, font, spacing) + (dot + 7 * k if dot else 0)
+    top = _P_PAD_Y * k
+    draw.rounded_rectangle(
+        (left, top, left + chip_w, top + _P_CHIP_H * k), radius=_P_CHIP_H * k / 2, fill=pal["chip"]
+    )
+    x = left + pad
+    if dot:
+        draw.ellipse((x, cy - dot / 2, x + dot, cy + dot / 2), fill=COLORS.get(panel.chip_dot, _P_INK))
+        x += dot + 7 * k
+    _draw_spaced(draw, (x, cy - _ink_mid(font, "H")), text, font, pal["chip_ink"], spacing)
+
+
+def _panel_footer(draw, panel, pal, w, h, k) -> None:
+    cy = h - (_P_PAD_Y + _P_FOOT_H / 2) * k
+    left, right = _P_PAD_X * k, w - _P_PAD_X * k
+    font = _font(14 * k)
+    right_w = 0
+    if panel.aside:
+        aside = _truncate(draw, panel.aside, font, (right - left) * 0.45)
+        right_w = draw.textlength(aside, font=font)
+        _text_mid(draw, right - right_w, cy, aside, font, pal["aside"])
+    elif panel.page is not None and panel.page[1] > 1:
+        index, count = panel.page
+        label_font = _font(13 * k)
+        label = f"{index % count + 1} / {count}"
+        label_w = draw.textlength(label, font=label_font)
+        _text_mid(draw, right - label_w, cy, label, label_font, pal["mute"])
+        r, gap = 3.5 * k, 6 * k
+        dots = min(count, 8)
+        x = right - label_w - 8 * k - dots * 2 * r - (dots - 1) * gap
+        right_w = right - x
+        for i in range(dots):
+            fill = pal["ink"] if i == index % count else pal["dim"]
+            draw.ellipse((x, cy - r, x + 2 * r, cy + r), fill=fill)
+            x += 2 * r + gap
+    room = right - left - right_w - 14 * k
+    if panel.note:
+        x = left
+        if not panel.solid:
+            r = 4 * k
+            draw.ellipse((x, cy - r, x + 2 * r, cy + r), fill=COLORS["red"])
+            x += 2 * r + 7 * k
+        note = _truncate(draw, panel.note, font, room - (x - left))
+        _text_mid(draw, x, cy, note, font, pal["note"])
+    elif panel.hint:
+        _text_mid(draw, left, cy, _truncate(draw, panel.hint, font, room), font, pal["mute"])
+
+
+def _panel_stats(draw, panel, pal, box, k) -> None:
+    x0, y0, x1, y1 = box
+    n = len(panel.stats)
+    gap = 8 * k
+    card_w = (x1 - x0 - gap * (n - 1)) / n
+    card_h = min(74 * k, y1 - y0)
+    top = y0 + (y1 - y0 - card_h) / 2
+    value_font = _font(34 * k)
+    label_room = card_w - 30 * k
+    # The label font shrinks (11 -> 8 px) until the widest label fits the
+    # narrow Elgato cards ("NEČINNÝ" at 392 px) instead of truncating them all.
+    label_font, spacing = _font(11 * k), 0.8 * k
+    for size in range(11, 7, -1):
+        label_font, spacing = _font(size * k), (0.8 if size > 9 else 0.3) * k
+        widest = max(_spaced_len(draw, st.label.upper(), label_font, spacing) for st in panel.stats)
+        if widest <= label_room:
+            break
+    for i, stat in enumerate(panel.stats):
+        cx = x0 + i * (card_w + gap)
+        draw.rounded_rectangle((cx, top, cx + card_w, top + card_h), radius=10 * k, fill=_P_CARD)
+        r = 4 * k
+        dot_cy = top + 17 * k
+        draw.ellipse(
+            (cx + 11 * k, dot_cy - r, cx + 11 * k + 2 * r, dot_cy + r),
+            fill=COLORS.get(stat.color, _P_INK),
+        )
+        label = _truncate_spaced(draw, stat.label.upper(), label_font, label_room, spacing)
+        _draw_spaced(
+            draw, (cx + 24 * k, dot_cy - _ink_mid(label_font, "H")), label, label_font,
+            pal["mute"], spacing,
+        )
+        value = _truncate(draw, str(stat.value), value_font, card_w - 22 * k)
+        draw.text((cx + 11 * k, top + card_h - 12 * k), value, font=value_font,
+                  fill=pal["ink"], anchor="ls")
+
+
+def _panel_gauges(draw, panel, pal, box, k) -> None:
+    x0, y0, x1, y1 = box
+    gauges = panel.gauges[:6]
+    columns = 1 if len(gauges) <= 3 else 2
+    rows = math.ceil(len(gauges) / columns)
+    col_gap = 18 * k
+    col_w = (x1 - x0 - col_gap * (columns - 1)) / columns
+    row_h = 29 * k
+    gap = min(10 * k, (y1 - y0 - rows * row_h) / max(1, rows - 1)) if rows > 1 else 0
+    top = y0 + (y1 - y0 - rows * row_h - (rows - 1) * gap) / 2
+    label_font, pct_font, hint_font = _font(14 * k), _font(14 * k), _font(12 * k, bold=False)
+    pace_font = _font(12 * k)
+    for i, gauge in enumerate(gauges):
+        row, col = divmod(i, columns)
+        gx = x0 + col * (col_w + col_gap)
+        gy = top + row * (row_h + gap)
+        cy = gy + 8 * k
+        pct = f"{gauge.used_percent}%"
+        pct_w = draw.textlength(pct, font=pct_font)
+        _text_mid(draw, gx + col_w - pct_w, cy, pct, pct_font, pal["ink"])
+        rx = gx + col_w - pct_w - 10 * k
+        label = f"{gauge.label} · {gauge.window}"
+        label_w = min(draw.textlength(label, font=label_font), col_w * 0.62)
+        # A reset hint that does not fit whole drops its leading word
+        # ("reset 14:09" -> "14:09") before it is dropped altogether.
+        short_hint = gauge.hint.split(" ", 1)[-1] if gauge.hint else ""
+        for options, font, fill in (((gauge.pace,), pace_font, COLORS["amber"]),
+                                    ((gauge.hint, short_hint), hint_font, pal["mute"])):
+            for text in options:
+                if not text:
+                    continue
+                tw = draw.textlength(text, font=font)
+                # the label keeps its full width (+ the 6k truncation margin):
+                # the window name matters more than the hint
+                if rx - tw - 16 * k < gx + label_w:
+                    continue
+                _text_mid(draw, rx - tw, cy, text, font, fill)
+                rx -= tw + 10 * k
+                break
+        _text_mid(draw, gx, cy, _truncate(draw, label, label_font, rx - gx - 6 * k), label_font,
+                  pal["ink"])
+        bar_y = gy + row_h - 6 * k
+        _draw_gauge_rail(draw, (gx, bar_y, gx + col_w, bar_y + 6 * k), gauge.used_percent,
+                         _gauge_tone(gauge.color, gauge.used_percent), track=_P_CARD)
+
+
+def _panel_text(draw, panel, pal, box, k) -> None:
+    x0, y0, x1, y1 = box
+    width = x1 - x0
+    if panel.headline:
+        head_font = _fit_font(draw, panel.headline, width, 36 * k, 22 * k)
+        head = _truncate(draw, panel.headline, head_font, width)
+        sub_font = _font(16 * k)
+        sub_lh = 21 * k
+        head_h = head_font.size * 1.05
+        room = int((y1 - y0 - head_h - 9 * k) // sub_lh)
+        sub = _panel_wrapped(draw, panel.lines, sub_font, width, max(0, min(2, room)))
+        block = head_h + (9 * k + len(sub) * sub_lh if sub else 0)
+        y = y0 + (y1 - y0 - block) / 2
+        draw.text((x0, y + head_h), head, font=head_font, fill=pal["ink"], anchor="ls")
+        y += head_h + 9 * k
+        for line in sub:
+            draw.text((x0, y + sub_lh * 0.78), line, font=sub_font, fill=pal["mute"], anchor="ls")
+            y += sub_lh
+        return
+    body_font = _font(18 * k, bold=False)
+    lh = 24 * k
+    body = _panel_wrapped(draw, panel.lines, body_font, width, int((y1 - y0) // lh))
+    y = y0
+    for line in body:
+        draw.text((x0, y + lh * 0.8), line, font=body_font, fill=pal["ink"], anchor="ls")
+        y += lh
+
+
+def _panel_wrapped(draw, lines, font, max_w, max_lines) -> list[str]:
+    """Pixel-wrapped display lines (<= max_lines). Panel lines are LOGICAL
+    lines; wrapping them here with the actual font keeps a long prompt
+    readable — character-count wrapping upstream overflowed the pixel budget."""
+    out: list[str] = []
+    for line in lines:
+        if len(out) >= max_lines:
+            break
+        out.extend(_wrap(draw, line, font, max_w, max_lines - len(out)))
+    # _truncate is a safety net for unbreakable tokens wider than the panel.
+    return [_truncate(draw, line, font, max_w) for line in out[:max_lines]]
+
+
 def compose_panel(panel: PanelView, width: int = PANEL_W) -> Image.Image:
-    """Render a PanelView to a width x 196 image with large, readable text.
+    """Render a PanelView to a width x 196 image.
 
     The default width is the D200 small window's native 458px. The Elgato
     driver composes at 392 so the image splits into two exact 196x196 key
     images; the web simulator and desktop window display the PNG at its true
     aspect either way.
     """
-    if panel.gauges:
-        return _compose_gauge_panel(panel, width)
-    bg = _panel_bg(panel.color)
-    img = Image.new("RGB", (width, PANEL_H), bg)
-    d = ImageDraw.Draw(img)
-    title_f = _font(30)
-    d.text(
-        (16, 12),
-        _truncate(d, panel.title, title_f, width - 32),
-        font=title_f,
-        fill=(255, 255, 255),
-    )
-    line_f = _font(24)
-    y = 60
-    body = _panel_body_lines(d, panel.lines, line_f, width - 32)
-    for line in body:
-        # _truncate is a safety net for unbreakable tokens wider than the panel.
-        d.text((16, y), _truncate(d, line, line_f, width - 32), font=line_f, fill=(232, 232, 236))
-        y += 40
-    if panel.note and len(body) < _PANEL_BODY_LINES:
-        # The note only takes a free body line: blocked/spotlight lines win.
-        d.text((16, y), _truncate(d, panel.note, line_f, width - 32), font=line_f, fill=_NOTE_TEXT)
-    return img
-
-
-_GAUGE_BG = (49, 55, 65)
-_GAUGE_CARD = (66, 73, 85)
-_GAUGE_LINE = (104, 112, 126)
-_GAUGE_MUTED = (200, 205, 215)
-_GAUGE_TEXT = (251, 252, 253)
-# Gauge labels are neutral: the palette colour (violet 'CLAUDE 5h' read at
-# 2.2:1 on the card) lives only in the rail, which also shifts to amber/red as
-# the limit nears — a coloured label then disagreed with its own bar.
-_GAUGE_LABEL = _GAUGE_MUTED
-# PanelView.note (e.g. "t3 offline" during a partial outage): a soft warning
-# tint, readable on both the grey text panel and the gauge header — the note
-# flags one server, it must not make the whole panel read as offline.
-_NOTE_TEXT = (255, 160, 150)
+    k = _PANEL_SS
+    w, h = width * k, PANEL_H * k
+    pal = _panel_palette(panel)
+    img = Image.new("RGB", (w, h), pal["bg"])
+    draw = ImageDraw.Draw(img)
+    _panel_header(draw, panel, pal, w, k)
+    has_footer = bool(panel.hint or panel.note or panel.aside or (panel.page and panel.page[1] > 1))
+    top = (_P_PAD_Y + _P_CHIP_H + 10) * k
+    bottom = h - (_P_PAD_Y + (_P_FOOT_H + 10 if has_footer else 0)) * k
+    box = (_P_PAD_X * k, top, w - _P_PAD_X * k, bottom)
+    if panel.stats:
+        _panel_stats(draw, panel, pal, box, k)
+    elif panel.gauges:
+        _panel_gauges(draw, panel, pal, box, k)
+    else:
+        _panel_text(draw, panel, pal, box, k)
+    _panel_footer(draw, panel, pal, w, h, k)
+    return img.resize((width, PANEL_H), Image.LANCZOS)
 
 
 def _gauge_tone(color: str, used_percent: int) -> tuple[int, int, int]:
@@ -768,132 +997,13 @@ def _gauge_tone(color: str, used_percent: int) -> tuple[int, int, int]:
     return COLORS.get(color, COLORS["violet"])
 
 
-def _draw_gauge_rail(draw, box, used_percent: int, tone) -> None:
+def _draw_gauge_rail(draw, box, used_percent: int, tone, track=_P_CARD) -> None:
     x0, y0, x1, y1 = box
-    radius = max(1, (y1 - y0) // 2)
-    draw.rounded_rectangle(box, radius=radius, fill=_GAUGE_LINE)
-    fill_w = round((x1 - x0) * max(0, min(100, used_percent)) / 100)
+    radius = max(1, (y1 - y0) / 2)
+    draw.rounded_rectangle(box, radius=radius, fill=track)
+    fill_w = (x1 - x0) * max(0, min(100, used_percent)) / 100
     if fill_w:
-        draw.rounded_rectangle((x0, y0, x0 + max(fill_w, 4), y1), radius=radius, fill=tone)
-
-
-def _compose_gauge_panel(panel: PanelView, width: int) -> Image.Image:
-    """Render usage as compact instrument gauges for the physical status window."""
-    img = Image.new("RGB", (width, PANEL_H), _GAUGE_BG)
-    draw = ImageDraw.Draw(img)
-    detail = bool(panel.gauge_meta)
-    title_font = _font(25)
-    draw.text(
-        (16, 10),
-        _truncate(draw, panel.title, title_font, width * 0.56),
-        font=title_font,
-        fill=_GAUGE_TEXT,
-    )
-    meta = panel.gauge_meta if detail else panel.lines[0] if panel.lines else ""
-    note = panel.note.upper() if panel.note else ""
-    meta_font = _font(15)
-    if meta:
-        meta = meta.upper()
-        meta = _truncate(draw, meta, meta_font, width * 0.38)
-        meta_w = draw.textlength(meta, font=meta_font)
-        # With a note the header stacks two short right-aligned rows.
-        draw.text((width - 16 - meta_w, 8 if note else 17), meta, font=meta_font, fill=_GAUGE_MUTED)
-    if note:
-        note = _truncate(draw, note, meta_font, width * 0.38)
-        note_w = draw.textlength(note, font=meta_font)
-        draw.text((width - 16 - note_w, 26 if meta else 17), note, font=meta_font, fill=_NOTE_TEXT)
-    draw.line((16, 45, width - 16, 45), fill=_GAUGE_LINE, width=1)
-
-    columns = min(3, len(panel.gauges)) if detail else min(2, len(panel.gauges))
-    rows = math.ceil(len(panel.gauges) / columns)
-    gap = 8
-    left = 16
-    top = 54
-    available_w = width - 2 * left - gap * (columns - 1)
-    available_h = PANEL_H - top - 10 - gap * (rows - 1)
-    cell_w = available_w / columns
-    cell_h = available_h / rows
-
-    for index, gauge in enumerate(panel.gauges):
-        row, col = divmod(index, columns)
-        x0 = round(left + col * (cell_w + gap))
-        y0 = round(top + row * (cell_h + gap))
-        x1 = round(x0 + cell_w)
-        y1 = round(y0 + cell_h)
-        draw.rounded_rectangle((x0, y0, x1, y1), radius=8, fill=_GAUGE_CARD)
-        tone = _gauge_tone(gauge.color, gauge.used_percent)
-
-        if detail:
-            label_font = _font(16)
-            value_font = _font(31)
-            hint_font = _font(13)
-            label = f"{gauge.label} · {gauge.window}".upper()
-            draw.text(
-                (x0 + 10, y0 + 9),
-                _truncate(draw, label, label_font, cell_w - 20),
-                font=label_font,
-                fill=_GAUGE_LABEL,
-            )
-            draw.text(
-                (x0 + 10, y0 + 34), f"{gauge.used_percent}%", font=value_font, fill=_GAUGE_TEXT
-            )
-            if gauge.pace and cell_h >= 100:
-                # Pace projection above the reset hint, in the warning tone:
-                # the window fills before it resets at this burn rate.
-                draw.text(
-                    (x0 + 10, y1 - 54),
-                    _truncate(draw, gauge.pace, hint_font, cell_w - 20),
-                    font=hint_font,
-                    fill=COLORS["amber"],
-                )
-            if gauge.hint:
-                draw.text(
-                    (x0 + 10, y1 - 36),
-                    _truncate(draw, gauge.hint, hint_font, cell_w - 20),
-                    font=hint_font,
-                    fill=_GAUGE_MUTED,
-                )
-            _draw_gauge_rail(draw, (x0 + 10, y1 - 15, x1 - 10, y1 - 10), gauge.used_percent, tone)
-        else:
-            roomy = cell_h >= 90
-            label_font = _font(16 if roomy else 14)
-            value_font = _font(36 if roomy else 22)
-            hint_font = _font(14 if roomy else 12)
-            label = f"{gauge.label}  {gauge.window}".upper()
-            label_space = cell_w - 18 if roomy else cell_w - 62
-            draw.text(
-                (x0 + 9, y0 + (10 if roomy else 7)),
-                _truncate(draw, label, label_font, label_space),
-                font=label_font,
-                fill=_GAUGE_LABEL,
-            )
-            value = f"{gauge.used_percent}%"
-            if roomy:
-                draw.text((x0 + 9, y0 + 35), value, font=value_font, fill=_GAUGE_TEXT)
-            else:
-                value_w = draw.textlength(value, font=value_font)
-                draw.text(
-                    (x1 - 9 - value_w, y0 + 3),
-                    value,
-                    font=value_font,
-                    fill=_GAUGE_TEXT,
-                )
-            if gauge.hint:
-                hint = gauge.hint.upper()
-                hint_y = y1 - (43 if roomy else 31)
-                draw.text(
-                    (x0 + 9, hint_y),
-                    _truncate(draw, hint, hint_font, cell_w - 18),
-                    font=hint_font,
-                    fill=_GAUGE_MUTED,
-                )
-            _draw_gauge_rail(
-                draw,
-                (x0 + 9, y1 - (17 if roomy else 12), x1 - 9, y1 - (11 if roomy else 7)),
-                gauge.used_percent,
-                tone,
-            )
-    return img
+        draw.rounded_rectangle((x0, y0, x0 + max(fill_w, 2 * radius), y1), radius=radius, fill=tone)
 
 
 def _truncate(draw, text, font, max_w):

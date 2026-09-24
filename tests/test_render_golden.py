@@ -124,27 +124,32 @@ def _panels() -> dict[str, PanelView]:
         set(),
         3,
         None,
-        usage_lines=["Claude 5h 42%", "Codex 7d 91%"],
         usage_gauges=[
             PanelGauge("Claude", "5h", 42, hint="2h 10m", color="green"),
             PanelGauge("Codex", "7d", 91, hint="Mon", color="red"),
         ],
     )
     usage_detail = PanelView(
-        "Claude usage",
+        "Usage limits",
         gauges=[
             PanelGauge(
                 "Session", "5h", 42, hint="resets 2h 10m", color="green", pace="full ~40m early"
             ),
             PanelGauge("Weekly", "7d", 87, hint="resets Mon", color="amber"),
         ],
-        gauge_meta="1/2",
+        meta="used / reset",
+        page=(0, 2),
+        hint="press · more",
+    )
+    offline = layout.panel_overview(
+        layout.Counts(1, 0, 0, 0), 0, 1, {"macbench"}, 1, None, down_for="2m"
     )
     return {
         "panel_overview": overview,
         "panel_spotlight": spotlight,
         "panel_overview_usage": overview_usage,
         "panel_usage_detail": usage_detail,
+        "panel_offline": offline,
     }
 
 

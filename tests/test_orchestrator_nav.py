@@ -162,8 +162,8 @@ def test_panel_press_pages_in_overview():
     assert o.on_press(3) == []  # panel press (slots) -> next page, no command
     second = [t.label for t in o.render().tiles]
     assert first != second
-    assert o.render().panel.title == "3 agents"
-    assert o.render().panel.lines[-1].endswith(" · 2/2")
+    assert o.render().panel.meta == "3 agents"
+    assert o.render().panel.page == (1, 2)
 
 
 def test_panel_indices_scale_with_slot_count():
@@ -182,8 +182,8 @@ def test_panel_indices_scale_with_slot_count():
     assert [t.label for t in o.render().tiles] == first
     assert o.on_press(4) == []  # computed panel index (slots) pages instead
     assert [t.label for t in o.render().tiles] != first
-    assert o.render().panel.title == "4 agents"
-    assert o.render().panel.lines[-1].endswith(" · 2/2")
+    assert o.render().panel.meta == "4 agents"
+    assert o.render().panel.page == (1, 2)
 
 
 def test_new_tile_opens_launcher_and_starts_agent():
@@ -410,8 +410,8 @@ def test_overview_panel_spotlights_oldest_blocked():
     orch.apply_event("s", AgentState(AgentKey("s", "p2"), "claude", "newer", Status.BLOCKED))
     now[0] = 260.0
     panel = orch.render().panel
-    assert panel.title == "▲ 2 need you"  # count included with 2+ blocked
-    assert panel.lines[0] == "older"  # entered BLOCKED earliest
+    assert panel.title == "2 need you"  # count included with 2+ blocked
+    assert panel.headline == "older"  # entered BLOCKED earliest
 
 
 def test_launcher_contains_profiles_entry_when_multiple_profiles_exist():
@@ -436,7 +436,8 @@ def test_profile_menu_lists_profiles_and_switches():
     profiles_index = [t.label for t in o.render().tiles].index("Profiles")
     assert o.on_press(profiles_index) == []
     rs = o.render()
-    assert rs.panel.title == "profiles"
+    assert rs.panel.title == "Profiles"
+    assert rs.panel.headline == "Pick a profile"
     assert rs.tiles[0].label == "* work"
     assert rs.tiles[1].label == "mobile"
 
@@ -468,11 +469,11 @@ def test_profile_menu_back_from_management_row_returns_to_overview():
     o = Orchestrator(cfg, slots=13)
 
     assert o.on_press(10) == []
-    assert o.render().panel.title == "profiles"
+    assert o.render().panel.title == "Profiles"
     assert o.on_press(12) == []
 
     rs = o.render()
-    assert rs.panel.title == "0 agents"
+    assert rs.panel.title == "No agents"
     assert rs.tiles[10].label == "Profiles"
 
 
@@ -484,9 +485,9 @@ def test_management_row_does_not_capture_panel_keys_when_actions_overflow():
     o = Orchestrator(cfg, slots=13)
     o.apply_snapshot("dev", [st(f"p{i}", Status.IDLE, label=f"a{i}") for i in range(1, 21)])
 
-    assert o.render().panel.lines[-1].endswith(" · 1/2")
+    assert o.render().panel.page == (0, 2)
     assert o.on_press(13) == []
-    assert o.render().panel.lines[-1].endswith(" · 2/2")
+    assert o.render().panel.page == (1, 2)
 
 
 def test_management_row_keeps_new_agent_visible_when_actions_overflow():
@@ -551,7 +552,8 @@ def test_armed_stop_confirmation_is_visible_and_expires():
     assert o.on_press(stop_i) == []  # first press arms
     rs = o.render()
     assert rs.tiles[stop_i].label == "Sure?"  # armed state is visible
-    assert rs.panel.lines[0] == "press again to confirm"
+    assert rs.panel.title == "Press again to confirm"
+    assert rs.panel.color == "red"
     clk[0] += 10  # TTL expired: the stale arm must not complete
     assert o.render().tiles[stop_i].label == "Stop"  # visual arm cleared
     assert o.on_press(stop_i) == []  # re-arms instead of firing
@@ -568,7 +570,7 @@ def test_armed_option_confirmation_marks_only_that_option_tile():
     tiles = o.render().tiles
     assert tiles[1].label == "Sure?"
     assert tiles[0].label != "Sure?"
-    assert o.render().panel.lines[0] == "press again to confirm"
+    assert o.render().panel.title == "Press again to confirm"
 
 
 # --- drill action colour semantics (audit: drill-option-colors) --------------
@@ -732,7 +734,9 @@ def test_drill_goes_inert_and_shows_offline_when_server_drops():
     rs = o.render()
     assert all(t.color == "grey" for t in rs.tiles[:3])  # options inert
     assert rs.tiles[11].color == "grey"  # Stop inert too
-    assert rs.panel.lines == ["OFFLINE — reconnecting…"]
+    assert rs.panel.title == "Offline"
+    assert rs.panel.headline == "Reconnecting…"
+    assert rs.panel.lines == []  # the stale prompt is not offered as answerable
     assert o.on_press(0) == []  # an action press is swallowed, not dropped silently
     assert o.on_press(11) == []  # Stop as well
     assert o.on_press(12) == []  # ...but Back still leaves the drill
@@ -766,7 +770,7 @@ def test_new_block_jumps_overview_to_front_page():
     o.apply_event("dev", st("p3", Status.BLOCKED, label="late"))
     rs = o.render()  # jumped back to page 1 with the blocked agent adopted first
     assert rs.tiles[0].label == "late" and rs.tiles[0].color == "amber"
-    assert o.render().panel.title == "▲ needs you"
+    assert o.render().panel.title == "Needs you"
     # the jump repopulated slots under a possible finger -> guard applies
     assert o.on_press(0) == []
     clk[0] += 0.5
@@ -834,9 +838,13 @@ def test_drill_action_acknowledges_on_the_overview_panel():
     o.on_press(0)
     o.set_detection(PROMPT)
     assert o.on_press(0)  # sends option 1, returns to overview
-    assert o.render().panel.lines[0] == "sent › api"
+    panel = o.render().panel
+    assert panel.sent == "Sent to api"
+    # The answered agent is still BLOCKED until the bridge catches up; it must
+    # not count as one "left" to answer.
+    assert panel.meta == ""
     clk[0] += 5.0  # note expired
-    assert not o.render().panel.lines[0].startswith("sent")
+    assert o.render().panel.sent == ""
 
 
 def test_empty_slots_render_darker_than_agent_tiles():
@@ -884,7 +892,7 @@ def test_idle_launcher_times_out_but_a_press_keeps_it_open():
     o.on_press(11)  # a blank launcher tile still counts as activity
     clock.t += 10
     assert o.consume_expired_panel_hold() is False
-    assert o.render().panel.title == "new agent"
+    assert o.render().panel.title == "New agent"
     clock.t += MENU_IDLE_TIMEOUT_S
     assert o.consume_expired_panel_hold() is True
     assert o.render().tiles[12].label == "+ New"
@@ -900,14 +908,14 @@ def test_drill_panel_counts_agents_that_blocked_after_it_opened():
     o.on_press(0)
     drilled = o.drill_key()
     # Already-blocked agents are not news; nothing is shown yet.
-    assert not any("more blocked" in line for line in o.render().panel.lines)
+    assert o.render().panel.aside == ""
     clock.t += 5
     o.apply_snapshot(
         "dev",
         [st("p1", Status.BLOCKED), st("p2", Status.BLOCKED, label="old"), st("p3", Status.BLOCKED)],
     )
     assert o.drill_key() == drilled  # a new block never yanks the drill
-    assert o.render().panel.lines[0] == "▲ 1 more blocked"
+    assert o.render().panel.aside == "+1 more waiting"
 
 
 def test_drill_new_block_indicator_is_localized():
@@ -919,7 +927,7 @@ def test_drill_new_block_indicator_is_localized():
     o.on_press(0)
     clock.t += 1
     o.apply_event("dev", st("p2", Status.BLOCKED))
-    assert o.render().panel.lines[0] == "▲ další blokováno: 1"
+    assert o.render().panel.aside == "+1 další čeká"
 
 
 def test_fallback_approve_labels_are_localized():
@@ -940,7 +948,7 @@ def test_launcher_names_the_target_server_when_several_are_configured():
     cfg.overview_order = ["gpu", "dev"]
     o = Orchestrator(cfg, slots=13)
     o.on_press(12)
-    assert o.render().panel.lines[-1] == "on gpu"
+    assert o.render().panel.lines == ["on gpu"]
     # ...and the start goes exactly there.
     assert o.on_press(0) == [Command("start", "gpu", text="claude", keys=["claude"])]
 
@@ -948,4 +956,5 @@ def test_launcher_names_the_target_server_when_several_are_configured():
 def test_launcher_single_server_keeps_the_plain_panel():
     o = Orchestrator(make_config(), slots=13)
     o.on_press(12)
-    assert o.render().panel.lines == ["pick a type"]
+    assert o.render().panel.headline == "Pick a type"
+    assert o.render().panel.lines == []  # no "on <server>" with a single server

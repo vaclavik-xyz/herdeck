@@ -14,12 +14,12 @@ def test_every_language_has_the_full_key_set():
 def test_tr_translates_and_formats():
     assert tr("en", "agents_total", n=4) == "4 agents"
     assert tr("cs", "agents_total", n=4) == "agentů: 4"
-    assert tr("cs", "sent", label="repo") == "posláno › repo"
+    assert tr("cs", "sent", label="repo") == "Posláno: repo"
 
 
 def test_tr_falls_back_to_english_for_unknown_language():
     assert tr("de", "stop") == "Stop"
-    assert tr("", "needs_you_one") == "▲ needs you"
+    assert tr("", "needs_you_one") == "Needs you"
 
 
 def test_tr_never_raises_for_unknown_key():

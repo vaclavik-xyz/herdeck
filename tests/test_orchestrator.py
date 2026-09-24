@@ -73,9 +73,10 @@ def test_overview_panel_summary():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED), state("p2", Status.WORKING)])
     rs = o.render()
-    assert rs.panel.title == "▲ needs you"
-    assert rs.panel.lines[0] == "api"
-    assert rs.panel.lines[1].startswith("blocked ")
+    assert rs.panel.title == "Needs you"
+    assert rs.panel.headline == "api"
+    assert rs.panel.solid
+    assert rs.panel.meta.endswith("s")  # how long it has been blocked
 
 
 def test_disconnected_colors_red_and_panel_offline():
@@ -84,8 +85,9 @@ def test_disconnected_colors_red_and_panel_offline():
     o.set_connection("dev", False)
     rs = o.render()
     assert rs.tiles[0].color == "red"
-    assert rs.panel.title == "OFFLINE"
-    assert rs.panel.lines == ["reconnecting…"]
+    assert rs.panel.title == "Offline"
+    assert rs.panel.headline == "Reconnecting…"
+    assert rs.panel.lines == ["dev"]
 
 
 def test_empty_slots_are_near_background():
@@ -492,13 +494,13 @@ def _usage_data():
     ]
 
 
-def test_overview_panel_carries_usage_lines():
+def test_overview_panel_carries_usage_gauges():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
     o.set_usage(_usage_data())
     rs = o.render()
-    assert "Claude 5h 19% · 7d 43%" in rs.panel.lines
-    assert "Codex 5h 2%" in rs.panel.lines
+    assert [g.used_percent for g in rs.panel.gauges] == [19, 43, 2]
+    assert rs.panel.hint == "press · limits detail"
     assert [(g.label, g.window) for g in rs.panel.gauges] == [
         ("Claude", "5H"),
         ("Claude", "7D"),
@@ -506,11 +508,12 @@ def test_overview_panel_carries_usage_lines():
     ]
 
 
-def test_overview_panel_without_usage_keeps_online_line():
+def test_overview_panel_without_usage_shows_stat_cards():
     o = Orchestrator(make_config(), slots=13)
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
     rs = o.render()
-    assert rs.panel.lines[-1] == "online"
+    assert rs.panel.gauges == []
+    assert ("IDLE", 1) in [(s.label, s.value) for s in rs.panel.stats]
 
 
 def test_panel_press_toggles_usage_detail_on_single_page():
@@ -520,16 +523,19 @@ def test_panel_press_toggles_usage_detail_on_single_page():
     o.set_usage(_usage_data())
     assert o.on_press(13) == []
     rs = o.render()
-    assert rs.panel.title == "usage limits"
-    assert rs.panel.lines[0].startswith("Claude 5h 19%")
+    assert rs.panel.title == "Usage limits"
+    assert rs.panel.lines == []
     assert rs.panel.gauges[0].label == "Claude"
+    assert rs.panel.gauges[0].used_percent == 19
+    assert rs.panel.page is None  # single detail page: no dots
+    assert rs.panel.hint == "press · close"
     # second press hides the detail again
     o.on_press(13)
-    assert o.render().panel.title == "1 agents"
+    assert o.render().panel.title == "All clear"
     # expired hold reverts on its own
     o.on_press(13)
     t["now"] = 100.0
-    assert o.render().panel.title == "1 agents"
+    assert o.render().panel.title == "All clear"
 
 
 def test_panel_press_still_pages_when_multipage():
@@ -548,10 +554,10 @@ def test_blocked_spotlight_preempts_held_usage_detail():
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
     o.set_usage(_usage_data())
     o.on_press(13)
-    assert o.render().panel.title == "usage limits"
+    assert o.render().panel.title == "Usage limits"
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
     panel = o.render().panel
-    assert panel.title == "▲ needs you"  # attention beats detail
+    assert panel.title == "Needs you"  # attention beats detail
     assert panel.gauges == []  # alert content must not be replaced by usage cards
 
 
@@ -561,7 +567,7 @@ def test_offline_panel_preempts_usage_gauges():
     o.set_usage(_usage_data())
     o.set_connection("dev", False)
     panel = o.render().panel
-    assert panel.title == "OFFLINE"
+    assert panel.title == "Offline"
     assert panel.gauges == []
 
 
@@ -573,7 +579,7 @@ def test_usage_detail_gauge_metadata_is_localized():
     o.set_usage(_usage_data())
     o.on_press(13)
     panel = o.render().panel
-    assert panel.gauge_meta == "využito / obnova"
+    assert panel.meta == "využito / obnova"
 
 
 def test_usage_detail_pages_via_repeated_presses():
@@ -590,14 +596,16 @@ def test_usage_detail_pages_via_repeated_presses():
     )
     o.on_press(13)
     rs = o.render()
-    assert rs.panel.title.endswith("· 1/2")
-    assert len(rs.panel.lines) == 3
+    assert rs.panel.page == (0, 2)
+    assert len(rs.panel.gauges) == 3
+    assert rs.panel.hint == "press · more"
     o.on_press(13)  # page 2 -> the 4th window's reset is reachable, not dropped
     rs = o.render()
-    assert rs.panel.title.endswith("· 2/2")
-    assert rs.panel.lines == ["Codex 7d 4%"]
+    assert rs.panel.page == (1, 2)
+    assert [(g.label, g.window, g.used_percent) for g in rs.panel.gauges] == [("Codex", "7D", 4)]
+    assert rs.panel.hint == "press · close"
     o.on_press(13)  # past the last page -> hide
-    assert o.render().panel.title == "1 agents"
+    assert o.render().panel.title == "All clear"
 
 
 def test_expired_detail_hold_fires_consume_once():
@@ -610,7 +618,7 @@ def test_expired_detail_hold_fires_consume_once():
     t["now"] = 100.0
     assert o.consume_expired_panel_hold() is True  # hosts render on this signal
     assert o.consume_expired_panel_hold() is False  # one-shot
-    assert o.render().panel.title == "1 agents"
+    assert o.render().panel.title == "All clear"
 
 
 def test_panel_press_does_not_arm_detail_during_spotlight():
@@ -623,7 +631,7 @@ def test_panel_press_does_not_arm_detail_during_spotlight():
     assert o.is_drilling()
     o.on_press(12)  # Back
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
-    assert o.render().panel.title == "1 agents"  # no surprise detail pop-up
+    assert o.render().panel.title == "All clear"  # no surprise detail pop-up
 
 
 def test_tile_press_dismisses_held_detail():
@@ -632,7 +640,7 @@ def test_tile_press_dismisses_held_detail():
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
     o.set_usage(_usage_data())
     o.on_press(13)
-    assert o.render().panel.title == "usage limits"
+    assert o.render().panel.title == "Usage limits"
     t["now"] = 1.0  # beyond the slot-press guard
     o.on_press(0)  # drilling an agent moves attention: the hold must not linger
     assert o._usage_detail_until == 0.0
@@ -795,7 +803,7 @@ def test_all_servers_down_keeps_offline_panel():
     o.set_connection("dev", False)
     o.set_connection("t3-headless", False)
     panel = o.render().panel
-    assert panel.title == "OFFLINE"
+    assert panel.title == "Offline"
     assert panel.gauges == []
 
 
@@ -807,7 +815,7 @@ def test_partial_outage_shows_usage_gauges_and_offline_note():
     o.set_connection("t3-headless", True)  # it was up, so going down is news
     o.set_connection("t3-headless", False)
     panel = o.render().panel
-    assert panel.title == "1 agents"
+    assert panel.title == "All clear"
     assert [g.label for g in panel.gauges] == ["Claude", "Claude", "Codex"]
     assert panel.note == "t3-headless offline"
     assert panel.color != o.config.theme.colors.get("offline", "red")
@@ -823,7 +831,7 @@ def test_server_that_never_connected_is_not_announced_offline():
     o.set_connection("dev", True)
     o.set_connection("t3-headless", False)
     panel = o.render().panel
-    assert panel.title == "1 agents"
+    assert panel.title == "All clear"
     assert panel.gauges
     assert panel.note == ""
     # ...until it has been seen up once: then losing it is a real outage.
@@ -840,8 +848,8 @@ def test_partial_outage_keeps_blocked_spotlight():
     o.set_connection("t3-headless", True)
     o.set_connection("t3-headless", False)
     panel = o.render().panel
-    assert panel.title == "▲ needs you"
-    assert panel.lines[0] == "api"
+    assert panel.title == "Needs you"
+    assert panel.headline == "api"
     assert panel.gauges == []
     assert panel.note == "t3-headless offline"
 
@@ -855,11 +863,11 @@ def test_usage_detail_press_works_in_partial_outage():
     o.set_connection("t3-headless", False)
     o.on_press(13)
     panel = o.render().panel
-    assert panel.title == "usage limits"
+    assert panel.title == "Usage limits"
     assert panel.gauges  # the held detail renders despite the outage
     # ...and a full outage still takes the panel back at once
     o.set_connection("dev", False)
-    assert o.render().panel.title == "OFFLINE"
+    assert o.render().panel.title == "Offline"
 
 
 def test_usage_detail_press_refused_when_all_servers_down():

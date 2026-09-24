@@ -61,16 +61,43 @@ class PanelGauge:
 
 
 @dataclass
+class PanelStat:
+    """One count card on the calm overview panel (WORKING 2, IDLE 12, ...)."""
+
+    label: str
+    value: int
+    color: str
+
+
+@dataclass
 class PanelView:
-    title: str
-    lines: list[str] = field(default_factory=list)
-    color: str = "grey"
+    """The status panel (the D200's wide window, two Elgato keys, the window's
+    panel strip). Every surface renders it through ``icons.compose_panel``.
+
+    Layout, top to bottom: a header (the state chip = ``title`` on the left,
+    ``meta`` on the right), a main area, and a footer (``hint`` or ``note`` on
+    the left, page dots or ``aside`` on the right). The main area shows, in
+    order of precedence, ``stats`` cards, ``gauges`` rows, the big
+    ``headline`` with the ``lines`` under it, or — without a headline — the
+    ``lines`` as body text (an agent's prompt, a menu hint).
+    """
+
+    title: str  # state chip ("Needs you", "All clear"); "" = no chip
+    lines: list[str] = field(default_factory=list)  # secondary text under the headline
+    color: str = "grey"  # tone: the chip colour, or the whole panel when solid
     gauges: list[PanelGauge] = field(default_factory=list)
-    gauge_meta: str = ""
-    # A compact secondary status line (e.g. "t3 offline" during a partial
-    # outage). Rendered only where it fits: after the body lines on a text
-    # panel (a full body drops it), under the header meta on a gauge panel.
+    # A compact warning (e.g. "t3 offline" during a partial outage); takes the
+    # footer's left slot in the offline tint.
     note: str = ""
+    headline: str = ""  # the big main text (an agent, "Reconnecting…")
+    meta: str = ""  # header right ("55s", "18 agents")
+    stats: list[PanelStat] = field(default_factory=list)
+    hint: str = ""  # footer left: what a press does ("press · answer")
+    page: tuple[int, int] | None = None  # (index, count) -> page dots when count > 1
+    aside: str = ""  # footer right accent text ("+2 more waiting"); wins over page dots
+    solid: bool = False  # fill the whole panel with ``color`` (needs you, offline)
+    chip_dot: str = ""  # a status dot inside a neutral chip ("All clear" -> green)
+    sent: str = ""  # replaces the chip with a check mark + this text
 
     def cache_key(self) -> tuple:
         return (
@@ -81,8 +108,16 @@ class PanelView:
                 (g.label, g.window, g.used_percent, g.hint, g.color, g.pace)
                 for g in self.gauges
             ),
-            self.gauge_meta,
             self.note,
+            self.headline,
+            self.meta,
+            tuple((s.label, s.value, s.color) for s in self.stats),
+            self.hint,
+            self.page,
+            self.aside,
+            self.solid,
+            self.chip_dot,
+            self.sent,
         )
 
 

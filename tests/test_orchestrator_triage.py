@@ -48,7 +48,7 @@ def drill_cmds(pane):
 
 def test_panel_press_on_spotlight_opens_longest_blocked_drill():
     o, _ = fleet()
-    assert o.render().panel.lines[0] == "p3"  # the spotlight names the oldest
+    assert o.render().panel.headline == "p3"  # the spotlight names the oldest
     assert o.on_press(PANEL) == drill_cmds("p3")
     assert o.drill_key() == AgentKey("dev", "p3")
 
@@ -181,7 +181,7 @@ def test_next_triage_drill_acknowledges_the_previous_answer():
     o.on_press(PANEL)
     o.set_detection(PROMPT)
     o.on_press(0)
-    assert o.render().panel.lines[0] == "sent › p3"
+    assert o.render().panel.sent == "Sent to p3"
 
 
 def test_idle_timeout_ends_the_triage_loop():

@@ -327,7 +327,7 @@ so give it a `token_file` or a keychain entry.
 
 A config file that exists but cannot be loaded (a token no source has, a
 malformed value) never starts the demo fleet. The deck shows an empty grid and
-a red `CONFIG ERROR` panel naming the problem, and `/health` and
+a red **Config error** status panel naming the problem, and `/health` and
 `/maintenance` report `config_error`. The runtime logs it at ERROR. It watches
 the config and token files and re-checks every 10 s, so fixing the problem
 recovers the deck without a restart. The demo still starts on the first run
@@ -1006,12 +1006,22 @@ See **Native desktop app** under Install for a local application bundle and
 The D200 has **13 buttons** (a 5×3 grid minus the small status window). The
 orchestrator takes the real button count from the driver: agent tiles fill the
 slots up to the reserved **+ New** launcher tile. With more agents than tiles,
-pressing the status window pages through them (the panel shows `· 1/2`), and a
+pressing the status window pages through them (page dots and `1 / 2` in the
+panel's corner), and a
 newly blocked agent automatically pulls the overview back to the first page
 where it sorts to the front.
 
-**Triage.** While an agent is blocked the status window shows `▲ needs you`
-with the agent that has waited longest. Pressing it opens that agent's prompt;
+**Status window.** Every panel state shares one layout: a state chip and a
+short fact (elapsed time, agent count) on top, the main content in the middle,
+and what a press does plus the page dots at the bottom. When nothing needs you
+it is dark: **All clear** with count cards for working / idle / done agents, or
+your usage-limit gauges when `[usage]` is on. It turns solid amber for **Needs
+you**, solid red for **Offline** (every server down) and **Config error**; a
+single offline server is only a red note in the footer.
+
+**Triage.** While an agent is blocked the status window turns amber with
+**Needs you** and the agent that has waited longest (with several, the chip
+shows the count and the next ones are listed under it). Pressing it opens that agent's prompt;
 once you answer (or Stop it), the deck goes straight to the next-longest
 blocked agent, and back to the overview when none is left. **Back** leaves the
 loop at any time. While the spotlight is up the status window starts triage
