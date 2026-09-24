@@ -37,14 +37,18 @@ PROMPT_MAX_CHARS = 64 * 1024
 _REFRESH_MIN_INTERVAL_S = 2.0
 
 # CSI (colours, cursor moves), OSC (titles, hyperlinks; BEL or ST terminated),
-# and the remaining two-byte ESC sequences.
+# and every other ESC sequence (intermediates + final byte: ESC c, ESC ( B, …).
 _ESCAPE_RE = re.compile(
     r"\x1b\[[0-?]*[ -/]*[@-~]"
     r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?"
-    r"|\x1b[@-_]"
+    r"|\x1b[ -/]*[0-~]"
 )
-# C0 controls except TAB and LF, plus DEL and the C1 range.
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# C0 controls except TAB and LF, DEL, the C1 range, and the invisible
+# formatting characters that can reorder or hide text (bidi embeddings /
+# overrides / isolates, zero-width spaces and joiners, marks, BOM).
+_CONTROL_RE = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]"
+)
 
 
 def sanitize_prompt(text: str) -> str:
@@ -213,16 +217,22 @@ class AgentCardMixin:
                 if isinstance(cached, str) and cached:
                     prompt = cached
                     revision = decision_revision(server_id, pane_id, agent.terminal_id, cached)
-                    options = orch.answer_options(key, cached) if orch is not None else []
+                    # Labels come from the sanitized text (keys are unchanged).
+                    options = (
+                        orch.answer_options(key, sanitize_prompt(cached)) if orch is not None else []
+                    )
                 else:
-                    prompt_pending = pending or refresh
-                if refresh and connected:
+                    prompt_pending = pending or refresh or connected
+                # Re-read on request, and whenever nothing is cached or in
+                # flight (e.g. right after an answer dropped the cache).
+                if connected and (refresh or not (cached or pending)):
                     reread = self._card_prepare_reread(key, agent)
         if reread is not None:
             # Sent after releasing the deck lock: a runner may deliver its
             # reply synchronously, and that reply takes the deck lock.
             runner, msg = reread
             runner.send(msg)
+        options = [{**o, "label": sanitize_prompt(o["label"])} for o in options]
         stop_ok = agent.backend != "t3" or "stop" in agent.capabilities
         text_ok = agent.backend != "t3" or "continue" in agent.capabilities
         return {
@@ -324,26 +334,59 @@ class AgentCardMixin:
                 if revision != decision_revision(server_id, pane_id, agent.terminal_id, prompt):
                     return outcome("stale")
                 option = next(
-                    (o for o in orch.answer_options(key, prompt) if o["key"] == choice), None
+                    (
+                        o
+                        for o in orch.answer_options(key, sanitize_prompt(prompt))
+                        if o["key"] == choice
+                    ),
+                    None,
                 )
                 if option is None:
                     return outcome("invalid")
-                if option["kind"] == "option":
-                    # A numbered menu selects on the digit and submits on Enter —
-                    # exactly what the deck drill sends.
+                if option["kind"] == "option" and self._card_bridge_protocol(server_id) >= 3:
+                    # The bridge re-reads the prompt and refuses ("stale_choice")
+                    # unless it still hashes to the revision the user saw: an
+                    # agent that moved from prompt A straight to prompt B (never
+                    # seen leaving BLOCKED here) cannot get A's answer typed
+                    # into B. Every protocol-3 bridge handles this message.
+                    cmd = Command(
+                        "choose_if_blocked",
+                        server_id,
+                        pane_id,
+                        text=choice,
+                        terminal_id=agent.terminal_id or None,
+                        decision_revision=revision,
+                    )
+                    keys = None
+                elif option["kind"] == "option":
+                    # Older bridge: the deck drill's own path ([digit, enter],
+                    # blocked + identity guarded).
                     keys = [choice, "enter"]
                 else:
                     profile = profile_for(self._config, agent.agent_type)
                     keys = list(getattr(profile, option["id"]))
-                cmd = Command(
-                    "act_if_blocked",
-                    server_id,
-                    pane_id,
-                    keys=keys,
-                    terminal_id=agent.terminal_id or None,
-                )
+                if keys is not None:
+                    cmd = Command(
+                        "act_if_blocked",
+                        server_id,
+                        pane_id,
+                        keys=keys,
+                        terminal_id=agent.terminal_id or None,
+                    )
         self._notify_throttle.note_interaction(key)
-        return self._card_send(cmd)
+        result = self._card_send(cmd)
+        if agent.backend != "t3":
+            # The answered prompt is spent: drop it so the next answer needs a
+            # fresh read (a second click on the still-shown prompt is stale).
+            with self._lock:
+                self._preread.pop(key, None)
+                self._preread_req.pop(key, None)
+        return result
+
+    def _card_bridge_protocol(self, server_id: str) -> int:
+        connector = getattr(self._runners.get(server_id), "connector", None)
+        protocol = getattr(connector, "protocol", 1)
+        return protocol if isinstance(protocol, int) else 1
 
     def card_text(self, server_id: str, pane_id: str, text: str) -> dict | None:
         """Type ``text`` into the agent and submit it (herdeck-ctl ``send``)."""

@@ -10,6 +10,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from types import SimpleNamespace
 
 import pytest
 from test_deckapp_live import StubIcons
@@ -30,10 +31,14 @@ class ReplyingRunner:
     """Captures sends; ``reply(msg)`` may return a result dict (delivered via the
     source's _on_result), an ``Error`` (via _on_request_error) or None (silence)."""
 
-    def __init__(self, reply=None):
+    def __init__(self, reply=None, protocol=3):
         self.sent: list[dict] = []
         self.reply = reply
         self.src = None
+        # What the real ConnectorRunner exposes: the bridge's wire protocol.
+        self.connector = SimpleNamespace(
+            protocol=protocol, capabilities=frozenset({"terminal_preview"})
+        )
 
     def send(self, msg):
         self.sent.append(msg)
@@ -164,6 +169,21 @@ def test_sanitize_prompt_strips_escapes_and_controls_but_keeps_layout():
     assert sanitize_prompt(raw) == "Bold\tcol\nnextline\x00end".replace("\x00", "")
 
 
+def test_sanitize_prompt_strips_other_escapes_and_invisible_formatting():
+    raw = "\x1bcA\x1b(BB\x1b#8C\x1b7D"  # reset, charset, alignment, save cursor
+    assert sanitize_prompt(raw) == "ABCD"
+    tricky = "rm \u202e-rf\u202c /\u200b\u2066x\u2069\ufeff\u200d"
+    assert sanitize_prompt(tricky) == "rm -rf /x"
+
+
+def test_option_labels_come_from_the_sanitized_prompt():
+    app, src, runner, _ = make()
+    src._on_snapshot("prod", [blocked()])
+    cache_prompt(src, runner, text="Run?\n1. Yes \u202eoN\u202c\n2. \x1b[31mNo\x1b[0m")
+    labels = [o["label"] for o in src.card_detail("prod", "p0")["options"]]
+    assert labels == ["Yes oN", "No"]
+
+
 def test_sanitize_prompt_keeps_the_tail_of_a_huge_prompt():
     raw = "x" * 100_000 + "\n1. Yes"
     out = sanitize_prompt(raw)
@@ -239,16 +259,62 @@ def test_resolve_tile_index_to_agent():
 # --- answer -------------------------------------------------------------------
 
 
-def test_answer_sends_the_drill_keys_with_the_blocked_and_identity_guards():
+def test_answer_uses_the_bridges_revision_checked_choice():
     app, src, runner, _ = blocked_with_prompt(reply=lambda m: {"sent": True})
     rev = src.card_detail("prod", "p0")["revision"]
     out = src.card_answer("prod", "p0", "3", rev)
     assert out == {"ok": True, "code": "sent", "message": ""}
+    (msg,) = [m for m in runner.sent if m["type"] not in ("list", "read")]
+    assert msg["type"] == "choose_if_blocked"
+    assert msg["choice"] == "3"
+    assert msg["decision_revision"] == rev
+    assert msg["terminal_id"] == "term-1"
+
+
+def test_answer_on_an_older_bridge_sends_the_drill_keys_with_guards():
+    app, src, runner, _ = blocked_with_prompt(reply=lambda m: {"sent": True})
+    runner.connector.protocol = 2
+    rev = src.card_detail("prod", "p0")["revision"]
+    assert src.card_answer("prod", "p0", "3", rev)["ok"] is True
     acts = [m for m in runner.sent if m["type"] == "act"]
     assert len(acts) == 1
     assert acts[0]["keys"] == ["3", "enter"]
     assert acts[0]["guard"] is True
     assert acts[0]["terminal_id"] == "term-1"
+
+
+PROMPT_B = "Edit file?\n❯ 1. Yes\n  2. No"
+
+
+def test_prompt_a_to_b_second_click_on_a_is_stale_and_sends_nothing():
+    # The agent answers A and immediately blocks on B without the runtime ever
+    # seeing it leave BLOCKED. A second click on the still-shown A must not
+    # type "1 enter" into B.
+    app, src, runner, _ = blocked_with_prompt(reply=lambda m: {"sent": True})
+    rev_a = src.card_detail("prod", "p0")["revision"]
+    assert src.card_answer("prod", "p0", "1", rev_a)["code"] == "sent"
+    runner.sent.clear()
+    assert src.card_answer("prod", "p0", "1", rev_a)["code"] == "stale"
+    assert [m for m in runner.sent if m["type"] not in ("list", "read")] == []
+    # The card re-reads (cache dropped, nothing in flight) and gets prompt B.
+    detail = src.card_detail("prod", "p0")
+    assert detail["prompt"] is None and detail["prompt_pending"] is True
+    read = [m for m in runner.sent if m["type"] == "read"][-1]
+    src._on_result("prod", read["req"], {"text": PROMPT_B, "pane_id": "p0"})
+    detail = src.card_detail("prod", "p0")
+    assert detail["prompt"] == PROMPT_B
+    assert src.card_answer("prod", "p0", "1", rev_a)["code"] == "stale"
+    assert src.card_answer("prod", "p0", "1", detail["revision"])["code"] == "sent"
+
+
+def test_prompt_changed_on_the_bridge_before_the_answer_is_stale():
+    # The runtime still caches A but the pane already shows B: the bridge's
+    # re-read refuses the choice.
+    app, src, runner, _ = blocked_with_prompt(
+        reply=lambda m: {"skipped": True, "message": "stale_choice"}
+    )
+    rev_a = src.card_detail("prod", "p0")["revision"]
+    assert src.card_answer("prod", "p0", "1", rev_a)["code"] == "stale"
 
 
 def test_answer_fallback_sends_the_profile_keys():
@@ -502,7 +568,7 @@ def test_answer_text_stop_focus_routes():
         code, out = _post(app, "/agent/focus", key)
         assert out["code"] == "focused"
         types = [m["type"] for m in runner.sent if m["type"] != "list"]
-        assert types[-4:] == ["act", "send_text", "act", "focus"]
+        assert types[-4:] == ["choose_if_blocked", "send_text", "act", "focus"]
         with pytest.raises(urllib.error.HTTPError) as e:
             _post(app, "/agent/answer", {**key, "key": 1})
         assert e.value.code == 400

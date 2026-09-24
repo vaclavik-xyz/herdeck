@@ -172,8 +172,9 @@
     }
     if (!alive) return false;
     feedback = out;
-    // Stale or gone: pull the current prompt so the user sees what changed.
-    void load(out.code === "stale");
+    // After an answer the old prompt is spent (the runtime drops it): re-read
+    // at once. After a stale refusal, likewise show what changed.
+    void load(action === "answer" || out.code === "stale");
     return out.ok;
   }
 
