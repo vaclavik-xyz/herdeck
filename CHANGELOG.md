@@ -7,6 +7,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Desktop agent card: Option-click, long-press or ⌥digit a tile in the deck
+  window to see that agent in full (header, status and since, the whole blocked
+  prompt, the drill's parsed options, a free-text reply, Focus and Stop). New
+  token-authenticated runtime routes `GET /agent/detail` and
+  `POST /agent/{answer,text,stop,focus}`; an answer carries the prompt revision
+  the user saw and is refused as stale when the prompt changed. Card actions
+  wait for the bridge's reply, so a read-only bridge token is reported instead
+  of being dropped silently (bridge `error` frames now keep their `req`).
 - `herdeck-bridge --rotate-token [--token-file PATH] [--show]` writes a fresh
   random `0600` token atomically and prints the next steps (restart the
   bridge, update the runtime-side token); the token is printed only with

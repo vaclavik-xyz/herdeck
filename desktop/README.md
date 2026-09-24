@@ -30,6 +30,11 @@ The Svelte frontend has two complementary surfaces, one per window role:
   live-deck preview, connections, and the full settings editor.
 - **Compact DeckView** (`main` window, the deck) - polls `/state`, renders the
   `/tile` PNGs, and turns clicks into `/press`, mirroring the hardware deck.
+- **Agent card** (in the deck window) - Option-click, long-press or ⌥digit a
+  tile: `AgentCard.svelte` shows that agent in full over the runtime's
+  `/agent/*` routes (detail, answer, text, stop, focus). All of them go through
+  one Rust command, `agent_call` (`src-tauri/src/agent_card.rs`), which only
+  relays `/agent/…` paths and injects the token like the other proxies.
 - **Onboarding** - a first-run and change-connection flow inside the active
   surface, followed by a sectioned
   settings editor (servers, theme, view, macros, notifications, safety,
@@ -49,6 +54,8 @@ desktop/
       sidecar.ts             # framework-free discovery + /health helpers
       deckClient.ts          # /state + /tile + /press transport
       DeckView.svelte        # live deck render + press
+      AgentCard.svelte       # one agent in full: prompt, options, reply, stop/focus
+      agentCardClient.ts     # /agent/* transport (via the agent_call command)
       Onboarding.svelte      # first-run onboarding flow
       configClient.ts        # config read/write transport
       onboardingClient.ts    # onboarding/setup transport
@@ -64,6 +71,7 @@ desktop/
       lib.rs                 # window + tray + sidecar supervisor + command wiring
       sidecar.rs             # spawn/parse/supervise logic (+ unit tests)
       http.rs                # loopback HTTP proxy with token injection (+ tests)
+      agent_card.rs          # agent_call: /agent/* relay for the agent card (+ tests)
       deck_prefs.rs          # deck_always_on_top + config path prefs
       window_state.rs        # ~/.cache/herdeck/window-state.json read/write (+ tests)
       hotkey.rs              # global hotkey
