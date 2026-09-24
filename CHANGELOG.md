@@ -7,6 +7,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- Subagent badges never appeared on the deck: `herdeck-subagent-hook`
+  passed the pane id last to `herdr pane report-metadata`, which herdr 0.9.1
+  rejects ("unknown option"), so the `subagents` token never reached the
+  bridge. The pane id now follows the subcommand. The agent card's subagent
+  list (read from the spool by the bridge) was unaffected.
 - `[usage].source = "auto"` no longer leaves the deck without limits when a
   bridge offers usage but sends no numbers (e.g. a LaunchDaemon bridge whose
   `codex`/`codexbar` cannot reach the login keychain). After 180 s without

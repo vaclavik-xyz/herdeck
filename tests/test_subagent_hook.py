@@ -530,12 +530,13 @@ def test_cli_reporter_invokes_herdr_report_metadata(tmp_path, env):
     env = dict(env, HERDECK_HERDR_BIN=_stub_herdr(tmp_path, f'printf "%s\\n" "$@" > {log}'))
     hook.run(json.dumps(claude_start()).encode(), [], env, now_ms=Clock())
     args = log.read_text().split("\n")
-    assert args[:9] == [
-        "pane", "report-metadata", "--source", "herdeck:subagents",
+    # herdr 0.9.1 rejects a trailing pane id ("unknown option: <source>"):
+    # it must follow the subcommand.
+    assert args[:10] == [
+        "pane", "report-metadata", PANE, "--source", "herdeck:subagents",
         "--token", "subagents=1/1", "--ttl-ms", "900000", "--seq",
     ]
-    assert args[9].isdigit()
-    assert args[10] == PANE
+    assert args[10].isdigit()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stub")
