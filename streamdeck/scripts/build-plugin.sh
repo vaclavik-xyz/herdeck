@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Local, unsigned, arm64 build of the herdeck .streamDeckPlugin (frozen backend bundled).
-# Reproducible in a clean env after: pip install -e .[packaging]  (PyInstaller + cairosvg + deps)
+# Reproducible in a clean env after: pip install -e .[packaging]  (PyInstaller + resvg-py + deps)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # streamdeck/scripts
@@ -12,7 +12,7 @@ PY="${PYTHON:-$ROOT/.venv/bin/python}"
 OUT_NAME="xyz.vaclavik.herdeck.streamDeckPlugin"
 OUT="$SD/$OUT_NAME"
 
-echo "==> 1/4 pre-rasterize SVG -> PNG (build-time cairosvg)"
+echo "==> 1/4 pre-rasterize SVG -> PNG (resvg)"
 "$PY" -c "from herdeck.elgato.frozen import prerasterize_assets, BAKE_SIZE; \
 print(prerasterize_assets('$ASSETS', '$ASSETS', BAKE_SIZE))"
 

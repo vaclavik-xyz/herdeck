@@ -26,6 +26,11 @@ from .base import DeckDriver, PanelView, TileView
 
 # Panel press maps to this button index (the orchestrator pages on PANEL_INDICES).
 _PANEL_PRESS_INDEX = 13
+# serve_forever() polls its shutdown flag every poll_interval seconds; the stdlib
+# default (0.5 s) makes every close() block up to half a second, which adds up
+# fast in tests that start/stop servers constantly. 50 ms keeps shutdown snappy
+# at a negligible idle-wakeup cost.
+_SERVE_POLL_INTERVAL = 0.05
 _TERMINAL_CANCEL = object()
 _TERMINAL_STREAM_RE = re.compile(r"[A-Za-z0-9_-]{8,80}")
 _WEB_ASSET_TYPES = {
@@ -259,7 +264,11 @@ class WebDeck(DeckDriver):
             self._browser_origin = self._public_origin or normalize_web_origin(
                 f"http://{origin_host}:{self.port}"
             )
-            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+            self._thread = threading.Thread(
+                target=self._server.serve_forever,
+                kwargs={"poll_interval": _SERVE_POLL_INTERVAL},
+                daemon=True,
+            )
             self._thread.start()
         else:
             self._browser_origin = ""

@@ -44,7 +44,7 @@ def _all_bundled_svgs():
 def test_every_bundled_svg_has_committed_decodable_baked_png():
     """Invariant guard against the silent Q1 regression: every committed SVG must
     have its committed content-keyed baked PNG, decodable at 196x196 (what the
-    frozen rasterizer loads, with NO cairosvg)."""
+    frozen rasterizer loads, without rendering the SVG)."""
     svgs = _all_bundled_svgs()
     assert len(svgs) >= len(BUNDLED_AGENT_TYPES) - 1  # Maki intentionally uses PNG artwork
     for svg_path in svgs:
@@ -76,7 +76,7 @@ def test_frozen_provider_renders_bundled_mark_not_letter(monkeypatch):
 
 def test_source_provider_without_svg_rasterizer_uses_committed_baked_mark(tmp_path):
     def unavailable_rasterizer(_svg, _size):
-        raise ImportError("cairosvg unavailable")
+        raise ImportError("resvg unavailable")
 
     icons = IconProvider(
         cache_dir=str(tmp_path),

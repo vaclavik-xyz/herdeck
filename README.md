@@ -126,7 +126,6 @@ Install the D200 dependencies, check the local Herdr connection, and start
 Herdeck:
 
 ```bash
-brew install cairo # needed once on a fresh Mac
 .venv/bin/pip install -e ".[deck]"
 .venv/bin/herdeck-doctor
 .venv/bin/herdeck
@@ -181,11 +180,9 @@ commands.
 ### Elgato Stream Deck plugin (arm64 macOS)
 
 The plugin package contains its own frozen Herdeck backend, so the destination
-Mac does not need Python. Building the current unsigned package requires Node.js
-and Cairo:
+Mac does not need Python. Building the current unsigned package requires Node.js:
 
 ```bash
-brew install cairo
 .venv/bin/pip install -e ".[packaging]"
 cd streamdeck
 npm ci
@@ -714,9 +711,9 @@ Python and no `herdeck` install. This milestone targets the local dev machine:
 warn on other machines).
 
 **Prereqs:** an arm64 Mac, the Python build deps (`pip install -e .[packaging]` into
-your venv — PyInstaller 6 + the build-time SVG rasterizer cairosvg + the frozen
-runtime deps), and the Node deps (`cd streamdeck && npm install`). cairosvg needs
-libcairo present at build time (e.g. `brew install cairo`); it is **not** bundled.
+your venv — PyInstaller 6 + the SVG rasterizer resvg-py (a self-contained wheel, no
+native library to install) + the frozen runtime deps), and the Node deps
+(`cd streamdeck && npm install`).
 
 **Build from the repository root:**
 
@@ -728,8 +725,8 @@ npm run package # pre-rasterize → freeze → npm build → zip
 ```
 
 `streamdeck/scripts/build-plugin.sh` runs four steps: pre-rasterize
-`src/herdeck/assets/*.svg` → PNG (so the frozen runtime never needs cairosvg;
-project SVG favicons use the bundled resvg); freeze the backend with PyInstaller (onedir) into
+`src/herdeck/assets/*.svg` → PNG with resvg (committed PNGs are reused; project
+SVG favicons use the bundled resvg at runtime); freeze the backend with PyInstaller (onedir) into
 `…sdPlugin/backend/herdeck-backend/herdeck-backend`; `npm run build` the TS
 shell; then package the `.sdPlugin` into a `.streamDeckPlugin` with Elgato's
 `DistributionTool` if it is on `PATH`, else a plain `zip` (the format is a zip

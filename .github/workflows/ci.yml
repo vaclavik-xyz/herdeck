@@ -27,6 +27,77 @@ jobs:
       - run: ruff check src tests
       - run: python -m pytest -v --cov=herdeck --cov-report=term-missing
 
+  # Which paths changed: gates the (slow-ish) freeze job below so a docs- or
+  # frontend-only change does not pay for two PyInstaller builds.
+  freeze-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      freeze: ${{ steps.filter.outputs.freeze }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            freeze:
+              - 'src/**'
+              - 'pyproject.toml'
+              - 'desktop/herdeck-deckapp.spec'
+              - 'desktop/scripts/**'
+              - 'streamdeck/herdeck-backend.spec'
+              - 'streamdeck/scripts/**'
+              - '.github/workflows/ci.yml'
+
+  # Freeze both PyInstaller bundles and prove their import graphs load, so a
+  # missing hidden import or a broken spec fails the PR instead of the release
+  # tag (release.yml / dev-build.yml were the only places that froze before).
+  freeze-smoke:
+    needs: freeze-changes
+    if: needs.freeze-changes.outputs.freeze == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            rpm \
+            build-essential \
+            file \
+            desktop-file-utils
+      - name: Install packaging deps
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[packaging,deck]"
+      - name: Freeze + smoke the desktop sidecar
+        # build-sidecar.sh freezes desktop/herdeck-deckapp.spec; smoke-sidecar.sh
+        # runs HERDECK_SELFTEST=imports on the binary, then serves the mock deck.
+        run: |
+          bash desktop/scripts/build-sidecar.sh
+          bash desktop/scripts/smoke-sidecar.sh
+      - name: Freeze the Elgato backend
+        run: |
+          .venv/bin/python -m PyInstaller streamdeck/herdeck-backend.spec --noconfirm \
+            --distpath build/elgato-dist --workpath build/pyinstaller-elgato
+      - name: Import selftest of the frozen Elgato backend
+        run: |
+          HERDECK_SELFTEST=imports build/elgato-dist/herdeck-backend/herdeck-backend
+          echo "OK: frozen Elgato backend imports reachable"
+
   frontend:
     runs-on: ubuntu-latest
     steps:

@@ -62,10 +62,6 @@ def test_png_rasterizer_never_imports_cairosvg(tmp_path, monkeypatch):
 
 
 def test_prerasterize_writes_content_keyed_pngs(tmp_path):
-    import pytest
-
-    pytest.importorskip("cairosvg")  # build-time dep; present in the dev extra
-
     src = tmp_path / "assets"
     src.mkdir()
     svg = (
@@ -92,7 +88,8 @@ def test_prerasterize_writes_content_keyed_pngs(tmp_path):
 
 
 def test_prerasterize_into_same_dir_is_idempotent(tmp_path, monkeypatch):
-    cairosvg = __import__("pytest").importorskip("cairosvg")
+    from herdeck import icons
+
     src = tmp_path / "assets"
     src.mkdir()
     (src / "x.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
@@ -100,11 +97,11 @@ def test_prerasterize_into_same_dir_is_idempotent(tmp_path, monkeypatch):
     mtime = (src / first[0]).stat().st_mtime_ns
 
     # The second run over an already-baked dir re-encodes nothing: stable return,
-    # no svg2png call, and the existing PNG's mtime is untouched.
+    # no rasterize call, and the existing PNG's mtime is untouched.
     calls = []
-    real_svg2png = cairosvg.svg2png
+    real_rasterize = icons.resvg_rasterize
     monkeypatch.setattr(
-        cairosvg, "svg2png", lambda *a, **k: calls.append(1) or real_svg2png(*a, **k)
+        icons, "resvg_rasterize", lambda *a, **k: calls.append(1) or real_rasterize(*a, **k)
     )
     second = frozen.prerasterize_assets(str(src), str(src), frozen.BAKE_SIZE)
     assert second == first  # re-running over the same dir is stable

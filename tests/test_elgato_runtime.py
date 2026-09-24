@@ -156,10 +156,6 @@ def _copy_assets_and_bake(tmp_path):
     import os
     import shutil
 
-    import pytest
-
-    pytest.importorskip("cairosvg")
-
     from herdeck.elgato import frozen
 
     src = "src/herdeck/assets"
@@ -183,7 +179,7 @@ def test_frozen_session_uses_png_rasterizer(tmp_path):
     # PNG-loading rasterizer + bundled assets dir + offline fetch.
     assert icons._assets_dir == baked
     assert icons._fetch("claude") is None  # no network when frozen
-    # The bundled-asset agent (codex.svg -> baked PNG) renders without cairosvg.
+    # The bundled-asset agent (codex.svg -> baked PNG) renders from the baked PNG.
     name = icons.icon_for("codex", "green")
     assert os.path.exists(os.path.join(icons._cache_dir, name))
 
@@ -266,4 +262,29 @@ async def test_serve_elgato_wires_project_icons_into_the_shared_store(monkeypatc
         assert icon_hash(data) in default_store()
     finally:
         default_store().clear()
+
+
+def test_elgato_backend_entry_selftest_exits_zero_without_starting():
+    """The frozen Elgato backend entry honours HERDECK_SELFTEST=imports (CI runs
+    it on the PyInstaller binary): import graph + one resvg render, exit 0."""
+    import os
+    import subprocess
+    import sys
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = {**os.environ, "HERDECK_SELFTEST": "imports"}
+    env["PYTHONPATH"] = os.path.join(root, "src") + os.pathsep + env.get("PYTHONPATH", "")
+    entry = os.path.join(root, "streamdeck", "scripts", "herdeck-backend-entry.py")
+    r = subprocess.run(
+        [sys.executable, entry], env=env, capture_output=True, timeout=60
+    )
+    assert r.returncode == 0, r.stderr.decode()
+    assert r.stdout == b""  # returned before the backend started
+
+
+def test_elgato_selftest_covers_lazy_imports():
+    from herdeck.elgato import runtime
+
+    assert {"herdeck.app", "websockets", "resvg_py"} <= set(runtime.SELFTEST_IMPORTS)
+    assert runtime.run_import_selftest() == 0
 
