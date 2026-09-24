@@ -7,6 +7,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Opt-in usage-limit notifications: `[usage].alert_at` (used-% levels, e.g.
+  `[80, 95]`) notifies once per limit window when a provider window crosses a
+  level, and `[usage].alert_reset` announces when a window that reached 100 %
+  (or the highest level) resets. They go through the `[notifications]`
+  backends (macOS banner via the desktop shell, Telegram) with the `done`
+  sound; the first poll after startup is a silent baseline. Editable under
+  Usage.
+- The usage detail on the status panel shows a pace hint (`full ~40m early`)
+  when the recent burn rate would fill a window before it resets.
 - Triage loop: pressing the `▲ needs you` status panel opens the drill of the
   agent blocked longest; answering (or stopping) it moves straight on to the
   next-longest blocked agent, and back to the overview when none is left.
@@ -42,6 +51,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   printed `--rollback` command on failure. It replaces the manual recipe in
   `docs/updating-a-deployment.md`, which now also covers moving a `nohup`
   bridge under `herdeck-service`.
+- Every `osascript` notification fallback is logged at WARNING with its
+  reason: `reason=no_shell_claim last_claim_age=…s` (or `never`) when no app
+  claimed banner duty in the last 60 s, `reason=shell_native_failed error=…`
+  when the app's native banner failed. The runtime also logs when the app's
+  banner claim is acquired, moves to a relaunched app, or lapses.
+- The desktop app logs which runtime it uses and why:
+  `herdeck: runtime plan=attach|spawn reason=…`, at launch and on every switch.
 
 ### Changed
 - Blocked agents are ordered by how long they have been waiting, longest
@@ -51,6 +67,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first.
 
 ### Fixed
+- A sidecar spawned by the desktop app no longer outlives it. It used to keep
+  running (and holding the D200) after a crash, SIGKILL or Force Quit. It now
+  exits cleanly when the app's stdin pipe closes, with a parent-pid check as a
+  fallback. A normal quit closes the pipe and kills the sidecar only after 5 s.
+- Two runtimes no longer fight over one D200. The owner holds
+  `~/.cache/herdeck/d200.lock` (`$HERDECK_RUNTIME_DIR` respected). Another
+  runtime leaves the device alone, keeps serving its window, and takes over
+  when the owner exits.
+- A desktop app that spawned its own sidecar because the launchd runtime
+  was not answering at launch (e.g. right after an auto-update relaunch) now
+  switches to that runtime once it is healthy and stops its sidecar. It
+  checks every 12 s and after any failed poll. Before, the two runtimes stayed
+  until the app restarted, and banners fell back to `osascript`. If the
+  runtime it switched to then stays unreachable (3 failed re-discoveries over
+  at least 30 s), the app starts its own sidecar again.
 - SVG project favicons now render in the packaged desktop app and the Elgato
   plugin (they showed the monogram): SVG goes through resvg (`resvg-py`, a
   self-contained wheel bundled into both). An SVG favicon referencing external files or

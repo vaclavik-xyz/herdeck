@@ -560,7 +560,11 @@ borderless deck window that overlays your other work. Either can be shown or
 hidden independently, and the deck can be kept always on top. Resize the deck
 with **⌘+** / **⌘−** and reset it to 100% with **⌘0**; the chosen scale is
 remembered on that Mac. The app attaches to a running herdeck runtime or
-spawns its own sidecar. For development, run it from `desktop/`:
+spawns its own sidecar. A spawned sidecar exits with the app, even when the app
+crashes or is force-quit, and the app switches over to a launchd runtime as
+soon as one answers (checked every 12 s). Only one runtime drives the D200 at a
+time; see `d200.lock` under [Deck](#the-deck-ulanzi-d200). For development,
+run it from `desktop/`:
 
 ```bash
 # from the repo root
@@ -581,7 +585,11 @@ keeps its own and its sidecar runtime's stderr in a timestamped log:
 (or `$XDG_STATE_HOME/herdeck/`) on Linux; `herdeck-dev.log` for the dev build.
 It rotates at 5 MB, keeping one previous file (`.1`). Besides warnings it
 records how each notification was delivered (native banner or `osascript`
-fallback).
+fallback), and why a fallback happened: `reason=no_shell_claim
+last_claim_age=…` (the app had not polled for 60 s) or
+`reason=shell_native_failed error=…`. It also records when the app's banner
+claim was acquired or lapsed, and which runtime the app is on:
+`herdeck: runtime plan=attach|spawn reason=…`.
 
 See **Native desktop app** under Install for a local application bundle and
 [`desktop/README.md`](desktop/README.md) for architecture and test details.
@@ -675,7 +683,21 @@ set `codexbar_path = ""` to disable it. Its `loginMethod` is the paid signal:
 Claude Pro/Max/Team/Enterprise and the paid ChatGPT plans (Plus, Pro, Team,
 Business, …) count as paid, so with `paid_only = true` the fallback still runs
 and keeps only those results. Pressing the status window holds a detail view
-with reset times. Blocked and offline alerts always take priority.
+with reset times. Blocked and offline alerts always take priority. When the
+recent burn rate (at least 10 minutes of polls; a fifth of the window, e.g. the
+last hour of a 5-hour limit) would fill a window before it resets, its detail
+card adds a pace hint such as `full ~40m early`.
+
+Usage can also **notify** (opt-in, through the same `[notifications]` backends
+as agent alerts, so `enabled` must be on; the sound is the `done` sound).
+`alert_at = [80, 95]` sends `Claude 5h · 80 % used` once per limit window when
+usage crosses a level (a jump past several levels sends only the highest);
+`alert_reset = true` sends `Claude 5h reset — you can continue` when a window
+that reached 100 % (or the highest `alert_at` level) resets. The reset is also
+detected from the clock passing the known reset time, so it arrives within one
+`refresh_secs` even while the Claude snapshot is stale. The first poll after
+startup is a silent baseline. Both the desktop runtime and the legacy
+`herdeck` app send them; the demo deck does not.
 
 **Thin-client deck.** When the deck machine only displays the deck and the AI
 logins live on another Mac, point `codex_path` and `codexbar_path` at small
@@ -695,6 +717,14 @@ exec ssh -T admin@ai-mac /opt/homebrew/bin/codexbar "$@"
 
 The Codex app-server session stays open across polls; its first start (cold
 codex plus SSH) may take up to 60 s, later reads time out after 15 s.
+
+**One D200 owner.** Only one herdeck runtime drives the D200 at a time. The
+owner holds an exclusive lock on `~/.cache/herdeck/d200.lock` (or
+`$HERDECK_RUNTIME_DIR/d200.lock`), which contains its pid. A second runtime,
+for example a desktop app's own sidecar running next to the launchd runtime,
+logs `D200 is owned by another herdeck runtime` once, leaves the device alone,
+and keeps serving its window. It retries every 5 s and takes the D200 over when
+the owner exits.
 
 ## Stream Deck (Elgato) plugin backend
 herdeck can also drive a native **Elgato Stream Deck** as a plugin. A thin

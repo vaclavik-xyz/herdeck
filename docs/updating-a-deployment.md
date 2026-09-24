@@ -209,11 +209,53 @@ copying over the existing one.
 
 After launching, count processes. The correct state is exactly **two**: the
 runtime, and the desktop binary. A third process under
-`herdeck.app/Contents/Resources/herdeck-deckapp/` means the window failed to
-attach to the running runtime and spawned its own frozen sidecar — which then
-competes with the runtime for the deck. That happens when the runtime is not up
-at the moment the app launches, and it persists silently until the app is
-restarted.
+`herdeck.app/Contents/Resources/herdeck-deckapp/` means the window did not
+find a healthy runtime at launch and spawned its own frozen sidecar. That
+happens when the runtime is not up at the moment the app launches, e.g. during
+an auto-update relaunch. It is no longer permanent:
+
+- The app re-reads `runtime.json` every 12 s (and on any failed poll). Once the
+  launchd runtime's `/health` answers, the window switches to it and stops its
+  own sidecar, so the third process should disappear within about 15 s.
+- The sidecar never opens the D200 while the runtime holds
+  `~/.cache/herdeck/d200.lock`. If the sidecar got the lock first, the runtime
+  takes the deck over within 5 s of the sidecar exiting.
+- A spawned sidecar exits when the app dies, including a crash or Force Quit:
+  its stdin is a pipe from the app, and it shuts down cleanly on EOF.
+
+The app log (`~/Library/Logs/herdeck/herdeck.log`) shows each decision:
+
+```
+herdeck: runtime plan=spawn reason=runtime_unhealthy
+herdeck: runtime plan=attach reason=launchd_runtime_appeared url=http://127.0.0.1:52001
+herdeck: stopping own sidecar pid=4242
+```
+
+Other reasons: `runtime_json_healthy` (normal attach at launch),
+`no_runtime_json`, `own_sidecar_unreachable` (switched after a failed poll),
+`runtime_restarted` (the launchd runtime came back on a new port),
+`env_override`, and `attach_disabled_for_channel` (dev builds never attach).
+`plan=spawn reason=attached_runtime_lost` means the app had switched to the
+launchd runtime, which then stayed unreachable (3 failed re-discoveries over at
+least 30 s), so the app started its own sidecar again. It switches back once
+the runtime is healthy.
+A third process that stays for longer than about 15 s means the launchd runtime
+is not answering `/health`; check the runtime itself.
+
+### A banner arrived through `osascript`
+
+With the app installed, the app posts every banner natively. The runtime falls
+back to `osascript` in only two cases, and it logs a WARNING with the reason
+for each:
+
+- `notification fallback=osascript reason=no_shell_claim last_claim_age=72s`:
+  no app had polled `/notifications` in the last 60 s (`never` = no app since
+  the runtime started). Look for the matching `notification shell claim
+  lapsed` and `… acquired … (after N s without one)` lines to see how long the
+  gap was, and for `runtime plan=` lines around the same time.
+- `notification fallback=osascript reason=shell_native_failed id=… error=…`:
+  the app tried to post the banner and macOS refused it (the error is the
+  app's). Check the notification permission in System Settings.
 
 ## Verifying without a display
 

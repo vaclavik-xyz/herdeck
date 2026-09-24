@@ -654,11 +654,15 @@ pub fn fallback_notification(
     generation: &str,
     seq: u64,
     shell_gen: &str,
+    error: &str,
 ) -> Result<u16, String> {
+    // `error` is the native failure, logged by the runtime as the fallback's
+    // reason (`reason=shell_native_failed error=...`).
     let body = serde_json::json!({
         "generation": generation,
         "seq": seq,
         "shell_gen": shell_gen,
+        "error": error,
     })
     .to_string();
     let (code, _) = http_post_json(

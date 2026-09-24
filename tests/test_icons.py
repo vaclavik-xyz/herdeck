@@ -273,12 +273,39 @@ def test_single_usage_gauge_spans_panel_and_draws_reset_hint():
     assert with_reset.tobytes() != without_reset.tobytes()
 
 
+def test_detail_usage_card_draws_the_pace_hint_inside_its_card():
+    from herdeck.driver.base import PanelGauge, PanelView
+    from herdeck.icons import PANEL_W_TWO_CELL, compose_panel
+
+    def detail(pace):
+        gauges = [
+            PanelGauge("Claude", "5H", 60, hint="reset 24.9. 13:05", color="orange", pace=pace),
+            PanelGauge("Claude", "7D", 30, hint="reset 1.10. 09:00", color="orange"),
+            PanelGauge("Codex", "5H", 10, hint="reset 13:05", color="teal"),
+        ]
+        return compose_panel(
+            PanelView("usage limits", gauges=gauges, gauge_meta="used / reset"),
+            width=PANEL_W_TWO_CELL,
+        )
+
+    plain, paced = detail(""), detail("plno ~40m dřív")
+    assert plain.tobytes() != paced.tobytes()
+    # Only the first card changes: the neighbour card and the gap stay put.
+    card_w = (PANEL_W_TWO_CELL - 32 - 16) / 3
+    right_of_first = round(16 + card_w) + 1
+    assert plain.crop((right_of_first, 0, PANEL_W_TWO_CELL, 196)).tobytes() == paced.crop(
+        (right_of_first, 0, PANEL_W_TWO_CELL, 196)
+    ).tobytes()
+
+
 def test_panel_cache_key_includes_usage_gauges():
     from herdeck.driver.base import PanelGauge, PanelView
 
     low = PanelView("usage", gauges=[PanelGauge("Codex", "5H", 10, color="teal")])
     high = PanelView("usage", gauges=[PanelGauge("Codex", "5H", 90, color="teal")])
     assert low.cache_key() != high.cache_key()
+    paced = PanelView("usage", gauges=[PanelGauge("Codex", "5H", 10, color="teal", pace="x")])
+    assert low.cache_key() != paced.cache_key()
     localized = PanelView(
         "usage",
         gauges=[PanelGauge("Codex", "5H", 10, color="teal")],

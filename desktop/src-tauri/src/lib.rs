@@ -104,6 +104,62 @@ struct AppState {
     /// through runtime.json (not env override, not self-spawned) — the only
     /// case where on-disk re-discovery may repoint the shell.
     attached_from_runtime_json: Arc<AtomicBool>,
+    /// True while this shell runs on its OWN spawned sidecar in a channel that
+    /// may attach the shared runtime: a healthy launchd runtime appearing in
+    /// runtime.json then takes over (see `try_reattach`). Cleared by the switch.
+    reattach_eligible: Arc<AtomicBool>,
+    /// The CURRENT supervisor (stop flag + child slot). A switch to the
+    /// launchd runtime stops it; losing that runtime again starts a fresh one
+    /// with its own flag + slot, so a late-waking old supervisor can never
+    /// restart itself or reap the new child. The exit handler stops whichever
+    /// is current.
+    supervisor: Arc<Mutex<Supervisor>>,
+    /// The spawn recipe of our own sidecar (set only when this shell spawned
+    /// one), kept for `fall_back_to_spawn`.
+    spawn_spec: Arc<Mutex<Option<CommandSpec>>>,
+    /// True after `switch_to_runtime` moved us off our own sidecar: only then
+    /// may a lost launchd runtime bring our own sidecar back.
+    switched_from_spawn: Arc<AtomicBool>,
+    /// Consecutive failed re-discoveries of the attached runtime.
+    attach_loss: Arc<Mutex<AttachLoss>>,
+    /// Set by the exit handler: no fallback may spawn a sidecar after it.
+    quitting: Arc<AtomicBool>,
+}
+
+/// One supervisor generation: its stop flag and its child slot.
+#[derive(Clone, Default)]
+struct Supervisor {
+    stop: Arc<AtomicBool>,
+    child: Arc<Mutex<Option<Child>>>,
+}
+
+/// Failed re-discoveries before a switched shell gives up on the launchd
+/// runtime and spawns its own sidecar again. BOTH thresholds must be met, so a
+/// runtime restart (new port within seconds) never triggers it, and a runtime
+/// that answers one probe and dies cannot make the shell flap faster than
+/// once per `ATTACH_LOST_AFTER` (+ `REATTACH_CHECK_INTERVAL` to switch back).
+const ATTACH_LOST_FAILURES: u32 = 3;
+const ATTACH_LOST_AFTER: Duration = Duration::from_secs(30);
+
+/// Streak of failed re-discoveries of the attached runtime. Any successful
+/// poll or re-discovery resets it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct AttachLoss {
+    failures: u32,
+    since: Option<std::time::Instant>,
+}
+
+impl AttachLoss {
+    fn record_ok(&mut self) {
+        *self = AttachLoss::default();
+    }
+
+    /// Record one failure at `now`; true once the runtime counts as lost.
+    fn record_failure(&mut self, now: std::time::Instant) -> bool {
+        self.failures = self.failures.saturating_add(1);
+        let since = *self.since.get_or_insert(now);
+        self.failures >= ATTACH_LOST_FAILURES && now.duration_since(since) >= ATTACH_LOST_AFTER
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -127,6 +183,11 @@ struct PendingNotification {
 
 /// Minimum interval between on-disk re-discovery attempts.
 const REDISCOVER_MIN_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How often a shell running on its own spawned sidecar re-reads runtime.json
+/// for a healthy launchd runtime to hand over to (one small file read; a
+/// `/health` probe only when the file names a runtime other than ours).
+const REATTACH_CHECK_INTERVAL: Duration = Duration::from_secs(12);
 
 /// Default timeout for the Rust-side sidecar proxy calls.
 const SIDECAR_TIMEOUT: Duration = Duration::from_secs(3);
@@ -252,18 +313,159 @@ fn current_discovery(state: &tauri::State<'_, AppState>) -> Result<Discovery, St
         .ok_or_else(|| "sidecar not ready".to_string())
 }
 
+/// The one log line recording which runtime this shell is on and why. Lands in
+/// the app log (`app_log`), so "why did two runtimes run / why did a banner go
+/// through osascript" is answerable afterwards. Never includes the token.
+fn plan_log_line(plan: &str, reason: &str, url: Option<&str>) -> String {
+    match url {
+        Some(url) => format!("herdeck: runtime plan={plan} reason={reason} url={url}"),
+        None => format!("herdeck: runtime plan={plan} reason={reason}"),
+    }
+}
+
+/// Should a shell running on its own spawned sidecar switch to `candidate`
+/// (the runtime named by runtime.json)? Only when it is a DIFFERENT runtime
+/// than the current one and its `/health` answers.
+fn reattach_target<F>(
+    eligible: bool,
+    current: Option<&Discovery>,
+    candidate: Option<Discovery>,
+    healthy: F,
+) -> Option<Discovery>
+where
+    F: Fn(&Discovery) -> bool,
+{
+    if !eligible {
+        return None;
+    }
+    let candidate = candidate?;
+    if current.map(discovery_key) == Some(discovery_key(&candidate)) {
+        return None;
+    }
+    sidecar::decide_runtime_attach(Some(candidate), healthy)
+}
+
+/// Move the shell from its own sidecar onto the launchd runtime `d`: adopt
+/// the discovery, then stop the supervisor and our sidecar for good (it would
+/// otherwise keep a second Orchestrator + bridge alive next to the runtime).
+/// The discovery write and the stop flag change together under the discovery
+/// lock, which the supervisor's callback also takes — a sidecar reporting in
+/// mid-switch cannot repoint us back.
+fn switch_to_runtime(app: &tauri::AppHandle, d: Discovery, reason: &str) -> bool {
+    let state = app.state::<AppState>();
+    {
+        let mut current = state.discovery.lock().unwrap();
+        if !state.reattach_eligible.swap(false, Ordering::SeqCst) {
+            return false; // another caller switched first
+        }
+        state.supervisor.lock().unwrap().stop.store(true, Ordering::SeqCst);
+        state.attached_from_runtime_json.store(true, Ordering::Relaxed);
+        state.switched_from_spawn.store(true, Ordering::SeqCst);
+        state.attach_loss.lock().unwrap().record_ok();
+        *current = Some(d.clone());
+    }
+    eprintln!("{}", plan_log_line("attach", reason, Some(&d.url)));
+    register_toggle_hotkey_logged(app, &d);
+    let _ = app.emit("discovery", DiscoveryView::from(&d)); // token-free
+    let child = state.supervisor.lock().unwrap().child.clone();
+    std::thread::spawn(move || {
+        let taken = child.lock().unwrap().take();
+        if let Some(mut c) = taken {
+            eprintln!("herdeck: stopping own sidecar pid={}", c.id());
+            sidecar::stop_child(&mut c, sidecar::SIDECAR_STOP_GRACE);
+        }
+    });
+    true
+}
+
+/// Switch to a healthy launchd runtime if this shell is on its own sidecar
+/// and runtime.json names one. Returns the adopted discovery.
+fn try_reattach(app: &tauri::AppHandle, reason: &str) -> Option<Discovery> {
+    let state = app.state::<AppState>();
+    let eligible = state.reattach_eligible.load(Ordering::SeqCst);
+    if !eligible {
+        return None;
+    }
+    let current = state.discovery.lock().unwrap().clone();
+    let candidate = sidecar::read_runtime_discovery(&sidecar::runtime_file_path());
+    let d = reattach_target(eligible, current.as_ref(), candidate, probe_runtime_health)?;
+    switch_to_runtime(app, d.clone(), reason).then_some(d)
+}
+
+/// Periodically hand a self-spawned shell over to the launchd runtime once it
+/// is healthy. The startup `/health` probe can miss it (e.g. right after an
+/// auto-update relaunch), which used to leave two runtimes running until the
+/// app was restarted.
+fn start_reattach_watch(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(REATTACH_CHECK_INTERVAL);
+        let state = app.state::<AppState>();
+        if !state.reattach_eligible.load(Ordering::SeqCst)
+            || state.supervisor.lock().unwrap().stop.load(Ordering::SeqCst)
+        {
+            return; // switched already, or quitting
+        }
+        try_reattach(&app, "launchd_runtime_appeared");
+    });
+}
+
+/// A proxied poll of the current runtime succeeded: the attached runtime is
+/// alive, so any failure streak is over.
+fn note_runtime_ok(state: &AppState) {
+    let mut loss = state.attach_loss.lock().unwrap();
+    if loss.failures != 0 {
+        loss.record_ok();
+    }
+}
+
+/// The launchd runtime we switched to is gone for good (uninstalled, booted
+/// out, crash-looping): without this the window would have no runtime at all
+/// until the app restarts, since we stopped our own sidecar to switch. Start a
+/// fresh supervisor (new stop flag + child slot), and make the shell eligible
+/// to re-adopt a launchd runtime that becomes healthy later.
+fn fall_back_to_spawn(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let Some(spec) = state.spawn_spec.lock().unwrap().clone() else {
+        return;
+    };
+    let fresh = Supervisor::default();
+    {
+        let mut current = state.discovery.lock().unwrap();
+        if !state.switched_from_spawn.swap(false, Ordering::SeqCst) {
+            return; // not switched, or another caller already fell back
+        }
+        if state.quitting.load(Ordering::SeqCst) {
+            return; // the app is quitting: spawn nothing
+        }
+        *state.supervisor.lock().unwrap() = fresh.clone();
+        state.attached_from_runtime_json.store(false, Ordering::Relaxed);
+        *current = None; // "sidecar not ready" until the new one reports in
+    }
+    state.attach_loss.lock().unwrap().record_ok();
+    eprintln!("{}", plan_log_line("spawn", "attached_runtime_lost", None));
+    start_supervisor(app.clone(), spec, fresh);
+    state.reattach_eligible.store(true, Ordering::SeqCst);
+    start_reattach_watch(app.clone());
+}
+
 /// Re-read `runtime.json` from disk and, when it describes a LIVE runtime
 /// (`/health` probe passes), adopt it as the current discovery. An external
 /// sidecar (launchd) picks a fresh port on every restart; a shell holding the
 /// stale port would silently drift into osascript fallbacks (the user sees
 /// duplicated alerts) while the deck keeps rendering from cached state.
-/// Called on `/state` fetch failures. Returns the adopted discovery, or `None`
-/// when the file is absent/unhealthy. Rate-limited to one attempt per
+/// Called on `/state` and `/notifications` failures. A shell on its OWN
+/// sidecar takes this chance to switch to a healthy launchd runtime
+/// (`try_reattach`) instead of waiting for the periodic watch. Returns the
+/// adopted discovery, or `None` when the file is absent/unhealthy or the shell
+/// was pointed at a runtime by env override. Rate-limited to one attempt per
 /// `REDISCOVER_MIN_INTERVAL`.
-fn rediscover_runtime(state: &tauri::State<'_, AppState>) -> Option<Discovery> {
-    if !state.attached_from_runtime_json.load(Ordering::Relaxed) {
-        // Env-override or self-spawned sidecar: on-disk re-discovery must not
-        // silently repoint the shell at a different runtime.
+fn rediscover_runtime(app: &tauri::AppHandle) -> Option<Discovery> {
+    let state = app.state::<AppState>();
+    let attached = state.attached_from_runtime_json.load(Ordering::Relaxed);
+    let eligible = state.reattach_eligible.load(Ordering::SeqCst);
+    if !attached && !eligible {
+        // Env-override (or a channel that never attaches): on-disk
+        // re-discovery must not silently repoint the shell.
         return None;
     }
     {
@@ -275,11 +477,32 @@ fn rediscover_runtime(state: &tauri::State<'_, AppState>) -> Option<Discovery> {
         }
         *last = Some(std::time::Instant::now());
     }
-    let d = sidecar::read_runtime_discovery(&sidecar::runtime_file_path())?;
-    if sidecar::decide_runtime_attach(Some(d.clone()), probe_runtime_health).is_none() {
-        return None;
+    if eligible {
+        return try_reattach(app, "own_sidecar_unreachable");
     }
-    *state.discovery.lock().unwrap() = Some(d.clone());
+    let healthy = sidecar::read_runtime_discovery(&sidecar::runtime_file_path())
+        .and_then(|d| sidecar::decide_runtime_attach(Some(d), probe_runtime_health));
+    let Some(d) = healthy else {
+        let lost = state
+            .attach_loss
+            .lock()
+            .unwrap()
+            .record_failure(std::time::Instant::now());
+        if lost && state.switched_from_spawn.load(Ordering::SeqCst) {
+            fall_back_to_spawn(app);
+        }
+        return None;
+    };
+    state.attach_loss.lock().unwrap().record_ok();
+    let changed = {
+        let mut current = state.discovery.lock().unwrap();
+        let changed = current.as_ref().map(discovery_key) != Some(discovery_key(&d));
+        *current = Some(d.clone());
+        changed
+    };
+    if changed {
+        eprintln!("{}", plan_log_line("attach", "runtime_restarted", Some(&d.url)));
+    }
     Some(d)
 }
 
@@ -371,11 +594,14 @@ async fn deck_state(
         })
     };
     let body = match fetch(d).await {
-        Ok(body) => body,
+        Ok(body) => {
+            note_runtime_ok(&state);
+            body
+        }
         Err(first_err) => {
             // Stale external sidecar (launchd restart → fresh port): re-read
             // runtime.json once and retry against the live runtime.
-            let Some(d) = rediscover_runtime(&state) else {
+            let Some(d) = rediscover_runtime(&app) else {
                 return Err(first_err);
             };
             fetch(d).await?
@@ -813,13 +1039,17 @@ fn start_notify_pump(app: tauri::AppHandle) {
             });
         };
         let (body, active_discovery) = match poll(&d) {
-            NotifyPoll::Deliver(body) => (body, d),
+            NotifyPoll::Deliver(body) => {
+                note_runtime_ok(&state);
+                (body, d)
+            }
             NotifyPoll::Unsupported => {
+                note_runtime_ok(&state);
                 unsupported_backoff(&d);
                 continue;
             }
             NotifyPoll::Failed => {
-                let Some(d) = rediscover_runtime(&state) else {
+                let Some(d) = rediscover_runtime(&app) else {
                     std::thread::sleep(NOTIFY_RETRY_DELAY);
                     continue;
                 };
@@ -867,6 +1097,7 @@ fn start_notify_pump(app: tauri::AppHandle) {
                     &item.generation,
                     item.seq,
                     &shell_gen(),
+                    &err.to_string(),
                 );
                 if code == Ok(204) {
                     let mut cursor = state.notify_cursor.lock().unwrap();
@@ -1503,28 +1734,36 @@ fn parse_host_port(url: &str) -> (String, u16) {
     }
 }
 
+/// The automatic plan plus the reason logged for it (`plan_log_line`).
 fn resolve_automatic_plan<F>(
     channel: &str,
     resource_dir: Option<&Path>,
     repo_root: &Path,
     runtime_discovery: Option<Discovery>,
     healthy: F,
-) -> SidecarPlan
+) -> (SidecarPlan, &'static str)
 where
     F: Fn(&Discovery) -> bool,
 {
-    if build_channel::shared_runtime_attach_enabled_for(channel) {
-        if let Some(discovery) = sidecar::decide_runtime_attach(runtime_discovery, healthy) {
-            return SidecarPlan::External(discovery, true);
-        }
-    }
-    SidecarPlan::Spawn(sidecar::choose_spawn(resource_dir, repo_root))
+    let reason = if !build_channel::shared_runtime_attach_enabled_for(channel) {
+        "attach_disabled_for_channel"
+    } else if runtime_discovery.is_none() {
+        "no_runtime_json"
+    } else if let Some(discovery) = sidecar::decide_runtime_attach(runtime_discovery, healthy) {
+        return (SidecarPlan::External(discovery, true), "runtime_json_healthy");
+    } else {
+        "runtime_unhealthy"
+    };
+    (
+        SidecarPlan::Spawn(sidecar::choose_spawn(resource_dir, repo_root)),
+        reason,
+    )
 }
 
 /// Decide how to obtain the sidecar. If `HERDECK_DECKAPP_URL` +
 /// `HERDECK_DECKAPP_TOKEN` are set, trust that externally-started sidecar (handy
 /// for manual `tauri dev` smoke without a `.venv`); otherwise spawn the dev venv.
-fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
+fn resolve_plan(resource_dir: Option<PathBuf>) -> (SidecarPlan, &'static str) {
     if let (Ok(url), Ok(token)) = (
         env::var("HERDECK_DECKAPP_URL"),
         env::var("HERDECK_DECKAPP_TOKEN"),
@@ -1533,15 +1772,18 @@ fn resolve_plan(resource_dir: Option<PathBuf>) -> SidecarPlan {
             let (host, port) = parse_host_port(&url);
             let source =
                 env::var("HERDECK_DECKAPP_SOURCE").unwrap_or_else(|_| "external".to_string());
-            return SidecarPlan::External(
-                Discovery {
-                    url,
-                    host,
-                    port,
-                    token,
-                    source,
-                },
-                false,
+            return (
+                SidecarPlan::External(
+                    Discovery {
+                        url,
+                        host,
+                        port,
+                        token,
+                        source,
+                    },
+                    false,
+                ),
+                "env_override",
             );
         }
     }
@@ -2184,6 +2426,83 @@ mod plan_tests {
     }
 
     #[test]
+    fn a_missed_or_unhealthy_runtime_spawns_with_the_reason_logged() {
+        let (plan, reason) =
+            resolve_automatic_plan("stable", None, Path::new("/repo"), None, |_| true);
+        assert!(matches!(plan, SidecarPlan::Spawn(_)));
+        assert_eq!(reason, "no_runtime_json");
+        let (plan, reason) = resolve_automatic_plan(
+            "stable",
+            None,
+            Path::new("/repo"),
+            Some(stable_runtime()),
+            |_| false,
+        );
+        assert!(matches!(plan, SidecarPlan::Spawn(_)));
+        assert_eq!(reason, "runtime_unhealthy");
+    }
+
+    #[test]
+    fn plan_log_line_names_plan_reason_and_url_but_never_the_token() {
+        let d = stable_runtime();
+        let line = plan_log_line("attach", "launchd_runtime_appeared", Some(&d.url));
+        assert_eq!(
+            line,
+            "herdeck: runtime plan=attach reason=launchd_runtime_appeared url=http://127.0.0.1:8800"
+        );
+        assert!(!line.contains(&d.token));
+        assert_eq!(
+            plan_log_line("spawn", "runtime_unhealthy", None),
+            "herdeck: runtime plan=spawn reason=runtime_unhealthy"
+        );
+    }
+
+    #[test]
+    fn an_attached_runtime_counts_as_lost_only_after_three_failures_and_30s() {
+        let t0 = std::time::Instant::now();
+        let mut loss = AttachLoss::default();
+        // Three quick failures (a runtime restarting) are not a loss.
+        assert!(!loss.record_failure(t0));
+        assert!(!loss.record_failure(t0 + Duration::from_secs(5)));
+        assert!(!loss.record_failure(t0 + Duration::from_secs(10)));
+        // Nor is a long gap with too few failures.
+        let mut sparse = AttachLoss::default();
+        assert!(!sparse.record_failure(t0));
+        assert!(!sparse.record_failure(t0 + Duration::from_secs(40)));
+        // Both thresholds met -> lost.
+        assert!(!loss.record_failure(t0 + Duration::from_secs(29)));
+        assert!(loss.record_failure(t0 + ATTACH_LOST_AFTER));
+        // Any success restarts the clock: no flapping faster than the window.
+        loss.record_ok();
+        let t1 = t0 + Duration::from_secs(60);
+        for i in 0..10 {
+            assert!(!loss.record_failure(t1 + Duration::from_secs(i)));
+        }
+        assert!(loss.record_failure(t1 + ATTACH_LOST_AFTER));
+    }
+
+    #[test]
+    fn a_self_spawned_shell_reattaches_only_to_a_different_healthy_runtime() {
+        let own = discovery_on(51000);
+        let launchd = stable_runtime();
+        // Healthy launchd runtime appeared -> switch.
+        assert_eq!(
+            reattach_target(true, Some(&own), Some(launchd.clone()), |_| true),
+            Some(launchd.clone())
+        );
+        // Not (yet) healthy, or no runtime.json -> stay on our sidecar.
+        assert!(reattach_target(true, Some(&own), Some(launchd.clone()), |_| false).is_none());
+        assert!(reattach_target(true, Some(&own), None, |_| true).is_none());
+        // Already on it -> nothing to do (and no probe).
+        assert!(reattach_target(true, Some(&launchd), Some(launchd.clone()), |_| panic!(
+            "probed the runtime we are already on"
+        ))
+        .is_none());
+        // Env override / attached / dev channel -> never repointed.
+        assert!(reattach_target(false, Some(&own), Some(launchd), |_| true).is_none());
+    }
+
+    #[test]
     fn dev_plan_spawns_instead_of_attaching_a_healthy_stable_runtime() {
         let plan = resolve_automatic_plan(
             build_channel::DEV_CHANNEL,
@@ -2193,7 +2512,8 @@ mod plan_tests {
             |_| true,
         );
 
-        match plan {
+        assert_eq!(plan.1, "attach_disabled_for_channel");
+        match plan.0 {
             SidecarPlan::Spawn(spec) => {
                 assert!(spec.program.ends_with("/.venv/bin/python"));
             }
@@ -2211,7 +2531,8 @@ mod plan_tests {
             |_| true,
         );
 
-        match plan {
+        assert_eq!(plan.1, "runtime_json_healthy");
+        match plan.0 {
             // The bool is the whole re-discovery safety gate: only this path
             // may ever be repointed by a re-read runtime.json (review LOW — a
             // polarity regression here would reintroduce the hijack).
@@ -3591,21 +3912,17 @@ fn build_tray(app: &tauri::App, deck_always_on_top: bool, deck_visible: bool) ->
 /// is exported as `HERDECK_CONFIG` so the spawned sidecar reads the SAME config
 /// file Rust resolved the deck preferences from (mooting the sidecar's CWD-relative
 /// branch — important for the frozen `.app`, where CWD is nondeterministic).
-fn start_sidecar(
-    app: &tauri::App,
-    discovery: Arc<Mutex<Option<Discovery>>>,
-    child: Arc<Mutex<Option<Child>>>,
-    stop: Arc<AtomicBool>,
-    config_path: &Path,
-) {
+fn start_sidecar(app: &tauri::App, discovery: Arc<Mutex<Option<Discovery>>>, config_path: &Path) {
     let primary_resource_dir = app.path().resource_dir().ok();
     let executable = env::current_exe().ok();
     let resource_dir = sidecar::resolve_resource_dir(
         primary_resource_dir.as_deref(),
         executable.as_deref(),
     );
-    match resolve_plan(resource_dir) {
+    let (plan, reason) = resolve_plan(resource_dir);
+    match plan {
         SidecarPlan::External(d, from_runtime_json) => {
+            eprintln!("{}", plan_log_line("attach", reason, Some(&d.url)));
             let view = DiscoveryView::from(&d);
             register_toggle_hotkey_logged(app.handle(), &d);
             if let Some(state) = app.try_state::<AppState>() {
@@ -3617,6 +3934,7 @@ fn start_sidecar(
             let _ = app.handle().emit("discovery", view); // token-free
         }
         SidecarPlan::Spawn(mut spec) => {
+            eprintln!("{}", plan_log_line("spawn", reason, None));
             eprintln!("herdeck sidecar: spawning {}", spec.program);
             spec.envs.push((
                 "HERDECK_CONFIG".to_string(),
@@ -3626,27 +3944,46 @@ fn start_sidecar(
                 spec.envs
                     .push(("HERDECK_KEYRING_SERVICE".to_string(), service.to_string()));
             }
-            let handle = app.handle().clone();
-            std::thread::spawn(move || {
-                supervise(SupervisorConfig::new(spec), child, stop, move |d| {
-                    let view = DiscoveryView::from(&d);
-                    register_toggle_hotkey_logged(&handle, &d);
-                    if let Some(state) = handle.try_state::<AppState>() {
-                        *state.discovery.lock().unwrap() = Some(d);
-                    }
-                    let _ = handle.emit("discovery", view); // token-free
-                });
-            });
+            let Some(state) = app.try_state::<AppState>() else {
+                return;
+            };
+            *state.spawn_spec.lock().unwrap() = Some(spec.clone());
+            let sup = state.supervisor.lock().unwrap().clone();
+            start_supervisor(app.handle().clone(), spec, sup);
+            if build_channel::shared_runtime_attach_enabled() {
+                state.reattach_eligible.store(true, Ordering::SeqCst);
+                start_reattach_watch(app.handle().clone());
+            }
         }
     }
+}
+
+/// Run one supervisor generation on its own thread. Its discovery callback
+/// checks ITS stop flag under the discovery lock, so once this generation is
+/// stopped (switch to the launchd runtime, quit) a late report never repoints
+/// the shell.
+fn start_supervisor(handle: tauri::AppHandle, spec: CommandSpec, sup: Supervisor) {
+    let callback_stop = sup.stop.clone();
+    std::thread::spawn(move || {
+        supervise(SupervisorConfig::new(spec), sup.child, sup.stop, move |d| {
+            if let Some(state) = handle.try_state::<AppState>() {
+                let mut current = state.discovery.lock().unwrap();
+                if callback_stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                *current = Some(d.clone());
+            }
+            let view = DiscoveryView::from(&d);
+            register_toggle_hotkey_logged(&handle, &d);
+            let _ = handle.emit("discovery", view); // token-free
+        });
+    });
 }
 
 /// Tauri entry point.
 pub fn run() {
     start_app_log();
     let discovery: Arc<Mutex<Option<Discovery>>> = Arc::new(Mutex::new(None));
-    let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
-    let stop = Arc::new(AtomicBool::new(false));
 
     // Resolve config.toml with the sidecar's existence-check order and read it
     // ONCE. Both answers below can fall back to the legacy window_mode the fixed
@@ -3670,12 +4007,7 @@ pub fn run() {
 
     // Clones for the setup closure and the supervisor.
     let setup_discovery = discovery.clone();
-    let setup_child = child.clone();
-    let setup_stop = stop.clone();
     let setup_config_path = config_path.clone();
-    // Clones for the exit handler.
-    let exit_child = child.clone();
-    let exit_stop = stop.clone();
 
     let state = AppState {
         discovery,
@@ -3685,6 +4017,12 @@ pub fn run() {
         notify_permission: Arc::new(AtomicBool::new(false)),
         rediscover_last: Arc::new(Mutex::new(None)),
         attached_from_runtime_json: Arc::new(AtomicBool::new(false)),
+        reattach_eligible: Arc::new(AtomicBool::new(false)),
+        supervisor: Arc::new(Mutex::new(Supervisor::default())),
+        spawn_spec: Arc::new(Mutex::new(None)),
+        switched_from_spawn: Arc::new(AtomicBool::new(false)),
+        attach_loss: Arc::new(Mutex::new(AttachLoss::default())),
+        quitting: Arc::new(AtomicBool::new(false)),
     };
     let notify_permission = state.notify_permission.clone();
 
@@ -3865,13 +4203,7 @@ pub fn run() {
             }
 
             build_tray(app, deck_always_on_top, startup.deck_visible)?;
-            start_sidecar(
-                app,
-                setup_discovery,
-                setup_child,
-                setup_stop,
-                &setup_config_path,
-            );
+            start_sidecar(app, setup_discovery, &setup_config_path);
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -3888,11 +4220,26 @@ pub fn run() {
                 // The last chance to save a deck position that was dragged and
                 // never hidden — `Moved` deliberately does not touch the disk.
                 persist_window_state(app_handle);
-                // Tear the supervised sidecar down so it never outlives the shell.
-                exit_stop.store(true, Ordering::SeqCst);
-                if let Some(mut c) = exit_child.lock().unwrap().take() {
-                    let _ = c.kill();
-                    let _ = c.wait();
+                // Tear the supervised sidecar down so it never outlives the shell:
+                // closing its stdin runs its clean shutdown (D200 released,
+                // files removed); SIGKILL only after SIDECAR_STOP_GRACE. A crash
+                // skips this handler, but the kernel closes the same pipe then.
+                let state = app_handle.state::<AppState>();
+                let sup = {
+                    // Same lock order as fall_back_to_spawn (discovery, then
+                    // supervisor): a fallback racing the quit either sees
+                    // `quitting` or its fresh supervisor is the one stopped here.
+                    let _discovery = state.discovery.lock().unwrap();
+                    state.quitting.store(true, Ordering::SeqCst);
+                    let sup = state.supervisor.lock().unwrap().clone();
+                    sup.stop.store(true, Ordering::SeqCst);
+                    sup
+                };
+                // Take the child out first so the slot's lock is not held
+                // through the stop grace.
+                let taken = sup.child.lock().unwrap().take();
+                if let Some(mut c) = taken {
+                    sidecar::stop_child(&mut c, sidecar::SIDECAR_STOP_GRACE);
                 }
             }
         });

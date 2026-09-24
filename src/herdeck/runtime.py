@@ -16,7 +16,9 @@ import os
 import signal
 import threading
 
+from .deckapp.device_lock import DeviceLock, d200_lock_path
 from .deckapp.discovery import clear_runtime_file, runtime_file_path, write_runtime_file
+from .deckapp.parent_watch import parent_watch_enabled, watch_parent
 from .deckapp.server import create_app
 from .deckapp.sinks import ReconnectingD200Sink
 
@@ -70,6 +72,9 @@ def _build_d200_sink(app, *, driver_factory):
         lambda: driver_factory(app.config),
         on_press=app.press,
         slots=app.slots,
+        # One D200 owner per machine: a second runtime (launchd + an app's own
+        # sidecar) serves its window but leaves the device alone.
+        device_lock=DeviceLock(d200_lock_path()),
     )
     app.add_sink(sink)
     return sink
@@ -132,6 +137,10 @@ def main() -> int:
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
+    if parent_watch_enabled():
+        # Spawned by the desktop shell: exit through this same clean path when
+        # the shell dies (crash / SIGKILL / Force Quit), not just on SIGTERM.
+        watch_parent(stop)
     try:
         stop.wait()
     finally:

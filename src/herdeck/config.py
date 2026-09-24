@@ -164,6 +164,13 @@ class UsageConfig:
     claude_cache_path: str = "~/.cache/herdeck/claude-usage.json"
     # Compatibility fallback for missing native providers. Empty disables it.
     codexbar_path: str = "codexbar"
+    # Opt-in usage notifications (usage_alerts.py), delivered through the
+    # [notifications] backends. `alert_at` = used-% thresholds (1-100, stored
+    # sorted + deduped); each fires once per window period. `alert_reset`
+    # announces the reset of a window that reached max(alert_at) (100 when
+    # alert_at is empty).
+    alert_at: list[int] = field(default_factory=list)
+    alert_reset: bool = False
 
 
 @dataclass

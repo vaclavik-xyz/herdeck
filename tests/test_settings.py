@@ -751,6 +751,37 @@ def test_usage_config_validates():
         _usage_config({"claude_cache_path": ""})
 
 
+def test_usage_alert_fields_default_off():
+    from herdeck.settings import _usage_config
+
+    usage = _usage_config(None)
+    assert usage.alert_at == []
+    assert usage.alert_reset is False
+
+
+def test_usage_alert_at_is_sorted_and_deduped():
+    from herdeck.settings import _usage_config
+
+    usage = _usage_config({"alert_at": [95, 80, 95, 100], "alert_reset": True})
+    assert usage.alert_at == [80, 95, 100]
+    assert usage.alert_reset is True
+
+
+@pytest.mark.parametrize("bad", ["80", [0], [101], [80.5], [True], ["80"]])
+def test_usage_alert_at_validates(bad):
+    from herdeck.settings import _usage_config
+
+    with pytest.raises(ConfigError, match="usage.alert_at"):
+        _usage_config({"alert_at": bad})
+
+
+def test_usage_alert_reset_validates():
+    from herdeck.settings import _usage_config
+
+    with pytest.raises(ConfigError, match="usage.alert_reset"):
+        _usage_config({"alert_reset": "yes"})
+
+
 def test_usage_section_flows_through_profiles(tmp_path, monkeypatch):
     monkeypatch.setenv("TOK", "x")
     cfg = tmp_path / "config.toml"

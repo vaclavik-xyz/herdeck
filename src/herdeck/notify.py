@@ -338,11 +338,17 @@ class NotificationFeed:
         return True
 
 
+def format_claim_age(age: float | None) -> str:
+    """``12s`` / ``never`` for the fallback reason (seconds since the last claim)."""
+    return "never" if age is None else f"{age:.0f}s"
+
+
 def runtime_sink(
     feed: NotificationFeed,
     gate: Callable[[], bool],
     *,
     fallback: Callable[[str, str, bool | str], None] = _macos_sink,
+    claim_age: Callable[[], float | None] | None = None,
 ) -> Callable[[str, str, bool | str], None]:
     """Sink for the deckapp runtime path.
 
@@ -352,13 +358,22 @@ def runtime_sink(
     notification. The sound is never played separately (e.g. via afplay): a
     detached sound would still play while Focus silences the banner. Never
     doing both feed and fallback removes the handoff replay race.
+
+    ``claim_age`` (seconds since the shell last claimed banner duty, ``None``
+    = never) makes the fallback line say WHY: with the desktop app installed a
+    fallback is abnormal, and the age tells a lapsed claim from a missing app.
     """
 
     def sink(title: str, body: str, sound: bool | str, icon: str | None = None) -> None:
         if gate():
             feed.push(title, body, sound, icon)
             return
-        log.info("notification fallback=osascript title=%r", title)
+        age = format_claim_age(claim_age()) if claim_age is not None else "unknown"
+        log.warning(
+            "notification fallback=osascript reason=no_shell_claim last_claim_age=%s title=%r",
+            age,
+            title,
+        )
         fallback(title, body, sound)
 
     return sink
@@ -402,6 +417,7 @@ def deckapp_sink(
     getenv=get_secret,
     telegram_factory=make_telegram_sink,
     macos_sink=_macos_sink,
+    claim_age: Callable[[], float | None] | None = None,
 ) -> Callable[[str, str, bool | str], None]:
     """Deckapp runtime sink honoring ``[notifications.backends]``.
 
@@ -424,6 +440,7 @@ def deckapp_sink(
             feed,
             gate,
             fallback=macos_sink if macos_on else (lambda t, b, s: None),
+            claim_age=claim_age,
         )
     ]
     if not macos_on:

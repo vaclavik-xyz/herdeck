@@ -409,14 +409,26 @@ class App:
         self._status_panel = None
         return None
 
-    @staticmethod
-    def _build_usage_poller(usage_cfg):
+    def _build_usage_poller(self, usage_cfg):
         from .usage import poller_from_config
 
-        poller = poller_from_config(usage_cfg)
+        poller = poller_from_config(usage_cfg, on_alert=self._deliver_usage_alerts)
         if poller is not None:
             poller.start()
         return poller
+
+    def _deliver_usage_alerts(self, alerts) -> None:
+        """Usage-limit alerts (poller thread) through the configured notifier
+        (a NoopNotifier when [notifications] is off); mirrors
+        deckapp LiveSource.notify_usage. Blocking the poller thread on an
+        osascript call is harmless — it only sleeps between polls."""
+        from .usage_alerts import usage_alert_message, usage_alert_sound
+
+        notifier = self.notifier
+        sound = usage_alert_sound(self.config.notifications)
+        for alert in alerts:
+            title, body = usage_alert_message(alert, self.config.view.language)
+            notifier.notify(title, body, sound)
 
     def _adopt_usage_config(self, config: Config) -> None:
         """Rebuild the poller when a reload/profile switch changed [usage] —

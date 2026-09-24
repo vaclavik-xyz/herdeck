@@ -1,4 +1,5 @@
 import asyncio
+import os
 import threading
 import time
 
@@ -403,3 +404,98 @@ def test_reconnecting_sink_reopens_immediately_after_disconnect():
         t0 = time.monotonic()
         sink.close()
         assert time.monotonic() - t0 < 1.0
+
+
+def _held_driver():
+    class HeldDriver(FrameDriver):
+        def __init__(self):
+            super().__init__()
+            self.release_reader = threading.Event()
+
+        async def run_reader(self):
+            await asyncio.to_thread(self.release_reader.wait)
+
+        def close(self):
+            super().close()
+            self.release_reader.set()
+
+    return HeldDriver()
+
+
+def _wait(predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_second_runtime_never_opens_a_d200_it_does_not_own(tmp_path, caplog):
+    """Two runtimes (launchd + an app's own sidecar) must not fight over one D200:
+    the lock loser keeps serving HTTP, warns once, and takes over when the owner exits."""
+    from herdeck.deckapp.device_lock import DeviceLock
+
+    path = str(tmp_path / "d200.lock")
+    owner_driver, loser_driver = _held_driver(), _held_driver()
+    loser_opens = []
+
+    def loser_factory():
+        loser_opens.append(1)
+        return loser_driver
+
+    owner = ReconnectingD200Sink(
+        lambda: owner_driver,
+        on_press=lambda i: None,
+        slots=13,
+        retry_interval=0.01,
+        device_lock=DeviceLock(path),
+    )
+    loser = None
+    try:
+        assert _wait(lambda: owner._active is not None)
+        caplog.set_level("WARNING", logger="herdeck.deckapp.sinks")
+        loser = ReconnectingD200Sink(
+            loser_factory,
+            on_press=lambda i: None,
+            slots=13,
+            retry_interval=0.01,
+            device_lock=DeviceLock(path),
+            lock_retry_interval=0.02,
+        )
+        time.sleep(0.2)  # ~10 lock retries
+        assert loser_opens == []  # never touched the device
+        owned = [r for r in caplog.records if "owned by another herdeck runtime" in r.message]
+        assert len(owned) == 1  # warned once, not per retry
+        assert str(os.getpid()) in owned[0].getMessage()
+
+        owner.close()  # the owning runtime exits -> its lock is released
+        assert _wait(lambda: loser_opens == [1])
+        assert any("now drives the D200" in r.message for r in caplog.records)
+        assert owner_driver.closed
+    finally:
+        owner.close()
+        if loser is not None:
+            loser.close()
+
+
+def test_device_lock_is_exclusive_and_reusable(tmp_path):
+    from herdeck.deckapp.device_lock import DeviceLock
+
+    path = str(tmp_path / "sub" / "d200.lock")
+    a, b = DeviceLock(path), DeviceLock(path)
+    assert a.acquire() and a.acquire()  # idempotent while held
+    assert not b.acquire()
+    assert b.owner_pid() == os.getpid()
+    a.release()
+    assert b.acquire()
+    b.release()
+
+
+def test_d200_lock_lives_in_the_runtime_dir(monkeypatch, tmp_path):
+    from herdeck.deckapp.device_lock import d200_lock_path
+
+    monkeypatch.setenv("HERDECK_RUNTIME_DIR", str(tmp_path))
+    assert d200_lock_path() == str(tmp_path / "d200.lock")
+    monkeypatch.delenv("HERDECK_RUNTIME_DIR")
+    assert d200_lock_path().endswith("/.cache/herdeck/d200.lock")

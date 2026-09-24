@@ -1282,6 +1282,58 @@ def notify_config(on=("blocked", "done"), *, sound=True, sounds=None):
     return config, server
 
 
+def test_usage_alerts_go_through_the_agent_notifier():
+    from herdeck.usage_alerts import UsageAlert
+
+    config, server = notify_config(sounds={"done": "Ping"})
+    src, notifier = make_notifying_live(config, server)
+    src.notify_usage(
+        [UsageAlert("threshold", "claude", "5h", 80, None), UsageAlert("reset", "codex", "7d", 100, None)]
+    )
+    assert notifier.calls == [
+        ("Claude 5h · 80 % used", "usage limits", "Ping"),
+        ("Codex 7d reset", "you can continue", "Ping"),
+    ]
+
+
+def test_usage_alerts_are_dropped_when_notifications_are_off():
+    from herdeck.usage_alerts import UsageAlert
+
+    config, server = live_config()
+    src = LiveSource(config, server, notify_schedule=lambda fn: fn())
+    assert src._notifier is None
+    src.notify_usage([UsageAlert("threshold", "claude", "5h", 80, None)])  # no crash
+
+
+def test_deckapp_routes_usage_alerts_to_its_source():
+    from herdeck.usage_alerts import UsageAlert
+
+    config, server = notify_config()
+    src, notifier = make_notifying_live(config, server)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    try:
+        app._deliver_usage_alerts([UsageAlert("threshold", "claude", "5h", 95, None)])
+        assert notifier.calls[0][0] == "Claude 5h · 95 % used"
+    finally:
+        app.close()
+
+
+def test_deckapp_builds_its_usage_poller_with_the_alert_route(monkeypatch):
+    import herdeck.usage as usage_mod
+
+    seen = []
+    monkeypatch.setattr(
+        usage_mod, "poller_from_config", lambda cfg, on_alert=None: seen.append(on_alert)
+    )
+    config, server = notify_config()
+    src, _notifier = make_notifying_live(config, server)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    try:
+        assert seen == [app._deliver_usage_alerts]
+    finally:
+        app.close()
+
+
 def test_done_snapshot_fires_notification_once():
     config, server = notify_config()
     src, notifier = make_notifying_live(config, server)
@@ -1765,6 +1817,57 @@ def test_build_live_source_wires_project_icons_into_the_shared_store():
         default_store().clear()
 
 
+def test_every_osascript_fallback_logs_its_reason(caplog):
+    """A fallback is abnormal with the app installed: the log must say why."""
+    import herdeck.notify as notify_mod
+
+    config, server = notify_config()
+    sent = []
+
+    def sink_factory(feed, gate):
+        return notify_mod.runtime_sink(
+            feed,
+            gate,
+            fallback=lambda t, b, s: sent.append(t),
+            claim_age=lambda: src._notify_claim_age(),
+        )
+
+    src = LiveSource(config, server, notify_sink_factory=sink_factory)
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    src.set_notify_gate(app.shell_claims_banners, claim_age=app.shell_claim_age)
+    caplog.set_level("INFO", logger="herdeck")
+    try:
+        # (a) no shell ever claimed banner duty
+        src._notifier.notify("codex · done", "p0", "Hero")
+        assert sent == ["codex · done"]
+        lines = [r for r in caplog.records if "fallback=osascript" in r.getMessage()]
+        assert lines[-1].levelname == "WARNING"
+        assert "reason=no_shell_claim last_claim_age=never" in lines[-1].getMessage()
+
+        # claim acquired -> timeline line; then it lapses past the TTL
+        app.note_shell_claim("shell-a")
+        assert any(
+            "shell claim acquired gen=shell-a (first claim)" in r.getMessage()
+            for r in caplog.records
+        )
+        app._shell_last_seen -= app._SHELL_CLAIM_TTL_S + 12
+        src._notifier.notify("claude · blocked", "p1", "Hero")
+        assert sent[-1] == "claude · blocked"
+        msgs = [r.getMessage() for r in caplog.records]
+        assert len([m for m in msgs if "shell claim lapsed gen=shell-a" in m]) == 1
+        assert "reason=no_shell_claim last_claim_age=72s" in msgs[-1]
+        assert app.shell_claims_banners() is False
+        msgs = [r.getMessage() for r in caplog.records]
+        assert len([m for m in msgs if "lapsed" in m]) == 1  # once per lapse
+
+        app.note_shell_claim("shell-b")  # a relaunched app claims again
+        assert "shell claim acquired gen=shell-b (after 72s without one)" in (
+            caplog.records[-1].getMessage()
+        )
+    finally:
+        app.close()
+
+
 # --- triage (NEEDS YOU panel press / desktop "next blocked" hotkey) ----------
 
 
@@ -1818,6 +1921,48 @@ def test_http_triage_requires_token():
         req = urllib.request.Request(url, method="POST", headers={"X-Herdeck-Token": app.token})
         with urllib.request.urlopen(req, timeout=2) as r:
             assert r.status == 204
+    finally:
+        app.close()
+
+
+def test_shell_native_failure_fallback_logs_reason_and_error(caplog):
+    import herdeck.notify as notify_mod
+
+    config, server = notify_config()
+
+    def silent_sink(feed, gate):
+        return notify_mod.runtime_sink(feed, gate, fallback=lambda t, b, s: None)
+
+    src = LiveSource(
+        config, server, notify_sink_factory=silent_sink, notification_fallback=lambda t, b, s: None
+    )
+    app = DeckApp(src, host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons())
+    src.set_notify_gate(app.shell_claims_banners)
+    app.note_shell_claim("shell-a")
+    src._notifier.notify("codex · done", "p1", "Hero")
+    item = src._notify_feed.state()["items"][0]
+    caplog.set_level("INFO", logger="herdeck")
+    payload = json.dumps(
+        {
+            "generation": item["generation"],
+            "seq": item["seq"],
+            "shell_gen": "shell-a",
+            "error": "UNUserNotificationCenter denied",
+        }
+    ).encode()
+    req = urllib.request.Request(
+        f"http://{app.host}:{app.port}/notifications/fallback",
+        data=payload,
+        method="POST",
+        headers={"X-Herdeck-Token": app.token, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=2) as response:
+            assert response.status == 204
+        line = next(r for r in caplog.records if "reason=shell_native_failed" in r.getMessage())
+        assert line.levelname == "WARNING"
+        assert "fallback=osascript" in line.getMessage()
+        assert "error=UNUserNotificationCenter denied" in line.getMessage()
     finally:
         app.close()
 

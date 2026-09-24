@@ -51,6 +51,7 @@ from ..notify_icons import NotificationIconCache
 from ..orchestrator import Orchestrator
 from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
+from ..usage_alerts import usage_alert_message, usage_alert_sound
 from .source import StateSource
 
 log = logging.getLogger(__name__)
@@ -107,11 +108,14 @@ class LiveSource(StateSource):
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
+        self._notify_claim_age: Callable[[], float | None] = lambda: None
         # Banners carry the agent's project mark (favicon or monogram).
         self._notify_icons = notify_icons or NotificationIconCache()
         if config.notifications.enabled:
             factory = notify_sink_factory or (
-                lambda feed, gate: deckapp_sink(feed, gate, self._config)
+                lambda feed, gate: deckapp_sink(
+                    feed, gate, self._config, claim_age=lambda: self._notify_claim_age()
+                )
             )
             self._notifier = Notifier(sink=factory(self._notify_feed, lambda: self._notify_gate()))
         else:
@@ -281,14 +285,21 @@ class LiveSource(StateSource):
 
     # --- notification plumbing (consumed by the deck shell via /state) -------
 
-    def set_notify_gate(self, gate: Callable[[], bool]) -> None:
+    def set_notify_gate(
+        self,
+        gate: Callable[[], bool],
+        claim_age: Callable[[], float | None] | None = None,
+    ) -> None:
         """Set the "a shell can post banners" predicate.
 
         True -> the runtime leaves both banner and sound to the shell; False ->
         alerts fall back to a plain osascript banner carrying the sound.
-        The DeckApp wires this to its shell-claim heartbeat.
+        The DeckApp wires this to its shell-claim heartbeat; ``claim_age``
+        (seconds since the last claim, None = never) feeds the fallback reason.
         """
         self._notify_gate = gate
+        if claim_age is not None:
+            self._notify_claim_age = claim_age
 
     def notifications_feed_state(self) -> dict:
         """Recent event notifications for the shell to post natively."""
@@ -340,6 +351,28 @@ class LiveSource(StateSource):
         self._notify_schedule(
             lambda: self._notifier.notify(title, body, sound, icon=self._banner_icon(agent))
         )
+
+    def notify_usage(self, alerts) -> None:
+        """Send usage-limit alerts (usage_alerts.UsageAlert, from the DeckApp's
+        poller thread) through the same notifier as the agent alerts. Gated by
+        [notifications].enabled only (the `on` list names agent events); the
+        sound is the "done" sound (usage news is informational)."""
+        if self._notifier is None or not alerts:
+            return
+        lang = self._config.view.language
+        sound = usage_alert_sound(self._config.notifications)
+        for alert in alerts:
+            title, body = usage_alert_message(alert, lang)
+            log.info(
+                "usage notification kind=%s provider=%s window=%s percent=%s",
+                alert.kind,
+                alert.provider,
+                alert.window,
+                alert.percent,
+            )
+            self._notify_schedule(
+                lambda title=title, body=body: self._notifier.notify(title, body, sound)
+            )
 
     def _banner_icon(self, agent: AgentState) -> str | None:
         """PNG path of the agent's project mark for the macOS banner; runs on
