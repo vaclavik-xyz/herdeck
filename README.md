@@ -1289,6 +1289,7 @@ banner_actions = false             # opt-in: Approve/Deny or Reply on blocked ma
 banner_prompt = false              # opt-in: add a short prompt excerpt to blocked alerts
 skip_focused = true                # no local banner for the herdr-focused pane while you use this Mac
 remind_after = 0                   # minutes; >0 re-alerts a still-blocked agent (max 3x)
+subagents_done = false             # opt-in: one alert when an agent's subagents all finished
 
 # Optional: which macOS system sound plays per event. A missing key falls
 # back to the default (Glass for "blocked", Hero for "done").
@@ -1358,6 +1359,16 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 - `remind_after = N` (minutes, 0 = off): an agent still blocked in the same
   episode alerts again after N, 2N and 3N minutes, titled
   `claude · still needs input (10 min)`.
+- `subagents_done = true` (opt-in): one alert, titled
+  `claude · subagents done (3)`, when an agent that had subagents running
+  (see [Subagent tracking](#subagent-tracking)) has none running any more and
+  is itself idle, blocked or done. While the agent keeps working on the
+  results, the alert waits, and a subagent started meanwhile joins the same
+  burst. The count covers the burst's subagents, including ones that started
+  and finished between two updates. It goes through the same backends,
+  `skip_focused` and a 60-second per-agent cooldown, uses the `done` sound, and
+  fires once per burst. It works with bridges that drive the lifecycle events
+  too, since those carry no subagent news.
 - `[notifications.telegram].only_when_away = N` (minutes, 0 = off): Telegram
   alerts go out only when this Mac has been idle for N minutes AND the deck was
   not pressed in that window. On Linux there is no idle source, so only deck

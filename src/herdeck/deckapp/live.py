@@ -49,6 +49,7 @@ from ..notify import (
 )
 from ..notify_events import (
     NOTIFY_EVENT_STATUSES,
+    SubagentBursts,
     event_notification_body,
     newly_entered,
 )
@@ -160,6 +161,9 @@ class LiveSource(
         # suppression (see notify.NotifyThrottle).
         self._notify_clock = notify_clock or time.monotonic
         self._notify_throttle = NotifyThrottle(clock=self._notify_clock)
+        # [notifications].subagents_done: per-agent subagent bursts
+        # (connector thread only, like _notify_keys).
+        self._subagent_bursts = SubagentBursts()
         # Blocked episodes that may get reminders: key -> (episode, since, sent).
         self._reminders: dict[AgentKey, tuple[str, float, int]] = {}
         self._reminder_stop = threading.Event()
@@ -796,7 +800,8 @@ class LiveSource(
                     agent.key.pane_id,
                 )
                 return
-            self._bannered.setdefault(agent.key, set()).add(event)
+            if event in NOTIFY_EVENT_STATUSES:  # only these are ever withdrawn
+                self._bannered.setdefault(agent.key, set()).add(event)
         self._alert_context.event = event
         self._alert_context.skip_local = skip_local
         try:
@@ -809,8 +814,11 @@ class LiveSource(
 
     def _alert_current(self, event: str, key: AgentKey, episode: str | None) -> bool:
         """Is ``key`` still in ``event``'s status (and block episode)? Caller
-        holds self._lock. A stale alert must not outlive its withdraw."""
+        holds self._lock. A stale alert must not outlive its withdraw. An
+        event with no status of its own (subagents_done) only needs the agent."""
         state = self._agents.get(key)
+        if event not in NOTIFY_EVENT_STATUSES:
+            return state is not None
         if state is None or state.status is not NOTIFY_EVENT_STATUSES[event]:
             return False
         if event == "blocked" and self._episode_spent(key.server_id, episode):
@@ -945,6 +953,52 @@ class LiveSource(
         self._withdraw_left(event, (tracked & scope) - entered_here)
         return [x for x in states if x.key in to]
 
+    # --- [notifications].subagents_done ------------------------------------
+
+    def _subagents_notify(self, states: list[AgentState], gone=()) -> None:
+        """Advance the subagent bursts of ``states`` and alert the ones whose
+        last subagent finished while the agent is not working (once per burst).
+        Bridge lifecycle events carry no subagent news, so this always runs
+        on the runtime's own view."""
+        if self._notifier is None or not self._config.notifications.subagents_done:
+            return
+        self._subagent_bursts.forget(gone)
+        for state in states:
+            count = self._subagent_bursts.observe(state)
+            if count is not None:
+                self._fire_subagents_done(state, count)
+
+    def _fire_subagents_done(self, agent: AgentState, count: int) -> None:
+        n = self._config.notifications
+        if not self._notify_throttle.allow("subagents_done", agent.key):
+            log.info(
+                "notification suppressed (cooldown) event=subagents_done agent=%s:%s",
+                agent.key.server_id,
+                agent.key.pane_id,
+            )
+            return
+        title = tr(
+            self._config.view.language,
+            "notify.title_subagents_done",
+            agent=agent.agent_type or "agent",
+            count=count,
+        )
+        body = event_notification_body(agent, multi_server=len(self._config.overview_order) > 1)
+        sound = False if not n.sound else n.sounds.get("done", True)
+        meta = {
+            "agent": {"server_id": agent.key.server_id, "pane_id": agent.key.pane_id},
+            "event": "subagents_done",
+        }
+        log.info(
+            "notification subagents done agent=%s:%s count=%d",
+            agent.key.server_id,
+            agent.key.pane_id,
+            count,
+        )
+        self._notify_schedule(
+            lambda: self._deliver_alert("subagents_done", agent, title, body, sound, meta)
+        )
+
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         self._bridge_update_on_snapshot(server_id)
         self._hooks_on_snapshot(server_id)
@@ -980,6 +1034,7 @@ class LiveSource(
                     self._preread_req.pop(key, None)
                     self._block_episode.pop(key, None)
                     self._notify_throttle.forget(key)
+                self._subagent_bursts.forget(recycled)
             if self._drilled_key() in recycled:
                 self._active_read_req = None
                 if self._orch is not None:
@@ -992,6 +1047,7 @@ class LiveSource(
             return True
 
         self._apply(mutate)
+        self._subagents_notify(states, gone=prev_keys - new_by_key.keys())
         if server_id not in self._notify_baselined_servers or self._bridge_events(server_id):
             # A process/source restart observes current truth, not lifecycle
             # transitions. Seed the episode sets without replaying stale alerts.
@@ -1040,6 +1096,7 @@ class LiveSource(
                     self._preread_req.pop(state.key, None)
                     self._block_episode.pop(state.key, None)
                     self._notify_throttle.forget(state.key)
+                    self._subagent_bursts.forget((state.key,))
             # Same rule for a single-pane event: only a real unblock clears the
             # drilled prompt.
             drilled = self._drilled_key()
@@ -1054,6 +1111,7 @@ class LiveSource(
             return True
 
         self._apply(mutate)
+        self._subagents_notify([state])
         if self._bridge_events(server_id):
             self._notify_seed([state], {state.key})
             return

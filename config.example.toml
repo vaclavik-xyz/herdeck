@@ -73,6 +73,9 @@ skip_focused = true
 # Minutes (0 = off): alert again for an agent still blocked this long, once
 # per interval, at most three times per block episode.
 remind_after = 0
+# Opt-in: one alert ("claude · subagents done (3)") when an agent's last running
+# subagent finished and the agent itself is idle, blocked or done.
+subagents_done = false
 # Per-event macOS system sound (played with the alert). A missing key falls
 # back to the default: Glass for "blocked", Hero for "done".
 # [notifications.sounds]

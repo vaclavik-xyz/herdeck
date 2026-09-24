@@ -57,6 +57,7 @@
     "banner_prompt": false,
     "skip_focused": true,
     "remind_after": 0,
+    "subagents_done": false,
     "telegram": {
       "message_thread_id": 0,
       "interactive": false,

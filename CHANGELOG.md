@@ -25,6 +25,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `turn_aborted` in the child rollout. It then updates the `subagents` token
   through herdr (`pane.report_metadata`). Unknown formats leave entries as
   they are, and file reads are bounded and run off the event loop.
+- `[notifications].subagents_done = false` (opt-in, editor field with en+cs
+  help): one alert (`claude · subagents done (3)`, en+cs) when an agent's last
+  running subagent finished and the agent is idle, blocked or done. It fires
+  once per burst through the usual backends, `skip_focused` and a per-agent
+  cooldown.
 - Bridge lifecycle events (capability `events`): the bridge gives every
   blocked and done episode a stable `episode_id` (it survives a bridge
   restart), streams `event` frames (`blocked` with the pre-read, sanitized
