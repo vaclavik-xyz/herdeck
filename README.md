@@ -899,6 +899,20 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 - The bridge token is read from `HERDECK_TOKEN_FILE` (recommended) or the legacy
   `HERDECK_TOKEN` environment variable. Keep token files mode `0600`; generated
   launchd units contain only the file path, never the token value.
+- `herdeck-bridge` refuses to start when `HERDECK_BIND` is not loopback, a
+  Tailscale address (`100.64.0.0/10`) or a `*.ts.net` name — the same policy as
+  `herdeck-web` and `herdeck-service`. `HERDECK_ALLOW_UNSAFE_BIND=1` overrides it.
+- Rotate the token with `herdeck-bridge --rotate-token` (defaults to
+  `$HERDECK_TOKEN_FILE`, else `~/.config/herdeck/bridge-token`; `--token-file`
+  picks another). It writes a fresh `0600` file atomically and prints the next
+  steps — restart the bridge, then update the token on every deck runtime — but
+  never the token itself unless you pass `--show`.
+- Optional view-only access: point `HERDECK_READONLY_TOKEN_FILE` at a second
+  `0600` token file (it must differ from the main token). A client that
+  authenticates with it may send only `list`, `read`, `observe`, `observe_stop`
+  and `health`; `act`, `focus`, `refresh_title`, `send_text`,
+  `choose_if_blocked`, `start` and any unknown message type get an `error`
+  frame and never reach herdr.
 
 ## Hardware notes (verified on a real D200, macOS)
 - Rendering and key input both work on macOS. The driver opens the deck's

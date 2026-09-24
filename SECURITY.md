@@ -24,7 +24,14 @@ the desktop app, a loopback HTTP sidecar. The intended, supported deployment:
 - The bridge binds to a **Tailscale / WireGuard interface only** (`HERDECK_BIND`),
   never `0.0.0.0` or a public IP. The transport is plain `ws://`, so the
   encrypted overlay provides confidentiality; a bearer token (constant-time
-  compared) provides authentication.
+  compared) provides authentication. `herdeck-bridge` refuses to start on
+  anything but loopback, `100.64.0.0/10` or a `*.ts.net` name unless
+  `HERDECK_ALLOW_UNSAFE_BIND=1` is set explicitly.
+- Rotate a bridge token with `herdeck-bridge --rotate-token` (it never prints
+  the new token unless `--show` is given). An optional view-only token
+  (`HERDECK_READONLY_TOKEN_FILE`) can watch the fleet — snapshots, icons, pane
+  text, live previews, health — but every command that changes anything is
+  rejected; give it to dashboards that should never press a key.
 - The desktop sidecar binds to `127.0.0.1` only; its access token is injected by
   the Rust shell and is never exposed to the WebView / JavaScript.
 - The browser simulator binds to loopback by default. For remote use, bind it to
