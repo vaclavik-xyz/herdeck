@@ -2,6 +2,7 @@
 //! placement, tray labels), moved out of the inline `plan_tests` module.
 
 use super::*;
+use crate::notify_pump::*;
 
 #[test]
 fn health_carries_the_shell_version_for_mismatch_warnings() {
@@ -122,11 +123,11 @@ fn a_feedless_source_is_unsupported_not_a_failure() {
 #[test]
 fn the_unsupported_backoff_wakes_when_discovery_changes() {
     let start = std::time::Instant::now();
-    assert!(backoff_until(Duration::from_secs(30), || true));
+    assert!(backoff_until(&SystemClock, Duration::from_secs(30), || true));
     assert!(start.elapsed() < Duration::from_secs(1));
     // And it does wait out the full period when nothing changes.
     let start = std::time::Instant::now();
-    assert!(!backoff_until(Duration::from_millis(30), || false));
+    assert!(!backoff_until(&SystemClock, Duration::from_millis(30), || false));
     assert!(start.elapsed() >= Duration::from_millis(30));
     assert_ne!(discovery_key(&discovery_on(1)), discovery_key(&discovery_on(2)));
 }

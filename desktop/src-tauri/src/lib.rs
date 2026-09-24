@@ -16,8 +16,10 @@ pub mod build_channel;
 pub mod deck_prefs;
 pub mod hotkey;
 pub mod http;
+mod notify_pump;
 pub mod runtime_service;
 pub mod sidecar;
+mod sync_util;
 pub mod window_state;
 
 use std::env;
@@ -34,7 +36,9 @@ use tauri::{
 };
 use tauri_plugin_updater::UpdaterExt;
 
+use notify_pump::{discovery_key, NotifyCursor, PendingNotification};
 use sidecar::{supervise, CommandSpec, Discovery, SupervisorConfig};
+use sync_util::LockExt;
 use window_state::WindowState;
 
 /// The two fixed window roles. The labels are historical — `main` is the
@@ -164,30 +168,6 @@ impl AttachLoss {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct NotifyCursor {
-    generation: Option<String>,
-    seq: u64,
-}
-
-#[derive(Debug, Clone)]
-struct PendingNotification {
-    id: String,
-    generation: String,
-    seq: u64,
-    title: String,
-    body: String,
-    sound: serde_json::Value,
-    /// PNG of the agent's project mark written by the runtime (notify_icons).
-    icon: Option<String>,
-    created_at_ms: Option<i64>,
-    /// Which agent the banner is about, plus answer buttons / reply field.
-    meta: banners::BannerMeta,
-    /// Feed item kind: "alert" (a banner) or "withdraw" (remove the agent's
-    /// delivered banners); None from a runtime that predates kinds.
-    kind: Option<String>,
-}
-
 /// Minimum interval between on-disk re-discovery attempts.
 const REDISCOVER_MIN_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -198,14 +178,6 @@ const REATTACH_CHECK_INTERVAL: Duration = Duration::from_secs(12);
 
 /// Default timeout for the Rust-side sidecar proxy calls.
 const SIDECAR_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// The runtime holds a long poll for 25 s; leave transport headroom around it.
-const NOTIFY_POLL_TIMEOUT: Duration = Duration::from_secs(30);
-const NOTIFY_RETRY_DELAY: Duration = Duration::from_millis(500);
-/// A source without a notification feed (demo/mock) answers `/notifications`
-/// with 404. That will not change until the shell is pointed at a different
-/// runtime, so the pump sleeps this long — or until discovery changes.
-const NOTIFY_UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(30);
 
 /// `/setup/connect` runs, inside the sidecar, the whole remote transaction: a probe
 /// (≈4 s) THEN build + render-prepare + keychain/config snapshots + write + swap. The
@@ -681,55 +653,6 @@ fn shell_gen() -> String {
     .clone()
 }
 
-fn notification_batch(
-    state_json: &serde_json::Value,
-    cursor: &NotifyCursor,
-) -> Option<(String, u64, Vec<PendingNotification>)> {
-    let generation = state_json.get("generation")?.as_str()?.to_string();
-    let acked_seq = state_json
-        .get("acked_seq")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let floor = if cursor.generation.as_deref() == Some(generation.as_str()) {
-        cursor.seq.max(acked_seq)
-    } else {
-        acked_seq
-    };
-    let mut items = Vec::new();
-    for item in state_json.get("items").and_then(|v| v.as_array()).into_iter().flatten() {
-        let seq = item.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-        if seq <= floor {
-            continue;
-        }
-        items.push(PendingNotification {
-            id: item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            generation: generation.clone(),
-            seq,
-            title: item
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            body: item
-                .get("body")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            sound: item.get("sound").cloned().unwrap_or(serde_json::Value::Bool(false)),
-            icon: item.get("icon").and_then(|v| v.as_str()).map(str::to_string),
-            created_at_ms: item.get("created_at_ms").and_then(|v| v.as_i64()),
-            meta: banners::BannerMeta::from_item(item),
-            kind: item.get("kind").and_then(|v| v.as_str()).map(str::to_string),
-        });
-    }
-    items.sort_by_key(|item| item.seq);
-    Some((generation, acked_seq, items))
-}
-
 /// The sound played for `sound = true` (and for a test banner with no sound
 /// picked), matching the runtime's osascript fallback.
 const DEFAULT_NOTIFICATION_SOUND: &str = "Glass";
@@ -973,221 +896,91 @@ fn prevent_notification_pump_app_nap() {
 #[cfg(not(target_os = "macos"))]
 fn prevent_notification_pump_app_nap() {}
 
-/// What the pump does with the result of one `/notifications` round trip.
-#[derive(Debug, PartialEq, Eq)]
-enum NotifyPoll {
-    /// A 2xx feed snapshot to deliver from.
-    Deliver(String),
-    /// 404: this runtime's source has no feed (demo/mock). Not an outage —
-    /// re-discovery would find the very same runtime — so back off instead of
-    /// hammering it twice a second.
-    Unsupported,
-    /// Transport failure or any other status: retry, possibly re-discovering.
-    Failed,
-}
+/// The shell side of the notify pump: `AppState` (permission, discovery,
+/// re-discovery), the loopback HTTP calls, and the native poster.
+struct AppNotify(tauri::AppHandle);
 
-fn classify_notify_poll(result: Result<(u16, String), String>) -> NotifyPoll {
-    match result {
-        Ok((code, body)) if (200..300).contains(&code) => NotifyPoll::Deliver(body),
-        Ok((404, _)) => NotifyPoll::Unsupported,
-        _ => NotifyPoll::Failed,
+impl notify_pump::NotifyHost for AppNotify {
+    fn permission(&self) -> bool {
+        self.0.state::<AppState>().notify_permission.load(Ordering::Relaxed)
+    }
+
+    fn discovery(&self) -> Option<Discovery> {
+        self.0.state::<AppState>().discovery.lock_or_recover().clone()
+    }
+
+    fn rediscover(&self) -> Option<Discovery> {
+        rediscover_runtime(&self.0)
+    }
+
+    fn note_runtime_ok(&self) {
+        note_runtime_ok(&self.0.state::<AppState>());
     }
 }
 
-/// The runtime the pump should poll right now, or how long to idle first.
-/// Both "no permission yet" and "sidecar not discovered yet" must SLEEP: a bare
-/// `continue` there spun a core at 100% through every sidecar boot, and forever
-/// while a crashing sidecar never reported in.
-fn notify_target(permission: bool, discovery: Option<Discovery>) -> Result<Discovery, Duration> {
-    match (permission, discovery) {
-        (true, Some(d)) => Ok(d),
-        _ => Err(NOTIFY_RETRY_DELAY),
+impl notify_pump::NotifyTransport for AppNotify {
+    fn poll(&self, d: &Discovery, cursor: &NotifyCursor) -> Result<(u16, String), String> {
+        http::fetch_notifications_status(
+            &d.host,
+            d.port,
+            &d.token,
+            notify_pump::NOTIFY_POLL_TIMEOUT,
+            cursor.generation.as_deref(),
+            cursor.seq,
+            &shell_gen(),
+        )
+    }
+
+    fn ack(&self, d: &Discovery, generation: &str, seq: u64) -> Result<u16, String> {
+        http::ack_notification(&d.host, d.port, &d.token, SIDECAR_TIMEOUT, generation, seq)
+    }
+
+    fn fallback(
+        &self,
+        d: &Discovery,
+        generation: &str,
+        seq: u64,
+        error: &str,
+    ) -> Result<u16, String> {
+        http::fallback_notification(
+            &d.host,
+            d.port,
+            &d.token,
+            SIDECAR_TIMEOUT,
+            generation,
+            seq,
+            &shell_gen(),
+            error,
+        )
     }
 }
 
-/// Identity of a discovered runtime, for "has the shell been repointed?".
-fn discovery_key(d: &Discovery) -> (String, u16, String) {
-    (d.host.clone(), d.port, d.token.clone())
-}
+impl notify_pump::BannerPoster for AppNotify {
+    fn post(&self, item: &PendingNotification) -> Result<(), String> {
+        post_native_notification(&self.0, item)
+    }
 
-/// Sleep up to `max`, in `NOTIFY_RETRY_DELAY` steps, returning early as soon as
-/// `changed()` reports true. Returns whether it woke early.
-fn backoff_until(max: Duration, changed: impl Fn() -> bool) -> bool {
-    let deadline = std::time::Instant::now() + max;
-    loop {
-        if changed() {
-            return true;
-        }
-        let now = std::time::Instant::now();
-        if now >= deadline {
-            return false;
-        }
-        std::thread::sleep(NOTIFY_RETRY_DELAY.min(deadline - now));
+    fn withdraw(&self, agent: &banners::AgentRef) {
+        withdraw_banners(agent);
     }
 }
 
-/// Generation-aware long-poll notification pump. The blocking request itself
-/// keeps banner duty claimed and wakes immediately when the runtime queues an
-/// event. Only a successfully shown banner is acknowledged.
+/// Generation-aware long-poll notification pump (see `notify_pump`). The
+/// blocking request itself keeps banner duty claimed and wakes immediately
+/// when the runtime queues an event. Only a successfully shown banner is
+/// acknowledged.
 fn start_notify_pump(app: tauri::AppHandle) {
-    let permission = app.state::<AppState>().notify_permission.clone();
-    std::thread::spawn(move || loop {
-        let state = app.state::<AppState>();
-        let d = match notify_target(
-            permission.load(Ordering::Relaxed),
-            state.discovery.lock().unwrap().clone(),
-        ) {
-            Ok(d) => d,
-            Err(delay) => {
-                std::thread::sleep(delay);
-                continue;
-            }
-        };
-        let poll = |d: &Discovery| {
-            let cursor = state.notify_cursor.lock().unwrap().clone();
-            classify_notify_poll(http::fetch_notifications_status(
-                &d.host,
-                d.port,
-                &d.token,
-                NOTIFY_POLL_TIMEOUT,
-                cursor.generation.as_deref(),
-                cursor.seq,
-                &shell_gen(),
-            ))
-        };
-        let unsupported_backoff = |d: &Discovery| {
-            let key = discovery_key(d);
-            backoff_until(NOTIFY_UNSUPPORTED_BACKOFF, || {
-                state.discovery.lock().unwrap().as_ref().map(discovery_key) != Some(key.clone())
-            });
-        };
-        let (body, active_discovery) = match poll(&d) {
-            NotifyPoll::Deliver(body) => {
-                note_runtime_ok(&state);
-                (body, d)
-            }
-            NotifyPoll::Unsupported => {
-                note_runtime_ok(&state);
-                unsupported_backoff(&d);
-                continue;
-            }
-            NotifyPoll::Failed => {
-                let Some(d) = rediscover_runtime(&app) else {
-                    std::thread::sleep(NOTIFY_RETRY_DELAY);
-                    continue;
-                };
-                match poll(&d) {
-                    NotifyPoll::Deliver(body) => (body, d),
-                    NotifyPoll::Unsupported => {
-                        unsupported_backoff(&d);
-                        continue;
-                    }
-                    NotifyPoll::Failed => {
-                        std::thread::sleep(NOTIFY_RETRY_DELAY);
-                        continue;
-                    }
-                }
-            }
-        };
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) else {
-            std::thread::sleep(NOTIFY_RETRY_DELAY);
-            continue;
-        };
-        let Some((generation, acked_seq, items)) = notification_batch(
-            &parsed,
-            &state.notify_cursor.lock().unwrap().clone(),
-        ) else {
-            std::thread::sleep(NOTIFY_RETRY_DELAY);
-            continue;
-        };
-        {
-            let mut cursor = state.notify_cursor.lock().unwrap();
-            if cursor.generation.as_deref() != Some(generation.as_str()) {
-                cursor.generation = Some(generation.clone());
-                cursor.seq = acked_seq;
-            } else {
-                cursor.seq = cursor.seq.max(acked_seq);
-            }
+    let cursor = app.state::<AppState>().notify_cursor.clone();
+    std::thread::spawn(move || {
+        notify_pump::NotifyPump {
+            host: AppNotify(app.clone()),
+            transport: AppNotify(app.clone()),
+            poster: AppNotify(app),
+            clock: notify_pump::SystemClock,
+            cursor,
         }
-        for item in items {
-            if let Err(err) = deliver_feed_item(&app, &item) {
-                eprintln!("herdeck: native notification failed id={}: {err}", item.id);
-                let code = http::fallback_notification(
-                    &active_discovery.host,
-                    active_discovery.port,
-                    &active_discovery.token,
-                    SIDECAR_TIMEOUT,
-                    &item.generation,
-                    item.seq,
-                    &shell_gen(),
-                    &err.to_string(),
-                );
-                if code == Ok(204) {
-                    let mut cursor = state.notify_cursor.lock().unwrap();
-                    cursor.generation = Some(item.generation.clone());
-                    cursor.seq = cursor.seq.max(item.seq);
-                    eprintln!("herdeck: notification fallback delivered id={}", item.id);
-                } else {
-                    eprintln!(
-                        "herdeck: notification fallback failed id={} result={code:?}",
-                        item.id
-                    );
-                }
-                std::thread::sleep(NOTIFY_RETRY_DELAY);
-                break;
-            }
-            // Advance the process-local cursor immediately after visible
-            // delivery. A transient ACK failure must never show the banner a
-            // second time in this shell; the next long poll carries this cursor
-            // and repairs the server ACK before waiting.
-            {
-                let mut cursor = state.notify_cursor.lock().unwrap();
-                cursor.generation = Some(item.generation.clone());
-                cursor.seq = cursor.seq.max(item.seq);
-            }
-            let code = http::ack_notification(
-                &active_discovery.host,
-                active_discovery.port,
-                &active_discovery.token,
-                SIDECAR_TIMEOUT,
-                &item.generation,
-                item.seq,
-            );
-            if code != Ok(204) {
-                eprintln!("herdeck: notification ack failed id={} result={code:?}", item.id);
-                std::thread::sleep(NOTIFY_RETRY_DELAY);
-                break;
-            }
-            let latency = item.created_at_ms.map(|created| {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(created);
-                (now - created).max(0)
-            });
-            eprintln!(
-                "herdeck: notification delivered id={} latency_ms={}",
-                item.id,
-                latency.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into())
-            );
-        }
+        .run()
     });
-}
-
-/// Deliver one feed item: post its banner, or withdraw the agent's delivered
-/// banners (answered / back to work — the runtime says when), or skip a kind
-/// this shell does not know. Every outcome but a failed post is acknowledged.
-fn deliver_feed_item(app: &tauri::AppHandle, item: &PendingNotification) -> Result<(), String> {
-    match banners::feed_item_action(item.kind.as_deref(), &item.meta) {
-        banners::FeedItemAction::Post => post_native_notification(app, item),
-        banners::FeedItemAction::Withdraw => {
-            if let Some(agent) = item.meta.agent.as_ref() {
-                withdraw_banners(agent);
-            }
-            Ok(())
-        }
-        banners::FeedItemAction::Skip => Ok(()),
-    }
 }
 
 /// Remove this agent's banners from Notification Center (only the ones this
