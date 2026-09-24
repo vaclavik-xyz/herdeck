@@ -2469,14 +2469,27 @@ class BridgeUsageFeed:
 def build_bridge_usage(server_id: str, *, getenv=os.environ.get) -> BridgeUsageFeed | None:
     """The usage feed when ``HERDECK_BRIDGE_USAGE=1`` (see usage.bridge_usage_config
     for ``HERDECK_USAGE_CONFIG``), else None: a plain bridge advertises no
-    ``usage`` capability and runtimes keep their own poller."""
+    ``usage`` capability and runtimes keep their own poller.
+
+    The feed reads the usage agent's file while it exists (a LaunchAgent in the
+    login session, usage_agent.py) and polls on the bridge only without one."""
     if not bridge_usage_enabled(getenv):
         return None
     from .usage import poller_from_config
+    from .usage_agent import CompositeUsagePoller
+    from .usage_agent import default_path as usage_agent_path
 
     cfg = bridge_usage_config(getenv)
-    log.info("usage poller on: providers=%s refresh=%ss", ",".join(cfg.providers), cfg.refresh_secs)
-    return BridgeUsageFeed(poller_from_config(cfg), server_id)
+    path = usage_agent_path()
+    log.info(
+        "usage feed on: providers=%s refresh=%ss (usage agent file %s when present)",
+        ",".join(cfg.providers),
+        cfg.refresh_secs,
+        path,
+    )
+    return BridgeUsageFeed(
+        CompositeUsagePoller(lambda: poller_from_config(cfg), path), server_id
+    )
 
 
 def _read_token_file(token_file: str, env_name: str) -> str:

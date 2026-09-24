@@ -144,7 +144,12 @@ def test_build_bridge_usage_uses_the_real_poller_unstarted(monkeypatch):
     )
     feed = build_bridge_usage("s", getenv={"HERDECK_BRIDGE_USAGE": "1"}.get)
     assert isinstance(feed, BridgeUsageFeed) and feed.capabilities == ("usage",)
-    assert seen[0].providers == ["codex", "claude"] and seen[0].paid_only is False
+    assert seen == []  # the own poller is built lazily: a usage agent file may exist
+    feed.start()
+    try:
+        assert seen[0].providers == ["codex", "claude"] and seen[0].paid_only is False
+    finally:
+        feed.close()
 
 
 # --- bridge feed lifecycle ----------------------------------------------------

@@ -42,3 +42,10 @@ def _isolated_agent_hook_files(tmp_path, monkeypatch):
     read or write the real ~/.claude/settings.json or ~/.codex/*."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+
+
+@pytest.fixture(autouse=True)
+def _isolated_usage_agent(tmp_path, monkeypatch):
+    """The usage agent's file (usage_agent.py) never touches ~/.local/state."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
