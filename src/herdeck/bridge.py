@@ -28,6 +28,8 @@ from .protocol import WIRE_PROTOCOL, encode
 from .self_update import EXIT_GRACE_S, BridgeUpdater, not_managed_result
 from .status_since import CAPABILITY as _STATUS_SINCE_CAPABILITY
 from .status_since import StatusSinceTracker
+from .subagent_spool import CAPABILITY as _SUBAGENTS_CAPABILITY
+from .subagent_spool import SubagentSpoolReader
 from .usage import USAGE_CAPABILITY, bridge_usage_config, bridge_usage_enabled, usage_to_wire
 
 log = logging.getLogger(__name__)
@@ -79,6 +81,8 @@ _WIRE_CAPABILITIES = (
     _STATUS_SINCE_CAPABILITY,
     # Answers {"type": "stats"} from its episode history (history.py).
     _history.CAPABILITY,
+    # A pane with subagents carries `subagents` (see subagent_spool.py).
+    _SUBAGENTS_CAPABILITY,
 )
 
 _TITLE_PLUGIN_ID = "zhangzujian.auto-session-title"
@@ -611,6 +615,7 @@ async def _wired_snapshot(
     herdr: HerdrClient,
     icons: ProjectIconIndex | None = None,
     status_since: StatusSinceTracker | None = None,
+    subagents: SubagentSpoolReader | None = None,
 ) -> list[dict]:
     """One session.snapshot carries the agent panes AND the workspace/tab
     labels; only branch labels need the extra per-workspace worktree fan-out
@@ -636,6 +641,8 @@ async def _wired_snapshot(
     )
     if status_since is not None:
         status_since.stamp(panes)
+    if subagents is not None:
+        subagents.attach(panes)
     return panes
 
 
@@ -720,11 +727,12 @@ async def handle_client_message(
     icons: ProjectIconIndex | None = None,
     status_since: StatusSinceTracker | None = None,
     extra_capabilities: tuple[str, ...] = (),
+    subagents: SubagentSpoolReader | None = None,
 ) -> str:
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "list":
-        panes = await _wired_snapshot(herdr, icons, status_since)
+        panes = await _wired_snapshot(herdr, icons, status_since, subagents)
         return encode(_snapshot_message(server_id, panes, extra_capabilities))
     if kind == "read":
         if await _pane_identity_changed(herdr, msg):
@@ -1150,9 +1158,11 @@ class HerdrEvents:
         *,
         icons: ProjectIconIndex | None = None,
         status_since: StatusSinceTracker | None = None,
+        subagents: SubagentSpoolReader | None = None,
     ):
         self._herdr = herdr
         self._status_since = status_since
+        self._subagents = subagents
         # Only ever touched from this stream's event loop (hash_for in stream,
         # invalidate in _note_event) — ProjectIconIndex has no lock.
         self._icons = icons
@@ -1196,6 +1206,8 @@ class HerdrEvents:
                     )
                     if self._status_since is not None:
                         self._status_since.stamp(cur)
+                    if self._subagents is not None:
+                        self._subagents.attach(cur)
                 except Exception as exc:
                     if str(exc) == _SNAPSHOT_UNSUPPORTED:
                         raise  # herdr too old: never retryable, surface loudly
@@ -1808,6 +1820,7 @@ async def _serve_connection(
     status_since: StatusSinceTracker | None = None,
     history: _history.BridgeHistory | None = None,
     usage: BridgeUsageFeed | None = None,
+    subagents: SubagentSpoolReader | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
@@ -1826,7 +1839,7 @@ async def _serve_connection(
         return await _send_to_client(ws, msg, send_lock)
 
     extra_capabilities = usage.capabilities if usage is not None else ()
-    panes = await _wired_snapshot(herdr, icons, status_since)
+    panes = await _wired_snapshot(herdr, icons, status_since, subagents)
     if not await send(encode(_snapshot_message(server_id, panes, extra_capabilities))):
         return
     clients[ws] = send_lock
@@ -1996,7 +2009,7 @@ async def _serve_connection(
                 if isinstance(features, list) and "project_icon" in features:
                     icon_subs.setdefault(ws, set())  # opt-in: this connection renders icons
                 try:
-                    panes = await _wired_snapshot(herdr, icons, status_since)
+                    panes = await _wired_snapshot(herdr, icons, status_since, subagents)
                 except Exception as exc:
                     await send(encode({"type": "error", "message": str(exc)}))
                     continue
@@ -2012,7 +2025,13 @@ async def _serve_connection(
                 continue
             try:
                 out = await handle_client_message(
-                    herdr, server_id, raw, icons, status_since, extra_capabilities
+                    herdr,
+                    server_id,
+                    raw,
+                    icons,
+                    status_since,
+                    extra_capabilities,
+                    subagents=subagents,
                 )
             except Exception as exc:
                 out = encode({"type": "error", "message": str(exc)})
@@ -2111,8 +2130,14 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
         _status_since.default_state_path("local-bridge-status-since.json")
     )
     history = _open_history("local-bridge-history.sqlite", status_since)
+    # Same host as the agents' hooks: read their subagent spools.
+    subagents = SubagentSpoolReader()
     events = HerdrEvents(
-        events_herdr, socket_path=socket_path, icons=icons, status_since=status_since
+        events_herdr,
+        socket_path=socket_path,
+        icons=icons,
+        status_since=status_since,
+        subagents=subagents,
     )
     clients: dict = {}
     icon_subs: dict = {}
@@ -2129,6 +2154,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
             icon_subs=icon_subs,
             status_since=status_since,
             history=history,
+            subagents=subagents,
         )
 
     server = await websockets.serve(handler, host, 0)
@@ -2168,8 +2194,13 @@ async def serve(
     icons = ProjectIconIndex()  # event-loop only (not thread-safe), see start_local_bridge
     status_since = StatusSinceTracker(_status_since.default_state_path())  # event-loop only too
     history = _open_history("history.sqlite", status_since)
+    subagents = SubagentSpoolReader()  # event-loop only too
     events = HerdrEvents(
-        events_herdr, socket_path=socket_path, icons=icons, status_since=status_since
+        events_herdr,
+        socket_path=socket_path,
+        icons=icons,
+        status_since=status_since,
+        subagents=subagents,
     )  # push + slow poll
     clients: dict = {}
     icon_subs: dict = {}
@@ -2196,6 +2227,7 @@ async def serve(
             status_since=status_since,
             history=history,
             usage=usage,
+            subagents=subagents,
         )
 
     extra_capabilities = usage.capabilities if usage is not None else ()

@@ -7,7 +7,10 @@
   import { onMount } from "svelte";
   import X from "phosphor-svelte/lib/X";
   import {
+    formatDuration,
     formatSince,
+    subagentIndent,
+    type SubagentRow,
     type ActionOutcome,
     type AgentAction,
     type AgentDetail,
@@ -65,6 +68,15 @@
       "out.forbidden": "Refused: the runtime's access token changed.",
       "out.unreachable": "Couldn't reach the runtime.",
       "out.http": "The runtime answered HTTP {message}.",
+      subagents: "Subagents",
+      "sub.unnamed": "subagent",
+      "sub.running": "running",
+      "sub.done": "done",
+      "sub.failed": "failed",
+      "sub.stale": "no signal",
+      "sub.running_title": "Running for {duration}",
+      "sub.total_title": "Took {duration}",
+      "sub.stale_title": "No heartbeat for over 10 minutes — it may have ended unnoticed ({duration} since start)",
     },
     cs: {
       card_label: "Detail agenta",
@@ -109,6 +121,15 @@
       "out.forbidden": "Odmítnuto: změnil se přístupový token runtime.",
       "out.unreachable": "Nepodařilo se spojit s runtime.",
       "out.http": "Runtime odpověděl HTTP {message}.",
+      subagents: "Subagenti",
+      "sub.unnamed": "subagent",
+      "sub.running": "běží",
+      "sub.done": "hotovo",
+      "sub.failed": "selhal",
+      "sub.stale": "bez signálu",
+      "sub.running_title": "Běží {duration}",
+      "sub.total_title": "Trval {duration}",
+      "sub.stale_title": "Přes 10 minut bez známky života — možná skončil bez hlášení ({duration} od startu)",
     },
   });
   const m = $derived(M[locale.lang]);
@@ -145,6 +166,10 @@
   let alive = true;
   let loop: GatedLoop | null = null;
   let root = $state<HTMLElement | undefined>(undefined);
+  // Live subagent durations: the runtime's figure at fetch time, advanced by a
+  // 1 s local tick between polls (only while something is running).
+  let fetchedAt = $state(Date.now());
+  let now = $state(Date.now());
 
   async function load(refresh = false): Promise<void> {
     const first = ref === null;
@@ -152,6 +177,7 @@
     if (!alive) return;
     if (r.kind === "ok") {
       detail = r.detail;
+      fetchedAt = now = Date.now();
       ref = { serverId: r.detail.serverId, paneId: r.detail.paneId };
       phase = "ready";
     } else if (r.kind === "gone") {
@@ -254,6 +280,26 @@
     detail ? [detail.workspace, detail.tab].filter(Boolean).join(" › ") : "",
   );
   const actionsOff = $derived(busy || !detail?.connected);
+  const anyRunning = $derived(detail?.subagents.some((s) => s.status === "running") ?? false);
+
+  $effect(() => {
+    if (!anyRunning) return;
+    const timer = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(timer);
+  });
+
+  function subDuration(s: SubagentRow): number {
+    return s.status === "running"
+      ? s.durationS + Math.max(0, Math.floor((now - fetchedAt) / 1000))
+      : s.durationS;
+  }
+
+  function subTitle(s: SubagentRow): string {
+    const duration = formatDuration(subDuration(s));
+    const key: Key =
+      s.status === "running" ? "sub.running_title" : s.status === "stale" ? "sub.stale_title" : "sub.total_title";
+    return fmt(m[key], { duration });
+  }
 
   onMount(() => {
     loop = visibilityGatedLoop(() => load(), () => pollMs);
@@ -321,6 +367,21 @@
           >{armed === `opt:${o.key}` ? m.confirm : optionText(o)}</button>
         {/each}
       </div>
+    {/if}
+
+    {#if detail.subagents.length}
+      <h3>{m.subagents}</h3>
+      <ul class="subagents">
+        {#each detail.subagents as s (s.id)}
+          <li class="sub sub-{s.status}" style:--indent={subagentIndent(s.depth)}>
+            <span class="dot"></span>
+            <span class="sub-type">{s.type || s.provider || m["sub.unnamed"]}</span>
+            {#if s.description}<span class="sub-desc" title={s.description}>{s.description}</span>{/if}
+            <span class="sub-state">{m[`sub.${s.status}`]}</span>
+            <span class="sub-time" title={subTitle(s)}>{formatDuration(subDuration(s))}</span>
+          </li>
+        {/each}
+      </ul>
     {/if}
 
     {#if detail.canText}
@@ -419,6 +480,44 @@
   .st-idle .dot { background: var(--st-idle); }
   .st-done .dot { background: var(--st-done); }
   .st-waiting .dot { background: var(--st-waiting); }
+  .subagents {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    max-height: 200px;
+    overflow: auto;
+  }
+  .sub {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s2);
+    min-width: 0;
+    padding-left: calc(var(--indent, 0) * 14px);
+    font: var(--t-help);
+  }
+  .sub .dot { flex: none; align-self: center; }
+  .sub-running .dot { background: var(--st-working); }
+  .sub-done .dot { background: var(--st-done); }
+  .sub-failed .dot { background: var(--st-red); }
+  .sub-type { flex: none; font: var(--t-label); }
+  .sub-desc {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-dim);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sub-state { flex: none; color: var(--text-faint); }
+  .sub-failed .sub-state { color: var(--st-offline-text); }
+  .sub-time {
+    flex: none;
+    margin-left: auto;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
   .title { margin: 0; font: var(--t-label); overflow-wrap: anywhere; }
   .meta, .note { margin: 0; color: var(--text-dim); font: var(--t-help); overflow-wrap: anywhere; }
   .err { color: var(--st-offline-text); }
