@@ -38,7 +38,10 @@ def test_child_exits_cleanly_when_the_parent_pipe_closes():
         assert proc.stdout.readline().strip() == "ready"
         assert proc.poll() is None  # an open pipe keeps it alive
         proc.stdin.close()  # what the kernel does when the shell dies
-        out, _ = proc.communicate(timeout=5)
+        # Not communicate(): on Python 3.12 it flushes the stdin we just
+        # closed and raises "I/O operation on closed file".
+        assert proc.wait(timeout=5) == 0
+        out = proc.stdout.read()
         assert out.strip() == "stopped"
         assert proc.returncode == 0
     finally:
