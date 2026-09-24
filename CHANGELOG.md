@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-24
+
 ### Changed
 - Redesigned status panel (the D200's wide window, the two Elgato keys, the
   panel in the app and the web simulator). Every state now shares one layout:
