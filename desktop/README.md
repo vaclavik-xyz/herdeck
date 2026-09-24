@@ -39,6 +39,20 @@ The Svelte frontend has two complementary surfaces, one per window role:
   (the shell relays plain responses only, no chunked streams) and renders with
   the dashboard's vendored xterm.js, loaded lazily through the `@herdeck-web`
   alias in `vite.config.ts` (`lib/xtermLoader.ts`).
+- **Maintenance** (a settings section, `sections/MaintenanceSection.svelte`) -
+  versions, runtime origin, D200 state and bridge updates from the runtime's
+  `/maintenance*` routes. `maintenance_call` (`src-tauri/src/maintenance.rs`)
+  relays only an allow-list of exact paths (`GET /maintenance`, `POST
+  /maintenance/deck/restart|power-cycle`, `POST|GET
+  /maintenance/servers/<id>/update[?after=N&wait_ms=M]`), injects the token and
+  stamps `GET /maintenance` with the shell's own `app` facts (version, bundle,
+  bundled runtime, whether this shell spawned the runtime). `runtime_service`
+  runs the bundled `herdeck-deckapp service <action> runtime` (install
+  `--from-app <this bundle>`, restart, uninstall, `status --json`) with a
+  timeout; `open_log` opens only an existing `*.log` under the log directories
+  that `/maintenance` reports or the app's own log. `HealthNotice.svelte`
+  offers the matching action inline; the tray's **Restart deck** and
+  `[hotkeys].restart_deck` post the deck restart directly.
 - **Onboarding** - a first-run and change-connection flow inside the active
   surface, followed by a sectioned
   settings editor (servers, theme, view, macros, notifications, safety,
@@ -60,6 +74,9 @@ desktop/
       DeckView.svelte        # live deck render + press
       AgentCard.svelte       # one agent in full: prompt, options, reply, stop/focus
       agentCardClient.ts     # /agent/* transport (via the agent_call command)
+      maintenanceClient.ts   # /maintenance* + runtime_service/open_log transport
+      maintenanceMessages.ts # Maintenance/HealthNotice en+cs texts, outcome mapping
+      HealthNotice.svelte    # "why is the deck dark" line + inline fixes
       AgentTerminal.svelte   # the card's read-only live terminal (long-polled)
       xtermLoader.ts         # lazy load of the vendored xterm.js (@herdeck-web alias)
       Onboarding.svelte      # first-run onboarding flow
@@ -88,6 +105,7 @@ desktop/
       sidecar.rs             # spawn/parse/supervise logic (+ unit tests)
       http.rs                # loopback HTTP proxy with token injection (+ tests)
       agent_card.rs          # agent_call: /agent/* relay for the agent card (+ tests)
+      maintenance.rs         # maintenance_call, open_log, runtime_service, Restart deck (+ tests)
       deck_prefs.rs          # deck_always_on_top + config path prefs
       window_state.rs        # ~/.cache/herdeck/window-state.json read/write (+ tests)
       hotkey.rs              # global hotkey

@@ -49,6 +49,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The desktop app's bundled runtime binary runs the service CLI as
   `herdeck-deckapp service ...`, so the runtime service can be installed from
   the app without Python.
+- Desktop **Maintenance** section (Settings → System → Maintenance): app,
+  runtime and bridge versions with mismatches flagged; where the runtime comes
+  from (service from this app, service from a checkout, inside the app, or
+  started elsewhere) with **Run as a service from this app**, **Restart
+  runtime**, **Remove service** and **Open runtime/app log**; the D200 state in
+  words with **Restart deck** and **Power-cycle USB port** (disabled with the
+  reason when uhubctl or the hub port is missing; `needs_admin` shows the exact
+  command with a copy button); and per bridge an **Update bridge** button (only
+  for a managed, self-updating bridge older than the runtime) with live
+  progress and an explanation for every outcome. A bridge that is not a managed
+  install shows the one-time `herdeck-service install bridge --managed --version
+  <runtime version>` command; an unknown install type (older bridge, T3) gets a
+  neutral note.
+- HealthNotice offers the fix inline: **Update bridge** on a version mismatch
+  of such a bridge, **Restart deck** on a D200 problem, **Open Maintenance**
+  otherwise.
+- Tray item **Restart deck** and an optional `[hotkeys].restart_deck` global
+  shortcut (default off).
+- Editor fields for `[hardware].d200_standard_writer`, `uhubctl`, `usb_hub`,
+  `usb_port` (Deck → Advanced) and a T3 server's `desktop_read_state`
+  (Connections).
+- Desktop shell commands `maintenance_call` (token-injecting proxy for an
+  allow-list of exact `/maintenance*` routes; the bridge-update read timeout
+  outlasts its wait), `open_log` (only the runtime log `/maintenance` reports or
+  the app's own log, as an existing `*.log` under the log directories) and
+  `runtime_service` (the bundled runtime's `service install|restart|uninstall|
+  status runtime`, with a timeout).
 
 ## [0.9.0] - 2026-09-24
 

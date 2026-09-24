@@ -29,10 +29,34 @@ pub fn next_blocked_accelerator(config: &Value) -> Option<String> {
     }
 }
 
+/// The accelerator for the "restart deck" hotkey (`[hotkeys].restart_deck`),
+/// or `None`. Opt-in like `next_blocked`: absent, non-string or empty = off.
+pub fn restart_deck_accelerator(config: &Value) -> Option<String> {
+    match config.pointer("/base/hotkeys/restart_deck") {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn restart_deck_is_opt_in() {
+        assert_eq!(restart_deck_accelerator(&json!({})), None);
+        assert_eq!(
+            restart_deck_accelerator(&json!({ "base": { "hotkeys": { "restart_deck": " " } } })),
+            None
+        );
+        assert_eq!(
+            restart_deck_accelerator(
+                &json!({ "base": { "hotkeys": { "restart_deck": " CmdOrCtrl+Alt+R " } } })
+            ),
+            Some("CmdOrCtrl+Alt+R".to_string())
+        );
+    }
 
     #[test]
     fn next_blocked_is_opt_in() {

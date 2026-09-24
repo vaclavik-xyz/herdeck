@@ -223,7 +223,7 @@ export interface ServerRecord {
   url: string;
   token_env: string;
   backend?: string;
-  /** T3 only: read this Mac's T3 desktop visited state (not edited here, only kept). */
+  /** T3 only: read this Mac's T3 desktop visited state (ServersSection toggle). */
   desktop_read_state?: boolean;
 }
 
@@ -292,6 +292,17 @@ export function updateServer(
   value: string,
 ): ConfigPayload {
   const servers = serversOf(payload).map((s, i) => (i === index ? { ...s, [field]: value } : s));
+  return withServers(payload, servers);
+}
+
+/** NEW payload with server `index`'s T3 `desktop_read_state` set (false drops
+ *  the key: it is the backend default and only valid on T3 servers). */
+export function setServerReadState(payload: ConfigPayload, index: number, value: boolean): ConfigPayload {
+  const servers = serversOf(payload).map((s, i) => {
+    if (i !== index) return s;
+    const { desktop_read_state: _drop, ...rest } = s;
+    return value ? { ...rest, desktop_read_state: true } : rest;
+  });
   return withServers(payload, servers);
 }
 
@@ -1023,6 +1034,17 @@ export function nextBlockedHotkey(payload: ConfigPayload): string {
 /** NEW payload with base.hotkeys.next_blocked set ("" = no hotkey). */
 export function setNextBlockedHotkey(payload: ConfigPayload, value: string): ConfigPayload {
   return setAt(payload, "base", "hotkeys", "next_blocked", value);
+}
+
+/** The opt-in "restart deck" hotkey (`[hotkeys].restart_deck`, "" = off). */
+export function restartDeckHotkey(payload: ConfigPayload): string {
+  const v = getAt(payload, "base", "hotkeys", "restart_deck");
+  return typeof v === "string" ? v : "";
+}
+
+/** NEW payload with base.hotkeys.restart_deck set ("" = no hotkey). */
+export function setRestartDeckHotkey(payload: ConfigPayload, value: string): ConfigPayload {
+  return setAt(payload, "base", "hotkeys", "restart_deck", value);
 }
 
 /** Whether the floating deck window stays above other windows. Applied live by

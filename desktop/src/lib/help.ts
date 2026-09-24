@@ -13,6 +13,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       id: "Unique server name the deck uses to sort, color, and route its agents.",
       url: "WebSocket address of the herdr bridge on the server (e.g. ws://100.x.y.z:8788), ideally a Tailscale IP.",
       token: "Name of the env var or keychain item holding the access token; the value can be saved straight to the keychain.",
+      desktop_read_state: "T3 only: read this Mac's T3 desktop visit state, so opening a finished thread there clears its Done; default off.",
     },
     deck: {
       grid: "Deck grid size as columns×rows (e.g. 5x3); sets how many tiles fit on screen.",
@@ -27,6 +28,10 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       debounce: "Seconds during which a repeated press of the same D200 key is ignored (default 0.25 s).",
       keep_alive_interval: "How often, in seconds, the D200 is kept alive so it doesn't revert to its default screen (default 5 s).",
       tick_interval: "How often, in seconds, the deck redraws (clock, elapsed time, animations); default 0.4 s.",
+      d200_standard_writer: "D200 firmware workaround: use strmdck's stock disk-backed image writer if the deck keeps a stale page; default off.",
+      uhubctl: "Path to uhubctl for the USB power-cycle; empty = search PATH and /opt/homebrew/bin, /usr/local/bin (default).",
+      usb_hub: "uhubctl hub location of the D200 (e.g. 1-1 or 20-1.4); with usb_port it overrides the last-seen port. Empty = auto.",
+      usb_port: "Port number (1-127) on usb_hub that the D200 hangs on; needs usb_hub, empty = the port it was last seen on.",
     },
     view: {
       backend_labels: "Show a small T3 or HERDR label on agent tiles. In a profile, changes apply only to that profile.",
@@ -113,6 +118,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       deck_always_on_top: "Keeps the floating deck window above other windows; applied immediately, no restart.",
       toggle_deck: "Global shortcut to show/hide the deck; default Cmd/Ctrl+Shift+D, empty field = disabled.",
       next_blocked: "Global shortcut that shows the deck and opens the longest-blocked agent (again = next one); empty = off (default).",
+      restart_deck: "Global shortcut that closes and reopens the D200 and redraws it (like the tray's Restart deck); empty = off (default).",
     },
   },
   cs: {
@@ -120,6 +126,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       id: "Jedinečný název serveru, podle kterého deck řadí, barví a směruje jeho agenty.",
       url: "WebSocket adresa herdr mostu na serveru (např. ws://100.x.y.z:8788), ideálně Tailscale IP.",
       token: "Název proměnné či položky klíčenky s přístupovým tokenem; hodnotu lze uložit rovnou do klíčenky.",
+      desktop_read_state: "Jen T3: čte stav návštěv z T3 desktopu na tomto Macu, otevření hotového vlákna tam zruší Done; výchozí vypnuto.",
     },
     deck: {
       grid: "Rozměr mřížky decku ve tvaru sloupce×řádky (např. 5x3); určuje počet dlaždic na obrazovce.",
@@ -134,6 +141,10 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       debounce: "Doba v sekundách, po kterou se ignoruje opakovaný stisk téže klávesy na D200 (výchozí 0,25 s).",
       keep_alive_interval: "Jak často v sekundách se D200 udržuje při životě, aby se nepřepnul na výchozí obrazovku (výchozí 5 s).",
       tick_interval: "Jak často v sekundách se deck překresluje (hodiny, uplynulý čas, animace); výchozí 0,4 s.",
+      d200_standard_writer: "Obejití firmwaru D200: použij standardní diskový zapisovač strmdck, když deck drží starou stránku; výchozí vypnuto.",
+      uhubctl: "Cesta k uhubctl pro restart napájení USB; prázdné = hledá v PATH a /opt/homebrew/bin, /usr/local/bin (výchozí).",
+      usb_hub: "Umístění hubu s D200 ve tvaru uhubctl (např. 1-1 nebo 20-1.4); s usb_port přebije naposledy viděný port. Prázdné = auto.",
+      usb_port: "Číslo portu (1-127) na usb_hub, kde visí D200; vyžaduje usb_hub, prázdné = port, kde byl naposledy viděn.",
     },
     view: {
       backend_labels: "Zobrazí malý štítek T3 nebo HERDR na dlaždicích agentů. V profilu se změna týká jen tohoto profilu.",
@@ -220,6 +231,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       deck_always_on_top: "Drží plovoucí okno decku nad ostatními okny; použije se hned, bez restartu.",
       toggle_deck: "Globální zkratka pro zobrazení/skrytí decku; výchozí Cmd/Ctrl+Shift+D, prázdné pole = vypnuto.",
       next_blocked: "Globální zkratka: ukáže deck a otevře nejdéle blokovaného agenta (znovu = další); prázdné = vypnuto (výchozí).",
+      restart_deck: "Globální zkratka, která zavře a znovu otevře D200 a překreslí ho (jako Restartovat deck v tray); prázdné = vypnuto (výchozí).",
     },
   },
 };

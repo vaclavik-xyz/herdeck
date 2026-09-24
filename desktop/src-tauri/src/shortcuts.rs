@@ -1,5 +1,5 @@
-//! Global shortcuts: the deck toggle and the opt-in "next blocked agent"
-//! hotkey, (re)registered from the runtime's `/config` (the accelerator
+//! Global shortcuts: the deck toggle and the opt-in "next blocked agent" and
+//! "restart deck" hotkeys, (re)registered from the runtime's `/config` (the accelerator
 //! parsing itself lives in `hotkey`).
 
 use tauri::Manager;
@@ -35,6 +35,7 @@ pub(crate) fn register_toggle_hotkey(app: &tauri::AppHandle, d: &Discovery) -> R
     let errors: Vec<String> = [
         register_toggle_accelerator(app, &cfg),
         register_next_blocked_accelerator(app, &cfg),
+        register_restart_deck_accelerator(app, &cfg),
     ]
     .into_iter()
     .filter_map(Result::err)
@@ -100,6 +101,27 @@ pub(crate) fn register_next_blocked_accelerator(app: &tauri::AppHandle, cfg: &se
             },
         )
         .map_err(|e| format!("could not register the next-blocked hotkey '{accel}': {e}"))
+}
+
+/// Register the opt-in `[hotkeys].restart_deck` accelerator (no default): the
+/// same action as the tray's "Restart deck".
+pub(crate) fn register_restart_deck_accelerator(app: &tauri::AppHandle, cfg: &serde_json::Value) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let Some(accel) = hotkey::restart_deck_accelerator(cfg) else {
+        return Ok(()); // not configured
+    };
+    let app_for_cb = app.clone();
+    app.global_shortcut()
+        .on_shortcut(
+            accel.as_str(),
+            move |_app: &tauri::AppHandle, _sc: &tauri_plugin_global_shortcut::Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
+                if event.state == ShortcutState::Pressed {
+                    crate::maintenance::restart_deck_from_shell(&app_for_cb);
+                }
+            },
+        )
+        .map_err(|e| format!("could not register the restart-deck hotkey '{accel}': {e}"))
 }
 
 /// The "next blocked agent" hotkey: show the deck and ask the runtime to open

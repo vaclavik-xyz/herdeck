@@ -753,10 +753,10 @@ fn every_tray_label_exists_in_both_languages() {
     // The mode radio items are gone; nothing may name them any more.
     assert!(!cs.iter().any(|l| l.contains("Režim okna")));
     // show_app + toggle_deck(show) + toggle_deck(hide) + deck_aot +
-    // autostart + reconnect + check_update + quit — `TrayMenuItems::
-    // retitle` indexes every one of these, so the array length must
-    // match exactly.
-    assert_eq!(en.len(), 8);
+    // autostart + reconnect + check_update + quit + restart_deck —
+    // `TrayMenuItems::retitle` indexes every one of these, so the array
+    // length must match exactly.
+    assert_eq!(en.len(), 9);
     // A label accidentally left English in the cs array (or vice versa)
     // is exactly the defect this test exists to catch.
     for (i, (e, c)) in en.iter().zip(cs.iter()).enumerate() {
@@ -773,6 +773,13 @@ fn every_tray_label_exists_in_both_languages() {
 fn check_update_tray_label_exists_in_both_languages() {
     assert_eq!(tray_labels("en")[6], "Check for updates");
     assert_eq!(tray_labels("cs")[6], "Zkontrolovat aktualizace");
+}
+
+// "Restart deck" (slot 8, appended so no other index moved).
+#[test]
+fn restart_deck_tray_label_exists_in_both_languages() {
+    assert_eq!(tray_labels("en")[8], "Restart deck");
+    assert_eq!(tray_labels("cs")[8], "Restartovat deck");
 }
 
 // The `toggle_deck` tray item's text depends on BOTH the language and the
