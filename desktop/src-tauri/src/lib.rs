@@ -916,10 +916,13 @@ async fn test_notification(
     } else {
         None
     };
+    // A fresh identifier per press: a banner with the same identifier as one
+    // still in Notification Center replaces it silently (no banner, no sound).
+    static TEST_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let item = PendingNotification {
         id: "test".to_string(),
-        generation: String::new(),
-        seq: 0,
+        generation: format!("test-{}", shell_gen()),
+        seq: TEST_SEQ.fetch_add(1, Ordering::Relaxed),
         title: title.to_string(),
         body: body.to_string(),
         sound,
@@ -1408,10 +1411,13 @@ fn should_present_banner(inner_answer: Option<bool>) -> bool {
 
 /// Banner clicks → reveal the deck, with no per-banner thread and no polling.
 ///
-/// `NSUserNotificationCenter` has exactly one delegate, owned by
-/// `mac-notification-sys` (it needs `didDeliverNotification:` to end each
-/// send). We put a forwarding proxy in front of it: every delegate message is
-/// passed on unchanged, and `didActivateNotification:` also reveals the deck.
+/// `NSUserNotificationCenter` has exactly one delegate. `mac-notification-sys`
+/// creates it (we still call its `setupDelegate`, and its handler removes an
+/// activated banner from Notification Center); our banners no longer go
+/// through the crate's `send`, so nothing waits on its `didDeliverNotification:`.
+/// We put a forwarding proxy in front of it: every delegate message is passed
+/// on unchanged, and `didActivateNotification:` also carries out the banner's
+/// intent (reveal / drill / answer / reply, see `banners::banner_intent`).
 /// That is one object for the whole process, event driven, on the main thread
 /// where AppKit delivers these callbacks anyway.
 ///

@@ -27,6 +27,7 @@ CLAUDE_PROMPT = (
 def _blocked_with_prompt(prompt=CLAUDE_PROMPT, *, connected=True):
     """A live app whose pane p0 is BLOCKED with its prompt pre-read."""
     app, src, server, runner = make_live()
+    src._config.notifications.banner_actions = True  # answering is opt-in
     src._on_connection(server.id, connected)
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.BLOCKED)])
     read = [m for m in runner.sent if m["type"] == "read"][-1]
@@ -161,6 +162,21 @@ def test_reply_types_sanitized_text_into_the_pane():
         app.close()
 
 
+def test_answers_are_refused_once_banner_actions_is_turned_off():
+    app, src, _server, runner, key, episode = _blocked_with_prompt()
+    try:
+        sig = binary_answer(CLAUDE_PROMPT, DEFAULT_PROFILES["claude"], SafetyConfig()).sig
+        src._config.notifications.banner_actions = False
+        assert src.answer_agent(key, episode, choice="approve", sig=sig) == "stale"
+        assert src.answer_agent(key, episode, text="yes") == "stale"
+        src._config.notifications.banner_actions = True
+        src._config.notifications.backends = ["telegram"]
+        assert src.answer_agent(key, episode, choice="approve", sig=sig) == "stale"
+        assert runner.sent == []
+    finally:
+        app.close()
+
+
 def test_malformed_answers_are_rejected():
     app, src, _server, runner, key, episode = _blocked_with_prompt()
     try:
@@ -186,7 +202,7 @@ def test_an_offline_server_is_unavailable_not_answered():
 
 def test_sanitize_reply_bounds_length():
     assert sanitize_reply(None) == ""
-    assert sanitize_reply("a\r\nb\tc") == "a\nb\tc"
+    assert sanitize_reply("a\r\nb\tc\u2028d\n\ne") == "a b\tc d e"
     assert len(sanitize_reply("x" * 5000)) == 2000
 
 
@@ -213,6 +229,7 @@ def _post(app, path, body, *, token=True):
 @pytest.fixture
 def served():
     config, server = live_config()
+    config.notifications.banner_actions = True
     src = LiveSource(config, server)
     runner = FakeRunner()
     src.attach_runner(runner)

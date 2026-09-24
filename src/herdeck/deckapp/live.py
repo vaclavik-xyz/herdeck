@@ -64,7 +64,10 @@ log = logging.getLogger(__name__)
 # control / bidi-override characters (a terminal escape must never ride in on
 # notification text). Newlines and tabs stay; the bridge normalizes further.
 REPLY_MAX_CHARS = 2000
-_REPLY_STRIP_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
+_REPLY_STRIP_RE = re.compile("[\x00-\x08\x0e-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
+# herdr types the text and then presses enter: a line break inside a reply
+# would submit early and type the rest into whatever prompt comes next.
+_REPLY_BREAK_RE = re.compile("[\r\n\x0b\x0c\x85\u2028\u2029]+")
 # Answered block episodes remembered so a second click (or a reminder banner of
 # the same episode) never answers twice.
 _ANSWERED_EPISODES_MAX = 256
@@ -78,7 +81,7 @@ def sanitize_reply(text: object) -> str:
     """The banner reply text safe to send to a pane ("" = nothing to send)."""
     if not isinstance(text, str):
         return ""
-    clean = text.replace("\r\n", "\n").replace("\r", "\n")
+    clean = _REPLY_BREAK_RE.sub(" ", text)
     return _REPLY_STRIP_RE.sub("", clean).strip()[:REPLY_MAX_CHARS]
 
 
@@ -281,6 +284,11 @@ class LiveSource(StateSource):
         prompt's options changed) or "unavailable" (its server is offline). A
         stale banner therefore never answers a later prompt.
         """
+        n = self._config.notifications
+        if not n.banner_actions or "macos" not in n.backends:
+            # Answering was turned off after the banner went out: never act
+            # on it; the shell opens the drill instead (409).
+            return "stale"
         if (choice is None) == (text is None) or not episode:
             return "invalid"
         if choice is not None and choice not in ("approve", "deny"):
