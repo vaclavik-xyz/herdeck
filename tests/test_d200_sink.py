@@ -499,3 +499,36 @@ def test_d200_lock_lives_in_the_runtime_dir(monkeypatch, tmp_path):
     assert d200_lock_path() == str(tmp_path / "d200.lock")
     monkeypatch.delenv("HERDECK_RUNTIME_DIR")
     assert d200_lock_path().endswith("/.cache/herdeck/d200.lock")
+
+
+def test_frozen_elapsed_text_catches_up_once_a_minute():
+    # The D200 froze the elapsed text for good: a done agent read "0s" forever.
+    class CapturingDriver(FrameDriver):
+        def __init__(self):
+            super().__init__()
+            self.tile_views = []
+
+        def render_frame(self, tiles, panel):
+            self.tile_views.append(tiles)
+
+    now = [1000.0]
+    driver = CapturingDriver()
+    sink = D200Sink(driver, on_press=lambda i: None, slots=13, start_reader=False,
+                    clock=lambda: now[0])
+    panel = PanelView("Agents")
+
+    def frame(time_text):
+        tiles = [
+            TileView(0, "api", "cyan", time_text=time_text, status_text="DONE"),
+            TileView(1, "web", "blue", time_text="2h", status_text="IDLE"),
+        ]
+        sink.deliver(RenderFrame(_RS(tiles, panel), working=None, full=True))
+        return [t.time_text for t in driver.tile_views[-1]]
+
+    assert frame("0s") == ["0s", "2h"]
+    now[0] += 30
+    assert frame("30s") == ["0s", "2h"]  # frozen between refreshes (no blink)
+    now[0] += 31
+    assert frame("1m") == ["1m", "2h"]  # the minute catch-up: every tile at once
+    now[0] += 5
+    assert frame("1m") == ["1m", "2h"]
