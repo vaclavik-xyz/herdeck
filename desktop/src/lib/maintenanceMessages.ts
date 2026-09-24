@@ -3,9 +3,9 @@
 // deckapp/maintenance.py and bridge_update.py has its own sentence).
 import { defineMessages, fmt } from "./i18n.svelte";
 import {
-  hookState, managedBridgeCommand,
+  hookState, managedBridgeCommand, usageAgentState,
   type BridgeUpdateView, type D200Status, type DeckOutcome, type HookAgent, type HooksOutcome, type HooksSummary,
-  type RuntimeOrigin,
+  type RuntimeOrigin, type UsageAgentOutcome, type UsageAgentStatus,
 } from "./maintenanceClient";
 
 export const MAINTENANCE_MESSAGES = defineMessages({
@@ -147,6 +147,36 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     hooks_disconnected: "The server is not connected, so nothing was changed.",
     hooks_timeout: "The bridge did not answer in time.",
     hooks_other: "Unexpected answer: {message}",
+    // usage limits helper (usage agent)
+    ua_heading: "Usage limits helper",
+    ua_hint: "Runs in your login session on the agents' Mac so codex/codexbar can reach the keychain; the bridge forwards its numbers to the deck.",
+    ua_state_not_installed: "not installed",
+    ua_state_running: "running · {providers} · updated {ago} ago",
+    ua_state_running_now: "running · {providers}",
+    ua_no_providers: "no providers yet",
+    ua_state_stale: "installed, but its numbers are stale",
+    ua_state_stopped: "installed, but not running",
+    ua_state_no_gui_session: "no login session on that Mac — log in to its desktop, then install again",
+    ua_state_unsupported: "not supported by this bridge (an older herdeck or another system)",
+    ua_state_error: "the last action failed",
+    ua_empty: "This bridge offers usage limits but sends no numbers — install the helper.",
+    ua_install: "Install",
+    ua_remove: "Remove",
+    ua_installing: "Installing…",
+    ua_removing: "Removing…",
+    ua_install_title: "Install the usage limits helper on {id}",
+    ua_remove_title: "Remove the usage limits helper from {id}",
+    ua_progress_install: "Installing the usage limits helper on {id}…",
+    ua_progress_uninstall: "Removing the usage limits helper from {id}…",
+    ua_done_install: "Usage limits helper installed on {id}.",
+    ua_done_uninstall: "Usage limits helper removed from {id}.",
+    ua_failed: "The usage limits helper on {id} could not be changed (details: hover).",
+    ua_no_gui_session: "{id}: no login session on that Mac. Log in to its desktop, then install again.",
+    ua_unsupported: "{id}: this bridge cannot run the usage limits helper (an older herdeck or another system).",
+    ua_readonly: "{id}: the bridge refused — this server's token is read-only.",
+    ua_disconnected: "{id} is not connected, so nothing was changed.",
+    ua_timeout: "{id}: the bridge did not answer in time.",
+    ua_other: "{id}: unexpected answer ({code}).",
   },
   cs: {
     versions: "Verze",
@@ -280,6 +310,36 @@ export const MAINTENANCE_MESSAGES = defineMessages({
     hooks_disconnected: "Server není připojený, nic se nezměnilo.",
     hooks_timeout: "Bridge neodpověděl včas.",
     hooks_other: "Neočekávaná odpověď: {message}",
+    // pomocník pro limity (usage agent)
+    ua_heading: "Pomocník pro limity",
+    ua_hint: "Běží ve tvém přihlášeném sezení na Macu s agenty, aby codex/codexbar dosáhly na klíčenku; bridge jeho čísla přeposílá decku.",
+    ua_state_not_installed: "nenainstalováno",
+    ua_state_running: "běží · {providers} · aktualizováno před {ago}",
+    ua_state_running_now: "běží · {providers}",
+    ua_no_providers: "zatím žádní poskytovatelé",
+    ua_state_stale: "nainstalováno, ale čísla jsou zastaralá",
+    ua_state_stopped: "nainstalováno, ale neběží",
+    ua_state_no_gui_session: "na tom Macu není přihlášené sezení — přihlas se do plochy a nainstaluj znovu",
+    ua_state_unsupported: "tento bridge ho nepodporuje (starší herdeck nebo jiný systém)",
+    ua_state_error: "poslední akce selhala",
+    ua_empty: "Tento bridge nabízí limity, ale neposílá žádná čísla — nainstaluj pomocníka.",
+    ua_install: "Nainstalovat",
+    ua_remove: "Odebrat",
+    ua_installing: "Instaluji…",
+    ua_removing: "Odebírám…",
+    ua_install_title: "Nainstalovat pomocníka pro limity na {id}",
+    ua_remove_title: "Odebrat pomocníka pro limity z {id}",
+    ua_progress_install: "Instaluji pomocníka pro limity na {id}…",
+    ua_progress_uninstall: "Odebírám pomocníka pro limity z {id}…",
+    ua_done_install: "Pomocník pro limity je nainstalovaný na {id}.",
+    ua_done_uninstall: "Pomocník pro limity je odebraný z {id}.",
+    ua_failed: "Pomocníka pro limity na {id} se nepodařilo změnit (podrobnosti po najetí myší).",
+    ua_no_gui_session: "{id}: na tom Macu není přihlášené sezení. Přihlas se do plochy a nainstaluj znovu.",
+    ua_unsupported: "{id}: tento bridge pomocníka pro limity spustit neumí (starší herdeck nebo jiný systém).",
+    ua_readonly: "{id}: bridge odmítl — token tohoto serveru je jen pro čtení.",
+    ua_disconnected: "{id} není připojený, nic se nezměnilo.",
+    ua_timeout: "{id}: bridge neodpověděl včas.",
+    ua_other: "{id}: neočekávaná odpověď ({code}).",
   },
 });
 
@@ -367,6 +427,47 @@ export function hooksOutcomeText(o: HooksOutcome, m: MaintenanceMessages): { ok:
     case "http": return { ok: false, text: fmt(m.upd_http, { message: o.message }) };
     case "unreachable": return { ok: false, text: fmt(m.upd_unreachable, { message: o.message }) };
     default: return { ok: false, text: fmt(m.hooks_other, { message: o.message || o.code }) };
+  }
+}
+
+/** The helper row's status text. `receivedAt`: when `ua` was answered (ms
+ *  epoch), so its file age can be carried forward; null = age unknown. */
+export function usageAgentStateText(
+  ua: UsageAgentStatus,
+  lastCode: string | null,
+  m: MaintenanceMessages,
+  receivedAt: number | null = null,
+  now: number = Date.now(),
+): string {
+  switch (usageAgentState(ua, lastCode)) {
+    case "running": {
+      const providers = ua.providers.length ? ua.providers.join(", ") : m.ua_no_providers;
+      if (ua.fileAgeS == null || receivedAt == null) return fmt(m.ua_state_running_now, { providers });
+      return fmt(m.ua_state_running, { providers, ago: ago(ua.fileAgeS * 1000 + Math.max(0, now - receivedAt)) });
+    }
+    case "stale": return m.ua_state_stale;
+    case "stopped": return m.ua_state_stopped;
+    case "no_gui_session": return m.ua_state_no_gui_session;
+    case "unsupported": return m.ua_state_unsupported;
+    case "error": return m.ua_state_error;
+    default: return m.ua_state_not_installed;
+  }
+}
+
+/** A usage-agent action's outcome as one sentence (from its code; the raw
+ *  message is the toast's detail). */
+export function usageAgentOutcomeText(o: UsageAgentOutcome, action: "install" | "uninstall", id: string, m: MaintenanceMessages): { ok: boolean; text: string } {
+  switch (o.code) {
+    case "ok": return { ok: true, text: fmt(action === "install" ? m.ua_done_install : m.ua_done_uninstall, { id }) };
+    case "failed": return { ok: false, text: fmt(m.ua_failed, { id }) };
+    case "no_gui_session": return { ok: false, text: fmt(m.ua_no_gui_session, { id }) };
+    case "unsupported": return { ok: false, text: fmt(m.ua_unsupported, { id }) };
+    case "readonly": return { ok: false, text: fmt(m.ua_readonly, { id }) };
+    case "disconnected": return { ok: false, text: fmt(m.ua_disconnected, { id }) };
+    case "timeout": return { ok: false, text: fmt(m.ua_timeout, { id }) };
+    case "http": return { ok: false, text: fmt(m.upd_http, { message: o.message }) };
+    case "unreachable": return { ok: false, text: fmt(m.upd_unreachable, { message: o.message }) };
+    default: return { ok: false, text: fmt(m.ua_other, { id, code: o.code }) };
   }
 }
 

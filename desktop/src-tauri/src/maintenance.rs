@@ -2,7 +2,7 @@
 //!
 //! - `maintenance_call`: a token-injecting proxy for the runtime's
 //!   `/maintenance*` routes (deckapp/maintenance.py + bridge_update.py +
-//!   hooks_relay.py), built
+//!   hooks_relay.py + usage_agent_relay.py), built
 //!   like `agent_card::agent_call` — the token never enters JS — but with an
 //!   allow-list of EXACT paths rather than a prefix. `GET /maintenance` is
 //!   stamped with what only the shell knows (`app`: its version, bundle, the
@@ -41,6 +41,9 @@ pub const POWER_CYCLE_TIMEOUT: Duration = Duration::from_secs(45);
 pub const STATS_TIMEOUT: Duration = Duration::from_secs(16);
 /// The runtime waits up to 14 s for the bridge's hooks answer (HOOKS_WAIT_S).
 pub const HOOKS_TIMEOUT: Duration = Duration::from_secs(20);
+/// The runtime waits up to 34 s for the bridge's usage-agent answer
+/// (usage_agent_relay.USAGE_AGENT_WAIT_S; the bridge caps its work at 30 s).
+pub const USAGE_AGENT_TIMEOUT: Duration = Duration::from_secs(40);
 /// The runtime's default bridge-update wait (15 s) when the body names none.
 const UPDATE_DEFAULT_WAIT_MS: u64 = 15_000;
 
@@ -59,6 +62,9 @@ pub enum MaintRoute {
     /// GET (status) / POST (install, uninstall): the subagent hooks on a
     /// bridge's machine (deckapp/hooks_relay.py).
     Hooks,
+    /// GET (status) / POST (install, uninstall, status): the usage agent on a
+    /// bridge's machine (deckapp/usage_agent_relay.py).
+    UsageAgent,
 }
 
 /// The stats query: only `range` (1, 7 or 30) and `group` (agent, repo,
@@ -126,6 +132,10 @@ pub fn maintenance_route(method: &str, path: &str) -> Option<MaintRoute> {
         return (server_segment_ok(seg) && query.is_none() && matches!(method, "GET" | "POST"))
             .then_some(MaintRoute::Hooks);
     }
+    if let Some(seg) = rest.strip_suffix("/usage-agent") {
+        return (server_segment_ok(seg) && query.is_none() && matches!(method, "GET" | "POST"))
+            .then_some(MaintRoute::UsageAgent);
+    }
     let seg = rest.strip_suffix("/update")?;
     if !server_segment_ok(seg) {
         return None;
@@ -148,6 +158,7 @@ pub fn maintenance_timeout(route: &MaintRoute, body: Option<&serde_json::Value>)
         MaintRoute::PowerCycle => POWER_CYCLE_TIMEOUT,
         MaintRoute::Stats => STATS_TIMEOUT,
         MaintRoute::Hooks => HOOKS_TIMEOUT,
+        MaintRoute::UsageAgent => USAGE_AGENT_TIMEOUT,
         MaintRoute::UpdateStart => {
             let ms = body
                 .and_then(|b| b.get("wait_ms"))
@@ -654,6 +665,14 @@ mod tests {
         assert_eq!(maintenance_route("POST", "/maintenance/servers//hooks"), None);
         assert_eq!(maintenance_route("POST", "/maintenance/servers/a/b/hooks"), None);
         assert_eq!(maintenance_timeout(&MaintRoute::Hooks, None), HOOKS_TIMEOUT);
+        // usage agent: same shape as the hooks route
+        assert_eq!(maintenance_route("GET", "/maintenance/servers/m4/usage-agent"), Some(MaintRoute::UsageAgent));
+        assert_eq!(maintenance_route("POST", "/maintenance/servers/m4/usage-agent"), Some(MaintRoute::UsageAgent));
+        assert_eq!(maintenance_route("DELETE", "/maintenance/servers/m4/usage-agent"), None);
+        assert_eq!(maintenance_route("GET", "/maintenance/servers/m4/usage-agent?token=x"), None);
+        assert_eq!(maintenance_route("POST", "/maintenance/servers/../usage-agent"), None);
+        assert_eq!(maintenance_route("POST", "/maintenance/servers/a/b/usage-agent"), None);
+        assert!(maintenance_timeout(&MaintRoute::UsageAgent, None) > Duration::from_secs(34));
         assert_eq!(maintenance_route("GET", "/agent/detail"), None);
     }
 

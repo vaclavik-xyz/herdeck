@@ -2,7 +2,8 @@
   // Maintenance: what an agent used to do from a terminal to keep herdeck
   // running — versions, where the runtime comes from (and making it a service
   // of this app), the D200 (restart / USB power-cycle), bridge updates and
-  // the subagent hooks on each bridge's machine (deckapp/hooks_relay.py).
+  // the subagent hooks and the usage limits helper on each bridge's machine
+  // (deckapp/hooks_relay.py, deckapp/usage_agent_relay.py).
   // Not a config section: it reads GET /maintenance through the Rust
   // `maintenance_call` proxy and acts through it, `runtime_service` and
   // `open_log`. All texts: maintenanceMessages.ts (en + cs).
@@ -13,13 +14,17 @@
   import {
     fetchMaintenance, restartDeck, powerCycleDeck, runBridgeUpdate, runtimeService, openLog,
     runtimeOrigin, unitOwner, versionRows, bridgeOffer, managedBridgeCommand, runHooksAction, hookState,
+    runUsageAgentAction, showsUsageAgent, usageAgentState,
     HOOK_AGENTS,
-    type BridgeUpdateView, type HookAgent, type HooksAction, type MaintenanceStatus, type ServiceAction,
+    type BridgeUpdateView, type HookAgent, type HooksAction, type MaintenanceStatus, type ServerStatus, type ServiceAction,
+    type UsageAgentStatus,
   } from "../maintenanceClient";
   import {
     MAINTENANCE_MESSAGES, bridgeUpdateText, d200StateText, deckOutcomeText, durationText,
-    hookStateText, hooksOutcomeText, originText, powerCycleReasonText,
+    hookStateText, hooksOutcomeText, originText, powerCycleReasonText, usageAgentOutcomeText, usageAgentStateText,
   } from "../maintenanceMessages";
+  import { healthState } from "../healthState.svelte";
+  import { showToast } from "../toastStore.svelte";
 
   let { invoke = null, pollMs = 5000, updateWaitMs = undefined }: {
     // Tauri `invoke`; null (browser preview / no runtime yet) shows nothing live.
@@ -31,6 +36,7 @@
   const lm = $derived(MAINTENANCE_MESSAGES[locale.lang]);
 
   let status = $state<MaintenanceStatus | null>(null);
+  let now = $state(Date.now());
   let loadError = $state("");
   let alive = true;
   onDestroy(() => { alive = false; });
@@ -40,9 +46,11 @@
     if (!call) return;
     const result = await fetchMaintenance(call);
     if (!alive) return;
+    now = Date.now();
     if (result.kind === "ok") {
       status = result.status;
       loadError = "";
+      askUsageAgents(result.status);
     } else {
       loadError = result.message;
     }
@@ -147,6 +155,59 @@
     loop?.kick();
   }
 
+  // --- usage limits helper (per bridge) ---
+  // GET /maintenance carries the relay's last answer (asked once per
+  // connection, so its file age is as old as that answer); this section asks
+  // each bridge once for a live status and keeps every answer it gets, with
+  // when it came, so "updated N ago" stays true.
+  let uaLive = $state<Record<string, { agent: UsageAgentStatus; at: number }>>({});
+  let uaCode = $state<Record<string, string>>({}); // the last action's code
+  let uaBusy = $state<Record<string, "install" | "uninstall">>({});
+  const uaAsked = new Set<string>();
+
+  function askUsageAgents(s: MaintenanceStatus, force = false): void {
+    const call = invoke;
+    if (!call) return;
+    for (const server of s.servers) {
+      if (!showsUsageAgent(server)) {
+        if (server.connected !== true) uaAsked.delete(server.id);
+        continue;
+      }
+      if (uaAsked.has(server.id) && !force) continue;
+      if (uaBusy[server.id]) continue;
+      uaAsked.add(server.id);
+      void runUsageAgentAction(call, server.id, "status").then((o) => {
+        if (alive && o.agent && !uaBusy[server.id]) uaLive[server.id] = { agent: o.agent, at: Date.now() };
+      });
+    }
+  }
+
+  function refreshAll(): void {
+    loop?.kick();
+    if (status) askUsageAgents(status, true);
+  }
+
+  const usageAgentOf = (server: ServerStatus): { agent: UsageAgentStatus; at: number | null } | null =>
+    uaLive[server.id] ?? (server.usageAgent ? { agent: server.usageAgent, at: null } : null);
+
+  async function usageAgent(server: string, action: "install" | "uninstall"): Promise<void> {
+    const call = invoke;
+    if (!call || uaBusy[server]) return;
+    uaBusy[server] = action;
+    delete uaCode[server];
+    const toastId = `usage-agent:${server}`;
+    showToast({ id: toastId, kind: "progress", text: fmt(action === "install" ? lm.ua_progress_install : lm.ua_progress_uninstall, { id: server }) });
+    const outcome = await runUsageAgentAction(call, server, action);
+    const text = usageAgentOutcomeText(outcome, action, server, lm);
+    // The toast outlives this section (it is the window's), so it always settles.
+    showToast({ id: toastId, kind: text.ok ? "success" : "error", text: text.text, ...(outcome.message ? { detail: outcome.message } : {}) });
+    if (!alive) return;
+    delete uaBusy[server];
+    if (outcome.agent) uaLive[server] = { agent: outcome.agent, at: Date.now() };
+    if (!outcome.ok) uaCode[server] = outcome.code;
+    loop?.kick();
+  }
+
   // --- copy ---
   let copied = $state("");
   async function copy(command: string): Promise<void> {
@@ -176,7 +237,7 @@
   <div class="toolbar">
     {#if loadError}<p class="note bad" role="alert">{fmt(lm.unreachable, { error: loadError })}</p>{/if}
     {#if !status && !loadError}<p class="note">{lm.loading}</p>{/if}
-    <button type="button" onclick={() => loop?.kick()} disabled={!invoke}>{lm.refresh}</button>
+    <button type="button" onclick={refreshAll} disabled={!invoke}>{lm.refresh}</button>
   </div>
 
   {#if status}
@@ -345,6 +406,38 @@
               {#if hooksBusy[server.id]}<p class="note">{lm.service_running}</p>{/if}
               {#if hooksNote[server.id]}<p class="note" class:bad={!hooksNote[server.id].ok} data-note="hooks">{hooksNote[server.id].text}</p>{/if}
             </div>
+            {@const ua = showsUsageAgent(server) ? usageAgentOf(server) : null}
+            {#if ua}
+              {@const uaState = usageAgentState(ua.agent, uaCode[server.id] ?? null)}
+              {@const busy = uaBusy[server.id]}
+              {@const empty = uaState !== "running" && healthState.usageBridgesEmpty.includes(server.id)}
+              <div class="usage-agent" class:attention={empty} data-usage-agent={server.id} data-state={uaState}>
+                <div class="hook-row">
+                  <span class="hooks-title" title={lm.ua_hint}>{lm.ua_heading}</span>
+                  <span class="dim" data-ua-state title={ua.agent.error ?? undefined}>{usageAgentStateText(ua.agent, uaCode[server.id] ?? null, lm, ua.at, now)}</span>
+                  {#if ua.agent.installed}
+                    <button
+                      type="button"
+                      data-action="usage-agent-uninstall"
+                      disabled={busy != null}
+                      title={fmt(lm.ua_remove_title, { id: server.id })}
+                      onclick={() => usageAgent(server.id, "uninstall")}
+                    >{busy === "uninstall" ? lm.ua_removing : lm.ua_remove}</button>
+                  {:else}
+                    <button
+                      type="button"
+                      class="primary"
+                      data-action="usage-agent-install"
+                      disabled={busy != null}
+                      title={fmt(lm.ua_install_title, { id: server.id })}
+                      onclick={() => usageAgent(server.id, "install")}
+                    >{busy === "install" ? lm.ua_installing : lm.ua_install}</button>
+                  {/if}
+                </div>
+                <p class="hint">{lm.ua_hint}</p>
+                {#if empty}<p class="note bad" data-ua-empty>{lm.ua_empty}</p>{/if}
+              </div>
+            {/if}
           {/if}
         </div>
       {:else}
@@ -387,6 +480,8 @@
   .hook-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); margin-top: var(--s2); }
   .hook-agent { min-width: 96px; color: var(--text); }
   .switch { min-width: 64px; }
+  .usage-agent { margin-top: var(--s3); }
+  .usage-agent.attention { margin-left: calc(-1 * var(--s3)); padding-left: calc(var(--s3) - 2px); border-left: 2px solid var(--sev-warning); }
   .switch.on { border-color: var(--accent-strong); color: var(--st-working); }
   .command { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); }
   .command code { flex: 1; min-width: 0; overflow-x: auto; padding: var(--s2); background: var(--field); border-radius: var(--r-control); font: var(--t-mono); white-space: nowrap; }

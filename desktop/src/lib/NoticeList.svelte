@@ -13,7 +13,7 @@
   import WarningOctagon from "phosphor-svelte/lib/WarningOctagon";
   import X from "phosphor-svelte/lib/X";
   import type { InvokeFn } from "./deckClient";
-  import { setHealthProblems } from "./healthState.svelte";
+  import { setHealthProblems, setUsageBridgesEmpty, usageBridgesEmpty } from "./healthState.svelte";
   import {
     bySeverity, configErrorSection, healthProblems,
     type HealthAction, type HealthProblem, type Severity,
@@ -206,6 +206,7 @@
     if (!fetch) {
       health = null;
       setHealthProblems([]);
+      setUsageBridgesEmpty([]);
       return;
     }
     const current = visibilityGatedLoop(async () => {
@@ -215,6 +216,7 @@
         health = raw;
         const found = healthProblems(raw, now);
         setHealthProblems(found);
+        setUsageBridgesEmpty(usageBridgesEmpty(raw));
         const pruned = pruneDismissals(dismissals, found.map((p) => p.key));
         if (pruned !== dismissals) {
           dismissals = pruned;
@@ -223,6 +225,7 @@
       } catch {
         health = null; // runtime not reachable: DeckView already says offline
         setHealthProblems([]);
+        setUsageBridgesEmpty([]);
       }
     }, () => intervalMs);
     loop = current;

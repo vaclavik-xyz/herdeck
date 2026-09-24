@@ -3,10 +3,26 @@
 // on the Maintenance entry of the settings navigation).
 import { worstSeverity, type HealthProblem, type Severity } from "./healthStatus";
 
-export const healthState = $state<{ problems: HealthProblem[] }>({ problems: [] });
+// `usageBridgesEmpty`: /health `usage.bridges_empty` — servers whose bridge
+// offers usage limits but sends no numbers (the Maintenance section points
+// their "Usage limits helper" row out).
+export const healthState = $state<{ problems: HealthProblem[]; usageBridgesEmpty: string[] }>({ problems: [], usageBridgesEmpty: [] });
 
 export function setHealthProblems(problems: HealthProblem[]): void {
   healthState.problems = problems;
+}
+
+export function setUsageBridgesEmpty(ids: string[]): void {
+  const cur = healthState.usageBridgesEmpty;
+  if (cur.length === ids.length && cur.every((id, i) => id === ids[i])) return;
+  healthState.usageBridgesEmpty = ids;
+}
+
+/** /health `usage.bridges_empty` (empty when absent: an older runtime). */
+export function usageBridgesEmpty(raw: unknown): string[] {
+  const usage = raw && typeof raw === "object" ? (raw as Record<string, unknown>).usage : null;
+  const list = usage && typeof usage === "object" ? (usage as Record<string, unknown>).bridges_empty : null;
+  return Array.isArray(list) ? list.filter((id): id is string => typeof id === "string") : [];
 }
 
 /** The Maintenance badge: how many problems (info facts are not problems;
