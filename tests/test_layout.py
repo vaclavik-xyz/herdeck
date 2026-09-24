@@ -705,3 +705,9 @@ def test_panel_overview_partial_outage_keeps_blocked_spotlight():
 def test_panel_overview_legacy_callers_treat_any_down_as_offline():
     pv = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"a"}, 1, None)
     assert pv.title == "Offline"
+
+
+def test_offline_panel_keeps_the_page_marker():
+    # A press still pages the (offline) tiles; the panel must say where you are.
+    pv = panel_overview(Counts(0, 0, 3, 0), 1, 2, {"dev"}, 3, None)
+    assert pv.solid and pv.page == (1, 2)

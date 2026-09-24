@@ -331,6 +331,7 @@ def panel_overview(
             solid=True,
             meta=down_for,
             hint=tr(lang, "panel.keep_running"),
+            page=page,  # a press still pages the (offline) tiles
         )
     if spotlight is not None:
         spot = spotlight if isinstance(spotlight, Spotlight) else Spotlight(*spotlight)

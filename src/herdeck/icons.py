@@ -845,7 +845,16 @@ def _panel_stats(draw, panel, pal, box, k) -> None:
     card_w = (x1 - x0 - gap * (n - 1)) / n
     card_h = min(74 * k, y1 - y0)
     top = y0 + (y1 - y0 - card_h) / 2
-    label_font, value_font = _font(11 * k), _font(34 * k)
+    value_font = _font(34 * k)
+    label_room = card_w - 30 * k
+    # The label font shrinks (11 -> 8 px) until the widest label fits the
+    # narrow Elgato cards ("NEČINNÝ" at 392 px) instead of truncating them all.
+    label_font, spacing = _font(11 * k), 0.8 * k
+    for size in range(11, 7, -1):
+        label_font, spacing = _font(size * k), (0.8 if size > 9 else 0.3) * k
+        widest = max(_spaced_len(draw, st.label.upper(), label_font, spacing) for st in panel.stats)
+        if widest <= label_room:
+            break
     for i, stat in enumerate(panel.stats):
         cx = x0 + i * (card_w + gap)
         draw.rounded_rectangle((cx, top, cx + card_w, top + card_h), radius=10 * k, fill=_P_CARD)
@@ -855,10 +864,10 @@ def _panel_stats(draw, panel, pal, box, k) -> None:
             (cx + 11 * k, dot_cy - r, cx + 11 * k + 2 * r, dot_cy + r),
             fill=COLORS.get(stat.color, _P_INK),
         )
-        label = _truncate_spaced(draw, stat.label.upper(), label_font, card_w - 32 * k, 0.8 * k)
+        label = _truncate_spaced(draw, stat.label.upper(), label_font, label_room, spacing)
         _draw_spaced(
             draw, (cx + 24 * k, dot_cy - _ink_mid(label_font, "H")), label, label_font,
-            pal["mute"], 0.8 * k,
+            pal["mute"], spacing,
         )
         value = _truncate(draw, str(stat.value), value_font, card_w - 22 * k)
         draw.text((cx + 11 * k, top + card_h - 12 * k), value, font=value_font,
@@ -888,15 +897,22 @@ def _panel_gauges(draw, panel, pal, box, k) -> None:
         rx = gx + col_w - pct_w - 10 * k
         label = f"{gauge.label} · {gauge.window}"
         label_w = min(draw.textlength(label, font=label_font), col_w * 0.62)
-        for text, font, fill in ((gauge.pace, pace_font, COLORS["amber"]),
-                                 (gauge.hint, hint_font, pal["mute"])):
-            if not text:
-                continue
-            tw = draw.textlength(text, font=font)
-            if rx - tw < gx + label_w + 10 * k:
-                continue  # no room next to the label: the percentage matters more
-            _text_mid(draw, rx - tw, cy, text, font, fill)
-            rx -= tw + 10 * k
+        # A reset hint that does not fit whole drops its leading word
+        # ("reset 14:09" -> "14:09") before it is dropped altogether.
+        short_hint = gauge.hint.split(" ", 1)[-1] if gauge.hint else ""
+        for options, font, fill in (((gauge.pace,), pace_font, COLORS["amber"]),
+                                    ((gauge.hint, short_hint), hint_font, pal["mute"])):
+            for text in options:
+                if not text:
+                    continue
+                tw = draw.textlength(text, font=font)
+                # the label keeps its full width (+ the 6k truncation margin):
+                # the window name matters more than the hint
+                if rx - tw - 16 * k < gx + label_w:
+                    continue
+                _text_mid(draw, rx - tw, cy, text, font, fill)
+                rx -= tw + 10 * k
+                break
         _text_mid(draw, gx, cy, _truncate(draw, label, label_font, rx - gx - 6 * k), label_font,
                   pal["ink"])
         bar_y = gy + row_h - 6 * k

@@ -87,10 +87,17 @@ def tile_accessible_label(tile, lang: str = "en") -> str:
     return " · ".join(parts) or tr(lang, "a11y.empty_tile", n=tile.index + 1)
 
 
+# Longer first lines (an exception text) wrap as body text: a headline is one
+# line and would cut off the cause the user needs.
+_HELD_HEADLINE_MAX = 28
+
+
 def _held_panel(panel_view, title: str, lines: list[str], color: str):
-    """A short status message: the chip says what happened, the first line
-    is the headline, any further lines sit under it."""
-    return panel_view(title, lines[1:], color, headline=lines[0] if lines else "")
+    """A short status message: the chip says what happened; a short first line
+    is the headline with any further lines under it, a long one wraps as body."""
+    if lines and len(lines[0]) <= _HELD_HEADLINE_MAX:
+        return panel_view(title, lines[1:], color, headline=lines[0])
+    return panel_view(title, list(lines), color)
 
 
 class DeckApp:
