@@ -137,8 +137,10 @@ def test_runtime_with_broken_config_shows_error_not_demo(broken, caplog):
         assert app.source_name == "config_error"
         assert not isinstance(app._source, MockSource)
         rs = app._orch.render()
-        assert rs.panel.title == "CONFIG ERROR"
-        assert rs.panel.lines == ["no token for 'local'", "see Maintenance"]
+        assert rs.panel.title == "Config error"
+        assert rs.panel.headline == "No token for local"
+        assert rs.panel.lines == ["Fix it in the app → Maintenance"]
+        assert rs.panel.solid
         assert all(tile.label == "" for tile in rs.tiles)  # no (fake) agents
         health = _get(app, "/health")
         assert health["source"] == "config_error"
@@ -157,8 +159,9 @@ def test_error_panel_speaks_the_configured_language(broken):
     app = srv.create_app(serve=False)
     try:
         rs = app._orch.render()
-        assert rs.panel.title == "CHYBA CONFIGU"
-        assert rs.panel.lines == ["chybí token 'local'", "viz Údržba"]
+        assert rs.panel.title == "Chyba configu"
+        assert rs.panel.headline == "Chybí token pro local"
+        assert rs.panel.lines == ["Oprav v aplikaci → Údržba"]
     finally:
         app.close()
 
@@ -226,7 +229,9 @@ def test_orchestrator_generic_config_error_panel():
     orch = Orchestrator(source.config)
     source.apply_to(orch)
     rs = orch.render()
-    assert rs.panel.lines == ["config not loadable", "see Maintenance"]
+    assert rs.panel.headline == "Config can't be loaded"
+    assert rs.panel.lines == ["Fix it in the app → Maintenance"]
+    assert rs.panel.hint == "the deck recovers once it's fixed"
     assert source.connected is False and source.summary()["agents"] == 0
 
 

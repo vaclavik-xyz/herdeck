@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from .driver.base import PanelGauge, PanelView, TileView
+from .driver.base import PanelGauge, PanelStat, PanelView, TileView
 from .i18n import tr
 from .model import AgentState, Status
 from .project_icons import ProjectIconStore, tile_icon_fields
@@ -254,28 +254,62 @@ def summary(agents) -> Counts:
     return c
 
 
+@dataclass
+class Spotlight:
+    """The overview's NEEDS YOU subject: the longest-waiting blocked agent."""
+
+    label: str
+    elapsed: str
+    detail: str = ""  # "tab · agent type", shown under the name
+    others: tuple[tuple[str, str], ...] = ()  # the next blocked agents (label, elapsed)
+
+
+def _status_stat(counts: Counts, lang: str, colors: dict[str, str]) -> list[PanelStat]:
+    rows = [(Status.WORKING, counts.working), (Status.WAITING, counts.waiting)]
+    rows += [(Status.IDLE, counts.idle), (Status.DONE, counts.done)]
+    return [
+        PanelStat(tr(lang, f"status.{status.value}"), n, colors.get(status.value, status_color(status)))
+        for status, n in rows
+        # held (herdwatch) panes are rare: their card appears only when used
+        if status is not Status.WAITING or n
+    ]
+
+
+def _compact_counts(counts: Counts) -> str:
+    pending = f" · P{counts.waiting}" if counts.waiting else ""
+    return f"W{counts.working}{pending} · I{counts.idle} · D{counts.done}"
+
+
 def panel_overview(
     counts: Counts,
     page_index: int,
     page_count: int,
     down: set[str],
     total: int,
-    spotlight: tuple[str, str] | None,
+    spotlight: Spotlight | tuple[str, str] | None,
     lang: str = "en",
-    usage_lines: list[str] | None = None,
     usage_gauges: list[PanelGauge] | None = None,
     servers: int | None = None,
+    *,
+    colors: dict[str, str] | None = None,
+    sent: str = "",
+    down_for: str = "",
+    left: int | None = None,
 ) -> PanelView:
-    """The overview status panel.
+    """The overview status panel: calm counts, NEEDS YOU, or OFFLINE.
 
     ``servers`` is the number of configured servers. When it is given and only
     SOME of them are in ``down`` (a partial outage), the normal calm/spotlight
     panel renders and a compact ``note`` names the offline server(s); the full
     OFFLINE panel is kept for "every server down". ``servers=None`` keeps the
-    legacy rule (any down server -> OFFLINE).
+    legacy rule (any down server -> OFFLINE). ``sent`` names the agent just
+    answered (the header acknowledges it while the bridge catches up);
+    ``down_for`` is how long the full outage has lasted; ``left`` is how many
+    blocked agents still await an answer (answered episodes excluded — the
+    bridge's status change lags the answer), defaulting to ``counts.blocked``.
     """
-    page_line = -1  # which line carries the "· p/n" page marker
-    gauges: list[PanelGauge] = []
+    colors = colors or {}
+    page = (page_index, page_count) if page_count > 1 else None
     partial = bool(down) and servers is not None and len(down) < servers
     note = ""
     if partial:
@@ -285,47 +319,70 @@ def panel_overview(
             else tr(lang, "servers_offline", n=len(down))
         )
     if down and not partial:
-        title, lines, color = tr(lang, "offline_title"), [tr(lang, "reconnecting")], "red"
+        sub = ", ".join(sorted(down))
         if counts.blocked:
             # one dead server must not hide that agents are waiting for input
-            lines.append(tr(lang, "blocked_count", n=counts.blocked))
-    elif spotlight is not None:
-        label, elapsed = spotlight
-        # With several agents blocked the deck must not look like just one:
-        # the spotlight names the oldest, the title carries the count.
-        title = (
-            tr(lang, "needs_you_one")
-            if counts.blocked <= 1
-            else tr(lang, "needs_you_many", n=counts.blocked)
+            sub = f"{sub} · {tr(lang, 'blocked_count', n=counts.blocked)}"
+        return PanelView(
+            title=tr(lang, "offline_title"),
+            headline=tr(lang, "reconnecting"),
+            lines=[sub],
+            color=colors.get("offline", "red"),
+            solid=True,
+            meta=down_for,
+            hint=tr(lang, "panel.keep_running"),
         )
-        lines = [label, tr(lang, "blocked_for", elapsed=elapsed).rstrip()]
-        color = "amber"
+    if spotlight is not None:
+        spot = spotlight if isinstance(spotlight, Spotlight) else Spotlight(*spotlight)
+        # With several agents blocked the deck must not look like just one:
+        # the headline names the oldest, the chip carries the count.
+        many = counts.blocked > 1
+        if many and spot.others:
+            items = " · ".join(f"{label} {elapsed}".strip() for label, elapsed in spot.others[:2])
+            lines = [tr(lang, "panel.next", items=items)]
+        else:
+            lines = [spot.detail] if spot.detail else []
+        if sent:
+            n = counts.blocked if left is None else left
+            meta = tr(lang, "panel.left", n=n) if n else ""
+        elif many:
+            meta = tr(lang, "panel.longest", t=spot.elapsed)
+        else:
+            meta = spot.elapsed
+        return PanelView(
+            title=tr(lang, "needs_you_many", n=counts.blocked) if many else tr(lang, "needs_you_one"),
+            headline=spot.label,
+            lines=lines,
+            color=colors.get("blocked", "amber"),
+            solid=True,
+            meta=meta,
+            hint=tr(lang, "panel.press_answer_longest" if many else "panel.press_answer"),
+            page=page,
+            note=note,
+            sent=sent,
+        )
+    if page is not None:
+        hint = tr(lang, "panel.press_next_page")
+    elif usage_gauges:
+        hint = tr(lang, "panel.press_limits")
     else:
-        title = tr(lang, "agents_total", n=total)
-        # P = panes held pending on background work (herdwatch); shown only
-        # when non-zero — the state is empty most of the time.
-        pending = f" · P{counts.waiting}" if counts.waiting else ""
-        lines = [
-            f"W{counts.working}{pending} · I{counts.idle} · D{counts.done}",
-            tr(lang, "online"),
-        ]
-        color = "grey"
-        if partial:
-            # "online" would be false with a server down; the note says which.
-            lines = lines[:1]
-        if usage_lines:
-            # The calm panel has spare body lines: swap the (implicit) "online"
-            # line for provider usage; the page marker moves to the counts line.
-            # Blocked/offline panels keep their priority — no usage there.
-            # A partial-outage note takes the last of the 3 body lines, so one
-            # usage line gives way to it (the gauges still carry every window).
-            room = _DETAIL_MAX_LINES - 1 - (1 if note else 0)
-            lines = [lines[0], *usage_lines[:room]]
-            page_line = 0
-            gauges = usage_gauges or []
-    if page_count > 1 and lines:
-        lines[page_line] = f"{lines[page_line]} · {page_index + 1}/{page_count}"
-    return PanelView(title=title, lines=lines, color=color, gauges=gauges, note=note)
+        hint = ""
+    view = PanelView(
+        title=tr(lang, "panel.all_clear") if total else tr(lang, "panel.no_agents"),
+        chip_dot="green" if total else "",
+        meta=tr(lang, "agents_total", n=total) if total else "",
+        hint=hint,
+        page=page,
+        note=note,
+        sent=sent,
+    )
+    if usage_gauges:
+        # Limits take the main area; the counts shrink into the header.
+        view.gauges = list(usage_gauges)
+        view.meta = tr(lang, "panel.counts_of", counts=_compact_counts(counts), n=total)
+    else:
+        view.stats = _status_stat(counts, lang, colors)
+    return view
 
 
 def _fmt_reset(resets_at: str | None, now) -> str:
@@ -365,15 +422,6 @@ def _provider_name(provider: str) -> str:
     return provider.capitalize() if provider.islower() else provider
 
 
-def usage_summary_lines(data, max_providers: int = 2) -> list[str]:
-    """One compact panel line per provider: 'Claude 5h 13% · 7d 43%'."""
-    lines = []
-    for p in data[:max_providers]:
-        parts = " · ".join(f"{w.label} {w.used_percent}%" for w in p.windows[:2])
-        lines.append(f"{_provider_name(p.provider)} {parts}")
-    return lines
-
-
 def _provider_gauge_color(provider: str) -> str:
     return {"claude": "orange", "codex": "teal"}.get(provider.lower(), "violet")
 
@@ -402,30 +450,6 @@ def usage_detail_pages(data) -> int:
     """How many panel pages the detail spans (one line per provider window)."""
     count = sum(len(p.windows) for p in data)
     return max(1, math.ceil(count / _DETAIL_MAX_LINES))
-
-
-def usage_detail_lines(
-    data, now=None, max_lines: int = _DETAIL_MAX_LINES, page: int = 0, lang: str = "en"
-) -> list[str]:
-    """One panel page of per-window detail lines: 'Claude 5h 13% → 01:00'.
-
-    Every provider window gets a line; with more windows than the panel's
-    3-line body the caller pages through them (repeated panel presses) —
-    a silent cap would make e.g. Codex's weekly reset unobtainable. The
-    arrow is a deliberate U+2192 — the panel font has no glyph for the
-    nicer ⟳/↻ (they render as tofu boxes on the deck)."""
-    lines: list[str] = []
-    for p in data:
-        for w in p.windows:
-            reset = _fmt_reset(w.resets_at, now)
-            tail = f" → {reset}" if reset else ""
-            pace = _pace_hint(w, lang)
-            if pace:
-                tail += f" · {pace}"
-            lines.append(f"{_provider_name(p.provider)} {w.label} {w.used_percent}%{tail}")
-    page = min(max(0, page), usage_detail_pages(data) - 1)
-    start = page * max_lines
-    return lines[start : start + max_lines]
 
 
 def usage_detail_gauges(data, now=None, page: int = 0, lang: str = "en") -> list[PanelGauge]:
@@ -609,21 +633,30 @@ def tile_status_text(agent: AgentState, lang: str = "en", down: bool = False) ->
     return tr(lang, f"status.{agent.status.value}")
 
 
-def panel_detail(agent: AgentState, text: str, lang: str = "en") -> PanelView:
-    # Logical prompt lines (options stripped); the renderer wraps them to the
-    # panel's pixel width so long prompts stay readable without losing words.
+def panel_detail(
+    agent: AgentState, text: str, lang: str = "en", elapsed: str = "", color: str | None = None
+) -> PanelView:
+    """The drill panel: the agent's status chip (with ``elapsed``), who it is,
+    and its prompt / pane text. Logical prompt lines (options stripped); the
+    renderer wraps them to the panel's pixel width so long prompts stay
+    readable without losing words."""
     raw_lines, lines = _detail_lines(text) if text else ([], [])
     if agent.status is Status.BLOCKED and not raw_lines:
         lines = [tr(lang, "reading_prompt")]
+    headline = ""
     if agent.status is Status.WAITING and agent.waiting_on:
         # The full holder label leads the drill detail — the tile only fits
         # the short status word.
         label = agent.waiting_on.replace("⏳", "").strip()
-        lines = [tr(lang, "waiting_on", label=label), *lines]
+        headline = tr(lang, "waiting_on", label=label)
     elif agent.status is Status.WORKING and agent.progress:
-        lines = [agent.progress, *lines]
+        headline = agent.progress
+    status = tile_status_text(agent, lang)
     return PanelView(
-        title=f"{agent.agent_type}: {agent.label}",
+        title=f"{status} · {elapsed}" if elapsed else status,
         lines=lines,
-        color=status_color(agent.status),
+        color=color or status_color(agent.status),
+        headline=headline,
+        meta=f"{agent.agent_type} · {agent.label}" if agent.agent_type else agent.label,
+        hint=tr(lang, "panel.answer_on_keys") if agent.status is Status.BLOCKED else "",
     )

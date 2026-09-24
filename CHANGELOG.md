@@ -6,6 +6,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Redesigned status panel (the D200's wide window, the two Elgato keys, the
+  panel in the app and the web simulator). Every state now shares one layout:
+  a state chip and a short fact on top, the main content in the middle, and
+  what a press does plus page dots at the bottom. The calm overview shows
+  count cards (or the usage gauges), **Needs you** fills the panel amber with
+  the waiting agent's name, **Offline** and **Config error** fill it red, and
+  the agent detail shows its status chip, who it is and the prompt. The "▲"
+  markers and the `· 1/2` text suffix are gone. The panel is drawn at 2× and
+  downsampled for smooth edges.
+
 ## [0.11.0] - 2026-09-24
 
 ### Added

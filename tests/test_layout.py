@@ -210,73 +210,108 @@ def test_tileview_server_fields_default_none():
 def test_panel_overview_offline_takes_priority():
     pv = panel_overview(Counts(1, 0, 0, 0), 0, 1, {"srv"}, 5, ("api", "2m"))
     assert isinstance(pv, PanelView)
-    assert pv.title == "OFFLINE"
+    assert pv.title == "Offline"
+    assert pv.headline == "Reconnecting…"
     assert pv.color == "red"
+    assert pv.solid
+
+
+def test_panel_overview_offline_reports_how_long_it_has_been_down():
+    pv = panel_overview(Counts(0, 0, 0, 0), 0, 1, {"srv"}, 1, None, down_for="2m")
+    assert pv.meta == "2m"
+    assert pv.lines == ["srv"]
 
 
 def test_panel_overview_blocked_spotlight():
     pv = panel_overview(Counts(1, 3, 6, 0), 0, 1, set(), 11, ("macdoktor-crm", "4m"))
-    assert pv.title == "▲ needs you"
-    assert pv.lines[0] == "macdoktor-crm"
-    assert pv.lines[1] == "blocked 4m"
+    assert pv.title == "Needs you"
+    assert pv.headline == "macdoktor-crm"
+    assert pv.meta == "4m"
     assert pv.color == "amber"
+    assert pv.solid
+
+
+def test_panel_overview_spotlight_uses_the_themed_blocked_colour():
+    pv = panel_overview(
+        Counts(1, 0, 0, 0), 0, 1, set(), 1, ("api", "2m"), colors={"blocked": "orange"}
+    )
+    assert pv.color == "orange"
 
 
 def test_panel_overview_blocked_without_elapsed():
     pv = panel_overview(Counts(1, 0, 0, 0), 0, 1, set(), 1, ("api", ""))
-    assert pv.lines[1] == "blocked"
+    assert pv.headline == "api"
+    assert pv.meta == ""
 
 
 def test_panel_overview_calm():
     pv = panel_overview(Counts(0, 3, 6, 2), 0, 1, set(), 11, None)
-    assert pv.title == "11 agents"
-    assert pv.lines[0] == "W3 · I6 · D2"
-    assert pv.lines[1] == "online"
+    assert pv.title == "All clear"
+    assert pv.chip_dot == "green"
+    assert pv.meta == "11 agents"
+    assert [(s.label, s.value) for s in pv.stats] == [("WORKING", 3), ("IDLE", 6), ("DONE", 2)]
     assert pv.color == "grey"
+    assert not pv.solid
 
 
 def test_panel_overview_page_suffix_only_when_multipage():
     multi = panel_overview(Counts(0, 1, 0, 0), 1, 3, set(), 5, None)
-    assert multi.lines[-1].endswith(" · 2/3")
+    assert multi.page == (1, 3)
     single = panel_overview(Counts(0, 1, 0, 0), 0, 1, set(), 5, None)
-    assert "/" not in single.lines[-1]
+    assert single.page is None
 
 
-def test_panel_overview_calm_swaps_online_for_usage_lines():
-    usage = ["Claude 5h 19% · 7d 43%", "Codex 5h 2% · 7d 30%"]
-    pv = panel_overview(Counts(0, 3, 6, 2), 0, 1, set(), 11, None, usage_lines=usage)
-    assert pv.lines == ["W3 · I6 · D2", *usage]  # "online" replaced, counts kept
+def test_panel_overview_calm_swaps_stat_cards_for_usage_gauges():
+    from herdeck.driver.base import PanelGauge
+
+    gauges = [PanelGauge("Claude", "5H", 19), PanelGauge("Codex", "5H", 2)]
+    pv = panel_overview(Counts(0, 3, 6, 2), 0, 1, set(), 11, None, usage_gauges=gauges)
+    assert pv.gauges == gauges
+    assert pv.stats == []
+    assert pv.meta == "W3 · I6 · D2 of 11"  # counts kept, shrunk into the header
 
 
-def test_panel_overview_usage_moves_page_marker_to_counts_line():
-    usage = ["Claude 5h 19% · 7d 43%"]
-    pv = panel_overview(Counts(0, 1, 0, 0), 1, 3, set(), 5, None, usage_lines=usage)
-    assert pv.lines[0] == "W1 · I0 · D0 · 2/3"
-    assert pv.lines[1] == usage[0]  # the marker never glues onto a usage line
+def test_panel_overview_usage_keeps_page_marker_off_the_gauges():
+    from herdeck.driver.base import PanelGauge
+
+    gauges = [PanelGauge("Claude", "5H", 19)]
+    pv = panel_overview(Counts(0, 1, 0, 0), 1, 3, set(), 5, None, usage_gauges=gauges)
+    assert pv.page == (1, 3)
+    assert pv.meta == "W1 · I0 · D0 of 5"
+    assert pv.gauges == gauges
 
 
 def test_panel_overview_usage_hidden_when_blocked_or_offline():
-    usage = ["Claude 5h 19%"]
-    blocked = panel_overview(Counts(1, 0, 0, 0), 0, 1, set(), 1, ("api", "2m"), usage_lines=usage)
-    assert all("Claude" not in ln for ln in blocked.lines)
-    offline = panel_overview(Counts(0, 0, 0, 0), 0, 1, {"srv"}, 1, None, usage_lines=usage)
-    assert all("Claude" not in ln for ln in offline.lines)
+    from herdeck.driver.base import PanelGauge
+
+    gauges = [PanelGauge("Claude", "5H", 19)]
+    blocked = panel_overview(Counts(1, 0, 0, 0), 0, 1, set(), 1, ("api", "2m"), usage_gauges=gauges)
+    assert blocked.gauges == []
+    offline = panel_overview(Counts(0, 0, 0, 0), 0, 1, {"srv"}, 1, None, usage_gauges=gauges)
+    assert offline.gauges == []
 
 
 def test_panel_detail_with_and_without_text():
     p = panel_detail(
         a("p1", Status.BLOCKED, agent_type="claude", label="api"), "Allow edit to config.py?"
     )
-    assert "claude" in p.title and "api" in p.title
+    assert "claude" in p.meta and "api" in p.meta
     assert p.lines and "Allow edit" in p.lines[0]
     assert p.color == "amber"
+    assert p.hint == "answer on the keys"
     p2 = panel_detail(a("p1", Status.WORKING), "")
     assert p2.lines == []  # no text yet
+    assert p2.hint == ""
+
+
+def test_panel_detail_title_carries_the_elapsed_time():
+    p = panel_detail(a("p1", Status.BLOCKED, agent_type="claude", label="api"), "", elapsed="55s")
+    assert p.title == "BLOCKED · 55s"
 
 
 def test_panel_detail_blocked_without_text_shows_loading_line():
     p = panel_detail(a("p1", Status.BLOCKED, agent_type="claude", label="api"), "")
-    assert p.lines == ["reading prompt..."]
+    assert p.lines == ["Reading the prompt…"]
 
 
 def test_panel_detail_shows_question_not_option_lines():
@@ -372,30 +407,50 @@ def test_spotlight_title_carries_the_blocked_count():
     """Three blocked agents must not look identical to one
     (audit: blocked-count-spotlight)."""
     pv = panel_overview(Counts(3, 1, 0, 0), 0, 1, set(), 4, ("api", "5m"))
-    assert pv.title == "▲ 3 need you"
-    assert pv.lines[0] == "api"  # the oldest blocked agent stays spotlighted
+    assert pv.title == "3 need you"
+    assert pv.headline == "api"  # the oldest blocked agent stays spotlighted
+    assert pv.meta == "longest 5m"
     single = panel_overview(Counts(1, 1, 0, 0), 0, 1, set(), 2, ("api", "5m"))
-    assert single.title == "▲ needs you"
+    assert single.title == "Needs you"
+
+
+def test_spotlight_lists_the_next_blocked_agents_or_the_detail():
+    from herdeck.layout import Spotlight
+
+    others = (("web", "3m"), ("db", "1m"), ("x", "1s"))
+    many = panel_overview(
+        Counts(3, 0, 0, 0), 0, 1, set(), 3, Spotlight("api", "5m", "t2 · claude", others)
+    )
+    assert many.lines == ["next: web 3m · db 1m"]  # at most two named
+    one = panel_overview(Counts(1, 0, 0, 0), 0, 1, set(), 1, Spotlight("api", "5m", "t2 · claude"))
+    assert one.lines == ["t2 · claude"]
+
+
+def test_spotlight_acknowledges_a_sent_answer():
+    pv = panel_overview(Counts(2, 0, 0, 0), 0, 1, set(), 2, ("api", "5m"), sent="web")
+    assert pv.sent == "web"
+    assert pv.meta == "2 left"
 
 
 def test_offline_panel_still_reports_blocked_agents():
     pv = panel_overview(Counts(2, 0, 0, 0), 0, 1, {"down-server"}, 2, ("api", "5m"))
-    assert pv.title == "OFFLINE"
-    assert "▲ 2 blocked" in pv.lines
+    assert pv.title == "Offline"
+    assert pv.lines == ["down-server · 2 waiting for you"]
 
 
 def test_panel_overview_renders_czech_when_asked():
     pv = panel_overview(Counts(2, 1, 0, 0), 0, 1, set(), 3, ("api", "4m"), lang="cs")
-    assert pv.title == "▲ čeká: 2"
-    assert pv.lines[1] == "čeká 4m"
+    assert pv.title == "Čeká na tebe: 2"
+    assert pv.meta == "nejdéle 4m"
     offline = panel_overview(Counts(1, 0, 0, 0), 0, 1, {"srv"}, 1, None, lang="cs")
-    assert offline.lines[0] == "připojuji…"
-    assert offline.lines[1] == "▲ blokováno: 1"
+    assert offline.headline == "Připojuji…"
+    assert offline.lines == ["srv · čeká na tebe: 1"]
 
 
 def test_panel_overview_default_language_stays_english():
     pv = panel_overview(Counts(0, 1, 1, 0), 0, 1, set(), 2, None)
-    assert pv.title == "2 agents"
+    assert pv.title == "All clear"
+    assert pv.meta == "2 agents"
 
 
 def test_waiting_ranks_between_working_and_idle():
@@ -554,9 +609,21 @@ def test_tile_status_text_clips_a_long_state_label():
 
 def test_panel_overview_counts_show_pending_only_when_nonzero():
     pv = panel_overview(Counts(0, 2, 3, 1, waiting=1), 0, 1, set(), 7, None)
-    assert pv.lines[0] == "W2 · P1 · I3 · D1"
+    assert [(s.label, s.value) for s in pv.stats] == [
+        ("WORKING", 2), ("WAITING", 1), ("IDLE", 3), ("DONE", 1)
+    ]
     pv = panel_overview(Counts(0, 2, 3, 1), 0, 1, set(), 6, None)
-    assert pv.lines[0] == "W2 · I3 · D1"
+    assert [s.label for s in pv.stats] == ["WORKING", "IDLE", "DONE"]
+
+
+def test_panel_overview_compact_counts_show_pending_only_when_nonzero():
+    from herdeck.driver.base import PanelGauge
+
+    gauges = [PanelGauge("Claude", "5H", 19)]
+    pv = panel_overview(Counts(0, 2, 3, 1, waiting=1), 0, 1, set(), 7, None, usage_gauges=gauges)
+    assert pv.meta == "W2 · P1 · I3 · D1 of 7"
+    pv = panel_overview(Counts(0, 2, 3, 1), 0, 1, set(), 6, None, usage_gauges=gauges)
+    assert pv.meta == "W2 · I3 · D1 of 6"
 
 
 def test_panel_detail_leads_with_waiting_label():
@@ -566,17 +633,17 @@ def test_panel_detail_leads_with_waiting_label():
         AgentKey("dev", "p1"), "claude", "api", Status.WAITING, waiting_on="⏳ review +1"
     )
     pv = panel_detail(agent, "", lang="en")
-    assert pv.lines[0] == "waiting on: review +1"
+    assert pv.headline == "Waiting on review +1"
     assert pv.color == "violet"
     pv_cs = panel_detail(agent, "", lang="cs")
-    assert pv_cs.lines[0] == "čeká na: review +1"
+    assert pv_cs.headline == "Čeká na review +1"
 
 
 def test_panel_detail_leads_with_active_progress():
     agent = AgentState(
         AgentKey("dev", "p1"), "claude", "api", Status.WORKING, progress="2/5 Run tests"
     )
-    assert panel_detail(agent, "").lines == ["2/5 Run tests"]
+    assert panel_detail(agent, "").headline == "2/5 Run tests"
 
 
 def test_t3_project_fallback_does_not_display_workspace_path():
@@ -592,7 +659,8 @@ def test_t3_project_fallback_does_not_display_workspace_path():
 
 def test_panel_overview_all_servers_down_keeps_offline_panel():
     pv = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"a", "b"}, 1, None, servers=2)
-    assert pv.title == "OFFLINE"
+    assert pv.title == "Offline"
+    assert pv.lines == ["a, b"]
     assert pv.color == "red"
     assert pv.note == ""
 
@@ -600,24 +668,22 @@ def test_panel_overview_all_servers_down_keeps_offline_panel():
 def test_panel_overview_partial_outage_keeps_calm_panel_with_usage():
     from herdeck.driver.base import PanelGauge
 
-    usage = ["Codex 5h 100%", "Claude 5h 17%"]
     gauges = [PanelGauge("Codex", "5H", 100), PanelGauge("Claude", "5H", 17)]
     pv = panel_overview(
         Counts(0, 2, 1, 0), 1, 2, {"t3-headless"}, 3, None,
-        usage_lines=usage, usage_gauges=gauges, servers=2,
+        usage_gauges=gauges, servers=2,
     )
-    assert pv.title == "3 agents"
-    assert pv.color == "grey"  # not the red offline panel
+    assert pv.title == "All clear"
+    assert pv.color == "grey" and not pv.solid  # not the red offline panel
     assert pv.gauges == gauges
-    assert pv.lines[0] == "W2 · I1 · D0 · 2/2"  # counts + page marker survive
-    assert pv.lines[1] == usage[0]
+    assert pv.meta == "W2 · I1 · D0 of 3"  # counts survive
+    assert pv.page == (1, 2)  # page marker survives
     assert pv.note == "t3-headless offline"
-    assert len(pv.lines) + 1 <= 3  # the note fits the 3-line body budget
 
 
-def test_panel_overview_partial_outage_without_usage_drops_online():
+def test_panel_overview_partial_outage_without_usage_keeps_stat_cards():
     pv = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"t3"}, 1, None, servers=2)
-    assert pv.lines == ["W1 · I0 · D0"]  # "online" would be a lie
+    assert [(s.label, s.value) for s in pv.stats] == [("WORKING", 1), ("IDLE", 0), ("DONE", 0)]
     assert pv.note == "t3 offline"
 
 
@@ -630,12 +696,12 @@ def test_panel_overview_partial_outage_counts_several_servers():
 
 def test_panel_overview_partial_outage_keeps_blocked_spotlight():
     pv = panel_overview(Counts(2, 0, 0, 0), 0, 1, {"t3"}, 2, ("api", "5m"), servers=2)
-    assert pv.title == "▲ 2 need you"
-    assert pv.lines == ["api", "blocked 5m"]
+    assert pv.title == "2 need you"
+    assert pv.headline == "api"
     assert pv.color == "amber"
     assert pv.note == "t3 offline"
 
 
 def test_panel_overview_legacy_callers_treat_any_down_as_offline():
     pv = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"a"}, 1, None)
-    assert pv.title == "OFFLINE"
+    assert pv.title == "Offline"

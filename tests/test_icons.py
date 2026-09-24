@@ -224,22 +224,29 @@ def test_theme_status_color_name_renders_distinct_from_dim(tmp_path):
 
 
 def test_compose_panel_uses_theme_color_background():
-    from herdeck.driver.base import PanelView
-    from herdeck.icons import compose_panel
+    from herdeck.driver.base import COLORS, PanelView
+    from herdeck.icons import _P_BG, compose_panel
 
-    themed = compose_panel(PanelView("needs you", [], "pink"))
-    default = compose_panel(PanelView("agents", [], "grey"))
+    themed = compose_panel(PanelView("Needs you", [], "pink", solid=True))
+    amber = compose_panel(PanelView("Needs you", [], "amber", solid=True))
+    calm = compose_panel(PanelView("All clear", [], "grey"))
 
-    assert themed.getpixel((0, 0)) != default.getpixel((0, 0))
+    assert themed.getpixel((0, 0)) == COLORS["pink"]  # a solid panel fills with its tone
+    assert amber.getpixel((0, 0)) == COLORS["amber"]
+    assert calm.getpixel((0, 0)) == _P_BG  # the calm panel sits on the dark background
+
+
+def _rail_rows(image, x, color):
+    return [y for y in range(image.height) if image.getpixel((x, y)) == color]
 
 
 def test_compose_usage_panel_draws_instrument_cards_and_rails():
-    from herdeck.driver.base import PanelGauge, PanelView
-    from herdeck.icons import compose_panel
+    from herdeck.driver.base import COLORS, PanelGauge, PanelView
+    from herdeck.icons import _P_BG, _P_CARD, compose_panel
 
     panel = PanelView(
-        "4 agents",
-        ["W2 · I2 · D0"],
+        "All clear",
+        meta="W2 · I2 · D0 of 4",
         gauges=[
             PanelGauge("Claude", "5H", 50, color="orange"),
             PanelGauge("Claude", "7D", 70, color="orange"),
@@ -248,34 +255,42 @@ def test_compose_usage_panel_draws_instrument_cards_and_rails():
         ],
     )
     image = compose_panel(panel)
+    colors = {image.getpixel((x, y)) for x in range(image.width) for y in range(image.height)}
 
-    assert image.getpixel((0, 0)) == (49, 55, 65)  # lighter slate usage canvas
-    assert image.getpixel((18, 58)) == (66, 73, 85)  # first instrument card
-    assert image.getpixel((28, 107)) == (220, 115, 35)  # Claude rail
-    assert image.getpixel((200, 107)) == (104, 112, 126)  # unused rail segment
+    assert image.getpixel((0, 0)) == _P_BG  # calm canvas
+    assert COLORS["orange"] in colors  # Claude 50%: the provider's own rail colour
+    assert COLORS["amber"] in colors  # 70% escalates to amber
+    assert COLORS["teal"] in colors  # Codex 10%
+    assert COLORS["red"] in colors  # 90% escalates to red
+    assert _P_CARD in colors  # the unused rail track
 
 
 def test_single_usage_gauge_spans_panel_and_draws_reset_hint():
-    from herdeck.driver.base import PanelGauge, PanelView
-    from herdeck.icons import compose_panel
+    from herdeck.driver.base import COLORS, PanelGauge, PanelView
+    from herdeck.icons import _P_CARD, _P_PAD_X, PANEL_W, compose_panel
 
     without_reset = compose_panel(
-        PanelView("11 agents", gauges=[PanelGauge("Codex", "7D", 38, color="teal")])
+        PanelView("All clear", gauges=[PanelGauge("Codex", "7D", 38, color="teal")])
     )
     with_reset = compose_panel(
         PanelView(
-            "11 agents",
+            "All clear",
             gauges=[PanelGauge("Codex", "7D", 38, hint="obnova 19.7. 20:59", color="teal")],
         )
     )
 
-    assert with_reset.getpixel((440, 60)) == (66, 73, 85)  # one card uses full width
+    rows = _rail_rows(with_reset, _P_PAD_X + 2, COLORS["teal"])
+    assert rows  # the rail starts at the left padding...
+    # ...and its track runs to the right padding: one gauge uses the full width
+    assert with_reset.getpixel((PANEL_W - _P_PAD_X - 6, rows[0])) == _P_CARD
     assert with_reset.tobytes() != without_reset.tobytes()
 
 
 def test_detail_usage_card_draws_the_pace_hint_inside_its_card():
-    from herdeck.driver.base import PanelGauge, PanelView
-    from herdeck.icons import PANEL_W_TWO_CELL, compose_panel
+    from PIL import ImageChops
+
+    from herdeck.driver.base import COLORS, PanelGauge, PanelView
+    from herdeck.icons import _P_PAD_X, PANEL_W_TWO_CELL, compose_panel
 
     def detail(pace):
         gauges = [
@@ -284,18 +299,16 @@ def test_detail_usage_card_draws_the_pace_hint_inside_its_card():
             PanelGauge("Codex", "5H", 10, hint="reset 13:05", color="teal"),
         ]
         return compose_panel(
-            PanelView("usage limits", gauges=gauges, gauge_meta="used / reset"),
+            PanelView("Usage limits", gauges=gauges, meta="used / reset"),
             width=PANEL_W_TWO_CELL,
         )
 
     plain, paced = detail(""), detail("plno ~40m dřív")
-    assert plain.tobytes() != paced.tobytes()
-    # Only the first card changes: the neighbour card and the gap stay put.
-    card_w = (PANEL_W_TWO_CELL - 32 - 16) / 3
-    right_of_first = round(16 + card_w) + 1
-    assert plain.crop((right_of_first, 0, PANEL_W_TWO_CELL, 196)).tobytes() == paced.crop(
-        (right_of_first, 0, PANEL_W_TWO_CELL, 196)
-    ).tobytes()
+    changed = ImageChops.difference(plain, paced).getbbox()
+    assert changed is not None
+    # Only the first gauge's text row changes: its rail and the rows below stay put.
+    first_rail = _rail_rows(plain, _P_PAD_X + 2, COLORS["orange"])[0]
+    assert changed[3] <= first_rail
 
 
 def test_panel_cache_key_includes_usage_gauges():
@@ -309,9 +322,29 @@ def test_panel_cache_key_includes_usage_gauges():
     localized = PanelView(
         "usage",
         gauges=[PanelGauge("Codex", "5H", 10, color="teal")],
-        gauge_meta="využito / obnova",
+        meta="využito / obnova",
     )
     assert low.cache_key() != localized.cache_key()
+
+
+def test_panel_cache_key_covers_every_structured_field():
+    from herdeck.driver.base import PanelStat, PanelView
+
+    base = PanelView("All clear")
+    variants = [
+        PanelView("All clear", headline="api"),
+        PanelView("All clear", meta="18 agents"),
+        PanelView("All clear", stats=[PanelStat("IDLE", 1, "blue")]),
+        PanelView("All clear", hint="press · answer"),
+        PanelView("All clear", page=(0, 2)),
+        PanelView("All clear", aside="+2 more waiting"),
+        PanelView("All clear", solid=True),
+        PanelView("All clear", chip_dot="green"),
+        PanelView("All clear", sent="Sent to api"),
+    ]
+    keys = {v.cache_key() for v in variants}
+    assert base.cache_key() not in keys
+    assert len(keys) == len(variants)
 
 
 def test_drill_option_subtext_is_drawn_under_label(tmp_path):
@@ -690,25 +723,25 @@ def test_wrap_marks_cut_tail_with_ellipsis():
     assert intact == ["Yes"]  # nothing cut -> no spurious ellipsis
 
 
-def test_panel_body_lines_wrap_by_pixel_width_without_losing_words():
+def test_panel_wrapped_wraps_by_pixel_width_without_losing_words():
     """The panel body wraps logical lines with the ACTUAL font and pixel budget
     (audit: panel-pixel-wrap)."""
     from PIL import Image, ImageDraw
 
-    from herdeck.icons import PANEL_W, _font, _panel_body_lines
+    from herdeck.icons import PANEL_W, _font, _panel_wrapped
 
     d = ImageDraw.Draw(Image.new("RGB", (PANEL_W, 196)))
     f = _font(24)
     text = "Claude needs your permission to run the following command right now"
     # max_lines high enough for ANY platform font (CI's Linux fonts are wider
     # than macOS ones), so the no-words-lost assertion is metric-independent
-    lines = _panel_body_lines(d, [text], f, PANEL_W - 32, max_lines=10)
+    lines = _panel_wrapped(d, [text], f, PANEL_W - 32, max_lines=10)
     assert len(lines) >= 2
     for line in lines:
         assert d.textlength(line, font=f) <= PANEL_W - 32
     assert " ".join(lines) == text  # nothing silently dropped between lines
     overflow = text + " and then some more words that cannot possibly fit on this panel"
-    lines = _panel_body_lines(d, [overflow], f, PANEL_W - 32)
+    lines = _panel_wrapped(d, [overflow], f, PANEL_W - 32, max_lines=3)
     assert len(lines) == 3 and lines[-1].endswith("…")
 
 
@@ -923,9 +956,11 @@ def test_bright_solid_comet_ring_is_dark_ink(tmp_path):
     assert min(sum(px) for px in ring_pixels("solid")) < 150  # dark ring on green
 
 
-def test_gauge_labels_are_neutral_and_upper_case(monkeypatch):
+def test_gauge_labels_are_neutral_ink(monkeypatch):
+    """The provider colour lives on the rail; the label stays neutral ink so
+    it reads on the calm background."""
     from herdeck.driver.base import COLORS, PanelGauge, PanelView
-    from herdeck.icons import _GAUGE_CARD, _GAUGE_LABEL, _contrast, compose_panel
+    from herdeck.icons import _P_BG, _P_INK, _contrast, compose_panel
 
     drawn = []
     real_text = ImageDraw.ImageDraw.text
@@ -935,11 +970,11 @@ def test_gauge_labels_are_neutral_and_upper_case(monkeypatch):
         return real_text(self, xy, text, *a, **kw)
 
     monkeypatch.setattr(ImageDraw.ImageDraw, "text", spy)
-    compose_panel(PanelView("Usage", gauges=[PanelGauge("Claude", "5h", 42, color="violet")]))
-    text, fill = next((t, c) for t, c in drawn if "CLAUDE" in t)
-    assert text == "CLAUDE  5H"  # consistent case
-    assert fill == _GAUGE_LABEL and fill != COLORS["violet"]
-    assert _contrast(_GAUGE_LABEL, _GAUGE_CARD) >= 4.5
+    compose_panel(PanelView("Usage", gauges=[PanelGauge("Claude", "5H", 42, color="violet")]))
+    text, fill = next((t, c) for t, c in drawn if "Claude" in t)
+    assert text == "Claude · 5H"
+    assert fill == _P_INK and fill != COLORS["violet"]
+    assert _contrast(_P_INK, _P_BG) >= 4.5
 
 
 def test_render_tile_bytes_does_not_touch_the_disk(tmp_path):

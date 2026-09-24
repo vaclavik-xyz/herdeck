@@ -87,6 +87,12 @@ def tile_accessible_label(tile, lang: str = "en") -> str:
     return " · ".join(parts) or tr(lang, "a11y.empty_tile", n=tile.index + 1)
 
 
+def _held_panel(panel_view, title: str, lines: list[str], color: str):
+    """A short status message: the chip says what happened, the first line
+    is the headline, any further lines sit under it."""
+    return panel_view(title, lines[1:], color, headline=lines[0] if lines else "")
+
+
 class DeckApp:
     """Token-authed loopback HTTP sidecar for the herdeck desktop app.
 
@@ -371,7 +377,7 @@ class DeckApp:
         from ..driver.base import PanelView
 
         with self._lock:
-            self._status_panel = PanelView(title, lines, color)
+            self._status_panel = _held_panel(PanelView, title, lines, color)
             self._status_panel_until = time.monotonic() + STATUS_PANEL_HOLD_S
             self._refresh_locked()
 
@@ -380,7 +386,7 @@ class DeckApp:
         from ..driver.base import PanelView
 
         self._status_panel_until = time.monotonic() + STATUS_PANEL_HOLD_S
-        return PanelView(title, lines, color)
+        return _held_panel(PanelView, title, lines, color)
 
     def _consume_expired_status_locked(self) -> bool:
         """True once when a held status panel just lapsed (a full render then

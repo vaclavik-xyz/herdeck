@@ -11,10 +11,11 @@
   "fill_solid_working_sweep": "f9dbf2409a59d807c8e6e663c916f95315e14213bd554450ce241fd7af3bba39",
   "fill_tint_idle": "3c1a604258a5a0f2eafe03e5d8b032856d11538e9bac690ab3ba84afeb02ab09",
   "label_back": "c89e42b5a8f032cf304335f7e6a12698cebdc6beaec1e9891b85af20585c2884",
-  "panel_overview": "10ae69d9c00cd4df333c601d19227872953015d8574401a4ebbf159670d0ad97",
-  "panel_overview_usage": "4b734599e4eacc10fd7e73295a30b3f55b8c8efcf67cecb6fd7c1712a24bd7fa",
-  "panel_spotlight": "0d2a4825c1b8aa209d972c8c260a2f1db788214a6bd8dfe0d615b0e8c1d0c094",
-  "panel_usage_detail": "7dec9e386dd3ec1927c9276404890c3f2702cd73f42cbc3d1317afd929699596",
+  "panel_offline": "b8915338a5757069eecc7852ff9c5def6443a81c47aa8e49f0162591067883a0",
+  "panel_overview": "8fc37e08d452c703f9dd6a5922bba9520789a1113323299c96483af59da71959",
+  "panel_overview_usage": "36c51ffffd124572775c2689452d3828c64dcd3101f2ae87b0c36936fd61b9e1",
+  "panel_spotlight": "31ab0cd912cd46cfa1f6687d3ca39300067a4dcce29c3e33f1ae923c09f9ea9a",
+  "panel_usage_detail": "9fa5c43ac456b26c7a16cd5e7a019b76831e4f2f2879e3773c1b497c98635cdc",
   "project_badge": "0c7d895f977ca42cf9cfa14235703a2b8916c033c68135ee1c66dbe9b30a4727",
   "project_monogram": "d51a1068324df221860360dfa2b6f2c5a625319ddc64c2d959d3415f67bb43e6"
 }
