@@ -69,8 +69,8 @@ host deployed from source, update the runtime with `deploy-host.sh` below.
 **`--env KEY=VALUE`** (repeatable) adds a non-secret variable to the unit's
 launch environment, so a host-specific switch survives a reinstall. Names
 containing `TOKEN`, `SECRET` or `PASSWORD` are refused (tokens live in the
-keychain or the bridge token file, never in a unit), as are variables the unit
-already sets. Prefer the config key where one exists:
+keychain, a `[[servers]]` `token_file` or the bridge token file, never in a
+unit), as are variables the unit already sets. Prefer the config key where one exists:
 `HERDECK_D200_STANDARD_WRITER=1` is `[hardware].d200_standard_writer = true` in
 `local.toml`, and `HERDECK_T3_DESKTOP_READ_STATE=1` is `desktop_read_state =
 true` on the T3 `[[servers]]` entry. The env vars still work as a fallback.
@@ -157,6 +157,36 @@ a newer one (`current`/`newer`), so an older deck host sharing the bridge cannot
 pull it back. The bridge only installs releases from 0.10.0 on (the first that
 publishes the wheel and can update itself); a release without a wheel asset is
 refused rather than installed unverified.
+
+### Giving a runtime service its server tokens
+
+A runtime unit has no shell environment, and `--env` refuses names containing
+`TOKEN`, so a `token_env` that only your shell exported resolves to nothing
+under launchd/systemd. Before switching to the service (`install runtime
+--from-app` included), make every `[[servers]]` token resolvable without the
+shell: keep it in the keychain (the desktop Connections editor writes there) or
+point the server at a token file:
+
+```bash
+install -m 600 /dev/null ~/.config/herdeck/t3-token
+pbpaste > ~/.config/herdeck/t3-token        # or copy it over ssh; never echo it
+```
+
+```toml
+[[servers]]
+id = "t3"
+url = "http://127.0.0.1:3773"
+backend = "t3"
+token_env = "HERDECK_T3_HEADLESS_TOKEN"     # still wins when an env var is set
+token_file = "~/.config/herdeck/t3-token"   # what the service reads
+```
+
+The file must be a regular `0600` file; a group- or world-readable one is
+refused. `herdeck-doctor` prints where each server's token resolved
+(`local=file, t3=keychain`) without the value. If a token still resolves from
+nowhere, the runtime does not fall back to the demo fleet: the D200 shows
+`CONFIG ERROR` and `GET /health` carries `config_error`. Creating or fixing
+the file (or adding the keychain entry) recovers it without a restart.
 
 ### Migrating a hand-made runtime unit
 

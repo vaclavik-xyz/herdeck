@@ -300,14 +300,51 @@ safe token transfer, local/remote/mixed configuration, multiple bridge
 services, verification, troubleshooting, and rollback. A device-local template
 is available as [`local.example.toml`](local.example.toml).
 
+### Where a server's token comes from
+
+A `[[servers]]` entry names its bridge token, never holds it. The runtime
+tries, in order:
+
+1. the environment variable named by `token_env`;
+2. the file named by `token_file` (`~` is expanded; content is stripped);
+3. the OS keychain entry named by `token_env` (what the desktop app's
+   Connections editor writes).
+
+```toml
+[[servers]]
+id = "local"
+url = "ws://127.0.0.1:8788"
+token_env = "HERDECK_TOKEN"                        # env, then keychain
+token_file = "~/.config/herdeck/bridge-token"      # used when the env var is unset
+```
+
+A server needs at least one of `token_env` and `token_file`. The token file
+follows the bridge's rules: a regular file that only its owner can read
+(`chmod 600`). A file readable by the group or others is refused with a clear
+config error, not skipped. A launchd or systemd runtime has no shell
+environment (and `herdeck-service` refuses `--env` names containing `TOKEN`),
+so give it a `token_file` or a keychain entry.
+
+A config file that exists but cannot be loaded (a token no source has, a
+malformed value) never starts the demo fleet. The deck shows an empty grid and
+a red `CONFIG ERROR` panel naming the problem, and `/health` and
+`/maintenance` report `config_error`. The runtime logs it at ERROR. It watches
+the config and token files and re-checks every 10 s, so fixing the problem
+recovers the deck without a restart. The demo still starts on the first run
+(no config), with `HERDECK_MOCK=1`, or when you choose it in onboarding.
+
+### Diagnosing a dark deck
+
 Run `herdeck-doctor` to diagnose setup problems — it checks the herdr socket,
-config/mode, deck availability, and (for remote) token presence, printing a
+config/mode, deck availability, and (for remote) where each server's token
+resolved (`env`, `file` or `keychain`), printing a
 pass/fail checklist with hints (it never prints token values). It also compares
 versions: the running runtime against this install, and every bridge against
 the runtime, and asks each bridge whether herdr answers it.
 
 When the deck goes dark, the runtime's token-gated `GET /health` says why: its
-`version`, `protocol`, `pid` and `uptime_s`; per server under `servers`
+`version`, `protocol`, `pid` and `uptime_s`; `config_error` when the config
+does not load; per server under `servers`
 (`connected`, `last_error`, `since` in unix ms, `attempt`, `bridge_version`,
 `protocol_supported`); the D200 under `d200` (`connected`, `last_frame_at`,
 `last_error`, `lock_owner` when another runtime holds `d200.lock`); and

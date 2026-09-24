@@ -5,6 +5,7 @@ import { healthActions, healthItems, type HealthMessages } from "./healthStatus"
 import { setLang } from "./i18n.svelte";
 
 const M: HealthMessages = {
+  config_error: "config error: {error}",
   runtime_mismatch: "runtime {runtime} ≠ app {app}",
   bridge_mismatch: "bridge {id} {bridge} ≠ runtime {runtime}",
   bridge_protocol: "bridge {id} protocol",

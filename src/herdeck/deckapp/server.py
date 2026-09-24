@@ -1037,6 +1037,14 @@ class DeckApp:
             state.update(self._state_meta_locked())
             return state
 
+    @property
+    def config_error(self) -> str | None:
+        """Why the existing config does not load (the deck shows an error state
+        instead of agents), or None. Never carries a token value."""
+        if self._source.source_name != "config_error":
+            return None
+        return getattr(self._source, "message", None)
+
     def _health(self) -> dict:
         health = {
             "ok": True,
@@ -1044,6 +1052,9 @@ class DeckApp:
             "connected": self._source.connected,
             "server_id": self._source.server_id,
         }
+        config_error = self.config_error
+        if config_error is not None:
+            health["config_error"] = config_error
         connections = getattr(self._source, "connections", None)
         if isinstance(connections, dict):
             health["connections"] = connections
@@ -1158,6 +1169,11 @@ class DeckApp:
             else:
                 mode = "remote"
             reason = None
+        elif self._source.source_name == "config_error":
+            # Not first-run onboarding: the config exists and must be fixed
+            # (Settings / Maintenance); the deck window shows the error.
+            mode = "error"
+            reason = "config_error"
         else:
             mode = "mock"
             if os.environ.get("HERDECK_MOCK"):
@@ -1705,9 +1721,9 @@ def select_live():
     Returns ``(config, first_server)`` for compatibility; LiveSource connects
     every selected server in ``config.servers``. Returns ``None`` to fall back to
     the deterministic mock. Mock wins when ``HERDECK_MOCK`` is set, when no config
-    file is discovered, or when the resolved server has no bridge token — the token
-    lives in env/keychain (``ServerConfig.token``), never in the config file, so a
-    missing one means we cannot connect and should show the mock + hint.
+    file is discovered, or when the resolved server has no bridge token. None does
+    NOT mean "show the demo": callers ask ``_config_load_error()`` whether an
+    existing config failed to load and then show the error state instead.
     """
     if os.environ.get("HERDECK_MOCK"):
         return None
@@ -1723,7 +1739,7 @@ def select_live():
         config = resolve_profile(snapshot).config
     except (ConfigError, OSError):
         # A config that needs a token whose env var is unset raises ConfigError;
-        # treat any unreadable/invalid config as "no live target" -> mock.
+        # no live target; _config_load_error() turns it into the error state.
         return None
     if not config.servers:
         return None
@@ -1731,6 +1747,51 @@ def select_live():
     if not server.token:
         return None
     return (config, server)
+
+
+def _config_load_error():
+    """Why an EXISTING config file cannot be loaded, or None.
+
+    None when it loads, when there is no config file at all (first run keeps
+    its onboarding) and under ``HERDECK_MOCK``. Otherwise the ConfigError /
+    OSError itself: its message names the problem without any token value.
+    A broken config must never fall back to demo agents that look healthy."""
+    if os.environ.get("HERDECK_MOCK"):
+        return None
+    from ..bootstrap import _discover_config_path, _discover_local_config_path
+    from ..config import ConfigError
+    from ..settings import load_settings, resolve_profile
+
+    path = _discover_config_path()
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        snapshot = load_settings(path, _discover_local_config_path(path))
+        resolve_profile(snapshot)
+    except (ConfigError, OSError) as exc:
+        return exc
+    return None
+
+
+def _config_error_source(error, config_service=None):
+    from .config_error import config_error_source
+
+    return config_error_source(
+        error, _default_config_paths()[0], _device_local_hardware(config_service)
+    )
+
+
+def _fallback_source(config_service=None):
+    """The source when no live target resolves: the config-error screen for a
+    config that exists but does not load, else the demo mock (no config)."""
+    error = _config_load_error()
+    if error is not None:
+        return _config_error_source(error, config_service)
+    from .config_error import log_config_error
+    from .mock import MockSource
+
+    log_config_error(None)
+    return MockSource(_device_local_hardware(config_service))
 
 
 def _has_saved_remote(config_service) -> bool:
@@ -1755,10 +1816,15 @@ def _has_saved_remote(config_service) -> bool:
     return isinstance(servers, list) and len(servers) > 0
 
 
-def select_source_kind(*, mock_env, remote, choice, socket_path, socket_exists):
+def select_source_kind(
+    *, mock_env, remote, choice, socket_path, socket_exists, config_error=None
+):
     """Pure source-selection precedence over already-gathered facts.
 
-    Returns ("remote", config, server) | ("local", socket_path) | ("mock", reason).
+    Returns ("remote", config, server) | ("local", socket_path) | ("mock", reason)
+    | ("error", exc). ``config_error`` is why an EXISTING config does not load:
+    it yields the explicit error state, never the demo — only HERDECK_MOCK, a
+    demo choice or no config at all (first run) pick the mock.
     All IO (env, select_live result, persisted choice, socket existence) is passed
     in, so every branch is unit-testable without touching the filesystem."""
     if mock_env:
@@ -1774,6 +1840,8 @@ def select_source_kind(*, mock_env, remote, choice, socket_path, socket_exists):
     if remote is not None:
         config, server = remote
         return ("remote", config, server)
+    if config_error is not None:
+        return ("error", config_error)
     return ("mock", "first_run")
 
 
@@ -1796,13 +1864,27 @@ def _resolve_source_kind():
         if selected:
             socket_path = selected[0].socket_path
             socket_exists = True
-    return select_source_kind(
-        mock_env=bool(os.environ.get("HERDECK_MOCK")),
-        remote=select_live(),
+    mock_env = bool(os.environ.get("HERDECK_MOCK"))
+    remote = select_live()
+    # Only probed when it can decide the outcome (no mock env / marker / live target).
+    config_error = (
+        _config_load_error()
+        if not mock_env and choice not in ("local", "demo") and remote is None
+        else None
+    )
+    kind = select_source_kind(
+        mock_env=mock_env,
+        remote=remote,
         choice=choice,
         socket_path=socket_path,
         socket_exists=socket_exists,
+        config_error=config_error,
     )
+    if kind[0] != "error":
+        from .config_error import log_config_error
+
+        log_config_error(None)
+    return kind
 
 
 def create_live_app(
@@ -1907,6 +1989,8 @@ def _select_source():
         from .live import build_live_source
 
         return build_live_source(kind[1], kind[2])
+    if kind[0] == "error":
+        return _config_error_source(kind[1])
     from .mock import MockSource
 
     return MockSource(_device_local_hardware())
@@ -1918,9 +2002,9 @@ def _remote_reloader(app):
     def reload_() -> None:
         selected = select_live()
         if selected is None:
-            from .mock import MockSource
-
-            app.swap_source(MockSource(_device_local_hardware(app._config_service)))
+            # A config that broke under a running remote deck shows the error,
+            # not demo agents; only a removed config falls back to the mock.
+            app.swap_source(_fallback_source(app._config_service))
             app._set_local_bridges({})
             return
         config, _server = selected
@@ -2785,6 +2869,55 @@ def _commit_remote(
         app._suppress_reload = False
 
 
+def _token_file_paths(config_path) -> list[str]:
+    """Every ``[[servers]].token_file`` in the config (raw TOML, no secret read), so
+    creating or fixing a token file reloads the deck like a config edit."""
+    import tomllib
+
+    try:
+        data = tomllib.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, TypeError):
+        return []
+    servers = data.get("servers")
+    if not isinstance(servers, list):
+        return []
+    return [
+        os.path.expanduser(raw["token_file"].strip())
+        for raw in servers
+        if isinstance(raw, dict)
+        and isinstance(raw.get("token_file"), str)
+        and raw["token_file"].strip()
+    ]
+
+
+# While the deck shows a config error, re-probe the config this often: a fix
+# the file watcher cannot see (a keychain entry added from the CLI) still
+# recovers the deck without a restart.
+CONFIG_ERROR_RETRY_S = 10.0
+
+
+def _config_error_probe(app, *, interval=CONFIG_ERROR_RETRY_S, clock=time.monotonic):
+    """ConfigWatcher ``state_provider``: the current config-error message while the
+    deck is in the error state (re-probed at most every ``interval``), else None.
+    A changed value — above all the error going away — fires the reloader."""
+    last = {"at": None, "value": None}
+
+    def probe():
+        if app.source_name != "config_error":
+            last["at"] = None
+            return None
+        now = clock()
+        if last["at"] is None:
+            # Just entered the error state: adopt what the source already shows.
+            last["at"], last["value"] = now, app.config_error
+        elif now - last["at"] >= interval:
+            error = _config_load_error()
+            last["at"], last["value"] = now, (str(error) or type(error).__name__) if error else None
+        return last["value"]
+
+    return probe
+
+
 def create_app(
     *,
     host: str = "127.0.0.1",
@@ -2795,7 +2928,8 @@ def create_app(
     reloader=None,
 ) -> DeckApp:
     """Build the sidecar with the right source: live when a server + token are
-    configured, otherwise the deterministic mock. Wires up a default ConfigService
+    configured, the config-error state when an existing config does not load,
+    otherwise the deterministic mock. Wires up a default ConfigService
     and a disk-re-select reloader so the GUI can edit + reload in place.
 
     Also starts a ``ConfigWatcher`` over the same paths the ConfigService reads so
@@ -2841,6 +2975,15 @@ def create_app(
                 runner.close()
             raise
         app._set_local_bridges(runners)
+    elif kind[0] == "error":
+        app = DeckApp(
+            _config_error_source(kind[1], svc),
+            host=host,
+            port=port,
+            icon_provider=icon_provider,
+            serve=serve,
+            config_service=svc,
+        )
     else:
         app = create_mock_app(
             host=host, port=port, icon_provider=icon_provider, serve=serve, config_service=svc
@@ -2865,7 +3008,7 @@ def create_app(
             session.socket_path
             for session in discover_local_sessions(service_local_path)
             if session.selected
-        ]
+        ] + _token_file_paths(cfg_path)
 
     app._watcher = ConfigWatcher(
         watch_paths,
@@ -2873,6 +3016,7 @@ def create_app(
         interval=1.0,
         adopt_before_fire=False,
         paths_provider=selected_socket_paths,
+        state_provider=_config_error_probe(app),
     )
     app._watcher.start()
     return app

@@ -58,7 +58,16 @@ def check_config(
     socket_exists: bool,
     token_envs=(),
     getenv=get_secret,
+    token_sources=None,
 ) -> Check:
+    if has_servers and token_sources is not None:
+        # Per server: WHERE its token resolved (env / file / keychain), never the value.
+        statuses = [
+            f"{sid}={source}" if source else f"{sid}=missing ({error})"
+            for sid, source, error in token_sources
+        ]
+        detail = f"config at {config_path}; tokens: {', '.join(statuses)}"
+        return Check("configuration", all(source for _sid, source, _e in token_sources), detail)
     if has_servers:
         statuses = [f"{env}=present" if getenv(env) else f"{env}=missing" for env in token_envs]
         missing = [env for env in token_envs if not getenv(env)]
@@ -447,6 +456,30 @@ def _module_available(module: str) -> bool:
     return importlib.util.find_spec(module) is not None
 
 
+def token_sources(config_path: str | None) -> list[tuple[str, str | None, str | None]]:
+    """``(server_id, source, error)`` per ``[[servers]]`` entry: source is where
+    its token resolves ("env" / "file" / "keychain"), or None with the reason.
+    Never carries a token value."""
+    from .settings import resolve_server_token
+
+    if config_path is None:
+        return []
+    try:
+        data = tomllib.loads(Path(config_path).read_text())
+    except Exception:
+        return []
+    out = []
+    for raw in data.get("servers", []):
+        if not isinstance(raw, dict):
+            continue
+        try:
+            _token, source = resolve_server_token(raw)
+            out.append((str(raw.get("id")), source, None))
+        except ConfigError as exc:
+            out.append((str(raw.get("id")), None, str(exc)))
+    return out
+
+
 def _read_config_facts(
     config_path: str | None,
 ) -> tuple[bool, list[str], Check | None, list]:
@@ -473,7 +506,9 @@ def _read_config_facts(
     try:
         config = load_config(config_path)
     except ConfigError as exc:
-        if any(not get_secret(env) for env in token_envs):
+        # A token that resolves from no source is reported by the configuration
+        # line (per server, with the reason); anything else is a real config error.
+        if any(source is None for _sid, source, _err in token_sources(config_path)):
             return bool(servers), token_envs, None, []
         return (
             bool(servers),
@@ -519,7 +554,13 @@ def collect_checks(web_url: str | None = None) -> list[Check]:
     checks = [
         config_error
         if config_error is not None
-        else check_config(config_path, has_servers, socket_exists, token_envs=token_envs),
+        else check_config(
+            config_path,
+            has_servers,
+            socket_exists,
+            token_envs=token_envs,
+            token_sources=token_sources(config_path),
+        ),
     ]
     # Actually contact each configured server — token presence alone said
     # nothing about a dead bridge, a wrong URL or a rejected token.

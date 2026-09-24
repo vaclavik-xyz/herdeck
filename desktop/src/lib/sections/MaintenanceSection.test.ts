@@ -55,6 +55,23 @@ const button = (t: HTMLElement, action: string): HTMLButtonElement => {
 };
 
 describe("MaintenanceSection", () => {
+  it("shows the runtime's config error in English and Czech", async () => {
+    const status = rawStatus({ config_error: "bridge token for server 'local' not found" });
+    let t = await render(fake(status).invoke);
+    expect(t.querySelector("[data-config-error]")?.textContent).toContain(
+      "The config does not load: bridge token for server 'local' not found",
+    );
+    cleanup?.();
+    t = await render(fake(status).invoke, "cs");
+    expect(t.querySelector("[data-config-error]")?.textContent).toContain(
+      "Config nejde načíst: bridge token for server 'local' not found",
+    );
+    cleanup?.();
+    cleanup = null;
+    t = await render(fake(rawStatus()).invoke);
+    expect(t.querySelector("[data-config-error]")).toBeNull();
+  });
+
   it("shows versions with the bridge mismatch flagged, and a service from this app", async () => {
     const t = await render(fake(rawStatus()).invoke);
     const bridge = t.querySelector('[data-row="bridge:m4"]');

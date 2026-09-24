@@ -842,6 +842,7 @@ def test_select_live_falls_back_to_mock_without_config(tmp_path, monkeypatch):
     monkeypatch.delenv("HERDECK_CONFIG", raising=False)
     monkeypatch.delenv("HERDECK_MOCK", raising=False)
     monkeypatch.chdir(tmp_path)  # no config.toml here
+    monkeypatch.setenv("HOME", str(tmp_path))  # nor in the real ~/.config/herdeck
     assert select_live() is None
 
 

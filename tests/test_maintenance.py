@@ -182,7 +182,7 @@ def test_status_reports_versions_service_logs_d200_and_servers(tmp_path):
     status = _maintenance(tmp_path).status()
 
     assert status["pid"] == os.getpid()
-    assert set(status) == {"version", "pid", "uptime_s", "process", "service", "logs", "d200", "servers"}
+    assert set(status) == {"version", "pid", "uptime_s", "process", "service", "logs", "d200", "servers", "config_error"}
     assert status["service"] == {
         "installed": True,
         "label": "dev.herdeck.runtime",

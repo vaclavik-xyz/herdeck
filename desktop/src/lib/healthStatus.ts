@@ -8,6 +8,7 @@ import { compareVersions } from "./maintenanceClient";
 
 /** The catalog keys the line is assembled from (HealthNotice owns en+cs). */
 export interface HealthMessages {
+  config_error: string; // {error}
   runtime_mismatch: string; // {runtime} {app}
   bridge_mismatch: string; // {id} {bridge} {runtime}
   bridge_protocol: string; // {id}
@@ -55,6 +56,10 @@ export function healthItems(raw: unknown, m: HealthMessages, now: number = Date.
   const h = rec(raw);
   const out: HealthItem[] = [];
   const maintenance: HealthAction = { kind: "open_maintenance" };
+  // An existing config that does not load: the runtime shows an error state
+  // (never the demo fleet), so this is the first thing to fix.
+  const configError = str(h.config_error);
+  if (configError) out.push({ text: fmt(m.config_error, { error: configError }), action: maintenance });
   const runtime = str(h.version);
   const app = str(h.app_version);
   if (runtime && app && runtime !== app) {

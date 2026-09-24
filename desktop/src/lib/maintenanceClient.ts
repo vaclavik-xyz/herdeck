@@ -65,6 +65,8 @@ export interface MaintenanceStatus {
   logs: { runtime: string | null; app: string | null };
   d200: D200Status;
   servers: ServerStatus[];
+  /** Why the existing config does not load (the runtime shows an error state), or null. */
+  configError: string | null;
   app: AppFacts | null;
 }
 
@@ -124,6 +126,7 @@ export function parseMaintenance(raw: unknown): MaintenanceStatus | null {
         source: str(pc.source),
       },
     },
+    configError: str(v.config_error),
     servers: Object.entries(rec(v.servers)).map(([id, value]) => {
       const s = rec(value);
       return {
