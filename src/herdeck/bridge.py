@@ -22,6 +22,7 @@ from . import __version__
 from . import history as _history
 from . import hooks_install as _hooks_install
 from . import status_since as _status_since
+from . import usage_agent_install as _usage_agent_install
 from .decisions import decision_choices, decision_revision
 from .events import CAPABILITY as _EVENTS_CAPABILITY
 from .events import STALE as _STALE
@@ -91,6 +92,10 @@ _WIRE_CAPABILITIES = (
     # Answers {"type": "hooks"} (full token only): installs, removes or
     # reports the subagent hooks on this machine (hooks_install.py).
     _hooks_install.CAPABILITY,
+    # Answers {"type": "usage_agent"} (full token only): installs, removes or
+    # reports the usage agent in this user's login session
+    # (usage_agent_install.py). Only useful with the `usage` capability.
+    _usage_agent_install.CAPABILITY,
 )
 
 _TITLE_PLUGIN_ID = "zhangzujian.auto-session-title"
@@ -1818,7 +1823,7 @@ class SocketHerdr:
 # snapshots (+ project icons), pane text reads, live terminal previews and the
 # health probe. Everything else — act, focus, refresh_title, send_text,
 # choose_if_blocked, start, update (bridge self-update), hooks (edits the
-# agents' hook files), and any future type —
+# agents' hook files), usage_agent (installs a LaunchAgent), and any future type —
 # is rejected (an allowlist, so a new mutating message is never open to
 # view-only clients by default).
 READONLY_MESSAGES = frozenset({"list", "read", "observe", "observe_stop", "health", "stats"})
@@ -2043,6 +2048,11 @@ async def _serve_connection(
                 # Full token only (not in READONLY_MESSAGES, refused above):
                 # edits the agents' hook files; file IO off the event loop.
                 await send(encode(await _hooks_install.bridge_reply(msg)))
+                continue
+            if kind == "usage_agent":
+                # Full token only (not in READONLY_MESSAGES, refused above):
+                # installs/removes a launchd/systemd unit; off the event loop.
+                await send(encode(await _usage_agent_install.bridge_reply(msg)))
                 continue
             if kind == "update":
                 # Full token only (not in READONLY_MESSAGES, refused above).

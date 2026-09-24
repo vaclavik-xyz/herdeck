@@ -44,8 +44,26 @@ def _isolated_agent_hook_files(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
 
 
-
 @pytest.fixture(autouse=True)
 def _isolated_usage_agent(tmp_path, monkeypatch):
-    """The usage agent's file (usage_agent.py) never touches ~/.local/state."""
+    """The usage agent's file (usage_agent.py) and the bridge's usage agent
+    installer (usage_agent_install.py) never touch ~/.local/state,
+    ~/Library/LaunchAgents or the real launchctl/systemctl."""
+    import os
+    import sys
+
+    from herdeck import usage_agent_install
+
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+    monkeypatch.setattr(
+        usage_agent_install,
+        "default_host",
+        lambda: usage_agent_install.Host(
+            home=tmp_path / "usage-home",
+            uid=501,
+            platform=sys.platform,
+            env=os.environ,
+            run=lambda argv: (1, "launchctl/systemctl are not run in tests"),
+        ),
+    )
+    monkeypatch.setattr(usage_agent_install, "_managed_prefix", lambda: None)

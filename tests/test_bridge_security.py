@@ -162,6 +162,9 @@ MUTATING = [
     # subagent hooks: edits the agents' hook files (hooks_install.py)
     {"type": "hooks", "req": "9", "action": "install", "agents": ["claude"]},
     {"type": "hooks", "req": "10", "action": "status"},
+    # usage agent: installs/removes a LaunchAgent (usage_agent_install.py)
+    {"type": "usage_agent", "req": "11", "action": "install"},
+    {"type": "usage_agent", "req": "12", "action": "status"},
     {"type": "something_new", "req": "7"},
 ]
 
