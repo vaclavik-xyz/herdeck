@@ -170,6 +170,9 @@ class SafetyConfig:
     require_confirm_for: list[str] = field(default_factory=lambda: list(DEFAULT_REQUIRE_CONFIRM))
 
 
+USAGE_SOURCES = ("auto", "local", "bridge")
+
+
 @dataclass
 class UsageConfig:
     # Provider ids to poll; empty keeps the usage panel off. This is also the
@@ -190,6 +193,11 @@ class UsageConfig:
     # alert_at is empty).
     alert_at: list[int] = field(default_factory=list)
     alert_reset: bool = False
+    # Where the numbers come from (usage_hub.py): "auto" = a connected bridge
+    # that offers usage frames (herdeck-bridge with HERDECK_BRIDGE_USAGE=1),
+    # else this runtime's own poller; "local" = always the own poller;
+    # "bridge" = bridge data only, never a local poll.
+    source: str = "auto"
 
 
 @dataclass

@@ -28,6 +28,7 @@ from .protocol import WIRE_PROTOCOL, encode
 from .self_update import EXIT_GRACE_S, BridgeUpdater, not_managed_result
 from .status_since import CAPABILITY as _STATUS_SINCE_CAPABILITY
 from .status_since import StatusSinceTracker
+from .usage import USAGE_CAPABILITY, bridge_usage_config, bridge_usage_enabled, usage_to_wire
 
 log = logging.getLogger(__name__)
 
@@ -718,12 +719,13 @@ async def handle_client_message(
     raw: str,
     icons: ProjectIconIndex | None = None,
     status_since: StatusSinceTracker | None = None,
+    extra_capabilities: tuple[str, ...] = (),
 ) -> str:
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "list":
         panes = await _wired_snapshot(herdr, icons, status_since)
-        return encode(_snapshot_message(server_id, panes))
+        return encode(_snapshot_message(server_id, panes, extra_capabilities))
     if kind == "read":
         if await _pane_identity_changed(herdr, msg):
             return _identity_changed_result(msg)
@@ -850,12 +852,16 @@ async def handle_client_message(
     raise ValueError(f"unknown client message: {kind}")
 
 
-def _snapshot_message(server_id: str, panes: list[dict]) -> dict:
+def _snapshot_message(
+    server_id: str, panes: list[dict], extra_capabilities: tuple[str, ...] = ()
+) -> dict:
+    """``extra_capabilities`` = per-bridge features that depend on how this
+    bridge was started (``usage`` only when its usage poller runs)."""
     return {
         "type": "snapshot",
         "server_id": server_id,
         "protocol": _WIRE_PROTOCOL,
-        "capabilities": list(_WIRE_CAPABILITIES),
+        "capabilities": [*_WIRE_CAPABILITIES, *extra_capabilities],
         # Additive: an older runtime ignores the key; a newer one lists it per
         # server in /health, where the window and herdeck-doctor compare it.
         "herdeck_version": __version__,
@@ -1386,6 +1392,7 @@ async def _broadcast(
     *,
     icon_subs: dict | None = None,
     icons: ProjectIconIndex | None = None,
+    extra_capabilities: tuple[str, ...] = (),
 ) -> None:
     """Forward each changed full agent list to all clients as a snapshot.
 
@@ -1398,7 +1405,7 @@ async def _broadcast(
     right AFTER the snapshot that references it.
     """
     async for panes in snapshot_stream:
-        msg = encode(_snapshot_message(server_id, panes))
+        msg = encode(_snapshot_message(server_id, panes, extra_capabilities))
         if clients:
             await asyncio.gather(
                 *(
@@ -1800,6 +1807,7 @@ async def _serve_connection(
     updater: BridgeUpdater | None = None,
     status_since: StatusSinceTracker | None = None,
     history: _history.BridgeHistory | None = None,
+    usage: BridgeUsageFeed | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
@@ -1817,10 +1825,17 @@ async def _serve_connection(
     async def send(msg: str) -> bool:
         return await _send_to_client(ws, msg, send_lock)
 
+    extra_capabilities = usage.capabilities if usage is not None else ()
     panes = await _wired_snapshot(herdr, icons, status_since)
-    if not await send(encode(_snapshot_message(server_id, panes))):
+    if not await send(encode(_snapshot_message(server_id, panes, extra_capabilities))):
         return
     clients[ws] = send_lock
+    # The current usage right after the first snapshot (which advertised the
+    # capability); later changes arrive through BridgeUsageFeed.run.
+    first_usage = usage.current() if usage is not None else None
+    if first_usage is not None and not await send(first_usage):
+        clients.pop(ws, None)
+        return
     observes: dict[str, tuple[asyncio.Task, dict]] = {}
 
     def observe_done(req: str, task: asyncio.Task) -> None:
@@ -1985,7 +2000,9 @@ async def _serve_connection(
                 except Exception as exc:
                     await send(encode({"type": "error", "message": str(exc)}))
                     continue
-                if not await send(encode(_snapshot_message(server_id, panes))):
+                if not await send(
+                    encode(_snapshot_message(server_id, panes, extra_capabilities))
+                ):
                     continue
                 sent = icon_subs.get(ws)
                 if sent is not None:
@@ -1994,7 +2011,9 @@ async def _serve_connection(
                             break
                 continue
             try:
-                out = await handle_client_message(herdr, server_id, raw, icons, status_since)
+                out = await handle_client_message(
+                    herdr, server_id, raw, icons, status_since, extra_capabilities
+                )
             except Exception as exc:
                 out = encode({"type": "error", "message": str(exc)})
             await send(out)
@@ -2132,11 +2151,13 @@ async def serve(
     updater_factory: Callable[[Callable[[], None]], BridgeUpdater] = (
         lambda request_exit: BridgeUpdater(request_exit=request_exit)
     ),
+    usage: BridgeUsageFeed | None = None,
 ) -> bool:
     """Serve until a verified self-update requests a restart (returns True).
     ``updater_factory`` receives the exit seam and builds the self-updater
     (injectable for tests); a managed install may update itself, see
-    self_update.py."""
+    self_update.py. ``usage`` (HERDECK_BRIDGE_USAGE=1) runs the provider usage
+    poller here and pushes ``usage`` frames; serve() starts and closes it."""
     # SocketHerdr RPCs are unserialized one-shot connections (herdr accepts them
     # concurrently), so an on-demand read/focus/act never queues behind an
     # in-flight fleet snapshot. Separate instances for the event stream vs client
@@ -2174,26 +2195,121 @@ async def serve(
             updater=updater,
             status_since=status_since,
             history=history,
+            usage=usage,
         )
 
+    extra_capabilities = usage.capabilities if usage is not None else ()
+    if usage is not None:
+        usage.start()
     async with websockets.serve(handler, host, port):
         # runs until a verified self-update asks for a restart
         broadcast = asyncio.create_task(
-            _broadcast(events.stream(), clients, server_id, icon_subs=icon_subs, icons=icons)
+            _broadcast(
+                events.stream(),
+                clients,
+                server_id,
+                icon_subs=icon_subs,
+                icons=icons,
+                extra_capabilities=extra_capabilities,
+            )
         )
         stopper = asyncio.create_task(stop.wait())
+        tasks = {broadcast, stopper}
+        if usage is not None:
+            tasks.add(asyncio.create_task(usage.run(clients)))
         try:
             await asyncio.wait({broadcast, stopper}, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            for task in (broadcast, stopper):
+            for task in tasks:
                 task.cancel()
-            await asyncio.gather(broadcast, stopper, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
             status_since.close()  # a restart must not lose the debounced last write
             if history is not None:
-                history.close()  # flushes the queued episodes
+                # Flushes the queued episodes and joins the writer thread.
+                await asyncio.to_thread(history.close)
+            if usage is not None:
+                # Joins the poller thread and stops `codex app-server`.
+                await asyncio.to_thread(usage.close)
         if broadcast.done() and not broadcast.cancelled() and broadcast.exception() is not None:
             raise broadcast.exception()
     return updater.exit_requested
+
+
+# How often the bridge re-reads its usage poller for a change to push. Cheap
+# (a locked list copy); it also catches a provider going stale by age.
+_USAGE_CHECK_S = 5.0
+
+
+class BridgeUsageFeed:
+    """Provider usage polled ON the bridge host (where Codex/Claude are logged
+    in) and pushed to every client as ``usage`` frames: once right after the
+    connect snapshot, then whenever the poller's snapshot changes. Runtimes
+    pick it over their own poller per ``[usage].source`` (usage_hub.py), so
+    thin clients need no ssh wrappers for codex/codexbar.
+
+    ``poller`` is a usage.UsagePoller (or a fake with start/snapshot/close);
+    the frame is unfiltered by paid_only, each runtime filters for itself."""
+
+    capabilities: tuple[str, ...] = (USAGE_CAPABILITY,)
+
+    def __init__(self, poller, server_id: str, *, check_s: float | None = None):
+        self._poller = poller
+        self._server_id = server_id
+        self._check_s = check_s
+        self._last: str | None = None
+
+    def start(self) -> None:
+        self._poller.start()
+
+    def close(self) -> None:
+        self._poller.close()
+
+    def frame(self) -> str:
+        return encode(
+            {
+                "type": "usage",
+                "server_id": self._server_id,
+                "providers": usage_to_wire(self._poller.snapshot()),
+            }
+        )
+
+    def current(self) -> str | None:
+        """frame(), or the last pushed one if the poller fails: a poller bug
+        must never end the feed or a client's connection."""
+        try:
+            return self.frame()
+        except Exception:
+            log.warning("usage snapshot failed", exc_info=True)
+            return self._last
+
+    async def run(self, clients: dict) -> None:
+        """Push each changed snapshot to all clients (same isolation as
+        snapshot broadcasts: a stalled client cannot hold up the others)."""
+        while True:
+            frame = self.current()
+            if frame is not None and frame != self._last:
+                self._last = frame
+                if clients:
+                    await asyncio.gather(
+                        *(
+                            _send_to_client(ws, frame, lock)
+                            for ws, lock in list(clients.items())
+                        )
+                    )
+            await asyncio.sleep(_USAGE_CHECK_S if self._check_s is None else self._check_s)
+
+
+def build_bridge_usage(server_id: str, *, getenv=os.environ.get) -> BridgeUsageFeed | None:
+    """The usage feed when ``HERDECK_BRIDGE_USAGE=1`` (see usage.bridge_usage_config
+    for ``HERDECK_USAGE_CONFIG``), else None: a plain bridge advertises no
+    ``usage`` capability and runtimes keep their own poller."""
+    if not bridge_usage_enabled(getenv):
+        return None
+    from .usage import poller_from_config
+
+    cfg = bridge_usage_config(getenv)
+    log.info("usage poller on: providers=%s refresh=%ss", ",".join(cfg.providers), cfg.refresh_secs)
+    return BridgeUsageFeed(poller_from_config(cfg), server_id)
 
 
 def _read_token_file(token_file: str, env_name: str) -> str:
@@ -2321,7 +2437,10 @@ def main(argv: list[str] | None = None) -> None:
     server_id = os.environ.get("HERDECK_SERVER_ID", "server")
     token = load_bridge_token()
     readonly = load_readonly_token(token)
-    restart = asyncio.run(serve(socket_path, host, port, server_id, token, readonly_token=readonly))
+    usage = build_bridge_usage(server_id)
+    restart = asyncio.run(
+        serve(socket_path, host, port, server_id, token, readonly_token=readonly, usage=usage)
+    )
     if restart:
         # Clean exit (0): the service unit restarts it (KeepAlive / Restart=always).
         log.info("herdeck-bridge exiting to restart into the updated version")

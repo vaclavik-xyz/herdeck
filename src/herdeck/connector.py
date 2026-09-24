@@ -21,9 +21,11 @@ from .protocol import (
     TermClosed,
     TermFrame,
     Unknown,
+    Usage,
     decode_inbound,
     encode,
 )
+from .usage import USAGE_CAPABILITY
 
 log = logging.getLogger("herdeck.connector")
 
@@ -82,6 +84,7 @@ class Connector:
         on_project_icon: Callable[[str, ProjectIcon], None] | None = None,
         on_request_error: Callable[[str | None, str], None] | None = None,
         on_progress: Callable[[str, str, str], None] | None = None,
+        on_usage: Callable[[str, bool, list | None], None] | None = None,
     ):
         self.server = server
         self._on_snapshot = on_snapshot
@@ -96,6 +99,10 @@ class Connector:
         # (req, stage, message) for a long request's progress frames (the
         # bridge self-update); dropped when no consumer wants them.
         self._on_progress = on_progress
+        # (server_id, offered, providers|None): whether this bridge offers
+        # usage frames (capability ``usage``; False when disconnected) and,
+        # with a usage frame, its ProviderUsage list. usage_hub consumes it.
+        self._on_usage = on_usage
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._stop = False
@@ -242,6 +249,7 @@ class Connector:
                 self._ws = None
                 self._reset_health_probe()
                 if connected:
+                    self._report_usage(False, None)
                     self._set_connected(False)
             if self._stop:
                 break
@@ -283,6 +291,7 @@ class Connector:
                 )
                 self._warned_protocol = msg.protocol
             self._on_snapshot(self.server.id, [self._rekey(s) for s in msg.states])
+            self._report_usage(USAGE_CAPABILITY in self._capabilities, None)
             self._maybe_request_icons()
             self._maybe_probe_health()
         elif isinstance(msg, Event):
@@ -313,6 +322,8 @@ class Connector:
         elif isinstance(msg, Progress):
             if self._on_progress is not None:
                 self._on_progress(msg.req, msg.stage, msg.message)
+        elif isinstance(msg, Usage):
+            self._report_usage(True, msg.providers)
         elif isinstance(msg, Unknown):
             return  # a newer bridge's frame type: ignored by design
         elif isinstance(msg, Error):
@@ -321,6 +332,14 @@ class Connector:
             self._on_error(msg.message)
             if self._on_request_error is not None:
                 self._on_request_error(msg.req, msg.message)
+
+    def _report_usage(self, offered: bool, providers: list | None) -> None:
+        if self._on_usage is None:
+            return
+        try:
+            self._on_usage(self.server.id, offered, providers)
+        except Exception:
+            log.warning("usage frame handling failed", exc_info=True)
 
     def _maybe_request_icons(self) -> None:
         """Opt in to project_icon frames once per connection — only when this

@@ -22,6 +22,7 @@ from .config import (
     TILE_FILLS,
     TILE_ICONS,
     TILE_LINE_TOKENS,
+    USAGE_SOURCES,
     WORKING_ANIMATIONS,
     Config,
     ConfigError,
@@ -510,6 +511,11 @@ def _usage_config(raw: dict | None) -> UsageConfig:
         if type(alert_reset) is not bool:
             raise ConfigError("usage.alert_reset must be true or false")
         usage.alert_reset = alert_reset
+    if "source" in raw:
+        source = raw["source"]
+        if source not in USAGE_SOURCES:
+            raise ConfigError(f"usage.source must be one of {', '.join(USAGE_SOURCES)}")
+        usage.source = source
     return usage
 
 

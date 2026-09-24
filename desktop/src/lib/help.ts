@@ -102,6 +102,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       codexbar_path: "codexbar executable or ssh wrapper path; bare names also search /opt/homebrew/bin and /usr/local/bin; empty = off.",
       alert_at: "Used-% levels (1-100, e.g. 80, 95) that each notify once per limit window; empty = off. Needs notifications on.",
       alert_reset: "Notify when a window that hit 100 % (or the top alert_at level) resets, so work can continue; default off.",
+      source: "Where limits come from: auto (default) = a bridge with usage on, else this Mac; local = this Mac only; bridge = bridge only.",
     },
     answer_profiles: {
       name: "Profile name = agent type (claude, codex…) that selects the keys; default is the fallback.",
@@ -216,6 +217,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       codexbar_path: "Binárka codexbar nebo ssh wrapper; holé jméno se hledá i v /opt/homebrew/bin a /usr/local/bin; prázdné = vypnuto.",
       alert_at: "Úrovně využití v % (1-100, např. 80, 95), každá upozorní jednou za okno limitu; prázdné = vypnuto. Vyžaduje zapnutá oznámení.",
       alert_reset: "Upozorní, když se obnoví okno, které dosáhlo 100 % (nebo nejvyšší úrovně alert_at); výchozí vypnuto.",
+      source: "Odkud limity brát: auto (výchozí) = bridge se zapnutým využitím, jinak tento Mac; local = jen tento Mac; bridge = jen bridge.",
     },
     answer_profiles: {
       name: "Jméno profilu = typ agenta (claude, codex…), podle kterého se vyberou klávesy; záložní je default.",

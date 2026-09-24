@@ -38,7 +38,8 @@
     "claude_cache_path": "~/.cache/herdeck/claude-usage.json",
     "codexbar_path": "codexbar",
     "alert_at": [],
-    "alert_reset": false
+    "alert_reset": false,
+    "source": "auto"
   },
   "hardware": {
     "brightness": 80,
