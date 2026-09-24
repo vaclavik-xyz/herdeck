@@ -6,6 +6,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Bridge self-update. A bridge running from a managed venv (a `managed.json`
+  marker at `Path(sys.prefix)`, written by `herdeck-service install bridge
+  --managed`) accepts a new full-token-only `update {req, version}` message:
+  it downloads the release wheel, checks it against the release `SHA256SUMS`,
+  installs it with pip or uv, verifies the installed version in a fresh
+  interpreter, answers and exits for its service to restart it (the `vX` git
+  tag is the fallback for releases without a wheel). Progress streams as
+  `progress` frames; any failure keeps the old version running and reports
+  the installer's output tail. The health probe reports `managed`, and the
+  bridge advertises the `self_update` capability.
+- The runtime's `POST /maintenance/servers/{id}/update` (and `GET` of the same
+  path to long-poll a running update) asks a bridge to update itself to the
+  runtime's version and answers `updated`, `pending`, `not_managed`,
+  `readonly`, `failed`, `busy`, `unsupported` or `disconnected`.
+- Tag releases publish the Python sdist and wheel plus a `SHA256SUMS` file.
+
 ## [0.9.0] - 2026-09-24
 
 ### Added

@@ -32,6 +32,19 @@ the desktop app, a loopback HTTP sidecar. The intended, supported deployment:
   (`HERDECK_READONLY_TOKEN_FILE`) can watch the fleet — snapshots, icons, pane
   text, live previews, health — but every command that changes anything is
   rejected; give it to dashboards that should never press a key.
+- `update` (bridge self-update) is a mutating message: it makes the bridge
+  download and install a herdeck release into its own virtualenv and restart.
+  It needs the full token (the read-only token is refused), is refused unless
+  the bridge runs from a managed install (a `managed.json` marker at the root
+  of the venv it runs from, herdeck installed inside that venv, not editable),
+  and only takes a strict release version (`X.Y.Z` plus an optional
+  `aN`/`bN`/`rcN`, `.postN`, `.devN`). The wheel comes from this
+  repository's GitHub release over HTTPS and is installed only when its SHA-256
+  matches the release's `SHA256SUMS`; a release without a wheel falls back to
+  the `vX.Y.Z` git tag (TLS only, no checksum). No shell is involved and every
+  step has a timeout; the bridge exits only after the new version verified.
+  The full token therefore also authorizes installing any *published* herdeck
+  release on the bridge host.
 - The desktop sidecar binds to `127.0.0.1` only; its access token is injected by
   the Rust shell and is never exposed to the WebView / JavaScript.
 - The browser simulator binds to loopback by default. For remote use, bind it to

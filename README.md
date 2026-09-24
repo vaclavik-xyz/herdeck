@@ -372,8 +372,47 @@ bridges share a host.
 Every bridge snapshot carries `herdeck_version`. An authenticated client can
 also send `{"type": "health", "req": "<id>"}` over the same WebSocket; the
 bridge answers `{"type": "result", "req": "<id>", "data": {"herdeck_version",
-"protocol", "herdr_reachable", "clients"}}`. `herdeck-doctor` uses it; a bridge
-older than 0.8.1 answers with an `error` frame instead.
+"protocol", "herdr_reachable", "clients", "managed"}}`. `herdeck-doctor` uses it; a bridge
+older than 0.8.1 answers with an `error` frame instead. `managed` says whether
+the bridge may update itself (below).
+
+### Bridge self-update
+
+A bridge installed as a **managed** service (`herdeck-service install bridge
+--managed`: its own venv under `~/.local/share/herdeck/bridge-venv` with a
+`managed.json` marker at the venv root) can be updated from the deck host
+without a shell on the bridge host. The runtime's token-authenticated `POST
+/maintenance/servers/<id>/update` sends that bridge `{"type": "update", "req":
+"<id>", "version": "<the runtime's version>"}`; the bridge
+
+1. downloads `herdeck-<version>-py3-none-any.whl` from the GitHub release
+   `v<version>` and checks its SHA-256 against the release's `SHA256SUMS`
+   (no matching checksum, no install). Only a release that has **no wheel at
+   all** (published before the Python assets) falls back to
+   `git+https://github.com/vaclavik-xyz/herdeck@v<version>`, which needs `git`
+   on the bridge host and has no checksum;
+2. installs it into its own venv with `pip` (or `uv` when the venv has no pip),
+   streaming `{"type": "progress", "req", "stage", "message"}` frames;
+3. reads the installed version back in a fresh interpreter, answers
+   `{"type": "result", "req", "data": {"updated": "<version>", "source":
+   "wheel"|"git", "restarting": true}}` and exits cleanly, so launchd
+   (`KeepAlive`) or systemd (`Restart=always`) starts the new version.
+
+Any failure keeps the old version serving and answers `{"updated": null,
+"error": {"code", "message", "output"}}` with the installer's output tail
+(codes: `not_managed`, `invalid_version`, `busy`, `failed`). A bridge running
+from a source checkout or an editable install always refuses with
+`not_managed`; the read-only token cannot send `update` at all. Only one update
+runs at a time.
+
+The runtime answers the route with `{"ok", "code", "message", "server_id",
+"target", "output", "progress": [{"seq", "stage", "message"}], "next"}`, where
+`code` is `updated`, `pending`, `not_managed`, `readonly`, `failed`, `busy`,
+`unsupported` (a bridge from before self-update) or `disconnected`. The POST
+waits up to `wait_ms` (default 15 s, at most 25 s); a `pending` answer is
+followed with `GET /maintenance/servers/<id>/update?after=<next>&wait_ms=<ms>`
+(token as a query parameter, like every GET), which returns on the next progress
+line or the outcome.
 
 ## Profiles and customization
 
