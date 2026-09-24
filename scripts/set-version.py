@@ -33,6 +33,10 @@ SKIP_RELATIVE_DIRECTORIES = ("src/herdeck/assets/web",)
 # Sanctioned homes for a literal version inside a source tree. Each one must also
 # be covered by versions(), so it cannot drift.
 VERSION_LITERAL_ALLOWLIST = frozenset({"src/herdeck/__init__.py"})
+# A line carrying this marker holds a version that must NOT follow releases
+# (e.g. a compatibility floor that happens to equal the version being cut).
+# Stamp it on that exact line so every other literal is still caught.
+NOT_THIS_RELEASE_MARKER = "version-scan: fixed"
 
 
 def _read_json(path: Path) -> dict:
@@ -224,7 +228,7 @@ def stray_version_literals(expected: str) -> list[tuple[str, int, str]]:
             continue
         for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
             match = pattern.search(line)
-            if match:
+            if match and NOT_THIS_RELEASE_MARKER not in line:
                 found.append((relative, number, _excerpt(line, match.start())))
     return found
 

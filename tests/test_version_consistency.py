@@ -141,6 +141,22 @@ def test_check_ignores_numbers_that_are_not_our_version(sandbox, text):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_check_ignores_a_line_marked_as_a_fixed_version(sandbox):
+    # A compatibility floor that happens to equal the release being cut.
+    write(
+        sandbox,
+        "src/herdeck/floor.py",
+        f'FLOOR = "{VERSION}"  # version-scan: fixed (a floor, not the release)\n'
+        f'OTHER = "{VERSION}"\n',
+    )
+
+    result = run_script("--check", cwd=sandbox)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "src/herdeck/floor.py:2" in result.stdout  # the unmarked line is still caught
+    assert "src/herdeck/floor.py:1" not in result.stdout
+
+
 def test_check_ignores_version_fixtures_in_tests(sandbox):
     write(sandbox, "desktop/src/Widget.test.ts", f'const current = "{VERSION}";\n')
 
