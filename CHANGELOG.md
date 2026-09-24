@@ -16,6 +16,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reports the Herdr metadata token `subagents=<running>/<total>`. The runtime
   reads that token into the agent state. You add the hooks by hand for now
   (README "Subagent tracking"); a later release will install them.
+- Status history and statistics. The bridge records every status stretch of
+  every agent pane in a local SQLite store
+  (`~/.local/state/herdeck/history.sqlite`, 0600, 30 days, at most 200,000
+  rows), including whether a blocked stretch ended after an answer sent
+  through herdeck. A new `stats` message (capability `history`, read-only
+  token allowed) returns working/blocked/idle/waiting time, blocked count,
+  answers, median and p90 time to answer, done count, per group (agent, repo,
+  agent type) and per day for today, 7 or 30 days. The runtime serves it as
+  `GET /stats?range=&group=`, summing all connected bridges, and the desktop
+  app has a new Statistics view (Settings → Control) with a summary row, a
+  per-day chart and a per-group table, in English and Czech.
 
 ## [0.10.2] - 2026-09-24
 
