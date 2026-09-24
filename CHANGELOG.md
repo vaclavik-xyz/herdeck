@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-09-24
+
 ### Fixed
 - Usage limits: a CodexBar poll that exits 1 because some OTHER provider it
   has enabled failed (an expired Cursor or Kimi login) no longer throws away
