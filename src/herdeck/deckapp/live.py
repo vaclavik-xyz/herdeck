@@ -40,6 +40,8 @@ from ..app import (
 from ..commands import Command, command_to_msg, profile_for
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
+from ..i18n import tr
+from ..layout import prompt_excerpt
 from ..model import AgentKey, AgentState, Status
 from ..notify import (
     NotificationFeed,
@@ -66,6 +68,10 @@ _REPLY_STRIP_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]
 # Answered block episodes remembered so a second click (or a reminder banner of
 # the same episode) never answers twice.
 _ANSWERED_EPISODES_MAX = 256
+# How long a blocked alert that needs its prompt ([notifications].banner_actions
+# / banner_prompt) waits for the background pre-read before it goes out
+# without it. The read normally lands in well under a second.
+PROMPT_WAIT_S = 2.0
 
 
 def sanitize_reply(text: object) -> str:
@@ -106,6 +112,7 @@ class LiveSource(StateSource):
         notification_fallback=None,
         notify_clock=None,
         notify_icons: NotificationIconCache | None = None,
+        prompt_wait_s: float = PROMPT_WAIT_S,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -124,6 +131,7 @@ class LiveSource(StateSource):
         # suppression (see notify.NotifyThrottle).
         self._notify_throttle = NotifyThrottle(clock=notify_clock or time.monotonic)
         self._notify_schedule = notify_schedule or _thread_notify_schedule
+        self._prompt_wait_s = prompt_wait_s
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
@@ -288,6 +296,8 @@ class LiveSource(StateSource):
             answered = episode in self._answered_episodes
         if state is None:
             return "unknown"
+        if state.backend != "herdr":
+            return "invalid"
         if state.status is not Status.BLOCKED or current != episode or answered:
             return "stale"
         terminal_id = state.terminal_id or None
@@ -476,11 +486,62 @@ class LiveSource(StateSource):
             agent.key.pane_id,
             time.time_ns() // 1_000_000,
         )
-        self._notify_schedule(
-            lambda: self._notifier.notify(
-                title, body, sound, icon=self._banner_icon(agent), meta=meta
+        self._notify_schedule(lambda: self._deliver_alert(event, agent, title, body, sound, meta))
+
+    def _deliver_alert(
+        self, event: str, agent: AgentState, title: str, body: str, sound, meta: dict
+    ) -> None:
+        """Notify thread: enrich a blocked alert with its prompt when asked to
+        ([notifications].banner_actions / banner_prompt), then send it."""
+        n = self._config.notifications
+        if event == "blocked" and (n.banner_actions or n.banner_prompt):
+            prompt = self._await_prompt(agent.key, meta.get("episode"))
+            if prompt is None:
+                log.info(
+                    "notification dropped (agent left the block episode) agent=%s:%s",
+                    agent.key.server_id,
+                    agent.key.pane_id,
+                )
+                return
+            body = self._enrich_blocked(agent, body, prompt, meta)
+        self._notifier.notify(title, body, sound, icon=self._banner_icon(agent), meta=meta)
+
+    def _await_prompt(self, key: AgentKey, episode: str | None) -> str | None:
+        """The pre-read prompt of ``key``'s block ``episode`` ("" if it did not
+        arrive in time), or None when the agent already left that episode — the
+        alert is stale then and must not be posted."""
+        with self._preread_cv:
+            self._preread_cv.wait_for(
+                lambda: self._block_episode.get(key) != episode
+                or isinstance(self._preread.get(key), str),
+                timeout=self._prompt_wait_s,
             )
-        )
+            if episode is None or self._block_episode.get(key) != episode:
+                return None
+            prompt = self._preread.get(key)
+        return prompt if isinstance(prompt, str) else ""
+
+    def _enrich_blocked(self, agent: AgentState, body: str, prompt: str, meta: dict) -> str:
+        """Add answer buttons / a reply field (banner_actions) to ``meta`` and a
+        prompt excerpt (banner_prompt) to ``body``."""
+        n = self._config.notifications
+        lang = self._config.view.language
+        # Answers go out as herdr keystrokes / text; other backends (T3) have
+        # their own decision API and keep plain banners.
+        if n.banner_actions and "macos" in n.backends and agent.backend == "herdr":
+            answer = binary_answer(
+                prompt, profile_for(self._config, agent.agent_type), self._config.safety
+            )
+            if answer is not None:
+                meta["actions"] = [
+                    {"id": "approve", "label": tr(lang, "act.approve")},
+                    {"id": "deny", "label": tr(lang, "act.deny")},
+                ]
+                meta["sig"] = answer.sig
+            else:
+                meta["reply"] = tr(lang, "notify.reply_placeholder")
+        excerpt = prompt_excerpt(prompt) if n.banner_prompt else ""
+        return f"{body}\n{excerpt}" if excerpt else body
 
     def _alert_meta(self, event: str, agent: AgentState) -> dict:
         """Feed fields naming the agent (and, for blocked, its episode) so a

@@ -58,6 +58,8 @@ STRINGS: dict[str, dict[str, str]] = {
         # notification titles (banner / Telegram headline)
         "notify.title_blocked": "{agent} · needs input",
         "notify.title_done": "{agent} · done",
+        # inline reply field of an actionable blocked banner
+        "notify.reply_placeholder": "Reply to the agent…",
         # usage-limit alerts (usage_alerts.usage_alert_message)
         "notify.usage_threshold": "{provider} {window} · {pct} % used",
         "notify.usage_resets_at": "resets {at}",
@@ -148,6 +150,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "launch_on": "na {server}",
         "notify.title_blocked": "{agent} · čeká na tebe",
         "notify.title_done": "{agent} · hotovo",
+        "notify.reply_placeholder": "Odpověz agentovi…",
         "notify.usage_threshold": "{provider} {window} · využito {pct} %",
         "notify.usage_resets_at": "obnova {at}",
         "notify.usage_reset_title": "{provider} {window} obnoveno",

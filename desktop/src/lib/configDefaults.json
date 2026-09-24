@@ -52,6 +52,8 @@
     "sound": true,
     "sounds": { "blocked": "Glass", "done": "Hero" },
     "backends": ["macos"],
+    "banner_actions": false,
+    "banner_prompt": false,
     "telegram": {
       "message_thread_id": 0,
       "interactive": false,

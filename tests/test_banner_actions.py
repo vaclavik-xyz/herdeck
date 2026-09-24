@@ -252,3 +252,106 @@ def test_http_answer_route(served):
     assert _post(app, "/agents/answer", body) == 204
     assert [m["type"] for m in runner.sent] == ["act"]
     assert _post(app, "/agents/answer", body) == 409
+
+
+# --- banner_actions / banner_prompt: the alert waits for its prompt ------------
+
+
+class _Recorder:
+    def __init__(self):
+        self.calls = []
+
+    def notify(self, title, body, sound=False, icon=None, meta=None):
+        self.calls.append((title, body, meta))
+
+
+def _enriching_live(*, actions=True, prompt=False, lang="en", wait=0.5):
+    config, server = live_config()
+    config.notifications.enabled = True
+    config.notifications.banner_actions = actions
+    config.notifications.banner_prompt = prompt
+    config.view.language = lang
+    pending = []
+    src = LiveSource(config, server, notify_schedule=pending.append, prompt_wait_s=wait)
+    recorder = _Recorder()
+    src._notifier = recorder
+    runner = FakeRunner()
+    src.attach_runner(runner)
+    src._on_connection(server.id, True)
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_event(server.id, agent(server.id, "p0", Status.BLOCKED))
+    return src, server, runner, pending, recorder
+
+
+def _land_prompt(src, server, runner, text):
+    read = [m for m in runner.sent if m["type"] == "read"][-1]
+    src._on_result(server.id, read["req"], {"text": text, "pane_id": "p0"})
+
+
+def test_binary_blocked_banner_carries_approve_and_deny():
+    src, server, runner, pending, recorder = _enriching_live()
+    _land_prompt(src, server, runner, CLAUDE_PROMPT)
+    [deliver] = pending
+    deliver()
+    [(title, body, meta)] = recorder.calls
+    assert title == "claude · needs input" and body == "p0 · main"
+    assert meta["actions"] == [
+        {"id": "approve", "label": "Approve"},
+        {"id": "deny", "label": "Deny"},
+    ]
+    assert meta["sig"] == binary_answer(CLAUDE_PROMPT, DEFAULT_PROFILES["claude"], SafetyConfig()).sig
+    assert meta["episode"] == src._block_episode[AgentKey(server.id, "p0")]
+    assert "reply" not in meta
+
+
+def test_open_question_banner_offers_a_reply_field_in_the_deck_language():
+    src, server, runner, pending, recorder = _enriching_live(lang="cs")
+    _land_prompt(src, server, runner, "Which colour?\n1. Red\n2. Blue\n")
+    pending[0]()
+    meta = recorder.calls[0][2]
+    assert meta["reply"] == "Odpověz agentovi…"
+    assert "actions" not in meta
+
+
+def test_banner_prompt_appends_a_sanitized_excerpt():
+    src, server, runner, pending, recorder = _enriching_live(actions=False, prompt=True)
+    _land_prompt(src, server, runner, "Run \x1b[1mrm -rf build\x1b[0m?‮\n1. Yes\n2. No")
+    pending[0]()
+    title, body, meta = recorder.calls[0]
+    assert body == "p0 · main\nRun rm -rf build?"
+    assert "actions" not in meta and "reply" not in meta
+
+
+def test_an_alert_whose_episode_ended_while_waiting_is_dropped():
+    src, server, runner, pending, recorder = _enriching_live()
+    src._on_event(server.id, agent(server.id, "p0", Status.WORKING))  # answered on the deck
+    pending[0]()
+    assert recorder.calls == []
+
+
+def test_a_prompt_that_never_arrives_still_alerts_without_buttons():
+    src, _server, _runner, pending, recorder = _enriching_live(wait=0.01)
+    pending[0]()
+    [(_title, body, meta)] = recorder.calls
+    assert body == "p0 · main"
+    assert "actions" not in meta and meta["reply"]  # replying needs no parsed prompt
+
+
+def test_banner_opt_ins_parse_default_off_and_validate():
+    from herdeck.config import ConfigError, parse_notifications
+    from herdeck.settings import _notifications_config
+
+    for parse in (parse_notifications, _notifications_config):
+        n = parse({})
+        assert (n.banner_actions, n.banner_prompt) == (False, False)
+        n = parse({"banner_actions": True, "banner_prompt": True})
+        assert (n.banner_actions, n.banner_prompt) == (True, True)
+        with pytest.raises(ConfigError, match="notifications.banner_prompt"):
+            parse({"banner_prompt": "yes"})
+
+
+def test_without_the_opt_ins_the_alert_does_not_wait():
+    src, _server, _runner, pending, recorder = _enriching_live(actions=False, wait=30)
+    pending[0]()  # would block for 30 s if it waited for the prompt
+    [(_title, _body, meta)] = recorder.calls
+    assert "actions" not in meta and "reply" not in meta

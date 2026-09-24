@@ -442,6 +442,28 @@ def parse_options(text: str) -> list[Option]:
     return options
 
 
+# Characters never allowed into notification text: controls (incl. escape) and
+# bidi overrides that could make a banner lie about its content.
+_UNSAFE_TEXT_RE = re.compile("[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
+_BOX_CHARS_RE = re.compile("[\u2500-\u257f]")  # TUI frame borders around a prompt
+PROMPT_EXCERPT_MAX = 180
+
+
+def prompt_excerpt(text: str, limit: int = PROMPT_EXCERPT_MAX) -> str:
+    """A one-line excerpt of a blocked prompt for a notification body.
+
+    The same lines the drill panel shows (the prompt's leading non-option
+    lines, ANSI and frame borders stripped), joined, stripped of
+    control / bidi characters and truncated to ``limit`` characters with "…".
+    """
+    _raw, lines = _detail_lines(text or "")
+    joined = _BOX_CHARS_RE.sub(" ", " ".join(lines))
+    joined = " ".join(_UNSAFE_TEXT_RE.sub(" ", joined).split())
+    if len(joined) <= limit:
+        return joined
+    return joined[: max(0, limit - 1)].rstrip() + "…"
+
+
 def _detail_lines(text: str) -> tuple[list[str], list[str]]:
     """(all cleaned lines, the first non-option LOGICAL lines).
 
