@@ -285,6 +285,6 @@ def test_elgato_backend_entry_selftest_exits_zero_without_starting():
 def test_elgato_selftest_covers_lazy_imports():
     from herdeck.elgato import runtime
 
-    assert {"herdeck.app", "websockets", "resvg_py"} <= set(runtime.SELFTEST_IMPORTS)
+    assert {"herdeck.host", "websockets", "resvg_py"} <= set(runtime.SELFTEST_IMPORTS)
     assert runtime.run_import_selftest() == 0
 

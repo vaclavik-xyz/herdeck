@@ -523,7 +523,8 @@ def _open_terminal(client, *, cols=None, rows=None, timeout=10.0):
 def test_live_terminal_sse_and_stop(cockpit):
     _proc, bridge, client = cockpit
     state = client.state()
-    index, version = "0", state["tiles"]["0"]
+    # validation runs on an empty tile: its image (version) never changes
+    index, version = "12", state["tiles"]["12"]
     stream = "streamabc123"
 
     assert client.request("GET", f"{BASE}/term/{index}?stream={stream}&v={version}",

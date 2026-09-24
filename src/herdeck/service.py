@@ -11,8 +11,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .app import validate_web_bind
 from .driver.web import normalize_web_base_path, normalize_web_origin
+from .host import validate_web_bind
 
 KINDS = ("web", "bridge", "runtime")
 DEFAULT_APP = Path("/Applications/herdeck.app")

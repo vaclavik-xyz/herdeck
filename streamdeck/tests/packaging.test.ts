@@ -56,8 +56,8 @@ describe("PyInstaller spec", () => {
 });
 
 describe("freeze entry script", () => {
-  it("invokes herdeck.app.main", () => {
-    expect(entry).toContain("from herdeck.app import main");
+  it("invokes the herdeck entry point (herdeck.host.main)", () => {
+    expect(entry).toContain("from herdeck.host import main");
     expect(entry).toMatch(/main\(\)/);
   });
 });

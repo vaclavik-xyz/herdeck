@@ -122,6 +122,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `herdeck: runtime plan=attach|spawn reason=…`, at launch and on every switch.
 
 ### Changed
+- `herdeck`, `herdeck-web` (and `python -m herdeck.app`) now run the same
+  runtime as the desktop app and `herdeck.runtime` (DeckApp + LiveSource),
+  with the web cockpit, D200, Elgato USB or headless deck attached as a
+  front. Routes, cookies, CSP/frame headers, the `/api/v1` cockpit API,
+  `/term` streams and Telegram alerts are unchanged (pinned by
+  `tests/test_contract_*.py`). What differs:
+  - A restart no longer re-alerts every agent that is already blocked; only
+    transitions after the first snapshot alert (Telegram included).
+  - Alerts follow the runtime's notification rules everywhere: macOS
+    banners carry the project icon, `[notifications].skip_focused`,
+    `remind_after` and `[notifications.telegram].only_when_away` apply to
+    these hosts too.
+  - `HERDECK_DECK=d200` waits for the device (and for `d200.lock` held by
+    another runtime) instead of exiting, and reopens it after sleep/USB loss.
+    Auto-detect skips a D200 another runtime owns.
+  - A config edit or deck profile switch reconnects to the bridge; Telegram
+    buttons sent before it keep working. A failed reload, a locked profile
+    or a failed pin save shows a short status panel (now also in Czech, and
+    also in the desktop runtime).
+  - `HERDECK_MOCK=1` shows the desktop app's demo fleet (static; a press
+    cycles a tile) instead of the old cycling five-agent demo.
 - `herdeck-bridge` now refuses to start unless `HERDECK_BIND` is loopback or a
   Tailscale address, like `herdeck-web` and `herdeck-service` already did;
   `HERDECK_ALLOW_UNSAFE_BIND=1` overrides it.
