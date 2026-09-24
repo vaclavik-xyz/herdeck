@@ -10,7 +10,14 @@ The Rust shell owns the window + tray and either **attaches** to a Herdeck
 runtime that is already listening (via its discovery JSON) or **spawns and
 supervises** one. Development uses `python -m herdeck.deckapp`; production
 bundles `herdeck.runtime`, including the Ulanzi D200 and HID stack. Both expose
-the same loopback discovery contract. The shell reads the runtime's `url` +
+the same loopback discovery contract. A spawned sidecar gets
+`HERDECK_PARENT_WATCH=1` and a stdin pipe the shell keeps open. When the shell
+dies for any reason the pipe closes, and the sidecar shuts down cleanly on EOF
+(`herdeck.deckapp.parent_watch`). A quit closes the same pipe and sends SIGKILL
+only after 2 s. A stable shell on its own sidecar re-checks `runtime.json`
+every 12 s and switches to a healthy launchd runtime when one appears. Every
+plan choice is logged as `herdeck: runtime plan=attach|spawn reason=…`. The
+shell reads the runtime's `url` +
 access `token` and proxies `/state`, `/tile`, and `/press` through Rust commands,
 so the token never crosses into JS (the runtime is a different origin and sends
 no CORS headers).

@@ -12,8 +12,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `~/Library/Logs/herdeck/herdeck.log` (Linux: `~/.local/state/herdeck/`),
   rotated at 5 MB. The runtime now also logs each notification's route
   (queued for the banner, or the `osascript` fallback) at INFO.
+- Every `osascript` notification fallback is logged at WARNING with its
+  reason: `reason=no_shell_claim last_claim_age=…s` (or `never`) when no app
+  claimed banner duty in the last 60 s, `reason=shell_native_failed error=…`
+  when the app's native banner failed. The runtime also logs when the app's
+  banner claim is acquired, moves to a relaunched app, or lapses.
+- The desktop app logs which runtime it uses and why:
+  `herdeck: runtime plan=attach|spawn reason=…`, at launch and on every switch.
 
 ### Fixed
+- A sidecar spawned by the desktop app no longer outlives it. It used to keep
+  running (and holding the D200) after a crash, SIGKILL or Force Quit. It now
+  exits cleanly when the app's stdin pipe closes, with a parent-pid check as a
+  fallback. A normal quit closes the pipe and kills the sidecar only after 2 s.
+- Two runtimes no longer fight over one D200. The owner holds
+  `~/.cache/herdeck/d200.lock` (`$HERDECK_RUNTIME_DIR` respected). Another
+  runtime leaves the device alone, keeps serving its window, and takes over
+  when the owner exits.
+- A desktop app that spawned its own sidecar because the launchd runtime
+  was not answering at launch (e.g. right after an auto-update relaunch) now
+  switches to that runtime once it is healthy and stops its sidecar. It
+  checks every 12 s and after any failed poll. Before, the two runtimes stayed
+  until the app restarted, and banners fell back to `osascript`.
 - SVG project favicons now render in the packaged desktop app and the Elgato
   plugin (they showed the monogram): SVG goes through resvg (`resvg-py`, a
   self-contained wheel bundled into both). An SVG favicon referencing external files or
