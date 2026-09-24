@@ -30,9 +30,12 @@ MAX_SERVERS = 64
 MAX_FILE_BYTES = 512 * 1024
 
 
-def default_path() -> str:
+def default_path(tag: str = "") -> str:
+    """``tag`` names the runtime (live_events.runtime_tag): each runtime on a
+    host keeps its own cursor, so one never swallows another's alerts."""
     base = os.environ.get("HERDECK_RUNTIME_DIR") or os.path.expanduser("~/.cache/herdeck")
-    return os.path.join(base, FILE_NAME)
+    name = f"bridge-events-{tag}.json" if tag else FILE_NAME
+    return os.path.join(base, name)
 
 
 class _Cursor:

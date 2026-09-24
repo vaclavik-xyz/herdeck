@@ -460,9 +460,10 @@ class AgentCardMixin:
                     # the agent may re-block on another prompt while the send
                     # below waits for the bridge.
                     episode = self._block_episode.get(key)
-                    answered = self._episode_spent(server_id, episode)
-                if not isinstance(prompt, str) or not prompt or answered:
-                    # answered: from a banner, or on another client (bridge event)
+                # An episode already answered is not refused here: on a
+                # bridge with lifecycle events the bridge decides (its next
+                # question may already be up), and refuses a repeat as "stale".
+                if not isinstance(prompt, str) or not prompt:
                     return outcome("stale")
                 if revision != decision_revision(server_id, pane_id, agent.terminal_id, prompt):
                     return outcome("stale")

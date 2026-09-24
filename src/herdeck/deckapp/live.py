@@ -657,6 +657,10 @@ class LiveSource(
                 agent.key.pane_id,
             )
             return
+        if agent.episode_id:
+            # This episode is alerted: a replay of the bridge's events (after
+            # a restart, or a failed subscription recovering) must not repeat it.
+            self._ev_store.note(agent.key.server_id, episodes=(agent.episode_id,))
         title = event_title(agent.agent_type, event, self._config.view.language)
         body = event_notification_body(agent, multi_server=multi)
         meta = self._alert_meta(event, agent)

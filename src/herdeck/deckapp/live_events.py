@@ -28,7 +28,10 @@ runs on a connector thread and never holds ``self._lock`` across the deck lock.
 from __future__ import annotations
 
 import logging
+import os
+import re
 import socket
+import sys
 import threading
 import time
 
@@ -41,6 +44,20 @@ from .event_cursor import EventCursorStore
 log = logging.getLogger(__name__)
 
 ANSWER_TYPES = frozenset({"act", "send_text", "choose_if_blocked"})
+# A subscription that has not seen its event_sync this long after connecting
+# counts as failed: local detection takes over and the subscribe is re-sent
+# every RESUBSCRIBE_S until the bridge answers.
+SYNC_TIMEOUT_S = 10.0
+RESUBSCRIBE_S = 30.0
+_TAG_RE = re.compile(r"[^a-z0-9_.-]+")
+
+
+def runtime_tag(active_profile: str) -> str:
+    """Which runtime this is, for its own cursor file: several runtimes on
+    one host (desktop, herdeck-web, another profile) each track their own
+    place in a bridge's event stream and alert on their own."""
+    entry = os.path.basename(sys.argv[0] or "") or "herdeck"
+    return _TAG_RE.sub("-", f"{entry}-{active_profile}".lower()).strip("-")[:80] or "herdeck"
 
 
 class StampingRunner:
@@ -59,9 +76,21 @@ class StampingRunner:
 
 class BridgeEventsMixin:
     def _bridge_events_init(self, store: EventCursorStore | None = None) -> None:
-        self._ev_store = store or EventCursorStore(_event_cursor.default_path())
+        self._ev_store = store or EventCursorStore(
+            _event_cursor.default_path(runtime_tag(self._config.meta.active_profile))
+        )
         self._ev_client = f"herdeck@{socket.gethostname()}"[:64]
         self._ev_lock = threading.Lock()
+        # Subscription health per server (under _ev_lock): synced once its
+        # event_sync arrived; until the deadline a pending one keeps local
+        # detection quiet; failed = no sync in time, local detection runs.
+        self._ev_synced: set[str] = set()
+        self._ev_failed: set[str] = set()
+        self._ev_deadline: dict[str, float] = {}
+        self._ev_generation: dict[str, int] = {}
+        self._ev_sync_timeout = SYNC_TIMEOUT_S
+        self._ev_resubscribe_s = RESUBSCRIBE_S
+        self._ev_timer = _start_timer
         # server -> events buffered until event_sync, and whether that replay
         # may alert (False for a first, cursor-less subscription).
         self._ev_batch: dict[str, list[LifecycleEvent]] = {}
@@ -73,18 +102,66 @@ class BridgeEventsMixin:
 
     # --- connector hooks ------------------------------------------------------
     def _events_cursor(self, server_id: str) -> dict:
-        """The ``events`` field of the connect-time ``list`` (connector thread)."""
+        """The ``events`` field of the connect-time ``list`` (connector thread).
+        Starts the event_sync watchdog of this connection."""
+        with self._ev_lock:
+            generation = self._ev_generation.get(server_id, 0) + 1
+            self._ev_generation[server_id] = generation
+            self._ev_synced.discard(server_id)
+            self._ev_failed.discard(server_id)
+            self._ev_deadline[server_id] = time.monotonic() + self._ev_sync_timeout
+        self._ev_timer(
+            self._ev_sync_timeout, lambda: self._ev_check_sync(server_id, generation)
+        )
+        return self._ev_subscription(server_id)
+
+    def _ev_subscription(self, server_id: str) -> dict:
         epoch, seq = self._ev_store.cursor(server_id)
         with self._ev_lock:
             self._ev_batch[server_id] = []
             self._ev_batch_alert[server_id] = seq is not None
         return {"after": seq, "epoch": epoch, "client": self._ev_client}
 
-    def _bridge_events(self, server_id: str) -> bool:
-        """Does ``server_id``'s bridge drive notifications (capability)?"""
+    def _ev_check_sync(self, server_id: str, generation: int) -> None:
+        """Watchdog (timer thread): no event_sync on this connection yet ->
+        local detection takes over and the subscribe goes out again."""
+        with self._ev_lock:
+            if self._ev_generation.get(server_id) != generation or server_id in self._ev_synced:
+                return
+            self._ev_failed.add(server_id)
+        with self._lock:
+            connected = self._connected.get(server_id, False)
+        runner = self._runners.get(server_id)
+        if not connected or runner is None or not self._events_offered(server_id):
+            return
+        log.warning(
+            "bridge '%s' offers events but sent no event_sync; alerting locally, re-subscribing",
+            server_id,
+        )
+        runner.send({"type": "list", "events": self._ev_subscription(server_id)})
+        self._ev_timer(
+            self._ev_resubscribe_s, lambda: self._ev_check_sync(server_id, generation)
+        )
+
+    def _events_offered(self, server_id: str) -> bool:
         connector = getattr(self._runners.get(server_id), "connector", None)
         caps = getattr(connector, "capabilities", None)
         return isinstance(caps, frozenset | set) and EVENTS_CAPABILITY in caps
+
+    def _bridge_events(self, server_id: str) -> bool:
+        """Does ``server_id``'s bridge drive notifications right now? It must
+        offer ``events`` and this connection's subscription must have synced
+        (or still be within its grace period, when local detection only
+        follows along silently)."""
+        if not self._events_offered(server_id):
+            return False
+        with self._ev_lock:
+            if server_id in self._ev_synced:
+                return True
+            return (
+                server_id not in self._ev_failed
+                and time.monotonic() < self._ev_deadline.get(server_id, 0.0)
+            )
 
     def _episode_spent(self, server_id: str, episode: str | None) -> bool:
         """Was block ``episode`` answered (here or on another client)? Only
@@ -101,12 +178,18 @@ class BridgeEventsMixin:
             with self._ev_lock:
                 self._ev_batch.pop(server_id, None)
                 self._ev_batch_alert.pop(server_id, None)
+                self._ev_synced.discard(server_id)
+                self._ev_deadline.pop(server_id, None)
+                # a pending watchdog of the old connection does nothing
+                self._ev_generation[server_id] = self._ev_generation.get(server_id, 0) + 1
 
     def _on_lifecycle(self, server_id: str, msg) -> None:
         if isinstance(msg, EventSync):
             with self._ev_lock:
                 batch = self._ev_batch.pop(server_id, None) or []
                 alert = self._ev_batch_alert.pop(server_id, False)
+                self._ev_synced.add(server_id)
+                self._ev_failed.discard(server_id)
             self._ev_replay(server_id, batch, alert=alert and bool(batch))
             self._ev_store.note(server_id, epoch=msg.epoch, seq=msg.seq)
             return
@@ -117,13 +200,17 @@ class BridgeEventsMixin:
             if batch is not None:
                 batch.append(msg)
                 return
-        fresh = self._ev_store.note(
+        opens = msg.kind in ("blocked", "done")
+        fresh = opens and not self._ev_store.known(server_id, msg.episode_id)
+        self._ev_handle(msg, alert=fresh)
+        # Known only once its alert is queued (_fire_notify notes it too): a
+        # crash in between replays it rather than losing it.
+        self._ev_store.note(
             server_id,
             epoch=msg.epoch,
             seq=msg.seq,
-            episodes=(msg.episode_id,) if msg.kind in ("blocked", "done") else (),
+            episodes=(msg.episode_id,) if opens else (),
         )
-        self._ev_handle(msg, alert=msg.episode_id in fresh)
 
     # --- event handling -------------------------------------------------------
     def _ev_replay(self, server_id: str, batch: list[LifecycleEvent], *, alert: bool) -> None:
@@ -136,14 +223,14 @@ class BridgeEventsMixin:
                 opened[msg.episode_id] = msg
             elif msg.kind in ("unblocked", "cleared"):
                 opened.pop(msg.episode_id, None)
-        fresh = self._ev_store.note(server_id, episodes=tuple(opened))
-        if not alert:
-            return
-        with self._lock:
-            answered = set(self._answered_episodes)
-        for episode, msg in opened.items():
-            if episode in fresh and episode not in answered:
-                self._ev_alert(msg)
+        if alert:
+            with self._lock:
+                answered = set(self._answered_episodes)
+            for episode, msg in opened.items():
+                if episode not in answered and not self._ev_store.known(server_id, episode):
+                    self._ev_alert(msg)
+        # A baseline, or what did not alert, is known from now on too.
+        self._ev_store.note(server_id, episodes=tuple(opened))
 
     def _ev_alert(self, msg: LifecycleEvent) -> None:
         key = AgentKey(msg.server_id, msg.pane_id)
@@ -294,6 +381,12 @@ class BridgeEventsMixin:
         interval = self._config.notifications.remind_after * 60.0
         # Reminders that fell due before we heard of the block are not sent late.
         return now - elapsed, int(elapsed // interval) if interval > 0 else 0
+
+
+def _start_timer(delay: float, fn) -> None:
+    timer = threading.Timer(delay, fn)
+    timer.daemon = True
+    timer.start()
 
 
 def _in_episode(state: AgentState | None, status: Status, episode_id: str) -> bool:

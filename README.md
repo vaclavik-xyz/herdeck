@@ -1349,13 +1349,16 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   is never sent twice. The blocked prompt arrives with the event, so drills,
   the agent card and banner excerpts need no extra read. An answer given on
   any client withdraws the banners on all the others, closes a drill left
-  open on that prompt, and turns their Approve/Deny/Reply and card buttons
-  for it into "stale". Reminders count from the moment the bridge saw the
+  open on that prompt, and turns their Approve/Deny/Reply buttons for it into
+  "stale" (the card asks the bridge, which also accepts the next question of
+  a multi-step prompt). Reminders count from the moment the bridge saw the
   block. Each runtime keeps its place in the event stream in
-  `~/.cache/herdeck/bridge-events.json`, so after sleep or a restart it only
-  alerts what it missed, never again what it already showed. A first start
-  alerts nothing that was already under way. Older bridges keep the previous
-  behaviour, where each runtime detects transitions itself.
+  `~/.cache/herdeck/bridge-events-<runtime>-<profile>.json`, so after sleep
+  or a restart it only alerts what it missed, never again what it already
+  showed. A first start alerts nothing that was already under way. If the
+  bridge does not confirm the subscription within 10 s, the runtime alerts
+  from its own detection and re-subscribes every 30 s. Older bridges keep the
+  previous behaviour, where each runtime detects transitions itself.
 - Notifications fire once per event episode (re-arming after the agent leaves
   the notified state) and never block the UI loop. An agent that flaps is
   throttled per agent and event (60 s for **done**, a 5 s flap guard for

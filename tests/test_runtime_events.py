@@ -47,6 +47,8 @@ def make(tmp_path, *, events=True, store=None, remind_after=0, clock=None):
         event_store=store or EventCursorStore(str(tmp_path / "cursor.json")),
     )
     src.set_notify_gate(lambda: True, features=lambda: frozenset({"withdraw"}))
+    src.timers = []
+    src._ev_timer = lambda delay, fn: src.timers.append((delay, fn))
     runner = FakeRunner(connector=Caps("events") if events else Caps())
     src.attach_runner(runner, server.id)
     src._on_connection(server.id, True)
@@ -145,7 +147,7 @@ def test_done_and_cleared_alert_and_withdraw(tmp_path):
 # --- answered elsewhere -----------------------------------------------------
 
 
-def test_answered_elsewhere_withdraws_and_makes_banner_and_card_stale(tmp_path):
+def test_answered_elsewhere_withdraws_and_makes_the_banner_stale(tmp_path):
     from herdeck.decisions import decision_revision
     from herdeck.deckapp import DeckApp
     from tests.test_deckapp_live import StubIcons
@@ -160,11 +162,15 @@ def test_answered_elsewhere_withdraws_and_makes_banner_and_card_stale(tmp_path):
     assert items(src) == [("alert", "blocked", "p0"), ("withdraw", None, "p0")]
     sig = binary_answer(CLAUDE_PROMPT, DEFAULT_PROFILES["claude"], SafetyConfig()).sig
     assert src.answer_agent(key, EP, choice="approve", sig=sig) == "stale"
-    rev = decision_revision(server.id, "p0", "", CLAUDE_PROMPT)
-    assert src.card_answer(server.id, "p0", "1", rev)["code"] == "stale"
     detail = src.card_detail(server.id, "p0")
     assert detail["options"] == [] and detail["prompt"]
-    assert [m for m in runner.sent if m["type"] in ("act", "choose_if_blocked")] == []
+    # The card itself does not refuse: the bridge decides (it may already
+    # show the next question) and answers a repeat with "stale".
+    sent = []
+    src._card_send = lambda cmd: sent.append(cmd) or {"ok": True, "code": "pending", "message": ""}
+    rev = decision_revision(server.id, "p0", "", CLAUDE_PROMPT)
+    assert src.card_answer(server.id, "p0", "1", rev)["code"] == "pending"
+    assert [c.kind for c in sent] == ["choose_if_blocked"]
     app.close()
 
 
@@ -361,3 +367,82 @@ async def test_real_bridge_frames_drive_the_runtime(tmp_path):
     assert alerts(src) == [("blocked", "p0")]
     assert src._preread[AgentKey(server.id, "p0")] == CLAUDE_PROMPT
     await hub.close()
+
+
+# --- a subscription that never syncs ------------------------------------------
+
+
+def test_no_event_sync_falls_back_to_local_alerts_and_resubscribes(tmp_path):
+    src, server, runner = make(tmp_path)
+    src._events_cursor(server.id)  # connect-time subscribe, no event_sync follows
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_snapshot(server.id, [blocked(server.id)])
+    assert alerts(src) == []  # within the grace period: the events path owns alerts
+    (delay, watchdog), = src.timers
+    assert delay == 10.0
+    watchdog()
+    resubscribe = runner.sent[-1]
+    assert resubscribe["type"] == "list" and "events" in resubscribe
+    assert len(src.timers) == 2  # and it keeps trying
+    # local detection runs now
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.WORKING), blocked(server.id)])
+    src._on_snapshot(
+        server.id, [blocked(server.id, "p1", episode=EP2), blocked(server.id)]
+    )
+    assert alerts(src) == [("blocked", "p1")]
+    # the bridge answers the re-subscribe: its replay repeats p1's episode,
+    # which the local path already alerted -> no second alert
+    src._on_lifecycle(server.id, ev("blocked", 1, episode=EP2, pane="p1", replay=True))
+    src._on_lifecycle(server.id, EventSync(server.id, "e1", 1, False))
+    assert src._bridge_events(server.id)
+    assert alerts(src) == [("blocked", "p1")]
+
+
+def test_watchdog_of_an_old_connection_does_nothing(tmp_path):
+    src, server, runner = make(tmp_path)
+    src._events_cursor(server.id)
+    (_delay, watchdog), = src.timers
+    src._on_connection(server.id, False)
+    src._on_connection(server.id, True)
+    src._events_cursor(server.id)
+    sent = len(runner.sent)
+    watchdog()  # the first connection's timer
+    assert len(runner.sent) == sent and src._bridge_events(server.id)
+
+
+# --- multi-step prompt on the runtime side ------------------------------------
+
+
+def test_next_question_after_an_answer_offers_options_again(tmp_path):
+    from herdeck.deckapp import DeckApp
+    from tests.test_deckapp_live import StubIcons
+
+    now = [100.0]
+    src, server, _runner = make(tmp_path, clock=lambda: now[0])
+    app = DeckApp(src, serve=False, icon_provider=StubIcons())
+    subscribe(src, server)
+    src._on_snapshot(server.id, [blocked(server.id)])
+    src._on_lifecycle(server.id, ev("blocked", 1, prompt=CLAUDE_PROMPT, revision=REV))
+    src._on_lifecycle(server.id, ev("answered", 2, by="deck@desk"))
+    assert src.card_detail(server.id, "p0")["options"] == []
+    q2 = CLAUDE_PROMPT.replace("app.py", "b.py")
+    src._on_lifecycle(server.id, ev("blocked", 3, prompt=q2, revision="99" * 8))
+    detail = src.card_detail(server.id, "p0")
+    assert detail["options"] and "b.py" in detail["prompt"]
+    stamped = src._stamp_answer(server.id, {"type": "act", "pane_id": "p0", "keys": ["1"]})
+    assert stamped["prompt_revision"] == "99" * 8
+    app.close()
+
+
+# --- per-runtime cursor file --------------------------------------------------
+
+
+def test_each_runtime_keeps_its_own_cursor_file(monkeypatch):
+    from herdeck.deckapp import event_cursor, live_events
+
+    monkeypatch.setattr(live_events.sys, "argv", ["/usr/bin/herdeck-web"])
+    assert live_events.runtime_tag("work") == "herdeck-web-work"
+    monkeypatch.setattr(live_events.sys, "argv", [""])
+    assert live_events.runtime_tag("Default Profile") == "herdeck-default-profile"
+    monkeypatch.undo()
+    assert event_cursor.default_path("a") != event_cursor.default_path("b")
