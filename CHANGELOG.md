@@ -16,6 +16,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reports the Herdr metadata token `subagents=<running>/<total>`. The runtime
   reads that token into the agent state. You add the hooks by hand for now
   (README "Subagent tracking"); a later release will install them.
+- Subagent list on the desktop agent card. The bridge reads each pane's
+  subagent spool (cached by file mtime, capped at 20, corrupt or oversized
+  files ignored, the hook's stale/drop rules applied at read time) and adds a
+  `subagents` list to the wire pane (capability `subagents`). The agent card
+  lists them newest first with type, description, status (running, done,
+  failed, no signal) in colour, a live running time or the total time, and
+  nested subagents indented (en + cs). The section is hidden when there are
+  none. The cockpit's `GET /api/v1/agents` records gain the same `subagents`
+  list.
 
 ## [0.10.2] - 2026-09-24
 

@@ -79,6 +79,88 @@ def parse_subagents_token(value: object) -> tuple[int, int]:
     return running, total
 
 
+# One subagent from the per-pane spool (``subagents`` wire field, bridge
+# capability "subagents"). Statuses and text bounds mirror
+# ``subagent_hook``; the runtime re-validates whatever the bridge sent.
+SUBAGENT_STATUSES = ("running", "done", "failed", "stale")
+SUBAGENTS_MAX = 20
+_SUBAGENT_TEXT_MAX = {"id": 128, "provider": 16, "type": 64, "description": 160, "model": 64}
+# C0/C1 controls (newlines included: every field is a single line) and the
+# invisible characters that can reorder or hide text (bidi, zero-width, BOM).
+_SUBAGENT_CONTROL_RE = re.compile(
+    "[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]"
+)
+
+
+@dataclass(frozen=True)
+class Subagent:
+    id: str
+    provider: str = ""
+    type: str = ""
+    description: str = ""
+    model: str = ""
+    depth: int | None = None
+    status: str = "running"
+    started_ms: int = 0
+    ended_ms: int | None = None
+
+    def to_wire(self) -> dict:
+        return {
+            "id": self.id,
+            "provider": self.provider,
+            "type": self.type,
+            "description": self.description,
+            "model": self.model,
+            "depth": self.depth,
+            "status": self.status,
+            "started_ms": self.started_ms,
+            "ended_ms": self.ended_ms,
+        }
+
+
+def _subagent_text(value: object, key: str) -> str:
+    if not isinstance(value, str):
+        return ""
+    return _SUBAGENT_CONTROL_RE.sub("", value).strip()[: _SUBAGENT_TEXT_MAX[key]]
+
+
+def _subagent_int(value: object) -> int | None:
+    return value if type(value) is int and 0 <= value < 2**53 else None
+
+
+def parse_subagents(value: object) -> tuple[Subagent, ...]:
+    """Validated subagent list: malformed entries dropped, text sanitized and
+    clipped, most recently started first, at most ``SUBAGENTS_MAX``."""
+    if not isinstance(value, list):
+        return ()
+    out: list[Subagent] = []
+    for raw in value[: SUBAGENTS_MAX * 4]:
+        if not isinstance(raw, dict):
+            continue
+        entry_id = _subagent_text(raw.get("id"), "id")
+        status = raw.get("status")
+        started = _subagent_int(raw.get("started_ms"))
+        if not entry_id or status not in SUBAGENT_STATUSES or started is None:
+            continue
+        depth = _subagent_int(raw.get("depth"))
+        ended = _subagent_int(raw.get("ended_ms"))
+        out.append(
+            Subagent(
+                id=entry_id,
+                provider=_subagent_text(raw.get("provider"), "provider"),
+                type=_subagent_text(raw.get("type"), "type"),
+                description=_subagent_text(raw.get("description"), "description"),
+                model=_subagent_text(raw.get("model"), "model"),
+                depth=depth if depth is not None and depth <= 64 else None,
+                status=status,
+                started_ms=started,
+                ended_ms=ended if ended is not None and ended >= started else None,
+            )
+        )
+    out.sort(key=lambda s: (s.started_ms, s.id), reverse=True)
+    return tuple(out[:SUBAGENTS_MAX])
+
+
 @dataclass
 class AgentState:
     key: AgentKey
@@ -132,3 +214,7 @@ class AgentState:
     # ``subagents`` metadata token (herdeck-subagent-hook). 0/0 without it.
     subagents_running: int = 0
     subagents_total: int = 0
+    # The subagents themselves, most recent first (bridge capability
+    # "subagents", read from the hook's spool on the agents' host). Empty
+    # from an older bridge or when the pane has none.
+    subagents: tuple[Subagent, ...] = ()

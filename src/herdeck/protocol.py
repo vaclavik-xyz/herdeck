@@ -6,7 +6,14 @@ import json
 import re
 from dataclasses import dataclass
 
-from .model import AgentKey, AgentState, Status, WorkContext, parse_subagents_token
+from .model import (
+    AgentKey,
+    AgentState,
+    Status,
+    WorkContext,
+    parse_subagents,
+    parse_subagents_token,
+)
 from .project_icon_discovery import ICON_MIMES, MAX_ICON_BYTES, icon_hash
 
 _ICON_HASH_RE = re.compile(r"[0-9a-f]{16}")
@@ -105,6 +112,7 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         status_since_ms=_since_ms(pane.get("status_since_ms")),
         subagents_running=subagents_running,
         subagents_total=subagents_total,
+        subagents=parse_subagents(pane.get("subagents")),
     )
 
 

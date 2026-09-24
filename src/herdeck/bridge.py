@@ -27,6 +27,8 @@ from .protocol import WIRE_PROTOCOL, encode
 from .self_update import EXIT_GRACE_S, BridgeUpdater, not_managed_result
 from .status_since import CAPABILITY as _STATUS_SINCE_CAPABILITY
 from .status_since import StatusSinceTracker
+from .subagent_spool import CAPABILITY as _SUBAGENTS_CAPABILITY
+from .subagent_spool import SubagentSpoolReader
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +77,8 @@ _WIRE_CAPABILITIES = (
     "self_update",
     # Each pane carries status_since_ms (see status_since.py).
     _STATUS_SINCE_CAPABILITY,
+    # A pane with subagents carries `subagents` (see subagent_spool.py).
+    _SUBAGENTS_CAPABILITY,
 )
 
 _TITLE_PLUGIN_ID = "zhangzujian.auto-session-title"
@@ -607,6 +611,7 @@ async def _wired_snapshot(
     herdr: HerdrClient,
     icons: ProjectIconIndex | None = None,
     status_since: StatusSinceTracker | None = None,
+    subagents: SubagentSpoolReader | None = None,
 ) -> list[dict]:
     """One session.snapshot carries the agent panes AND the workspace/tab
     labels; only branch labels need the extra per-workspace worktree fan-out
@@ -632,6 +637,8 @@ async def _wired_snapshot(
     )
     if status_since is not None:
         status_since.stamp(panes)
+    if subagents is not None:
+        subagents.attach(panes)
     return panes
 
 
@@ -708,11 +715,12 @@ async def handle_client_message(
     raw: str,
     icons: ProjectIconIndex | None = None,
     status_since: StatusSinceTracker | None = None,
+    subagents: SubagentSpoolReader | None = None,
 ) -> str:
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "list":
-        panes = await _wired_snapshot(herdr, icons, status_since)
+        panes = await _wired_snapshot(herdr, icons, status_since, subagents)
         return encode(_snapshot_message(server_id, panes))
     if kind == "read":
         if await _pane_identity_changed(herdr, msg):
@@ -1131,9 +1139,11 @@ class HerdrEvents:
         *,
         icons: ProjectIconIndex | None = None,
         status_since: StatusSinceTracker | None = None,
+        subagents: SubagentSpoolReader | None = None,
     ):
         self._herdr = herdr
         self._status_since = status_since
+        self._subagents = subagents
         # Only ever touched from this stream's event loop (hash_for in stream,
         # invalidate in _note_event) — ProjectIconIndex has no lock.
         self._icons = icons
@@ -1177,6 +1187,8 @@ class HerdrEvents:
                     )
                     if self._status_since is not None:
                         self._status_since.stamp(cur)
+                    if self._subagents is not None:
+                        self._subagents.attach(cur)
                 except Exception as exc:
                     if str(exc) == _SNAPSHOT_UNSUPPORTED:
                         raise  # herdr too old: never retryable, surface loudly
@@ -1786,6 +1798,7 @@ async def _serve_connection(
     readonly_token: str | None = None,
     updater: BridgeUpdater | None = None,
     status_since: StatusSinceTracker | None = None,
+    subagents: SubagentSpoolReader | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
@@ -1803,7 +1816,7 @@ async def _serve_connection(
     async def send(msg: str) -> bool:
         return await _send_to_client(ws, msg, send_lock)
 
-    panes = await _wired_snapshot(herdr, icons, status_since)
+    panes = await _wired_snapshot(herdr, icons, status_since, subagents)
     if not await send(encode(_snapshot_message(server_id, panes))):
         return
     clients[ws] = send_lock
@@ -1954,7 +1967,7 @@ async def _serve_connection(
                 if isinstance(features, list) and "project_icon" in features:
                     icon_subs.setdefault(ws, set())  # opt-in: this connection renders icons
                 try:
-                    panes = await _wired_snapshot(herdr, icons, status_since)
+                    panes = await _wired_snapshot(herdr, icons, status_since, subagents)
                 except Exception as exc:
                     await send(encode({"type": "error", "message": str(exc)}))
                     continue
@@ -1967,7 +1980,9 @@ async def _serve_connection(
                             break
                 continue
             try:
-                out = await handle_client_message(herdr, server_id, raw, icons, status_since)
+                out = await handle_client_message(
+                    herdr, server_id, raw, icons, status_since, subagents
+                )
             except Exception as exc:
                 out = encode({"type": "error", "message": str(exc)})
             await send(out)
@@ -2050,8 +2065,14 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     status_since = StatusSinceTracker(
         _status_since.default_state_path("local-bridge-status-since.json")
     )
+    # Same host as the agents' hooks: read their subagent spools.
+    subagents = SubagentSpoolReader()
     events = HerdrEvents(
-        events_herdr, socket_path=socket_path, icons=icons, status_since=status_since
+        events_herdr,
+        socket_path=socket_path,
+        icons=icons,
+        status_since=status_since,
+        subagents=subagents,
     )
     clients: dict = {}
     icon_subs: dict = {}
@@ -2067,6 +2088,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
             icons=icons,
             icon_subs=icon_subs,
             status_since=status_since,
+            subagents=subagents,
         )
 
     server = await websockets.serve(handler, host, 0)
@@ -2103,8 +2125,13 @@ async def serve(
     await _require_snapshot_support(events_herdr)
     icons = ProjectIconIndex()  # event-loop only (not thread-safe), see start_local_bridge
     status_since = StatusSinceTracker(_status_since.default_state_path())  # event-loop only too
+    subagents = SubagentSpoolReader()  # event-loop only too
     events = HerdrEvents(
-        events_herdr, socket_path=socket_path, icons=icons, status_since=status_since
+        events_herdr,
+        socket_path=socket_path,
+        icons=icons,
+        status_since=status_since,
+        subagents=subagents,
     )  # push + slow poll
     clients: dict = {}
     icon_subs: dict = {}
@@ -2129,6 +2156,7 @@ async def serve(
             readonly_token=readonly_token,
             updater=updater,
             status_since=status_since,
+            subagents=subagents,
         )
 
     async with websockets.serve(handler, host, port):

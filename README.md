@@ -686,6 +686,13 @@ entries): a running subagent with no activity for 10 minutes counts as stale
 and is dropped after 30 minutes, and the spool resets when the agent session
 starts over (`startup` / `clear` or a new session id).
 
+The bridge on that machine also reads these spools and sends each pane's
+subagents along with the pane (bridge capability `subagents`). The desktop
+agent card (Option/Alt-click a tile) then lists them, newest first: type,
+description, status (running, done, failed, or "no signal" for a stale one),
+running time or total time, with nested subagents indented. The cockpit's
+`GET /api/v1/agents` carries the same list in each record's `subagents`.
+
 A later release will install these hooks for you. For now, add them by hand. If
 `herdeck-subagent-hook` is not on the agents' `PATH`, use its absolute path
 (`command -v herdeck-subagent-hook`). If you already have hooks for an event,
