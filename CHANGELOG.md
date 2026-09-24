@@ -6,6 +6,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Desktop health notices redesigned. The app window shows one compact row per
+  problem (config does not load, bridge disconnected or token rejected, version
+  mismatch, D200 disconnected or held by another runtime, unsupported bridge
+  protocol) with a severity bar and icon (error red, warning amber, info blue),
+  one human sentence in the UI language (en/cs), one fix button where there is
+  one (Update bridge, Restart deck, Restart runtime, Fix config…), a Details
+  link to Settings → Maintenance and a × that hides the notice until that
+  problem changes (a new outage, other versions). A new app release is an info
+  row with Install and restart. Raw backend errors moved to the tooltip. The
+  Maintenance entry in the settings navigation shows a problem-count badge.
+- The deck window shows no notice rows any more, only a small status dot in the
+  corner (coloured by the worst problem, tooltip with the top one); clicking it
+  opens Maintenance in the app window. Updates are installed from the app
+  window.
+- Action results (bridge update, restart deck/runtime, update checks, install
+  errors) are toasts in the corner: successes leave after 5 s, errors stay
+  until closed, and a bridge update shows its progress as a stepper
+  (download → install → verify → restart).
+
+### Fixed
+- A T3 server that has never answered (configured but not running) no longer
+  shows up as "disconnected": the T3 connector now reports `ever_connected`
+  (and `since`, `attempt`, `last_error`) on `/health` and `/maintenance` like
+  the herdr connector, and Maintenance lists such servers greyed out as
+  "not in use".
+
 ## [0.10.1] - 2026-09-24
 
 ### Added

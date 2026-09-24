@@ -14,7 +14,7 @@ import { defineMessages, fmt, type Lang } from "./i18n.svelte";
 /** Shaped `GET /setup` status (snake_case JSON -> camelCase). `reason` is one of
  *  "mock_env" | "demo" | "first_run" | "local_unavailable" | "config_error" | null.
  *  "config_error" (mode "error"): the config exists but does not load; the deck
- *  shows the error and HealthNotice explains it — no onboarding card. */
+ *  shows the error and the health notices explain it — no onboarding card. */
 export interface SetupStatus {
   mode: string; // "mock" | "local" | "remote" | "mixed" | "error"
   connected: boolean;

@@ -214,7 +214,7 @@ describe("MaintenanceSection", () => {
     expect(polls).toBe(1);
     const items = Array.from(t.querySelectorAll('[data-server="m4"] .progress li')).map((li) => li.textContent);
     expect(items).toEqual(["download wheel", "verify 0.9.1"]);
-    expect(t.querySelector('[data-note="bridge"]')?.textContent).toContain("updated to 0.9.1");
+    expect(t.querySelector('[data-note="bridge"]')?.textContent).toBe("Bridge m4 is updated to 0.9.1.");
   });
 
   it("explains not_managed with the one-time managed install command", async () => {
@@ -245,6 +245,24 @@ describe("MaintenanceSection", () => {
       .toBe("herdeck-service install bridge --managed --version 0.9.1");
     expect(t.querySelector('[data-server="t3"] [data-offer="unknown"]')?.textContent).toContain("Install type unknown");
     expect(t.querySelector('[data-server="legacy"] [data-offer="unsupported"]')).not.toBeNull();
+  });
+
+  it("greys out a server that never connected as not in use (en + cs)", async () => {
+    const status = rawStatus({
+      servers: {
+        m4: { managed: true, self_update: true, connected: true, bridge_version: "0.9.1", ever_connected: true },
+        "t3-headless": { managed: null, self_update: false, connected: false, ever_connected: false, last_error: "T3 unavailable or incompatible" },
+      },
+    });
+    let t = await render(fake(status).invoke);
+    const row = t.querySelector<HTMLElement>('[data-server="t3-headless"]')!;
+    expect(row.hasAttribute("data-unused")).toBe(true);
+    expect(row.querySelector(".unused-label")?.textContent).toBe("not in use");
+    expect(row.textContent).not.toContain("T3 unavailable");
+    expect(t.querySelector('[data-server="m4"]')?.hasAttribute("data-unused")).toBe(false);
+    cleanup?.();
+    t = await render(fake(status).invoke, "cs");
+    expect(t.querySelector('[data-server="t3-headless"] .unused-label')?.textContent).toBe("nepoužívá se");
   });
 
   it("reports an unreachable runtime", async () => {

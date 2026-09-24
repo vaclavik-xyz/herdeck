@@ -15,6 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import { setLang } from "./lib/i18n.svelte";
+import { clearToasts } from "./lib/toastStore.svelte";
 
 const { invokeMock, listenMock, emitMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -84,6 +85,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearToasts();
   delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   delete document.documentElement.dataset.windowRole;
   target.remove();
@@ -99,6 +101,17 @@ function registeredListener(event: string): (() => void) | undefined {
   const calls = listenMock.mock.calls.filter(([name]) => name === event);
   const call = calls[calls.length - 1];
   return call?.[1] as (() => void) | undefined;
+}
+
+// The deck window shows no update row, only its status dot (title = the top
+// notice).
+function deckDotTitle(t: HTMLElement): string {
+  return t.querySelector<HTMLButtonElement>("button.dot")?.getAttribute("title") ?? "";
+}
+
+// The app window's update row and its install button.
+function installButton(t: HTMLElement): HTMLButtonElement | null {
+  return t.querySelector<HTMLButtonElement>('[data-notice="app_update"] button[data-action="install_update"]');
 }
 
 function render(): { target: HTMLElement; cleanup: () => void } {
@@ -129,7 +142,7 @@ describe("App update check", () => {
       await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
       // Give the rejected check's .catch/assignment a tick to (not) render.
       await new Promise((r) => setTimeout(r, 0));
-      expect(target.querySelector(".banner"), "a silent mount failure must render nothing").toBeNull();
+      expect(target.querySelector("[data-notice], [data-toast]"), "a silent mount failure must render nothing").toBeNull();
     } finally {
       cleanup();
     }
@@ -141,7 +154,7 @@ describe("App update check", () => {
     const { target, cleanup } = render();
     try {
       await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available");
       });
     } finally {
       cleanup();
@@ -168,7 +181,7 @@ describe("App update check", () => {
     try {
       await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
       // The automatic check just failed silently (previous test covers this).
-      expect(target.querySelector(".banner")).toBeNull();
+      expect(target.querySelector("[data-notice], [data-toast]")).toBeNull();
 
       registeredListener("check-for-updates")!();
 
@@ -189,7 +202,7 @@ describe("App update check", () => {
       await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
       // Nothing to show yet: the automatic check found no update either, and
       // that outcome is not surfaced unless it was asked for.
-      expect(target.querySelector(".banner")).toBeNull();
+      expect(target.querySelector("[data-notice], [data-toast]")).toBeNull();
 
       registeredListener("check-for-updates")!();
 
@@ -220,13 +233,13 @@ describe("App update-check-result listener", () => {
       const cb = call![1] as (ev: { payload: unknown }) => void;
 
       // "available" with no `info` — exactly the shape that would throw
-      // inside UpdateBanner's `availableUpdate.version` if it were assigned
+      // inside NoticeList's `appUpdate.version` if it were assigned
       // as-is.
       expect(() => {
         cb({ payload: { kind: "available" } });
         flushSync(); // force the render synchronously so a bad assignment surfaces here
       }).not.toThrow();
-      expect(target.querySelector(".banner"), "a rejected payload must not render").toBeNull();
+      expect(target.querySelector("[data-notice], [data-toast]"), "a rejected payload must not render").toBeNull();
     } finally {
       cleanup();
     }
@@ -262,8 +275,10 @@ describe("App update check across windows", () => {
       try {
         await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
         await vi.waitFor(() => {
-          expect(deck.target.textContent).toContain("Herdeck 0.2.0 is available.");
+          expect(deckDotTitle(deck.target)).toContain("Herdeck 0.2.0 is available");
         });
+        // No notice rows in the deck window: only the dot.
+        expect(deck.target.querySelector("[data-notice]")).toBeNull();
         // Confirms the deck never ran a check of its own to get there.
         expect(check).toHaveBeenCalledTimes(1);
       } finally {
@@ -289,7 +304,7 @@ describe("App update check across windows", () => {
         await vi.waitFor(() => {
           expect(app.target.textContent).toContain("Herdeck is up to date.");
         });
-        expect(deck.target.querySelector(".banner")).toBeNull();
+        expect(deck.target.querySelector("[data-notice], [data-toast], button.dot")).toBeNull();
       } finally {
         app.cleanup();
       }
@@ -319,24 +334,23 @@ describe("App update check on top of an already-found update", () => {
       const { target, cleanup } = render();
       try {
         await vi.advanceTimersByTimeAsync(0);
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available");
 
         registeredListener("check-for-updates")!();
         await vi.advanceTimersByTimeAsync(0);
 
         // The original defect: nothing changed here at all — not while
-        // checking, not on failure. Now the failure is reported...
-        expect(target.textContent).toContain("Update check failed: offline");
-        // ...temporarily covering the install button (scoped to the update
-        // banner's own live region — an unscoped "button" query would find
-        // ConfigApp's unrelated "Show deck" button instead)...
-        expect(target.querySelector<HTMLButtonElement>('[role="status"] button')).toBeNull();
+        // checking, not on failure. Now the failure is reported as an error
+        // toast, next to (not over) the update row...
+        expect(target.querySelector('[data-toast="update-check"]')?.textContent).toContain("Update check failed: offline");
+        expect(installButton(target)?.textContent?.trim()).toBe("Install and restart");
 
-        // ...but the update itself was never touched underneath: once the
-        // notice auto-dismisses, the install action is exactly where it was.
+        // ...and it stays until closed (errors are sticky), while the update
+        // itself was never touched.
         await vi.advanceTimersByTimeAsync(8000);
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
-        expect(target.querySelector<HTMLButtonElement>('[role="status"] button')?.textContent).toBe("Install and restart");
+        expect(target.textContent).toContain("Update check failed: offline");
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available");
+        expect(installButton(target)?.textContent?.trim()).toBe("Install and restart");
       } finally {
         cleanup();
       }
@@ -356,7 +370,7 @@ describe("App update check on top of an already-found update", () => {
     invokeMock.mockImplementation(mockInvoke(check));
     const { target, cleanup } = render();
     try {
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available"));
 
       registeredListener("check-for-updates")!();
       await vi.waitFor(() => expect(target.textContent).toContain("Herdeck is up to date."));
@@ -366,7 +380,7 @@ describe("App update check on top of an already-found update", () => {
     }
   });
 
-  it("shows 'checking' during a manual re-check, temporarily covering an available update", async () => {
+  it("shows 'checking' during a manual re-check, next to an available update", async () => {
     let resolveSecond: (v: unknown) => void = () => {};
     const check = vi
       .fn()
@@ -375,17 +389,17 @@ describe("App update check on top of an already-found update", () => {
     invokeMock.mockImplementation(mockInvoke(check));
     const { target, cleanup } = render();
     try {
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available"));
 
       registeredListener("check-for-updates")!();
       await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
-      expect(target.textContent).toContain("Checking for updates");
-      expect(target.textContent).not.toContain("is available");
+      expect(target.querySelector('[data-toast="update-check"]')?.textContent).toContain("Checking for updates");
+      expect(installButton(target)).not.toBeNull();
 
-      // Resolves with the same version: the update reappears once
-      // "checking" clears, exactly as it was before the re-check.
+      // Resolves with the same version: the progress toast goes, the row stays.
       resolveSecond({ version: "0.2.0", current_version: "0.1.0" });
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+      await vi.waitFor(() => expect(target.textContent).not.toContain("Checking for updates"));
+      expect(target.textContent).toContain("Herdeck 0.2.0 is available");
     } finally {
       cleanup();
     }
@@ -414,7 +428,7 @@ describe("App update check on top of an already-found update", () => {
     invokeMock.mockImplementation(mockInvoke(check));
     const { target, cleanup } = render();
     try {
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available"));
 
       registeredListener("check-for-updates")!();
       await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
@@ -457,25 +471,23 @@ describe("App update install resolution clears both windows", () => {
       const app = render();
       try {
         await vi.waitFor(() => {
-          expect(app.target.textContent).toContain("Herdeck 0.2.0 is available.");
+          expect(app.target.textContent).toContain("Herdeck 0.2.0 is available");
         });
         await vi.waitFor(() => {
-          expect(deck.target.textContent).toContain("Herdeck 0.2.0 is available.");
+          expect(deckDotTitle(deck.target)).toContain("Herdeck 0.2.0 is available");
         });
 
-        const installButton = app.target.querySelector<HTMLButtonElement>('[role="status"] button');
-        expect(installButton?.textContent).toBe("Install and restart");
-        installButton!.click();
+        const install = installButton(app.target);
+        expect(install?.textContent?.trim()).toBe("Install and restart");
+        install!.click();
 
-        // applyResolvedAway answers "up to date" (not silence) in BOTH
-        // windows — the app locally, the deck via the broadcast.
+        // applyResolvedAway answers "up to date" (not silence) in the app
+        // window, and the deck learns via the broadcast (its dot goes).
         await vi.waitFor(() => {
           expect(app.target.textContent, "app window never answered").toContain("Herdeck is up to date.");
         });
         await vi.waitFor(() => {
-          expect(deck.target.textContent, "deck window never learned of the resolution").toContain(
-            "Herdeck is up to date.",
-          );
+          expect(deck.target.querySelector("button.dot"), "deck window never learned of the resolution").toBeNull();
         });
       } finally {
         app.cleanup();
@@ -502,10 +514,9 @@ describe("App update install resolution clears both windows", () => {
     emitMock.mockImplementation(async () => {});
     const { target, cleanup } = render();
     try {
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available"));
 
-      const installButton = target.querySelector<HTMLButtonElement>('[role="status"] button');
-      installButton!.click();
+      installButton(target)!.click();
 
       await vi.waitFor(() => {
         expect(target.textContent, "the local apply depended on the echo arriving").toContain(
@@ -525,12 +536,11 @@ describe("App update install resolution clears both windows", () => {
     const { target, cleanup } = render();
     try {
       await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available");
       });
       emitMock.mockClear();
 
-      const installButton = target.querySelector("button");
-      installButton!.click();
+      installButton(target)!.click();
       // Positive check first: confirm installUpdate's async body actually
       // ran all the way through to the (successful) resolution, not just
       // that nothing happened at all — a `not.toHaveBeenCalledWith(…, null)`
@@ -544,7 +554,7 @@ describe("App update install resolution clears both windows", () => {
       await new Promise((r) => setTimeout(r, 0));
       expect(install).toHaveBeenCalledTimes(1);
       expect(target.textContent, "a successful install must leave the banner as-is").toContain(
-        "Herdeck 0.2.0 is available.",
+        "Herdeck 0.2.0 is available",
       );
 
       expect(emitMock).not.toHaveBeenCalledWith("update-check-result", null);
@@ -558,7 +568,7 @@ describe("App update install resolution clears both windows", () => {
   // sync through the SAME "update-check-result" broadcast an available
   // update travels over, or a check running in the window that never
   // installed anything is blind to what the other one just resolved.
-  it("keeps a resolved-away update cleared when the app's check settles after the DECK's install", async () => {
+  it("keeps a resolved-away update cleared in both windows when a check settles after the install", async () => {
     let resolveManual: (v: unknown) => void = () => {};
     const check = vi
       .fn()
@@ -572,22 +582,22 @@ describe("App update install resolution clears both windows", () => {
     try {
       const app = render();
       try {
-        await vi.waitFor(() => expect(app.target.textContent).toContain("Herdeck 0.2.0 is available."));
-        await vi.waitFor(() => expect(deck.target.textContent).toContain("Herdeck 0.2.0 is available."));
+        await vi.waitFor(() => expect(app.target.textContent).toContain("Herdeck 0.2.0 is available"));
+        await vi.waitFor(() => expect(deckDotTitle(deck.target)).toContain("Herdeck 0.2.0 is available"));
 
         // A manual re-check starts in the APP window and is left in flight.
         registeredListener("check-for-updates")!();
         await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
 
-        // The user installs from the DECK window instead.
-        const deckInstallButton = deck.target.querySelector<HTMLButtonElement>('[role="status"] button');
-        deckInstallButton!.click();
-        await vi.waitFor(() => expect(deck.target.textContent).toContain("Herdeck is up to date."));
+        // The user installs (the deck window has no install button any more;
+        // its dot sends the user here).
+        installButton(app.target)!.click();
+        await vi.waitFor(() => expect(app.target.textContent).toContain("Herdeck is up to date."));
+        await vi.waitFor(() => expect(deck.target.querySelector("button.dot")).toBeNull());
 
-        // The app window's in-flight check (started before the DECK's
-        // install resolved things) now settles with the same stale version
-        // — dropped, since the deck's broadcast already moved the app's
-        // own epoch on.
+        // The in-flight check (started before the install resolved things)
+        // now settles with the same stale version — dropped, since the
+        // resolution already moved the epoch on in both windows.
         resolveManual({ version: "0.2.0", current_version: "0.1.0" });
         await new Promise((r) => setTimeout(r, 0));
 
@@ -596,9 +606,9 @@ describe("App update install resolution clears both windows", () => {
           "the app window resurrected what the deck's install cleared",
         ).toContain("Herdeck is up to date.");
         expect(
-          deck.target.textContent,
-          "the deck window resurrected what its own install cleared",
-        ).toContain("Herdeck is up to date.");
+          deck.target.querySelector("button.dot"),
+          "the deck window resurrected what the install cleared",
+        ).toBeNull();
       } finally {
         app.cleanup();
       }
@@ -621,7 +631,7 @@ describe("App update install resolution clears both windows", () => {
     invokeMock.mockImplementation(mockInvoke(check));
     const { target, cleanup } = render();
     try {
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available"));
 
       registeredListener("check-for-updates")!();
       await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
@@ -652,7 +662,7 @@ describe("App update install resolution clears both windows", () => {
 
 // A live region only reliably announces a CONTENT change on an element that
 // already existed — not a freshly created one with its first message already
-// in it. UpdateBanner must therefore be mounted (and its role="status"
+// in it. NoticeList must therefore be mounted (and its role="status"
 // wrapper present) from the very first render, before any check has settled.
 describe("App update banner is a persistent live region", () => {
   it("keeps the same [role=status] node across the null -> available transition", async () => {
@@ -670,7 +680,7 @@ describe("App update banner is a persistent live region", () => {
       await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
       resolveCheck({ version: "0.2.0", current_version: "0.1.0" });
       await vi.waitFor(() => {
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available");
       });
 
       expect(
@@ -689,7 +699,7 @@ describe("App update banner is a persistent live region", () => {
 // sticky "available" update stays until installed or retracted by a
 // confirmed up-to-date; it must NOT be swept away on the same clock.
 describe("App update banner auto-dismiss", () => {
-  it("clears a failed manual check after a timeout", async () => {
+  it("keeps a failed manual check (an error toast) until it is closed", async () => {
     vi.useFakeTimers();
     try {
       const check = vi.fn().mockRejectedValue(new Error("offline"));
@@ -702,7 +712,11 @@ describe("App update banner auto-dismiss", () => {
         expect(target.textContent).toContain("Update check failed: offline");
 
         await vi.advanceTimersByTimeAsync(8000);
-        expect(target.querySelector(".banner"), "the failed banner never cleared").toBeNull();
+        expect(target.textContent, "an error toast must not leave on its own").toContain("Update check failed: offline");
+
+        target.querySelector<HTMLButtonElement>('[data-toast="update-check"] button.close')!.click();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(target.querySelector("[data-notice], [data-toast]"), "closing the toast did not clear it").toBeNull();
       } finally {
         cleanup();
       }
@@ -719,11 +733,11 @@ describe("App update banner auto-dismiss", () => {
       const { target, cleanup } = render();
       try {
         await vi.advanceTimersByTimeAsync(0);
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available");
 
         await vi.advanceTimersByTimeAsync(8000);
         expect(target.textContent, "an actionable available-update banner must not auto-dismiss")
-          .toContain("Herdeck 0.2.0 is available.");
+          .toContain("Herdeck 0.2.0 is available");
       } finally {
         cleanup();
       }
@@ -752,7 +766,7 @@ describe("App update banner auto-dismiss", () => {
       const { target, cleanup } = render();
       try {
         await vi.advanceTimersByTimeAsync(0);
-        expect(target.querySelector(".banner")).toBeNull();
+        expect(target.querySelector("[data-notice], [data-toast]")).toBeNull();
 
         registeredListener("check-for-updates")!();
         await vi.advanceTimersByTimeAsync(0);
@@ -762,7 +776,7 @@ describe("App update banner auto-dismiss", () => {
         expect(target.textContent, "a stuck 'checking' notice was never swept").not.toContain(
           "Checking for updates",
         );
-        expect(target.querySelector(".banner")).toBeNull();
+        expect(target.querySelector("[data-notice], [data-toast]")).toBeNull();
       } finally {
         cleanup();
       }
@@ -784,7 +798,7 @@ describe("App update banner auto-dismiss", () => {
       const { target, cleanup } = render();
       try {
         await vi.advanceTimersByTimeAsync(0);
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available");
 
         registeredListener("check-for-updates")!();
         await vi.advanceTimersByTimeAsync(0);
@@ -792,7 +806,7 @@ describe("App update banner auto-dismiss", () => {
 
         await vi.advanceTimersByTimeAsync(8000);
         expect(target.textContent, "the available update never reappeared").toContain(
-          "Herdeck 0.2.0 is available.",
+          "Herdeck 0.2.0 is available",
         );
       } finally {
         cleanup();
@@ -836,7 +850,7 @@ describe("App update banner auto-dismiss", () => {
         expect(
           target.textContent,
           "the check's real result was dropped as stale after its notice was swept",
-        ).toContain("Herdeck 0.2.0 is available.");
+        ).toContain("Herdeck 0.2.0 is available");
       } finally {
         cleanup();
       }
@@ -858,20 +872,19 @@ describe("App update banner auto-dismiss", () => {
       const { target, cleanup } = render();
       try {
         await vi.advanceTimersByTimeAsync(0);
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available");
 
-        target.querySelector("button")!.click();
+        installButton(target)!.click();
         await vi.advanceTimersByTimeAsync(0);
-        expect(target.textContent).toContain("disk full");
+        expect(target.querySelector('[data-toast="update-install"]')?.textContent).toContain("disk full");
 
         await vi.advanceTimersByTimeAsync(60_000);
         expect(target.textContent, "the install error vanished on its own").toContain("disk full");
 
-        Array.from(target.querySelectorAll<HTMLButtonElement>("button"))
-          .find((b) => b.textContent === "Dismiss")!.click();
+        target.querySelector<HTMLButtonElement>('[data-toast="update-install"] button.close')!.click();
         await vi.advanceTimersByTimeAsync(0);
         expect(target.textContent).not.toContain("disk full");
-        expect(target.textContent).toContain("Herdeck 0.2.0 is available.");
+        expect(target.textContent).toContain("Herdeck 0.2.0 is available");
       } finally {
         cleanup();
       }
@@ -887,17 +900,16 @@ describe("App update banner actions", () => {
     invokeMock.mockImplementation(mockInvoke(check));
     const { target, cleanup } = render();
     try {
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
-      const link = target.querySelector<HTMLAnchorElement>(".banner a");
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available"));
+      const link = target.querySelector<HTMLAnchorElement>('[data-notice="app_update"] a');
       expect(link?.href).toBe("https://github.com/vaclavik-xyz/herdeck/releases/tag/v0.2.0");
-      Array.from(target.querySelectorAll<HTMLButtonElement>("button"))
-        .find((b) => b.textContent === "Later")!.click();
+      target.querySelector<HTMLButtonElement>('[data-notice="app_update"] button[aria-label="Later"]')!.click();
       flushSync();
-      expect(target.textContent).not.toContain("Herdeck 0.2.0 is available.");
+      expect(target.textContent).not.toContain("Herdeck 0.2.0 is available");
 
       // An explicit tray check shows it again.
       registeredListener("check-for-updates")!();
-      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available."));
+      await vi.waitFor(() => expect(target.textContent).toContain("Herdeck 0.2.0 is available"));
     } finally {
       cleanup();
     }

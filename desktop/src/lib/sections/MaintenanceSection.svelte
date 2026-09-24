@@ -236,12 +236,17 @@
       <h3 id="mt-bridges">{lm.bridges_heading}</h3>
       {#each status.servers as server (server.id)}
         {@const upd = updates[server.id]}
-        {@const text = upd?.view ? bridgeUpdateText(upd.view, lm) : null}
+        {@const text = upd?.view ? bridgeUpdateText(upd.view, lm, server.id, status.version) : null}
+        {@const unused = server.everConnected === false && server.connected !== true && !upd}
         {@const offer = bridgeOffer(server, status.version)}
-        <div class="bridge" data-server={server.id}>
+        <div class="bridge" class:unused data-server={server.id} data-unused={unused ? "" : undefined}>
           <div class="bridge-head">
             <strong>{server.id}</strong>
-            <span class:ok={server.connected === true}>{server.connected ? lm.connected : lm.disconnected}</span>
+            {#if unused}
+              <span class="unused-label" title={lm.not_in_use_title}>{lm.not_in_use}</span>
+            {:else}
+              <span class:ok={server.connected === true}>{server.connected ? lm.connected : lm.disconnected}</span>
+            {/if}
             <span class:flag={server.bridgeVersion != null && status.version != null && server.bridgeVersion !== status.version}>{server.bridgeVersion ?? lm.unknown}</span>
             <span class="dim">{server.managed === true ? lm.managed : server.managed === false ? lm.not_managed : lm.managed_unknown}</span>
             {#if offer === "update" || upd?.running}
@@ -262,7 +267,7 @@
               <p class="hint" data-offer={offer}>{offer === "unknown" ? lm.offer_unknown : lm.offer_unsupported}</p>
             {/if}
           {/if}
-          {#if server.lastError && server.connected !== true}<p class="hint">{fmt(lm.last_error, { error: server.lastError })}</p>{/if}
+          {#if server.lastError && server.connected !== true && !unused}<p class="hint">{fmt(lm.last_error, { error: server.lastError })}</p>{/if}
           {#if upd?.view && upd.view.progress.length > 0}
             <ol class="progress">
               {#each upd.view.progress as step (step.seq)}<li><span class="dim">{step.stage}</span> {step.message}</li>{/each}
@@ -303,6 +308,8 @@
   .confirm-text { color: var(--text); font: var(--t-help); }
   .bridge { border-top: 1px solid var(--line); padding: var(--s3) 0; }
   .bridge:first-of-type { border-top: 0; }
+  .bridge.unused { opacity: .55; }
+  .unused-label { color: var(--text-faint); font-style: italic; }
   .bridge-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
   .bridge-head button { margin-left: auto; }
   .progress { margin: var(--s2) 0 0; padding-left: var(--s5); color: var(--text); font: var(--t-mono); font-size: 11px; }

@@ -50,8 +50,9 @@ The Svelte frontend has two complementary surfaces, one per window role:
   runs the bundled `herdeck-deckapp service <action> runtime` (install
   `--from-app <this bundle>`, restart, uninstall, `status --json`) with a
   timeout; `open_log` opens only an existing `*.log` under the log directories
-  that `/maintenance` reports or the app's own log. `HealthNotice.svelte`
-  offers the matching action inline; the tray's **Restart deck** and
+  that `/maintenance` reports or the app's own log. `NoticeList.svelte`
+  offers the matching action on each notice row (results as toasts,
+  `Toasts.svelte`); the deck window's `DeckStatusDot.svelte` opens Maintenance; the tray's **Restart deck** and
   `[hotkeys].restart_deck` post the deck restart directly.
 - **Onboarding** - a first-run and change-connection flow inside the active
   surface, followed by a sectioned
@@ -75,8 +76,13 @@ desktop/
       AgentCard.svelte       # one agent in full: prompt, options, reply, stop/focus
       agentCardClient.ts     # /agent/* transport (via the agent_call command)
       maintenanceClient.ts   # /maintenance* + runtime_service/open_log transport
-      maintenanceMessages.ts # Maintenance/HealthNotice en+cs texts, outcome mapping
-      HealthNotice.svelte    # "why is the deck dark" line + inline fixes
+      maintenanceMessages.ts # Maintenance en+cs texts, outcome mapping
+      healthStatus.ts        # /health -> problems (severity, key, action)
+      noticeMessages.ts      # notice/toast en+cs sentences
+      noticeDismissals.ts    # "hide until it changes" (localStorage)
+      NoticeList.svelte      # app window: one row per problem + fix button
+      DeckStatusDot.svelte   # deck window: worst-severity dot -> Maintenance
+      Toasts.svelte          # action results (toastStore.svelte.ts)
       AgentTerminal.svelte   # the card's read-only live terminal (long-polled)
       xtermLoader.ts         # lazy load of the vendored xterm.js (@herdeck-web alias)
       Onboarding.svelte      # first-run onboarding flow

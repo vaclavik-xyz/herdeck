@@ -730,9 +730,10 @@ when uhubctl needs root the exact `sudo` command is shown to copy. Per bridge
 it offers **Update bridge**: the runtime asks that bridge to install the
 runtime's version into its managed install and restart, with progress shown
 live. A bridge that is not a managed install explains the one-time
-`herdeck-service install bridge --managed` instead. The status line under the
-deck (HealthNotice) offers the same fixes inline, the tray has **Restart
-deck**, and `[hotkeys].restart_deck` can bind it to a global shortcut (off by
+`herdeck-service install bridge --managed` instead. The app window lists each
+problem as a compact notice with the same fix as its one button (results show
+as toasts; × hides a notice until that problem changes), the deck window shows
+a status dot that opens Maintenance, the tray has **Restart deck**, and `[hotkeys].restart_deck` can bind it to a global shortcut (off by
 default).
 
 The UI is dark-only by design: it mirrors the deck hardware's black tiles, so
