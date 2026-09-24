@@ -2,6 +2,8 @@
 //! placement, tray labels), moved out of the inline `plan_tests` module.
 
 use super::*;
+use crate::banner_native::*;
+use crate::notifications::*;
 use crate::notify_pump::*;
 use crate::tray::*;
 use crate::window_roles::*;

@@ -4,9 +4,9 @@
 //! blocked agent, its block episode plus optional answer buttons / reply
 //! field). This module parses those fields, remembers which delivered banner
 //! belongs to which agent (bounded), and decides what a banner activation
-//! means. Everything that touches Notification Center lives in `lib.rs`
-//! (`post_native_notification`, `banner_clicks`); everything here is pure and
-//! unit-tested.
+//! means. Everything that touches Notification Center lives in
+//! `banner_native.rs` (`post_native_notification`, `banner_clicks`); everything
+//! here is pure and unit-tested.
 
 use std::collections::VecDeque;
 
