@@ -52,6 +52,18 @@ class RuntimeAgentControl:
     def current_agent(self, key: AgentKey) -> AgentState | None:
         return self._current_agent(key)
 
+    def owns(self, req: str, server_id: str | None = None) -> Command | None:
+        """The command a pending request ``req`` belongs to (None when it is not
+        this control's). Read-only, so a connector thread may ask before handing
+        the result over to the control's event loop."""
+        pending = self._pending.get(req)
+        if pending is None:
+            return None
+        command = pending[1]
+        if server_id is not None and command.server_id != server_id:
+            return None
+        return command
+
     def handle_result(
         self, req: str, data: dict, *, server_id: str | None = None
     ) -> Command | None:

@@ -166,13 +166,20 @@ def _env_flag(name: str, *, default: bool) -> bool:
 
 
 class WebDeck(DeckDriver):
-    """A browser-based D200 simulator.
+    """A browser-based D200 simulator — the web cockpit front of the runtime.
 
     Renders tiles and the status panel with the SAME code as the real device, so
     the simulator is pixel-faithful, and turns browser clicks into presses. Lets
     you develop the whole app without the physical deck. Bind to a Tailscale IP to
     use it remotely.
+
+    It holds no deck logic of its own: it is a render sink of the one runtime
+    (``deliver`` takes the DeckApp's frames) and forwards presses, the versioned
+    cockpit API and live-terminal streams to callbacks the runtime registers.
     """
+
+    # The browser shows every spinner/elapsed frame (see deckapp.sinks).
+    wants_ticker_frames = True
 
     def __init__(
         self,
@@ -230,6 +237,7 @@ class WebDeck(DeckDriver):
         self._tile_ver: dict[int, int] = {}  # index -> last-changed version
         self._panel: bytes | None = None
         self._panel_ver = 0
+        self._panel_memo: tuple[tuple, bytes] | None = None  # (content key, png)
         self._version = 0
         # Serving decks persist the token across restarts (bookmarkable URL);
         # an embedded/non-serving deck (tests) keeps an ephemeral one.
@@ -364,14 +372,30 @@ class WebDeck(DeckDriver):
                     self._tiles[i] = png
                     self._tile_ver[i] = self._bump()
 
+    def deliver(self, frame) -> None:
+        """RenderSink: take one runtime frame (every tile + the panel)."""
+        self.render(frame.render.tiles)
+        self.render_panel(frame.render.panel)
+
+    def set_slots(self, slots: int) -> None:
+        """RenderSink: follow the runtime's tile count (profile/grid switch)."""
+        with self._lock:
+            self._slots = slots
+
     def render_panel(self, panel: PanelView) -> None:
         from ..icons import PANEL_W_TWO_CELL, compose_panel
 
-        buf = io.BytesIO()
-        # The page shows the panel in a 2-cells-wide box (width:100%/height:100%),
-        # so compose at the two-cell width — the native 458px would be squeezed.
-        compose_panel(panel, width=PANEL_W_TWO_CELL).convert("RGB").save(buf, "PNG")
-        png = buf.getvalue()
+        key = panel.cache_key()
+        memo = self._panel_memo
+        if memo is not None and memo[0] == key:
+            png = memo[1]
+        else:
+            buf = io.BytesIO()
+            # The page shows the panel in a 2-cells-wide box (width:100%/height:100%),
+            # so compose at the two-cell width — the native 458px would be squeezed.
+            compose_panel(panel, width=PANEL_W_TWO_CELL).convert("RGB").save(buf, "PNG")
+            png = buf.getvalue()
+            self._panel_memo = (key, png)
         with self._lock:
             if self._panel != png:  # bump only when it changes
                 self._panel = png

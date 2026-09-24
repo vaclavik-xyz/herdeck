@@ -375,3 +375,49 @@ class ReconnectingD200Sink:
             # After the device is closed, so the next owner never opens a
             # D200 this runtime is still writing to.
             self._device_lock.release()
+
+
+class DriverSink:
+    """RenderSink over a plain ``DeckDriver`` (the Elgato USB driver, the
+    in-memory fake): every frame renders all in-range tiles plus the panel, and
+    the driver's presses go to ``on_press``. A driver with an async
+    ``run_reader`` gets it on a private thread, as D200Sink does."""
+
+    def __init__(self, driver, *, on_press: Callable[[int], None], slots: int):
+        self._driver = driver
+        self._slots = slots
+        self._closing = threading.Event()
+        driver.on_press(on_press)
+        self._reader_thread: threading.Thread | None = None
+        if hasattr(driver, "run_reader"):
+            self._reader_thread = threading.Thread(
+                target=self._run_reader, name="herdeck-deck-reader", daemon=True
+            )
+            self._reader_thread.start()
+
+    def deliver(self, frame) -> None:
+        rs = frame.render
+        self._driver.render([t for t in rs.tiles if t.index < self._slots])
+        self._driver.render_panel(rs.panel)
+
+    def set_slots(self, slots: int) -> None:
+        self._slots = slots
+
+    def _run_reader(self) -> None:
+        try:
+            asyncio.run(self._driver.run_reader())
+        except Exception:
+            if not self._closing.is_set():
+                log.warning("deck press reader stopped", exc_info=True)
+
+    def close(self) -> None:
+        if self._closing.is_set():
+            return
+        self._closing.set()
+        try:
+            self._driver.close()
+        except Exception:
+            log.warning("deck driver close failed", exc_info=True)
+        reader = self._reader_thread
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=2.0)

@@ -43,6 +43,10 @@ _BAD_BODY = object()
 # fast in tests that start/stop servers constantly. 50 ms keeps shutdown snappy
 # at a negligible idle-wakeup cost.
 _SERVE_POLL_INTERVAL = 0.05
+# A status panel ("reload failed", "profile locked") stays up this long: the
+# next render would otherwise replace it within one tick and the user never
+# learned why their action had no effect. Any press dismisses it.
+STATUS_PANEL_HOLD_S = 4.0
 
 # Body returned for any unauthenticated request: plain text (never
 # octet-stream, which browsers offer to download) and free of any token.
@@ -107,8 +111,13 @@ class DeckApp:
         config_service=None,
         reloader=None,
         pin_store=None,
+        run_ticker: bool | None = None,
     ):
         self._serve_enabled = serve
+        # The animation ticker runs for a serving deck by default; a host that
+        # serves through its own front (the web cockpit, a physical deck) and
+        # not this HTTP API asks for it explicitly.
+        self._ticker_enabled = serve if run_ticker is None else run_ticker
         self._started_at = time.monotonic()
         self._source = source
         config = source.config
@@ -144,6 +153,8 @@ class DeckApp:
         self._usage_poller = self._build_usage_poller(self._usage_cfg)
 
         self._lock = threading.Lock()
+        self._status_panel = None  # held PanelView (hold_status_panel)
+        self._status_panel_until = 0.0
         self._panel_memo: tuple[tuple, bytes] | None = None  # (panel content key, png)
         self._tiles: dict[int, bytes] = {}
         self._tile_ver: dict[int, int] = {}
@@ -208,7 +219,7 @@ class DeckApp:
         self._ticker_stop = threading.Event()
         self._ticker_wake = threading.Event()
         self._ticker_thread: threading.Thread | None = None
-        if serve and tick_interval > 0:
+        if self._ticker_enabled and tick_interval > 0:
             self._ticker_thread = threading.Thread(
                 target=self._ticker_loop, name="herdeck-deckapp-tick", daemon=True
             )
@@ -297,7 +308,38 @@ class DeckApp:
         poller = self._usage_poller
         orch.set_usage(poller.snapshot() if poller is not None else [])
         source.apply_to(orch)
-        return orch.render()
+        rs = orch.render()
+        held = self._status_panel
+        if held is not None and time.monotonic() < self._status_panel_until:
+            from ..orchestrator import RenderState
+
+            rs = RenderState(rs.tiles, held)
+        return rs
+
+    def hold_status_panel(self, title: str, lines: list[str], color: str = "amber") -> None:
+        """Show a short status message on the panel for STATUS_PANEL_HOLD_S
+        (or until the next press) instead of the deck's own panel."""
+        from ..driver.base import PanelView
+
+        with self._lock:
+            self._status_panel = PanelView(title, lines, color)
+            self._status_panel_until = time.monotonic() + STATUS_PANEL_HOLD_S
+            self._refresh_locked()
+
+    def _status_view(self, title: str, lines: list[str], color: str):
+        """A held status panel (caller holds self._lock and re-renders)."""
+        from ..driver.base import PanelView
+
+        self._status_panel_until = time.monotonic() + STATUS_PANEL_HOLD_S
+        return PanelView(title, lines, color)
+
+    def _consume_expired_status_locked(self) -> bool:
+        """True once when a held status panel just lapsed (a full render then
+        brings the deck's own panel back)."""
+        if self._status_panel is not None and time.monotonic() >= self._status_panel_until:
+            self._status_panel = None
+            return True
+        return False
 
     def _rasterize(self, rs, slots, *, icons=None, source=None):
         """RenderState → (tiles, panel_png, sections, labels). Touches no deck
@@ -483,7 +525,7 @@ class DeckApp:
             return
         self._tick_interval = interval
         self._ticker_wake.set()
-        if self._serve_enabled and self._ticker_thread is None:
+        if self._ticker_enabled and self._ticker_thread is None:
             self._ticker_thread = threading.Thread(
                 target=self._ticker_loop, name="herdeck-deckapp-tick", daemon=True
             )
@@ -530,6 +572,7 @@ class DeckApp:
             working = self._orch.tick()
             self._ticks += 1
             hold_expired = self._orch.consume_expired_panel_hold()
+            hold_expired = self._consume_expired_status_locked() or hold_expired
             if hold_expired:
                 kwargs = {"working": None, "full": True, "ticker": False}
             elif self._ticks % self.FULL_REFRESH_TICKS == 0:
@@ -576,6 +619,7 @@ class DeckApp:
         local_commands = []
         if 0 <= index < self._slots + 2:
             with self._lock:
+                self._status_panel = None  # any press dismisses a held status panel
                 local_commands = self._source.press(index) or []
                 for command in local_commands:
                     if command.kind == "toggle_pin":
@@ -587,6 +631,10 @@ class DeckApp:
                         except (OSError, ValueError, KeyError, TypeError):
                             self._orch.pins = old
                             log.warning("deck pin save failed", exc_info=True)
+                            lang = getattr(self._source, "language", "en")
+                            self._status_panel = self._status_view(
+                                tr(lang, "status.pin_failed"), [tr(lang, "status.try_again")], "red"
+                            )
                 self._refresh_locked()
         for command in local_commands:
             if command.kind == "switch_profile":
@@ -639,16 +687,23 @@ class DeckApp:
         """Persist and immediately apply a profile selected on the physical deck."""
         if self._config_service is None:
             return
+        lang = getattr(self._source, "language", "en")
         try:
             with self._setup_lock:
                 if not self._config_service.set_active(name):
+                    # HERDECK_PROFILE pins the profile (or there is no local.toml)
+                    self.hold_status_panel(
+                        tr(lang, "status.profile_locked"),
+                        [self._source.config.meta.active_profile],
+                    )
                     return
                 self.reload()
                 watcher = getattr(self, "_watcher", None)
                 if watcher is not None:
                     watcher.resync()
-        except (ConfigError, OSError):
+        except (ConfigError, OSError) as exc:
             log.warning("deck profile switch failed for %s", name, exc_info=True)
+            self.hold_status_panel(tr(lang, "status.profile_failed"), [str(exc)[:60]])
 
     def close(self) -> None:
         ticker = getattr(self, "_ticker_thread", None)

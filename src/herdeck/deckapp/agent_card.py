@@ -153,6 +153,11 @@ class PendingReplies:
             self._finish(reply, result)
 
 
+# Browser preview pool: WebDeck already caps concurrent streams at 3.
+WEB_TERM_SESSIONS = 3
+WEB_TERM_IDLE_S = 30.0
+
+
 class AgentCardMixin:
     """Card operations for ``LiveSource`` (uses its agent buffer, pre-read cache,
     runners and the deck lock; lock order is always deck lock -> source lock)."""
@@ -161,6 +166,13 @@ class AgentCardMixin:
         self._card_replies = PendingReplies()
         self._card_reads: dict[AgentKey, float] = {}
         self._card_terms = CardTerminals(self._card_term_send)
+        # Browser previews of the web cockpit (driver.web /term SSE): their own
+        # session pool, so a card preview never evicts a browser one. The SSE
+        # pump polls continuously, so the idle reaper only catches a pump that
+        # died without closing.
+        self._web_terms = CardTerminals(
+            self._card_term_send, max_sessions=WEB_TERM_SESSIONS, idle_s=WEB_TERM_IDLE_S
+        )
 
     # --- connector hooks ---------------------------------------------------
     def _card_on_result(self, req: str | None, data: dict) -> None:
@@ -172,20 +184,26 @@ class AgentCardMixin:
         that server — same stance as herdeck-ctl."""
         result = error_outcome(message)
         if req:
-            if not self._card_replies.fail(req, result):
-                self._card_terms.fail_request(server_id, req, message or "bridge error")
+            if not self._card_replies.fail(req, result) and not self._card_terms.fail_request(
+                server_id, req, message or "bridge error"
+            ):
+                self._web_terms.fail_request(server_id, req, message or "bridge error")
             return
         self._card_replies.fail_server(server_id, result)
         self._card_terms.fail_fresh(server_id, message or "bridge error")
+        self._web_terms.fail_fresh(server_id, message or "bridge error")
 
     def _card_on_connection(self, server_id: str, up: bool) -> None:
         if not up:
             self._card_replies.fail_server(server_id, outcome("disconnected"))
             self._card_terms.close_server(server_id, "disconnected")
+            self._web_terms.close_server(server_id, "disconnected")
 
     def _on_term(self, server_id: str, message) -> None:
-        """Connector callback: a live-terminal frame or close for a card preview."""
+        """Connector callback: a live-terminal frame or close for a card or
+        browser preview (each pool ignores requests it does not own)."""
         self._card_terms.on_term(server_id, message)
+        self._web_terms.on_term(server_id, message)
 
     # --- live terminal -----------------------------------------------------
     def _card_term_send(self, server_id: str, msg: dict) -> bool:
@@ -223,6 +241,39 @@ class AgentCardMixin:
 
     def _card_close(self) -> None:
         self._card_terms.close_all()
+        self._web_terms.close_all()
+
+    # --- browser (web cockpit) previews --------------------------------------
+    def web_term_open(self, index: int, cols, rows) -> tuple[str, str] | str:
+        """Start observing the agent the deck last rendered on tile ``index``.
+
+        Returns ``(label, session_id)``, or the reason it cannot: "no_agent"
+        (empty / just re-occupied tile) or "disconnected". Unlike the card, the
+        bridge's ``terminal_preview`` capability is not required — the web
+        preview always asked, and a bridge that cannot observe answers with an
+        error frame that closes the session."""
+        orch = self._orch
+        if orch is None:
+            return "no_agent"
+        with self._card_deck_lock():
+            agent = orch.agent_for_preview(index)
+        if agent is None:
+            return "no_agent"
+        key = agent.key
+        with self._lock:
+            connected = self._connected.get(key.server_id, False)
+        if not connected or self._runners.get(key.server_id) is None:
+            return "disconnected"
+        session_id = self._web_terms.open(
+            key.server_id, key.pane_id, agent.terminal_id, cols=cols, rows=rows
+        )
+        return (agent.label or agent.agent_type, session_id)
+
+    def web_term_poll(self, session_id: str, after: int, wait_s: float) -> dict | None:
+        return self._web_terms.poll(session_id, after, wait_s)
+
+    def web_term_close(self, session_id: str) -> bool:
+        return self._web_terms.close(session_id)
 
     # --- queries -----------------------------------------------------------
     def _card_deck_lock(self):
