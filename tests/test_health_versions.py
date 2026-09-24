@@ -66,6 +66,7 @@ async def test_health_message_reports_version_protocol_herdr_and_clients():
             "protocol": WIRE_PROTOCOL,
             "herdr_reachable": True,
             "clients": 1,
+            "managed": False,
         },
     }
 
@@ -373,6 +374,7 @@ async def test_doctor_probe_reads_version_and_health_from_a_real_bridge():
         "protocol": WIRE_PROTOCOL,
         "herdr_reachable": True,
         "clients": 1,
+        "managed": False,
     }
 
 

@@ -4,7 +4,6 @@ import hmac
 import json
 import logging
 import os
-import re
 import secrets
 import threading
 import time
@@ -19,7 +18,7 @@ from ..model import AgentKey
 from ..orchestrator import Orchestrator
 from ..pins import PinStore
 from ..protocol import WIRE_PROTOCOL
-from . import agent_card
+from . import agent_card, bridge_update
 from .sinks import RenderFrame
 from .source import StateSource
 
@@ -39,8 +38,6 @@ claim_log = logging.getLogger("herdeck.notify.claim")
 # object (parse error or wrong type). Using a distinct singleton means callers
 # can safely distinguish it from None, False, or any other falsy value.
 _BAD_BODY = object()
-# POST /maintenance/servers/<id>/update (bridge self-update, reserved: 501 for now).
-_MAINTENANCE_SERVER_UPDATE = re.compile(r"/maintenance/servers/[^/]+/update")
 # serve_forever() polls its shutdown flag every poll_interval seconds; the stdlib
 # default (0.5 s) makes every close() block up to half a second, which adds up
 # fast in tests that start/stop servers constantly. 50 ms keeps shutdown snappy
@@ -1321,6 +1318,14 @@ class DeckApp:
                         return
                     code, payload = agent_card.handle_get(app._source, path, parse_qs(url.query))
                     self._send_agent(code, payload)
+                elif bridge_update.route_server_id(path) is not None:
+                    # Bridge self-update status long-poll (bridge_update.py).
+                    if not self._require_query_token(url):
+                        return
+                    code, payload = bridge_update.handle_get(
+                        app._source, path, parse_qs(url.query)
+                    )
+                    self._send_agent(code, payload)
                 else:
                     self._send(404)
 
@@ -1490,6 +1495,16 @@ class DeckApp:
                         return
                     code, payload = agent_card.handle_post(app._source, path, body)
                     self._send_agent(code, payload)
+                elif bridge_update.route_server_id(path) is not None:
+                    # POST /maintenance/servers/{id}/update: ask that bridge to
+                    # update itself to this runtime's version (bridge_update.py).
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    code, payload = bridge_update.handle_post(app._source, path, body)
+                    self._send_agent(code, payload)
                 elif path in ("/maintenance/deck/restart", "/maintenance/deck/power-cycle"):
                     if not self._require_header_token():
                         return
@@ -1501,24 +1516,6 @@ class DeckApp:
                         else app.maintenance.power_cycle
                     )
                     self._send(200, json.dumps(action()).encode(), "application/json")
-                elif _MAINTENANCE_SERVER_UPDATE.fullmatch(path):
-                    # Reserved for the bridge self-update (maintenance UI, batch M2).
-                    if not self._require_header_token():
-                        return
-                    if self._json_body() is _BAD_BODY:
-                        return
-                    self._send(
-                        501,
-                        json.dumps(
-                            {
-                                "ok": False,
-                                "outcome": "not_implemented",
-                                "error": "bridge self-update is not available in this "
-                                "runtime version",
-                            }
-                        ).encode(),
-                        "application/json",
-                    )
                 elif path == "/setup/connect":
                     if not self._require_header_token():
                         return

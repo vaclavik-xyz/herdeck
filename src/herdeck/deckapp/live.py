@@ -60,6 +60,7 @@ from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
 from .agent_card import AgentCardMixin
+from .bridge_update import BridgeUpdateMixin
 from .source import StateSource
 
 log = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ def _thread_notify_schedule(fn) -> None:
     threading.Thread(target=fn, daemon=True, name="herdeck-notify").start()
 
 
-class LiveSource(AgentCardMixin, StateSource):
+class LiveSource(AgentCardMixin, BridgeUpdateMixin, StateSource):
     """A StateSource fed by one or more real bridges through ``Connector``.
 
     The connector callbacks buffer the latest fleet state and re-render the deck;
@@ -238,6 +239,7 @@ class LiveSource(AgentCardMixin, StateSource):
         self._refresh_locked_cb = None
         self._runners: dict[str, object] = {}
         self._card_init()  # desktop agent card (agent_card.AgentCardMixin)
+        self._bridge_update_init()  # bridge self-update (bridge_update.BridgeUpdateMixin)
 
     # --- StateSource surface ---
     @property
@@ -917,6 +919,7 @@ class LiveSource(AgentCardMixin, StateSource):
         return [x for x in states if x.key in to]
 
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        self._bridge_update_on_snapshot(server_id)
         new_by_key = {s.key: s for s in states}
         prev_keys = {key for key in self._agents if key.server_id == server_id}
 
@@ -1061,6 +1064,7 @@ class LiveSource(AgentCardMixin, StateSource):
 
         self._apply(mutate)
         self._card_on_connection(server_id, up)
+        self._bridge_update_on_connection(server_id, up)
 
     def _on_result(self, *args) -> None:
         """Handle a connector result.
@@ -1077,6 +1081,8 @@ class LiveSource(AgentCardMixin, StateSource):
             raise TypeError("_on_result expects (server_id, req, data) or (req, data)")
         if server_id is None:
             return
+        if self._bridge_update_on_result(req, data):
+            return  # a bridge self-update reply (bridge_update.py), not a deck command
         tap = self._result_tap
         if tap is not None and req is not None:
             claimed = tap(server_id, req, data)
@@ -1393,8 +1399,11 @@ def build_live_source(
             on_result=lambda req, data, sid=selected.id: source._on_result(sid, req, data),
             on_project_icon=source._on_project_icon,
             on_term=source._on_term,
-            on_request_error=lambda req, message, sid=selected.id: source._on_request_error(
+            on_request_error=lambda req, message, sid=selected.id: source._on_bridge_error(
                 sid, req, message
+            ),
+            on_progress=lambda req, stage, message, sid=selected.id: source._on_progress(
+                sid, req, stage, message
             ),
         )
         runner = runner_factory(connector)

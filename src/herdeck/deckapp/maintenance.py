@@ -418,9 +418,16 @@ class Maintenance:
         server_health = getattr(app._source, "server_health", None)
         if callable(server_health):
             for sid, facts in server_health().items():
-                # Whether the bridge runs from a managed install (and so may
-                # update itself) is announced by the bridge in batch M2.
-                servers[sid] = {"managed": None, **facts}
+                # self_update: the bridge understands {"type": "update"}.
+                # managed: its health probe says it runs from a managed install
+                # and so may update itself; None = unknown (not asked yet, no
+                # answer, an older bridge, or a non-herdeck backend).
+                managed = facts.get("managed")
+                servers[sid] = {
+                    **facts,
+                    "self_update": facts.get("self_update") is True,
+                    "managed": managed if isinstance(managed, bool) else None,
+                }
         return {
             "version": __version__,
             "pid": os.getpid(),

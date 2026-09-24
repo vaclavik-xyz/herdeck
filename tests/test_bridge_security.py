@@ -157,6 +157,8 @@ MUTATING = [
     {"type": "send_text", "req": "4", "pane_id": "w1:p1", "text": "hi"},
     {"type": "choose_if_blocked", "req": "5", "pane_id": "w1:p1", "choice": "1"},
     {"type": "start", "req": "6", "name": "x", "argv": ["claude"]},
+    # bridge self-update: installs code and restarts the bridge (self_update.py)
+    {"type": "update", "req": "8", "version": "9.9.9"},
     {"type": "something_new", "req": "7"},
 ]
 

@@ -222,6 +222,7 @@ async def test_list_returns_mapped_filtered_snapshot(herdr):
         "state_labels",
         "herdr_order",
         "project_icon",
+        "self_update",
     ]
     p = msg["panes"][0]
     assert p["pane_id"] == "w1:p1"

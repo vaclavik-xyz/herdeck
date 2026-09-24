@@ -14,6 +14,7 @@ from .protocol import (
     WIRE_PROTOCOL,
     Error,
     Event,
+    Progress,
     ProjectIcon,
     Result,
     Snapshot,
@@ -28,6 +29,14 @@ log = logging.getLogger("herdeck.connector")
 
 # Wire capability + opt-in feature name for project favicon frames.
 PROJECT_ICON_FEATURE = "project_icon"
+# A bridge advertising this answers the authenticated health probe with a
+# ``managed`` boolean (whether it may update itself, self_update.py).
+SELF_UPDATE_CAPABILITY = "self_update"
+# How long the once-per-connection health probe waits for its answer before
+# leaving ``managed`` unknown (the bridge caps its own herdr check at 1 s).
+HEALTH_PROBE_TIMEOUT_S = 5.0
+# What a bridge that predates the health message answers (no req in it).
+_UNKNOWN_HEALTH = "unknown client message: health"
 
 
 def _now_ms() -> int:
@@ -72,6 +81,7 @@ class Connector:
         on_term: Callable[[str, TermFrame | TermClosed], None] | None = None,
         on_project_icon: Callable[[str, ProjectIcon], None] | None = None,
         on_request_error: Callable[[str | None, str], None] | None = None,
+        on_progress: Callable[[str, str, str], None] | None = None,
     ):
         self.server = server
         self._on_snapshot = on_snapshot
@@ -83,6 +93,9 @@ class Connector:
         # (req, message) for every bridge error frame, in addition to
         # on_error: lets a consumer fail exactly the request the bridge refused.
         self._on_request_error = on_request_error
+        # (req, stage, message) for a long request's progress frames (the
+        # bridge self-update); dropped when no consumer wants them.
+        self._on_progress = on_progress
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._stop = False
@@ -108,6 +121,13 @@ class Connector:
         # None = this consumer renders no tiles (e.g. ctl): never opt in.
         self._on_project_icon = on_project_icon
         self._icons_requested = False
+        # Bridge `managed` (may it update itself?) from one health probe per
+        # connection: None = unknown (not asked yet, no answer, old bridge).
+        self._managed: bool | None = None
+        self._health_asked = False
+        self._health_waiter: tuple[str, asyncio.Future] | None = None
+        self._health_seq = 0
+        self._health_task: asyncio.Task | None = None
 
     @property
     def last_connect_error(self) -> str | None:
@@ -136,6 +156,8 @@ class Connector:
             "bridge_version": self._bridge_version,
             "protocol": self._protocol,
             "protocol_supported": self._protocol <= WIRE_PROTOCOL,
+            "self_update": SELF_UPDATE_CAPABILITY in self._capabilities,
+            "managed": self._managed,
         }
 
     def _set_connected(self, up: bool) -> None:
@@ -183,6 +205,7 @@ class Connector:
                         break
                     self._stopping_terms.clear()
                     self._icons_requested = False  # opt-in is per connection
+                    self._reset_health_probe()  # so is the managed probe
                     self._attempt = 0
                     connected = True
                     self._ever_connected = True
@@ -217,6 +240,7 @@ class Connector:
                 self._last_connect_error = reason
             finally:
                 self._ws = None
+                self._reset_health_probe()
                 if connected:
                     self._set_connected(False)
             if self._stop:
@@ -260,9 +284,12 @@ class Connector:
                 self._warned_protocol = msg.protocol
             self._on_snapshot(self.server.id, [self._rekey(s) for s in msg.states])
             self._maybe_request_icons()
+            self._maybe_probe_health()
         elif isinstance(msg, Event):
             self._on_event(self.server.id, self._rekey(msg.state))
         elif isinstance(msg, Result):
+            if self._claim_health_reply(msg.req, msg.data):
+                return
             self._on_result(msg.req, msg.data)
         elif isinstance(msg, TermFrame):
             if msg.req in self._stopping_terms:
@@ -283,9 +310,14 @@ class Connector:
         elif isinstance(msg, ProjectIcon):
             if self._on_project_icon is not None:
                 self._on_project_icon(self.server.id, msg)
+        elif isinstance(msg, Progress):
+            if self._on_progress is not None:
+                self._on_progress(msg.req, msg.stage, msg.message)
         elif isinstance(msg, Unknown):
             return  # a newer bridge's frame type: ignored by design
         elif isinstance(msg, Error):
+            if self._claim_health_error(msg):
+                return
             self._on_error(msg.message)
             if self._on_request_error is not None:
                 self._on_request_error(msg.req, msg.message)
@@ -304,3 +336,70 @@ class Connector:
             return
         self._icons_requested = True
         asyncio.create_task(self.send({"type": "list", "features": [PROJECT_ICON_FEATURE]}))
+
+    # --- managed probe ------------------------------------------------------
+
+    def _reset_health_probe(self) -> None:
+        """Forget the managed answer: it describes one connection (a bridge
+        that updated itself restarts, and the next connection asks again)."""
+        self._managed = None
+        self._health_asked = False
+        waiter = self._health_waiter
+        self._health_waiter = None
+        if waiter is not None and not waiter[1].done():
+            waiter[1].cancel()
+        task = self._health_task
+        self._health_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _maybe_probe_health(self) -> None:
+        """Ask the bridge once per connection whether it is managed — only a
+        bridge that advertises self_update (and so answers with ``managed``)
+        and speaks a protocol this runtime knows. Runs in the background on
+        the connector's loop; readers just see ``managed`` change."""
+        if (
+            self._health_asked
+            or SELF_UPDATE_CAPABILITY not in self._capabilities
+            or self._protocol > WIRE_PROTOCOL
+        ):
+            return
+        self._health_asked = True
+        self._health_task = asyncio.create_task(self._probe_health())
+
+    async def _probe_health(self) -> None:
+        self._health_seq += 1
+        req = f"herdeck-health-{self._health_seq}"
+        future = asyncio.get_running_loop().create_future()
+        self._health_waiter = (req, future)
+        try:
+            await self.send({"type": "health", "req": req})
+            data = await asyncio.wait_for(future, timeout=HEALTH_PROBE_TIMEOUT_S)
+        except (TimeoutError, asyncio.CancelledError):
+            return
+        finally:
+            if self._health_waiter is not None and self._health_waiter[0] == req:
+                self._health_waiter = None
+        managed = data.get("managed") if isinstance(data, dict) else None
+        self._managed = managed if isinstance(managed, bool) else None
+
+    def _claim_health_reply(self, req: str, data: dict) -> bool:
+        waiter = self._health_waiter
+        if waiter is None or req != waiter[0]:
+            return False
+        if not waiter[1].done():
+            waiter[1].set_result(data)
+        return True
+
+    def _claim_health_error(self, msg: Error) -> bool:
+        """An error answering the probe (by req, or an old bridge's reqless
+        "unknown client message: health") leaves ``managed`` unknown and is
+        not surfaced as a deck error."""
+        waiter = self._health_waiter
+        if waiter is None:
+            return False
+        if msg.req != waiter[0] and not (msg.req is None and msg.message == _UNKNOWN_HEALTH):
+            return False
+        if not waiter[1].done():
+            waiter[1].set_result(None)
+        return True
