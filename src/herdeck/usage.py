@@ -623,12 +623,17 @@ class UsagePoller:
         except Exception:
             log.warning("CodexBar fallback poll failed", exc_info=True)
             return []
-        if proc.returncode != 0:
+        # CodexBar also reports every provider enabled in its own settings and
+        # exits 1 when ANY of them fails (e.g. an expired Cursor/Kimi login),
+        # even with --provider naming only healthy ones — the JSON on stdout
+        # still carries the requested providers' numbers. Keep those.
+        wanted = set(providers)
+        parsed = [u for u in parse_usage(proc.stdout or "") if u.provider in wanted]
+        if proc.returncode != 0 and not parsed:
             log.warning(
                 "CodexBar fallback exited %s: %s", proc.returncode, (proc.stderr or "")[:200]
             )
-            return []
-        return parse_usage(proc.stdout or "")
+        return parsed
 
 
 def poller_from_config(usage_config, on_alert=None) -> UsagePoller | None:
