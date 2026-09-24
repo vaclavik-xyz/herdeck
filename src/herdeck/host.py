@@ -186,6 +186,7 @@ def _d200_driver(hardware: HardwareConfig):
         debounce=hardware.debounce,
         keep_alive_interval=hardware.keep_alive_interval,
         icons_dir=hardware.icons_dir,
+        standard_writer=hardware.d200_standard_writer,
     )
 
 

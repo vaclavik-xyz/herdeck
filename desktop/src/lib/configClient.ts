@@ -223,6 +223,8 @@ export interface ServerRecord {
   url: string;
   token_env: string;
   backend?: string;
+  /** T3 only: read this Mac's T3 desktop visited state (not edited here, only kept). */
+  desktop_read_state?: boolean;
 }
 
 export interface LocalSessionRecord {
@@ -262,7 +264,8 @@ export function serversOf(payload: ConfigPayload): ServerRecord[] {
   return raw.map((s) => {
     const r = obj(s);
     return { id: str(r.id), url: str(r.url), token_env: str(r.token_env),
-      ...(typeof r.backend === "string" ? { backend: r.backend } : {}) };
+      ...(typeof r.backend === "string" ? { backend: r.backend } : {}),
+      ...(typeof r.desktop_read_state === "boolean" ? { desktop_read_state: r.desktop_read_state } : {}) };
   });
 }
 

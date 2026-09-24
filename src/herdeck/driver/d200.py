@@ -173,6 +173,7 @@ class D200Driver(DeckDriver):
         debounce: float = DEBOUNCE,
         keep_alive_interval: float = KEEP_ALIVE_INTERVAL,
         icons_dir: str | None = None,
+        standard_writer: bool = False,
     ):
         # Stable working dir so strmdck's relative .build/.cache never collide (R-4).
         self.DEBOUNCE = debounce
@@ -184,8 +185,11 @@ class D200Driver(DeckDriver):
         self._panel_names: tuple[str, ...] | None = None
         self._last_frame_buttons: dict[int, dict] | None = None
         # Some firmware keeps a stale page despite successful fast-path HID
-        # writes. Allow the device-tested stock writer without a runtime patch.
-        self._standard_writer = os.environ.get("HERDECK_D200_STANDARD_WRITER") == "1"
+        # writes. Allow the device-tested stock writer without a runtime patch:
+        # [hardware].d200_standard_writer, or the env var as the fallback.
+        self._standard_writer = bool(standard_writer) or (
+            os.environ.get("HERDECK_D200_STANDARD_WRITER") == "1"
+        )
         self._fast_path_ok = True
         self._icons_dir = os.path.abspath(os.path.expanduser(icons_dir)) if icons_dir else None
         self._workdir = workdir or os.path.expanduser("~/.cache/herdeck")

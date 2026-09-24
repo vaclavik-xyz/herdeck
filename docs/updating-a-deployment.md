@@ -49,6 +49,7 @@ herdeck-<kind>`) and token *files*, never token values:
 | bridge host | `bridge` | `dev.herdeck.bridge` / `herdeck-bridge.service` | `herdeck-service install bridge --system --bind <tailscale-ip> --server-id <id>` |
 | deck host, from source | `runtime` | `dev.herdeck.runtime` / `herdeck-runtime.service` | `herdeck-service install runtime --config ~/.config/herdeck/config.toml` |
 | deck host, from the app | `runtime` | `dev.herdeck.runtime` | `herdeck-service install runtime --from-app [/Applications/herdeck.app]` |
+| bridge host, managed release | `bridge` | `dev.herdeck.bridge` / `herdeck-bridge.service` | `herdeck-service install bridge --managed [--version X] --bind <tailscale-ip> --server-id <id>` |
 
 The runtime unit runs in the login (`gui/<uid>`) session because it drives the
 D200 and posts notifications; the desktop window finds it through
@@ -64,6 +65,44 @@ gui/<uid>/dev.herdeck.runtime`, logged in the app log) before relaunching
 itself. The updater only touches a unit whose program lies inside its own
 bundle; a unit that runs from a source checkout is never restarted by it. On a
 host deployed from source, update the runtime with `deploy-host.sh` below.
+
+**`--env KEY=VALUE`** (repeatable) adds a non-secret variable to the unit's
+launch environment, so a host-specific switch survives a reinstall. Names
+containing `TOKEN`, `SECRET` or `PASSWORD` are refused (tokens live in the
+keychain or the bridge token file, never in a unit), as are variables the unit
+already sets. Prefer the config key where one exists:
+`HERDECK_D200_STANDARD_WRITER=1` is `[hardware].d200_standard_writer = true` in
+`local.toml`, and `HERDECK_T3_DESKTOP_READ_STATE=1` is `desktop_read_state =
+true` on the T3 `[[servers]]` entry. The env vars still work as a fallback.
+
+**`--managed`** (bridge only) runs the bridge from its own virtualenv at
+`~/.local/share/herdeck/bridge-venv` instead of a checkout. The installer
+creates it (with `uv` when present, else `python -m venv`), installs the herdeck
+release — the wheel attached to the GitHub release (checked against the
+release's `SHA256SUMS` when it has one), falling back to
+`git+https://github.com/vaclavik-xyz/herdeck@vX` — checks that the venv imports
+exactly that version, writes `managed.json {version, source, ...}` into the venv
+and only then installs the unit. `--version` picks the release (default: the
+version of the `herdeck-service` you run). The marker is what will let the
+desktop app update a managed bridge in place; a checkout is never touched.
+
+`herdeck-service restart <kind>` restarts an installed unit in place
+(`launchctl kickstart -k` / `systemctl --user restart`), and `herdeck-service
+status <kind> --json` prints `{kind, label, installed, unit_path, loaded,
+program, from_app}` for scripts and the desktop app.
+
+The desktop app's bundled runtime binary carries the same CLI as a `service`
+subcommand, so a Mac without a Python install can run it:
+
+```bash
+/Applications/herdeck.app/Contents/Resources/herdeck-deckapp/herdeck-deckapp \
+  service install runtime --from-app          # --from-app defaults to that same bundle
+/Applications/herdeck.app/Contents/Resources/herdeck-deckapp/herdeck-deckapp \
+  service status runtime --json
+```
+
+Run from the bundle, `install` accepts only `runtime --from-app` and `bridge
+--managed` (anything else needs `--python`, which the frozen binary is not).
 
 ### Migrating a bridge from `nohup`
 
@@ -169,6 +208,8 @@ before building the app whenever frontend dependencies changed.
 
 ## Restarting services
 
+`herdeck-service restart <kind> [--system]` runs the matching command below.
+
 ```bash
 launchctl kickstart -k gui/$(id -u)/dev.herdeck.runtime   # runtime
 launchctl kickstart -k user/$(id -u)/dev.herdeck.bridge   # bridge LaunchAgent
@@ -204,6 +245,32 @@ address: since 0.8.1 `herdeck-bridge` enforces the same bind policy as
 `herdeck-web` (loopback or Tailscale). The log says `refusing to start:
 HERDECK_BIND must be loopback or a Tailscale address`; fix `HERDECK_BIND`, or set
 `HERDECK_ALLOW_UNSAFE_BIND=1` if the exposure is deliberate.
+
+## Reviving the D200 without a terminal
+
+The runtime answers three token-authenticated maintenance routes (the desktop
+Maintenance section is built on them; the token is the one in
+`~/.cache/herdeck/runtime.json`):
+
+- `GET /maintenance?token=...` — version, pid, uptime, whether the runtime
+  service is installed and runs from the app, log paths, D200 state (`state`:
+  `connected`, `not_on_usb`, `locked`, `disconnected`, `unsupervised`), whether
+  the D200 is on USB, its last-seen hub location and whether a power-cycle is
+  possible, and per-bridge health.
+- `POST /maintenance/deck/restart` (`X-Herdeck-Token`) — closes and reopens the
+  D200 and repaints a full frame. It never releases `d200.lock`; when another
+  runtime owns the device it answers `locked_by` with that pid instead.
+- `POST /maintenance/deck/power-cycle` — runs `uhubctl -l <hub> -p <port> -a
+  cycle -d 2` (no shell, 30 s timeout). It needs `uhubctl` (`brew install
+  uhubctl`; found on PATH, in the Homebrew prefixes, or at `[hardware].uhubctl`)
+  and the D200's port: the runtime remembers where it last saw the device in
+  `~/.cache/herdeck/d200-usb.json`, or pin it with `[hardware].usb_hub` /
+  `[hardware].usb_port`. Only hubs with per-port power switching can cut power.
+  When uhubctl needs root it answers `needs_admin` with the exact `sudo`
+  command to run.
+
+`POST /maintenance/servers/<id>/update` is reserved for the bridge self-update
+and answers `501` until it ships.
 
 ## Rebuilding the desktop app
 

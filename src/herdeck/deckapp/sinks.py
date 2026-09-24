@@ -212,6 +212,14 @@ class ReconnectingD200Sink:
         # Set by every event the attached-device wait cares about (disconnect,
         # reconfigure, close), so the supervisor sleeps instead of polling.
         self._wake = threading.Event()
+        # Cuts the retry sleeps short (restart(), kick(), close()).
+        self._kick = threading.Event()
+        # Open attempts: started / finished counters + the newest outcome, so
+        # restart() can wait for an attempt that began after its request.
+        self._attempts = threading.Condition()
+        self._attempts_started = 0
+        self._attempts_finished = 0
+        self._attempt_error: str | None = None
         self._thread = threading.Thread(
             target=self._run,
             name="herdeck-d200-reconnect",
@@ -264,6 +272,56 @@ class ReconnectingD200Sink:
         self._reconfigure.set()
         self._wake.set()
 
+    def kick(self) -> None:
+        """Retry opening the device now instead of after the retry interval
+        (e.g. right after its USB port was power-cycled)."""
+        self._kick.set()
+
+    def restart(self, timeout: float = 15.0) -> dict:
+        """Close and reopen the D200, then repaint the retained full frame.
+
+        Blocking (call it off any event loop): waits for an open attempt that
+        started after this request. The device lock is never released on the
+        way — another runtime cannot grab the deck mid-restart — and a lock
+        held by another runtime is reported instead of fought over. Returns
+        ``{"outcome": "reopened"}``, ``{"outcome": "failed", "error": ...}``,
+        ``{"outcome": "locked_by", "pid": ...}`` or ``{"outcome": "timeout"}``."""
+        if self._stop.is_set():
+            return {"outcome": "failed", "error": "runtime is shutting down"}
+        lock = self._device_lock
+        if lock is not None and not lock.held and not lock.acquire():
+            return {"outcome": "locked_by", "pid": lock.owner_pid()}
+        with self._attempts:
+            target = self._attempts_started + 1
+        self._reconfigure.set()
+        self._wake.set()
+        self._kick.set()
+        with self._attempts:
+            done = self._attempts.wait_for(
+                lambda: self._attempts_finished >= target or self._stop.is_set(),
+                timeout=timeout,
+            )
+            error = self._attempt_error
+        if not done or self._stop.is_set():
+            return {"outcome": "timeout"}
+        if error is not None:
+            return {"outcome": "failed", "error": error}
+        return {"outcome": "reopened"}
+
+    def _sleep(self, interval: float) -> None:
+        self._kick.wait(interval)
+        self._kick.clear()
+
+    def _attempt_started(self) -> None:
+        with self._attempts:
+            self._attempts_started += 1
+
+    def _attempt_done(self, error: str | None) -> None:
+        with self._attempts:
+            self._attempts_finished = self._attempts_started
+            self._attempt_error = error
+            self._attempts.notify_all()
+
     def _owns_device(self) -> bool:
         """Hold the D200 lock before touching the device. A runtime that loses
         keeps serving HTTP and is told once; it takes over when the owner exits."""
@@ -291,21 +349,24 @@ class ReconnectingD200Sink:
         while not self._stop.is_set():
             if not self._owns_device():
                 self._mark(False, "D200 owned by another herdeck runtime")
-                self._stop.wait(self._lock_retry_interval)
+                self._sleep(self._lock_retry_interval)
                 continue
             # If configuration changed while no device was attached, the next
             # factory call already reads the newest app.config.
             self._reconfigure.clear()
+            self._attempt_started()
             try:
                 driver = self._driver_factory()
             except Exception as exc:
-                self._mark(False, str(exc) or type(exc).__name__)
+                error = str(exc) or type(exc).__name__
+                self._mark(False, error)
+                self._attempt_done(error)
                 log.info(
                     "no D200 attached (%s); retrying in %.1fs",
                     exc,
                     self._retry_interval,
                 )
-                self._stop.wait(self._retry_interval)
+                self._sleep(self._retry_interval)
                 continue
 
             if self._stop.is_set():
@@ -341,6 +402,7 @@ class ReconnectingD200Sink:
             self._mark(True, None)
             if latest is not None and not latest.ticker:
                 self._last_frame_at = _now_ms()
+            self._attempt_done(None)
             log.info("D200 attached")
 
             while not (
@@ -364,6 +426,9 @@ class ReconnectingD200Sink:
             return
         self._stop.set()
         self._wake.set()
+        self._kick.set()
+        with self._attempts:
+            self._attempts.notify_all()
         with self._lock:
             active = self._active
             self._active = None

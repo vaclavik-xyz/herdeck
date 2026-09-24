@@ -27,6 +27,9 @@ SELFTEST_IMPORTS = (
     "herdeck.deckapp.local_bridge",
     "herdeck.bridge",
     "herdeck.runtime",
+    "herdeck.deckapp.maintenance",
+    "herdeck.service",
+    "herdeck.managed",
     "herdeck.driver.d200",
     "strmdck",
     "strmdck.devices.ulanzi_d200",
@@ -65,6 +68,7 @@ def _default_driver_factory(config):
         debounce=hw.debounce,
         keep_alive_interval=hw.keep_alive_interval,
         icons_dir=hw.icons_dir,
+        standard_writer=hw.d200_standard_writer,
     )
 
 

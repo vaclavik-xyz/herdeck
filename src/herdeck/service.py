@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import plistlib
 import pwd
+import re
 import secrets
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -15,6 +18,11 @@ from .driver.web import normalize_web_base_path, normalize_web_origin
 from .host import validate_web_bind
 
 KINDS = ("web", "bridge", "runtime")
+ACTIONS = ("install", "status", "restart", "uninstall")
+# --env names that look like credentials are refused: unit files are 0644 and
+# tokens belong in the keychain / token file, never in a launch environment.
+_SECRET_ENV_RE = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.IGNORECASE)
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DEFAULT_APP = Path("/Applications/herdeck.app")
 # Where the signed desktop bundle carries its frozen converged runtime
 # (desktop/herdeck-deckapp.spec -> desktop/scripts/runtime-entry.py). The desktop
@@ -49,6 +57,9 @@ class ServiceConfig:
     # "darwin" -> launchd, anything else -> systemd --user. The CLI passes
     # sys.platform; direct callers get launchd, the historical behaviour.
     platform: str = "darwin"
+    # Extra non-secret launch environment (--env KEY=VALUE), e.g. the deck
+    # Mac's HERDECK_D200_STANDARD_WRITER=1. Validated by validate_extra_env.
+    extra_env: tuple[tuple[str, str], ...] = ()
 
     @property
     def label(self) -> str:
@@ -79,7 +90,56 @@ def app_runtime_binary(app: Path) -> Path:
     return app / APP_RUNTIME_BINARY
 
 
+def validate_extra_env(pairs, *, reserved=()) -> tuple[tuple[str, str], ...]:
+    """Validate ``--env`` pairs: a plain variable name, not credential-looking,
+    not one the unit already sets, no newlines."""
+    out = []
+    seen = set()
+    for key, value in pairs:
+        if not _ENV_NAME_RE.fullmatch(key):
+            raise ValueError(f"--env name is not a valid variable name: {key!r}")
+        if _SECRET_ENV_RE.search(key):
+            raise ValueError(
+                f"--env {key}: secrets never go into a service unit; store them in the "
+                "keychain (the herdeck config's token_env) or the bridge token file"
+            )
+        if key in reserved or key == "HERDECK_RUNTIME_MANAGED":
+            raise ValueError(f"--env {key}: set by herdeck-service itself")
+        if key in seen:
+            raise ValueError(f"--env {key} given twice")
+        if "\n" in value or "\r" in value or "\0" in value:
+            raise ValueError(f"--env {key}: value must be a single line")
+        seen.add(key)
+        out.append((key, value))
+    return tuple(out)
+
+
+def parse_env_args(values) -> tuple[tuple[str, str], ...]:
+    pairs = []
+    for item in values or ():
+        key, sep, value = item.partition("=")
+        if not sep:
+            raise ValueError(f"--env expects KEY=VALUE, got {item!r}")
+        pairs.append((key, value))
+    return validate_extra_env(pairs)
+
+
+def _with_extra_env(
+    config: ServiceConfig, arguments: list[str], environment: dict[str, str]
+) -> tuple[list[str], dict[str, str]]:
+    if config.extra_env:
+        extra = validate_extra_env(config.extra_env, reserved=set(environment))
+        environment = {**environment, **dict(extra)}
+    return arguments, environment
+
+
 def _program_and_environment(config: ServiceConfig) -> tuple[list[str], dict[str, str]]:
+    return _with_extra_env(config, *_base_program_and_environment(config))
+
+
+def _base_program_and_environment(
+    config: ServiceConfig,
+) -> tuple[list[str], dict[str, str]]:
     if config.from_app is not None and config.kind != "runtime":
         raise ValueError("--from-app is supported only for the runtime")
     if config.kind == "runtime":
@@ -376,6 +436,71 @@ def install_service(
     return plist_path
 
 
+def _unit_path(config: ServiceConfig) -> Path:
+    if not config.uses_launchd:
+        return _systemd_user_dir(config) / config.systemd_unit
+    if config.system:
+        return config.system_dir / f"{config.label}.plist"
+    return config.home / "Library/LaunchAgents" / f"{config.label}.plist"
+
+
+def _unit_program(config: ServiceConfig, path: Path) -> str | None:
+    """The executable the installed unit runs (first ProgramArguments / ExecStart word)."""
+    try:
+        if config.uses_launchd:
+            arguments = plistlib.loads(path.read_bytes()).get("ProgramArguments") or []
+            return arguments[0] if arguments and isinstance(arguments[0], str) else None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("ExecStart="):
+                words = shlex.split(line[len("ExecStart="):])
+                return words[0] if words else None
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return None
+    return None
+
+
+def _quiet_run(command: list[str]) -> int:
+    return subprocess.run(
+        command, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ).returncode
+
+
+def service_status_info(config: ServiceConfig, *, runner=None) -> dict:
+    """Machine-readable status (``status --json``) for the desktop app."""
+    runner = runner or _quiet_run
+    path = _unit_path(config)
+    installed = path.exists()
+    program = _unit_program(config, path) if installed else None
+    if not config.uses_launchd:
+        probe = ["systemctl", "--user", "is-active", "--quiet", config.systemd_unit]
+    elif config.system:
+        probe = ["launchctl", "print", f"system/{config.label}"]
+    else:
+        uid = os.getuid() if config.uid is None else config.uid
+        probe = ["launchctl", "print", f"{config.launchd_domain(uid)}/{config.label}"]
+    return {
+        "kind": config.kind,
+        "label": config.label if config.uses_launchd else config.systemd_unit,
+        "installed": installed,
+        "unit_path": str(path),
+        "loaded": runner(probe) == 0,
+        "program": program,
+        "from_app": bool(program) and program.endswith("/" + str(APP_RUNTIME_BINARY)),
+    }
+
+
+def restart_service(config: ServiceConfig, *, runner=None) -> int:
+    """Restart the installed service in place (``launchctl kickstart -k`` /
+    ``systemctl --user restart``); the unit must already be loaded."""
+    runner = runner or _run
+    if not config.uses_launchd:
+        return runner(["systemctl", "--user", "restart", config.systemd_unit])
+    if config.system:
+        return runner(["sudo", "launchctl", "kickstart", "-k", f"system/{config.label}"])
+    uid = os.getuid() if config.uid is None else config.uid
+    return runner(["launchctl", "kickstart", "-k", f"{config.launchd_domain(uid)}/{config.label}"])
+
+
 def service_status(config: ServiceConfig, *, runner=_run) -> int:
     if not config.uses_launchd:
         return runner(["systemctl", "--user", "status", "--no-pager", config.systemd_unit])
@@ -406,17 +531,36 @@ def uninstall_service(config: ServiceConfig, *, runner=_run) -> None:
         pass
 
 
+def _frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def _default_from_app() -> Path:
+    """``--from-app`` without a path: run from the desktop app's bundled
+    binary means "this app"; otherwise the standard install location."""
+    if _frozen():
+        executable = Path(sys.executable).resolve()
+        depth = len(APP_RUNTIME_BINARY.parts)
+        if executable.parts[-depth:] == APP_RUNTIME_BINARY.parts:
+            return executable.parents[depth - 1]
+    return DEFAULT_APP
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="herdeck-service")
     sub = parser.add_subparsers(dest="command", required=True)
-    for action in ("install", "status", "uninstall"):
+    for action in ACTIONS:
         command = sub.add_parser(action)
         command.add_argument("kind", choices=KINDS)
         command.add_argument("--home", type=Path, default=Path.home())
         command.add_argument("--uid", type=int, default=os.getuid())
         command.add_argument("--system", action="store_true")
+        if action == "status":
+            command.add_argument(
+                "--json", action="store_true", help="print a machine-readable status object"
+            )
         if action == "install":
-            command.add_argument("--python", default=sys.executable)
+            command.add_argument("--python", default=None)
             command.add_argument("--bind", default="127.0.0.1")
             command.add_argument("--port", type=int)
             command.add_argument("--config", type=Path)
@@ -428,16 +572,42 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--frame-ancestor", action="append", default=[])
             command.add_argument("--allow-query-token", action="store_true")
             command.add_argument(
+                "--env",
+                action="append",
+                default=[],
+                metavar="KEY=VALUE",
+                help=(
+                    "extra launch environment (repeatable, non-secret only: names with "
+                    "TOKEN/SECRET/PASSWORD are refused)"
+                ),
+            )
+            command.add_argument(
+                "--managed",
+                action="store_true",
+                help=(
+                    "bridge only: install the herdeck release into "
+                    "~/.local/share/herdeck/bridge-venv and run the bridge from it"
+                ),
+            )
+            command.add_argument(
+                "--version",
+                dest="managed_version",
+                default=None,
+                metavar="X",
+                help="with --managed: the herdeck release to install (default: this version)",
+            )
+            command.add_argument(
                 "--from-app",
                 type=Path,
                 nargs="?",
-                const=DEFAULT_APP,
+                const=_default_from_app(),
                 default=None,
                 metavar="APP",
                 help=(
                     "runtime only (macOS): run the frozen runtime bundled in this "
-                    f"desktop app (default {DEFAULT_APP}); the app's updater then "
-                    "restarts the runtime together with itself"
+                    f"desktop app (default {DEFAULT_APP}, or this app when run from "
+                    "its bundle); the app's updater then restarts the runtime "
+                    "together with itself"
                 ),
             )
     return parser
@@ -459,13 +629,38 @@ def _config_from_args(args) -> ServiceConfig:
         # Resolve here: the desktop updater compares the unit's program path
         # against its own (canonical) bundle path.
         from_app = from_app.expanduser().resolve()
+    managed = getattr(args, "managed", False)
+    if managed and kind != "bridge":
+        raise SystemExit("--managed is supported only for the bridge")
+    if getattr(args, "managed_version", None) is not None and not managed:
+        raise SystemExit("--version needs --managed")
+    python = getattr(args, "python", None)
+    if managed and python is not None:
+        raise SystemExit("--managed runs the bridge from its own venv; drop --python")
+    if python is None:
+        python = sys.executable
+        if (
+            args.command == "install"
+            and _frozen()
+            and not managed
+            and not (kind == "runtime" and from_app is not None)
+        ):
+            # The app's frozen binary is not a Python interpreter.
+            raise SystemExit(
+                "run from the desktop app, install supports only `runtime --from-app` "
+                "and `bridge --managed`; pass --python for anything else"
+            )
+    try:
+        extra_env = parse_env_args(getattr(args, "env", ()))
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
     user_name = None
     if system and args.command == "install":
         user_name = pwd.getpwuid(args.uid).pw_name
     return ServiceConfig(
         kind=kind,
         home=home,
-        python=getattr(args, "python", sys.executable),
+        python=python,
         bind=getattr(args, "bind", "127.0.0.1"),
         port=getattr(args, "port", None) or default_port,
         config_path=getattr(args, "config", None),
@@ -481,6 +676,37 @@ def _config_from_args(args) -> ServiceConfig:
         user_name=user_name,
         from_app=from_app,
         platform=sys.platform,
+        extra_env=extra_env,
+    )
+
+
+def install_managed_bridge(
+    config: ServiceConfig,
+    version: str | None = None,
+    *,
+    installer=None,
+    runner=_run,
+    token_factory=lambda: secrets.token_urlsafe(32),
+) -> Path:
+    """Install the herdeck release into the managed bridge venv, then the
+    bridge service running that venv's interpreter."""
+    from dataclasses import replace
+
+    from . import __version__
+    from .managed import ManagedInstaller, ManagedInstallError, managed_venv_dir, venv_python
+
+    if config.kind != "bridge":
+        raise ValueError("--managed is supported only for the bridge")
+    venv = managed_venv_dir(config.home)
+    installer = installer or ManagedInstaller()
+    try:
+        installer.install(venv, version or __version__)
+    except ManagedInstallError as error:
+        raise SystemExit(f"managed bridge install failed: {error}") from None
+    return install_service(
+        replace(config, python=str(venv_python(venv))),
+        runner=runner,
+        token_factory=token_factory,
     )
 
 
@@ -488,10 +714,18 @@ def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     config = _config_from_args(args)
     if args.command == "install":
-        path = install_service(config)
+        if getattr(args, "managed", False):
+            path = install_managed_bridge(config, args.managed_version)
+        else:
+            path = install_service(config)
         print(path)
     elif args.command == "status":
+        if args.json:
+            print(json.dumps(service_status_info(config)))
+            return
         raise SystemExit(service_status(config))
+    elif args.command == "restart":
+        raise SystemExit(restart_service(config))
     else:
         uninstall_service(config)
 

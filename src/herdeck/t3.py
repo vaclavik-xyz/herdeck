@@ -270,8 +270,13 @@ class T3Connector:
         self.last_connect_error = None
         self._features = None
         self._environment_id = None
+        # Config key first ([[servers]] desktop_read_state), env as the fallback
+        # that older launch units still set.
+        read_state = bool(getattr(server, "desktop_read_state", False)) or (
+            os.environ.get("HERDECK_T3_DESKTOP_READ_STATE") == "1"
+        )
         self._desktop_seen = (DesktopSeen(os.environ.get("HERDECK_T3_DESKTOP_STORAGE"))
-                              if os.environ.get("HERDECK_T3_DESKTOP_READ_STATE") == "1" else None)
+                              if read_state else None)
         self._cache = {}
         config = Path(os.environ.get("HERDECK_CONFIG", str(Path.home() / ".config/herdeck/config.toml")))
         self._seen = kwargs.get("seen_store") or SeenStore(config.parent / "t3-seen", server.id)

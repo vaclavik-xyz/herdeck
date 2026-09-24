@@ -825,3 +825,31 @@ def test_compose_panel_note_yields_to_a_full_body():
     a = PanelView("x", full, "amber")
     b = PanelView("x", full, "amber", note="t3 offline")
     assert compose_panel(a).tobytes() == compose_panel(b).tobytes()
+
+
+def test_standard_writer_comes_from_config_or_env(tmp_path, monkeypatch):
+    before = os.getcwd()
+    monkeypatch.delenv("HERDECK_D200_STANDARD_WRITER", raising=False)
+
+    class _Driver(D200Driver):
+        def _open_device(self, retries=5, delay=1.0):
+            return _FakeDev()
+
+        def _set_panel_background_mode(self):
+            pass
+
+    try:
+        for kwargs, env, expected in (
+            ({}, None, False),
+            ({"standard_writer": True}, None, True),  # [hardware].d200_standard_writer
+            ({"standard_writer": False}, "1", True),  # the env fallback
+        ):
+            if env is not None:
+                monkeypatch.setenv("HERDECK_D200_STANDARD_WRITER", env)
+            driver = _Driver(workdir=str(tmp_path), icon_provider=_FakeIcons(), **kwargs)
+            try:
+                assert driver._standard_writer is expected
+            finally:
+                driver.close()
+    finally:
+        os.chdir(before)

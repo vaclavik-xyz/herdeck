@@ -33,6 +33,10 @@ a = Analysis(
         "herdeck.deckapp.onboarding",
         "herdeck.deckapp.local_bridge",
         "herdeck.deckapp.probe",
+        "herdeck.deckapp.maintenance",
+        # `herdeck-deckapp service ...` (runtime-entry.py) -> herdeck-service CLI
+        "herdeck.service",
+        "herdeck.managed",
         "herdeck.bridge",
         "herdeck.bootstrap",
         "herdeck.connector",
