@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -38,6 +39,8 @@ claim_log = logging.getLogger("herdeck.notify.claim")
 # object (parse error or wrong type). Using a distinct singleton means callers
 # can safely distinguish it from None, False, or any other falsy value.
 _BAD_BODY = object()
+# POST /maintenance/servers/<id>/update (bridge self-update, reserved: 501 for now).
+_MAINTENANCE_SERVER_UPDATE = re.compile(r"/maintenance/servers/[^/]+/update")
 # serve_forever() polls its shutdown flag every poll_interval seconds; the stdlib
 # default (0.5 s) makes every close() block up to half a second, which adds up
 # fast in tests that start/stop servers constantly. 50 ms keeps shutdown snappy
@@ -522,6 +525,7 @@ class DeckApp:
             hardware.debounce,
             hardware.keep_alive_interval,
             hardware.icons_dir,
+            hardware.d200_standard_writer,
         )
 
     def _adopt_tick_interval_locked(self, interval: float) -> None:
@@ -1063,6 +1067,17 @@ class DeckApp:
                 break
         return health
 
+    @property
+    def maintenance(self):
+        """The Maintenance facade behind /maintenance* (deckapp/maintenance.py);
+        built on first use so a test can install its own beforehand."""
+        existing = getattr(self, "_maintenance", None)
+        if existing is None:
+            from .maintenance import Maintenance
+
+            existing = self._maintenance = Maintenance(self)
+        return existing
+
     # /setup is polled by the desktop onboarding card. Its disk facts (two
     # TOML reads, the onboarding marker, a sessions glob and one socket probe
     # per session) are cached while the files they come from are unchanged,
@@ -1270,6 +1285,12 @@ class DeckApp:
                     if not self._require_query_token(url):
                         return
                     self._send(200, json.dumps(app._health()).encode(), "application/json")
+                elif path == "/maintenance":
+                    if not self._require_query_token(url):
+                        return
+                    self._send(
+                        200, json.dumps(app.maintenance.status()).encode(), "application/json"
+                    )
                 elif path == "/panel":
                     if not self._require_query_token(url):
                         return
@@ -1469,6 +1490,35 @@ class DeckApp:
                         return
                     code, payload = agent_card.handle_post(app._source, path, body)
                     self._send_agent(code, payload)
+                elif path in ("/maintenance/deck/restart", "/maintenance/deck/power-cycle"):
+                    if not self._require_header_token():
+                        return
+                    if self._json_body() is _BAD_BODY:
+                        return
+                    action = (
+                        app.maintenance.restart_deck
+                        if path.endswith("/restart")
+                        else app.maintenance.power_cycle
+                    )
+                    self._send(200, json.dumps(action()).encode(), "application/json")
+                elif _MAINTENANCE_SERVER_UPDATE.fullmatch(path):
+                    # Reserved for the bridge self-update (maintenance UI, batch M2).
+                    if not self._require_header_token():
+                        return
+                    if self._json_body() is _BAD_BODY:
+                        return
+                    self._send(
+                        501,
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "outcome": "not_implemented",
+                                "error": "bridge self-update is not available in this "
+                                "runtime version",
+                            }
+                        ).encode(),
+                        "application/json",
+                    )
                 elif path == "/setup/connect":
                     if not self._require_header_token():
                         return
