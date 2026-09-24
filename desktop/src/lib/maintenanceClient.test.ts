@@ -21,7 +21,7 @@ describe("parseMaintenance", () => {
     expect(s.d200.state).toBe("connected");
     expect(s.d200.powerCycle).toMatchObject({ available: true, hub: "20-1", port: 2 });
     expect(s.servers).toEqual([
-      { id: "m4", managed: true, connected: true, bridgeVersion: "0.9.0", protocolSupported: null, lastError: null, everConnected: true },
+      { id: "m4", managed: true, connected: true, bridgeVersion: "0.8.9", protocolSupported: null, lastError: null, everConnected: true },
     ]);
     expect(s.app?.bundle).toBe("/Applications/herdeck.app");
   });
@@ -62,7 +62,7 @@ describe("versionRows", () => {
     expect(rows.map((r) => [r.id, r.version, r.mismatch])).toEqual([
       ["app", "0.9.2", true],
       ["runtime", "0.9.1", false],
-      ["m4", "0.9.0", true],
+      ["m4", "0.8.9", true],
     ]);
     expect(versionRows(status({ servers: { a: { bridge_version: "0.9.1" } } }))[2].mismatch).toBe(false);
   });

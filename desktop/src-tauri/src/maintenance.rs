@@ -581,13 +581,13 @@ mod tests {
     #[test]
     fn status_is_stamped_with_the_app_facts() {
         let facts = AppFacts {
-            version: "0.9.0".into(),
+            version: "0.8.9".into(),
             channel: "stable".into(),
             bundle: Some("/Applications/herdeck.app".into()),
             bundled_runtime: None,
             spawned_runtime: true,
         };
-        let v = with_app_facts(serde_json::json!({"version": "0.9.0"}), &facts);
+        let v = with_app_facts(serde_json::json!({"version": "0.8.9"}), &facts);
         assert_eq!(v["app"]["bundle"], "/Applications/herdeck.app");
         assert_eq!(v["app"]["spawned_runtime"], true);
         assert_eq!(with_app_facts(serde_json::Value::Null, &facts), serde_json::Value::Null);

@@ -23,9 +23,9 @@ describe("healthItems actions", () => {
     const items = healthItems(
       {
         version: "0.9.1",
-        app_version: "0.9.0",
+        app_version: "0.8.9",
         servers: {
-          m4: { connected: true, bridge_version: "0.9.0" },
+          m4: { connected: true, bridge_version: "0.8.9" },
           ci: { connected: false, since: 0, ever_connected: true },
         },
         d200: { connected: false, last_frame_at: 1, since: 0 },
@@ -77,7 +77,7 @@ describe("HealthNotice actions", () => {
       calls.push(args ?? {});
       return { status: 200, body: { ok: true, code: "updated", message: "updated to 0.9.1; restarting", progress: [], next: 0 } };
     };
-    const instance = mountWith({ version: "0.9.1", servers: { m4: { connected: true, bridge_version: "0.9.0" } } }, invoke);
+    const instance = mountWith({ version: "0.9.1", servers: { m4: { connected: true, bridge_version: "0.8.9" } } }, invoke);
     await settle();
     const button = target.querySelector<HTMLButtonElement>('button[data-action="update:m4"]');
     expect(button?.textContent?.trim()).toBe("Update bridge m4");
@@ -110,7 +110,7 @@ describe("HealthNotice actions", () => {
     let opened = 0;
     const cmds: string[] = [];
     const invoke: Invoke = async (cmd) => { cmds.push(cmd); return null; };
-    const payload = { version: "0.9.1", app_version: "0.9.0" };
+    const payload = { version: "0.9.1", app_version: "0.8.9" };
     let instance = mountWith(payload, invoke, () => { opened += 1; });
     await settle();
     target.querySelector<HTMLButtonElement>('button[data-action="open_maintenance"]')!.click();
