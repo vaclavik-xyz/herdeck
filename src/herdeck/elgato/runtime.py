@@ -17,6 +17,35 @@ from .frozen import make_png_rasterizer as _make_png_rasterizer
 from .ipc import IpcServer
 from .session import ElgatoSession
 
+# Modules the frozen Elgato backend must be able to import. PyInstaller only
+# traces static imports, so anything reached lazily (resvg_py for SVG favicons,
+# the entry's herdeck.app dispatch) is proven here. Mirrors
+# herdeck.runtime.SELFTEST_IMPORTS for the desktop sidecar.
+SELFTEST_IMPORTS = (
+    "herdeck.app",
+    "herdeck.connector",
+    "herdeck.elgato.runtime",
+    "herdeck.elgato.session",
+    "herdeck.elgato.ipc",
+    "herdeck.elgato.frozen",
+    "websockets",
+    "PIL.Image",
+    "resvg_py",
+)
+
+
+def run_import_selftest() -> int:
+    """``HERDECK_SELFTEST=imports``: import the frozen graph and render once
+    through the native resvg module, then exit 0 (raises on any failure)."""
+    import importlib
+
+    for module in SELFTEST_IMPORTS:
+        importlib.import_module(module)
+    from ..icons import resvg_rasterize
+
+    resvg_rasterize('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', 8)
+    return 0
+
 
 def discover_ipc(getenv=os.environ.get) -> tuple[str, str]:
     sock = getenv("HERDECK_ELGATO_SOCK")
