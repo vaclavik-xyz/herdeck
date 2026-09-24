@@ -28,6 +28,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   onboarding, or no config at all.
 - A running remote deck whose config breaks on reload now shows that error
   instead of switching to the demo fleet.
+- The deck's "time in this status" timers no longer reset to 0 whenever the
+  runtime restarts (deploy, config reload, app update, source swap). The
+  bridge now stamps each pane with `status_since_ms` (unix ms when it entered
+  its current status, keyed on pane id + terminal id, advertised as the
+  `status_since` capability) and persists the table to
+  `$XDG_STATE_HOME/herdeck/bridge-status-since.json` (0600; the embedded local
+  bridge uses `local-bridge-status-since.json`), so a bridge restart keeps
+  the clocks of panes whose terminal and status are unchanged. The runtime
+  prefers that timestamp for tile times and blocked ordering, falls back to
+  its first-seen time for older bridges, and ignores a bridge clock more than
+  5 s in the future. A source swap also keeps the local fallback times.
 
 ## [0.10.0] - 2026-09-24
 

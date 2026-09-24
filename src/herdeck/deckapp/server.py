@@ -837,6 +837,9 @@ class DeckApp:
             ) != self._d200_hardware_signature(new_source.config.hardware)
             self._source = new_source
             self._slots = slots
+            # Keep the local status timers (agents from a bridge without
+            # status_since, other backends) across the swap; same clock only.
+            orch.inherit_status_times(self._orch)
             self._orch = orch
             self._clock = clk  # adopt the clock the orchestrator was built with
             self._icons = icons
