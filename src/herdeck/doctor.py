@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import __version__
 from .config import ConfigError, Notifications
 from .secrets import get_secret
 
@@ -82,9 +83,10 @@ def check_config(
 def check_servers(servers, probe) -> list[Check]:
     """One connectivity check per configured [[servers]] entry.
 
-    ``probe(url, token) -> error string or None``. Without this, a bridge that
-    is down, a wrong URL/port and a present-but-rejected token all passed
-    doctor with green checkmarks — exactly the remote failure modes users hit."""
+    ``probe(url, token) -> error string, or None / a dict of bridge facts on
+    success``. Without this, a bridge that is down, a wrong URL/port and a
+    present-but-rejected token all passed doctor with green checkmarks —
+    exactly the remote failure modes users hit."""
     checks = []
     for server in servers:
         try:
@@ -92,17 +94,47 @@ def check_servers(servers, probe) -> list[Check]:
                 from .t3 import T3Http, validate_shell
                 snapshot = T3Http(server.url, server.token).get("/api/orchestration/shell")
                 validate_shell(snapshot)
-                error = None
+                result = None
             else:
-                error = probe(server.url, server.token)
+                result = probe(server.url, server.token)
         except Exception as exc:
-            error = str(exc) or type(exc).__name__
+            result = str(exc) or type(exc).__name__
         name = f"server '{server.id}'"
-        if error is None:
-            checks.append(Check(name, True, f"{server.url} answered with a snapshot"))
-        else:
-            checks.append(Check(name, False, f"{server.url}: {error}"))
+        if isinstance(result, str):
+            checks.append(Check(name, False, f"{server.url}: {result}"))
+            continue
+        ok, notes = _bridge_notes(result or {})
+        detail = "; ".join([f"{server.url} answered with a snapshot", *notes])
+        checks.append(Check(name, ok, detail))
     return checks
+
+
+def _bridge_notes(info: dict, *, expected: str = __version__) -> tuple[bool, list[str]]:
+    """Version/protocol/herdr facts of one bridge as report fragments, and
+    whether they are healthy. A version other than ``expected`` is a
+    mismatch: snapshot fields one side does not know render blank, silently."""
+    from .protocol import WIRE_PROTOCOL
+
+    ok, notes = True, []
+    version = info.get("herdeck_version") or info.get("bridge_version")
+    if version:
+        if version != expected:
+            ok = False
+            notes.append(f"version mismatch: bridge {version} ≠ {expected}")
+        else:
+            notes.append(f"bridge {version}")
+    elif info:
+        notes.append("bridge version unknown (older than 0.8.1?)")
+    protocol = info.get("protocol")
+    if isinstance(protocol, int) and protocol > WIRE_PROTOCOL:
+        ok = False
+        notes.append(f"unsupported wire protocol {protocol} (this install knows <= {WIRE_PROTOCOL})")
+    if info.get("herdr_reachable") is False:
+        ok = False
+        notes.append("herdr socket not reachable from the bridge")
+    elif info.get("herdr_reachable") is True:
+        notes.append(f"herdr reachable, {info.get('clients', '?')} client(s)")
+    return ok, notes
 
 
 def check_optional_deps(is_available: Callable[[str], bool]) -> Check:
@@ -288,9 +320,11 @@ def _probe_socket(path: str) -> dict:
     return asyncio.run(asyncio.wait_for(_socket_snapshot(path), timeout=SOCKET_TIMEOUT))
 
 
-async def _probe_server_ws(url: str, token: str) -> str | None:
-    """Connect to a bridge and wait for its greeting snapshot. None on success,
-    else a human-readable reason (reusing the connector's classification, so a
+async def _probe_server_ws(url: str, token: str) -> str | dict:
+    """Connect to a bridge and wait for its greeting snapshot. On success a
+    dict of what the bridge announced (version, protocol, and — from a bridge
+    that answers ``health`` — herdr reachability and client count), else a
+    human-readable reason (reusing the connector's classification, so a
     rejected token reads as 'token rejected', not as a generic close)."""
     import websockets
 
@@ -313,26 +347,73 @@ async def _probe_server_ws(url: str, token: str) -> str | None:
                 return "answered, but not with a herdeck snapshot (is this a herdeck-bridge?)"
             if not isinstance(msg, Snapshot):
                 return f"answered with {type(msg).__name__}, not a snapshot"
-            return None
+            info = {"herdeck_version": msg.herdeck_version, "protocol": msg.protocol}
+            health = await _bridge_health(ws)
+            if health is not None:
+                info.update(health)
+            return info
     except TimeoutError:
         return f"connected but no snapshot within {SERVER_PROBE_TIMEOUT:g}s"
     except (OSError, websockets.WebSocketException) as exc:
         return _describe_connect_error(exc)
 
 
-def _probe_server(url: str, token: str) -> str | None:
+async def _bridge_health(ws) -> dict | None:
+    """Ask a connected bridge for its health (``{"type": "health"}``). None
+    from a bridge that predates the message, closes, or does not answer."""
+    import websockets
+
+    try:
+        await ws.send(json.dumps({"type": "health", "req": "doctor-health"}))
+        async with asyncio.timeout(SERVER_PROBE_TIMEOUT):
+            while True:
+                msg = json.loads(await ws.recv())
+                if msg.get("type") == "error":
+                    return None  # an older bridge: "unknown client message"
+                if msg.get("type") == "result" and msg.get("req") == "doctor-health":
+                    data = msg.get("data")
+                    return data if isinstance(data, dict) else None
+    except (TimeoutError, ValueError, AttributeError, websockets.WebSocketException):
+        return None
+
+
+def _probe_server(url: str, token: str) -> str | dict | None:
     return asyncio.run(_probe_server_ws(url, token))
 
 
-def _runtime_health(url: str, token: str) -> bool:
-    """Does the runtime at `url` answer its token-authed /health within 1s?"""
+def _runtime_health(url: str, token: str) -> dict | None:
+    """The runtime's token-authed /health JSON, or None when it does not
+    answer within 1s."""
     import urllib.request
 
     try:
         with urllib.request.urlopen(f"{url}/health?token={token}", timeout=1) as r:
-            return r.status == 200
+            if r.status != 200:
+                return None
+            data = json.loads(r.read())
+            return data if isinstance(data, dict) else {}
     except Exception:
-        return False
+        return None
+
+
+def _runtime_notes(health: dict) -> tuple[bool, list[str]]:
+    """Runtime version vs this install, and each bridge vs the runtime."""
+    runtime = health.get("version")
+    if not runtime:
+        return True, []  # a pre-0.8.1 runtime: nothing to compare
+    ok, notes = True, [f"runtime {runtime}"]
+    if runtime != __version__:
+        ok = False
+        notes.append(f"version mismatch: runtime {runtime} ≠ installed {__version__} — restart it")
+    servers = health.get("servers")
+    for sid, facts in (servers.items() if isinstance(servers, dict) else ()):
+        if not isinstance(facts, dict):
+            continue
+        bridge_ok, bridge_notes = _bridge_notes(facts, expected=runtime)
+        ok = ok and bridge_ok
+        state = "connected" if facts.get("connected") else f"down ({facts.get('last_error') or '?'})"
+        notes.append(f"'{sid}' {state}" + (f": {', '.join(bridge_notes)}" if bridge_notes else ""))
+    return ok, notes
 
 
 def check_runtime(read_file, health) -> Check:
@@ -350,8 +431,10 @@ def check_runtime(read_file, health) -> Check:
     url, token = info.get("url"), info.get("token")
     if not url or not token:
         return Check("runtime", False, f"malformed runtime.json at {path}")
-    if health(url, token):
-        return Check("runtime", True, f"headless runtime answering at {url}")
+    answer = health(url, token)
+    if answer is not None and answer is not False:
+        ok, notes = _runtime_notes(answer) if isinstance(answer, dict) else (True, [])
+        return Check("runtime", ok, "; ".join([f"headless runtime answering at {url}", *notes]))
     return Check(
         "runtime",
         False,

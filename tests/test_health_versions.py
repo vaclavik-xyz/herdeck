@@ -306,6 +306,70 @@ def test_d200_sink_health_reports_frames_errors_and_lock_owner(tmp_path):
             other.close()
 
 
+# --- herdeck-doctor ---------------------------------------------------------
+
+
+def test_doctor_reports_runtime_and_bridge_versions(tmp_path, monkeypatch):
+    from herdeck.doctor import check_runtime
+
+    monkeypatch.setenv("HERDECK_RUNTIME_DIR", str(tmp_path))
+    info = {"url": "http://127.0.0.1:9", "token": "t"}
+    same = {"version": __version__, "servers": {
+        "box": {"connected": True, "bridge_version": __version__, "protocol": 3},
+    }}
+    check = check_runtime(lambda p: info, lambda u, t: same)
+    assert check.ok and f"runtime {__version__}" in check.detail
+    assert f"'box' connected: bridge {__version__}" in check.detail
+
+    old_bridge = {"version": __version__, "servers": {
+        "box": {"connected": False, "last_error": "token rejected",
+                "bridge_version": "0.0.1", "protocol": WIRE_PROTOCOL + 1},
+    }}
+    check = check_runtime(lambda p: info, lambda u, t: old_bridge)
+    assert not check.ok
+    assert f"bridge 0.0.1 ≠ {__version__}" in check.detail
+    assert "down (token rejected)" in check.detail
+    assert "unsupported wire protocol" in check.detail
+
+    stale_runtime = check_runtime(lambda p: info, lambda u, t: {"version": "0.0.1"})
+    assert not stale_runtime.ok and "restart it" in stale_runtime.detail
+
+
+def test_doctor_server_check_uses_the_bridge_health():
+    from herdeck.config import ServerConfig
+    from herdeck.doctor import check_servers
+
+    server = ServerConfig("box", "ws://a:8788", "t")
+    healthy = {"herdeck_version": __version__, "protocol": 3,
+               "herdr_reachable": True, "clients": 2}
+    check = check_servers([server], lambda u, t: healthy)[0]
+    assert check.ok and "herdr reachable, 2 client(s)" in check.detail
+    check = check_servers([server], lambda u, t: {**healthy, "herdr_reachable": False})[0]
+    assert not check.ok and "herdr socket not reachable" in check.detail
+
+
+async def test_doctor_probe_reads_version_and_health_from_a_real_bridge():
+    from herdeck.doctor import _probe_server_ws
+
+    host, port, token, (server, btask) = await start_local_bridge(
+        "unused.sock", herdr=StubHerdr(panes=[])
+    )
+    try:
+        info = await _probe_server_ws(f"ws://{host}:{port}", token)
+    finally:
+        btask.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await btask
+        server.close()
+        await server.wait_closed()
+    assert info == {
+        "herdeck_version": __version__,
+        "protocol": WIRE_PROTOCOL,
+        "herdr_reachable": True,
+        "clients": 1,
+    }
+
+
 def test_d200_sink_health_keeps_the_open_error():
     from test_d200_sink import _wait
 
