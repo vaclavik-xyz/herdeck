@@ -66,6 +66,15 @@ describe("healthLine", () => {
     expect(healthLine(down, M, NOW)).toBe("bridge box: disconnected 15 s");
   });
 
+  it("stays quiet about a server that never connected, unless its token was rejected", () => {
+    const unused = { servers: { t3: { connected: false, ever_connected: false, since: NOW - 3_600_000, last_error: "connection refused" } } };
+    expect(healthLine(unused, M, NOW)).toBe("");
+    const lost = { servers: { t3: { connected: false, ever_connected: true, since: NOW - HEALTH_GRACE_MS } } };
+    expect(healthLine(lost, M, NOW)).toBe("bridge t3: disconnected 15 s");
+    const badToken = { servers: { t3: { connected: false, ever_connected: false, since: NOW - 60_000, last_error: "token rejected (close 4401)" } } };
+    expect(healthLine(badToken, M, NOW)).toBe("bridge t3: token rejected 1 min");
+  });
+
   it("reports a D200 only once it has been driven, and a foreign lock owner", () => {
     const neverAttached = { d200: { connected: false, last_frame_at: null, since: 0, last_error: "no device" } };
     expect(healthLine(neverAttached, M, NOW)).toBe("");

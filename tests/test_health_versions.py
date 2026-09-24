@@ -146,6 +146,7 @@ async def test_connector_remembers_bridge_version_and_state(fake_bridge):
     try:
         health = conn.health()
         assert health["connected"] is True
+        assert health["ever_connected"] is True
         assert health["bridge_version"] == "0.8.1"
         assert health["protocol"] == 3
         assert health["protocol_supported"] is True
@@ -155,6 +156,7 @@ async def test_connector_remembers_bridge_version_and_state(fake_bridge):
     finally:
         await _stop(conn, task)
     assert conn.health()["connected"] is False
+    assert conn.health()["ever_connected"] is True  # a real outage from here on
 
 
 async def test_connector_warns_on_unsupported_protocol(fake_bridge, caplog):
@@ -189,6 +191,7 @@ async def test_connector_counts_failed_attempts():
     health = conn.health()
     assert health["attempt"] >= 2
     assert health["connected"] is False
+    assert health["ever_connected"] is False  # never answered: not an outage
     assert health["last_error"]
 
 

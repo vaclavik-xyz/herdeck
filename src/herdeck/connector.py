@@ -97,6 +97,10 @@ class Connector:
         self._capabilities: frozenset[str] = frozenset()
         # /health diagnostics: why is this server dark, and since when?
         self._connected = False
+        # A server that has never answered (configured but not running, e.g.
+        # an unused T3) is not "down": the window stays quiet about it, like
+        # the panel (orchestrator._ever_up).
+        self._ever_connected = False
         self._since_ms = _now_ms()
         self._attempt = 0
         self._bridge_version: str | None = None
@@ -125,6 +129,7 @@ class Connector:
         counts consecutive failed connects (0 while connected)."""
         return {
             "connected": self._connected,
+            "ever_connected": self._ever_connected,
             "last_error": self._last_connect_error,
             "since": self._since_ms,
             "attempt": self._attempt,
@@ -180,6 +185,7 @@ class Connector:
                     self._icons_requested = False  # opt-in is per connection
                     self._attempt = 0
                     connected = True
+                    self._ever_connected = True
                     self._set_connected(True)
                     await ws.send(encode({"type": "list"}))  # resync-on-reconnect
                     first = True
