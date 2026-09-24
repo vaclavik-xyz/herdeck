@@ -31,6 +31,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "usage_title": "usage limits",
         "usage_meta": "used / reset",
         "usage_reset": "reset",
+        # pace projection on a usage detail card (~95 px at 13 px: keep short)
+        "usage_pace": "full ~{t} early",
         # drill detail (layout.panel_detail)
         "reading_prompt": "reading prompt...",
         "waiting_on": "waiting on: {label}",
@@ -56,6 +58,11 @@ STRINGS: dict[str, dict[str, str]] = {
         # notification titles (banner / Telegram headline)
         "notify.title_blocked": "{agent} · needs input",
         "notify.title_done": "{agent} · done",
+        # usage-limit alerts (usage_alerts.usage_alert_message)
+        "notify.usage_threshold": "{provider} {window} · {pct} % used",
+        "notify.usage_resets_at": "resets {at}",
+        "notify.usage_reset_title": "{provider} {window} reset",
+        "notify.usage_reset_body": "you can continue",
         # accessible tile descriptions (desktop aria-label via /state)
         "a11y.empty_tile": "empty tile {n}",
         "a11y.pinned": "pinned",
@@ -118,6 +125,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "usage_title": "limity využití",
         "usage_meta": "využito / obnova",
         "usage_reset": "obnova",
+        "usage_pace": "plno ~{t} dřív",
         "reading_prompt": "čtu prompt...",
         "waiting_on": "čeká na: {label}",
         "new_agent": "+ Nový",
@@ -140,6 +148,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "launch_on": "na {server}",
         "notify.title_blocked": "{agent} · čeká na tebe",
         "notify.title_done": "{agent} · hotovo",
+        "notify.usage_threshold": "{provider} {window} · využito {pct} %",
+        "notify.usage_resets_at": "obnova {at}",
+        "notify.usage_reset_title": "{provider} {window} obnoveno",
+        "notify.usage_reset_body": "můžeš pokračovat",
         "a11y.empty_tile": "prázdná dlaždice {n}",
         "a11y.pinned": "připnuto",
         "act.approve": "Schválit",

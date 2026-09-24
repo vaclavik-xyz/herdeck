@@ -7,6 +7,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Opt-in usage-limit notifications: `[usage].alert_at` (used-% levels, e.g.
+  `[80, 95]`) notifies once per limit window when a provider window crosses a
+  level, and `[usage].alert_reset` announces when a window that reached 100 %
+  (or the highest level) resets. They go through the `[notifications]`
+  backends (macOS banner via the desktop shell, Telegram) with the `done`
+  sound; the first poll after startup is a silent baseline. Editable under
+  Usage.
+- The usage detail on the status panel shows a pace hint (`full ~40m early`)
+  when the recent burn rate would fill a window before it resets.
 - Triage loop: pressing the `▲ needs you` status panel opens the drill of the
   agent blocked longest; answering (or stopping) it moves straight on to the
   next-longest blocked agent, and back to the overview when none is left.

@@ -79,6 +79,13 @@ refresh_secs = 300            # poll cadence (min 30)
 codex_path = "codex"          # or an ssh wrapper on a thin-client deck
 claude_cache_path = "~/.cache/herdeck/claude-usage.json"
 codexbar_path = "codexbar"    # empty string disables the fallback
+# Opt-in usage notifications through the [notifications] backends (needs
+# [notifications] enabled; uses the "done" sound). Each level fires once per
+# limit window when used % crosses it; no alerts for the first poll after
+# startup. alert_reset announces the reset of a window that reached 100 % (or
+# the highest alert_at level), within one refresh_secs of the reset time.
+alert_at = []                 # e.g. [80, 95]; 1-100, sorted + deduped
+alert_reset = false
 
 [[macros]]
 label = "continue"

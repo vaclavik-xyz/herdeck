@@ -528,6 +528,91 @@ def test_paid_only_hides_free_native_subscription():
     assert poller.snapshot() == []
 
 
+def _alert_poller(source, alerts, wall, **kw):
+    return UsagePoller(
+        ["codex"],
+        codex_source=source,
+        codexbar_path="",
+        on_alert=alerts.extend,
+        wall_clock=lambda: wall["now"],
+        **kw,
+    )
+
+
+def test_poller_sends_threshold_alerts_after_the_baseline():
+    source = _Source(ProviderUsage("codex", [UsageWindow("5h", 70, None)]))
+    alerts: list = []
+    wall = {"now": 1_800_000_000.0}
+    poller = _alert_poller(source, alerts, wall, alert_at=[80])
+    poller.poll_once()
+    assert alerts == []
+    source.usage = ProviderUsage("codex", [UsageWindow("5h", 85, None)])
+    wall["now"] += 300
+    poller.poll_once()
+    assert [(a.kind, a.provider, a.percent) for a in alerts] == [("threshold", "codex", 80)]
+
+
+def test_poller_alert_callback_failure_keeps_polling():
+    source = _Source(ProviderUsage("codex", [UsageWindow("5h", 70, None)]))
+    wall = {"now": 1_800_000_000.0}
+
+    def boom(_alerts):
+        raise RuntimeError("sink down")
+
+    poller = UsagePoller(
+        ["codex"],
+        codex_source=source,
+        codexbar_path="",
+        alert_at=[80],
+        on_alert=boom,
+        wall_clock=lambda: wall["now"],
+    )
+    poller.poll_once()
+    source.usage = ProviderUsage("codex", [UsageWindow("5h", 90, None)])
+    poller.poll_once()
+    assert poller.snapshot()[0].windows[0].used_percent == 90
+
+
+def test_poller_paid_only_mutes_alerts_for_hidden_providers():
+    free = lambda used: ProviderUsage("codex", [UsageWindow("5h", used, None)], "free")  # noqa: E731
+    source = _Source(free(70))
+    alerts: list = []
+    wall = {"now": 1_800_000_000.0}
+    poller = _alert_poller(source, alerts, wall, alert_at=[80], paid_only=True)
+    poller.poll_once()
+    source.usage = free(90)
+    poller.poll_once()
+    assert alerts == []
+
+
+def test_poller_snapshot_carries_the_pace_projection():
+    from datetime import datetime
+
+    t0 = 1_800_000_000.0
+    resets = datetime.fromtimestamp(t0 + 3 * 3600, tz=UTC).isoformat()
+    source = _Source(ProviderUsage("codex", [UsageWindow("5h", 10, resets)]))
+    wall = {"now": t0}
+    poller = _alert_poller(source, [], wall)
+    poller.poll_once()
+    source.usage = ProviderUsage("codex", [UsageWindow("5h", 30, resets)])
+    wall["now"] = t0 + 1200
+    poller.poll_once()
+    assert poller.snapshot()[0].windows[0].full_early_s == 90 * 60
+
+
+def test_poller_from_config_passes_alert_settings():
+    from herdeck.config import UsageConfig
+
+    sent = []
+    p = poller_from_config(
+        UsageConfig(providers=["codex"], alert_at=[80, 95], alert_reset=True),
+        on_alert=sent.append,
+    )
+    assert p._tracker._levels == [80, 95]
+    assert p._tracker._alert_reset is True
+    assert p._on_alert == sent.append
+
+
 def test_codex_app_server_source_handshakes_and_reads_limits(monkeypatch):
     class FakeAppServer:
         def __init__(self):
