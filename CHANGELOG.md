@@ -24,6 +24,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rotated at 5 MB. The runtime now also logs each notification's route
   (queued for the banner, or the `osascript` fallback) at INFO.
 
+### Changed
+- Blocked agents are ordered by how long they have been waiting, longest
+  first, instead of by pane id: on the overview (D200, desktop window, web
+  simulator) and in the Elgato pager. With `agent_order = "status"` the wait
+  also beats server order; with `"herdr"` the Herdr position still comes
+  first.
+
 ### Fixed
 - SVG project favicons now render in the packaged desktop app and the Elgato
   plugin (they showed the monogram): SVG goes through resvg (`resvg-py`, a

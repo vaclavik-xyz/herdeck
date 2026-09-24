@@ -43,6 +43,9 @@ class ElgatoSession:
         self._action_keys: list[tuple[str, str]] = []   # (instance_id, type)
         self._detection: dict[AgentKey, str] = {}
         self._block_gen: dict[AgentKey, int] = {}  # +1 each time an agent enters BLOCKED
+        # When each agent last entered BLOCKED: the pager cycles blocked agents
+        # longest-waiting first (same order as the D200 overview and triage).
+        self._blocked_at: dict[AgentKey, float] = {}
         self._pending_act: AgentKey | None = None  # an act is in flight for this agent
         self._armed_for: AgentKey | None = None
         self._armed_at: float = 0.0
@@ -197,6 +200,11 @@ class ElgatoSession:
             for k, v in self._detection.items()
             if k in self._agents and self._agents[k].status is Status.BLOCKED
         }
+        self._blocked_at = {
+            k: v
+            for k, v in self._blocked_at.items()
+            if k in self._agents and self._agents[k].status is Status.BLOCKED
+        }
 
     def block_generation(self, key: AgentKey) -> int:
         return self._block_gen.get(key, 0)
@@ -221,6 +229,7 @@ class ElgatoSession:
             prev = self._agents.get(s.key)
             if s.status is Status.BLOCKED and (prev is None or prev.status is not Status.BLOCKED):
                 self._block_gen[s.key] = self._block_gen.get(s.key, 0) + 1
+                self._blocked_at[s.key] = self._clock()
 
     def _target(self) -> AgentState | None:
         key = self.selected()
@@ -340,6 +349,7 @@ class ElgatoSession:
                 (state for state in self._agents.values() if state.status is Status.BLOCKED and state.lifecycle == "active"),
                 self.config.overview_order,
                 self.config.view.agent_order,
+                blocked_since=self._blocked_at,
             )
         ]
         if not blocked:

@@ -620,9 +620,11 @@ running the deck; quote a repo name that contains a dot, e.g.
 SVG icons are rendered with resvg (bundled in the packaged app and the Elgato
 plugin). An SVG that references anything outside itself (a file path or URL in
 `href`/`url(...)`) is refused and shows the monogram.
-Agents are always grouped by attention priority. Set `[view].agent_order` to
+Agents are always grouped by attention priority. Blocked agents are ordered by
+how long they have been waiting, longest first. Set `[view].agent_order` to
 `"herdr"` to mirror Herdr's workspace and tab positions within the same state
-and server; the default `"status"` uses stable pane ids as the tie-breaker.
+and server (waiting time then only breaks ties); the default `"status"` uses
+stable pane ids as the tie-breaker for the other states.
 
 All rendered deck text (tile status words, the panel, the web simulator) and
 the desktop app UI speak `[view].language` — `"en"` (default) or `"cs"`; the

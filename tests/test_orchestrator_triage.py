@@ -170,6 +170,12 @@ def test_triage_opens_t3_agent_with_a_read_only():
     assert o.triage() == [Command("read", "dev", "p3")]
 
 
+def test_overview_orders_blocked_tiles_longest_waiting_first():
+    o, _ = fleet()
+    labels = [t.label for t in o.render().tiles[:4]]
+    assert labels == ["p3", "p1", "p2", "p4"]  # not pane-id order p1, p2, p3
+
+
 def test_next_triage_drill_acknowledges_the_previous_answer():
     o, _ = fleet()
     o.on_press(PANEL)

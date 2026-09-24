@@ -387,7 +387,10 @@ class Orchestrator:
         drop out immediately; new agents append at the end until the next
         adoption."""
         target = layout.order_agents(
-            (s for s in self._agents.values() if s.lifecycle == "active"), self.config.overview_order, self.config.view.agent_order
+            (s for s in self._agents.values() if s.lifecycle == "active"),
+            self.config.overview_order,
+            self.config.view.agent_order,
+            blocked_since=self._blocked_since_map(),
         )
         target_keys = [s.key for s in target]
         now = self._clock()
@@ -759,6 +762,7 @@ class Orchestrator:
                     (s for s in self._agents.values() if s.lifecycle == "active"),
                     self.config.overview_order,
                     self.config.view.agent_order,
+                    blocked_since=self._blocked_since_map(),
                 )
             ]
         shown, _ = layout.page(self._place_pins([by_key[k] for k in display]), self._page, self._agent_slots())
