@@ -3,6 +3,7 @@ blocked reminders and away-only Telegram routing (runtime side)."""
 
 from dataclasses import replace
 
+from herdeck.config import TelegramConfig
 from herdeck.deckapp.live import LiveSource
 from herdeck.model import Status
 from herdeck.presence import IdleProbe, parse_hid_idle
@@ -82,12 +83,60 @@ def test_a_focused_pane_alerts_when_you_are_away_from_the_host():
     assert [c[0] for c in notifier.calls] == ["claude · needs input"]
 
 
-def test_unknown_idle_time_counts_as_present():
+def test_unknown_idle_time_counts_as_away():
+    # No idle reading (e.g. Linux) is no proof the user sits at the host, so
+    # the alert is not dropped.
     config, server = notify_config()
     src, notifier, _probe = _live(config, server, idle=None)
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
     src._on_event(server.id, _focused(server, "p0", Status.DONE))
-    assert notifier.calls == []
+    assert [c[0] for c in notifier.calls] == ["claude · done"]
+
+
+def test_a_focused_pane_still_reaches_remote_backends(monkeypatch):
+    """skip_focused silences only the local banner: Telegram (one-way and
+    interactive) is for when you are away, and presence is a guess."""
+    import herdeck.notify as notify
+
+    config, server = notify_config(on=("blocked", "done"))
+    config.notifications.backends = ["macos", "telegram"]
+    config.notifications.telegram = TelegramConfig(token_env="TG_TOKEN", chat_id="-1")
+    monkeypatch.setenv("TG_TOKEN", "bot")
+    local, remote = [], []
+    monkeypatch.setattr(
+        notify,
+        "make_telegram_sink",
+        lambda token, chat, thread: lambda title, body, sound, icon=None: remote.append(title),
+    )
+    src = LiveSource(
+        config,
+        server,
+        notify_schedule=lambda fn: fn(),
+        idle_probe=FakeIdle(3.0),  # present
+        shell_banners=False,
+    )
+    # the same sink LiveSource builds, with a recording local banner
+    src._notifier = notify.Notifier(
+        sink=notify.deckapp_sink(
+            src._notify_feed,
+            lambda: False,
+            config,
+            telegram_factory=src._telegram_sink,
+            macos_sink=lambda title, body, sound, icon=None: local.append(title),
+            shell=False,
+            local_gate=lambda: not getattr(src._alert_context, "skip_local", False),
+        )
+    )
+    interactive = []
+    src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
+    src._on_event(server.id, _focused(server, "p0", Status.DONE))
+    assert local == [] and remote == ["claude · done"]
+    src.set_telegram_interactive(lambda: True, lambda a, **k: interactive.append(a.key))
+    src._on_event(server.id, _focused(server, "p0", Status.BLOCKED))
+    assert local == [] and interactive == [agent(server.id, "p0", Status.BLOCKED).key]
+    # an unfocused pane keeps its local banner
+    src._on_event(server.id, agent(server.id, "p1", Status.DONE))
+    assert local == ["claude · done"]
 
 
 def test_skip_focused_can_be_turned_off():

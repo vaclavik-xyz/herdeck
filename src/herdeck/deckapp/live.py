@@ -80,8 +80,10 @@ _ANSWERED_EPISODES_MAX = 256
 # without it. The read normally lands in well under a second.
 PROMPT_WAIT_S = 2.0
 # [notifications].skip_focused: the herdr-focused pane only counts as "you are
-# looking at it" while the deck host saw input within this many seconds (an
-# unknown idle time, e.g. on Linux, counts as present).
+# looking at it" while the deck host saw input within this many seconds. An
+# unknown idle time (e.g. Linux) counts as away: dropping an alert needs proof
+# that the user is at the host. It only ever silences the local banner, never
+# a remote backend (Telegram) — that is for when you are NOT at the host.
 FOCUS_PRESENT_S = 120.0
 # [notifications].remind_after: at most this many reminders per block episode,
 # checked by a small background thread every REMIND_POLL_S seconds.
@@ -194,6 +196,7 @@ class LiveSource(AgentCardMixin, StateSource):
                     away=self._user_away,
                     telegram_factory=self._telegram_sink,
                     shell=shell_banners,
+                    local_gate=lambda: not getattr(self._alert_context, "skip_local", False),
                 )
             )
             self._notifier = Notifier(sink=factory(self._notify_feed, lambda: self._notify_gate()))
@@ -734,14 +737,19 @@ class LiveSource(AgentCardMixin, StateSource):
         ([notifications].banner_actions / banner_prompt), then send it."""
         n = self._config.notifications
         plain_body = body
-        if n.skip_focused and agent.focused and self._user_present():
+        skip_local = bool(n.skip_focused and agent.focused and self._user_present())
+        if skip_local:
             log.info(
-                "notification skipped (herdr-focused pane) event=%s agent=%s:%s",
+                "local banner skipped (herdr-focused pane) event=%s agent=%s:%s",
                 event,
                 agent.key.server_id,
                 agent.key.pane_id,
             )
-            return
+            remote = "telegram" in n.backends or (
+                event == "blocked" and self._tg_interactive()
+            )
+            if not remote:
+                return
         if event == "blocked" and (n.banner_actions or n.banner_prompt):
             prompt = self._await_prompt(agent.key, meta.get("episode"))
             if prompt is None:
@@ -763,10 +771,12 @@ class LiveSource(AgentCardMixin, StateSource):
                 return
             self._bannered.setdefault(agent.key, set()).add(event)
         self._alert_context.event = event
+        self._alert_context.skip_local = skip_local
         try:
             self._notifier.notify(title, body, sound, icon=self._banner_icon(agent), meta=meta)
         finally:
             self._alert_context.event = None
+            self._alert_context.skip_local = False
         if event == "blocked" and self._tg_interactive():
             self._notify_blocked_interactive(agent, plain_body, sound)
 
@@ -806,9 +816,10 @@ class LiveSource(AgentCardMixin, StateSource):
         return idle is None or idle >= seconds
 
     def _user_present(self) -> bool:
-        """The user touched this host recently (notify thread: may run ioreg)."""
+        """The user touched this host recently (notify thread: may run ioreg).
+        An unknown idle time is not proof of presence."""
         idle = self._idle_probe.idle_seconds()
-        return idle is None or idle < FOCUS_PRESENT_S
+        return idle is not None and idle < FOCUS_PRESENT_S
 
     def _await_prompt(self, key: AgentKey, episode: str | None) -> str | None:
         """The pre-read prompt of ``key``'s block ``episode`` ("" if it did not

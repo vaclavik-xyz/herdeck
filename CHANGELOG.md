@@ -20,9 +20,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   starts working again or disappears, the desktop app removes its delivered
   banners from Notification Center (a new `withdraw` feed item, only sent to a
   shell that announces support).
-- No alert for the pane herdr reports as focused while you are using the deck
-  host (input within 2 minutes); `[notifications].skip_focused = false` turns
-  this off. The bridge now passes herdr's `focused` flag on the wire.
+- No local banner for the pane herdr reports as focused while you are using
+  the deck host (input within 2 minutes; an unknown idle time counts as away);
+  Telegram alerts are never skipped for it. `[notifications].skip_focused =
+  false` turns this off. The bridge now passes herdr's `focused` flag on the
+  wire.
 - Opt-in `[notifications].remind_after` (minutes): an agent that stays blocked
   alerts again once per interval, at most three times per episode.
 - Opt-in `[notifications.telegram].only_when_away` (minutes): Telegram alerts

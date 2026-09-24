@@ -37,6 +37,33 @@ log = logging.getLogger(__name__)
 TELEGRAM_POLL_TIMEOUT_S = 20
 
 
+class _DaemonThreadExecutor(concurrent.futures.ThreadPoolExecutor):
+    """Default executor of the services loop: one daemon thread per call (a
+    ThreadPoolExecutor subclass only because asyncio insists on one).
+
+    The Bot API calls (``asyncio.to_thread``: a 20 s ``getUpdates`` long poll)
+    cannot be cancelled. On the stock executor their non-daemon workers are
+    joined at interpreter exit, so SIGTERM could wait out a whole long poll
+    (and launchd's kill timeout). Daemon threads let the process exit now."""
+
+    def submit(self, fn, /, *args, **kwargs):
+        future: concurrent.futures.Future = concurrent.futures.Future()
+
+        def run() -> None:
+            if not future.set_running_or_notify_cancel():
+                return
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except BaseException as exc:  # noqa: BLE001 - handed to the awaiter
+                future.set_exception(exc)
+
+        threading.Thread(target=run, name="herdeck-services-io", daemon=True).start()
+        return future
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        return None
+
+
 class RuntimeServices:
     def __init__(
         self,
@@ -64,6 +91,7 @@ class RuntimeServices:
         self._interactor_generation = 0
         self._closing = False
         self._loop = asyncio.new_event_loop()
+        self._loop.set_default_executor(_DaemonThreadExecutor())
         self._ready = threading.Event()
         self._thread = threading.Thread(
             target=self._serve, name="herdeck-runtime-services", daemon=True
@@ -96,6 +124,8 @@ class RuntimeServices:
             return
         self._closing = True
         self._poll_future.cancel()
+        # An in-flight getUpdates long poll (a daemon thread, up to 20 s)
+        # cannot be cancelled: do not wait for it.
 
         async def drain() -> None:
             tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
@@ -104,12 +134,12 @@ class RuntimeServices:
             await asyncio.gather(*tasks, return_exceptions=True)
 
         try:
-            asyncio.run_coroutine_threadsafe(drain(), self._loop).result(3)
+            asyncio.run_coroutine_threadsafe(drain(), self._loop).result(1)
         except Exception:
             pass
         self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread is not threading.current_thread():
-            self._thread.join(timeout=3)
+            self._thread.join(timeout=1)
 
     # --- source wiring -----------------------------------------------------------
     def wire(self, source) -> None:
