@@ -15,6 +15,9 @@ from .source import StateSource
 # empty so no real bridge credential ever lives in the mock.
 MOCK_SERVERS: tuple[str, str] = ("local", "gpu-box")
 
+# The sample prompt a demo agent "shows" to a read.
+DEMO_PROMPT = "Do you want to proceed?\n1. Yes\n2. Yes, and don't ask again\n3. No"
+
 # Deterministic cycle used by mock presses for visual feedback (no randomness).
 _STATUS_CYCLE: tuple[Status, ...] = (
     Status.WORKING,
@@ -117,6 +120,26 @@ class MockSource(StateSource):
         if 0 <= index < len(ordered):  # only real agent tiles; ignore everything else
             agent = ordered[index]
             agent.status = _next_status(agent.status)
+
+    # --- cockpit API (deckapp.services): the demo fleet answers in-process ---
+    def semantic_agents(self) -> list[AgentState]:
+        return list(self._agents)
+
+    def semantic_agent(self, key: AgentKey) -> AgentState | None:
+        return next((agent for agent in self._agents if agent.key == key), None)
+
+    def semantic_server_available(self, server_id: str) -> bool:
+        return server_id in self._config.overview_order
+
+    def semantic_generation(self, server_id: str, pane_id: str) -> int:
+        return 0
+
+    def control_result(self, command) -> dict:
+        """The demo's answer to a control request: reads get a sample prompt,
+        everything else is reported sent (nothing is sent anywhere)."""
+        if command.kind == "read":
+            return {"text": DEMO_PROMPT, "pane_id": command.pane_id}
+        return {"sent": True}
 
     def summary(self) -> dict:
         counts = layout.summary(self._agents)

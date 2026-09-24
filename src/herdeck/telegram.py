@@ -241,6 +241,7 @@ class TelegramInteractor:
         allowed_user_ids: list[int],
         store: TelegramAlertStore | None = None,
         prompt_max_chars: int = 1200,
+        offset: int | None = None,
     ):
         self._client = client
         self._control = control
@@ -250,7 +251,10 @@ class TelegramInteractor:
         self._store = store or TelegramAlertStore()
         self._formatter = TelegramAlertFormatter(prompt_max_chars=prompt_max_chars)
         self._inbound_disabled = False
-        self._offset: int | None = None
+        # getUpdates cursor. A rebuilt interactor (config reload) continues
+        # from its predecessor's cursor: starting from None would re-deliver
+        # updates the old one already acted on (a second approve).
+        self._offset: int | None = offset
 
     @property
     def offset(self) -> int | None:

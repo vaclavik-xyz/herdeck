@@ -500,8 +500,14 @@ def deckapp_sink(
     macos_sink=_macos_sink,
     claim_age: Callable[[], float | None] | None = None,
     away: Callable[[float], bool] | None = None,
+    shell: bool = True,
+    local_gate: Callable[[], bool] | None = None,
 ) -> Callable[[str, str, bool | str], None]:
     """Deckapp runtime sink honoring ``[notifications.backends]``.
+
+    ``shell=False`` is for a host no deck shell ever attaches to (the CLI
+    runtime with a web/physical front): its "macos" backend posts through
+    osascript directly instead of waiting for a shell claim that never comes.
 
     ``away(seconds)`` answers "has the user been away from the deck host that
     long?" for ``[notifications.telegram].only_when_away``.
@@ -532,6 +538,22 @@ def deckapp_sink(
         # No shell banner should fire either: the runtime's feed drives the
         # shell banners, which are the macOS backend's job.
         sinks[0] = lambda t, b, s, icon=None: None  # noqa: E731
+    elif not shell:
+        sinks[0] = macos_sink
+    if local_gate is not None:
+        # ``local_gate()`` False silences only the local banner (shell feed /
+        # osascript) for this alert, e.g. [notifications].skip_focused;
+        # remote backends still fire.
+        local = sinks[0]
+
+        def gated_local(title, body, sound, icon=None, meta=None):
+            if not local_gate():
+                return
+            local(title, body, sound, **_sink_kwargs(local, icon, meta))
+
+        gated_local._accepts_meta = True
+        gated_local._notify_name = _sink_name(local)
+        sinks[0] = gated_local
     if "telegram" in n.backends:
         tg = n.telegram
         token = getenv(tg.token_env) if tg else None

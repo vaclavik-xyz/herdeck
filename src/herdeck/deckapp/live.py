@@ -29,14 +29,10 @@ import re
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable
 
-from ..app import (
-    NOTIFY_EVENT_STATUSES,
-    _interaction_keys,
-    event_notification_body,
-    newly_entered,
-)
+from .. import notify as _notify
 from ..commands import Command, command_to_msg, profile_for
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
@@ -51,6 +47,12 @@ from ..notify import (
     deckapp_sink,
     event_title,
 )
+from ..notify_events import (
+    NOTIFY_EVENT_STATUSES,
+    event_notification_body,
+    newly_entered,
+)
+from ..notify_events import interaction_keys as _interaction_keys
 from ..notify_icons import NotificationIconCache
 from ..orchestrator import Orchestrator, binary_answer
 from ..presence import IdleProbe
@@ -78,13 +80,17 @@ _ANSWERED_EPISODES_MAX = 256
 # without it. The read normally lands in well under a second.
 PROMPT_WAIT_S = 2.0
 # [notifications].skip_focused: the herdr-focused pane only counts as "you are
-# looking at it" while the deck host saw input within this many seconds (an
-# unknown idle time, e.g. on Linux, counts as present).
+# looking at it" while the deck host saw input within this many seconds. An
+# unknown idle time (e.g. Linux) counts as away: dropping an alert needs proof
+# that the user is at the host. It only ever silences the local banner, never
+# a remote backend (Telegram) — that is for when you are NOT at the host.
 FOCUS_PRESENT_S = 120.0
 # [notifications].remind_after: at most this many reminders per block episode,
 # checked by a small background thread every REMIND_POLL_S seconds.
 REMIND_MAX = 3
 REMIND_POLL_S = 15.0
+# Per-agent semantic generations remembered for the cockpit API (bounded).
+SEMANTIC_GENERATION_LIMIT = 4096
 
 
 def sanitize_reply(text: object) -> str:
@@ -127,18 +133,19 @@ class LiveSource(AgentCardMixin, StateSource):
         notify_icons: NotificationIconCache | None = None,
         prompt_wait_s: float = PROMPT_WAIT_S,
         idle_probe: IdleProbe | None = None,
+        shell_banners: bool = True,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
         # when it carries a fleet, every selected server participates.
         self._config = config
-        # Event notifications, same engine as herdeck/app.py App._maybe_notify
-        # (newly_entered bookkeeping per event). Plain sinks only — the
-        # interactive blocked chain (Telegram approve buttons) is an app.py
-        # runtime feature and is deliberately not wired here. The sink records
-        # every alert into the feed; the deck shell posts both the banner and
-        # sound under one acknowledged delivery. A plain osascript notification
-        # is only the fallback while no shell is attached.
+        # Event notifications (newly_entered bookkeeping per event). The sink
+        # records every alert into the feed; the deck shell posts both the
+        # banner and sound under one acknowledged delivery. A plain osascript
+        # notification is only the fallback while no shell is attached.
+        # Interactive Telegram (approve buttons) is opt-in per host: the
+        # runtime services install it with set_telegram_interactive, and then
+        # blocked alerts go to it instead of the one-way Telegram sink.
         self._notify_keys: dict[str, set] = {event: set() for event in NOTIFY_EVENT_STATUSES}
         self._notify_baselined_servers: set[str] = set()
         # Cooldown per agent+event and "done right after you answered it"
@@ -165,6 +172,20 @@ class LiveSource(AgentCardMixin, StateSource):
         self._bannered: dict[AgentKey, set[str]] = {}
         # Banners carry the agent's project mark (favicon or monogram).
         self._notify_icons = notify_icons or NotificationIconCache()
+        # Interactive Telegram hooks (set_telegram_interactive) and the event of
+        # the alert this notify thread is delivering (so the one-way Telegram
+        # sink can leave blocked alerts to the interactive chain).
+        self._tg_interactive: Callable[[], bool] = lambda: False
+        self._tg_notify_blocked = None
+        self._alert_context = threading.local()
+        # Cockpit semantic API bookkeeping: a server is "available" only after
+        # a snapshot on its current connection; every agent change bumps that
+        # agent's generation (a stop confirmation dies with it).
+        self._semantic_ready: set[str] = set()
+        self._semantic_generations: OrderedDict[AgentKey, int] = OrderedDict()
+        self._semantic_serial = 0
+        # Results of requests owned by the runtime services (agent control).
+        self._result_tap = None
         if config.notifications.enabled:
             factory = notify_sink_factory or (
                 lambda feed, gate: deckapp_sink(
@@ -173,6 +194,9 @@ class LiveSource(AgentCardMixin, StateSource):
                     self._config,
                     claim_age=lambda: self._notify_claim_age(),
                     away=self._user_away,
+                    telegram_factory=self._telegram_sink,
+                    shell=shell_banners,
+                    local_gate=lambda: not getattr(self._alert_context, "skip_local", False),
                 )
             )
             self._notifier = Notifier(sink=factory(self._notify_feed, lambda: self._notify_gate()))
@@ -467,6 +491,88 @@ class LiveSource(AgentCardMixin, StateSource):
             runner.close()
         self._runners.clear()
 
+    # --- runtime services hooks (deckapp.services.RuntimeServices) -----------
+
+    def set_result_tap(self, tap) -> None:
+        """``tap(server_id, req, data) -> Command | None`` claims results of
+        requests the runtime services issued (agent control: Telegram, the
+        cockpit API). A claimed result is not processed as a deck result."""
+        self._result_tap = tap
+
+    def set_telegram_interactive(self, active: Callable[[], bool], notify_blocked) -> None:
+        """Route blocked alerts to an interactive Telegram chain.
+
+        While ``active()`` is true a blocked alert (after the same skip/stale
+        checks as every other alert) calls ``notify_blocked(agent, body=,
+        sound=, multi_server=)`` and the one-way Telegram sink stays quiet for
+        it; done and usage alerts keep using the one-way sink."""
+        self._tg_interactive = active
+        self._tg_notify_blocked = notify_blocked
+
+    def _telegram_sink(self, token: str, chat_id: str, message_thread_id: int | None):
+        sink = _notify.make_telegram_sink(token, chat_id, message_thread_id)
+
+        def one_way(title: str, body: str, sound, icon: str | None = None) -> None:
+            if getattr(self._alert_context, "event", None) == "blocked" and self._tg_interactive():
+                return  # the interactive chain owns blocked alerts
+            sink(title, body, sound, icon)
+
+        one_way._notify_name = "telegram"
+        return one_way
+
+    def _notify_blocked_interactive(self, agent: AgentState, body: str, sound) -> None:
+        notify_blocked = self._tg_notify_blocked
+        if notify_blocked is None:
+            return
+        tg = self._config.notifications.telegram
+        away_min = getattr(tg, "only_when_away", 0) if tg is not None else 0
+        if away_min > 0 and not self._user_away(away_min * 60.0):
+            log.info(
+                "telegram alert skipped (user at the deck host) agent=%s:%s",
+                agent.key.server_id,
+                agent.key.pane_id,
+            )
+            return
+        try:
+            notify_blocked(
+                agent,
+                body=body,
+                sound=sound,
+                multi_server=len(self._config.overview_order) > 1,
+            )
+        except Exception:
+            log.warning("interactive telegram alert failed", exc_info=True)
+
+    # Semantic reads take the deck lock too: a bridge update is applied AND
+    # rendered under it, so the API never reports an agent state whose tiles
+    # the web front has not received yet.
+    def semantic_agents(self) -> list[AgentState]:
+        with self._card_deck_lock(), self._lock:
+            return list(self._agents.values())
+
+    def semantic_agent(self, key: AgentKey) -> AgentState | None:
+        with self._card_deck_lock(), self._lock:
+            return self._agents.get(key)
+
+    def semantic_server_available(self, server_id: str) -> bool:
+        with self._card_deck_lock(), self._lock:
+            return server_id in self._semantic_ready
+
+    def semantic_generation(self, server_id: str, pane_id: str) -> int:
+        with self._lock:
+            return self._semantic_generations.get(
+                AgentKey(server_id, pane_id), self._semantic_serial
+            )
+
+    def _bump_semantic_locked(self, keys) -> None:
+        """Caller holds self._lock."""
+        for key in keys:
+            self._semantic_serial += 1
+            self._semantic_generations[key] = self._semantic_serial
+            self._semantic_generations.move_to_end(key)
+            while len(self._semantic_generations) > SEMANTIC_GENERATION_LIMIT:
+                self._semantic_generations.popitem(last=False)
+
     # --- notification plumbing (consumed by the deck shell via /state) -------
 
     def set_notify_gate(
@@ -630,14 +736,20 @@ class LiveSource(AgentCardMixin, StateSource):
         """Notify thread: enrich a blocked alert with its prompt when asked to
         ([notifications].banner_actions / banner_prompt), then send it."""
         n = self._config.notifications
-        if n.skip_focused and agent.focused and self._user_present():
+        plain_body = body
+        skip_local = bool(n.skip_focused and agent.focused and self._user_present())
+        if skip_local:
             log.info(
-                "notification skipped (herdr-focused pane) event=%s agent=%s:%s",
+                "local banner skipped (herdr-focused pane) event=%s agent=%s:%s",
                 event,
                 agent.key.server_id,
                 agent.key.pane_id,
             )
-            return
+            remote = "telegram" in n.backends or (
+                event == "blocked" and self._tg_interactive()
+            )
+            if not remote:
+                return
         if event == "blocked" and (n.banner_actions or n.banner_prompt):
             prompt = self._await_prompt(agent.key, meta.get("episode"))
             if prompt is None:
@@ -658,7 +770,15 @@ class LiveSource(AgentCardMixin, StateSource):
                 )
                 return
             self._bannered.setdefault(agent.key, set()).add(event)
-        self._notifier.notify(title, body, sound, icon=self._banner_icon(agent), meta=meta)
+        self._alert_context.event = event
+        self._alert_context.skip_local = skip_local
+        try:
+            self._notifier.notify(title, body, sound, icon=self._banner_icon(agent), meta=meta)
+        finally:
+            self._alert_context.event = None
+            self._alert_context.skip_local = False
+        if event == "blocked" and self._tg_interactive():
+            self._notify_blocked_interactive(agent, plain_body, sound)
 
     def _alert_current(self, event: str, key: AgentKey, episode: str | None) -> bool:
         """Is ``key`` still in ``event``'s status (and block episode)? Caller
@@ -696,9 +816,10 @@ class LiveSource(AgentCardMixin, StateSource):
         return idle is None or idle >= seconds
 
     def _user_present(self) -> bool:
-        """The user touched this host recently (notify thread: may run ioreg)."""
+        """The user touched this host recently (notify thread: may run ioreg).
+        An unknown idle time is not proof of presence."""
         idle = self._idle_probe.idle_seconds()
-        return idle is None or idle < FOCUS_PRESENT_S
+        return idle is not None and idle < FOCUS_PRESENT_S
 
     def _await_prompt(self, key: AgentKey, episode: str | None) -> str | None:
         """The pre-read prompt of ``key``'s block ``episode`` ("" if it did not
@@ -806,6 +927,17 @@ class LiveSource(AgentCardMixin, StateSource):
                     for key, state in new_by_key.items()
                     if self._terminal_identity_changed(self._agents.get(key), state)
                 }
+                previous = {
+                    key: state
+                    for key, state in self._agents.items()
+                    if key.server_id == server_id
+                }
+                self._bump_semantic_locked(
+                    key
+                    for key in previous.keys() | new_by_key.keys()
+                    if previous.get(key) != new_by_key.get(key)
+                )
+                self._semantic_ready.add(server_id)
                 self._agents = {
                     key: state
                     for key, state in self._agents.items()
@@ -863,6 +995,8 @@ class LiveSource(AgentCardMixin, StateSource):
                 recycled = self._terminal_identity_changed(
                     self._agents.get(state.key), state
                 )
+                if self._agents.get(state.key) != state:
+                    self._bump_semantic_locked((state.key,))
                 self._agents[state.key] = state
                 if recycled:
                     self._preread.pop(state.key, None)
@@ -901,6 +1035,12 @@ class LiveSource(AgentCardMixin, StateSource):
         def mutate():
             with self._lock:
                 self._connected[server_id] = up
+                # Available again only after the fresh snapshot that follows
+                # a (re)connect; every agent of the server changes generation.
+                self._semantic_ready.discard(server_id)
+                self._bump_semantic_locked(
+                    key for key in self._agents if key.server_id == server_id
+                )
                 if not up:
                     # In-flight background reads died with the connection
                     # (Connector.send is at-most-once), so their req markers
@@ -937,6 +1077,17 @@ class LiveSource(AgentCardMixin, StateSource):
             raise TypeError("_on_result expects (server_id, req, data) or (req, data)")
         if server_id is None:
             return
+        tap = self._result_tap
+        if tap is not None and req is not None:
+            claimed = tap(server_id, req, data)
+            if claimed is not None:
+                if claimed.kind != "read":
+                    # an act/send ack: resync so a skipped guarded action
+                    # cannot linger as stale state (same as a deck result)
+                    runner = self._runners.get(server_id)
+                    if runner is not None:
+                        runner.send(command_to_msg(Command("list", server_id), None))
+                return
         # A desktop agent card may be waiting on this reply (never consumes it).
         self._card_on_result(req, data)
         with self._lock:
@@ -1226,13 +1377,14 @@ def build_live_source(
     *,
     connector_factory=create_connector,
     runner_factory=ConnectorRunner,
+    shell_banners: bool = True,
 ) -> LiveSource:
     """Wire a LiveSource to one Connector + runner per selected server.
 
     ``connector_factory``/``runner_factory`` are injectable so tests can drive the
     callbacks and capture sends without a real bridge.
     """
-    source = LiveSource(config, server)
+    source = LiveSource(config, server, shell_banners=shell_banners)
     servers = list(config.servers) or ([server] if server is not None else [])
     for selected in servers:
         connector = connector_factory(
