@@ -265,6 +265,93 @@ describe("MaintenanceSection", () => {
     expect(t.querySelector('[data-server="t3-headless"] .unused-label')?.textContent).toBe("nepoužívá se");
   });
 
+  const hooksSummary = (claude: Record<string, unknown> = {}, codex: Record<string, unknown> = {}) => ({
+    claude: { installed: false, file: "/Users/me/.claude/settings.json", error: null, ...claude },
+    codex: { installed: false, file: "/Users/me/.codex/hooks.json", error: null, needs_trust: false, features_hooks_enabled: false, ...codex },
+  });
+  const withHooks = (hooks: unknown, over: Record<string, unknown> = {}) =>
+    rawStatus({ servers: { m4: { managed: true, self_update: true, connected: true, bridge_version: "0.9.1", hooks, ...over } } });
+  const hookRow = (t: HTMLElement, agent: string) => t.querySelector<HTMLElement>(`[data-hooks="m4"] [data-agent="${agent}"]`)!;
+
+  it("shows each agent's subagent tracking state (en + cs)", async () => {
+    const status = withHooks(hooksSummary({ installed: true }, { installed: true, needs_trust: true }));
+    let t = await render(fake(status).invoke);
+    expect(hookRow(t, "claude").dataset.state).toBe("installed");
+    expect(hookRow(t, "claude").querySelector("[data-hook-state]")?.textContent).toBe("installed");
+    expect(hookRow(t, "codex").dataset.state).toBe("enable_features");
+    expect(hookRow(t, "codex").textContent).toContain("[features] hooks = true in /Users/me/.codex/config.toml");
+    const toggle = button(t, "hooks-claude");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(toggle.getAttribute("title")).toBe("Remove herdeck's subagent hooks for Claude Code from m4");
+    cleanup?.();
+    t = await render(fake(withHooks(hooksSummary({}, { installed: true, needs_trust: true, features_hooks_enabled: true }))).invoke, "cs");
+    expect(hookRow(t, "claude").textContent).toContain("nenainstalováno");
+    expect(hookRow(t, "codex").textContent).toContain("/hooks");
+    expect(button(t, "hooks-claude").getAttribute("title")).toContain("Nainstalovat");
+  });
+
+  it("confirms before installing, naming the file and the backup, then reports the outcome", async () => {
+    const posted: unknown[] = [];
+    const f = fake(withHooks(hooksSummary()), {
+      "POST /maintenance/servers/m4/hooks": (args) => {
+        posted.push(args?.body);
+        return { status: 200, body: { ok: true, code: "ok", message: "", agents: hooksSummary({ installed: true }) } };
+      },
+    });
+    const t = await render(f.invoke);
+    button(t, "hooks-claude").click();
+    await settle();
+    expect(posted).toEqual([]);
+    const confirm = t.querySelector('[data-confirm="hooks-install"]')!;
+    expect(confirm.textContent).toContain("/Users/me/.claude/settings.json");
+    expect(confirm.textContent).toContain("backup");
+    button(t, "hooks-confirm").click();
+    await settle();
+    expect(posted).toEqual([{ action: "install", agents: ["claude"] }]);
+    expect(t.querySelector('[data-note="hooks"]')?.textContent).toBe("Done. Running agents pick it up after a restart.");
+  });
+
+  it("asks to uninstall an installed agent, can be cancelled, and shows refusals", async () => {
+    const posted: unknown[] = [];
+    const f = fake(withHooks(hooksSummary({}, { installed: true, features_hooks_enabled: true })), {
+      "POST /maintenance/servers/m4/hooks": (args) => {
+        posted.push(args?.body);
+        return { status: 200, body: { ok: false, code: "readonly", message: "read-only token", agents: null } };
+      },
+    });
+    const t = await render(f.invoke, "cs");
+    button(t, "hooks-codex").click();
+    await settle();
+    expect(t.querySelector('[data-confirm="hooks-uninstall"]')?.textContent).toContain("záloha");
+    button(t, "hooks-cancel").click();
+    await settle();
+    expect(t.querySelector('[data-confirm^="hooks-"]')).toBeNull();
+    button(t, "hooks-codex").click();
+    await settle();
+    button(t, "hooks-confirm").click();
+    await settle();
+    expect(posted).toEqual([{ action: "uninstall", agents: ["codex"] }]);
+    const note = t.querySelector('[data-note="hooks"]')!;
+    expect(note.classList.contains("bad")).toBe(true);
+    expect(note.textContent).toContain("jen pro čtení");
+  });
+
+  it("explains a bridge that does not report hooks and hides the row while disconnected", async () => {
+    let t = await render(fake(withHooks(null)).invoke);
+    expect(t.querySelector('[data-hooks="m4"] [data-hooks-unavailable]')?.textContent).toContain("Subagent tracking");
+    expect(t.querySelector('[data-action="hooks-claude"]')).toBeNull();
+    cleanup?.();
+    t = await render(fake(withHooks(hooksSummary(), { connected: false })).invoke);
+    expect(t.querySelector('[data-hooks="m4"]')).toBeNull();
+  });
+
+  it("does not offer installing over a hook file it cannot use", async () => {
+    const t = await render(fake(withHooks(hooksSummary({ error: "settings.json is not valid JSON; not changed" }))).invoke);
+    expect(hookRow(t, "claude").dataset.state).toBe("error");
+    expect(hookRow(t, "claude").textContent).toContain("not valid JSON");
+    expect(button(t, "hooks-claude").disabled).toBe(true);
+  });
+
   it("reports an unreachable runtime", async () => {
     const t = await render(async () => { throw new Error("sidecar not ready"); });
     expect(t.querySelector('[role="alert"]')?.textContent).toContain("sidecar not ready");

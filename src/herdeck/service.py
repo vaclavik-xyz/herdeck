@@ -741,6 +741,13 @@ def install_managed_bridge(
 
 
 def main(argv: list[str] | None = None) -> None:
+    raw = sys.argv[1:] if argv is None else argv
+    if raw[:1] == ["hooks"]:
+        # `herdeck-service hooks install|uninstall|status`: the subagent hooks
+        # in the agents' own config files (hooks_install.py), not a service unit.
+        from . import hooks_install
+
+        raise SystemExit(hooks_install.main(raw[1:]))
     args = _parser().parse_args(argv)
     config = _config_from_args(args)
     if args.command == "install":

@@ -1,7 +1,8 @@
 //! The desktop Maintenance section's shell side.
 //!
 //! - `maintenance_call`: a token-injecting proxy for the runtime's
-//!   `/maintenance*` routes (deckapp/maintenance.py + bridge_update.py), built
+//!   `/maintenance*` routes (deckapp/maintenance.py + bridge_update.py +
+//!   hooks_relay.py), built
 //!   like `agent_card::agent_call` — the token never enters JS — but with an
 //!   allow-list of EXACT paths rather than a prefix. `GET /maintenance` is
 //!   stamped with what only the shell knows (`app`: its version, bundle, the
@@ -38,6 +39,8 @@ pub const DECK_RESTART_TIMEOUT: Duration = Duration::from_secs(20);
 pub const POWER_CYCLE_TIMEOUT: Duration = Duration::from_secs(45);
 /// The runtime waits up to 10 s for the bridges' stats answers (STATS_WAIT_S).
 pub const STATS_TIMEOUT: Duration = Duration::from_secs(16);
+/// The runtime waits up to 14 s for the bridge's hooks answer (HOOKS_WAIT_S).
+pub const HOOKS_TIMEOUT: Duration = Duration::from_secs(20);
 /// The runtime's default bridge-update wait (15 s) when the body names none.
 const UPDATE_DEFAULT_WAIT_MS: u64 = 15_000;
 
@@ -53,6 +56,9 @@ pub enum MaintRoute {
     UpdatePoll { wait_ms: u64 },
     /// GET: the bridges' status history (`/stats?range=&group=`).
     Stats,
+    /// GET (status) / POST (install, uninstall): the subagent hooks on a
+    /// bridge's machine (deckapp/hooks_relay.py).
+    Hooks,
 }
 
 /// The stats query: only `range` (1, 7 or 30) and `group` (agent, repo,
@@ -115,9 +121,12 @@ pub fn maintenance_route(method: &str, path: &str) -> Option<MaintRoute> {
         ("GET", "/stats", Some(q)) => return stats_query_ok(q).then_some(MaintRoute::Stats),
         _ => {}
     }
-    let seg = route
-        .strip_prefix("/maintenance/servers/")?
-        .strip_suffix("/update")?;
+    let rest = route.strip_prefix("/maintenance/servers/")?;
+    if let Some(seg) = rest.strip_suffix("/hooks") {
+        return (server_segment_ok(seg) && query.is_none() && matches!(method, "GET" | "POST"))
+            .then_some(MaintRoute::Hooks);
+    }
+    let seg = rest.strip_suffix("/update")?;
     if !server_segment_ok(seg) {
         return None;
     }
@@ -138,6 +147,7 @@ pub fn maintenance_timeout(route: &MaintRoute, body: Option<&serde_json::Value>)
         MaintRoute::DeckRestart => DECK_RESTART_TIMEOUT,
         MaintRoute::PowerCycle => POWER_CYCLE_TIMEOUT,
         MaintRoute::Stats => STATS_TIMEOUT,
+        MaintRoute::Hooks => HOOKS_TIMEOUT,
         MaintRoute::UpdateStart => {
             let ms = body
                 .and_then(|b| b.get("wait_ms"))
@@ -631,6 +641,19 @@ mod tests {
         assert_eq!(maintenance_route("POST", "/maintenance/servers/m4/update\r\nX: y"), None);
         assert_eq!(maintenance_route("GET", "/config"), None);
         assert_eq!(maintenance_route("GET", "/maintenance/"), None);
+        // subagent hooks: GET status, POST action; no query, one safe segment
+        assert_eq!(maintenance_route("GET", "/maintenance/servers/m4/hooks"), Some(MaintRoute::Hooks));
+        assert_eq!(maintenance_route("POST", "/maintenance/servers/m4/hooks"), Some(MaintRoute::Hooks));
+        assert_eq!(
+            maintenance_route("POST", "/maintenance/servers/local%3Apersonal/hooks"),
+            Some(MaintRoute::Hooks)
+        );
+        assert_eq!(maintenance_route("DELETE", "/maintenance/servers/m4/hooks"), None);
+        assert_eq!(maintenance_route("GET", "/maintenance/servers/m4/hooks?token=x"), None);
+        assert_eq!(maintenance_route("POST", "/maintenance/servers/../hooks"), None);
+        assert_eq!(maintenance_route("POST", "/maintenance/servers//hooks"), None);
+        assert_eq!(maintenance_route("POST", "/maintenance/servers/a/b/hooks"), None);
+        assert_eq!(maintenance_timeout(&MaintRoute::Hooks, None), HOOKS_TIMEOUT);
         assert_eq!(maintenance_route("GET", "/agent/detail"), None);
     }
 
