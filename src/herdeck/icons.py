@@ -7,6 +7,7 @@ import math
 import os
 import re
 import struct
+import sys
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -240,7 +241,40 @@ def _default_rasterize(svg: str, size: int) -> Image.Image:
     return resvg_rasterize(svg, size)
 
 
-# Candidate scalable fonts for the letter fallback (macOS, then Linux).
+# The vendored tile font (Inter 4.1, OFL — see assets/fonts/VENDORED.md). Every
+# tile and panel is drawn with it so text metrics — shrink-to-fit sizes, wrap
+# and truncation points — are identical on macOS, Linux and in the frozen
+# bundles (tests/test_render_golden.py pins the pixels).
+_BUNDLED_FONTS = {True: "Inter-Bold.ttf", False: "Inter-Regular.ttf"}
+
+
+def bundled_font_path(*, bold: bool = True) -> str | None:
+    """The vendored font file, from the package assets or — inside a
+    PyInstaller bundle, whose package dir has no assets/ — from
+    ``sys._MEIPASS/herdeck_assets/fonts``. None when neither has it."""
+    name = _BUNDLED_FONTS[bold]
+    dirs = [os.path.join(_ASSETS_DIR, "fonts")]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        dirs.append(os.path.join(meipass, "herdeck_assets", "fonts"))
+    for d in dirs:
+        path = os.path.join(d, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def check_bundled_font() -> None:
+    """Raise unless both vendored font files are found — the frozen bundles'
+    ``HERDECK_SELFTEST=imports`` runs this, so a spec that stops shipping
+    assets/fonts fails the build instead of silently drawing a system font."""
+    missing = [name for bold, name in _BUNDLED_FONTS.items() if bundled_font_path(bold=bold) is None]
+    if missing:
+        raise RuntimeError(f"vendored tile font missing: {', '.join(missing)}")
+
+
+# System fonts: only a fallback when the vendored font is missing (a broken
+# install). Metrics then differ per OS.
 _FONT_CANDIDATES = (
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/System/Library/Fonts/HelveticaNeue.ttc",
@@ -280,7 +314,9 @@ _font_cache: dict[tuple[int, bool], object] = {}  # (size, bold) -> font
 #     missing-icon monogram under the real icon's tile name.
 # 17: opaque favicons are plated by their edge, not their mean colour (no dark
 #     frame around a white/red app-tile favicon on a bright solid fill).
-TILE_VERSION = 17
+# 18: all text is drawn with the vendored Inter font (was Arial/Helvetica on
+#     macOS, DejaVu/Liberation on Linux).
+TILE_VERSION = 18
 # The status word / elapsed time column: right of the logo box incl. the comet
 # ring (x < 66), inside the 12px right margin.
 STATUS_MAX_W = ICON_SIZE - 12 - 70
@@ -411,12 +447,21 @@ def _font(size: int, *, bold: bool = True):
     from PIL import ImageFont
 
     font = None
-    for path in _FONT_CANDIDATES if bold else _REGULAR_FONT_CANDIDATES:
+    bundled = bundled_font_path(bold=bold)
+    if bundled is not None:
         try:
-            font = ImageFont.truetype(path, size)
-            break
+            # BASIC layout: raqm ships in some Pillow builds and not others,
+            # and would shape (kern) the same text differently per OS.
+            font = ImageFont.truetype(bundled, size, layout_engine=ImageFont.Layout.BASIC)
         except Exception:
-            continue
+            font = None
+    if font is None:
+        for path in _FONT_CANDIDATES if bold else _REGULAR_FONT_CANDIDATES:
+            try:
+                font = ImageFont.truetype(path, size)
+                break
+            except Exception:
+                continue
     if font is None:
         try:
             font = ImageFont.load_default(size=size)
@@ -886,8 +931,8 @@ def _fit_project_name(draw, text, max_w):
         cut += 1
     boundaries = [i + 1 for i, c in enumerate(text[:cut]) if c in " -_/" and i >= cut // 2]
     # Prefer the latest word boundary whose remainder still fits on line two,
-    # then a hard cut at the widest first line: with a wide font (DejaVu on
-    # Linux) the boundary split can push the suffix past the edge, and losing
+    # then a hard cut at the widest first line: with a wide name the boundary
+    # split can push the suffix past the edge, and losing
     # the suffix loses what tells two repos apart.
     for split in [*reversed(boundaries), cut]:
         rest = text[split:].lstrip()

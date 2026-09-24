@@ -10,6 +10,9 @@ a = Analysis(
     [os.path.join(SPECPATH, "scripts", "herdeck-backend-entry.py")],
     pathex=[os.path.join(ROOT, "src")],
     binaries=[],
+    # The assets dir (glyphs, pre-baked PNGs and assets/fonts — the vendored Inter
+    # tile font, found by icons.bundled_font_path; HERDECK_SELFTEST=imports fails
+    # without it) lands under herdeck_assets in sys._MEIPASS.
     datas=[(os.path.join(ROOT, "src", "herdeck", "assets"), "herdeck_assets")],
     # The elgato submodules serve_elgato reaches, plus websockets pinned explicitly. websockets
     # is a CORE dep: connector.py imports it at module top level (ELGATO uses Connector to reach

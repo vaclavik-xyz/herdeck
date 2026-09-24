@@ -151,8 +151,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   simulator) and in the Elgato pager. With `agent_order = "status"` the wait
   also beats server order; with `"herdr"` the Herdr position still comes
   first.
+- Tiles and panels are drawn with a bundled font (Inter 4.1, SIL OFL 1.1, in
+  `src/herdeck/assets/fonts`) instead of whatever the OS has (Arial/Helvetica on
+  macOS, DejaVu/Liberation on Linux), so a tile wraps, shrinks and truncates the
+  same on every machine and in the packaged apps. Text looks slightly different
+  from before; cached tile images are re-rendered once.
+- The Elgato plugin's agent tiles now honour `[view].working_animation` in
+  their tile data (they are built by the same code as the deck's).
 
 ### Fixed
+- `herdeck.runtime` installs its SIGTERM/SIGINT handlers before it publishes
+  `runtime.json`, so a stop sent right after start-up no longer leaves a stale
+  discovery file behind.
 - A profile switch, config reload or demo-to-live connect no longer drops macOS
   alerts to the plain `osascript` fallback: the swapped-in source keeps posting
   through the desktop app.

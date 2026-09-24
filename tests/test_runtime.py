@@ -250,3 +250,20 @@ def test_two_runtimes_share_one_d200_owner(monkeypatch, tmp_path):
         first.close()
         if second is not None:
             second.close()
+
+
+def test_import_selftest_fails_without_the_vendored_font(monkeypatch):
+    # The frozen bundle must carry assets/fonts: without it every tile silently
+    # falls back to a per-OS system font.
+    import pytest
+
+    from herdeck import icons
+
+    # The D200 modules (strmdck, hid) are not installed on the CI test job;
+    # the import list itself is pinned above.
+    monkeypatch.setattr(runtime, "SELFTEST_IMPORTS", ())
+    assert runtime._run_import_selftest() == 0
+    monkeypatch.setattr(icons, "bundled_font_path", lambda *, bold=True: None)
+
+    with pytest.raises(RuntimeError, match="font"):
+        runtime._run_import_selftest()

@@ -24,7 +24,7 @@ from .project_icons import ProjectIconStore, default_store
 log = logging.getLogger(__name__)
 
 # The shell only accepts banner images from a directory with this name and
-# file names of [a-z0-9-] + ".png" (lib.rs `banner_image_path`); keep in step.
+# file names of [a-z0-9-] + ".png" (notifications.rs `banner_image_path`); keep in step.
 DIR_NAME = "notification-icons"
 # Files kept on disk; the least recently used beyond this are pruned.
 MAX_FILES = 64

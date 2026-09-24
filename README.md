@@ -1046,3 +1046,8 @@ remain trademarks of their respective owners (Anthropic, OpenAI,
 Microsoft/GitHub, Cursor, Google, OpenCode) and are bundled solely to identify
 which agent a deck tile represents — no affiliation or endorsement is implied.
 See [`src/herdeck/assets/ATTRIBUTION.md`](src/herdeck/assets/ATTRIBUTION.md).
+
+Tiles are drawn with the [Inter](https://github.com/rsms/inter) typeface
+(`src/herdeck/assets/fonts`), Copyright (c) 2016 The Inter Project Authors,
+licensed under the SIL Open Font License 1.1 — see
+[`src/herdeck/assets/fonts/VENDORED.md`](src/herdeck/assets/fonts/VENDORED.md).

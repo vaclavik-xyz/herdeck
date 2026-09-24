@@ -42,9 +42,11 @@ def _run_import_selftest() -> int:
         importlib.import_module(module)
     # The native resvg module must also load and render inside the bundle
     # (it draws SVG project favicons there).
-    from .icons import resvg_rasterize
+    from .icons import check_bundled_font, resvg_rasterize
 
     resvg_rasterize('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', 8)
+    # The vendored tile font must be inside the bundle (assets/fonts).
+    check_bundled_font()
     return 0
 
 
@@ -128,15 +130,18 @@ def main() -> int:
     configure_logging(debug=bool(os.environ.get("HERDECK_DEBUG")))
     port = int(os.environ.get("HERDECK_DECKAPP_PORT", "0"))
     write_discovery = _should_write_discovery()
+    # Handlers go in before anything is published: a SIGTERM sent as soon as
+    # the discovery line (or runtime.json) appears must take the clean path
+    # below, not the default action that leaves a stale runtime.json behind.
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
     app, sink, info, path = build_runtime(
         host="127.0.0.1",
         port=port,
         write_discovery=write_discovery,
     )
     print(json.dumps(info), flush=True)  # stdout discovery fallback (parity with the sidecar)
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
     if parent_watch_enabled():
         # Spawned by the desktop shell: exit through this same clean path when
         # the shell dies (crash / SIGKILL / Force Quit), not just on SIGTERM.

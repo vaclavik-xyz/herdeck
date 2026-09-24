@@ -73,7 +73,7 @@ def test_config_override_wins(tmp_path):
 def test_file_names_stay_in_the_shells_allowed_set(tmp_path):
     cache = NotificationIconCache(str(tmp_path), store=ProjectIconStore())
     path = cache.path_for(_state(repo="../../etc/ Weird name"))
-    # lib.rs banner_image_path accepts only [a-z0-9-]+.png in this directory.
+    # notifications.rs banner_image_path accepts only [a-z0-9-]+.png in this directory.
     assert re.fullmatch(r"[a-z0-9-]+\.png", os.path.basename(path))
     assert os.path.dirname(path) == str(tmp_path)
 
