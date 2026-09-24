@@ -100,6 +100,10 @@ class AgentState:
     # Content hash of the project's favicon (bridge discovery), "" when none or
     # when the bridge predates the "project_icon" capability.
     project_icon: str = ""
+    # Unix ms when the pane entered its current status, stamped by the bridge
+    # ("status_since" capability). None from an older bridge or another
+    # backend; the orchestrator then times the status from first sight.
+    status_since_ms: int | None = None
     # herdr reports this pane as the focused one in its session. False from a
     # bridge that predates the field.
     focused: bool = False

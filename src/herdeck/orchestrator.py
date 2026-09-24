@@ -34,6 +34,9 @@ _USAGE_DETAIL_HOLD_S = 6.0
 # overview on its own: new blocks never yank an open view (see _on_new_block),
 # so a forgotten drill would otherwise hide every later attention request.
 MENU_IDLE_TIMEOUT_S = 60.0
+# Bridge-vs-runtime clock skew tolerated before a bridge status_since_ms that
+# lies in the future is ignored in favour of the local first-seen time.
+_BRIDGE_SKEW_TOLERANCE_S = 5.0
 SERVER_ACCENTS = ("teal", "violet", "orange", "pink", "lime")
 _MANAGEMENT_ACTIONS = {"profiles", "new_agent"}
 _APPROVE_ALWAYS_HINTS = ("always", "don't ask", "dont ask", "do not ask")
@@ -151,6 +154,7 @@ class Orchestrator:
         slots: int | None = None,
         clock=None,
         project_icons: ProjectIconStore | None = None,
+        wall_clock=None,
     ):
         import time
 
@@ -158,9 +162,14 @@ class Orchestrator:
         cols, rows = config.grid
         self.slots = slots if slots is not None else cols * rows
         self._clock = clock or time.monotonic
+        # Wall clock (unix seconds): only used to convert the bridge's
+        # status_since_ms into this orchestrator's (monotonic) clock basis.
+        self._wall_clock = wall_clock or time.time
         self._project_icons = project_icons  # None -> the process-wide store
         self._agents: dict[AgentKey, AgentState] = {}
-        self._since: dict[AgentKey, tuple[Status, float]] = {}  # status start time
+        # Status start time per agent, in the ``_clock`` basis:
+        # (status, started at, the bridge's status_since_ms it came from or None).
+        self._since: dict[AgentKey, tuple[Status, float, int | None]] = {}
         self._down: set[str] = set()
         # Servers seen connected at least once. A configured backend that never
         # came up (kept in config but not running, e.g. T3) is not announced
@@ -225,14 +234,59 @@ class Orchestrator:
         """
         return (self.slots, self.slots + 1)
 
+    def _bridge_start(self, since_ms: int | None) -> float | None:
+        """The bridge's status start (unix ms) in the ``_clock`` basis, or None
+        when there is none or it cannot be trusted.
+
+        Bridge and runtime may run on different Macs: a start in the future by
+        more than _BRIDGE_SKEW_TOLERANCE_S means the clocks disagree and the
+        local first-seen time is used instead; a smaller skew clamps to "now"."""
+        if since_ms is None:
+            return None
+        age = self._wall_clock() - since_ms / 1000.0
+        if age < -_BRIDGE_SKEW_TOLERANCE_S:
+            return None
+        return self._clock() - max(0.0, age)
+
     def _touch(self, state: AgentState) -> bool:
         """Record when a pane entered its current status (for elapsed time).
-        Returns True when this starts a NEW blocked episode."""
+        Returns True when this starts a NEW blocked episode.
+
+        The bridge's ``status_since_ms`` (when present) is preferred over the
+        moment this orchestrator first saw the status, so the elapsed time
+        survives a runtime restart / source swap."""
         prev = self._since.get(state.key)
+        bridge_ms = state.status_since_ms
         if prev is None or prev[0] is not state.status:
-            self._since[state.key] = (state.status, self._clock())
+            # A status change always restarts the clock, even if a stale
+            # bridge stamp (unchanged since the previous status) came along.
+            fresh = prev is None or bridge_ms != prev[2]
+            at = self._bridge_start(bridge_ms) if fresh else None
+            self._since[state.key] = (
+                state.status,
+                self._clock() if at is None else at,
+                bridge_ms,
+            )
             return state.status is Status.BLOCKED
+        if bridge_ms is not None and bridge_ms != prev[2]:
+            # Same status, new bridge stamp: the bridge just started reporting
+            # it (upgrade) or saw a flip this runtime missed. Adopt its time;
+            # not announced as a new block (a bridge restart without its state
+            # file would otherwise re-alert every blocked agent).
+            at = self._bridge_start(bridge_ms)
+            self._since[state.key] = (state.status, prev[1] if at is None else at, bridge_ms)
         return False
+
+    def inherit_status_times(self, other: Orchestrator) -> None:
+        """Adopt ``other``'s status start times (a source swap builds a fresh
+        orchestrator; without this every local-fallback timer restarted at 0).
+        Only valid when both share the same clock; limited to configured servers."""
+        if other._clock is not self._clock:
+            return
+        allowed = {s.id for s in self.config.servers}
+        for key, rec in other._since.items():
+            if key.server_id in allowed:
+                self._since.setdefault(key, rec)
 
     def _elapsed_text(self, key: AgentKey) -> str:
         rec = self._since.get(key)
@@ -273,7 +327,11 @@ class Orchestrator:
         if new_blocks:
             self._on_new_block()
         live = set(self._agents)
-        self._since = {k: v for k, v in self._since.items() if k in live}
+        # Prune only this server's gone panes: another server's entries may be
+        # inherited from a swapped-out orchestrator, awaiting its snapshot.
+        self._since = {
+            k: v for k, v in self._since.items() if k.server_id != server_id or k in live
+        }
         if self._drill is not None and self._drill.server_id == server_id:
             if self._agents.get(self._drill) != drilled_before:
                 self._pending_confirm = None
@@ -718,7 +776,9 @@ class Orchestrator:
 
     def _blocked_since_map(self) -> dict[AgentKey, float]:
         """When each currently BLOCKED agent entered BLOCKED (overview sort)."""
-        return {key: at for key, (status, at) in self._since.items() if status is Status.BLOCKED}
+        return {
+            key: at for key, (status, at, _ms) in self._since.items() if status is Status.BLOCKED
+        }
 
     def _blocked_spotlight(self) -> tuple[str, str] | None:
         """The longest-waiting BLOCKED agent as (label, elapsed), or None."""

@@ -536,6 +536,9 @@ new service; a failed migration restores the previous service. The install
 command creates the bridge token at
 `~/.config/herdeck/bridge-token` with mode `0600` when needed. Web capability
 URLs are disabled by default and are no longer written to normal startup logs.
+The bridge remembers when each pane entered its current status in
+`~/.local/state/herdeck/bridge-status-since.json` (or `$XDG_STATE_HOME`, mode
+`0600`), so the deck's elapsed-time text survives bridge and runtime restarts.
 `herdeck-web url --allow-query-token` prints one only when the server was also
 started with that explicit legacy opt-in. Do not enable it for a persOS cockpit.
 

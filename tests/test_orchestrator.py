@@ -126,7 +126,7 @@ def test_event_recycled_terminal_starts_fresh_block_episode():
         ),
     )
 
-    assert o._since[key] == (Status.BLOCKED, 10.0)
+    assert o._since[key] == (Status.BLOCKED, 10.0, None)
     assert o._force_adopt is True
 
 

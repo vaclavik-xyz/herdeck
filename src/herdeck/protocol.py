@@ -25,6 +25,24 @@ def _status(value: str) -> Status:
         return Status.UNKNOWN
 
 
+def effective_status(value: object, waiting_on: object = "") -> Status:
+    """The status the runtime shows for a wire pane.
+
+    A user-facing block remains more important. Otherwise explicit passive
+    metadata (``waiting_on``) owns the derived state across Herdr's
+    idle/done/working states. Shared with the bridge's status-since tracker so
+    both sides agree on what counts as a status change."""
+    status = _status(value) if isinstance(value, str) else Status.UNKNOWN
+    if status in (Status.WORKING, Status.IDLE, Status.DONE) and waiting_on:
+        return Status.WAITING
+    return status
+
+
+def _since_ms(value: object) -> int | None:
+    """The bridge's ``status_since_ms`` (unix ms), or None when absent/invalid."""
+    return value if type(value) is int and value > 0 else None
+
+
 def _order(value: object) -> int | None:
     return value if type(value) is int and value >= 0 else None
 
@@ -35,12 +53,8 @@ def _icon_ref(value: object) -> str:
 
 
 def _pane_to_state(server_id: str, pane: dict) -> AgentState:
-    status = _status(pane.get("status", "unknown"))
     waiting_on = pane.get("waiting_on") or ""
-    # A user-facing block remains more important. Otherwise explicit passive
-    # metadata owns the derived state across Herdr's idle/done/working states.
-    if status in (Status.WORKING, Status.IDLE, Status.DONE) and waiting_on:
-        status = Status.WAITING
+    status = effective_status(pane.get("status", "unknown"), waiting_on)
     metadata = pane.get("metadata") if isinstance(pane.get("metadata"), dict) else {}
     state_labels = pane.get("state_labels") if isinstance(pane.get("state_labels"), dict) else {}
     wire_work = pane.get("work") if isinstance(pane.get("work"), dict) else {}
@@ -85,6 +99,7 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         capabilities=capabilities,
         project_icon=_icon_ref(pane.get("project_icon")),
         focused=pane.get("focused") is True,
+        status_since_ms=_since_ms(pane.get("status_since_ms")),
     )
 
 
