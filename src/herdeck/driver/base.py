@@ -46,6 +46,7 @@ class TileView:
     server_tag: str | None = None
     server_accent: str | None = None
     section: str | None = None  # config section a click jumps to (klik-to-jump); None = no jump
+    subagents: int = 0  # running subagents: > 0 draws the fork badge (agent tiles only)
 
 
 @dataclass

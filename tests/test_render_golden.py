@@ -91,6 +91,10 @@ def _tiles() -> dict[str, TileView]:
     return {
         "agent_blocked": _agent(Status.BLOCKED, pinned=True, server_tag="HERDR"),
         "agent_working_spin": _agent(Status.WORKING, spinner=3),
+        "agent_working_subagents": _agent(Status.WORKING, spinner=3, subagents=3),
+        "agent_subagents_pinned_tag": _agent(
+            Status.WORKING, fill="solid", pinned=True, server_tag="HERDR", subagents=12
+        ),
         "agent_idle": _agent(Status.IDLE, agent_type="codex"),
         "agent_done_wrapped_repo": _agent(Status.DONE, repo="macdoktor-crm-production"),
         "agent_waiting": _agent(Status.WAITING),

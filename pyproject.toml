@@ -52,6 +52,7 @@ herdeck-web = "herdeck.web:main"
 herdeck-service = "herdeck.service:main"
 herdeck-usage = "herdeck.usage_cli:main"
 herdeck-t3-connect = "herdeck.t3_setup:main"
+herdeck-subagent-hook = "herdeck.subagent_hook:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

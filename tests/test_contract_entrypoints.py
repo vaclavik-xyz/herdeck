@@ -40,6 +40,8 @@ SCRIPTS = {
     "herdeck-service",
     "herdeck-usage",
     "herdeck-t3-connect",
+    # invoked by Claude Code / Codex hook configs (README "Subagent tracking")
+    "herdeck-subagent-hook",
 }
 
 

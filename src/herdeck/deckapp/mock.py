@@ -41,7 +41,16 @@ def demo_agents() -> list[AgentState]:
     time-based seeds — two calls return equal data."""
     local, gpu = MOCK_SERVERS
     return [
-        AgentState(AgentKey(local, "p0"), "claude", "api", Status.WORKING, repo="api", branch="main"),
+        AgentState(
+            AgentKey(local, "p0"),
+            "claude",
+            "api",
+            Status.WORKING,
+            repo="api",
+            branch="main",
+            subagents_running=2,
+            subagents_total=3,
+        ),
         AgentState(
             AgentKey(local, "p1"), "codex", "web", Status.IDLE, repo="web", branch="feat/login"
         ),
