@@ -14,6 +14,7 @@ pub mod build_channel;
 pub mod deck_prefs;
 pub mod hotkey;
 pub mod http;
+pub mod runtime_service;
 pub mod sidecar;
 pub mod window_state;
 
@@ -218,6 +219,12 @@ async fn update_install(app: tauri::AppHandle) -> Result<bool, String> {
         .download_and_install(|_, _| {}, || {})
         .await
         .map_err(|e| e.to_string())?;
+    // A `herdeck-service install runtime --from-app` unit runs the runtime
+    // bundled in this .app; restart it now so runtime and app stay in step.
+    let _ = tauri::async_runtime::spawn_blocking(
+        runtime_service::restart_bundled_runtime_after_update,
+    )
+    .await;
     app.request_restart();
     Ok(true)
 }
