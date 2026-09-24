@@ -570,6 +570,18 @@ class DeckApp:
             if command.kind == "switch_profile":
                 self._switch_profile_from_deck(command.text or command.server_id)
 
+    def triage(self) -> bool:
+        """Open the longest-blocked agent's drill (called from the HTTP thread).
+
+        False when the source cannot triage (the demo mock has no drills)."""
+        triage = getattr(self._source, "triage", None)
+        if not callable(triage):
+            return False
+        with self._lock:
+            triage()
+            self._refresh_locked()
+        return True
+
     def _load_pins(self, orch):
         if self._pin_store is not None:
             try:
@@ -1141,6 +1153,10 @@ class DeckApp:
                         self._send(204)
                     except ValueError:
                         self._send(400)
+                elif path == "/triage":
+                    if not self._require_header_token():
+                        return
+                    self._send(204) if app.triage() else self._send(404)
                 elif path == "/notifications/ack":
                     if not self._require_header_token():
                         return

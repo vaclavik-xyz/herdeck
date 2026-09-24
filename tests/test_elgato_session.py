@@ -335,6 +335,20 @@ def test_pager_advances_selection_through_blocked():
     assert sess.selected() != first  # cycled to the other blocked agent
 
 
+def test_pager_starts_with_the_longest_blocked_agent():
+    clk = FakeClock()
+    sess = ElgatoSession(make_config(), FakeIcons(), clock=clk)
+    sess.set_action_keys([("p", "pager", (3, 2))])
+    sess.apply_snapshot("dev", [state("p2", Status.BLOCKED), state("p1", Status.WORKING)])
+    clk.now += 10
+    sess.apply_event("dev", state("p1", Status.BLOCKED))
+
+    sess.key_up("p")
+    assert sess.selected() == AgentKey("dev", "p2")  # blocked first, despite pane id
+    sess.key_up("p")
+    assert sess.selected() == AgentKey("dev", "p1")
+
+
 def test_pager_honors_native_herdr_order():
     cfg = make_config()
     cfg.view.agent_order = "herdr"

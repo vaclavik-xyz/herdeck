@@ -14,6 +14,9 @@ herdr_sessions = ["default", "review"]
 # web_bind = "127.0.0.1"
 # web_port = 8800
 # icons_dir = "~/herdeck-icons"
+# macOS app to bring forward after a tile press focuses an agent's pane (only
+# useful when the herdr client runs on this machine); empty = off.
+# terminal_app = "Ghostty"
 
 # Use one custom socket only when conventional Herdr session paths do not fit.
 # An explicit HERDR_SOCKET environment variable overrides normal discovery.

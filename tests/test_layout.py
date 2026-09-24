@@ -117,6 +117,37 @@ def test_order_stable_by_pane_within_status():
     assert [s.key.pane_id for s in order_agents(agents, ["dev"])] == ["p1", "p2"]
 
 
+def test_blocked_agents_order_longest_waiting_first():
+    agents = [a("p1", Status.BLOCKED), a("p2", Status.BLOCKED), a("p3", Status.BLOCKED)]
+    since = {AgentKey("dev", "p1"): 30.0, AgentKey("dev", "p2"): 10.0}
+    ordered = order_agents(agents, ["dev"], blocked_since=since)
+    # p2 waited longest; p3 has no known start and falls back behind the known
+    assert [s.key.pane_id for s in ordered] == ["p2", "p1", "p3"]
+
+
+def test_blocked_wait_beats_server_order_in_status_mode():
+    agents = [a("p1", Status.BLOCKED, server="dev"), a("p9", Status.BLOCKED, server="ops")]
+    since = {AgentKey("dev", "p1"): 50.0, AgentKey("ops", "p9"): 5.0}
+    ordered = order_agents(agents, ["dev", "ops"], blocked_since=since)
+    assert [s.key.pane_id for s in ordered] == ["p9", "p1"]
+
+
+def test_blocked_since_ignored_for_other_statuses():
+    agents = [a("p2", Status.WORKING), a("p1", Status.WORKING)]
+    since = {AgentKey("dev", "p2"): 1.0, AgentKey("dev", "p1"): 99.0}
+    assert [s.key.pane_id for s in order_agents(agents, ["dev"], blocked_since=since)] == ["p1", "p2"]
+
+
+def test_herdr_order_keeps_position_before_blocked_wait():
+    agents = [a("p1", Status.BLOCKED), a("p2", Status.BLOCKED), a("p3", Status.BLOCKED)]
+    agents[0].workspace_order = 2
+    agents[1].workspace_order = 1
+    agents[2].workspace_order = 2
+    since = {AgentKey("dev", "p1"): 20.0, AgentKey("dev", "p2"): 30.0, AgentKey("dev", "p3"): 10.0}
+    ordered = order_agents(agents, ["dev"], "herdr", blocked_since=since)
+    assert [s.key.pane_id for s in ordered] == ["p2", "p3", "p1"]
+
+
 def test_herdr_order_uses_workspace_then_tab_within_status():
     agents = [a("p3", Status.WORKING), a("p1", Status.WORKING), a("p2", Status.WORKING)]
     agents[0].workspace_order, agents[0].tab_order = 2, 1

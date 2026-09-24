@@ -7,11 +7,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Triage loop: pressing the `▲ needs you` status panel opens the drill of the
+  agent blocked longest; answering (or stopping) it moves straight on to the
+  next-longest blocked agent, and back to the overview when none is left.
+  Back still returns to the overview. The desktop app gets an opt-in global
+  shortcut, `[hotkeys].next_blocked` (no default), that shows the deck and
+  does the same through the runtime's new `POST /triage` route; pressing it
+  again skips to the next blocked agent.
+- Opt-in `[local].terminal_app` (for example `"Ghostty"`): after a tile press
+  focuses an agent's pane, the deck machine brings that app forward with
+  `open -a` (macOS only, off the event loop, failures only logged). Only useful
+  when the herdr client runs on the deck machine.
+- Opt-in `[view].collapse_idle`: idle agents fold into one `+N` tile at the
+  end of the overview, so 15-20 agents fit without paging; pressing it
+  unfolds them and a `hide` tile folds them back (also after a minute idle).
+  Pinned agents keep their tile. D200, desktop deck window and web simulator;
+  the Elgato plugin ignores it. Editable under View.
 - The desktop app keeps a log when launched outside a terminal: its own and
   the sidecar runtime's stderr, timestamped, in
   `~/Library/Logs/herdeck/herdeck.log` (Linux: `~/.local/state/herdeck/`),
   rotated at 5 MB. The runtime now also logs each notification's route
   (queued for the banner, or the `osascript` fallback) at INFO.
+
+### Changed
+- Blocked agents are ordered by how long they have been waiting, longest
+  first, instead of by pane id: on the overview (D200, desktop window, web
+  simulator) and in the Elgato pager. With `agent_order = "status"` the wait
+  also beats server order; with `"herdr"` the Herdr position still comes
+  first.
 
 ### Fixed
 - SVG project favicons now render in the packaged desktop app and the Elgato

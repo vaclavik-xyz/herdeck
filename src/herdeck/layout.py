@@ -128,9 +128,27 @@ def resolve_tile_lines(
 
 
 def order_agents(
-    agents, overview_order: list[str], agent_order: str = "status"
+    agents,
+    overview_order: list[str],
+    agent_order: str = "status",
+    blocked_since=None,
 ) -> list[AgentState]:
+    """Overview order: attention priority (status rank) first.
+
+    ``blocked_since`` maps an AgentKey to when that agent entered BLOCKED (any
+    monotonic clock). BLOCKED agents are then ordered longest-waiting first —
+    in ``status`` order across servers (attention beats grouping), in
+    ``herdr`` order after the mirrored workspace/tab position. Agents without
+    a known start sort after the known ones, then by pane id as before."""
     order = {sid: i for i, sid in enumerate(overview_order)}
+    since = blocked_since or {}
+
+    def waited(state: AgentState) -> float:
+        if state.status is not Status.BLOCKED:
+            return 0.0
+        return since.get(state.key, math.inf)
+
+    first = agent_order != "herdr"
 
     def herdr_position(state: AgentState) -> tuple[int, int]:
         if agent_order != "herdr":
@@ -145,8 +163,10 @@ def order_agents(
         agents,
         key=lambda s: (
             0 if s.attention == "error" else _STATUS_PRIORITY.get(s.status, 9),
+            waited(s) if first else 0.0,
             order.get(s.key.server_id, 999),
             *herdr_position(s),
+            0.0 if first else waited(s),
             s.key.pane_id,
         ),
     )

@@ -22,6 +22,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       web_bind: "Address the web simulator listens on; 127.0.0.1 local only, 0.0.0.0 also for other devices. Takes effect after restart.",
       web_port: "Port of the browser web simulator (default 8800; 0 = automatic). Takes effect after restart.",
       icons_dir: "Folder of custom icons (PNG) that override the built-in tile icons.",
+      terminal_app: "macOS app brought forward (open -a) after a tile press focuses its pane, e.g. Ghostty; needs herdr on this Mac; empty = off.",
       brightness: "Physical deck display brightness from 0-100 (default 80).",
       debounce: "Seconds during which a repeated press of the same D200 key is ignored (default 0.25 s).",
       keep_alive_interval: "How often, in seconds, the D200 is kept alive so it doesn't revert to its default screen (default 5 s).",
@@ -30,7 +31,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     view: {
       backend_labels: "Show a small T3 or HERDR label on agent tiles. In a profile, changes apply only to that profile.",
       management: "Controls layout: launcher_menu = a '+ New' tile with a menu, bottom_row = a bottom row of buttons.",
-      agent_order: "Orders equal-status agents by pane id (status) or by their Herdr workspace and tab position (herdr).",
+      agent_order: "Equal-status order: status = blocked longest-waiting first, others by pane id; herdr = Herdr workspace/tab position.",
       agent_slots: "Number of tiles reserved for agents ('max' = all free ones); not used by the app yet.",
       show_profile_on_panel: "Shows the active profile name on the status panel; not used when rendering yet.",
       working_animation: "Working-tile animation: pulse = calm slow breath (fewest repaints), spin/comet/sweep = per-tick motion, none = static.",
@@ -42,6 +43,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_primary: "Primary line tokens; unset = project (Herdr workspace/T3 title), $name = metadata, empty = off.",
       tile_secondary: "Second line from built-in fields or $name metadata tokens; unset = session title when available, otherwise tab then branch; empty = off.",
       language: "Language of the deck and this app: en (English) or cs (Czech). Applies after Apply.",
+      collapse_idle: "Fold idle agents into one '+N' tile at the end of the overview; press it to show them (off by default; not Elgato).",
     },
     theme: {
       working: "Tile color of an agent that is currently working (default green).",
@@ -103,6 +105,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     desktop: {
       deck_always_on_top: "Keeps the floating deck window above other windows; applied immediately, no restart.",
       toggle_deck: "Global shortcut to show/hide the deck; default Cmd/Ctrl+Shift+D, empty field = disabled.",
+      next_blocked: "Global shortcut that shows the deck and opens the longest-blocked agent (again = next one); empty = off (default).",
     },
   },
   cs: {
@@ -119,6 +122,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       web_bind: "Adresa, na které poslouchá webový simulátor; 127.0.0.1 jen lokálně, 0.0.0.0 i pro jiná zařízení. Projeví se po restartu.",
       web_port: "Port webového simulátoru (výchozí 8800; 0 = automaticky). Projeví se po restartu.",
       icons_dir: "Složka s vlastními ikonami (PNG), které přepíší vestavěné ikony na dlaždicích.",
+      terminal_app: "Aplikace macOS vyvolaná dopředu (open -a) po stisku dlaždice agenta, např. Ghostty; herdr musí běžet na tomto Macu; prázdné = vypnuto.",
       brightness: "Jas displeje fyzického decku v rozsahu 0-100 (výchozí 80).",
       debounce: "Doba v sekundách, po kterou se ignoruje opakovaný stisk téže klávesy na D200 (výchozí 0,25 s).",
       keep_alive_interval: "Jak často v sekundách se D200 udržuje při životě, aby se nepřepnul na výchozí obrazovku (výchozí 5 s).",
@@ -127,7 +131,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     view: {
       backend_labels: "Zobrazí malý štítek T3 nebo HERDR na dlaždicích agentů. V profilu se změna týká jen tohoto profilu.",
       management: "Rozložení ovládání: launcher_menu = dlaždice „+ New“ s menu, bottom_row = spodní řada tlačítek.",
-      agent_order: "Řadí agenty se stejným stavem podle ID panelu (status) nebo pozice workspace a tabu v Herdr (herdr).",
+      agent_order: "Pořadí při stejném stavu: status = blokovaní od nejdéle čekajícího, ostatní podle ID panelu; herdr = pozice v Herdr.",
       agent_slots: "Počet dlaždic vyhrazených agentům („max“ = všechny volné); zatím se v aplikaci nepoužívá.",
       show_profile_on_panel: "Ukáže název aktivního profilu na stavovém panelu; zatím se při vykreslování nepoužívá.",
       working_animation: "Animace pracující dlaždice: pulse = klidný pomalý tep (nejméně překreslení), spin/comet/sweep = pohyb každý tick, none = staticky.",
@@ -139,6 +143,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_primary: "První řádek z tokenů; nevyplněno = project (workspace Herdr/projekt T3), $name = metadata, prázdné = vypnuto.",
       tile_secondary: "Druhý řádek z polí nebo tokenů $name; nevyplněno = název session, pokud existuje, jinak tab a branch; prázdné = vypnuto.",
       language: "Jazyk decku i této aplikace: en (angličtina) nebo cs (čeština). Projeví se po Použít.",
+      collapse_idle: "Sbalí nečinné agenty do jedné dlaždice „+N“ na konci přehledu; stiskem se ukážou (výchozí vypnuto; ne Elgato).",
     },
     theme: {
       working: "Barva dlaždice agenta, který právě pracuje (výchozí green).",
@@ -200,6 +205,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     desktop: {
       deck_always_on_top: "Drží plovoucí okno decku nad ostatními okny; použije se hned, bez restartu.",
       toggle_deck: "Globální zkratka pro zobrazení/skrytí decku; výchozí Cmd/Ctrl+Shift+D, prázdné pole = vypnuto.",
+      next_blocked: "Globální zkratka: ukáže deck a otevře nejdéle blokovaného agenta (znovu = další); prázdné = vypnuto (výchozí).",
     },
   },
 };

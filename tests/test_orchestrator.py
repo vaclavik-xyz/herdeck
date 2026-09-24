@@ -618,8 +618,10 @@ def test_panel_press_does_not_arm_detail_during_spotlight():
     o = Orchestrator(make_config(), slots=13, clock=lambda: t["now"])
     o.apply_snapshot("dev", [state("p1", Status.BLOCKED)])
     o.set_usage(_usage_data())
-    o.on_press(13)  # spotlight owns the panel; the press must not arm a timer
+    o.on_press(13)  # spotlight owns the panel: the press opens triage, no timer
     assert o._usage_detail_until == 0.0
+    assert o.is_drilling()
+    o.on_press(12)  # Back
     o.apply_snapshot("dev", [state("p1", Status.IDLE)])
     assert o.render().panel.title == "1 agents"  # no surprise detail pop-up
 

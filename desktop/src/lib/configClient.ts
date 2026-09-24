@@ -1010,6 +1010,18 @@ export function setToggleDeckHotkey(payload: ConfigPayload, value: string): Conf
   return setAt(payload, "base", "hotkeys", "toggle_deck", value);
 }
 
+/** The configured "jump to the next blocked agent" accelerator. Opt-in: an
+ *  absent key (or "") means no hotkey. Mirrors `hotkey::next_blocked_accelerator`. */
+export function nextBlockedHotkey(payload: ConfigPayload): string {
+  const v = getAt(payload, "base", "hotkeys", "next_blocked");
+  return typeof v === "string" ? v : "";
+}
+
+/** NEW payload with base.hotkeys.next_blocked set ("" = no hotkey). */
+export function setNextBlockedHotkey(payload: ConfigPayload, value: string): ConfigPayload {
+  return setAt(payload, "base", "hotkeys", "next_blocked", value);
+}
+
 /** Whether the floating deck window stays above other windows. Applied live by
  *  `deck_prefs::resolve_deck_always_on_top` on the Rust side — no restart needed.
  *

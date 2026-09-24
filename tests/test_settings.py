@@ -121,6 +121,7 @@ herdr_socket = "/tmp/herdr.sock"
 web_bind = "100.1.2.3"
 web_port = 1234
 icons_dir = "/tmp/icons"
+terminal_app = "Ghostty"
 
 [hardware]
 brightness = 35
@@ -137,6 +138,7 @@ tick_interval = 1.25
     assert cfg.hardware.web_bind == "100.1.2.3"
     assert cfg.hardware.web_port == 1234
     assert cfg.hardware.icons_dir == "/tmp/icons"
+    assert cfg.hardware.terminal_app == "Ghostty"
     assert cfg.hardware.brightness == 35
     assert cfg.hardware.debounce == 0.1
     assert cfg.hardware.keep_alive_interval == 2.5
@@ -149,6 +151,7 @@ tick_interval = 1.25
         ('[local]\nweb_port = 65536\n', "local.web_port"),
         ('[local]\nweb_port = "8800"\n', "local.web_port"),
         ('[local]\nweb_port = true\n', "local.web_port"),
+        ('[local]\nterminal_app = 1\n', "local.terminal_app"),
         ('[hardware]\nbrightness = -1\n', "hardware.brightness"),
         ('[hardware]\nbrightness = 101\n', "hardware.brightness"),
         ('[hardware]\nbrightness = 80.5\n', "hardware.brightness"),
@@ -169,6 +172,23 @@ def test_hardware_rejects_invalid_types_and_ranges(tmp_path, local_text, error):
 
     with pytest.raises(ConfigError, match=error):
         resolve_profile(load_settings(config, local))
+
+
+def test_view_collapse_idle_parses_and_defaults_off(tmp_path):
+    config = write(tmp_path / "config.toml", '[deck]\ngrid = "5x3"\n')
+    assert resolve_profile(load_settings(config)).config.view.collapse_idle is False
+    config = write(tmp_path / "config.toml", '[view]\ncollapse_idle = true\n')
+    assert resolve_profile(load_settings(config)).config.view.collapse_idle is True
+    config = write(tmp_path / "config.toml", '[view]\ncollapse_idle = "yes"\n')
+    with pytest.raises(ConfigError, match="view.collapse_idle"):
+        resolve_profile(load_settings(config))
+
+
+def test_terminal_app_defaults_to_off(tmp_path):
+    config = write(tmp_path / "config.toml", '[deck]\ngrid = "5x3"\n')
+    local = write(tmp_path / "local.toml", "[local]\n")
+
+    assert resolve_profile(load_settings(config, local)).config.hardware.terminal_app == ""
 
 
 def test_hardware_allows_automatic_web_port(tmp_path):

@@ -133,6 +133,9 @@ class ViewConfig:
     project_icons: dict[str, str] = field(default_factory=dict)
     # Language of RENDERED deck text (tiles, panel, websim) and the desktop UI.
     language: str = "en"
+    # Fold IDLE agents into one "+N idle" overview tile (press = unfold). The
+    # Elgato plugin keeps sticky per-key slots and ignores it.
+    collapse_idle: bool = False
 
 
 # Actions that need a second confirming press by default. Stop (act_force) is an
@@ -170,6 +173,9 @@ class HardwareConfig:
     web_bind: str | None = None
     web_port: int | None = None
     icons_dir: str | None = None
+    # App to bring forward after a tile press focused a pane ("" = off). Only
+    # useful when the herdr client runs on the deck machine (see terminal_app.py).
+    terminal_app: str = ""
     brightness: int = 80
     debounce: float = 0.25
     keep_alive_interval: float = 5.0
