@@ -124,7 +124,7 @@ def _bridge_notes(info: dict, *, expected: str = __version__) -> tuple[bool, lis
         else:
             notes.append(f"bridge {version}")
     elif info:
-        notes.append("bridge version unknown (older than 0.8.1?)")
+        notes.append("bridge version not reported")
     protocol = info.get("protocol")
     if isinstance(protocol, int) and protocol > WIRE_PROTOCOL:
         ok = False
