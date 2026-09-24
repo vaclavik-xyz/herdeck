@@ -302,7 +302,19 @@ is available as [`local.example.toml`](local.example.toml).
 
 Run `herdeck-doctor` to diagnose setup problems — it checks the herdr socket,
 config/mode, deck availability, and (for remote) token presence, printing a
-pass/fail checklist with hints (it never prints token values).
+pass/fail checklist with hints (it never prints token values). It also compares
+versions: the running runtime against this install, and every bridge against
+the runtime, and asks each bridge whether herdr answers it.
+
+When the deck goes dark, the runtime's token-gated `GET /health` says why: its
+`version`, `protocol`, `pid` and `uptime_s`; per server under `servers`
+(`connected`, `last_error`, `since` in unix ms, `attempt`, `bridge_version`,
+`protocol_supported`); the D200 under `d200` (`connected`, `last_frame_at`,
+`last_error`, `lock_owner` when another runtime holds `d200.lock`); and
+notification counters (`queued`, `acked`, `fallback`, `dropped`, `pending`).
+The desktop window turns the same data into a one-line warning, for example
+`runtime 0.8.0 ≠ app 0.8.1 — restart the runtime` or
+`bridge local: token rejected 3 min · D200: disconnected 2 min`.
 
 ## Controlling agents from the CLI (`herdeck-ctl`)
 
@@ -356,6 +368,12 @@ as one `[[servers]]` entry. The config `id` is the authoritative routing ID on
 the deck; `HERDECK_SERVER_ID` is only the bridge's self-reported label. Keep
 ports, config IDs, token environment names, and token files unique when several
 bridges share a host.
+
+Every bridge snapshot carries `herdeck_version`. An authenticated client can
+also send `{"type": "health", "req": "<id>"}` over the same WebSocket; the
+bridge answers `{"type": "result", "req": "<id>", "data": {"herdeck_version",
+"protocol", "herdr_reachable", "clients"}}`. `herdeck-doctor` uses it; a bridge
+older than 0.8.1 answers with an `error` frame instead.
 
 ## Profiles and customization
 

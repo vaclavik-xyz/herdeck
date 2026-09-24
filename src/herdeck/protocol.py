@@ -87,12 +87,20 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
     )
 
 
+# The bridge<->runtime wire protocol this code speaks. Additive pane fields
+# are advertised as capabilities instead; bumping this is a breaking change a
+# runtime older than the bridge reports as "unsupported protocol".
+WIRE_PROTOCOL = 3
+
+
 @dataclass
 class Snapshot:
     server_id: str
     states: list[AgentState]
     protocol: int = 1
     capabilities: tuple[str, ...] = ()
+    # The bridge's herdeck package version (None from an older bridge).
+    herdeck_version: str | None = None
 
 
 @dataclass
@@ -182,11 +190,13 @@ def decode_inbound(
             if isinstance(raw_capabilities, list)
             else ()
         )
+        version = msg.get("herdeck_version")
         return Snapshot(
             sid,
             [_pane_to_state(sid, p) for p in msg["panes"]],
             protocol,
             capabilities,
+            version[:64] if isinstance(version, str) and version else None,
         )
     if kind == "event":
         sid = msg["server_id"]

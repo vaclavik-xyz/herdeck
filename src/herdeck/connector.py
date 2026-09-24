@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import time
 from collections.abc import Callable
 
 import websockets
@@ -10,6 +11,7 @@ import websockets
 from .config import ServerConfig
 from .model import AgentKey, AgentState
 from .protocol import (
+    WIRE_PROTOCOL,
     Error,
     Event,
     ProjectIcon,
@@ -26,6 +28,10 @@ log = logging.getLogger("herdeck.connector")
 
 # Wire capability + opt-in feature name for project favicon frames.
 PROJECT_ICON_FEATURE = "project_icon"
+
+
+def _now_ms() -> int:
+    return time.time_ns() // 1_000_000
 
 
 def create_connector(server, **kwargs):
@@ -85,6 +91,12 @@ class Connector:
         self._last_logged_error: str | None = None
         self._protocol = 1
         self._capabilities: frozenset[str] = frozenset()
+        # /health diagnostics: why is this server dark, and since when?
+        self._connected = False
+        self._since_ms = _now_ms()
+        self._attempt = 0
+        self._bridge_version: str | None = None
+        self._warned_protocol: int | None = None
         # None = this consumer renders no tiles (e.g. ctl): never opt in.
         self._on_project_icon = on_project_icon
         self._icons_requested = False
@@ -102,6 +114,26 @@ class Connector:
     @property
     def capabilities(self) -> frozenset[str]:
         return self._capabilities
+
+    def health(self) -> dict:
+        """Non-secret connection facts for the runtime's /health. ``since`` is
+        the unix ms of the last connected/disconnected change; ``attempt``
+        counts consecutive failed connects (0 while connected)."""
+        return {
+            "connected": self._connected,
+            "last_error": self._last_connect_error,
+            "since": self._since_ms,
+            "attempt": self._attempt,
+            "bridge_version": self._bridge_version,
+            "protocol": self._protocol,
+            "protocol_supported": self._protocol <= WIRE_PROTOCOL,
+        }
+
+    def _set_connected(self, up: bool) -> None:
+        if up != self._connected:
+            self._connected = up
+            self._since_ms = _now_ms()
+        self._on_connection(self.server.id, up)
 
     def stop(self) -> None:
         self._stop = True
@@ -126,7 +158,7 @@ class Connector:
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._wake = asyncio.Event()
-        attempt = 0
+        self._attempt = 0
         while not self._stop:
             connected = False
             try:
@@ -142,9 +174,9 @@ class Connector:
                         break
                     self._stopping_terms.clear()
                     self._icons_requested = False  # opt-in is per connection
-                    attempt = 0
+                    self._attempt = 0
                     connected = True
-                    self._on_connection(self.server.id, True)
+                    self._set_connected(True)
                     await ws.send(encode({"type": "list"}))  # resync-on-reconnect
                     first = True
                     async for raw in ws:
@@ -176,11 +208,11 @@ class Connector:
             finally:
                 self._ws = None
                 if connected:
-                    self._on_connection(self.server.id, False)
+                    self._set_connected(False)
             if self._stop:
                 break
-            delay = min(self._backoff_base * (2**attempt), self._backoff_max)
-            attempt += 1
+            delay = min(self._backoff_base * (2**self._attempt), self._backoff_max)
+            self._attempt += 1
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=delay)
             except TimeoutError:
@@ -203,6 +235,19 @@ class Connector:
         if isinstance(msg, Snapshot):
             self._protocol = msg.protocol
             self._capabilities = frozenset(msg.capabilities)
+            self._bridge_version = msg.herdeck_version
+            if msg.protocol > WIRE_PROTOCOL and self._warned_protocol != msg.protocol:
+                # Rendering continues best-effort, but new fields may be blank;
+                # this used to be silent until the runtime was upgraded.
+                log.warning(
+                    "bridge '%s' speaks unsupported wire protocol %s (this runtime "
+                    "knows <= %s, bridge herdeck %s); upgrade this runtime",
+                    self.server.id,
+                    msg.protocol,
+                    WIRE_PROTOCOL,
+                    msg.herdeck_version or "unknown",
+                )
+                self._warned_protocol = msg.protocol
             self._on_snapshot(self.server.id, [self._rekey(s) for s in msg.states])
             self._maybe_request_icons()
         elif isinstance(msg, Event):

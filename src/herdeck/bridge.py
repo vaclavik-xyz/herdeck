@@ -17,10 +17,11 @@ from typing import Protocol
 
 import websockets
 
+from . import __version__
 from .decisions import decision_choices, decision_revision
 from .model import Status, WorkContext
 from .project_icon_discovery import ProjectIconIndex
-from .protocol import encode
+from .protocol import WIRE_PROTOCOL, encode
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +52,9 @@ _PROBE_TIMEOUT = 5.0
 _HERDR_RPC_TIMEOUT = 10.0
 _HERDR_SUBSCRIBE_TIMEOUT = 10.0
 _HERDR_LINE_LIMIT = 1024 * 1024 + 1  # 1 MiB payload plus NDJSON newline
-_WIRE_PROTOCOL = 3
+_WIRE_PROTOCOL = WIRE_PROTOCOL
+# The authenticated health probe answers within this, reachable or not.
+_HEALTH_HERDR_TIMEOUT = 1.0
 # Additive pane fields are advertised as capabilities instead of bumping the
 # protocol: an older bridge simply omits them.
 _WIRE_CAPABILITIES = (
@@ -815,6 +818,9 @@ def _snapshot_message(server_id: str, panes: list[dict]) -> dict:
         "server_id": server_id,
         "protocol": _WIRE_PROTOCOL,
         "capabilities": list(_WIRE_CAPABILITIES),
+        # Additive: an older runtime ignores the key; a newer one lists it per
+        # server in /health, where the window and herdeck-doctor compare it.
+        "herdeck_version": __version__,
         "panes": panes,
     }
 
@@ -1706,6 +1712,27 @@ class SocketHerdr:
         return merged
 
 
+async def _health_result(herdr: HerdrClient, req: object, clients: int) -> dict:
+    """Answer an authenticated ``{"type": "health", "req": ...}`` probe: this
+    bridge's version and wire protocol, whether herdr's socket answers right
+    now, and how many deck clients are attached (herdeck-doctor uses it)."""
+    try:
+        await asyncio.wait_for(herdr.snapshot(), timeout=_HEALTH_HERDR_TIMEOUT)
+        reachable = True
+    except Exception:
+        reachable = False
+    return {
+        "type": "result",
+        "req": req if isinstance(req, str) else "",
+        "data": {
+            "herdeck_version": __version__,
+            "protocol": _WIRE_PROTOCOL,
+            "herdr_reachable": reachable,
+            "clients": clients,
+        },
+    }
+
+
 async def _serve_connection(
     ws,
     herdr: HerdrClient,
@@ -1841,6 +1868,9 @@ async def _serve_connection(
                 req = msg.get("req")
                 if isinstance(req, str):
                     await stop_observe(req)
+                continue
+            if kind == "health":
+                await send(encode(await _health_result(herdr, msg.get("req"), len(clients))))
                 continue
             if kind == "list" and icons is not None and icon_subs is not None:
                 features = msg.get("features")

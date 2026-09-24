@@ -468,7 +468,8 @@ async def test_probe_server_accepts_real_snapshot_greeting():
     server = await websockets.serve(bridge, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     try:
-        assert await _probe_server_ws(f"ws://127.0.0.1:{port}", "t") is None
+        info = await _probe_server_ws(f"ws://127.0.0.1:{port}", "t")
+        assert info == {"herdeck_version": None, "protocol": 1}  # an old bridge
     finally:
         server.close()
         await server.wait_closed()
