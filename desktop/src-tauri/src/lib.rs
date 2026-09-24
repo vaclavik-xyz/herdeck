@@ -57,7 +57,7 @@ use sync_util::LockExt;
 use tray::{build_tray, TrayHandles};
 use window_roles::{
     hide_role_window, persist_window_state, place_deck, placement_space_position,
-    remember_deck_position, reveal_deck, window_role_script, APP_WINDOW, DECK_WINDOW,
+    remember_deck_position, window_role_script, APP_WINDOW, DECK_WINDOW,
 };
 use window_state::WindowState;
 
@@ -474,7 +474,7 @@ pub fn run() {
             // with both windows hidden it would otherwise do nothing at all.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
-                reveal_deck(app_handle);
+                window_roles::reveal_deck(app_handle);
                 return;
             }
             if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
