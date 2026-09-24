@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-09-24
+
 ### Changed
 - Desktop health notices redesigned. The app window shows one compact row per
   problem (config does not load, bridge disconnected or token rejected, version
