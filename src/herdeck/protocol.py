@@ -155,6 +155,15 @@ class ProjectIcon:
 
 
 @dataclass
+class Progress:
+    """An in-flight long request's progress line (bridge self-update)."""
+
+    req: str
+    stage: str
+    message: str
+
+
+@dataclass
 class Unknown:
     """A frame type this client does not know (a newer bridge). Ignored."""
 
@@ -180,7 +189,9 @@ def _decode_project_icon(msg: dict) -> ProjectIcon:
 
 def decode_inbound(
     raw: str,
-) -> Snapshot | Event | Result | Error | TermFrame | TermClosed | ProjectIcon | Unknown:
+) -> (
+    Snapshot | Event | Result | Error | TermFrame | TermClosed | ProjectIcon | Progress | Unknown
+):
     msg = json.loads(raw)
     kind = msg["type"]
     if kind == "snapshot":
@@ -242,6 +253,15 @@ def decode_inbound(
         return TermClosed(req, reason if isinstance(reason, str) else "preview closed")
     if kind == "project_icon":
         return _decode_project_icon(msg)
+    if kind == "progress":
+        req, stage, message = (msg.get(k) for k in ("req", "stage", "message"))
+        if not isinstance(req, str) or not req:
+            raise ValueError("progress frame missing request id")
+        return Progress(
+            req,
+            stage[:32] if isinstance(stage, str) else "",
+            message[:300] if isinstance(message, str) else "",
+        )
     # Forward compatibility: a newer bridge may add frame types. Raising here
     # would reach Connector's on_error (ctl fails every pending request on it).
     return Unknown(str(kind))

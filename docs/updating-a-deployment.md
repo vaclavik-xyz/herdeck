@@ -125,6 +125,39 @@ got its token from `HERDECK_TOKEN`, write that value into the token file first
 (mode `0600`) — read it from where you stored it, not from `ps eww`. Then check
 the deck: `/health` should report `connected` again within a few seconds.
 
+### Updating a managed bridge from the deck host
+
+A bridge installed with `herdeck-service install bridge --managed` runs from its
+own venv (`~/.local/share/herdeck/bridge-venv`) that carries a `managed.json`
+marker at its root. Such a bridge updates itself on request; nothing has to be
+copied to the bridge host:
+
+```bash
+# on the deck host; <id> is the [[servers]] id
+URL="$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.cache/herdeck/runtime.json")))["url"])')"
+TOKEN="$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.cache/herdeck/runtime.json")))["token"])')"
+curl -s -X POST -H "X-Herdeck-Token: $TOKEN" -d '{"wait_ms": 20000}' \
+  "$URL/maintenance/servers/<id>/update"
+```
+
+The bridge installs the **runtime's** version: the release wheel, checked
+against the release's `SHA256SUMS`, into its venv; it checks the installed
+version in a fresh interpreter, answers, and exits so launchd/systemd starts the
+new version. The answer is `pending` while pip runs; poll `GET
+/maintenance/servers/<id>/update?token=$TOKEN&after=<next>&wait_ms=20000` until
+it says `updated` (then `/health` lists the new `bridge_version` for that
+server) or `failed` (with the installer output in `output`; the old version
+is still running). `not_managed` means the bridge runs from a checkout or an
+editable install — migrate it with `--managed` first, or keep using
+`deploy-host.sh --role bridge`. `unsupported` means the bridge predates
+self-update and needs one update by hand.
+
+The runtime never sends an update to a bridge that already runs its version or
+a newer one (`current`/`newer`), so an older deck host sharing the bridge cannot
+pull it back. The bridge only installs releases from 0.10.0 on (the first that
+publishes the wheel and can update itself); a release without a wheel asset is
+refused rather than installed unverified.
+
 ### Migrating a hand-made runtime unit
 
 A deck host that runs the runtime from a custom plist and launcher script

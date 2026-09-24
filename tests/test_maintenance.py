@@ -468,11 +468,12 @@ def test_post_deck_actions_return_outcomes(served):
     assert err.value.code == 400
 
 
-def test_bridge_update_route_is_reserved(served):
+def test_bridge_update_route_needs_a_live_source(served):
+    # The route is served by deckapp/bridge_update.py (tests/test_bridge_update_route.py);
+    # a source without bridges (the demo) has nothing to update.
     with pytest.raises(urllib.error.HTTPError) as err:
         _post(served, "/maintenance/servers/box/update")
-    assert err.value.code == 501
-    assert json.loads(err.value.read())["outcome"] == "not_implemented"
+    assert err.value.code == 404
 
 
 def test_runtime_default_maintenance_uses_the_real_app(served, monkeypatch):

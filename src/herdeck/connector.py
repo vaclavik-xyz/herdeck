@@ -14,6 +14,7 @@ from .protocol import (
     WIRE_PROTOCOL,
     Error,
     Event,
+    Progress,
     ProjectIcon,
     Result,
     Snapshot,
@@ -72,6 +73,7 @@ class Connector:
         on_term: Callable[[str, TermFrame | TermClosed], None] | None = None,
         on_project_icon: Callable[[str, ProjectIcon], None] | None = None,
         on_request_error: Callable[[str | None, str], None] | None = None,
+        on_progress: Callable[[str, str, str], None] | None = None,
     ):
         self.server = server
         self._on_snapshot = on_snapshot
@@ -83,6 +85,9 @@ class Connector:
         # (req, message) for every bridge error frame, in addition to
         # on_error: lets a consumer fail exactly the request the bridge refused.
         self._on_request_error = on_request_error
+        # (req, stage, message) for a long request's progress frames (the
+        # bridge self-update); dropped when no consumer wants them.
+        self._on_progress = on_progress
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._stop = False
@@ -283,6 +288,9 @@ class Connector:
         elif isinstance(msg, ProjectIcon):
             if self._on_project_icon is not None:
                 self._on_project_icon(self.server.id, msg)
+        elif isinstance(msg, Progress):
+            if self._on_progress is not None:
+                self._on_progress(msg.req, msg.stage, msg.message)
         elif isinstance(msg, Unknown):
             return  # a newer bridge's frame type: ignored by design
         elif isinstance(msg, Error):

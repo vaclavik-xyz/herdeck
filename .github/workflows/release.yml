@@ -8,6 +8,53 @@ on:
     tags: ["v*"]
 
 jobs:
+  build-python:
+    # The Python sdist + wheel (+ SHA256SUMS, written in publish-release) are
+    # what a managed bridge installs when it updates itself: herdeck's
+    # self_update.py downloads herdeck-X-py3-none-any.whl from the vX release
+    # and refuses it unless SHA256SUMS lists its exact hash.
+    name: Build Python sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify release version
+        run: |
+          python scripts/set-version.py --check
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
+          fi
+
+      - name: Build sdist + wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade build
+          python -m build --sdist --wheel --outdir python-dist
+          VERSION="$(cat VERSION)"
+          test -f "python-dist/herdeck-${VERSION}-py3-none-any.whl"
+          test -f "python-dist/herdeck-${VERSION}.tar.gz"
+          ls -l python-dist
+
+      - name: Smoke the wheel in a clean venv
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          "$RUNNER_TEMP/wheel-venv/bin/pip" install python-dist/herdeck-*-py3-none-any.whl
+          installed="$("$RUNNER_TEMP/wheel-venv/bin/python" -I -c 'import herdeck; print(herdeck.__version__)')"
+          test "$installed" = "$(cat VERSION)"
+          "$RUNNER_TEMP/wheel-venv/bin/herdeck-bridge" --help > /dev/null
+
+      - name: Upload Python distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: herdeck-python
+          path: python-dist/*
+          if-no-files-found: error
+
   build-linux:
     name: Build Linux ${{ matrix.arch }} (AppImage + deb + rpm)
     runs-on: ${{ matrix.runner }}
@@ -249,7 +296,7 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-linux, build-macos]
+    needs: [build-linux, build-macos, build-python]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -269,6 +316,16 @@ jobs:
             --tag "$GITHUB_REF_NAME" \
             --output dist/latest.json
 
+      - name: Checksum the Python distributions
+        working-directory: dist/herdeck-python
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          test -f "herdeck-${VERSION}-py3-none-any.whl"
+          test -f "herdeck-${VERSION}.tar.gz"
+          sha256sum "herdeck-${VERSION}-py3-none-any.whl" "herdeck-${VERSION}.tar.gz" > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Publish immutable tag release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -281,6 +338,7 @@ jobs:
             dist/herdeck-linux-arm64/deb/* \
             dist/herdeck-linux-arm64/rpm/* \
             dist/herdeck-macos/* \
+            dist/herdeck-python/* \
             dist/latest.json \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
