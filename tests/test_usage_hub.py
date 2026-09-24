@@ -130,6 +130,38 @@ def test_auto_switches_to_a_bridge_that_appears_later_and_stops_local():
     assert local.closed
 
 
+def test_auto_falls_back_from_a_bridge_that_offers_usage_but_sends_no_numbers():
+    # A LaunchDaemon bridge whose codex/codexbar cannot reach the login
+    # keychain offers `usage` but its frames stay empty: the deck must not
+    # sit without limits forever.
+    hub, clock, pollers, _alerts, _changes = make("auto")
+    hub.bridge_update("a", True, None)
+    hub.bridge_update("a", True, [])
+    assert hub.mode == "bridge" and pollers == []  # its first poll may still come
+    clock.now += 179
+    hub.evaluate()
+    assert hub.mode == "bridge"
+    clock.now += 2
+    hub.evaluate()  # the tick
+    assert hub.mode == "local" and pollers[0].started
+    assert hub.health()["bridges_empty"] == ["a"]
+    # numbers arrive later: back to the bridge
+    hub.bridge_update("a", True, [_usage("codex", 42)])
+    assert hub.mode == "bridge" and hub.snapshot() == [_usage("codex", 42)]
+    assert hub.health()["bridges_empty"] == []
+
+
+def test_auto_an_empty_frame_after_numbers_restarts_the_empty_wait():
+    hub, clock, pollers, _alerts, _changes = make("auto")
+    hub.bridge_update("a", True, [_usage("codex", 42)])
+    clock.now += 1000
+    hub.bridge_update("a", True, [])  # every provider went stale on the bridge
+    assert hub.mode == "bridge"
+    clock.now += 181
+    hub.evaluate()
+    assert hub.mode == "local" and pollers
+
+
 def test_auto_keeps_bridge_numbers_through_a_flap_then_falls_back():
     hub, clock, pollers, _alerts, _changes = make("auto")
     hub.bridge_update("a", True, [_usage("codex", 42)])
@@ -170,7 +202,12 @@ def test_multiple_bridges_merge_per_provider_in_config_order():
     hub.bridge_update("second", True, [_usage("codex", 20), _usage("claude", 21)])
     hub.bridge_update("first", True, [_usage("codex", 10)])
     assert hub.snapshot() == [_usage("codex", 10), _usage("claude", 21)]
-    assert hub.health() == {"source": "auto", "active": "bridge", "bridges": ["first", "second"]}
+    assert hub.health() == {
+        "source": "auto",
+        "active": "bridge",
+        "bridges": ["first", "second"],
+        "bridges_empty": [],
+    }
 
 
 def test_paid_only_skips_an_unpaid_first_bridge_for_a_paid_second():
