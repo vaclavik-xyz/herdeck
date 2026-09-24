@@ -57,7 +57,7 @@ herdeck-t3-connect = "herdeck.t3_setup:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-herdeck = ["assets/*.svg", "assets/*.png", "assets/web/*"]
+herdeck = ["assets/*.svg", "assets/*.png", "assets/web/*", "assets/fonts/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

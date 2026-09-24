@@ -42,9 +42,11 @@ def _run_import_selftest() -> int:
         importlib.import_module(module)
     # The native resvg module must also load and render inside the bundle
     # (it draws SVG project favicons there).
-    from .icons import resvg_rasterize
+    from .icons import check_bundled_font, resvg_rasterize
 
     resvg_rasterize('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', 8)
+    # The vendored tile font must be inside the bundle (assets/fonts).
+    check_bundled_font()
     return 0
 
 

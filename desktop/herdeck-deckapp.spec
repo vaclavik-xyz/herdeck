@@ -15,6 +15,8 @@ a = Analysis(
     binaries=[],
     # Bundle the assets dir (SVG glyphs + the pre-baked PNGs the baker writes into
     # it) as herdeck_assets. baked_assets_dir() resolves to it via sys._MEIPASS.
+    # The directory copy includes assets/fonts (the vendored Inter tile font,
+    # found by icons.bundled_font_path); HERDECK_SELFTEST=imports fails without it.
     datas=[(os.path.join(ROOT, "src", "herdeck", "assets"), "herdeck_assets")],
     # Runtime graph: source/live/mock + WS bridge + the dynamically imported D200
     # driver stack. websockets is a CORE dep. tomli_w is imported at the top of

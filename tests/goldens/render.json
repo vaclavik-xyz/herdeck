@@ -1,0 +1,18 @@
+{
+  "agent_blocked": "077f77a3de27f72fafe51c8196b3968c8345c20348b7c73b691a64e9de6706be",
+  "agent_done_wrapped_repo": "3456a3c9565004fc30594a05a9e2b1ccc79e9dc83a086afd670078592a119a1d",
+  "agent_idle": "d6817a5a5c7969ed6821d86267799f41cc7bdce283ec47ec1b3c1dd24b1e7aa6",
+  "agent_letter_glyph": "dff9218a1d6b6bd639bea8020402abe2071c2aebfec6eaca6432a3c43303706c",
+  "agent_waiting": "78581dd5d4381b044cef5203c479a63578eef30d8fb4f582a1e22ee4d10971f2",
+  "agent_working_spin": "4c691a62501d1773a52a55b6577bc5d798d3c51707dba2e5c439e791e426daaf",
+  "fill_solid_blocked": "87c221625895f6d4f7213fbcd1cf1313fb98bc7a3306b990b2576eaaeb103359",
+  "fill_solid_working_sweep": "f9dbf2409a59d807c8e6e663c916f95315e14213bd554450ce241fd7af3bba39",
+  "fill_tint_idle": "3c1a604258a5a0f2eafe03e5d8b032856d11538e9bac690ab3ba84afeb02ab09",
+  "label_back": "c89e42b5a8f032cf304335f7e6a12698cebdc6beaec1e9891b85af20585c2884",
+  "panel_overview": "10ae69d9c00cd4df333c601d19227872953015d8574401a4ebbf159670d0ad97",
+  "panel_overview_usage": "4b734599e4eacc10fd7e73295a30b3f55b8c8efcf67cecb6fd7c1712a24bd7fa",
+  "panel_spotlight": "0d2a4825c1b8aa209d972c8c260a2f1db788214a6bd8dfe0d615b0e8c1d0c094",
+  "panel_usage_detail": "7dec9e386dd3ec1927c9276404890c3f2702cd73f42cbc3d1317afd929699596",
+  "project_badge": "0c7d895f977ca42cf9cfa14235703a2b8916c033c68135ee1c66dbe9b30a4727",
+  "project_monogram": "d51a1068324df221860360dfa2b6f2c5a625319ddc64c2d959d3415f67bb43e6"
+}

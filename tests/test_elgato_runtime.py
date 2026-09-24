@@ -288,3 +288,12 @@ def test_elgato_selftest_covers_lazy_imports():
     assert {"herdeck.host", "websockets", "resvg_py"} <= set(runtime.SELFTEST_IMPORTS)
     assert runtime.run_import_selftest() == 0
 
+
+
+def test_elgato_selftest_fails_without_the_vendored_font(monkeypatch):
+    from herdeck import icons
+    from herdeck.elgato import runtime
+
+    monkeypatch.setattr(icons, "bundled_font_path", lambda *, bold=True: None)
+    with pytest.raises(RuntimeError, match="font"):
+        runtime.run_import_selftest()
