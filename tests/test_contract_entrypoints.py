@@ -39,6 +39,8 @@ SCRIPTS = {
     "herdeck-web",
     "herdeck-service",
     "herdeck-usage",
+    # the login-session usage agent for a --system bridge (README "Usage agent")
+    "herdeck-usage-agent",
     "herdeck-t3-connect",
     # invoked by Claude Code / Codex hook configs (README "Subagent tracking")
     "herdeck-subagent-hook",

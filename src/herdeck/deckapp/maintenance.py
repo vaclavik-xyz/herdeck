@@ -417,6 +417,7 @@ class Maintenance:
         servers = {}
         server_health = getattr(app._source, "server_health", None)
         hooks_summary = getattr(app._source, "hooks_summary", None)
+        usage_agent_summary = getattr(app._source, "usage_agent_summary", None)
         if callable(server_health):
             for sid, facts in server_health().items():
                 # self_update: the bridge understands {"type": "update"}.
@@ -432,6 +433,13 @@ class Maintenance:
                     # {claude: {installed, ...}, codex: {...}}; None = unknown
                     # (not asked yet, an older bridge, a read-only token, T3).
                     "hooks": hooks_summary(sid) if callable(hooks_summary) else None,
+                    # The usage agent on that bridge's machine (usage_agent_relay.py):
+                    # {installed, running, fresh, bridge_usage, file_age_s,
+                    # providers, error}; None = unknown (not asked yet, an older
+                    # bridge, a read-only token, T3).
+                    "usage_agent": (
+                        usage_agent_summary(sid) if callable(usage_agent_summary) else None
+                    ),
                 }
         return {
             "version": __version__,

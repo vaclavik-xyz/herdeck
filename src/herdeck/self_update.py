@@ -390,6 +390,14 @@ def _write_marker(env: ManagedEnv, version: str, installed: dict) -> None:
         raise
 
 
+def _restart_helpers(env: ManagedEnv) -> None:
+    """Restart the services that run from the managed venv besides the bridge
+    (today: the usage agent, usage_agent_install.py)."""
+    from .usage_agent_install import restart_after_update
+
+    restart_after_update(env.prefix)
+
+
 Send = Callable[[str], Awaitable[bool]]
 
 
@@ -408,6 +416,7 @@ class BridgeUpdater:
         has_pip: Callable[[], bool] = _has_pip,
         write_marker: Callable[[ManagedEnv, str, dict], None] = _write_marker,
         current_version: str = __version__,
+        restart_helpers: Callable[[ManagedEnv], None] | None = None,
     ):
         self._request_exit = request_exit
         self._probe = probe
@@ -417,6 +426,7 @@ class BridgeUpdater:
         self._has_pip = has_pip
         self._write_marker = write_marker
         self._current = current_version
+        self._restart_helpers = restart_helpers or _restart_helpers
         self._busy = False
         self._tasks: set[asyncio.Task] = set()
         self.exit_requested = False
@@ -513,6 +523,12 @@ class BridgeUpdater:
             )
         )
         log.info("bridge updated to herdeck %s (%s); exiting for a service restart", version, source)
+        try:
+            # The usage agent runs from this venv too: restart it into the new
+            # version as well (the bridge's own restart is the exit below).
+            await asyncio.to_thread(self._restart_helpers, env)
+        except Exception:
+            log.warning("could not restart the helpers after the update", exc_info=True)
         self.exit_requested = True
         self._request_exit()
 

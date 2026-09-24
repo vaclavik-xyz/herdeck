@@ -614,6 +614,7 @@ LaunchAgents:
 herdeck-service install bridge --system --bind 100.x.y.z --server-id workbox
 herdeck-service install web --bind 100.x.y.z --config ~/.config/herdeck/config.toml
 herdeck-service install runtime --config ~/.config/herdeck/config.toml
+herdeck-service install usage --managed   # usage limits for a --system bridge
 herdeck-service status bridge --system
 herdeck-service restart runtime
 ```
@@ -632,6 +633,11 @@ it runs the frozen runtime bundled in the desktop app instead of a Python
 checkout, and the app's updater restarts it whenever it installs a new version.
 On Linux every kind installs as a systemd `--user` unit (`--system` is
 macOS-only).
+
+The `usage` kind is the usage agent for a `--system` bridge (see "Usage agent"
+under usage limits): a login-session LaunchAgent (`dev.herdeck.usage`,
+`gui/<uid>`, `LimitLoadToSessionType = Aqua`); `--managed` runs it from the
+managed bridge venv and `--config PATH` sets `HERDECK_USAGE_CONFIG`.
 
 System installation asks for macOS administrator approval only for the
 root-owned LaunchDaemon operations. The daemon still runs as the invoking user.
@@ -1137,6 +1143,40 @@ used), else the defaults with providers `codex` + `claude`. The unit also gets
 a Homebrew `PATH` (codex is a Node script); override it with
 `--env PATH=...`. The `herdeck-usage capture-claude` status-line hook belongs
 on the bridge host too, since that is where Claude Code runs.
+
+**Usage agent (a bridge installed with `--system`).** A LaunchDaemon bridge
+runs outside your login session, where `codex app-server` and `codexbar`
+cannot reach the login keychain: they time out and the bridge's usage frames
+stay empty. Install the usage agent, a small LaunchAgent in the login (Aqua)
+session, on the bridge host:
+
+```bash
+herdeck-service install usage --managed \
+  --config ~/.config/herdeck/config.toml   # same --config as the bridge
+```
+
+It runs the bridge's poller (`python -m herdeck.usage_agent`, also
+`herdeck-usage-agent`; `HERDECK_USAGE_CONFIG` from `--config`) and writes the
+snapshot to `~/.local/state/herdeck/bridge-usage.json` (or
+`$XDG_STATE_HOME/herdeck/`, mode `0600`) on every change and at least every
+`refresh_secs`. While that file exists the bridge uses only it and never polls
+itself; data older than `max(3 × refresh_secs, 5 min)` is dropped (the frame
+sends no providers) until the agent writes again. Without the file (the agent
+never installed, or `herdeck-service uninstall usage`, which removes it) the
+bridge polls itself as before. `--managed` runs the agent from the managed
+bridge venv, so a bridge self-update restarts it too (it reuses the venv the
+bridge runs from and installs one only when there is none); without it, the
+agent runs `--python` or the current interpreter. It logs to
+`~/Library/Logs/herdeck-usage.log`; `--system` is not accepted (it must run in
+the login session). On Linux it is a systemd `--user` unit like the others.
+
+A runtime can manage the agent remotely: the bridge answers `{"type":
+"usage_agent", "req", "action": "install" | "uninstall" | "status"}` (full
+token only; capability `usage_agent`) for its own user, from the managed venv
+when it runs from one, passing its `HERDECK_USAGE_CONFIG` through. Installing
+needs a GUI login session for that user (log in to the Mac's desktop once),
+otherwise the reply says `no_gui_session`. The runtime relays it at
+`GET|POST /maintenance/servers/<id>/usage-agent` (`{"action": ...}`).
 
 Each runtime chooses with `[usage].source`: `"auto"` (default) uses bridge data
 while a connected bridge offers it and otherwise its own poller; `"local"`

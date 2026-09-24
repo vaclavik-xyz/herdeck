@@ -67,6 +67,7 @@ from .hooks_relay import HooksMixin
 from .live_events import BridgeEventsMixin
 from .source import StateSource
 from .stats import StatsMixin
+from .usage_agent_relay import UsageAgentMixin
 
 log = logging.getLogger(__name__)
 
@@ -113,7 +114,13 @@ def _thread_notify_schedule(fn) -> None:
 
 
 class LiveSource(
-    AgentCardMixin, BridgeUpdateMixin, StatsMixin, HooksMixin, BridgeEventsMixin, StateSource
+    AgentCardMixin,
+    BridgeUpdateMixin,
+    StatsMixin,
+    HooksMixin,
+    UsageAgentMixin,
+    BridgeEventsMixin,
+    StateSource,
 ):
     """A StateSource fed by one or more real bridges through ``Connector``.
 
@@ -260,6 +267,7 @@ class LiveSource(
         self._bridge_events_init(event_store)  # bridge lifecycle events (live_events.py)
         self._stats_init()  # GET /stats relay (stats.StatsMixin)
         self._hooks_init()  # subagent hook install relay (hooks_relay.HooksMixin)
+        self._usage_agent_init()  # usage agent install relay (usage_agent_relay.py)
 
     # --- StateSource surface ---
     @property
@@ -1002,6 +1010,7 @@ class LiveSource(
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
         self._bridge_update_on_snapshot(server_id)
         self._hooks_on_snapshot(server_id)
+        self._usage_agent_on_snapshot(server_id)
         new_by_key = {s.key: s for s in states}
         prev_keys = {key for key in self._agents if key.server_id == server_id}
 
@@ -1163,6 +1172,7 @@ class LiveSource(
         self._bridge_update_on_connection(server_id, up)
         self._stats_on_connection(server_id, up)
         self._hooks_on_connection(server_id, up)
+        self._usage_agent_on_connection(server_id, up)
 
     def _on_result(self, *args) -> None:
         """Handle a connector result.
@@ -1185,6 +1195,8 @@ class LiveSource(
             return  # a GET /stats reply (stats.py), not a deck command
         if self._hooks_on_result(req, data):
             return  # a hooks reply (hooks_relay.py), not a deck command
+        if self._usage_agent_on_result(req, data):
+            return  # a usage_agent reply (usage_agent_relay.py), not a deck command
         tap = self._result_tap
         if tap is not None and req is not None:
             claimed = tap(server_id, req, data)

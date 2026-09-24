@@ -158,6 +158,11 @@ pull it back. The bridge only installs releases from 0.10.0 on (the first that
 publishes the wheel and can update itself); a release without a wheel asset is
 refused rather than installed unverified.
 
+A usage agent installed from the same venv (`herdeck-service install usage
+--managed`) is restarted with it (`launchctl kickstart -k
+gui/<uid>/dev.herdeck.usage`, or `systemctl --user restart herdeck-usage`), so
+it runs the new version too. An agent running another interpreter is left alone.
+
 ### Giving a runtime service its server tokens
 
 A runtime unit has no shell environment, and `--env` refuses names containing

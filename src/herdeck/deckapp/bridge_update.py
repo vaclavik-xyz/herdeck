@@ -276,6 +276,9 @@ class BridgeUpdateMixin:
         hooks_error = getattr(self, "_hooks_on_error", None)
         if callable(hooks_error) and hooks_error(req, message):
             return  # a hooks request's own error (hooks_relay.py)
+        usage_agent_error = getattr(self, "_usage_agent_on_error", None)
+        if callable(usage_agent_error) and usage_agent_error(req, message):
+            return  # a usage_agent request's own error (usage_agent_relay.py)
         self._on_request_error(server_id, req, message)
 
     def _on_progress(self, server_id: str, req: str | None, stage: str, message: str) -> None:
