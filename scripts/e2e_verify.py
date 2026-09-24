@@ -1,15 +1,17 @@
 """End-to-end check against a live herdr via the local bridge.
 
-Connects the real Connector + Orchestrator + FakeRenderer to a running
-herdeck bridge, waits a few seconds, and prints the resulting deck tiles.
+Runs the real runtime (LiveSource connectors + DeckApp + Orchestrator) against
+a running herdeck bridge with an in-memory deck front, waits a few seconds and
+prints the resulting deck tiles.
 """
 
-import asyncio
 import os
+import time
 
-from herdeck.app import App
 from herdeck.config import AnswerProfile, Config, ServerConfig
-from herdeck.connector import Connector
+from herdeck.deckapp.live import build_live_source
+from herdeck.deckapp.server import DeckApp
+from herdeck.deckapp.sinks import DriverSink
 from herdeck.driver.fake import FakeRenderer
 
 URL = os.environ.get("HERDECK_E2E_URL", "ws://127.0.0.1:8788")
@@ -39,55 +41,20 @@ def _verify_capture(*, tiles, frames_seen, connected):
     return True, f"OK: connected and rendered ({frames_seen} bridge frames)"
 
 
-async def main():
+def main():
     cfg = make_config()
     deck = FakeRenderer(13)  # emulate the D200's 13 buttons
-    loop = asyncio.get_running_loop()
-    connectors = {}
-
-    def send(cmd):
-        c = connectors.get(cmd.server_id)
-        if c is not None:
-            from herdeck.commands import command_to_msg
-
-            asyncio.run_coroutine_threadsafe(c.send(command_to_msg(cmd, app.next_req_for(cmd))), loop)
-
-    app = App(cfg, deck, send, schedule=lambda fn: loop.call_soon_threadsafe(fn))
-    frames = {"n": 0}
-    connection = {"up": False}
-
-    def on_snap(sid, st):
-        frames["n"] += 1
-        loop.call_soon_threadsafe(app.handle_snapshot, sid, st)
-
-    def on_evt(sid, s):
-        frames["n"] += 1
-        loop.call_soon_threadsafe(app.handle_event, sid, s)
-
-    def on_connection(sid, up):
-        connection["up"] = up
-        loop.call_soon_threadsafe(app.handle_connection, sid, up)
-
-    conn = Connector(
-        cfg.servers[0],
-        on_snapshot=on_snap,
-        on_event=on_evt,
-        on_connection=on_connection,
-        on_result=lambda req, data, sid="dev": loop.call_soon_threadsafe(
-            app.handle_result, sid, req, data
-        ),
-    )
-    connectors["dev"] = conn
-    task = asyncio.create_task(conn.run())
-    await asyncio.sleep(3.5)
-    tiles = list(deck.last)  # capture WHILE connected
-    frames_seen = frames["n"]  # capture frame count at the same instant
-    connected = connection["up"]
-    conn.stop()
+    source = build_live_source(cfg, shell_banners=False)
+    app = DeckApp(source, serve=False, clock=time.monotonic)
+    app.add_sink(DriverSink(deck, on_press=app.press, slots=app.slots))
     try:
-        await asyncio.wait_for(task, 2.0)
-    except Exception:
-        pass
+        time.sleep(3.5)
+        tiles = list(deck.last)  # capture WHILE connected
+        # a server turns "available" once a snapshot arrived on its connection
+        frames_seen = int(source.semantic_server_available("dev"))
+        connected = source.connected
+    finally:
+        app.close()
 
     print("=== deck tiles (non-empty) ===")
     for t in tiles:
@@ -95,11 +62,9 @@ async def main():
             print(f"  [{t.index:2}] {t.color:6} {t.label!r}")
 
     ok, message = _verify_capture(tiles=tiles, frames_seen=frames_seen, connected=connected)
-    if not ok:
-        print(message)
-        return 1
     print(message)
-    return 0
+    return 0 if ok else 1
 
 
-raise SystemExit(asyncio.run(main()))
+if __name__ == "__main__":
+    raise SystemExit(main())

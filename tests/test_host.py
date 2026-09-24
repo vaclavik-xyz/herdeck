@@ -159,3 +159,35 @@ def test_elgato_usb_deck_uses_its_own_key_layout(keys, tmp_path, monkeypatch):
         assert host.app.slots == slots and host.app._orch.slots == slots
     finally:
         host.close()
+
+
+def test_local_mode_reload_keeps_the_embedded_bridge(tmp_path):
+    """A profile switch / reload in local mode applies the file settings but
+    keeps talking to the embedded bridge the host started."""
+    from herdeck.bootstrap import local_config
+    from herdeck.driver.fake import FakeRenderer
+    from herdeck.host import Host, _Front
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[deck]\ngrid = "4x4"\n[theme.colors]\nblocked = "pink"\n')
+    runtime = local_config(7654, "secret")
+    host = Host(
+        runtime,
+        _Front("fake", deck=FakeRenderer(14)),
+        mode="local",
+        config_path=str(config_path),
+        local_path=str(tmp_path / "local.toml"),
+        source_factory=lambda cfg: live(cfg)[0],
+    )
+    host.start()
+    try:
+        host.app.reload()
+        config = host.app._source.config
+        assert [(s.id, s.url, s.token) for s in config.servers] == [
+            ("local", "ws://127.0.0.1:7654", "secret")
+        ]
+        assert config.grid == (4, 4)
+        assert config.theme.colors["blocked"] == "pink"
+        assert host.app.slots == 14
+    finally:
+        host.close()

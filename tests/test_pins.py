@@ -48,27 +48,6 @@ def test_pin_detail_command_and_page_position():
     assert o.render().tiles[2].repo == "6"
 
 
-def test_app_persists_pin_without_sending_backend_commands(tmp_path):
-    from herdeck.app import App
-    from herdeck.driver.fake import FakeRenderer
-
-    sent = []
-    store = PinStore(tmp_path / "pins.json")
-    app = App(make_config(), FakeRenderer(13), sent.append, pin_store=store)
-    key = AgentKey("dev", "a")
-    app.orch.apply_snapshot("dev", [AgentState(key, "codex", "A", Status.IDLE)])
-    app.orch.render()
-    app._handle_press(0)
-    sent.clear()
-    app._handle_press(10)
-    assert sent == []
-    assert store.load("default") == {0: key}
-    restored = App(make_config(), FakeRenderer(13), sent.append, pin_store=store)
-    assert restored.orch.pins == {0: key}
-    app._handle_press(10)
-    assert store.load("default") == {}
-
-
 def test_thread_title_preset_keeps_t3_project_as_secondary():
     cfg = make_config()
     cfg.view.tile_primary = ["tab"]

@@ -72,9 +72,9 @@ def test_missing_keyring_backend_degrades_to_env_only(monkeypatch):
     assert secrets.has_secret("TOK") is False
 
 
-def test_build_notifier_resolves_telegram_token_via_secrets(monkeypatch):
-    from herdeck.app import _build_notifier
+def test_runtime_sink_resolves_telegram_token_via_secrets(monkeypatch):
     from herdeck.config import Config, Notifications, TelegramConfig
+    from herdeck.notify import NotificationFeed, deckapp_sink
 
     fake = FakeKeyring()
     fake.set_password("herdeck", "TGTOK", "bot-token")
@@ -94,7 +94,9 @@ def test_build_notifier_resolves_telegram_token_via_secrets(monkeypatch):
             telegram=TelegramConfig(token_env="TGTOK", chat_id="1"),
         ),
     )
-    _build_notifier(
+    deckapp_sink(
+        NotificationFeed(),
+        lambda: False,
         cfg,
         telegram_factory=lambda tok, chat, thread: captured.append((tok, chat, thread)),
     )

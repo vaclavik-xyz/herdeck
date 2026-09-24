@@ -954,7 +954,7 @@ class LiveSource(AgentCardMixin, StateSource):
                 if self._orch is not None:
                     self._orch.set_detection("")
             # Drop the drilled prompt only if the pane left BLOCKED
-            # (App.handle_snapshot): the prompt + in-flight read stay valid while it
+            # the prompt + in-flight read stay valid while it
             # is still blocked.
             self._invalidate_if_drill_unblocked(server_id, new_by_key.get(self._drilled_key()))
             self._reconcile_prereads()
@@ -974,7 +974,7 @@ class LiveSource(AgentCardMixin, StateSource):
             return
         # Notifications reconcile AFTER the buffer update: `scope` is every key
         # this snapshot is authoritative for (previous + current), matching
-        # App.handle_snapshot's server-scoped reconciliation.
+        # a server-scoped reconciliation.
         self._notify_all(server_id, states, prev_keys)
 
     def _notify_all(self, server_id: str, states: list[AgentState], prev_keys: set) -> None:
@@ -1004,7 +1004,7 @@ class LiveSource(AgentCardMixin, StateSource):
                     self._block_episode.pop(state.key, None)
                     self._notify_throttle.forget(state.key)
             # Same rule for a single-pane event: only a real unblock clears the
-            # drilled prompt (App.handle_event).
+            # drilled prompt.
             drilled = self._drilled_key()
             if drilled is not None and drilled == state.key:
                 if recycled:
@@ -1101,7 +1101,6 @@ class LiveSource(AgentCardMixin, StateSource):
                 banner_key.pane_id,
                 data.get("message") or data.get("error") or "skipped",
             )
-        # Mirrors App.handle_result.
         with self._lock:
             focused = req is not None and self._focus_reqs.pop(req, False)
         if focused and data.get("focused"):
@@ -1271,8 +1270,7 @@ class LiveSource(AgentCardMixin, StateSource):
         return orch.drill_key() if orch is not None else None
 
     def _invalidate_if_drill_unblocked(self, server_id: str, new_state) -> None:
-        """Drop the drilled prompt only when the agent actually leaves BLOCKED
-        (mirrors App._invalidate_read_if_unblocked).
+        """Drop the drilled prompt only when the agent actually leaves BLOCKED.
 
         The prompt (and an in-flight read) stay valid as long as the agent stays
         blocked. Wiping on every cosmetic change instead — e.g. a ``branch`` label
@@ -1295,7 +1293,7 @@ class LiveSource(AgentCardMixin, StateSource):
             self._active_read_req = None
 
     def _next_req(self, cmd) -> str | None:
-        # Mirrors App.next_req_for: `list` carries no req; everything else gets a
+        # `list` carries no req; everything else gets a
         # fresh sequential id. A `read` id is remembered so its result can be matched
         # (``_active_read_req`` for the drill display; ``_preread_req`` per pane so the
         # drill read also refreshes the pre-read cache under the same episode scope).

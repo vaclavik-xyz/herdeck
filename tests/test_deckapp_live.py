@@ -1252,7 +1252,7 @@ def test_converged_runtime_pins_are_local_persisted_and_reloaded(tmp_path):
         app.close()
 
 
-# --- event notifications (shared engine with herdeck/app.py) -----------------
+# --- event notifications (the runtime's notification engine) -----------------
 
 
 class RecordingNotifier:
@@ -1525,8 +1525,8 @@ def test_multi_server_body_includes_server_id():
 
 
 def test_body_respects_workspace_tab_and_title():
-    from herdeck.app import event_notification_body
     from herdeck.model import AgentKey
+    from herdeck.notify_events import event_notification_body
 
     def st(sid, pane, *, workspace="", tab="", title="", repo="", branch="", label=None):
         return AgentState(
