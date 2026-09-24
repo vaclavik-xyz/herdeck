@@ -53,13 +53,16 @@ type Call = { action: AgentAction; ref: AgentRef; extra: Record<string, string> 
 function fakeTransport(opts: {
   detail?: DetailResult;
   outcome?: ActionOutcome;
-} = {}): AgentTransport & { calls: Call[]; targets: AgentTarget[] } {
+} = {}): AgentTransport & { calls: Call[]; targets: AgentTarget[]; refreshes: boolean[] } {
   const calls: Call[] = [];
   const targets: AgentTarget[] = [];
+  const refreshes: boolean[] = [];
   return {
     calls,
     targets,
-    detail: async (target) => {
+    refreshes,
+    detail: async (target, refresh = false) => {
+      refreshes.push(refresh);
       targets.push(target);
       return opts.detail ?? { kind: "ok", detail: detail() };
     },
@@ -134,6 +137,8 @@ describe("AgentCard", () => {
         { action: "answer", ref: { serverId: "prod", paneId: "p0" }, extra: { key: "1", revision: "rev-1" } },
       ]);
       expect(target.querySelector("[role=status]")?.textContent).toBe("Sent.");
+      // The answered prompt is spent: the card re-reads at once.
+      expect(transport.refreshes).toEqual([true, true]);
     } finally { cleanup(); }
   });
 
