@@ -8,6 +8,16 @@
 //! `{url, host, port, token, source}`), and hands the url+token to the WebView so
 //! the frontend can reach the sidecar over loopback. The sidecar is restarted on
 //! crash and killed on quit.
+//!
+//! This file holds the shared state (`AppState`), the updater and discovery
+//! commands, and `run()`. The rest lives beside it: `runtime_plan` (which
+//! runtime to use and keeping it), `proxy` (token-injecting sidecar commands),
+//! `window_roles` (the two windows), `tray`, `shortcuts`, `notifications` +
+//! `notify_pump` + `banner_native` (native banners), with pure logic in
+//! `sidecar`, `http`, `banners`, `hotkey`, `deck_prefs` and `window_state`.
+//! Every `#[tauri::command]` is registered in `run()` by its bare name, which
+//! is what the WebView invokes — moving a command between modules is free,
+//! renaming one is not.
 
 mod agent_card;
 pub mod app_log;

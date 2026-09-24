@@ -1,7 +1,7 @@
 import type { FloatingScaleCommand } from "./floatingScale";
 
 /** Emitted by Rust to the DECK window only (`FLOATING_ZOOM_EVENT` /
- *  `app.emit_to(DECK_WINDOW, ...)` in desktop/src-tauri/src/lib.rs) when a
+ *  `app.emit_to(DECK_WINDOW, ...)` in desktop/src-tauri/src/tray.rs) when a
  *  zoom item is picked from the deck's native right-click context menu. */
 export const DECK_ZOOM_EVENT = "floating-zoom-command";
 

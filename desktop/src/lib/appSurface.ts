@@ -9,7 +9,7 @@ export function appSurface(role: string | null | undefined): AppSurface {
 }
 
 /** Reads the role Rust stamps on `<html data-window-role>` before first paint
- *  (`window_role_script` in desktop/src-tauri/src/lib.rs, injected via
+ *  (`window_role_script` in desktop/src-tauri/src/window_roles.rs, injected via
  *  `initialization_script` so the borderless CSS applies with no flash of
  *  opaque chrome). The dataset key ("windowRole") and both literal values
  *  ("app" / "deck") are a contract with that Rust code — see

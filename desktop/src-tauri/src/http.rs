@@ -17,7 +17,7 @@
 //! `/state` (JSON), `/tile/{i}` + `/panel` (PNG), and `POST /press/{i}` — with
 //! the sidecar access token injected HERE (query param for GETs, `X-Herdeck-Token`
 //! header for the press POST). The token therefore never crosses into JS: the
-//! frontend invokes token-free Tauri commands (see lib.rs) that call these.
+//! frontend invokes token-free Tauri commands (see proxy.rs) that call these.
 
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
@@ -699,7 +699,7 @@ pub fn fetch_png(
 
 /// Proxy a PNG endpoint (`/tile/{i}` or `/panel`) and frame it as a `data:` URL.
 /// `Ok(None)` on 404 (no tile/panel yet) so the caller clears the cell. Kept as
-/// the fallback transport beside the `herdeck://` image protocol (lib.rs).
+/// the fallback transport beside the `herdeck://` image protocol (proxy.rs).
 pub fn fetch_image(
     host: &str,
     port: u16,

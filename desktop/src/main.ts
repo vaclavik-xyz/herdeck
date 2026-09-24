@@ -5,7 +5,7 @@ import App from "./App.svelte";
 // Both windows load index.html and mount the same root: App.svelte routes its
 // surface off `<html data-window-role>`, which Rust's initialization_script
 // stamps before this module even runs (see window_role_script in
-// desktop/src-tauri/src/lib.rs). There is nothing left for main.ts to route in
+// desktop/src-tauri/src/window_roles.rs). There is nothing left for main.ts to route in
 // a real Tauri WebView.
 //
 // A plain browser (no Tauri) never gets that attribute, so `?window=` lets

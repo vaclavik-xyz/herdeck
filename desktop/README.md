@@ -74,7 +74,17 @@ desktop/
     icons/                   # desktop app icons
     src/
       main.rs                # thin bin entry
-      lib.rs                 # window + tray + sidecar supervisor + command wiring
+      lib.rs                 # AppState, setup/run, window build + command wiring
+      runtime_plan.rs        # spawn-or-attach plan, supervisor, re-discovery
+      proxy.rs               # token-injecting sidecar proxy commands + image scheme
+      window_roles.rs        # deck/app windows: placement, show/hide, always-on-top
+      tray.rs                # tray menu + deck context menu (EN/CS labels)
+      shortcuts.rs           # global shortcut registration
+      notifications.rs       # notification commands, sounds, pump adapter
+      notify_pump.rs         # long-poll notification pump behind traits (+ tests)
+      banner_native.rs       # native banner post/withdraw + macOS click delegate
+      banners.rs             # banner parsing + intents, pure (+ tests)
+      plan_tests.rs          # unit tests for the shell glue
       sidecar.rs             # spawn/parse/supervise logic (+ unit tests)
       http.rs                # loopback HTTP proxy with token injection (+ tests)
       agent_card.rs          # agent_call: /agent/* relay for the agent card (+ tests)

@@ -9,7 +9,7 @@
   - vysvětlivky polí: centrální `desktop/src/lib/help.ts` (FIELD_HELP.en + FIELD_HELP.cs).
   - renderovaný text decku (dlaždice/panel/websim): `src/herdeck/i18n.py` STRINGS
     (en+cs, `tr(lang, key)`); jazyk teče z `config.view.language`.
-  - tray menu (Rust): `tray_labels()` v `desktop/src-tauri/src/lib.rs`.
+  - tray menu (Rust): `tray_labels()` v `desktop/src-tauri/src/tray.rs`.
 - Labely polí v editoru zůstávají anglické = přesné klíče z TOML configu (např. `tile_fill`);
   vysvětluje je tooltip.
 - CLI, logy, README a komentáře v kódu zůstávají anglicky.
