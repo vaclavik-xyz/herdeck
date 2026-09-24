@@ -572,9 +572,21 @@ def usage_agent_file(config: ServiceConfig) -> Path:
 
 
 def uninstall_service(config: ServiceConfig, *, runner=_run) -> None:
-    if config.kind == "usage":
-        # Without the agent's file the bridge polls usage itself again.
-        usage_agent_file(config).unlink(missing_ok=True)
+    if config.kind != "usage":
+        _uninstall_unit(config, runner=runner)
+        return
+    # Without the agent's file the bridge polls usage itself again. Its path
+    # comes from the unit (read before removing it); it is deleted only after
+    # the agent stopped, or a last heartbeat could write it back, and the
+    # bridge would then wait on a stale file forever.
+    agent_file = usage_agent_file(config)
+    try:
+        _uninstall_unit(config, runner=runner)
+    finally:
+        agent_file.unlink(missing_ok=True)
+
+
+def _uninstall_unit(config: ServiceConfig, *, runner) -> None:
     if not config.uses_launchd:
         runner(["systemctl", "--user", "disable", "--now", config.systemd_unit])
         (_systemd_user_dir(config) / config.systemd_unit).unlink(missing_ok=True)

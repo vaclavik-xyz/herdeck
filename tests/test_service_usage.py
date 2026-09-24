@@ -101,6 +101,22 @@ def test_uninstall_removes_the_unit_and_the_agent_file(tmp_path):
     assert ["launchctl", "bootout", "gui/501/dev.herdeck.usage"] in calls
 
 
+def test_uninstall_deletes_the_file_only_after_the_agent_stopped(tmp_path):
+    """A heartbeat racing the uninstall must not leave a stale file behind."""
+    from herdeck.service import install_service, uninstall_service
+
+    install_service(_usage(tmp_path), runner=_record()[1])
+    agent_file = tmp_path / ".local/state/herdeck/bridge-usage.json"
+    agent_file.parent.mkdir(parents=True)
+    def runner(command):
+        if command[:2] == ["launchctl", "bootout"]:
+            agent_file.write_text("{}")  # the agent's last write before it stops
+        return 0
+
+    uninstall_service(_usage(tmp_path), runner=runner)
+    assert not agent_file.exists()
+
+
 def test_uninstall_removes_the_file_under_the_units_xdg_state_home(tmp_path, monkeypatch):
     from herdeck.service import install_service, uninstall_service
 
