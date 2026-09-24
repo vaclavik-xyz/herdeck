@@ -3817,11 +3817,13 @@ pub fn run() {
                 // The last chance to save a deck position that was dragged and
                 // never hidden — `Moved` deliberately does not touch the disk.
                 persist_window_state(app_handle);
-                // Tear the supervised sidecar down so it never outlives the shell.
+                // Tear the supervised sidecar down so it never outlives the shell:
+                // closing its stdin runs its clean shutdown (D200 released,
+                // files removed); SIGKILL only after SIDECAR_STOP_GRACE. A crash
+                // skips this handler, but the kernel closes the same pipe then.
                 exit_stop.store(true, Ordering::SeqCst);
                 if let Some(mut c) = exit_child.lock().unwrap().take() {
-                    let _ = c.kill();
-                    let _ = c.wait();
+                    sidecar::stop_child(&mut c, sidecar::SIDECAR_STOP_GRACE);
                 }
             }
         });

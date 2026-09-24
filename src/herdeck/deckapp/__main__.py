@@ -18,6 +18,7 @@ import os
 import sys
 import threading
 
+from .parent_watch import parent_watch_enabled, watch_parent
 from .server import create_app
 
 
@@ -54,6 +55,8 @@ def main() -> int:
     print(json.dumps(discovery), flush=True)
 
     stop = threading.Event()
+    if parent_watch_enabled():
+        watch_parent(stop)  # die with the desktop shell that spawned us
     try:
         stop.wait()
     except KeyboardInterrupt:
