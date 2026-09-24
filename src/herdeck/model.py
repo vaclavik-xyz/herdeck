@@ -218,3 +218,7 @@ class AgentState:
     # "subagents", read from the hook's spool on the agents' host). Empty
     # from an older bridge or when the pane has none.
     subagents: tuple[Subagent, ...] = ()
+    # The bridge's blocked/done episode id (capability "events"), "" outside
+    # one or from an older bridge. Stable across bridge restarts; answers and
+    # lifecycle events refer to it.
+    episode_id: str = ""

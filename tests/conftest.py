@@ -10,6 +10,15 @@ def _isolated_notification_icons(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_event_cursor(tmp_path, monkeypatch):
+    """The runtime's bridge-event cursor (event_cursor.py) never touches ~/.cache."""
+    monkeypatch.setattr(
+        "herdeck.deckapp.event_cursor.default_path",
+        lambda: str(tmp_path / "runtime" / "bridge-events.json"),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolated_status_since_state(tmp_path, monkeypatch):
     """The bridge's persisted status-since table never touches ~/.local/state."""
     monkeypatch.setattr(

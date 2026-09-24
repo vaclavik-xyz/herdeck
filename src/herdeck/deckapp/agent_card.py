@@ -106,7 +106,8 @@ def result_outcome(data: dict) -> dict:
             return outcome("not_blocked")
         if message == "agent identity changed":
             return outcome("identity_changed")
-        if message == "stale_choice":
+        if message in ("stale_choice", "stale"):
+            # "stale": the bridge saw this episode answered already (events.py)
             return outcome("stale")
         return outcome("rejected", str(message))
     if data.get("focused"):
@@ -323,6 +324,8 @@ class AgentCardMixin:
                 connected = self._connected.get(server_id, False)
                 cached = self._preread.get(key)
                 pending = key in self._preread_req
+                episode = self._block_episode.get(key)
+                answered = self._episode_spent(server_id, episode)
             if agent is None:
                 return None
             since = orch.status_elapsed(key) if orch is not None else None
@@ -335,7 +338,11 @@ class AgentCardMixin:
                 revision = agent.backend_revision or None
                 options = orch.answer_options(key, "") if orch is not None else []
             elif agent.status is Status.BLOCKED:
-                if isinstance(cached, str) and cached:
+                if answered:
+                    # Answered here or on another client (bridge "answered"
+                    # event): the prompt stays readable, its options are spent.
+                    prompt = cached if isinstance(cached, str) and cached else None
+                elif isinstance(cached, str) and cached:
                     prompt = cached
                     revision = decision_revision(server_id, pane_id, agent.terminal_id, cached)
                     # Labels come from the sanitized text (keys are unchanged).
@@ -346,7 +353,7 @@ class AgentCardMixin:
                     prompt_pending = pending or refresh or connected
                 # Re-read on request, and whenever nothing is cached or in
                 # flight (e.g. right after an answer dropped the cache).
-                if connected and (refresh or not (cached or pending)):
+                if connected and not answered and (refresh or not (cached or pending)):
                     reread = self._card_prepare_reread(key, agent)
         if reread is not None:
             # Sent after releasing the deck lock: a runner may deliver its
@@ -453,7 +460,9 @@ class AgentCardMixin:
                     # the agent may re-block on another prompt while the send
                     # below waits for the bridge.
                     episode = self._block_episode.get(key)
-                if not isinstance(prompt, str) or not prompt:
+                    answered = self._episode_spent(server_id, episode)
+                if not isinstance(prompt, str) or not prompt or answered:
+                    # answered: from a banner, or on another client (bridge event)
                     return outcome("stale")
                 if revision != decision_revision(server_id, pane_id, agent.terminal_id, prompt):
                     return outcome("stale")

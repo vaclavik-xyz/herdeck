@@ -14,6 +14,8 @@ from .protocol import (
     WIRE_PROTOCOL,
     Error,
     Event,
+    EventSync,
+    LifecycleEvent,
     Progress,
     ProjectIcon,
     Result,
@@ -39,6 +41,8 @@ SELF_UPDATE_CAPABILITY = "self_update"
 HEALTH_PROBE_TIMEOUT_S = 5.0
 # What a bridge that predates the health message answers (no req in it).
 _UNKNOWN_HEALTH = "unknown client message: health"
+# Wire capability of bridge lifecycle events (events.py).
+EVENTS_CAPABILITY = "events"
 
 
 def _now_ms() -> int:
@@ -85,6 +89,8 @@ class Connector:
         on_request_error: Callable[[str | None, str], None] | None = None,
         on_progress: Callable[[str, str, str], None] | None = None,
         on_usage: Callable[[str, bool, list | None], None] | None = None,
+        on_lifecycle: Callable[[str, LifecycleEvent | EventSync], None] | None = None,
+        events_cursor: Callable[[str], dict] | None = None,
     ):
         self.server = server
         self._on_snapshot = on_snapshot
@@ -103,6 +109,12 @@ class Connector:
         # usage frames (capability ``usage``; False when disconnected) and,
         # with a usage frame, its ProviderUsage list. usage_hub consumes it.
         self._on_usage = on_usage
+        # Bridge lifecycle events (capability "events"): the consumer's
+        # callback, and ``events_cursor(server_id)`` -> the ``events`` field
+        # of the connect-time ``list`` ({"after", "epoch", "client"}). A
+        # consumer without them (ctl) never subscribes.
+        self._on_lifecycle = on_lifecycle
+        self._events_cursor = events_cursor
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._stop = False
@@ -217,7 +229,7 @@ class Connector:
                     connected = True
                     self._ever_connected = True
                     self._set_connected(True)
-                    await ws.send(encode({"type": "list"}))  # resync-on-reconnect
+                    await ws.send(encode(self._resync_message()))  # resync-on-reconnect
                     first = True
                     async for raw in ws:
                         if first:
@@ -260,6 +272,20 @@ class Connector:
             except TimeoutError:
                 pass
 
+    def _resync_message(self) -> dict:
+        """The connect-time ``list``; it subscribes to lifecycle events when
+        this consumer wants them (an older bridge ignores the field)."""
+        message: dict = {"type": "list"}
+        if self._on_lifecycle is not None and self._events_cursor is not None:
+            try:
+                cursor = self._events_cursor(self.server.id)
+            except Exception:
+                log.warning("events cursor failed", exc_info=True)
+                cursor = None
+            if isinstance(cursor, dict):
+                message["events"] = cursor
+        return message
+
     def _rekey(self, state: AgentState) -> AgentState:
         """Force the agent key to THIS connector's configured server id.
 
@@ -296,6 +322,10 @@ class Connector:
             self._maybe_probe_health()
         elif isinstance(msg, Event):
             self._on_event(self.server.id, self._rekey(msg.state))
+        elif isinstance(msg, (LifecycleEvent, EventSync)):
+            if self._on_lifecycle is not None:
+                # Routing is keyed by the configured id, not the bridge's label.
+                self._on_lifecycle(self.server.id, dataclasses.replace(msg, server_id=self.server.id))
         elif isinstance(msg, Result):
             if self._claim_health_reply(msg.req, msg.data):
                 return

@@ -18,6 +18,12 @@ from .project_icon_discovery import ICON_MIMES, MAX_ICON_BYTES, icon_hash
 from .usage import usage_from_wire
 
 _ICON_HASH_RE = re.compile(r"[0-9a-f]{16}")
+# Bridge episode ids and prompt revisions (events.py): short lowercase hex.
+_EPISODE_RE = re.compile(r"[0-9a-f]{8,64}")
+LIFECYCLE_KINDS = frozenset({"blocked", "done", "unblocked", "cleared", "answered"})
+# Bounds on what a lifecycle frame may carry into the runtime.
+_EVENT_PROMPT_MAX = 16_000
+_EVENT_LABEL_MAX = 64
 # Base64 length of MAX_ICON_BYTES (whole 4-char groups): a cheap pre-decode cap.
 _MAX_ICON_B64 = 4 * ((MAX_ICON_BYTES + 2) // 3)
 
@@ -114,7 +120,12 @@ def _pane_to_state(server_id: str, pane: dict) -> AgentState:
         subagents_running=subagents_running,
         subagents_total=subagents_total,
         subagents=parse_subagents(pane.get("subagents")),
+        episode_id=_episode_ref(pane.get("episode_id")),
     )
+
+
+def _episode_ref(value: object) -> str:
+    return value if isinstance(value, str) and _EPISODE_RE.fullmatch(value) else ""
 
 
 # The bridge<->runtime wire protocol this code speaks. Additive pane fields
@@ -203,6 +214,36 @@ class Usage:
 
 
 @dataclass
+class LifecycleEvent:
+    """A bridge lifecycle event (capability ``events``, see events.py)."""
+
+    server_id: str
+    epoch: str
+    seq: int
+    kind: str  # blocked | done | unblocked | cleared | answered
+    episode_id: str
+    pane_id: str
+    terminal_id: str
+    at_ms: int
+    prompt: str | None = None
+    prompt_revision: str | None = None
+    prompt_truncated: bool = False
+    by: str = ""
+    via: str = ""
+    replay: bool = False
+
+
+@dataclass
+class EventSync:
+    """End of a lifecycle-event replay: live events follow."""
+
+    server_id: str
+    epoch: str
+    seq: int
+    gap: bool
+
+
+@dataclass
 class Unknown:
     """A frame type this client does not know (a newer bridge). Ignored."""
 
@@ -226,11 +267,64 @@ def _decode_project_icon(msg: dict) -> ProjectIcon:
     return ProjectIcon(sid, digest, mime, raw)
 
 
+def _label(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return "".join(ch for ch in value if ch.isprintable())[:_EVENT_LABEL_MAX]
+
+
+def _decode_lifecycle(msg: dict) -> LifecycleEvent:
+    sid, epoch, seq, kind = (msg.get(k) for k in ("server_id", "epoch", "seq", "kind"))
+    episode, pane_id, at_ms = (msg.get(k) for k in ("episode_id", "pane_id", "at_ms"))
+    if (
+        not isinstance(sid, str)
+        or not isinstance(epoch, str)
+        or not epoch
+        or len(epoch) > 64
+        or type(seq) is not int
+        or seq < 1
+        or kind not in LIFECYCLE_KINDS
+        or not _episode_ref(episode)
+        or not isinstance(pane_id, str)
+        or not pane_id
+        or type(at_ms) is not int
+    ):
+        raise ValueError("malformed lifecycle event frame")
+    prompt = msg.get("prompt")
+    revision = msg.get("prompt_revision")
+    terminal_id = msg.get("terminal_id")
+    return LifecycleEvent(
+        sid,
+        epoch,
+        seq,
+        kind,
+        episode,
+        pane_id,
+        terminal_id if isinstance(terminal_id, str) else "",
+        at_ms,
+        prompt=prompt[-_EVENT_PROMPT_MAX:] if isinstance(prompt, str) else None,
+        prompt_revision=_episode_ref(revision) or None,
+        prompt_truncated=msg.get("prompt_truncated") is True,
+        by=_label(msg.get("by")),
+        via=_label(msg.get("via")),
+        replay=msg.get("replay") is True,
+    )
+
+
+def _decode_event_sync(msg: dict) -> EventSync:
+    sid, epoch, seq = (msg.get(k) for k in ("server_id", "epoch", "seq"))
+    if not isinstance(sid, str) or not isinstance(epoch, str) or not epoch or type(seq) is not int:
+        raise ValueError("malformed event_sync frame")
+    return EventSync(sid, epoch[:64], max(seq, 0), msg.get("gap") is True)
+
+
 def decode_inbound(
     raw: str,
 ) -> (
     Snapshot
     | Event
+    | LifecycleEvent
+    | EventSync
     | Result
     | Error
     | TermFrame
@@ -262,8 +356,13 @@ def decode_inbound(
             version[:64] if isinstance(version, str) and version else None,
         )
     if kind == "event":
+        if "pane" not in msg:
+            # The same frame name carries bridge lifecycle events (events.py).
+            return _decode_lifecycle(msg)
         sid = msg["server_id"]
         return Event(sid, _pane_to_state(sid, msg["pane"]))
+    if kind == "event_sync":
+        return _decode_event_sync(msg)
     if kind == "result":
         return Result(msg["req"], msg.get("data", {}))
     if kind == "error":

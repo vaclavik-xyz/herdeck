@@ -462,7 +462,7 @@ class SemanticAPI:
             return self._outcome(502, "backend_failure", "backend request failed")
         if result.message == "not_blocked":
             return self._outcome(409, "not_blocked", "agent is no longer blocked")
-        if result.message == "stale_choice":
+        if result.message in ("stale_choice", "stale"):
             return self._outcome(409, "stale_choice", "choice is no longer available")
         return self._action_response(result)
 
