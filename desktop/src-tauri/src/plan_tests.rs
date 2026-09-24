@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::notify_pump::*;
+use crate::window_roles::*;
 
 #[test]
 fn health_carries_the_shell_version_for_mismatch_warnings() {
