@@ -7,6 +7,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Actionable macOS banners. Clicking an agent banner brings the deck forward
+  and opens that agent's drill (new token-authenticated `POST /agents/drill`).
+  Opt-in `[notifications].banner_actions` adds **Approve**/**Deny** to a blocked
+  banner whose prompt is a plain permission question, or an inline **Reply**
+  field otherwise (`POST /agents/answer`); an answer is applied only while the
+  agent is still blocked in the same episode on the same options, so a stale
+  banner opens the drill instead. Opt-in `[notifications].banner_prompt`
+  appends a short, sanitized prompt excerpt to blocked alerts. Both are
+  editable under Notifications.
 - Desktop agent card: Option-click, long-press or ⌥digit a tile in the deck
   window to see that agent in full (header, status and since, the whole blocked
   prompt, the drill's parsed options, a free-text reply, Focus and Stop). New
@@ -109,6 +118,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first.
 
 ### Fixed
+- A profile switch, config reload or demo-to-live connect no longer drops macOS
+  alerts to the plain `osascript` fallback: the swapped-in source keeps posting
+  through the desktop app.
 - A sidecar spawned by the desktop app no longer outlives it. It used to keep
   running (and holding the D200) after a crash, SIGKILL or Force Quit. It now
   exits cleanly when the app's stdin pipe closes, with a parent-pid check as a

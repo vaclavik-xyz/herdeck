@@ -56,6 +56,13 @@ enabled = false
 backends = ["macos"]
 on = ["blocked", "done"] # events that alert you (default both); ["blocked"] mutes done
 sound = true
+# Opt-in (desktop app on macOS): blocked banners get Approve/Deny buttons for a
+# plain permission prompt, or an inline reply field; answers are applied only
+# while the agent is still blocked on the same prompt.
+banner_actions = false
+# Opt-in: blocked alerts add a short, sanitized excerpt of the prompt (every
+# backend, so it also shows on a locked screen).
+banner_prompt = false
 # Per-event macOS system sound (played with the alert). A missing key falls
 # back to the default: Glass for "blocked", Hero for "done".
 # [notifications.sounds]

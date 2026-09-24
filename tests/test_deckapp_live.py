@@ -1259,10 +1259,12 @@ class RecordingNotifier:
     def __init__(self):
         self.calls = []
         self.icons = []
+        self.metas = []
 
-    def notify(self, title, body, sound=False, icon=None):
+    def notify(self, title, body, sound=False, icon=None, meta=None):
         self.calls.append((title, body, sound))
         self.icons.append(icon)
+        self.metas.append(meta)
 
 
 def make_notifying_live(config, server, clock=None):
@@ -2007,3 +2009,53 @@ def test_mock_source_has_no_triage():
 
     app = DeckApp(MockSource(), serve=False, icon_provider=StubIcons())
     assert app.triage() is False
+
+
+def test_swapped_in_live_source_keeps_the_shell_banner_gate():
+    """A profile switch / reload swaps in a fresh LiveSource; it must still
+    hand banners to the shell instead of falling back to osascript forever."""
+    app, _src, _server, _runner = make_live()
+    try:
+        config, server = live_config()
+        fresh = LiveSource(config, server)
+        app.swap_source(fresh)
+        assert fresh._notify_gate() is False  # no shell has claimed yet
+        app.note_shell_claim("gen-1")
+        assert fresh._notify_gate() is True
+        assert fresh._notify_claim_age() is not None
+    finally:
+        app.close()
+
+
+def test_alerts_carry_the_agent_key_event_and_block_episode():
+    config, server = notify_config()
+    now = [100.0]
+    src, notifier = make_notifying_live(config, server, clock=lambda: now[0])
+
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.WORKING)])
+    src._on_event(server.id, agent(server.id, "p1", Status.BLOCKED))
+    first = notifier.metas[-1]
+    assert first["agent"] == {"server_id": server.id, "pane_id": "p1"}
+    assert first["event"] == "blocked"
+    assert first["episode"]
+
+    # Answered, then a new prompt: a NEW episode, so the old banner is stale.
+    now[0] += 10
+    src._on_event(server.id, agent(server.id, "p1", Status.WORKING))
+    src._on_event(server.id, agent(server.id, "p1", Status.BLOCKED))
+    second = notifier.metas[-1]
+    assert second["episode"] and second["episode"] != first["episode"]
+
+    src._on_event(server.id, agent(server.id, "p1", Status.DONE))
+    done = notifier.metas[-1]
+    assert done == {"agent": {"server_id": server.id, "pane_id": "p1"}, "event": "done"}
+
+
+def test_a_recycled_terminal_starts_a_new_block_episode():
+    config, server = notify_config()
+    src, _notifier = make_notifying_live(config, server)
+    src._on_snapshot(server.id, [agent(server.id, "p1", Status.BLOCKED, terminal_id="t1")])
+    key = AgentKey(server.id, "p1")
+    before = src._block_episode[key]
+    src._on_event(server.id, agent(server.id, "p1", Status.BLOCKED, terminal_id="t2"))
+    assert src._block_episode[key] != before

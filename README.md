@@ -882,6 +882,8 @@ enabled = true
 backends = ["macos", "telegram"]   # run both, or just one
 on = ["blocked", "done"]
 sound = true
+banner_actions = false             # opt-in: Approve/Deny or Reply on blocked macOS banners
+banner_prompt = false              # opt-in: add a short prompt excerpt to blocked alerts
 
 # Optional: which macOS system sound plays per event. A missing key falls
 # back to the default (Glass for "blocked", Hero for "done").
@@ -923,9 +925,25 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 - Telegram setup: create a bot with @BotFather, `export HERDECK_TELEGRAM_TOKEN=<token>`
   (never commit the token), and set your numeric `chat_id`. A missing token or
   chat_id makes herdeck skip telegram with a warning — other backends still fire.
+- **Clicking a macOS banner** brings the deck forward and opens that agent's
+  drill (the runtime's token-authenticated `POST /agents/drill`).
+- `banner_actions = true` (opt-in, desktop app on macOS): a blocked banner waits
+  up to 2 s for the agent's prompt, then offers **Approve** (action button) and
+  **Deny** (its drop-down) when the prompt is a plain permission question —
+  every numbered option maps to approve/deny, the same detection the drill uses
+  — or an inline **Reply** field otherwise; the reply is typed into the pane.
+  Answers go through `POST /agents/answer` and are applied only while the agent
+  is still blocked in the same block episode, on the same options, and not yet
+  answered — a stale banner opens the agent's drill instead of answering a newer
+  prompt. Prompts whose approve/deny needs an on-deck confirmation
+  (`[safety].require_confirm_for`) never get buttons. Reply text is bounded and
+  stripped of control characters.
+- `banner_prompt = true` (opt-in) appends a one-line, sanitized excerpt of the
+  blocked prompt (about 180 characters) to the alert body — on every backend,
+  so it also shows on a locked screen and in Telegram.
 - Non-interactive notifications contain only the repo/label, branch, and
-  (multi-server) server id; they never include prompt text, command output, or
-  tokens. When `interactive = true`, Telegram alerts include the current blocked
+  (multi-server) server id — plus the prompt excerpt when `banner_prompt` is
+  on; they never include command output or tokens. When `interactive = true`, Telegram alerts include the current blocked
   prompt, Approve/Deny/Stop/Read again buttons, and reply routing. Reply to this message
   to send text to that specific agent. Herdeck accepts inbound actions only from
   `allowed_user_ids`, only in the configured `chat_id`, and only in `message_thread_id`

@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
+import uuid
 from collections.abc import Callable
 
 from ..app import (
@@ -35,9 +37,11 @@ from ..app import (
     event_notification_body,
     newly_entered,
 )
-from ..commands import Command, command_to_msg
+from ..commands import Command, command_to_msg, profile_for
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
+from ..i18n import tr
+from ..layout import prompt_excerpt
 from ..model import AgentKey, AgentState, Status
 from ..notify import (
     NotificationFeed,
@@ -48,7 +52,7 @@ from ..notify import (
     event_title,
 )
 from ..notify_icons import NotificationIconCache
-from ..orchestrator import Orchestrator
+from ..orchestrator import Orchestrator, binary_answer
 from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
@@ -56,6 +60,30 @@ from .agent_card import AgentCardMixin
 from .source import StateSource
 
 log = logging.getLogger(__name__)
+
+# A banner reply is typed into the agent's pane: bounded, and stripped of
+# control / bidi-override characters (a terminal escape must never ride in on
+# notification text). Line breaks collapse to spaces (below); tabs stay.
+REPLY_MAX_CHARS = 2000
+_REPLY_STRIP_RE = re.compile("[\x00-\x08\x0e-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
+# herdr types the text and then presses enter: a line break inside a reply
+# would submit early and type the rest into whatever prompt comes next.
+_REPLY_BREAK_RE = re.compile("[\r\n\x0b\x0c\x85\u2028\u2029]+")
+# Answered block episodes remembered so a second click (or a reminder banner of
+# the same episode) never answers twice.
+_ANSWERED_EPISODES_MAX = 256
+# How long a blocked alert that needs its prompt ([notifications].banner_actions
+# / banner_prompt) waits for the background pre-read before it goes out
+# without it. The read normally lands in well under a second.
+PROMPT_WAIT_S = 2.0
+
+
+def sanitize_reply(text: object) -> str:
+    """The banner reply text safe to send to a pane ("" = nothing to send)."""
+    if not isinstance(text, str):
+        return ""
+    clean = _REPLY_BREAK_RE.sub(" ", text)
+    return _REPLY_STRIP_RE.sub("", clean).strip()[:REPLY_MAX_CHARS]
 
 
 def _thread_notify_schedule(fn) -> None:
@@ -88,6 +116,7 @@ class LiveSource(AgentCardMixin, StateSource):
         notification_fallback=None,
         notify_clock=None,
         notify_icons: NotificationIconCache | None = None,
+        prompt_wait_s: float = PROMPT_WAIT_S,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -106,6 +135,7 @@ class LiveSource(AgentCardMixin, StateSource):
         # suppression (see notify.NotifyThrottle).
         self._notify_throttle = NotifyThrottle(clock=notify_clock or time.monotonic)
         self._notify_schedule = notify_schedule or _thread_notify_schedule
+        self._prompt_wait_s = prompt_wait_s
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
@@ -125,6 +155,17 @@ class LiveSource(AgentCardMixin, StateSource):
         if not self._servers and server is not None:
             self._servers = {server.id: server}
         self._lock = threading.Lock()
+        # Signalled (under self._lock) when a pre-read lands or a block episode
+        # changes, so an alert waiting for its prompt wakes at once.
+        self._preread_cv = threading.Condition(self._lock)
+        # Block episode per BLOCKED pane: a fresh opaque id each time the pane
+        # enters BLOCKED (or its terminal is recycled). Banner answers carry it,
+        # so a stale banner can never answer a later prompt.
+        self._block_episode: dict[AgentKey, str] = {}
+        self._answered_episodes: dict[str, None] = {}
+        # Outstanding fire-and-forget banner answers (req -> agent, bounded):
+        # a bridge refusal is logged, since nobody else waits for the result.
+        self._banner_reqs: dict[str, AgentKey] = {}
         self._agents: dict[AgentKey, AgentState] = {}
         self._connected: dict[str, bool] = {sid: False for sid in self._servers}
         self._req = 0
@@ -221,6 +262,101 @@ class LiveSource(AgentCardMixin, StateSource):
         if orch is None:
             return []
         return self._drive(orch, orch.triage)
+
+    def open_agent(self, key: AgentKey) -> bool:
+        """Open ``key``'s drill (a banner click). False when it is unknown."""
+        orch = self._orch
+        if orch is None or orch.get_agent(key) is None:
+            return False
+        self._drive(orch, lambda: orch.open_agent(key) or [])
+        return True
+
+    def answer_agent(
+        self,
+        key: AgentKey,
+        episode: str,
+        *,
+        choice: str | None = None,
+        sig: str | None = None,
+        text: str | None = None,
+    ) -> str:
+        """Answer a blocked agent from a banner (caller holds the deck lock).
+
+        Exactly one of ``choice`` ("approve"/"deny", with the option signature
+        ``sig`` the banner was built from) or ``text`` (an inline reply).
+        Returns "ok", "invalid" (malformed request), "unknown" (no such agent),
+        "stale" (no longer blocked in ``episode``, already answered — from a
+        banner or the agent card — the prompt's options changed, or
+        banner_actions / the macos backend was turned off since) or
+        "unavailable" (its server is offline). A stale banner therefore never
+        answers a later prompt. Approve/Deny go out through the same guarded
+        command as the agent card (``_blocked_option_command``).
+        """
+        n = self._config.notifications
+        if not n.banner_actions or "macos" not in n.backends:
+            # Answering was turned off after the banner went out: never act
+            # on it; the shell opens the drill instead (409).
+            return "stale"
+        if (choice is None) == (text is None) or not episode:
+            return "invalid"
+        if choice is not None and choice not in ("approve", "deny"):
+            return "invalid"
+        clean = sanitize_reply(text) if text is not None else ""
+        if text is not None and not clean:
+            return "invalid"
+        with self._lock:
+            state = self._agents.get(key)
+            current = self._block_episode.get(key)
+            prompt = self._preread.get(key)
+            connected = self._connected.get(key.server_id, False)
+            answered = episode in self._answered_episodes
+        if state is None:
+            return "unknown"
+        if state.backend != "herdr":
+            return "invalid"
+        if state.status is not Status.BLOCKED or current != episode or answered:
+            return "stale"
+        terminal_id = state.terminal_id or None
+        if choice is not None:
+            answer = binary_answer(
+                prompt if isinstance(prompt, str) else "",
+                profile_for(self._config, state.agent_type),
+                self._config.safety,
+            )
+            if answer is None or answer.sig != sig:
+                return "stale"
+            option = answer.approve if choice == "approve" else answer.deny
+            cmd = self._blocked_option_command(key, state, option, prompt)
+        else:
+            cmd = Command(
+                "send_text", key.server_id, key.pane_id, text=clean, terminal_id=terminal_id
+            )
+        runner = self._runners.get(key.server_id)
+        if runner is None or not connected:
+            return "unavailable"
+        self._spend_answered_prompt(key, episode)
+        self._notify_throttle.note_interaction(key)
+        if self._orch is not None:
+            self._orch.note_external_answer(key)
+        log.info(
+            "banner answer agent=%s:%s kind=%s",
+            key.server_id,
+            key.pane_id,
+            choice or "reply",
+        )
+        req = self._next_req(cmd)
+        with self._lock:
+            self._banner_reqs[req] = key
+            while len(self._banner_reqs) > 32:
+                self._banner_reqs.pop(next(iter(self._banner_reqs)))
+        runner.send(command_to_msg(cmd, req))
+        return "ok"
+
+    def _note_episode_answered_locked(self, episode: str) -> None:
+        """Remember an answered block episode (bounded). Caller holds self._lock."""
+        self._answered_episodes[episode] = None
+        while len(self._answered_episodes) > _ANSWERED_EPISODES_MAX:
+            self._answered_episodes.pop(next(iter(self._answered_episodes)))
 
     def _drive(self, orch, step) -> list[Command]:
         drilled_before = orch.drill_key()
@@ -360,6 +496,7 @@ class LiveSource(AgentCardMixin, StateSource):
             return
         title = event_title(agent.agent_type, event, self._config.view.language)
         body = event_notification_body(agent, multi_server=multi)
+        meta = self._alert_meta(event, agent)
         log.info(
             "notification transition event=%s agent=%s:%s observed_at_ms=%s",
             event,
@@ -367,9 +504,76 @@ class LiveSource(AgentCardMixin, StateSource):
             agent.key.pane_id,
             time.time_ns() // 1_000_000,
         )
-        self._notify_schedule(
-            lambda: self._notifier.notify(title, body, sound, icon=self._banner_icon(agent))
-        )
+        self._notify_schedule(lambda: self._deliver_alert(event, agent, title, body, sound, meta))
+
+    def _deliver_alert(
+        self, event: str, agent: AgentState, title: str, body: str, sound, meta: dict
+    ) -> None:
+        """Notify thread: enrich a blocked alert with its prompt when asked to
+        ([notifications].banner_actions / banner_prompt), then send it."""
+        n = self._config.notifications
+        if event == "blocked" and (n.banner_actions or n.banner_prompt):
+            prompt = self._await_prompt(agent.key, meta.get("episode"))
+            if prompt is None:
+                log.info(
+                    "notification dropped (agent left the block episode) agent=%s:%s",
+                    agent.key.server_id,
+                    agent.key.pane_id,
+                )
+                return
+            body = self._enrich_blocked(agent, body, prompt, meta)
+        self._notifier.notify(title, body, sound, icon=self._banner_icon(agent), meta=meta)
+
+    def _await_prompt(self, key: AgentKey, episode: str | None) -> str | None:
+        """The pre-read prompt of ``key``'s block ``episode`` ("" if it did not
+        arrive in time), or None when the agent already left that episode — the
+        alert is stale then and must not be posted."""
+        with self._preread_cv:
+            self._preread_cv.wait_for(
+                lambda: self._block_episode.get(key) != episode
+                or isinstance(self._preread.get(key), str),
+                timeout=self._prompt_wait_s,
+            )
+            if episode is None or self._block_episode.get(key) != episode:
+                return None
+            prompt = self._preread.get(key)
+        return prompt if isinstance(prompt, str) else ""
+
+    def _enrich_blocked(self, agent: AgentState, body: str, prompt: str, meta: dict) -> str:
+        """Add answer buttons / a reply field (banner_actions) to ``meta`` and a
+        prompt excerpt (banner_prompt) to ``body``."""
+        n = self._config.notifications
+        lang = self._config.view.language
+        # Answers go out as herdr keystrokes / text; other backends (T3) have
+        # their own decision API and keep plain banners.
+        if n.banner_actions and "macos" in n.backends and agent.backend == "herdr":
+            answer = binary_answer(
+                prompt, profile_for(self._config, agent.agent_type), self._config.safety
+            )
+            if answer is not None:
+                meta["actions"] = [
+                    {"id": "approve", "label": tr(lang, "act.approve")},
+                    {"id": "deny", "label": tr(lang, "act.deny")},
+                ]
+                meta["sig"] = answer.sig
+            else:
+                meta["reply"] = tr(lang, "notify.reply_placeholder")
+        excerpt = prompt_excerpt(prompt) if n.banner_prompt else ""
+        return f"{body}\n{excerpt}" if excerpt else body
+
+    def _alert_meta(self, event: str, agent: AgentState) -> dict:
+        """Feed fields naming the agent (and, for blocked, its episode) so a
+        banner click can open that agent's drill."""
+        meta: dict = {
+            "agent": {"server_id": agent.key.server_id, "pane_id": agent.key.pane_id},
+            "event": event,
+        }
+        if event == "blocked":
+            with self._lock:
+                episode = self._block_episode.get(agent.key)
+            if episode is not None:
+                meta["episode"] = episode
+        return meta
 
     def notify_usage(self, alerts) -> None:
         """Send usage-limit alerts (usage_alerts.UsageAlert, from the DeckApp's
@@ -431,6 +635,7 @@ class LiveSource(AgentCardMixin, StateSource):
                 for key in recycled:
                     self._preread.pop(key, None)
                     self._preread_req.pop(key, None)
+                    self._block_episode.pop(key, None)
                     self._notify_throttle.forget(key)
             if self._drilled_key() in recycled:
                 self._active_read_req = None
@@ -479,6 +684,7 @@ class LiveSource(AgentCardMixin, StateSource):
                 if recycled:
                     self._preread.pop(state.key, None)
                     self._preread_req.pop(state.key, None)
+                    self._block_episode.pop(state.key, None)
                     self._notify_throttle.forget(state.key)
             # Same rule for a single-pane event: only a real unblock clears the
             # drilled prompt (App.handle_event).
@@ -550,6 +756,17 @@ class LiveSource(AgentCardMixin, StateSource):
             return
         # A desktop agent card may be waiting on this reply (never consumes it).
         self._card_on_result(req, data)
+        with self._lock:
+            banner_key = self._banner_reqs.pop(req, None) if req is not None else None
+        if banner_key is not None and isinstance(data, dict) and (
+            data.get("skipped") or data.get("error")
+        ):
+            log.warning(
+                "banner answer refused by the bridge agent=%s:%s reason=%s",
+                banner_key.server_id,
+                banner_key.pane_id,
+                data.get("message") or data.get("error") or "skipped",
+            )
         # Mirrors App.handle_result.
         with self._lock:
             focused = req is not None and self._focus_reqs.pop(req, False)
@@ -640,6 +857,16 @@ class LiveSource(AgentCardMixin, StateSource):
         clear_detection = False
         with self._lock:
             blocked = {k for k, s in self._agents.items() if s.status is Status.BLOCKED}
+            episodes_changed = False
+            for key in [k for k in self._block_episode if k not in blocked]:
+                del self._block_episode[key]
+                episodes_changed = True
+            for key in blocked:
+                if key not in self._block_episode:
+                    self._block_episode[key] = uuid.uuid4().hex[:16]
+                    episodes_changed = True
+            if episodes_changed:
+                self._preread_cv.notify_all()
             for key in set(self._preread) | set(self._preread_req):
                 if key not in blocked:  # left BLOCKED -> prompt + pending read are stale
                     self._preread.pop(key, None)
@@ -694,7 +921,7 @@ class LiveSource(AgentCardMixin, StateSource):
         if pane_id is None or req is None:
             return
         key = AgentKey(server_id, pane_id)
-        with self._lock:
+        with self._preread_cv:
             state = self._agents.get(key)
             if (
                 state is not None
@@ -702,6 +929,7 @@ class LiveSource(AgentCardMixin, StateSource):
                 and req == self._preread_req.get(key)
             ):
                 self._preread[key] = text
+                self._preread_cv.notify_all()
 
     # --- read invalidation (callers hold the deck lock) ---
     def _drilled_key(self) -> AgentKey | None:

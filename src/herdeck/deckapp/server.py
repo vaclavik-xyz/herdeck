@@ -604,6 +604,30 @@ class DeckApp:
             self._refresh_locked()
         return True
 
+    def open_agent(self, server_id: str, pane_id: str) -> bool:
+        """Open one agent's drill (a notification banner click, HTTP thread).
+        False when the source has no drills or the agent is unknown."""
+        open_agent = getattr(self._source, "open_agent", None)
+        if not callable(open_agent):
+            return False
+        with self._lock:
+            opened = open_agent(AgentKey(server_id, pane_id))
+            if opened:
+                self._refresh_locked()
+        return opened
+
+    def answer_agent(self, server_id: str, pane_id: str, episode: str, **answer) -> str:
+        """Answer a blocked agent from a banner (LiveSource.answer_agent result,
+        or "unsupported" for a source without banner answers)."""
+        answer_agent = getattr(self._source, "answer_agent", None)
+        if not callable(answer_agent):
+            return "unsupported"
+        with self._lock:
+            result = answer_agent(AgentKey(server_id, pane_id), episode, **answer)
+            if result == "ok":
+                self._refresh_locked()
+        return result
+
     def _load_pins(self, orch):
         if self._pin_store is not None:
             try:
@@ -741,6 +765,10 @@ class DeckApp:
         fanned out a full frame so physical sinks repaint immediately on swap."""
         slots, orch, clk, icons, icons_dir, rs, tiles, panel_png, sections, labels = prepared
         usage_changed = self._adopt_usage_config(new_source.config)
+        # A swapped-in live source (profile switch, config reload, connect from
+        # the demo) must keep posting through the shell; without this its gate
+        # stayed at the "no shell" default and every alert fell back to osascript.
+        self._wire_notify_gate(new_source)
         with self._lock:
             old = self._source
             hardware_changed = self._d200_hardware_signature(
@@ -841,6 +869,12 @@ class DeckApp:
             claim_log.info(
                 "notification shell claim moved gen=%s -> %s", previous_gen, shell_gen
             )
+
+    def _wire_notify_gate(self, source) -> None:
+        """Hand a notifying source the shell-claim predicates (banner duty)."""
+        setter = getattr(source, "set_notify_gate", None)
+        if callable(setter):
+            setter(self.shell_claims_banners, claim_age=self.shell_claim_age)
 
     def shell_claim_age(self) -> float | None:
         """Seconds since a shell last claimed banner duty; None if none ever did."""
@@ -1246,6 +1280,36 @@ class DeckApp:
                     if not self._require_header_token():
                         return
                     self._send(204) if app.triage() else self._send(404)
+                elif path == "/agents/drill":
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    ref = _agent_ref(body)
+                    if ref is None:
+                        self._send(400)
+                        return
+                    self._send(204) if app.open_agent(*ref) else self._send(404)
+                elif path == "/agents/answer":
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    ref = _agent_ref(body)
+                    episode = body.get("episode")
+                    answer = {k: body[k] for k in ("choice", "sig", "text") if k in body}
+                    if (
+                        ref is None
+                        or not isinstance(episode, str)
+                        or not episode
+                        or not all(isinstance(v, str) for v in answer.values())
+                    ):
+                        self._send(400)
+                        return
+                    result = app.answer_agent(*ref, episode, **answer)
+                    self._send(_ANSWER_STATUS.get(result, 500))
                 elif path == "/notifications/ack":
                     if not self._require_header_token():
                         return
@@ -1660,12 +1724,31 @@ def create_live_app(
     )
     if local_runners:
         app._set_local_bridges(local_runners)
-    if hasattr(source, "set_notify_gate"):
-        # The shell claims banner duty only while it polls /state with a
-        # granted notification permission; otherwise the runtime falls back
-        # to plain osascript alerts.
-        source.set_notify_gate(app.shell_claims_banners, claim_age=app.shell_claim_age)
+    # The shell claims banner duty only while it polls /state with a
+    # granted notification permission; otherwise the runtime falls back
+    # to plain osascript alerts.
+    app._wire_notify_gate(source)
     return app
+
+
+# POST /agents/answer outcome -> HTTP status. 409 tells the shell the banner
+# is stale (it then opens the agent's drill instead).
+_ANSWER_STATUS = {
+    "ok": 204,
+    "invalid": 400,
+    "unknown": 404,
+    "unsupported": 404,
+    "stale": 409,
+    "unavailable": 503,
+}
+
+
+def _agent_ref(body: dict) -> tuple[str, str] | None:
+    """``(server_id, pane_id)`` from a JSON body, or None when malformed."""
+    server_id, pane_id = body.get("server_id"), body.get("pane_id")
+    if isinstance(server_id, str) and server_id and isinstance(pane_id, str) and pane_id:
+        return server_id, pane_id
+    return None
 
 
 def _default_config_paths():

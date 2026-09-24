@@ -35,6 +35,7 @@ from .config import (
     _parse_profile,
     _parse_telegram_config,
     normalize_notify_on,
+    notification_flag,
     validate_event_sounds,
 )
 from .i18n import LANGUAGES
@@ -311,6 +312,8 @@ def _notifications_config(raw: dict | None) -> Notifications:
         backends=list(raw.get("backends", ["macos"])),
         sounds={**DEFAULT_EVENT_SOUNDS, **validate_event_sounds(raw.get("sounds"))},
         telegram=telegram,
+        banner_actions=notification_flag(raw, "banner_actions", False),
+        banner_prompt=notification_flag(raw, "banner_prompt", False),
     )
 
 

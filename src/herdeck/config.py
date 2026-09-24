@@ -65,6 +65,12 @@ class Notifications:
     # over them, so one key can be overridden without retyping the rest.
     sounds: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_EVENT_SOUNDS))
     telegram: TelegramConfig | None = None
+    # Opt-in: blocked banners get Approve/Deny buttons (a plain permission
+    # prompt) or an inline reply field (anything else), answered through the
+    # runtime (desktop app on macOS only).
+    banner_actions: bool = False
+    # Opt-in: blocked alerts append a short, sanitized excerpt of the prompt.
+    banner_prompt: bool = False
 
 
 DEFAULT_STATUS_COLORS: dict[str, str] = {
@@ -339,6 +345,14 @@ def validate_event_sounds(raw) -> dict[str, str]:
     return dict(raw)
 
 
+def notification_flag(raw: dict, name: str, default: bool) -> bool:
+    """A boolean [notifications] option (shared by both config loaders)."""
+    value = raw.get(name, default)
+    if type(value) is not bool:
+        raise ConfigError(f"notifications.{name} must be true or false")
+    return value
+
+
 def normalize_notify_on(raw) -> list[str]:
     """`[notifications].on` with surrounding whitespace stripped from each event,
     so a hand-written " done" still fires (the app matches with `in`)."""
@@ -363,6 +377,8 @@ def parse_notifications(n: dict) -> Notifications:
         backends=list(n.get("backends", ["macos"])),
         sounds={**DEFAULT_EVENT_SOUNDS, **validate_event_sounds(n.get("sounds"))},
         telegram=telegram,
+        banner_actions=notification_flag(n, "banner_actions", False),
+        banner_prompt=notification_flag(n, "banner_prompt", False),
     )
 
 
