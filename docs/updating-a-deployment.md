@@ -289,7 +289,10 @@ Maintenance section is built on them; the token is the one in
   service is installed and runs from the app, log paths, D200 state (`state`:
   `connected`, `not_on_usb`, `locked`, `disconnected`, `unsupervised`), whether
   the D200 is on USB, its last-seen hub location and whether a power-cycle is
-  possible, and per-bridge health.
+  possible, and per-bridge health. Each server also carries `self_update`
+  (the bridge understands `update`) and `managed` (`true`/`false` from one
+  health probe per connection; `null` until answered, on timeout, or for a
+  bridge that predates self-update).
 - `POST /maintenance/deck/restart` (`X-Herdeck-Token`) — closes and reopens the
   D200 and repaints a full frame. It never releases `d200.lock`; when another
   runtime owns the device it answers `locked_by` with that pid instead.
