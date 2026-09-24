@@ -1444,26 +1444,9 @@ def _resolve_tick_interval(config: Config | None) -> float:
 
 def validate_web_bind(host: str, *, getenv=os.environ.get) -> str:
     """Allow remote web control only on an explicit Tailscale interface."""
-    if str(getenv("HERDECK_ALLOW_UNSAFE_BIND", "")).lower() in {"1", "true", "yes"}:
-        return host
-    if host == "localhost" or host.endswith(".ts.net"):
-        return host
-    import ipaddress
+    from .bind import validate_bind
 
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError as exc:
-        raise ValueError(
-            "HERDECK_WEB_BIND must be loopback or a Tailscale address; "
-            "set HERDECK_ALLOW_UNSAFE_BIND=1 to override"
-        ) from exc
-    tailscale = ipaddress.ip_network("100.64.0.0/10")
-    if address.is_loopback or address in tailscale:
-        return host
-    raise ValueError(
-        "HERDECK_WEB_BIND must be loopback or a Tailscale address; "
-        "set HERDECK_ALLOW_UNSAFE_BIND=1 to override"
-    )
+    return validate_bind(host, env_name="HERDECK_WEB_BIND", getenv=getenv)
 
 
 def make_deck(

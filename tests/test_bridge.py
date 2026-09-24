@@ -729,7 +729,7 @@ def test_bridge_main_rejects_empty_token(monkeypatch):
     monkeypatch.setattr(bridge, "serve", should_not_start)
 
     with pytest.raises(SystemExit, match="HERDECK_TOKEN must not be empty"):
-        bridge.main()
+        bridge.main([])  # [] = no CLI flags (main() alone would parse pytest's argv)
 
 
 def test_bridge_token_file_must_be_private_and_never_echoes_value(tmp_path, monkeypatch):
