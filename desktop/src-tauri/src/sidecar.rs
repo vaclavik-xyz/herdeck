@@ -190,6 +190,35 @@ fn kill_and_reap(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// Env var that arms the sidecar's parent watch (`herdeck.deckapp.parent_watch`):
+/// exit cleanly on stdin EOF / re-parenting. Set only by this spawner — a
+/// runtime started any other way must not exit when its stdin is `/dev/null`.
+pub const PARENT_WATCH_ENV: &str = "HERDECK_PARENT_WATCH";
+
+/// How long a clean stop waits for the sidecar to shut its D200 + runtime
+/// files down after its stdin closes, before falling back to SIGKILL.
+/// The runtime's own shutdown joins its D200 reconnect thread for up to 7 s,
+/// but a normal close takes well under a second.
+pub const SIDECAR_STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// Stop a sidecar the way a dying shell would: close its stdin (the parent
+/// watch then runs the same cleanup as SIGTERM — closes the D200, removes its
+/// files), wait up to `grace`, and only then SIGKILL + reap.
+pub fn stop_child(child: &mut Child, grace: Duration) {
+    drop(child.stdin.take());
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25))
+            }
+            _ => break,
+        }
+    }
+    kill_and_reap(child);
+}
+
 /// Double the backoff up to a ceiling (matches the TS supervisor's policy).
 pub fn next_backoff(current: Duration, max: Duration) -> Duration {
     let doubled = current.saturating_mul(2);
@@ -200,13 +229,23 @@ pub fn next_backoff(current: Duration, max: Duration) -> Duration {
     }
 }
 
-/// Spawn the sidecar with piped stdout (null stdin; stderr inherited so Python
-/// tracebacks surface in the dev console).
-fn spawn_piped(spec: &CommandSpec) -> Result<Child, String> {
+/// The spawn recipe as a `Command`: piped stdout (discovery), stderr inherited
+/// (Python tracebacks reach the app log), and a piped stdin the shell never
+/// writes to but keeps open inside the `Child` for its whole life. The kernel
+/// closes that pipe when the shell dies for ANY reason — crash, SIGKILL, Force
+/// Quit — and the parent-watched sidecar exits on the EOF instead of lingering
+/// as an orphan that keeps holding the D200.
+fn spawn_command(spec: &CommandSpec) -> Command {
     let mut cmd = spec.to_command();
-    cmd.stdin(Stdio::null());
+    cmd.env(PARENT_WATCH_ENV, "1");
+    cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
-    cmd.spawn()
+    cmd
+}
+
+fn spawn_piped(spec: &CommandSpec) -> Result<Child, String> {
+    spawn_command(spec)
+        .spawn()
         .map_err(|e| format!("failed to spawn sidecar `{}`: {e}", spec.program))
 }
 
@@ -357,9 +396,10 @@ pub fn supervise<F>(
         thread::sleep(backoff);
         backoff = next_backoff(backoff, cfg.max_backoff);
     }
-    // Make sure no child outlives us.
-    if let Some(mut child) = shared_child.lock().unwrap().take() {
-        kill_and_reap(&mut child);
+    // Make sure no child outlives us (clean stop first, SIGKILL as a backstop).
+    let taken = shared_child.lock().unwrap().take(); // never hold the slot through the grace
+    if let Some(mut child) = taken {
+        stop_child(&mut child, SIDECAR_STOP_GRACE);
     }
 }
 
@@ -596,6 +636,73 @@ mod tests {
         let path = dir.join("runtime.json");
         std::fs::write(&path, "{not json").unwrap();
         assert!(read_runtime_discovery(&path).is_none());
+    }
+
+    #[test]
+    fn spawned_sidecar_arms_its_parent_watch() {
+        let spec = CommandSpec {
+            program: "/bin/true".to_string(),
+            args: vec![],
+            cwd: None,
+            envs: vec![],
+        };
+        let cmd = spawn_command(&spec);
+        let armed = cmd.get_envs().any(|(k, v)| {
+            k == PARENT_WATCH_ENV && v.map(|v| v == "1").unwrap_or(false)
+        });
+        assert!(armed, "the spawner must opt the sidecar into the parent watch");
+    }
+
+    #[test]
+    fn sidecar_lives_while_the_stdin_pipe_is_held_and_exits_cleanly_on_close() {
+        // A stand-in sidecar: prints discovery, then blocks on stdin like the
+        // parent watch does, and exits 0 on EOF (the clean shutdown path).
+        let spec = CommandSpec {
+            program: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                r#"echo '{"url":"http://127.0.0.1:1","host":"127.0.0.1","port":1,"token":"t","source":"mock"}'; test "$HERDECK_PARENT_WATCH" = 1 || exit 3; cat >/dev/null; exit 0"#.to_string(),
+            ],
+            cwd: None,
+            envs: vec![],
+        };
+        let (_d, mut child) =
+            spawn_and_read_discovery(&spec, Duration::from_secs(5)).expect("discovery");
+        assert!(child.stdin.is_some(), "the shell must keep the stdin pipe");
+        thread::sleep(Duration::from_millis(150));
+        assert!(child.try_wait().unwrap().is_none(), "an open pipe keeps it alive");
+        // Dropping the stdin handle is exactly what a crashing shell does.
+        drop(child.stdin.take());
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(std::time::Instant::now() < deadline, "sidecar outlived its pipe");
+            thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(status.code(), Some(0), "exited cleanly, not killed");
+    }
+
+    #[test]
+    fn stop_child_prefers_the_clean_exit_and_kills_a_stuck_one() {
+        let mut clean = Command::new("/bin/sh")
+            .args(["-c", "cat >/dev/null; exit 0"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        stop_child(&mut clean, Duration::from_secs(5));
+        assert_eq!(clean.try_wait().unwrap().and_then(|s| s.code()), Some(0));
+
+        let mut stuck = Command::new("/bin/sh")
+            .args(["-c", "exec sleep 30"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        stop_child(&mut stuck, Duration::from_millis(100));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(stuck.try_wait().unwrap().is_some(), "SIGKILL backstop reaped it");
     }
 
     #[test]

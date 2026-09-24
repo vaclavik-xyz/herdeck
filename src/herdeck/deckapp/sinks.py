@@ -183,11 +183,18 @@ class ReconnectingD200Sink:
         on_press: Callable[[int], None],
         slots: int,
         retry_interval: float = 2.0,
+        device_lock=None,
+        lock_retry_interval: float = 5.0,
     ):
         self._driver_factory = driver_factory
         self._on_press = on_press
         self._slots = slots
         self._retry_interval = max(0.01, retry_interval)
+        # Optional DeviceLock (deckapp.device_lock): only its holder may open
+        # the D200. None = no arbitration (tests, single-runtime callers).
+        self._device_lock = device_lock
+        self._lock_retry_interval = max(0.01, lock_retry_interval)
+        self._lock_warned = False
         self._lock = threading.Lock()
         self._latest_frame: RenderFrame | None = None
         self._active: D200Sink | None = None
@@ -223,8 +230,34 @@ class ReconnectingD200Sink:
         self._reconfigure.set()
         self._wake.set()
 
+    def _owns_device(self) -> bool:
+        """Hold the D200 lock before touching the device. A runtime that loses
+        keeps serving HTTP and is told once; it takes over when the owner exits."""
+        lock = self._device_lock
+        if lock is None:
+            return True
+        if lock.acquire():
+            if self._lock_warned:
+                log.warning("D200 lock %s acquired; this runtime now drives the D200", lock.path)
+                self._lock_warned = False
+            return True
+        if not self._lock_warned:
+            owner = lock.owner_pid()
+            log.warning(
+                "D200 is owned by another herdeck runtime (pid %s, lock %s); "
+                "not opening it, retrying every %.0fs",
+                owner if owner is not None else "unknown",
+                lock.path,
+                self._lock_retry_interval,
+            )
+            self._lock_warned = True
+        return False
+
     def _run(self) -> None:
         while not self._stop.is_set():
+            if not self._owns_device():
+                self._stop.wait(self._lock_retry_interval)
+                continue
             # If configuration changed while no device was attached, the next
             # factory call already reads the newest app.config.
             self._reconfigure.clear()
@@ -298,3 +331,7 @@ class ReconnectingD200Sink:
             active.close()
         if self._thread is not threading.current_thread():
             self._thread.join(timeout=7.0)
+        if self._device_lock is not None:
+            # After the device is closed, so the next owner never opens a
+            # D200 this runtime is still writing to.
+            self._device_lock.release()
