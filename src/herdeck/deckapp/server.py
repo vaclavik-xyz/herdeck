@@ -596,6 +596,30 @@ class DeckApp:
             self._refresh_locked()
         return True
 
+    def open_agent(self, server_id: str, pane_id: str) -> bool:
+        """Open one agent's drill (a notification banner click, HTTP thread).
+        False when the source has no drills or the agent is unknown."""
+        open_agent = getattr(self._source, "open_agent", None)
+        if not callable(open_agent):
+            return False
+        with self._lock:
+            opened = open_agent(AgentKey(server_id, pane_id))
+            if opened:
+                self._refresh_locked()
+        return opened
+
+    def answer_agent(self, server_id: str, pane_id: str, episode: str, **answer) -> str:
+        """Answer a blocked agent from a banner (LiveSource.answer_agent result,
+        or "unsupported" for a source without banner answers)."""
+        answer_agent = getattr(self._source, "answer_agent", None)
+        if not callable(answer_agent):
+            return "unsupported"
+        with self._lock:
+            result = answer_agent(AgentKey(server_id, pane_id), episode, **answer)
+            if result == "ok":
+                self._refresh_locked()
+        return result
+
     def _load_pins(self, orch):
         if self._pin_store is not None:
             try:
@@ -1237,6 +1261,36 @@ class DeckApp:
                     if not self._require_header_token():
                         return
                     self._send(204) if app.triage() else self._send(404)
+                elif path == "/agents/drill":
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    ref = _agent_ref(body)
+                    if ref is None:
+                        self._send(400)
+                        return
+                    self._send(204) if app.open_agent(*ref) else self._send(404)
+                elif path == "/agents/answer":
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    ref = _agent_ref(body)
+                    episode = body.get("episode")
+                    answer = {k: body[k] for k in ("choice", "sig", "text") if k in body}
+                    if (
+                        ref is None
+                        or not isinstance(episode, str)
+                        or not episode
+                        or not all(isinstance(v, str) for v in answer.values())
+                    ):
+                        self._send(400)
+                        return
+                    result = app.answer_agent(*ref, episode, **answer)
+                    self._send(_ANSWER_STATUS.get(result, 500))
                 elif path == "/notifications/ack":
                     if not self._require_header_token():
                         return
@@ -1646,6 +1700,26 @@ def create_live_app(
     # to plain osascript alerts.
     app._wire_notify_gate(source)
     return app
+
+
+# POST /agents/answer outcome -> HTTP status. 409 tells the shell the banner
+# is stale (it then opens the agent's drill instead).
+_ANSWER_STATUS = {
+    "ok": 204,
+    "invalid": 400,
+    "unknown": 404,
+    "unsupported": 404,
+    "stale": 409,
+    "unavailable": 503,
+}
+
+
+def _agent_ref(body: dict) -> tuple[str, str] | None:
+    """``(server_id, pane_id)`` from a JSON body, or None when malformed."""
+    server_id, pane_id = body.get("server_id"), body.get("pane_id")
+    if isinstance(server_id, str) and server_id and isinstance(pane_id, str) and pane_id:
+        return server_id, pane_id
+    return None
 
 
 def _default_config_paths():

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
 import uuid
@@ -36,7 +37,7 @@ from ..app import (
     event_notification_body,
     newly_entered,
 )
-from ..commands import Command, command_to_msg
+from ..commands import Command, command_to_msg, profile_for
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
 from ..model import AgentKey, AgentState, Status
@@ -49,13 +50,30 @@ from ..notify import (
     event_title,
 )
 from ..notify_icons import NotificationIconCache
-from ..orchestrator import Orchestrator
+from ..orchestrator import Orchestrator, binary_answer
 from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
 from .source import StateSource
 
 log = logging.getLogger(__name__)
+
+# A banner reply is typed into the agent's pane: bounded, and stripped of
+# control / bidi-override characters (a terminal escape must never ride in on
+# notification text). Newlines and tabs stay; the bridge normalizes further.
+REPLY_MAX_CHARS = 2000
+_REPLY_STRIP_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
+# Answered block episodes remembered so a second click (or a reminder banner of
+# the same episode) never answers twice.
+_ANSWERED_EPISODES_MAX = 256
+
+
+def sanitize_reply(text: object) -> str:
+    """The banner reply text safe to send to a pane ("" = nothing to send)."""
+    if not isinstance(text, str):
+        return ""
+    clean = text.replace("\r\n", "\n").replace("\r", "\n")
+    return _REPLY_STRIP_RE.sub("", clean).strip()[:REPLY_MAX_CHARS]
 
 
 def _thread_notify_schedule(fn) -> None:
@@ -132,6 +150,7 @@ class LiveSource(StateSource):
         # enters BLOCKED (or its terminal is recycled). Banner answers carry it,
         # so a stale banner can never answer a later prompt.
         self._block_episode: dict[AgentKey, str] = {}
+        self._answered_episodes: dict[str, None] = {}
         self._agents: dict[AgentKey, AgentState] = {}
         self._connected: dict[str, bool] = {sid: False for sid in self._servers}
         self._req = 0
@@ -227,6 +246,90 @@ class LiveSource(StateSource):
         if orch is None:
             return []
         return self._drive(orch, orch.triage)
+
+    def open_agent(self, key: AgentKey) -> bool:
+        """Open ``key``'s drill (a banner click). False when it is unknown."""
+        orch = self._orch
+        if orch is None or orch.get_agent(key) is None:
+            return False
+        self._drive(orch, lambda: orch.open_agent(key) or [])
+        return True
+
+    def answer_agent(
+        self,
+        key: AgentKey,
+        episode: str,
+        *,
+        choice: str | None = None,
+        sig: str | None = None,
+        text: str | None = None,
+    ) -> str:
+        """Answer a blocked agent from a banner (caller holds the deck lock).
+
+        Exactly one of ``choice`` ("approve"/"deny", with the option signature
+        ``sig`` the banner was built from) or ``text`` (an inline reply).
+        Returns "ok", "invalid" (malformed request), "unknown" (no such agent),
+        "stale" (no longer blocked in ``episode``, already answered, or the
+        prompt's options changed) or "unavailable" (its server is offline). A
+        stale banner therefore never answers a later prompt.
+        """
+        if (choice is None) == (text is None) or not episode:
+            return "invalid"
+        if choice is not None and choice not in ("approve", "deny"):
+            return "invalid"
+        clean = sanitize_reply(text) if text is not None else ""
+        if text is not None and not clean:
+            return "invalid"
+        with self._lock:
+            state = self._agents.get(key)
+            current = self._block_episode.get(key)
+            prompt = self._preread.get(key)
+            connected = self._connected.get(key.server_id, False)
+            answered = episode in self._answered_episodes
+        if state is None:
+            return "unknown"
+        if state.status is not Status.BLOCKED or current != episode or answered:
+            return "stale"
+        terminal_id = state.terminal_id or None
+        if choice is not None:
+            answer = binary_answer(
+                prompt if isinstance(prompt, str) else "",
+                profile_for(self._config, state.agent_type),
+                self._config.safety,
+            )
+            if answer is None or answer.sig != sig:
+                return "stale"
+            option = answer.approve if choice == "approve" else answer.deny
+            # Same keys as the drill's option tile: the digit selects, enter submits.
+            cmd = Command(
+                "act_if_blocked",
+                key.server_id,
+                key.pane_id,
+                keys=[option, "enter"],
+                terminal_id=terminal_id,
+            )
+        else:
+            cmd = Command(
+                "send_text", key.server_id, key.pane_id, text=clean, terminal_id=terminal_id
+            )
+        runner = self._runners.get(key.server_id)
+        if runner is None or not connected:
+            return "unavailable"
+        with self._lock:
+            self._answered_episodes[episode] = None
+            while len(self._answered_episodes) > _ANSWERED_EPISODES_MAX:
+                self._answered_episodes.pop(next(iter(self._answered_episodes)))
+        self._notify_throttle.note_interaction(key)
+        if self._orch is not None:
+            self._orch.note_external_answer(key)
+        log.info(
+            "banner answer agent=%s:%s kind=%s",
+            key.server_id,
+            key.pane_id,
+            choice or "reply",
+        )
+        runner.send(command_to_msg(cmd, self._next_req(cmd)))
+        return "ok"
 
     def _drive(self, orch, step) -> list[Command]:
         drilled_before = orch.drill_key()

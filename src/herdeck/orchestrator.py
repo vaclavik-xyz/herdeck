@@ -65,6 +65,63 @@ def _looks_like_deny(label: str) -> bool:
     return normalized == "no" or normalized.startswith(("no,", "no "))
 
 
+def option_action_id(option_key: str, option_label: str, profile) -> str | None:
+    """The drill action a numbered prompt option stands for (approve /
+    approve_always / deny), or None for an option that is none of those
+    (e.g. an answer to a multiple-choice question)."""
+    if _looks_like_approve_always(option_label):
+        return "approve_always"
+    if profile.approve and option_key == profile.approve[0]:
+        return "approve"
+    if profile.approve_always and option_key == profile.approve_always[0]:
+        return "approve_always"
+    if profile.deny and option_key == profile.deny[0]:
+        return "deny"
+    if _looks_like_deny(option_label):
+        return "deny"
+    return None
+
+
+@dataclass(frozen=True)
+class BinaryAnswer:
+    """A blocked prompt that reduces to approve / deny: the option key to send
+    for each, and ``sig`` — a fingerprint of the whole option list, so an answer
+    prepared for one prompt is never applied to a different one."""
+
+    approve: str
+    deny: str
+    sig: str
+
+
+def binary_answer(detection: str, profile, safety) -> BinaryAnswer | None:
+    """Approve/deny keys for a prompt that is a plain permission question, else None.
+
+    Reuses the drill's option detection: every numbered option must map to an
+    approve/approve_always/deny action (one unmapped option = a real question,
+    not a yes/no), and both an approve and a deny option must exist. A prompt
+    whose actions need an on-deck confirmation ([safety].require_confirm_for)
+    is not binary here: a banner button cannot arm a confirmation. The y/n
+    fallback the drill offers for unnumbered prompts is deliberately excluded —
+    a banner never answers a prompt it could not parse.
+    """
+    options = layout.parse_options(detection or "")
+    if len(options) < 2:
+        return None
+    ids = [option_action_id(o.key, o.label, profile) for o in options]
+    if any(action is None for action in ids):
+        return None
+    if {"approve", "deny"} & set(safety.require_confirm_for):
+        return None
+    approve = next((o.key for o, a in zip(options, ids, strict=True) if a == "approve"), None)
+    deny = next((o.key for o, a in zip(options, ids, strict=True) if a == "deny"), None)
+    if approve is None or deny is None:
+        return None
+    digest = hashlib.sha1(
+        "\n".join(f"{o.key}\t{o.label}" for o in options).encode()
+    ).hexdigest()[:16]
+    return BinaryAnswer(approve=approve, deny=deny, sig=digest)
+
+
 @dataclass(frozen=True)
 class IdleGroup:
     """Overview placeholder for the idle agents folded by [view].collapse_idle.
@@ -1108,17 +1165,7 @@ class Orchestrator:
         return profile_for(self.config, self._agents[key].agent_type)
 
     def _option_action_id(self, option_key: str, option_label: str, profile) -> str | None:
-        if _looks_like_approve_always(option_label):
-            return "approve_always"
-        if profile.approve and option_key == profile.approve[0]:
-            return "approve"
-        if profile.approve_always and option_key == profile.approve_always[0]:
-            return "approve_always"
-        if profile.deny and option_key == profile.deny[0]:
-            return "deny"
-        if _looks_like_deny(option_label):
-            return "deny"
-        return None
+        return option_action_id(option_key, option_label, profile)
 
     def on_press(self, index: int) -> list[Command]:
         self._last_press_at = self._clock()
@@ -1264,6 +1311,33 @@ class Orchestrator:
         self._triage = True
         self._drill = None  # position lookup below must read the overview order
         return self._open_drill(self._agents[target], self._overview_position(target))
+
+    def open_agent(self, key: AgentKey) -> list[Command] | None:
+        """Open ``key``'s drill from outside the deck (a notification banner
+        click). Leaves any menu/triage first, like the triage entry point.
+        None when the agent is unknown (it vanished since the banner)."""
+        agent = self._agents.get(key)
+        if agent is None:
+            return None
+        self._last_press_at = self._clock()
+        self._launcher = False
+        self._profile_menu = False
+        self._profile_menu_origin = "overview"
+        self._usage_detail_until = 0.0
+        self._triage = False
+        self._drill = None  # position lookup below must read the overview order
+        return self._open_drill(agent, self._overview_position(key))
+
+    def note_external_answer(self, key: AgentKey) -> None:
+        """The user answered ``key`` outside the deck (a banner button/reply):
+        acknowledge it like a drill action and close its now-stale drill."""
+        self._note_sent(key)
+        self._note_answered(key)
+        if self._drill == key:
+            self._drill = None
+            self._triage = False
+            self._pending_confirm = None
+            self._resettle()
 
     def _after_drill_action(self, acted: AgentKey) -> list[Command]:
         """Leave a drill after an action: in triage, straight into the next
