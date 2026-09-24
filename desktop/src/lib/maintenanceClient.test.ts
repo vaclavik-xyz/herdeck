@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   fetchMaintenance, parseDeckOutcome, parseMaintenance, powerCycleDeck, restartDeck, runBridgeUpdate,
   compareVersions, runtimeOrigin, runtimeService, serverSegment, versionRows, type MaintenanceStatus,
+  hookState, parseHooksSummary, runHooksAction,
 } from "./maintenanceClient";
 import {
   MAINTENANCE_MESSAGES, bridgeUpdateText, d200StateText, deckOutcomeText, powerCycleReasonText,
+  hookStateText, hooksOutcomeText,
 } from "./maintenanceMessages";
 import { rawStatus } from "./maintenanceFixture";
 
@@ -21,7 +23,7 @@ describe("parseMaintenance", () => {
     expect(s.d200.state).toBe("connected");
     expect(s.d200.powerCycle).toMatchObject({ available: true, hub: "20-1", port: 2 });
     expect(s.servers).toEqual([
-      { id: "m4", managed: true, selfUpdate: true, connected: true, bridgeVersion: "0.8.9", protocolSupported: null, lastError: null, everConnected: true },
+      { id: "m4", managed: true, selfUpdate: true, connected: true, bridgeVersion: "0.8.9", protocolSupported: null, lastError: null, everConnected: true, hooks: null },
     ]);
     expect(s.app?.bundle).toBe("/Applications/herdeck.app");
   });
@@ -214,5 +216,68 @@ describe("outcome texts", () => {
     expect(d200StateText({ ...d, state: "not_on_usb" }, m)).toContain("unplug and replug");
     expect(d200StateText({ ...d, state: "locked", lockOwner: 99 }, m)).toContain("pid 99");
     expect(d200StateText({ ...d, lastFrameAt: 1000 }, m, 6000)).toContain("5 s");
+  });
+});
+
+describe("subagent hooks", () => {
+  const raw = (claude: Record<string, unknown>, codex: Record<string, unknown>) => ({
+    claude: { installed: false, file: "/h/.claude/settings.json", error: null, ...claude },
+    codex: { installed: false, file: "/h/.codex/hooks.json", error: null, needs_trust: false, features_hooks_enabled: false, ...codex },
+  });
+
+  it("parses the summary and derives each agent's state", () => {
+    expect(parseHooksSummary(null)).toBeNull();
+    expect(parseHooksSummary([])).toBeNull();
+    const cases: [Record<string, unknown>, Record<string, unknown>, string, string][] = [
+      [{}, {}, "not_installed", "not_installed"],
+      [{ installed: true }, { installed: true, needs_trust: true }, "installed", "enable_features"],
+      [{}, { installed: true, needs_trust: true, features_hooks_enabled: true }, "not_installed", "needs_trust"],
+      [{}, { installed: true, features_hooks_enabled: true }, "not_installed", "installed"],
+      [{ error: "not valid JSON" }, { installed: true, features_hooks_enabled: null }, "error", "enable_features"],
+    ];
+    for (const [claude, codex, cs, xs] of cases) {
+      const h = parseHooksSummary(raw(claude, codex));
+      expect([hookState("claude", h), hookState("codex", h)]).toEqual([cs, xs]);
+    }
+    expect(hookState("claude", null)).toBe("unknown");
+    expect(hookState("codex", parseHooksSummary({ claude: raw({}, {}).claude }))).toBe("unknown");
+    const s = status({ servers: { m4: { connected: true, hooks: raw({ installed: true }, {}) } } });
+    expect(s.servers[0].hooks?.claude).toEqual({
+      installed: true, file: "/h/.claude/settings.json", error: null, needsTrust: false, featuresHooksEnabled: null,
+    });
+  });
+
+  it("names the Codex config next to its hooks file", () => {
+    const m = MAINTENANCE_MESSAGES.en;
+    const h = parseHooksSummary(raw({}, { installed: true }));
+    expect(hookStateText("codex", h, m)).toContain("[features] hooks = true in /h/.codex/config.toml");
+    expect(hookStateText("claude", h, m)).toBe("not installed");
+    expect(hookStateText("claude", parseHooksSummary(raw({ error: "broken" }, {})), MAINTENANCE_MESSAGES.cs)).toContain("broken");
+  });
+
+  it("posts the action for one agent and maps the outcome", async () => {
+    const calls: unknown[] = [];
+    const invoke = async (cmd: string, args?: Record<string, unknown>) => {
+      calls.push({ cmd, args });
+      return { status: 200, body: { ok: true, code: "ok", message: "", agents: raw({ installed: true }, {}) } };
+    };
+    const o = await runHooksAction(invoke, "local:b", "install", ["claude"]);
+    expect(calls).toEqual([{
+      cmd: "maintenance_call",
+      args: { method: "POST", path: "/maintenance/servers/local%3Ab/hooks", body: { action: "install", agents: ["claude"] } },
+    }]);
+    expect(o.ok).toBe(true);
+    expect(o.agents?.claude?.installed).toBe(true);
+    expect(hooksOutcomeText(o, MAINTENANCE_MESSAGES.en).text).toContain("after a restart");
+    const http = await runHooksAction(async () => ({ status: 404, body: null }), "x", "uninstall", ["codex"]);
+    expect(http).toMatchObject({ ok: false, code: "http" });
+    const down = await runHooksAction(async () => { throw new Error("gone"); }, "x", "install", ["codex"]);
+    expect(down).toMatchObject({ ok: false, code: "unreachable" });
+    const m = MAINTENANCE_MESSAGES.cs;
+    for (const code of ["failed", "readonly", "unsupported", "disconnected", "timeout", "http", "unreachable", "weird"]) {
+      const text = hooksOutcomeText({ ok: false, code, message: "msg", agents: null }, m);
+      expect(text.ok).toBe(false);
+      expect(text.text.length).toBeGreaterThan(5);
+    }
   });
 });

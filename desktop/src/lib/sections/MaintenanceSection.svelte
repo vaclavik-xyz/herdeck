@@ -1,7 +1,8 @@
 <script lang="ts">
   // Maintenance: what an agent used to do from a terminal to keep herdeck
   // running — versions, where the runtime comes from (and making it a service
-  // of this app), the D200 (restart / USB power-cycle) and bridge updates.
+  // of this app), the D200 (restart / USB power-cycle), bridge updates and
+  // the subagent hooks on each bridge's machine (deckapp/hooks_relay.py).
   // Not a config section: it reads GET /maintenance through the Rust
   // `maintenance_call` proxy and acts through it, `runtime_service` and
   // `open_log`. All texts: maintenanceMessages.ts (en + cs).
@@ -11,12 +12,13 @@
   import { visibilityGatedLoop } from "../pollGate";
   import {
     fetchMaintenance, restartDeck, powerCycleDeck, runBridgeUpdate, runtimeService, openLog,
-    runtimeOrigin, unitOwner, versionRows, bridgeOffer, managedBridgeCommand,
-    type BridgeUpdateView, type MaintenanceStatus, type ServiceAction,
+    runtimeOrigin, unitOwner, versionRows, bridgeOffer, managedBridgeCommand, runHooksAction, hookState,
+    HOOK_AGENTS,
+    type BridgeUpdateView, type HookAgent, type HooksAction, type MaintenanceStatus, type ServiceAction,
   } from "../maintenanceClient";
   import {
     MAINTENANCE_MESSAGES, bridgeUpdateText, d200StateText, deckOutcomeText, durationText,
-    originText, powerCycleReasonText,
+    hookStateText, hooksOutcomeText, originText, powerCycleReasonText,
   } from "../maintenanceMessages";
 
   let { invoke = null, pollMs = 5000, updateWaitMs = undefined }: {
@@ -117,6 +119,25 @@
     }, { isCancelled: () => !alive, waitMs: updateWaitMs });
     if (!alive) return;
     updates[id] = { running: false, view };
+    loop?.kick();
+  }
+
+  // --- subagent hooks (per bridge, per agent) ---
+  let hooksConfirm = $state<{ server: string; agent: HookAgent; action: HooksAction } | null>(null);
+  let hooksBusy = $state<Record<string, boolean>>({});
+  let hooksNote = $state<Record<string, { ok: boolean; text: string }>>({});
+  const agentName = (agent: HookAgent): string => (agent === "claude" ? lm.hooks_agent_claude : lm.hooks_agent_codex);
+
+  async function hooks(server: string, agent: HookAgent, action: HooksAction): Promise<void> {
+    const call = invoke;
+    hooksConfirm = null;
+    if (!call || hooksBusy[server]) return;
+    hooksBusy[server] = true;
+    delete hooksNote[server];
+    const outcome = await runHooksAction(call, server, action, [agent]);
+    if (!alive) return;
+    hooksBusy[server] = false;
+    hooksNote[server] = hooksOutcomeText(outcome, lm);
     loop?.kick();
   }
 
@@ -278,6 +299,47 @@
             {#if text.command}{@render commandBox(text.command)}{/if}
             {#if upd?.view?.output}<pre class="output">{upd.view.output}</pre>{/if}
           {/if}
+          {#if server.connected === true}
+            <div class="hooks" data-hooks={server.id}>
+              <span class="hooks-title">{lm.hooks_heading}</span>
+              {#if server.hooks}
+                <p class="hint">{lm.hooks_hint}</p>
+                {#each HOOK_AGENTS as agent (agent)}
+                  {@const state = hookState(agent, server.hooks)}
+                  {@const on = server.hooks[agent]?.installed === true}
+                  {@const name = agentName(agent)}
+                  {@const pending = hooksConfirm?.server === server.id && hooksConfirm.agent === agent ? hooksConfirm : null}
+                  <div class="hook-row" data-agent={agent} data-state={state}>
+                    <span class="hook-agent">{name}</span>
+                    <button
+                      type="button"
+                      class="switch"
+                      class:on
+                      role="switch"
+                      aria-checked={on}
+                      data-action={`hooks-${agent}`}
+                      disabled={hooksBusy[server.id] === true || state === "unknown" || (state === "error" && !on)}
+                      title={fmt(on ? lm.hooks_turn_off_title : lm.hooks_turn_on_title, { agent: name, id: server.id })}
+                      aria-label={fmt(on ? lm.hooks_turn_off_title : lm.hooks_turn_on_title, { agent: name, id: server.id })}
+                      onclick={() => (hooksConfirm = { server: server.id, agent, action: on ? "uninstall" : "install" })}
+                    >{on ? lm.hooks_on : lm.hooks_off}</button>
+                    <span class="dim" data-hook-state>{hookStateText(agent, server.hooks, lm)}</span>
+                  </div>
+                  {#if pending}
+                    <div class="actions" data-confirm={`hooks-${pending.action}`}>
+                      <span class="confirm-text">{fmt(pending.action === "install" ? lm.hooks_install_confirm : lm.hooks_uninstall_confirm, { agent: name, id: server.id, file: server.hooks[agent]?.file ?? "?" })}</span>
+                      <button type="button" class="primary" data-action="hooks-confirm" onclick={() => hooks(server.id, agent, pending.action)}>{lm.confirm}</button>
+                      <button type="button" data-action="hooks-cancel" onclick={() => (hooksConfirm = null)}>{lm.cancel}</button>
+                    </div>
+                  {/if}
+                {/each}
+              {:else}
+                <p class="hint" data-hooks-unavailable>{lm.hooks_unavailable}</p>
+              {/if}
+              {#if hooksBusy[server.id]}<p class="note">{lm.service_running}</p>{/if}
+              {#if hooksNote[server.id]}<p class="note" class:bad={!hooksNote[server.id].ok} data-note="hooks">{hooksNote[server.id].text}</p>{/if}
+            </div>
+          {/if}
         </div>
       {:else}
         <p class="hint">{lm.no_bridges}</p>
@@ -314,6 +376,12 @@
   .bridge-head button { margin-left: auto; }
   .progress { margin: var(--s2) 0 0; padding-left: var(--s5); color: var(--text); font: var(--t-mono); font-size: 11px; }
   .output { max-height: 160px; overflow: auto; margin: var(--s2) 0 0; padding: var(--s2); background: var(--field); border-radius: var(--r-control); font: var(--t-mono); font-size: 11px; white-space: pre-wrap; }
+  .hooks { margin-top: var(--s3); }
+  .hooks-title { color: var(--text); font: var(--t-help); font-weight: 600; }
+  .hook-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); margin-top: var(--s2); }
+  .hook-agent { min-width: 96px; color: var(--text); }
+  .switch { min-width: 64px; }
+  .switch.on { border-color: var(--accent-strong); color: var(--st-working); }
   .command { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); }
   .command code { flex: 1; min-width: 0; overflow-x: auto; padding: var(--s2); background: var(--field); border-radius: var(--r-control); font: var(--t-mono); white-space: nowrap; }
   button {
