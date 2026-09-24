@@ -392,3 +392,33 @@ def test_snapshot_project_icon_defaults_to_empty(value):
         pane["project_icon"] = value
     raw = json.dumps({"type": "snapshot", "server_id": "s", "panes": [pane]})
     assert decode_inbound(raw).states[0].project_icon == ""
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("2/5", (2, 5)),
+        ("0/0", (0, 0)),
+        (" 1 / 3 ", (1, 3)),
+        ("5/2", (0, 0)),  # running > total: junk
+        ("-1/3", (0, 0)),
+        ("1/3/4", (0, 0)),
+        ("a/b", (0, 0)),
+        ("12345/99999", (0, 0)),
+        ("", (0, 0)),
+        (None, (0, 0)),
+    ],
+)
+def test_subagents_metadata_token_parses_robustly(token, expected):
+    from herdeck.protocol import _pane_to_state
+
+    metadata = {} if token is None else {"subagents": token}
+    state = _pane_to_state("dev", {"pane_id": "p1", "status": "working", "metadata": metadata})
+    assert (state.subagents_running, state.subagents_total) == expected
+
+
+def test_subagents_parse_ignores_non_string_values():
+    from herdeck.model import parse_subagents_token
+
+    for value in (3, 2.5, ["1/2"], {"r": 1}, b"1/2"):
+        assert parse_subagents_token(value) == (0, 0)

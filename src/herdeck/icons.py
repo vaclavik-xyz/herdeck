@@ -316,7 +316,8 @@ _font_cache: dict[tuple[int, bool], object] = {}  # (size, bold) -> font
 #     frame around a white/red app-tile favicon on a bright solid fill).
 # 18: all text is drawn with the vendored Inter font (was Arial/Helvetica on
 #     macOS, DejaVu/Liberation on Linux).
-TILE_VERSION = 18
+# 19: running subagents draw a fork badge + count in the bottom band.
+TILE_VERSION = 19
 # The status word / elapsed time column: right of the logo box incl. the comet
 # ring (x < 66), inside the 12px right margin.
 STATUS_MAX_W = ICON_SIZE - 12 - 70
@@ -1282,6 +1283,9 @@ class IconProvider:
             )
         if tile.server_tag or tile.server_accent:
             parts.extend([tile.server_tag, tile.server_accent])
+        subagents = getattr(tile, "subagents", 0)
+        if subagents:
+            parts.append(f"sub{subagents}")
         return parts
 
     def _tile_name(self, tile, *, drop_icon: bool = False) -> tuple[str, int | None]:
@@ -1488,9 +1492,13 @@ class IconProvider:
         # bottom band: backend tag (left) + pin (right), at a size that still
         # reads on a 72px key (the old 12px tag / 12px pin vanished there).
         pinned = getattr(tile, "pinned", False)
+        badge_w = self._draw_subagent_badge(
+            d, getattr(tile, "subagents", 0), right - (26 if pinned else 0), time_fill
+        )
         if tile.server_tag:
             fc = _font(16, bold=False)
-            tag = _truncate(d, tile.server_tag, fc, ICON_SIZE - 24 - (26 if pinned else 0))
+            tag_w = ICON_SIZE - 24 - (26 if pinned else 0) - (badge_w + 8 if badge_w else 0)
+            tag = _truncate(d, tile.server_tag, fc, tag_w)
             d.text((12, 164), tag, font=fc, fill=time_fill)
         if pinned:
             # pin silhouette (head, collar, needle), independent of backend labels
@@ -1503,6 +1511,31 @@ class IconProvider:
         if static_bar and fill != "solid":
             d.rectangle([0, ICON_SIZE - 8, ICON_SIZE, ICON_SIZE], fill=accent)
         return bg
+
+    @staticmethod
+    def _draw_subagent_badge(d, count: int, right: int, ink) -> int:
+        """The "⑂N" running-subagents badge, right-aligned at ``right`` in the
+        bottom band; returns its width (0 when nothing is drawn).
+
+        The fork is drawn as lines (the vendored Inter has no U+2442 glyph):
+        a stem splitting into two prongs, then the count."""
+        if count <= 0:
+            return 0
+        text = str(count) if count < 100 else "99+"
+        font = _font(16)
+        text_w = int(d.textlength(text, font=font))
+        fork_w = 12
+        width = fork_w + 3 + text_w
+        x0 = right - width
+        top, mid, bottom = 167, 174, 182
+        left_x, right_x = x0 + 1, x0 + fork_w - 1
+        stem_x = x0 + fork_w // 2
+        d.line((stem_x, mid, stem_x, bottom), fill=ink, width=2)
+        d.line((left_x, mid, right_x, mid), fill=ink, width=2)
+        d.line((left_x, top, left_x, mid), fill=ink, width=2)
+        d.line((right_x, top, right_x, mid), fill=ink, width=2)
+        d.text((x0 + fork_w + 3, 164), text, font=font, fill=ink)
+        return width
 
     def _logo(self, agent_type: str, dark: bool, size: int, rotation: float = 0) -> Image.Image:
         """The agent mark at ``size`` px (dark-recoloured and/or rotated), cached."""

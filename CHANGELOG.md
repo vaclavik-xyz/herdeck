@@ -19,6 +19,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are applied by the runtime to bridge data too, alerts and the pace hint work
   from either input, and several bridges merge per provider in config order.
   `/health` reports the active input under `usage`.
+- Subagent badge: an agent tile shows `⑂N` in its bottom band while the pane's
+  agent has N subagents running, on the D200, the desktop deck window, the web
+  simulator and the Elgato plugin. The new `herdeck-subagent-hook` command,
+  run as a Claude Code (`SubagentStart`/`SubagentStop`, `PostToolUse` on
+  `Agent`, `PreToolUse` heartbeat) or Codex (`SubagentStart`/`SubagentStop`)
+  hook, keeps a small per-pane spool in `~/.cache/herdeck/subagents/` and
+  reports the Herdr metadata token `subagents=<running>/<total>`. The runtime
+  reads that token into the agent state. You add the hooks by hand for now
+  (README "Subagent tracking"); a later release will install them.
 
 ## [0.10.2] - 2026-09-24
 

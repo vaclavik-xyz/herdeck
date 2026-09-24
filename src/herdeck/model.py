@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from urllib.parse import urlsplit
@@ -58,6 +59,26 @@ class WorkContext:
         )
 
 
+# The ``subagents`` pane metadata token written by ``herdeck-subagent-hook``:
+# "<running>/<total>". Small bounded integers only (the hook's spool keeps at
+# most 20 entries); anything else is junk from some other writer.
+_SUBAGENTS_TOKEN_RE = re.compile(r"\s*(\d{1,4})\s*/\s*(\d{1,4})\s*")
+
+
+def parse_subagents_token(value: object) -> tuple[int, int]:
+    """``(running, total)`` from a ``subagents`` metadata token; ``(0, 0)`` for
+    anything malformed. ``running`` never exceeds ``total``."""
+    if not isinstance(value, str):
+        return 0, 0
+    match = _SUBAGENTS_TOKEN_RE.fullmatch(value)
+    if match is None:
+        return 0, 0
+    running, total = int(match.group(1)), int(match.group(2))
+    if running > total:
+        return 0, 0
+    return running, total
+
+
 @dataclass
 class AgentState:
     key: AgentKey
@@ -107,3 +128,7 @@ class AgentState:
     # herdr reports this pane as the focused one in its session. False from a
     # bridge that predates the field.
     focused: bool = False
+    # Subagents the pane's agent has running / seen this session, from the
+    # ``subagents`` metadata token (herdeck-subagent-hook). 0/0 without it.
+    subagents_running: int = 0
+    subagents_total: int = 0

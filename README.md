@@ -668,6 +668,79 @@ generate a fresh title for that exact pane. The action stays hidden when the
 plugin is missing or disabled and while approval controls take priority on a
 blocked agent.
 
+### Subagent tracking
+
+An agent tile shows a fork badge with a count (`⑂3`) while the pane's agent has
+subagents running. Claude Code and Codex report subagents through hooks, and
+`herdeck-subagent-hook` turns them into a Herdr pane metadata token
+`subagents=<running>/<total>` (source `herdeck:subagents`, 15-minute TTL) that
+the bridge forwards like any other token (`$subagents` also works in
+`tile_primary` / `tile_secondary`).
+
+The hook runs on the machine where the agents run (next to herdr and the
+bridge), inside the agent's herdr pane. It only uses the standard library and
+the local `herdr` CLI, prints nothing, always exits 0 and gives up after 2 s;
+outside a herdr pane (no `HERDR_PANE_ID`) it does nothing. Per pane it keeps a
+small spool in `~/.cache/herdeck/subagents/<pane>.json` (0600, at most 20
+entries): a running subagent with no activity for 10 minutes counts as stale
+and is dropped after 30 minutes, and the spool resets when the agent session
+starts over (`startup` / `clear` or a new session id).
+
+A later release will install these hooks for you. For now, add them by hand. If
+`herdeck-subagent-hook` is not on the agents' `PATH`, use its absolute path
+(`command -v herdeck-subagent-hook`). If you already have hooks for an event,
+add the entry to that event's existing array.
+
+**Claude Code**: add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SubagentStart": [
+      { "hooks": [{ "type": "command", "command": "herdeck-subagent-hook --provider claude", "timeout": 5, "async": true }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "herdeck-subagent-hook --provider claude", "timeout": 5, "async": true }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Agent|Task", "hooks": [{ "type": "command", "command": "herdeck-subagent-hook --provider claude", "timeout": 5, "async": true }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "herdeck-subagent-hook --provider claude", "timeout": 5, "async": true }] }
+    ],
+    "SessionStart": [
+      { "matcher": "startup|clear", "hooks": [{ "type": "command", "command": "herdeck-subagent-hook --provider claude", "timeout": 5, "async": true }] }
+    ]
+  }
+}
+```
+
+`PostToolUse` on the `Agent` tool catches background launches and results when
+a start or stop event was missed. `PreToolUse` is the heartbeat: it fires for
+every tool call, and does work only when the call comes from inside a
+subagent. Without it, a subagent that runs for more than 10 minutes shows as
+stale.
+
+**Codex**: add to `~/.codex/hooks.json`. Hooks must be enabled
+(`[features] hooks = true` in `~/.codex/config.toml`), and Codex asks you to
+review and trust new hooks (`/hooks`):
+
+```json
+{
+  "hooks": {
+    "SubagentStart": [
+      { "hooks": [{ "type": "command", "command": "herdeck-subagent-hook --provider codex", "timeout": 5 }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "herdeck-subagent-hook --provider codex", "timeout": 5 }] }
+    ],
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "herdeck-subagent-hook --provider codex", "timeout": 5 }] }
+    ]
+  }
+}
+```
+
 **Headless.** `HERDECK_FAKE_DECK=1 herdeck` uses an in-memory
 renderer (no UI). `scripts/e2e_verify.py` connects the pipeline to a bridge and
 prints the resulting tiles (`HERDECK_E2E_URL` / `HERDECK_E2E_TOKEN`).

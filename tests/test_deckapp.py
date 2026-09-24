@@ -1344,6 +1344,16 @@ def test_tile_accessible_label_shapes_and_language():
         status_text="WORKING", time_text="3m",
     )
     assert tile_accessible_label(agent) == "claude · herdeck · main · working 3m"
+    forked = TileView(
+        0, "api", "green", agent_type="claude", repo="herdeck", status_text="WORKING",
+        subagents=2, pinned=True,
+    )
+    assert tile_accessible_label(forked) == (
+        "claude · herdeck · working · 2 subagents running · pinned"
+    )
+    assert tile_accessible_label(forked, "cs") == (
+        "claude · herdeck · working · běžící subagenti: 2 · připnuto"
+    )
     cs = TileView(0, "api", "amber", agent_type="codex", repo="web", status_text="SCHVÁLIT")
     assert tile_accessible_label(cs, "cs") == "codex · web · schválit"
     assert tile_accessible_label(TileView(4, "", "empty")) == "empty tile 5"

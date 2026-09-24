@@ -78,6 +78,8 @@ def tile_accessible_label(tile, lang: str = "en") -> str:
         )
         if status:
             parts.append(status)
+        if getattr(tile, "subagents", 0) > 0:
+            parts.append(tr(lang, "a11y.subagents", n=tile.subagents))
         if tile.pinned:
             parts.append(tr(lang, "a11y.pinned"))
         return " · ".join(parts)
