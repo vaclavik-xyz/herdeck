@@ -1,0 +1,99 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Icon from '../../components/Icon.astro';
+import { languages, text, path, releases, repository, type Lang } from '../../lib/copy';
+export const getStaticPaths = () => languages.map((lang) => ({ params: { lang } }));
+const lang = Astro.params.lang as Lang;
+---
+
+<Layout lang={lang} page="download" title={text(lang, 'Get Herdeck', 'Stáhnout Herdeck')}>
+  <section class="page-intro container">
+    <p class="breadcrumb">Herdeck / {text(lang, 'Download', 'Stažení')}</p>
+    <h1>{text(lang, 'Your cockpit\nis ready.', 'Tvůj ovládací pult\nje připravený.')}</h1>
+    <p>
+      {text(
+        lang,
+        'Free and open source. The desktop packages include the Herdeck runtime. Install Herdr separately to connect real agents.',
+        'Zdarma a s otevřeným kódem. Desktopové balíčky obsahují celý Herdeck runtime. Pro skutečné agenty si samostatně nainstaluj Herdr.',
+      )}
+    </p>
+  </section>
+  <section class="download-grid container">
+    <article>
+      <span class="os-symbol">⌘</span>
+      <h2>macOS</h2>
+      <p>Apple Silicon · .dmg</p>
+      <p>
+        {text(
+          lang,
+          'Developer ID signed and Apple notarized. Includes the D200 runtime and in-app updates.',
+          'Podepsáno Developer ID a notarizováno Applem. Obsahuje D200 runtime a aktualizace přímo v aplikaci.',
+        )}
+      </p>
+      <a class="button" href={releases}>
+        {text(lang, 'Choose macOS download', 'Vybrat macOS balíček')}
+        <Icon name="download" size={18} />
+      </a>
+      <small>
+        {text(
+          lang,
+          'Choose the aarch64.dmg asset. Intel macOS is not available.',
+          'Vyber soubor aarch64.dmg. Verze pro Intel Mac není dostupná.',
+        )}
+      </small>
+    </article>
+    <article>
+      <Icon name="terminal" size={44} />
+      <h2>Linux</h2>
+      <p>x86_64 / arm64</p>
+      <p>
+        {text(
+          lang,
+          'AppImage, Debian/Ubuntu packages, and Fedora/RHEL packages. Choose the format and architecture for your system.',
+          'AppImage a balíčky pro Debian/Ubuntu i Fedora/RHEL. Vyber formát a architekturu pro svůj systém.',
+        )}
+      </p>
+      <a class="button button-quiet" href={releases}>
+        {text(lang, 'Choose Linux package', 'Vybrat Linux balíček')}
+        <Icon name="download" size={18} />
+      </a>
+      <small>
+        {text(
+          lang,
+          'D200 hardware control is currently verified on macOS only.',
+          'Ovládání hardwaru D200 je aktuálně ověřené pouze na macOS.',
+        )}
+      </small>
+    </article>
+  </section>
+  <section class="callout container">
+    <div>
+      <h2>{text(lang, 'No hardware yet? No problem.', 'Zatím nemáš deck? Nevadí.')}</h2>
+      <p>
+        {text(
+          lang,
+          'Use the native desktop app or try the browser demo with synthetic agents. You can add a physical deck later.',
+          'Použij nativní desktopovou aplikaci nebo webovou ukázku se simulovanými agenty. Fyzický deck můžeš připojit později.',
+        )}
+      </p>
+    </div>
+    <a class="button button-quiet" href={path(lang, 'docs/getting-started')}>
+      {text(lang, 'Open the quick start', 'Otevřít rychlý start')}
+      <Icon name="arrow" size={18} />
+    </a>
+  </section>
+  <section class="source-note container">
+    <h2>{text(lang, 'Prefer to build it yourself?', 'Raději ze zdrojového kódu?')}</h2>
+    <p>
+      {text(
+        lang,
+        'The source, build instructions, release notes, and issue tracker live on GitHub. The Elgato plugin is currently a local, unsigned arm64 macOS build.',
+        'Zdrojový kód, postup sestavení, poznámky k vydáním a issues najdeš na GitHubu. Elgato plugin je zatím lokální nepodepsaný build pro arm64 macOS.',
+      )}
+    </p>
+    <a class="text-link" href={repository}>
+      {text(lang, 'Open the repository', 'Otevřít repozitář')}
+      <Icon name="github" size={18} />
+    </a>
+  </section>
+</Layout>

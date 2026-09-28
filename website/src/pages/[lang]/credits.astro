@@ -1,0 +1,62 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { languages, type Lang, text, repository } from '../../lib/copy';
+export const getStaticPaths = () => languages.map((lang) => ({ params: { lang } }));
+const lang = Astro.params.lang as Lang;
+---
+
+<Layout lang={lang} page="credits" title={text(lang, 'Visuals & credits', 'Vizuály a licence')}>
+  <section class="page-intro container">
+    <p class="breadcrumb">Herdeck / {text(lang, 'Credits', 'Licence')}</p>
+    <h1>
+      {text(lang, 'Made with care.\nShared in the open.', 'S péčí o detail.\nS otevřeným kódem.')}
+    </h1>
+  </section>
+  <article class="prose credits-prose container">
+    <h2>{text(lang, 'Herdeck', 'Herdeck')}</h2>
+    <p>
+      {text(
+        lang,
+        'Herdeck and this website are released under the MIT License. Copyright © 2026 Filip Vaclavik.',
+        'Herdeck i tento web jsou vydané pod licencí MIT. Copyright © 2026 Filip Vaclavik.',
+      )}{' '}
+      <a href={`${repository}/blob/main/LICENSE`}>MIT License</a>.
+    </p>
+    <h2>{text(lang, 'Product visualizations', 'Produktové vizualizace')}</h2>
+    <p>
+      {text(
+        lang,
+        'The two product images are AI-created studio visualizations commissioned for this website using OpenAI image generation. They illustrate the physical control workflow. They are not photographs of production hardware or screenshots of the running app. The interactive deck uses simulated agents.',
+        'Dva produktové obrázky jsou studiové vizualizace vytvořené pomocí OpenAI image generation pro tento web. Ilustrují fyzické ovládání agentů. Nejde o fotografie produkčního hardwaru ani screenshoty běžící aplikace. Interaktivní deck používá simulované agenty.',
+      )}
+    </p>
+    <h2>{text(lang, 'Film & original music', 'Film a původní hudba')}</h2>
+    <p>
+      {text(
+        lang,
+        'The 30-second film is built in Remotion, with Czech and English editions. The original 128 BPM electronic score is synthesized from source: drums, bass, arpeggios, transitions, and a final master. It contains no third-party samples or recordings. Film and score source are included in the repository.',
+        'Třicetisekundový film vznikl v Remotionu v české i anglické verzi. Původní elektronická hudba o tempu 128 BPM je syntetizovaná ze zdrojového kódu: bicí, basy, arpeggia, přechody a finální mastering. Neobsahuje cizí samply ani nahrávky. Zdroj filmu i hudby je součástí repozitáře.',
+      )}
+    </p>
+    <h2>{text(lang, 'Type & agent marks', 'Písma a značky agentů')}</h2>
+    <p>
+      {text(
+        lang,
+        'Sora and Manrope are self-hosted through Fontsource under the SIL Open Font License. Agent icons reuse the attributed assets already included with Herdeck. Brand marks remain trademarks of their owners; their appearance identifies integrations and does not imply endorsement.',
+        'Sora a Manrope jsou hostované přímo na webu přes Fontsource pod licencí SIL Open Font License. Ikony agentů používají podklady se zdroji uvedenými v Herdecku. Značky zůstávají ochrannými známkami svých vlastníků; jejich zobrazení označuje integrace a neznamená doporučení produktu.',
+      )}{' '}
+      <a href={`${repository}/blob/main/src/herdeck/assets/ATTRIBUTION.md`}>
+        {text(lang, 'Agent icon attribution', 'Zdroje ikon agentů')}
+      </a>
+      .
+    </p>
+    <h2>{text(lang, 'Privacy', 'Soukromí')}</h2>
+    <p>
+      {text(
+        lang,
+        'This static website does not set analytics cookies, load remote fonts, or connect to your agents. The demo runs entirely in your browser. Video and audio are served from this website and start only when you press play.',
+        'Tento statický web neukládá analytické cookies, nenačítá vzdálená písma a nepřipojuje se k tvým agentům. Ukázka běží jen v prohlížeči. Video i zvuk jsou uložené přímo na webu a spustí se až po stisku přehrávání.',
+      )}
+    </p>
+  </article>
+</Layout>

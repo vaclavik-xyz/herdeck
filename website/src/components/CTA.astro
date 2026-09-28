@@ -1,0 +1,22 @@
+---
+import { copy, path, type Lang } from '../lib/copy';
+import Icon from './Icon.astro';
+const { lang } = Astro.props as { lang: Lang };
+const t = copy[lang];
+---
+
+<section class="cta-section container">
+  <img class="cta-mark" src="/favicon.png" alt="" width="72" height="72" loading="lazy" />
+  <h2 class="line-break">{t.cta}</h2>
+  <p>{t.ctaBody}</p>
+  <div class="button-row">
+    <a class="button" href={path(lang, 'download')}>
+      {t.download}
+      <Icon name="download" size={18} />
+    </a>
+    <a class="button button-quiet" href={path(lang, 'docs')}>
+      {t.guide}
+      <Icon name="book" size={18} />
+    </a>
+  </div>
+</section>

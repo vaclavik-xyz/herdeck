@@ -1,0 +1,33 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import DocsSidebar from '../../../components/DocsSidebar.astro';
+import { docs } from '../../../lib/docs';
+import { languages, type Lang, text, local, path } from '../../../lib/copy';
+export const getStaticPaths = () => languages.map((lang) => ({ params: { lang } }));
+const lang = Astro.params.lang as Lang;
+---
+
+<Layout lang={lang} page="docs" title={text(lang, 'Documentation', 'Dokumentace')}>
+  <div class="docs-layout container">
+    <DocsSidebar lang={lang} />
+    <article class="docs-article">
+      <p class="breadcrumb">Herdeck / {text(lang, 'Docs', 'Dokumentace')}</p>
+      <h1>{text(lang, 'Your cockpit manual.', 'Příručka k tvému pultu.')}</h1>
+      <p class="lead">
+        {text(
+          lang,
+          'Everything you need to connect your agents and make Herdeck your own. Start with the app, then add the controls that fit your workflow.',
+          'Vše, co potřebuješ k připojení agentů a nastavení Herdecku. Začni aplikací a přidej ovládání, které ti sedí.',
+        )}
+      </p>
+      <div class="docs-card-grid">
+        {docs.map((doc) => (
+          <a class="docs-card" href={path(lang, `docs/${doc.slug}`)}>
+            <h2>{local(lang, doc.title)}</h2>
+            <p>{local(lang, doc.description)}</p>
+          </a>
+        ))}
+      </div>
+    </article>
+  </div>
+</Layout>

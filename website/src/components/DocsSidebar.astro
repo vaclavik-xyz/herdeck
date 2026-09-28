@@ -1,0 +1,64 @@
+---
+import { docs, searchText } from '../lib/docs';
+import { type Lang, path, text, local } from '../lib/copy';
+import Icon from './Icon.astro';
+const { lang, slug = '' } = Astro.props as { lang: Lang; slug?: string };
+---
+
+<aside class="docs-sidebar">
+  <label class="docs-search">
+    <Icon name="search" size={17} />
+    <input
+      type="search"
+      placeholder={text(lang, 'Search guides…', 'Hledat v návodech…')}
+      aria-label={text(lang, 'Search documentation', 'Hledat v dokumentaci')}
+    />
+  </label>
+  <nav aria-label={text(lang, 'Documentation', 'Dokumentace')}>
+    <a href={path(lang, 'docs')} aria-current={!slug ? 'page' : undefined}>
+      {text(lang, 'Overview', 'Přehled')}
+    </a>
+    {docs.map((doc) => (
+      <a
+        href={path(lang, `docs/${doc.slug}`)}
+        aria-current={slug === doc.slug ? 'page' : undefined}
+        data-search={searchText(doc, lang)}
+      >
+        {local(lang, doc.title)}
+      </a>
+    ))}
+  </nav>
+  <div class="search-empty" hidden role="status">
+    {text(
+      lang,
+      'No guides found. Try “bridge”, “profile”, or “USB”.',
+      'Žádný návod nenalezen. Zkus „bridge“, „profil“ nebo „USB“.',
+    )}
+  </div>
+  <p>
+    {text(
+      lang,
+      'For Herdeck 0.13.x. The linked repository runbooks contain the full operational details.',
+      'Pro Herdeck 0.13.x. Úplné provozní postupy najdeš v odkazovaných návodech repozitáře.',
+    )}
+  </p>
+</aside>
+<script>
+  const input = document.querySelector<HTMLInputElement>('.docs-search input');
+  const links = [...document.querySelectorAll<HTMLAnchorElement>('[data-search]')];
+  const normalized = (s: string) =>
+    s
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLocaleLowerCase();
+  input?.addEventListener('input', () => {
+    const query = normalized(input.value.trim());
+    let count = 0;
+    links.forEach((a) => {
+      a.hidden = !normalized(a.dataset.search || '').includes(query);
+      if (!a.hidden) count++;
+    });
+    const empty = document.querySelector<HTMLElement>('.search-empty');
+    if (empty) empty.hidden = count > 0;
+  });
+</script>

@@ -1,0 +1,82 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import DocsSidebar from '../../../components/DocsSidebar.astro';
+import { docs } from '../../../lib/docs';
+import { languages, type Lang, text, local, path, repository } from '../../../lib/copy';
+export const getStaticPaths = () =>
+  languages.flatMap((lang) =>
+    docs.map((doc) => ({ params: { lang, slug: doc.slug }, props: { doc } })),
+  );
+const lang = Astro.params.lang as Lang;
+const { doc } = Astro.props;
+const index = docs.findIndex((d) => d.slug === doc.slug);
+const previous = docs[index - 1],
+  next = docs[index + 1];
+---
+
+<Layout
+  lang={lang}
+  page={`docs/${doc.slug}`}
+  title={local(lang, doc.title)}
+  description={local(lang, doc.description)}
+>
+  <div class="docs-layout container">
+    <DocsSidebar lang={lang} slug={doc.slug} />
+    <article class="docs-article">
+      <p class="breadcrumb">
+        <a href={path(lang, 'docs')}>{text(lang, 'Docs', 'Dokumentace')}</a> /{' '}
+        {local(lang, doc.title)}
+      </p>
+      <h1>{local(lang, doc.title)}</h1>
+      <p class="lead">{local(lang, doc.description)}</p>
+      <nav class="docs-toc" aria-label={text(lang, 'On this page', 'Na této stránce')}>
+        {doc.sections.map((s) => (
+          <a href={`#${s.id}`}>{local(lang, s.title)}</a>
+        ))}
+      </nav>
+      <div class="prose">
+        {doc.sections.map((s) => (
+          <section>
+            <h2 id={s.id}>{local(lang, s.title)}</h2>
+            {s.paragraphs?.map((p) => (
+              <p>{local(lang, p)}</p>
+            ))}
+            {s.bullets && (
+              <ul>
+                {s.bullets.map((b) => (
+                  <li>{local(lang, b)}</li>
+                ))}
+              </ul>
+            )}
+            {s.code && <pre><code>{s.code}</code></pre>}
+            {s.note && (
+              <blockquote>
+                <p>{local(lang, s.note)}</p>
+              </blockquote>
+            )}
+          </section>
+        ))}
+      </div>
+      <div class="docs-source">
+        <span>
+          {text(
+            lang,
+            'Checked against the repository, September 2026.',
+            'Ověřeno proti repozitáři, září 2026.',
+          )}
+        </span>
+        <a href={`${repository}/blob/main/${doc.source}`}>
+          {text(lang, 'Full source guide on GitHub', 'Úplný zdrojový návod na GitHubu')}
+        </a>
+      </div>
+      <nav class="doc-next" aria-label={text(lang, 'Adjacent guides', 'Další návody')}>
+        {previous ? (
+          <a href={path(lang, `docs/${previous.slug}`)}>← {local(lang, previous.title)}</a>
+        ) : (
+          <span />
+        )}
+        {next && <a href={path(lang, `docs/${next.slug}`)}>{local(lang, next.title)} →</a>}
+      </nav>
+    </article>
+  </div>
+</Layout>

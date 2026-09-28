@@ -1,0 +1,184 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Icon from '../../components/Icon.astro';
+import DeckDemo from '../../components/DeckDemo.astro';
+import Film from '../../components/Film.astro';
+import CTA from '../../components/CTA.astro';
+import { languages, copy, path, features, local, text, type Lang } from '../../lib/copy';
+export const getStaticPaths = () => languages.map((lang) => ({ params: { lang } }));
+const lang = Astro.params.lang as Lang;
+const t = copy[lang];
+---
+
+<Layout lang={lang}>
+  <section class="hero">
+    <div class="hero-photo">
+      <img
+        src="/images/deck-hero.webp"
+        alt={text(
+          lang,
+          'Visualization of an LCD deck with illuminated agent keys on a dark metal desk',
+          'Vizualizace LCD decku s rozsvícenými tlačítky agentů na tmavém kovovém stole',
+        )}
+        width="1659"
+        height="948"
+        fetchpriority="high"
+      />
+    </div>
+    <div class="container hero-inner">
+      <div class="hero-copy">
+        <a class="release-note" href={path(lang, 'download')}>
+          <span class="status-dot"></span>
+          {text(lang, 'Meet your new command center', 'Tvůj nový ovládací pult')}
+          <Icon name="arrow" size={16} />
+        </a>
+        <h1 class="line-break">{t.hero}</h1>
+        <p>{t.intro}</p>
+        <div class="button-row">
+          <a class="button" href={path(lang, 'download')}>
+            {t.download}
+            <Icon name="download" size={18} />
+          </a>
+          <a class="button button-ghost" href="#film" data-watch>
+            <Icon name="play" size={18} />
+            {t.watch}
+          </a>
+        </div>
+        <span class="hero-footnote">
+          {t.free}
+          <span>macOS / Linux</span>
+        </span>
+      </div>
+    </div>
+    <div class="hero-base container">
+      <span>
+        <i class="status-dot"></i>
+        {text(lang, 'Your next decision. One press away.', 'Další rozhodnutí. Na jeden stisk.')}
+      </span>
+      <span>Ulanzi D200 · Elgato Stream Deck · Desktop</span>
+    </div>
+  </section>
+  <section class="agent-strip container">
+    <p>{t.compatibility}</p>
+    <div>
+      {[
+        ['claude', 'Claude'],
+        ['codex', 'Codex'],
+        ['cursor', 'Cursor'],
+        ['gemini', 'Gemini'],
+        ['opencode', 'OpenCode'],
+        ['hermes', 'Hermes'],
+      ].map(([icon, name]) => (
+        <span>
+          <img src={`/icons/${icon}.svg`} width="24" height="24" alt="" />
+          {name}
+        </span>
+      ))}
+    </div>
+    <small>{text(lang, 'Through Herdr. And more.', 'Přes Herdr. A další.')}</small>
+  </section>
+  <section class="intro-section container">
+    <div class="section-heading">
+      <h2 class="line-break">{t.firstTitle}</h2>
+      <p>{t.firstBody}</p>
+    </div>
+    <div class="feature-preview">
+      {features.slice(0, 3).map((f) => (
+        <article>
+          <Icon name={f.icon} size={28} />
+          <h3>{local(lang, f.title)}</h3>
+          <p>{local(lang, f.body)}</p>
+        </article>
+      ))}
+    </div>
+    <a class="text-link" href={path(lang, 'features')}>
+      {t.more}
+      <Icon name="arrow" size={17} />
+    </a>
+  </section>
+  <section class="demo-section">
+    <div class="container demo-layout">
+      <div class="demo-intro">
+        <h2>{t.demoTitle}</h2>
+        <p>{t.demoBody}</p>
+        <div class="status-legend">
+          <span>
+            <i class="dot amber"></i>
+            {text(lang, 'Needs you', 'Čeká na tebe')}
+          </span>
+          <span>
+            <i class="dot green"></i>
+            {text(lang, 'Working', 'Pracuje')}
+          </span>
+          <span>
+            <i class="dot cyan"></i>
+            {text(lang, 'Done', 'Hotovo')}
+          </span>
+        </div>
+        <small>{t.demoLabel}</small>
+      </div>
+      <DeckDemo lang={lang} />
+    </div>
+  </section>
+  <Film lang={lang} />
+  <section class="surfaces-section container">
+    <div class="section-heading">
+      <h2 class="line-break">{t.anywhere}</h2>
+      <p>{t.anywhereBody}</p>
+    </div>
+    <div class="surfaces-grid">
+      <a class="surface surface-photo" href={path(lang, 'docs/hardware')}>
+        <img
+          src="/images/deck-detail.webp"
+          alt={text(
+            lang,
+            'Visualization of a finger pressing an illuminated deck key',
+            'Vizualizace prstu stiskávajícího rozsvícené tlačítko decku',
+          )}
+          width="1587"
+          height="992"
+          loading="lazy"
+        />
+        <div>
+          <h3>{t.hardware}</h3>
+          <p>{t.hardwareBody}</p>
+          <span>
+            {text(lang, 'Hardware guide', 'Průvodce hardwarem')}
+            <Icon name="arrow" size={18} />
+          </span>
+        </div>
+      </a>
+      <div class="surfaces-side">
+        <a class="surface" href={path(lang, 'docs/getting-started')}>
+          <div class="mini-window" aria-hidden="true">
+            <div>
+              ● ● ● <span>herdeck</span>
+            </div>
+            <div class="mini-tiles">
+              {['claude', 'codex', 'gemini', 'cursor'].map((a) => (
+                <span>
+                  <img src={`/icons/${a}.svg`} width="24" height="24" alt="" />
+                  <i></i>
+                </span>
+              ))}
+            </div>
+          </div>
+          <h3>{t.desktop}</h3>
+          <p>{t.desktopBody}</p>
+        </a>
+        <a class="surface remote-surface" href={path(lang, 'docs/connections')}>
+          <div class="connection-illustration" aria-hidden="true">
+            <span>Mac</span>
+            <i></i>
+            <img src="/favicon.png" width="34" height="34" alt="" />
+            <i></i>
+            <span>Server</span>
+          </div>
+          <h3>{t.remote}</h3>
+          <p>{t.remoteBody}</p>
+        </a>
+      </div>
+    </div>
+  </section>
+  <CTA lang={lang} />
+</Layout>

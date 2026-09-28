@@ -9,6 +9,9 @@
 [**Download Herdeck for Apple Silicon macOS**](https://github.com/vaclavik-xyz/herdeck/releases/latest)
 · [Linux packages](https://github.com/vaclavik-xyz/herdeck/releases/latest)
 
+The bilingual product website, documentation, and editable Remotion film live
+in [`website/`](website/README.md). Run it locally with `cd website && npm ci && npm run dev`.
+
 Turn an Ulanzi Stream Controller D200 (or an Elgato Stream Deck) into a control
 panel for AI coding agents running under
 [herdr](https://github.com/herdrdev/herdr). See blocked agents at a glance

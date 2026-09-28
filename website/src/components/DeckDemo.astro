@@ -1,0 +1,183 @@
+---
+import { type Lang, text } from '../lib/copy';
+const { lang } = Astro.props as { lang: Lang };
+const agents = [
+  ['claude', 'Claude', 'herdeck', 'blocked'],
+  ['codex', 'Codex', 'api-server', 'working'],
+  ['gemini', 'Gemini', 'docs', 'done'],
+  ['cursor', 'Cursor', 'web-app', 'working'],
+  ['opencode', 'OpenCode', 'design-system', 'idle'],
+  ['hermes', 'Hermes', 'pipeline', 'working'],
+  ['claude', 'Claude', 'auth', 'working'],
+  ['codex', 'Codex', 'checkout', 'idle'],
+];
+const status: Record<string, string> = {
+  blocked: text(lang, 'Needs you', 'Čeká na tebe'),
+  working: text(lang, 'Working', 'Pracuje'),
+  done: text(lang, 'Done', 'Hotovo'),
+  idle: text(lang, 'Idle', 'Nečinný'),
+};
+---
+
+<herdeck-demo data-lang={lang}>
+  <div class="demo-topline">
+    <span>
+      <i class="status-dot"></i>
+      {text(lang, 'Demo fleet', 'Ukázková flotila')}
+    </span>
+    <span>{text(lang, '8 agents · 2 machines', '8 agentů · 2 stroje')}</span>
+  </div>
+  <div class="demo-hardware">
+    <div class="demo-grid">
+      <div class="demo-status">
+        <img src="/favicon.png" width="34" height="34" alt="" />
+        <span data-summary>{text(lang, 'Needs you', 'Čeká na tebe')}</span>
+        <strong data-waiting>1</strong>
+        <small>{text(lang, 'agent waiting', 'čekající agent')}</small>
+        <div class="tiny-meter">
+          <i></i>
+          <i></i>
+          <i></i>
+          <i></i>
+          <i></i>
+        </div>
+      </div>
+      {agents.map(([icon, name, project, state], index) => (
+        <button
+          class={`agent-key ${state}`}
+          data-agent={index}
+          data-name={name}
+          aria-label={`${name}, ${project}, ${status[state]}`}
+        >
+          <span class="key-brand">
+            <img src={`/icons/${icon}.svg`} alt="" width="27" height="27" />
+            <small>{name}</small>
+          </span>
+          <strong>{project}</strong>
+          <span class="key-status">{status[state]}</span>
+          <i class="key-bar"></i>
+        </button>
+      ))}
+    </div>
+    <div class="demo-bezel">
+      <span>herdeck</span>
+      <span>● ● ●</span>
+    </div>
+  </div>
+  <div class="demo-prompt" aria-live="polite" aria-atomic="true">
+    <div data-demo-message>
+      <span class="prompt-dot"></span>
+      <span>
+        {text(
+          lang,
+          'Select the amber Claude tile to see its request.',
+          'Vyber oranžovou dlaždici Claude a přečti si požadavek.',
+        )}
+      </span>
+    </div>
+    <div class="demo-approval" hidden>
+      <div class="request-copy">
+        <span>Claude · herdeck</span>
+        <strong>{text(lang, 'Run the project test suite?', 'Spustit testy projektu?')}</strong>
+        <code>npm test</code>
+      </div>
+      <div class="demo-buttons">
+        <button data-decision="deny" class="button button-quiet">
+          {text(lang, 'Deny', 'Zamítnout')}
+        </button>
+        <button data-decision="approve" class="button">
+          {text(lang, 'Approve', 'Schválit')} ✓
+        </button>
+      </div>
+    </div>
+    <button class="demo-reset" hidden>
+      {text(lang, 'Try again', 'Zkusit znovu')} ↻
+    </button>
+  </div>
+  <noscript>
+    <p>
+      {text(
+        lang,
+        'Enable JavaScript to try the interactive controls. This is a simulated fleet, with no connection to real agents.',
+        'Interaktivní ovládání vyžaduje JavaScript. Toto je simulovaná flotila bez připojení ke skutečným agentům.',
+      )}
+    </p>
+  </noscript>
+</herdeck-demo>
+<script>
+  class HerdeckDemo extends HTMLElement {
+    connectedCallback() {
+      const cs = this.dataset.lang === 'cs';
+      const message = this.querySelector<HTMLElement>('[data-demo-message]')!;
+      const approval = this.querySelector<HTMLElement>('.demo-approval')!;
+      const reset = this.querySelector<HTMLButtonElement>('.demo-reset')!;
+      const first = this.querySelector<HTMLButtonElement>('[data-agent="0"]')!;
+      let resolved = false;
+      this.querySelectorAll<HTMLButtonElement>('[data-agent]').forEach((button) =>
+        button.addEventListener('click', () => {
+          if (button === first && !resolved) {
+            approval.hidden = false;
+            message.hidden = true;
+            this.querySelector<HTMLButtonElement>('[data-decision="approve"]')?.focus();
+          } else {
+            approval.hidden = true;
+            message.hidden = false;
+            message.textContent = `${button.dataset.name}: ${button.querySelector('.key-status')?.textContent}. ${cs ? 'Tato ukázka není připojena ke skutečným agentům.' : 'This demo is not connected to real agents.'}`;
+          }
+        }),
+      );
+      this.querySelectorAll<HTMLButtonElement>('[data-decision]').forEach((button) =>
+        button.addEventListener('click', () => {
+          resolved = true;
+          const approved = button.dataset.decision === 'approve';
+          approval.hidden = true;
+          message.hidden = false;
+          reset.hidden = false;
+          message.textContent = approved
+            ? cs
+              ? 'Schváleno. Claude spouští testy. Všichni mají, co potřebují.'
+              : 'Approved. Claude is running the tests. Everyone has what they need.'
+            : cs
+              ? 'Zamítnuto. Příkaz se nespustil. Claude čeká na další zadání.'
+              : 'Denied. The command did not run. Claude is ready for your next instruction.';
+          first.classList.remove('blocked');
+          first.classList.add(approved ? 'working' : 'idle');
+          first.querySelector('.key-status')!.textContent = approved
+            ? cs
+              ? 'Pracuje'
+              : 'Working'
+            : cs
+              ? 'Nečinný'
+              : 'Idle';
+          first.setAttribute(
+            'aria-label',
+            `Claude, herdeck, ${first.querySelector('.key-status')!.textContent}`,
+          );
+          this.querySelector('[data-summary]')!.textContent = cs ? 'Vše v pořádku' : 'All clear';
+          this.querySelector('[data-waiting]')!.textContent = '0';
+          reset.focus();
+        }),
+      );
+      reset.addEventListener('click', () => {
+        resolved = false;
+        reset.hidden = true;
+        approval.hidden = true;
+        message.hidden = false;
+        first.classList.remove('working', 'idle');
+        first.classList.add('blocked');
+        first.querySelector('.key-status')!.textContent = cs ? 'Čeká na tebe' : 'Needs you';
+        first.setAttribute(
+          'aria-label',
+          `Claude, herdeck, ${first.querySelector('.key-status')!.textContent}`,
+        );
+        this.querySelector('[data-summary]')!.textContent = cs ? 'Čeká na tebe' : 'Needs you';
+        this.querySelector('[data-waiting]')!.textContent = '1';
+        message.textContent = cs
+          ? 'Vyber oranžovou dlaždici Claude a přečti si požadavek.'
+          : 'Select the amber Claude tile to see its request.';
+        first.focus();
+      });
+    }
+  }
+  customElements.define('herdeck-demo', HerdeckDemo);
+</script>

@@ -1,0 +1,65 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Icon from '../../components/Icon.astro';
+import CTA from '../../components/CTA.astro';
+import { languages, features, local, text, type Lang, path } from '../../lib/copy';
+export const getStaticPaths = () => languages.map((lang) => ({ params: { lang } }));
+const lang = Astro.params.lang as Lang;
+---
+
+<Layout lang={lang} page="features" title={text(lang, 'Features', 'Funkce')}>
+  <section class="page-intro container">
+    <p class="breadcrumb">Herdeck / {text(lang, 'Features', 'Funkce')}</p>
+    <h1>
+      {text(lang, 'Built for the moments\nthat need you.', 'Pro chvíle,\nkdy tě agenti potřebují.')}
+    </h1>
+    <p>
+      {text(
+        lang,
+        'From a blocked prompt to a fleet spread across machines. Keep the context and the controls in one place.',
+        'Od čekajícího požadavku po flotilu rozprostřenou napříč stroji. Kontext i ovládání na jednom místě.',
+      )}
+    </p>
+  </section>
+  <div class="wide-image container">
+    <img
+      src="/images/deck-detail.webp"
+      width="1587"
+      height="992"
+      alt={text(
+        lang,
+        'Close-up visualization of a physical approval key',
+        'Detailní vizualizace fyzického tlačítka pro schválení',
+      )}
+      fetchpriority="high"
+    />
+  </div>
+  <section class="features-full container">
+    {features.map((f) => (
+      <article>
+        <Icon name={f.icon} size={30} />
+        <div>
+          <h2>{local(lang, f.title)}</h2>
+          <p>{local(lang, f.body)}</p>
+        </div>
+      </article>
+    ))}
+  </section>
+  <section class="callout container">
+    <div>
+      <h2>{text(lang, 'The tools stay yours.', 'Nástroje zůstávají tvoje.')}</h2>
+      <p>
+        {text(
+          lang,
+          'Herdeck is a front-end for Herdr. Your agents run in their existing terminal sessions. The optional T3 Code adapter is a separate, opt-in backend.',
+          'Herdeck je ovládací rozhraní pro Herdr. Agenti běží ve svých terminálových sessions. Volitelný adaptér T3 Code je samostatný backend.',
+        )}
+      </p>
+    </div>
+    <a class="button button-quiet" href={path(lang, 'docs/connections')}>
+      {text(lang, 'How connections work', 'Jak fungují připojení')}
+      <Icon name="arrow" size={18} />
+    </a>
+  </section>
+  <CTA lang={lang} />
+</Layout>

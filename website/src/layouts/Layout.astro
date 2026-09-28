@@ -1,0 +1,153 @@
+---
+import '@fontsource-variable/sora';
+import '@fontsource-variable/manrope';
+import '../styles/global.css';
+import Icon from '../components/Icon.astro';
+import { copy, path, repository, releases, type Lang } from '../lib/copy';
+interface Props {
+  lang: Lang;
+  title?: string;
+  description?: string;
+  page?: string;
+}
+const { lang, title, description, page = '' } = Astro.props;
+const t = copy[lang];
+const other = lang === 'cs' ? 'en' : 'cs';
+const fullTitle = title ? `${title} — Herdeck` : `Herdeck — ${t.hero.replace('\n', ' ')}`;
+const canonical = Astro.site ? new URL(path(lang, page), Astro.site) : undefined;
+const nav = ['features', 'workflow', 'docs'];
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description || t.intro} />
+    <meta name="theme-color" content="#09111f" />
+    <link rel="icon" href="/favicon.png" type="image/png" />
+    {canonical ? (
+      <>
+        <link rel="canonical" href={canonical} />
+        {(['en', 'cs'] as Lang[]).map((l) => (
+          <link rel="alternate" hreflang={l} href={new URL(path(l, page), Astro.site)} />
+        ))}
+      </>
+    ) : (
+      <meta name="robots" content="noindex, nofollow" />
+    )}
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description || t.intro} />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content={lang === 'cs' ? 'cs_CZ' : 'en_US'} />
+    <meta
+      property="og:image"
+      content={
+        Astro.site ? new URL('/images/deck-hero.webp', Astro.site) : '/images/deck-hero.webp'
+      }
+    />
+    {canonical && <meta property="og:url" content={canonical} />}
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">
+      {t.skip}
+    </a>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="wordmark" href={path(lang)} aria-label="Herdeck">
+          <img src="/favicon.png" width="34" height="34" alt="" />
+          herdeck
+        </a>
+        <nav class="desktop-nav" aria-label={lang === 'cs' ? 'Hlavní navigace' : 'Main navigation'}>
+          {nav.map((p, i) => (
+            <a href={path(lang, p)} aria-current={page.startsWith(p) ? 'page' : undefined}>
+              {t.nav[i]}
+            </a>
+          ))}
+        </nav>
+        <div class="header-actions">
+          <a
+            class="language-switch"
+            href={path(other, page)}
+            lang={other}
+            hreflang={other}
+            aria-label={other === 'cs' ? 'Přepnout do češtiny' : 'Switch to English'}
+          >
+            {other === 'cs' ? 'CZ' : 'EN'}
+          </a>
+          <a class="button button-small" href={path(lang, 'download')}>
+            {t.download}
+            <Icon name="download" size={16} />
+          </a>
+          <button class="menu-toggle" aria-expanded="false" aria-controls="mobile-nav">
+            {t.menu}
+            <span></span>
+          </button>
+        </div>
+      </div>
+      <nav
+        id="mobile-nav"
+        class="mobile-nav"
+        hidden
+        aria-label={lang === 'cs' ? 'Mobilní navigace' : 'Mobile navigation'}
+      >
+        {nav.map((p, i) => (
+          <a href={path(lang, p)}>{t.nav[i]}</a>
+        ))}
+        <a href={path(lang, 'download')}>{t.download}</a>
+      </nav>
+    </header>
+    <main id="main">
+      <slot />
+    </main>
+    <footer class="site-footer container">
+      <div class="footer-top">
+        <div>
+          <a class="wordmark" href={path(lang)}>
+            <img src="/favicon.png" width="30" height="30" alt="" />
+            herdeck
+          </a>
+          <p>{t.foot}</p>
+        </div>
+        <div class="footer-links">
+          <a href={path(lang, 'docs')}>{t.nav[2]}</a>
+          <a href={releases}>Releases</a>
+          <a href={repository}>
+            GitHub
+            <Icon name="github" size={16} />
+          </a>
+          <a href={path(lang, 'credits')}>{t.credits}</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© {new Date().getFullYear()} Filip Vaclavik · MIT</span>
+        <span>{t.notice}</span>
+      </div>
+    </footer>
+    <script>
+      const toggle = document.querySelector<HTMLButtonElement>('.menu-toggle');
+      const menu = document.querySelector<HTMLElement>('#mobile-nav');
+      const close = () => {
+        if (toggle && menu) {
+          toggle.setAttribute('aria-expanded', 'false');
+          menu.hidden = true;
+        }
+      };
+      toggle?.addEventListener('click', () => {
+        if (menu) {
+          const open = toggle.getAttribute('aria-expanded') !== 'true';
+          toggle.setAttribute('aria-expanded', String(open));
+          menu.hidden = !open;
+        }
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && toggle?.getAttribute('aria-expanded') === 'true') {
+          close();
+          toggle?.focus();
+        }
+      });
+    </script>
+  </body>
+</html>
