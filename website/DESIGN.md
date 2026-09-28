@@ -17,7 +17,7 @@ Sora supplies the compact geometric headlines. Manrope carries readable body
 copy. Both are self-hosted with Latin and Latin Extended coverage. Monospace
 appears only in real commands.
 
-Layout: left-aligned hero copy beside a manufacturer product image; a
+Layout: left-aligned hero copy beside a D200 image with composited Herdeck screens; a
 quiet agent strip; three concrete capabilities; the interactive deck; a large
 film frame; a hardware / desktop / remote composition; installation CTA.
 Docs use a narrow searchable sidebar and a readable single article column.
@@ -57,22 +57,56 @@ The initial text-generated images invented the enclosure and put a vertical
 screen at the left. They were rejected and removed from the website and films.
 Do not reuse those images or use them as generation references.
 
-The current locally hosted WebPs are unmodified manufacturer assets from Ulanzi,
-retrieved and visually checked on 2026-09-28:
+The corrected geometry was initially used with stock Ulanzi icons. That did not
+communicate Herdeck, so the current assets replace the screen contents with
+agent tiles and a status panel based on the actual application renderer.
 
-- `public/images/deck-hero.webp`: [original D200 studio image](https://www.ulanzi.com/cdn/shop/files/14_14_11zon_381246ba-6f9d-4199-a711-d5c63a6ecb9c.webp?v=1726212953), 800 × 800.
-- `public/images/deck-detail.webp`: [original D200 desk photograph](https://www.ulanzi.com/cdn/shop/files/8_8_11zon_8c923c8c-cc9c-4bd5-b66d-d07d2156f287.webp?v=1726212953), 800 × 800.
+### Hardware source images
 
-These show stock Ulanzi software, **not Herdeck running on hardware**. Credits,
-alt text, the hardware guide and film attribution keep that distinction explicit.
-Images remain Ulanzi property, excluded from the repository's MIT license.
+Manufacturer sources, retrieved and visually checked on 2026-09-28:
+
+- `design/ulanzi-d200-source.webp`: [original D200 studio image](https://www.ulanzi.com/cdn/shop/files/14_14_11zon_381246ba-6f9d-4199-a711-d5c63a6ecb9c.webp?v=1726212953), 800 × 800.
+- `design/ulanzi-d200-desk-source.webp`: [original D200 desk photograph](https://www.ulanzi.com/cdn/shop/files/8_8_11zon_8c923c8c-cc9c-4bd5-b66d-d07d2156f287.webp?v=1726212953), 800 × 800.
+
+Original Ulanzi imagery is excluded from the repository's MIT license.
 No separate image redistribution license has been established; replace with
 owner-provided photography or obtain permission before public distribution.
 The old product page now redirects to D200X, so preserve these exact source URLs.
 
-Hero and film composition use CSS positioning without repainting, mirroring,
-or synthesizing the device. The interactive demo is a diagram of the 13-key
-layout with eight simulated agents, five empty keys and the bottom-right display.
+### Herdeck UI reference and compositing
+
+`design/agent-ui-reference.png` is rendered by the real `IconProvider` and
+`compose_panel` functions in `src/herdeck/icons.py`, using bundled agent glyphs
+and Inter fonts, tint fills and synthetic project/session data. It contains
+13 agent tiles and the bottom-right approval spotlight. It is reproducible:
+
+```sh
+PYTHONPATH=src python website/scripts/render-agent-reference.py
+```
+
+Use a Python environment with the root project's `dev` extra. This script has
+no runtime, hardware or network connection and uses a temporary icon cache.
+
+The built-in OpenAI `image_gen` tool edited each manufacturer's image using
+that UI reference. The second edit also referenced the completed hero for
+screen appearance. Full prompts and input roles are committed in
+[design/screen-composite-prompts.md](design/screen-composite-prompts.md).
+
+Selected exports (1254 × 1254 WebP, quality 92):
+
+- `public/images/deck-hero.webp` — source generation `exec-97d78ea9-6360-4ba6-8c97-981e66dab610.png`.
+- `public/images/deck-detail.webp` — source generation `exec-92ee16bc-6fda-45f4-a2dc-94cd25a39f7b.png`.
+
+These are **edited product visualizations**, not photographs of a live Herdeck
+session. The rendered UI is a reference for the edit, not a promise of exact
+pixel transfer. Credits, alt text and the hardware guide identify the composites.
+Both outputs were visually checked for the 5 + 5 + 3 square keys, bottom-right
+horizontal panel, recognizable agent marks and absence of stock app icons.
+The enclosure, stand, camera angle and hand placement follow the source D200.
+
+The browser demo remains an interactive diagram with eight simulated agents,
+five empty keys and the bottom-right display. Both localized Remotion films
+use the same selected images and identify the hardware/UI sources.
 
 ## Film direction
 

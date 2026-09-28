@@ -113,7 +113,7 @@ function Scene({
             padding: '6px 10px',
           }}
         >
-          Ulanzi D200 · {photo === 'deck-hero' ? 'Ulanzi' : 'Photo: Ulanzi'}
+          UI: Herdeck · D200: Ulanzi
         </div>
       )}
       <div

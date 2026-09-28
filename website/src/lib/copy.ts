@@ -44,7 +44,7 @@ export const copy = {
     foot: 'A control surface for AI coding agents. Built for Herdr.',
     credits: 'Visuals & credits',
     notice:
-      'D200 product images: Ulanzi, showing stock software. The interactive demo uses simulated agents.',
+      'D200 images show composited Herdeck UI with sample data. Hardware image source: Ulanzi.',
     skip: 'Skip to content',
     menu: 'Menu',
     close: 'Close',
@@ -88,7 +88,7 @@ export const copy = {
     foot: 'Ovládací pult pro AI coding agenty. Postavený pro Herdr.',
     credits: 'Vizuály a licence',
     notice:
-      'Produktové snímky D200: Ulanzi, s původním softwarem. Interaktivní ukázka používá simulované agenty.',
+      'Snímky D200 s vizualizovaným UI Herdecku a ukázkovými daty. Zdroj snímků hardwaru: Ulanzi.',
     skip: 'Přeskočit na obsah',
     menu: 'Menu',
     close: 'Zavřít',
