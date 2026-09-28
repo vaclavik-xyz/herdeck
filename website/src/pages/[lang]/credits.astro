@@ -17,18 +17,27 @@ const lang = Astro.params.lang as Lang;
     <p>
       {text(
         lang,
-        'Herdeck and this website are released under the MIT License. Copyright © 2026 Filip Vaclavik.',
-        'Herdeck i tento web jsou vydané pod licencí MIT. Copyright © 2026 Filip Vaclavik.',
+        'Herdeck and the website source code are released under the MIT License. Copyright © 2026 Filip Vaclavik.',
+        'Herdeck a zdrojový kód webu jsou vydané pod licencí MIT. Copyright © 2026 Filip Vaclavik.',
       )}{' '}
       <a href={`${repository}/blob/main/LICENSE`}>MIT License</a>.
     </p>
-    <h2>{text(lang, 'Product visualizations', 'Produktové vizualizace')}</h2>
+    <h2>{text(lang, 'D200 product images', 'Produktové snímky D200')}</h2>
     <p>
       {text(
         lang,
-        'The two product images are AI-created studio visualizations commissioned for this website using OpenAI image generation. They illustrate the physical control workflow. They are not photographs of production hardware or screenshots of the running app. The interactive deck uses simulated agents.',
-        'Dva produktové obrázky jsou studiové vizualizace vytvořené pomocí OpenAI image generation pro tento web. Ilustrují fyzické ovládání agentů. Nejde o fotografie produkčního hardwaru ani screenshoty běžící aplikace. Interaktivní deck používá simulované agenty.',
+        'The product images come from Ulanzi and show the real D200 model with stock Ulanzi software. They do not show Herdeck running on the device. The interactive deck uses simulated agents. Images remain the property of Ulanzi and are not covered by the source code MIT license.',
+        'Produktové snímky pocházejí od Ulanzi a ukazují skutečný model D200 s původním softwarem Ulanzi. Nezachycují spuštěný Herdeck. Interaktivní deck používá simulované agenty. Snímky zůstávají majetkem Ulanzi a nevztahuje se na ně licence MIT zdrojového kódu.',
       )}
+    </p>
+    <p>
+      <a href="https://www.ulanzi.com/cdn/shop/files/14_14_11zon_381246ba-6f9d-4199-a711-d5c63a6ecb9c.webp?v=1726212953">
+        {text(lang, 'Original D200 image', 'Originální snímek D200')}
+      </a>
+      ·{' '}
+      <a href="https://www.ulanzi.com/cdn/shop/files/8_8_11zon_8c923c8c-cc9c-4bd5-b66d-d07d2156f287.webp?v=1726212953">
+        {text(lang, 'Original desk photograph', 'Originální fotografie na stole')}
+      </a>
     </p>
     <h2>{text(lang, 'Film & original music', 'Film a původní hudba')}</h2>
     <p>

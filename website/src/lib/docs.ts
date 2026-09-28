@@ -128,8 +128,8 @@ export const docs: Doc[] = [
           ],
         ],
         note: [
-          'D200 support is currently verified on macOS. Website product images are illustrative AI-created visualizations, not photographs of a verified hardware setup.',
-          'Podpora D200 je aktuálně ověřená na macOS. Produktové obrázky na webu jsou ilustrativní AI vizualizace, nikoliv fotografie ověřené hardwarové sestavy.',
+          'D200 support is currently verified on macOS. Website product images are supplied by Ulanzi and show the D200 with stock software. The interactive demo illustrates Herdeck using simulated agents.',
+          'Podpora D200 je aktuálně ověřená na macOS. Produktové snímky na webu pocházejí od Ulanzi a ukazují D200 s původním softwarem. Interaktivní ukázka představuje Herdeck se simulovanými agenty.',
         ],
       },
       {

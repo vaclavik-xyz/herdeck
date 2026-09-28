@@ -29,19 +29,6 @@ const status: Record<string, string> = {
   </div>
   <div class="demo-hardware">
     <div class="demo-grid">
-      <div class="demo-status">
-        <img src="/favicon.png" width="34" height="34" alt="" />
-        <span data-summary>{text(lang, 'Needs you', 'Čeká na tebe')}</span>
-        <strong data-waiting>1</strong>
-        <small>{text(lang, 'agent waiting', 'čekající agent')}</small>
-        <div class="tiny-meter">
-          <i></i>
-          <i></i>
-          <i></i>
-          <i></i>
-          <i></i>
-        </div>
-      </div>
       {agents.map(([icon, name, project, state], index) => (
         <button
           class={`agent-key ${state}`}
@@ -58,6 +45,16 @@ const status: Record<string, string> = {
           <i class="key-bar"></i>
         </button>
       ))}
+      {Array.from({ length: 5 }).map(() => (
+        <div class="agent-key empty-key" aria-hidden="true"></div>
+      ))}
+      <div class="demo-status">
+        <strong data-waiting>1</strong>
+        <div>
+          <span data-summary>{text(lang, 'Needs you', 'Čeká na tebe')}</span>
+          <small>{text(lang, 'agent waiting', 'čekající agent')}</small>
+        </div>
+      </div>
     </div>
     <div class="demo-bezel">
       <span>herdeck</span>

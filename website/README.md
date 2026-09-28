@@ -65,10 +65,11 @@ Remotion itself has its own [license](https://www.remotion.dev/license).
 
 ## Assets and design
 
-The photo-style images are AI-generated product **visualizations**, not verified
-hardware photography. This is disclosed in the footer, hardware guide and credits.
-Prompts and art direction are in [DESIGN.md](DESIGN.md). Optimized WebP assets
-live in `public/images/`; no third-party image hotlinks or runtime font requests.
+Product images use the actual Ulanzi D200 manufacturer assets, showing stock
+Ulanzi software. They are credited separately from the MIT-licensed source code;
+see [DESIGN.md](DESIGN.md) for original URLs, image rights and hardware geometry.
+The browser demo uses simulated agents in the D200's 5 + 5 + 3 key layout.
+Local WebP assets live in `public/images/`; no image hotlinks or remote fonts.
 Agent icons and the Herdeck logo reuse repository assets. Font license files are
 in `public/fonts/`; icon attribution is in `../src/herdeck/assets/ATTRIBUTION.md`.
 

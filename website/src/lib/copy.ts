@@ -44,7 +44,7 @@ export const copy = {
     foot: 'A control surface for AI coding agents. Built for Herdr.',
     credits: 'Visuals & credits',
     notice:
-      'Product images are AI-created visualizations. The interactive demo uses simulated data.',
+      'D200 product images: Ulanzi, showing stock software. The interactive demo uses simulated agents.',
     skip: 'Skip to content',
     menu: 'Menu',
     close: 'Close',
@@ -88,7 +88,7 @@ export const copy = {
     foot: 'Ovládací pult pro AI coding agenty. Postavený pro Herdr.',
     credits: 'Vizuály a licence',
     notice:
-      'Produktové obrázky jsou vizualizace vytvořené pomocí AI. Interaktivní ukázka používá simulovaná data.',
+      'Produktové snímky D200: Ulanzi, s původním softwarem. Interaktivní ukázka používá simulované agenty.',
     skip: 'Přeskočit na obsah',
     menu: 'Menu',
     close: 'Zavřít',

@@ -74,14 +74,18 @@ function Scene({
           <Img
             src={staticFile(`images/${photo}.webp`)}
             style={{
-              width: '100%',
-              height: '100%',
+              position: 'absolute',
+              right: 0,
+              width: 720,
+              height: 720,
               objectFit: 'cover',
               transform: `scale(${1 + f * 0.00035})`,
             }}
           />
           <AbsoluteFill
-            style={{ background: 'linear-gradient(90deg,#09111ff5,#09111fb0 40%,#09111f20)' }}
+            style={{
+              background: 'linear-gradient(90deg,#09111f 40%,#09111f88 53%,transparent 70%)',
+            }}
           />
         </>
       )}
@@ -97,6 +101,21 @@ function Scene({
       >
         {children}
       </AbsoluteFill>
+      {photo && (
+        <div
+          style={{
+            position: 'absolute',
+            right: 40,
+            bottom: 58,
+            fontSize: 12,
+            color: white,
+            background: '#09111fcc',
+            padding: '6px 10px',
+          }}
+        >
+          Ulanzi D200 · {photo === 'deck-hero' ? 'Ulanzi' : 'Photo: Ulanzi'}
+        </div>
+      )}
       <div
         style={{
           position: 'absolute',
@@ -296,7 +315,7 @@ export function Film({ lang }: Props) {
       <Html5Audio src={staticFile('film/herdeck-score.mp3')} />
       <Sequence from={0} durationInFrames={beat(8)}>
         <Scene photo="deck-hero">
-          <Title>{t.intro.join('\n')}</Title>
+          <Title size={68}>{t.intro.join('\n')}</Title>
           <div style={{ fontSize: 20, marginTop: 28, color: cyan }}>herdeck</div>
         </Scene>
       </Sequence>
