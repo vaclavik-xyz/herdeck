@@ -14,6 +14,7 @@ from .model import (
     parse_subagents,
     parse_subagents_token,
 )
+from .presence_hub import clean_idle
 from .project_icon_discovery import ICON_MIMES, MAX_ICON_BYTES, icon_hash
 from .usage import usage_from_wire
 
@@ -204,6 +205,16 @@ class Progress:
 
 
 @dataclass
+class Presence:
+    """The bridge's aggregate presence (capability "presence"): the least
+    idle time over every runtime reporting to it, None when unknown."""
+
+    server_id: str
+    idle_s: float | None
+    clients: int
+
+
+@dataclass
 class Usage:
     """A bridge's provider usage snapshot (capability ``usage``), sent on
     connect and whenever it changes. ``providers`` is the validated
@@ -332,6 +343,7 @@ def decode_inbound(
     | ProjectIcon
     | Progress
     | Usage
+    | Presence
     | Unknown
 ):
     msg = json.loads(raw)
@@ -414,6 +426,15 @@ def decode_inbound(
         if not isinstance(sid, str):
             raise ValueError("usage frame missing server_id")
         return Usage(sid, usage_from_wire(msg.get("providers")))
+    if kind == "presence":
+        sid, clients = msg.get("server_id"), msg.get("clients")
+        if not isinstance(sid, str):
+            raise ValueError("presence frame missing server_id")
+        return Presence(
+            sid,
+            clean_idle(msg.get("idle_s")),
+            clients if type(clients) is int and clients >= 0 else 0,
+        )
     # Forward compatibility: a newer bridge may add frame types. Raising here
     # would reach Connector's on_error (ctl fails every pending request on it).
     return Unknown(str(kind))

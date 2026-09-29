@@ -58,6 +58,7 @@ from ..notify_events import interaction_keys as _interaction_keys
 from ..notify_icons import NotificationIconCache
 from ..orchestrator import Orchestrator, binary_answer
 from ..presence import IdleProbe
+from ..presence_hub import PRESENCE_CAPABILITY, PRESENCE_REPORT_S, PRESENCE_STALE_S
 from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
@@ -198,6 +199,15 @@ class LiveSource(
         # When the deck (a key, the triage hotkey, a banner drill) was last
         # used; None = not since start. [notifications.telegram].only_when_away.
         self._last_deck_press: float | None = None
+        # Presence across machines (bridge capability "presence"): this
+        # runtime's idle goes to every bridge every PRESENCE_REPORT_S; the
+        # bridge's aggregate per server (received at, idle s) feeds _user_away.
+        self._presence_clock = time.monotonic
+        self._remote_presence: dict[str, tuple[float, float | None]] = {}
+        self._presence_announced: set[str] = set()
+        self._presence_stop = threading.Event()
+        self._presence_wake = threading.Event()
+        self._presence_thread: threading.Thread | None = None
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
@@ -534,6 +544,8 @@ class LiveSource(
 
     def close(self) -> None:
         self._reminder_stop.set()
+        self._presence_stop.set()
+        self._presence_wake.set()
         with self._lock:
             pending = list(self._pending_done.values())
             self._pending_done.clear()
@@ -926,15 +938,80 @@ class LiveSource(
         for key in keys:
             self._notify_feed.withdraw({"server_id": key.server_id, "pane_id": key.pane_id})
 
-    def _user_away(self, seconds: float) -> bool:
-        """Idle on the deck host (HIDIdleTime) AND no deck press for ``seconds``
-        (notify thread). An unknown idle time (Linux) leaves only the deck
-        press to decide."""
+    def _local_idle(self) -> float | None:
+        """Seconds since input on this Mac or a deck press (the smaller), None
+        when both are unknown. Notify/presence threads only (may run ioreg)."""
+        known = []
         pressed = self._last_deck_press
-        if pressed is not None and time.monotonic() - pressed < seconds:
-            return False
+        if pressed is not None:
+            known.append(max(0.0, time.monotonic() - pressed))
         idle = self._idle_probe.idle_seconds()
-        return idle is None or idle >= seconds
+        if idle is not None:
+            known.append(idle)
+        return min(known) if known else None
+
+    def _on_presence(self, server_id: str, idle_s: float | None) -> None:
+        """Connector callback: a bridge's aggregate presence."""
+        with self._lock:
+            self._remote_presence[server_id] = (self._presence_clock(), idle_s)
+
+    def _remote_idles(self) -> list[float]:
+        now = self._presence_clock()
+        with self._lock:
+            reports = list(self._remote_presence.values())
+        return [
+            idle + (now - at)
+            for at, idle in reports
+            if idle is not None and now - at <= PRESENCE_STALE_S
+        ]
+
+    def _offers_presence(self, server_id: str) -> bool:
+        connector = getattr(self._runners.get(server_id), "connector", None)
+        caps = getattr(connector, "capabilities", None)
+        return isinstance(caps, frozenset | set) and PRESENCE_CAPABILITY in caps
+
+    def report_presence(self) -> int:
+        """Send this runtime's idle to every connected bridge offering presence."""
+        with self._lock:
+            connected = dict(self._connected)
+        targets = [
+            runner
+            for sid, runner in list(self._runners.items())
+            if connected.get(sid) and self._offers_presence(sid)
+        ]
+        if not targets:
+            return 0
+        msg = {"type": "presence", "idle_s": self._local_idle()}
+        for runner in targets:
+            runner.send(msg)
+        return len(targets)
+
+    def _presence_loop(self) -> None:
+        while not self._presence_stop.is_set():
+            try:
+                self.report_presence()
+            except Exception:
+                log.warning("presence report failed", exc_info=True)
+            self._presence_wake.wait(PRESENCE_REPORT_S)
+            self._presence_wake.clear()
+
+    def _ensure_presence_thread(self) -> None:
+        if self._presence_thread is not None or self._presence_stop.is_set():
+            return
+        self._presence_thread = threading.Thread(
+            target=self._presence_loop, name="herdeck-presence", daemon=True
+        )
+        self._presence_thread.start()
+
+    def _user_away(self, seconds: float) -> bool:
+        """No input on this Mac, no deck press, and no input on any other Mac
+        reporting to a bridge (capability "presence") for ``seconds``. Nothing
+        known at all counts as away."""
+        known = self._remote_idles()
+        local = self._local_idle()
+        if local is not None:
+            known.append(local)
+        return not known or min(known) >= seconds
 
     def _user_present(self) -> bool:
         """The user touched this host recently (notify thread: may run ioreg).
@@ -1084,6 +1161,13 @@ class LiveSource(
         )
 
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        if self._offers_presence(server_id):
+            with self._lock:
+                first = server_id not in self._presence_announced
+                self._presence_announced.add(server_id)
+            if first:  # report at once on (re)connect instead of after 30 s
+                self._ensure_presence_thread()
+                self._presence_wake.set()
         self._bridge_update_on_snapshot(server_id)
         self._hooks_on_snapshot(server_id)
         self._usage_agent_on_snapshot(server_id)
@@ -1224,6 +1308,10 @@ class LiveSource(
         )
 
     def _on_connection(self, server_id: str, up: bool) -> None:
+        if not up:
+            with self._lock:
+                self._remote_presence.pop(server_id, None)
+                self._presence_announced.discard(server_id)
         def mutate():
             with self._lock:
                 self._connected[server_id] = up
@@ -1644,6 +1732,7 @@ def build_live_source(
             ),
             on_usage=source._on_usage,
             on_lifecycle=source._on_lifecycle,
+            on_presence=source._on_presence,
             events_cursor=source._events_cursor,
         )
         runner = runner_factory(connector)

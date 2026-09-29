@@ -16,6 +16,7 @@ from .protocol import (
     Event,
     EventSync,
     LifecycleEvent,
+    Presence,
     Progress,
     ProjectIcon,
     Result,
@@ -90,6 +91,7 @@ class Connector:
         on_progress: Callable[[str, str, str], None] | None = None,
         on_usage: Callable[[str, bool, list | None], None] | None = None,
         on_lifecycle: Callable[[str, LifecycleEvent | EventSync], None] | None = None,
+        on_presence: Callable[[str, float | None], None] | None = None,
         events_cursor: Callable[[str], dict] | None = None,
     ):
         self.server = server
@@ -109,6 +111,7 @@ class Connector:
         # usage frames (capability ``usage``; False when disconnected) and,
         # with a usage frame, its ProviderUsage list. usage_hub consumes it.
         self._on_usage = on_usage
+        self._on_presence = on_presence
         # Bridge lifecycle events (capability "events"): the consumer's
         # callback, and ``events_cursor(server_id)`` -> the ``events`` field
         # of the connect-time ``list`` ({"after", "epoch", "client"}). A
@@ -354,6 +357,9 @@ class Connector:
                 self._on_progress(msg.req, msg.stage, msg.message)
         elif isinstance(msg, Usage):
             self._report_usage(True, msg.providers)
+        elif isinstance(msg, Presence):
+            if self._on_presence is not None:
+                self._on_presence(self.server.id, msg.idle_s)
         elif isinstance(msg, Unknown):
             return  # a newer bridge's frame type: ignored by design
         elif isinstance(msg, Error):
