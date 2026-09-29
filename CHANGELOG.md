@@ -6,6 +6,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Notifications: `done_min_work` / `done_short_delay` quiet `done` alerts for
+  short agent runs (a quick chat reply alerts only if still done after the delay).
+- Notifications: Telegram `only_when_away` now counts input on every Mac
+  connected to the bridge (bridge-aggregated presence).
+
 ## [0.13.1] - 2026-09-24
 
 ### Fixed

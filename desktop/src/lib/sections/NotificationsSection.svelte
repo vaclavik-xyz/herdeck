@@ -33,6 +33,8 @@
     banner_prompt: defaults.notifications.banner_prompt,
     skip_focused: defaults.notifications.skip_focused,
     remind_after: defaults.notifications.remind_after,
+    done_min_work: defaults.notifications.done_min_work,
+    done_short_delay: defaults.notifications.done_short_delay,
     subagents_done: defaults.notifications.subagents_done,
   };
   const NOTIF_LIST_DEFAULTS: Record<string, string[]> = {
@@ -128,6 +130,8 @@
   const bannerActions = $derived((getAt(payload, "base", "notifications", "banner_actions") as boolean) ?? NOTIF_DEFAULTS.banner_actions);
   const skipFocused = $derived((getAt(payload, "base", "notifications", "skip_focused") as boolean) ?? NOTIF_DEFAULTS.skip_focused);
   const remindAfter = $derived((getAt(payload, "base", "notifications", "remind_after") as number) ?? NOTIF_DEFAULTS.remind_after as number);
+  const doneMinWork = $derived((getAt(payload, "base", "notifications", "done_min_work") as number) ?? NOTIF_DEFAULTS.done_min_work as number);
+  const doneShortDelay = $derived((getAt(payload, "base", "notifications", "done_short_delay") as number) ?? NOTIF_DEFAULTS.done_short_delay as number);
   const subagentsDone = $derived((getAt(payload, "base", "notifications", "subagents_done") as boolean) ?? NOTIF_DEFAULTS.subagents_done);
   const bannerPrompt = $derived((getAt(payload, "base", "notifications", "banner_prompt") as boolean) ?? NOTIF_DEFAULTS.banner_prompt);
   const on = $derived((getAt(payload, "base", "notifications", "on") as string[]) ?? NOTIF_LIST_DEFAULTS.on);
@@ -423,6 +427,12 @@
   <OverrideField label="remind_after" help={HELP.remind_after} state={scState("remind_after")} inheritedDisplay={scHint("remind_after")} onstate={(s) => setScState("remind_after", s)}>
     <NumberField label="" int min={0} max={1440} value={scNumber("remind_after")} onchange={(v) => setSc("remind_after", v ?? 0)} />
   </OverrideField>
+  <OverrideField label="done_min_work" help={HELP.done_min_work} state={scState("done_min_work")} inheritedDisplay={scHint("done_min_work")} onstate={(s) => setScState("done_min_work", s)}>
+    <NumberField label="" int min={0} max={1440} value={scNumber("done_min_work")} onchange={(v) => setSc("done_min_work", v ?? 0)} />
+  </OverrideField>
+  <OverrideField label="done_short_delay" help={HELP.done_short_delay} state={scState("done_short_delay")} inheritedDisplay={scHint("done_short_delay")} onstate={(s) => setScState("done_short_delay", s)}>
+    <NumberField label="" int min={0} max={1440} value={scNumber("done_short_delay")} onchange={(v) => setSc("done_short_delay", v ?? 0)} />
+  </OverrideField>
   <OverrideField label="subagents_done" help={HELP.subagents_done} state={scState("subagents_done")} inheritedDisplay={scHint("subagents_done")} onstate={(s) => setScState("subagents_done", s)}>
     <BooleanField label="" value={scBool("subagents_done")} onchange={(v) => setSc("subagents_done", v)} />
   </OverrideField>
@@ -474,6 +484,8 @@
   <BooleanField label="banner_prompt" help={HELP.banner_prompt} value={bannerPrompt} onchange={(v) => set("banner_prompt", v)} />
   <BooleanField label="skip_focused" help={HELP.skip_focused} value={skipFocused} onchange={(v) => set("skip_focused", v)} />
   <NumberField label="remind_after" help={HELP.remind_after} int min={0} max={1440} value={remindAfter} onchange={(v) => set("remind_after", v ?? 0)} />
+  <NumberField label="done_min_work" help={HELP.done_min_work} int min={0} max={1440} value={doneMinWork} onchange={(v) => set("done_min_work", v ?? 0)} />
+  <NumberField label="done_short_delay" help={HELP.done_short_delay} int min={0} max={1440} value={doneShortDelay} onchange={(v) => set("done_short_delay", v ?? 0)} />
   <BooleanField label="subagents_done" help={HELP.subagents_done} value={subagentsDone} onchange={(v) => set("subagents_done", v)} />
   <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} resetKey={`base:${reloadRev}:notifications:backends`} onchange={(s, l) => setTri("backends", s, l)} />
   <FieldGroup title={lm.group_sounds}>

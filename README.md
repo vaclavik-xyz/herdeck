@@ -1339,6 +1339,8 @@ banner_actions = false             # opt-in: Approve/Deny or Reply on blocked ma
 banner_prompt = false              # opt-in: add a short prompt excerpt to blocked alerts
 skip_focused = true                # no local banner for the herdr-focused pane while you use this Mac
 remind_after = 0                   # minutes; >0 re-alerts a still-blocked agent (max 3x)
+done_min_work = 0                  # minutes; >0: a done after a run this long alerts at once
+done_short_delay = 0               # minutes; a shorter run alerts only if still done after this (0 = never)
 subagents_done = false             # opt-in: one alert when an agent's subagents all finished
 
 # Optional: which macOS system sound plays per event. A missing key falls
@@ -1409,6 +1411,11 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 - `remind_after = N` (minutes, 0 = off): an agent still blocked in the same
   episode alerts again after N, 2N and 3N minutes, titled
   `claude · still needs input (10 min)`.
+- `done_min_work = N` (minutes, 0 = off): a `done` after an agent run of at
+  least N minutes alerts at once. A shorter run (a quick chat reply) alerts
+  only if the agent is still done `done_short_delay` minutes later (0 = never).
+  A run spans blocked/waiting stretches; when the runtime never saw the run
+  start (restart), the alert goes out at once. Tiles are not affected.
 - `subagents_done = true` (opt-in): one alert, titled
   `claude · subagents done (3)`, when an agent that had subagents running
   (see [Subagent tracking](#subagent-tracking)) has none running any more and
@@ -1422,7 +1429,11 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 - `[notifications.telegram].only_when_away = N` (minutes, 0 = off): Telegram
   alerts go out only when this Mac has been idle for N minutes AND the deck was
   not pressed in that window. On Linux there is no idle source, so only deck
-  presses count. macOS banners are not affected.
+  presses count. macOS banners are not affected. Presence is aggregated by
+  the bridge from every connected runtime (bridge capability `presence`), so
+  typing on any connected Mac counts as present. Run Telegram from ONE
+  always-on runtime (e.g. the web cockpit next to the bridge); a second
+  runtime polling the same bot conflicts.
 - `banner_prompt = true` (opt-in) appends a one-line, sanitized excerpt of the
   blocked prompt (about 180 characters) to the alert body — on every backend,
   so it also shows on a locked screen and in Telegram.
