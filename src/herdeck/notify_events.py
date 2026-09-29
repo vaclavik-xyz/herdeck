@@ -136,3 +136,42 @@ def event_notification_body(agent: AgentState, *, multi_server: bool) -> str:
     if multi_server:
         parts.append(agent.key.server_id)
     return " · ".join(parts)
+
+
+# A run is one stretch of work: it starts when the agent turns active and ends
+# at DONE (its length gates the "done" alert, [notifications].done_min_work).
+# Blocked/waiting inside a run do not restart it; UNKNOWN is neutral.
+RUN_ACTIVE_STATUSES = frozenset({Status.WORKING, Status.BLOCKED, Status.WAITING})
+
+
+class RunTracker:
+    """Run length per agent. ``last(key)`` = (done since ms, run ms or None
+    when the run start was never seen). Callers serialize access."""
+
+    def __init__(self) -> None:
+        self._start: dict[AgentKey, int] = {}
+        self._last: dict[AgentKey, tuple[int, int | None]] = {}
+
+    def observe(self, state: AgentState, now_ms: int) -> None:
+        key, since = state.key, state.status_since_ms
+        if state.status in RUN_ACTIVE_STATUSES:
+            self._start.setdefault(key, since if since is not None else now_ms)
+            self._last.pop(key, None)
+        elif state.status is Status.DONE:
+            prev = self._last.get(key)
+            if prev is not None and (since is None or prev[0] == since):
+                return  # the same done episode seen again
+            done_since = since if since is not None else now_ms
+            start = self._start.pop(key, None)
+            self._last[key] = (done_since, None if start is None else max(0, done_since - start))
+        elif state.status is Status.IDLE:
+            self._start.pop(key, None)
+            self._last.pop(key, None)
+
+    def last(self, key: AgentKey) -> tuple[int, int | None] | None:
+        return self._last.get(key)
+
+    def forget(self, keys) -> None:
+        for key in keys:
+            self._start.pop(key, None)
+            self._last.pop(key, None)

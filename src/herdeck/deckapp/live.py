@@ -49,6 +49,7 @@ from ..notify import (
 )
 from ..notify_events import (
     NOTIFY_EVENT_STATUSES,
+    RunTracker,
     SubagentBursts,
     event_notification_body,
     newly_entered,
@@ -113,6 +114,14 @@ def _thread_notify_schedule(fn) -> None:
     threading.Thread(target=fn, daemon=True, name="herdeck-notify").start()
 
 
+def _start_done_timer(delay: float, fn):
+    """A deferred short-run "done" check (daemon timer thread)."""
+    timer = threading.Timer(delay, fn)
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
 class LiveSource(
     AgentCardMixin,
     BridgeUpdateMixin,
@@ -150,6 +159,7 @@ class LiveSource(
         idle_probe: IdleProbe | None = None,
         shell_banners: bool = True,
         event_store: EventCursorStore | None = None,
+        done_timer=None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -171,6 +181,13 @@ class LiveSource(
         # [notifications].subagents_done: per-agent subagent bursts
         # (connector thread only, like _notify_keys).
         self._subagent_bursts = SubagentBursts()
+        # [notifications].done_min_work / done_short_delay: run length per
+        # agent (under self._lock) and the pending deferred "done" check per
+        # agent (one at a time; a newer done episode replaces it).
+        self._runs = RunTracker()
+        self._done_timer = done_timer or _start_done_timer
+        self._pending_done: dict[AgentKey, object] = {}
+        self._wall_ms = lambda: time.time_ns() // 1_000_000
         # Blocked episodes that may get reminders: key -> (episode, since, sent).
         self._reminders: dict[AgentKey, tuple[str, float, int]] = {}
         self._reminder_stop = threading.Event()
@@ -517,6 +534,11 @@ class LiveSource(
 
     def close(self) -> None:
         self._reminder_stop.set()
+        with self._lock:
+            pending = list(self._pending_done.values())
+            self._pending_done.clear()
+        for handle in pending:
+            handle.cancel()
         self._card_close()  # stop card terminal previews while runners still send
         for runner in list(self._runners.values()):
             runner.close()
@@ -649,13 +671,17 @@ class LiveSource(
         )
 
     # --- connector callbacks (run on the connector's loop thread) ---
-    def _fire_notify(self, event: str, agent: AgentState, *, at_ms: int | None = None) -> None:
+    def _fire_notify(
+        self, event: str, agent: AgentState, *, at_ms: int | None = None, deferred: bool = False
+    ) -> None:
         """Schedule one event alert (never raises, never blocks the loop).
         ``at_ms``: when the bridge saw the transition (reminders count from it)."""
         if self._notifier is None:
             return
         n = self._config.notifications
         if event not in n.on:
+            return
+        if event == "done" and not deferred and self._quiet_done(agent):
             return
         if event == "blocked":
             self._track_reminder(agent.key, at_ms)
@@ -684,6 +710,56 @@ class LiveSource(
             time.time_ns() // 1_000_000,
         )
         self._notify_schedule(lambda: self._deliver_alert(event, agent, title, body, sound, meta))
+
+    def _quiet_done(self, agent: AgentState) -> bool:
+        """[notifications].done_min_work: True when this "done" must not alert
+        now — a short run is dropped (done_short_delay 0) or re-checked later.
+        An unknown run length counts as long."""
+        n = self._config.notifications
+        if n.done_min_work <= 0:
+            return False
+        with self._lock:
+            run = self._runs.last(agent.key)
+        if run is None or run[1] is None or run[1] >= n.done_min_work * 60_000:
+            return False
+        done_since, run_ms = run
+        if n.done_short_delay <= 0:
+            log.info(
+                "done alert suppressed (short run %ds) agent=%s:%s",
+                run_ms // 1000, agent.key.server_id, agent.key.pane_id,
+            )
+            return True
+        due_ms = done_since + n.done_short_delay * 60_000
+        remaining = max(0.0, (due_ms - self._wall_ms()) / 1000.0)
+        key = agent.key
+        with self._lock:
+            old = self._pending_done.pop(key, None)
+        if old is not None:
+            old.cancel()
+        handle = self._done_timer(remaining, lambda: self._deferred_done(key, done_since))
+        with self._lock:
+            self._pending_done[key] = handle
+        log.info(
+            "done alert deferred %.0fs (short run %ds) agent=%s:%s",
+            remaining, run_ms // 1000, key.server_id, key.pane_id,
+        )
+        return True
+
+    def _deferred_done(self, key: AgentKey, done_since: int) -> None:
+        """Timer thread: alert a short-run "done" still unanswered."""
+        with self._lock:
+            self._pending_done.pop(key, None)
+            state = self._agents.get(key)
+            run = self._runs.last(key)
+        if state is None or state.status is not Status.DONE or run is None or run[0] != done_since:
+            return
+        self._fire_notify("done", state, deferred=True)
+
+    def _cancel_pending_done(self, key: AgentKey) -> None:
+        """Caller holds self._lock."""
+        handle = self._pending_done.pop(key, None)
+        if handle is not None:
+            handle.cancel()
 
     # --- reminders ([notifications].remind_after) -----------------------------
 
@@ -1038,11 +1114,17 @@ class LiveSource(
                     if key.server_id != server_id
                 }
                 self._agents.update(new_by_key)
+                now = self._wall_ms()
+                self._runs.forget(prev_keys - new_by_key.keys())
+                for state in states:
+                    self._runs.observe(state, now)
                 for key in recycled:
                     self._preread.pop(key, None)
                     self._preread_req.pop(key, None)
                     self._block_episode.pop(key, None)
                     self._notify_throttle.forget(key)
+                    self._runs.forget((key,))
+                    self._cancel_pending_done(key)
                 self._subagent_bursts.forget(recycled)
             if self._drilled_key() in recycled:
                 self._active_read_req = None
@@ -1100,11 +1182,14 @@ class LiveSource(
                 if self._agents.get(state.key) != state:
                     self._bump_semantic_locked((state.key,))
                 self._agents[state.key] = state
+                self._runs.observe(state, self._wall_ms())
                 if recycled:
                     self._preread.pop(state.key, None)
                     self._preread_req.pop(state.key, None)
                     self._block_episode.pop(state.key, None)
                     self._notify_throttle.forget(state.key)
+                    self._runs.forget((state.key,))
+                    self._cancel_pending_done(state.key)
                     self._subagent_bursts.forget((state.key,))
             # Same rule for a single-pane event: only a real unblock clears the
             # drilled prompt.
