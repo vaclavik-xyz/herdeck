@@ -84,6 +84,12 @@ class Notifications:
     # Minutes (0 = off): an agent still blocked this long after its episode
     # began alerts again, once per interval, at most REMIND_MAX times.
     remind_after: int = 0
+    # Minutes (0 = off): a "done" after a run at least this long alerts at
+    # once; a shorter run (a chat reply) follows done_short_delay.
+    done_min_work: int = 0
+    # Minutes: a short-run "done" alerts only if the agent is still in that
+    # same done episode this long later; 0 = a short run never alerts.
+    done_short_delay: int = 0
     # Opt-in: one alert when an agent's last running subagent finished and
     # the agent itself is idle, blocked or done (notify_events.SubagentBursts).
     subagents_done: bool = False
@@ -427,6 +433,8 @@ def parse_notifications(n: dict) -> Notifications:
         banner_prompt=notification_flag(n, "banner_prompt", False),
         skip_focused=notification_flag(n, "skip_focused", True),
         remind_after=notification_minutes(n, "remind_after"),
+        done_min_work=notification_minutes(n, "done_min_work"),
+        done_short_delay=notification_minutes(n, "done_short_delay"),
         subagents_done=notification_flag(n, "subagents_done", False),
     )
 

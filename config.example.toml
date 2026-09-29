@@ -73,6 +73,11 @@ skip_focused = true
 # Minutes (0 = off): alert again for an agent still blocked this long, once
 # per interval, at most three times per block episode.
 remind_after = 0
+# Quiet "done" for short runs (chatting): a run >= done_min_work minutes
+# alerts at once; a shorter one alerts only if still done after
+# done_short_delay minutes (0 = never). 0 = off.
+done_min_work = 0
+done_short_delay = 0
 # Opt-in: one alert ("claude · subagents done (3)") when an agent's last running
 # subagent finished and the agent itself is idle, blocked or done.
 subagents_done = false

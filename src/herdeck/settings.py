@@ -444,6 +444,8 @@ def _notifications_config(raw: dict | None) -> Notifications:
         banner_prompt=notification_flag(raw, "banner_prompt", False),
         skip_focused=notification_flag(raw, "skip_focused", True),
         remind_after=notification_minutes(raw, "remind_after"),
+        done_min_work=notification_minutes(raw, "done_min_work"),
+        done_short_delay=notification_minutes(raw, "done_short_delay"),
         subagents_done=notification_flag(raw, "subagents_done", False),
     )
 
