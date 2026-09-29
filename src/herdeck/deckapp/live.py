@@ -187,7 +187,7 @@ class LiveSource(
         # agent (one at a time; a newer done episode replaces it).
         self._runs = RunTracker()
         self._done_timer = done_timer or _start_done_timer
-        self._pending_done: dict[AgentKey, object] = {}
+        self._pending_done: dict[AgentKey, tuple[int, object]] = {}
         self._wall_ms = lambda: time.time_ns() // 1_000_000
         # Blocked episodes that may get reminders: key -> (episode, since, sent).
         self._reminders: dict[AgentKey, tuple[str, float, int]] = {}
@@ -547,7 +547,7 @@ class LiveSource(
         self._presence_stop.set()
         self._presence_wake.set()
         with self._lock:
-            pending = list(self._pending_done.values())
+            pending = [handle for _since, handle in self._pending_done.values()]
             self._pending_done.clear()
         for handle in pending:
             handle.cancel()
@@ -747,10 +747,10 @@ class LiveSource(
         with self._lock:
             old = self._pending_done.pop(key, None)
         if old is not None:
-            old.cancel()
+            old[1].cancel()
         handle = self._done_timer(remaining, lambda: self._deferred_done(key, done_since))
         with self._lock:
-            self._pending_done[key] = handle
+            self._pending_done[key] = (done_since, handle)
         log.info(
             "done alert deferred %.0fs (short run %ds) agent=%s:%s",
             remaining, run_ms // 1000, key.server_id, key.pane_id,
@@ -759,8 +759,13 @@ class LiveSource(
 
     def _deferred_done(self, key: AgentKey, done_since: int) -> None:
         """Timer thread: alert a short-run "done" still unanswered."""
+        if self._reminder_stop.is_set():  # close() ran
+            return
         with self._lock:
-            self._pending_done.pop(key, None)
+            # Pop only our own entry: a newer timer may have replaced it.
+            entry = self._pending_done.get(key)
+            if entry is not None and entry[0] == done_since:
+                del self._pending_done[key]
             state = self._agents.get(key)
             run = self._runs.last(key)
         if state is None or state.status is not Status.DONE or run is None or run[0] != done_since:
@@ -769,9 +774,9 @@ class LiveSource(
 
     def _cancel_pending_done(self, key: AgentKey) -> None:
         """Caller holds self._lock."""
-        handle = self._pending_done.pop(key, None)
-        if handle is not None:
-            handle.cancel()
+        entry = self._pending_done.pop(key, None)
+        if entry is not None:
+            entry[1].cancel()
 
     # --- reminders ([notifications].remind_after) -----------------------------
 
@@ -995,13 +1000,18 @@ class LiveSource(
             self._presence_wake.wait(PRESENCE_REPORT_S)
             self._presence_wake.clear()
 
-    def _ensure_presence_thread(self) -> None:
-        if self._presence_thread is not None or self._presence_stop.is_set():
-            return
-        self._presence_thread = threading.Thread(
-            target=self._presence_loop, name="herdeck-presence", daemon=True
-        )
-        self._presence_thread.start()
+    def _ensure_presence_thread(self) -> bool:
+        """Start the reporter once; True when this call started it (it reports
+        immediately, so the caller need not wake it)."""
+        with self._lock:
+            if self._presence_thread is not None or self._presence_stop.is_set():
+                return False
+            thread = threading.Thread(
+                target=self._presence_loop, name="herdeck-presence", daemon=True
+            )
+            self._presence_thread = thread
+        thread.start()
+        return True
 
     def _user_away(self, seconds: float) -> bool:
         """No input on this Mac, no deck press, and no input on any other Mac
@@ -1166,8 +1176,8 @@ class LiveSource(
                 first = server_id not in self._presence_announced
                 self._presence_announced.add(server_id)
             if first:  # report at once on (re)connect instead of after 30 s
-                self._ensure_presence_thread()
-                self._presence_wake.set()
+                if not self._ensure_presence_thread():
+                    self._presence_wake.set()
         self._bridge_update_on_snapshot(server_id)
         self._hooks_on_snapshot(server_id)
         self._usage_agent_on_snapshot(server_id)
@@ -1200,6 +1210,11 @@ class LiveSource(
                 self._agents.update(new_by_key)
                 now = self._wall_ms()
                 self._runs.forget(prev_keys - new_by_key.keys())
+                # Forget a recycled pane's old run BEFORE observing, or the
+                # first observation of the new one would be wiped.
+                for key in recycled:
+                    self._runs.forget((key,))
+                    self._cancel_pending_done(key)
                 for state in states:
                     self._runs.observe(state, now)
                 for key in recycled:
@@ -1207,8 +1222,6 @@ class LiveSource(
                     self._preread_req.pop(key, None)
                     self._block_episode.pop(key, None)
                     self._notify_throttle.forget(key)
-                    self._runs.forget((key,))
-                    self._cancel_pending_done(key)
                 self._subagent_bursts.forget(recycled)
             if self._drilled_key() in recycled:
                 self._active_read_req = None
@@ -1266,14 +1279,15 @@ class LiveSource(
                 if self._agents.get(state.key) != state:
                     self._bump_semantic_locked((state.key,))
                 self._agents[state.key] = state
+                if recycled:
+                    self._runs.forget((state.key,))
+                    self._cancel_pending_done(state.key)
                 self._runs.observe(state, self._wall_ms())
                 if recycled:
                     self._preread.pop(state.key, None)
                     self._preread_req.pop(state.key, None)
                     self._block_episode.pop(state.key, None)
                     self._notify_throttle.forget(state.key)
-                    self._runs.forget((state.key,))
-                    self._cancel_pending_done(state.key)
                     self._subagent_bursts.forget((state.key,))
             # Same rule for a single-pane event: only a real unblock clears the
             # drilled prompt.

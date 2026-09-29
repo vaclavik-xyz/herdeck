@@ -179,3 +179,75 @@ def test_short_run_through_bridge_event_path_is_deferred(tmp_path):
     src._on_lifecycle(server.id, ev("done", 1))
     assert [i for i in src._notify_feed.state()["items"] if i["kind"] == "alert"] == []
     assert timers.pending[0]["delay"] == 600.0
+
+
+# --- final-review fixes --------------------------------------------------------
+
+
+def test_recycled_pane_first_run_is_tracked():
+    src, server, notifier, timers = _live(now_ms=MIN)
+    old = replace(agent(server.id, "p", Status.WORKING, terminal_id="t1"), status_since_ms=0)
+    src._on_snapshot(server.id, [old])
+    new = replace(agent(server.id, "p", Status.WORKING, terminal_id="t2"), status_since_ms=1000)
+    src._on_event(server.id, new)
+    done = replace(agent(server.id, "p", Status.DONE, terminal_id="t2"), status_since_ms=MIN)
+    src._on_event(server.id, done)
+    assert notifier.calls == []
+    assert len(timers.pending) == 1
+
+
+def test_recycled_pane_via_snapshot_first_run_is_tracked():
+    src, server, notifier, timers = _live(now_ms=MIN)
+    old = replace(agent(server.id, "p", Status.IDLE, terminal_id="t1"), status_since_ms=0)
+    src._on_snapshot(server.id, [old])
+    new = replace(agent(server.id, "p", Status.WORKING, terminal_id="t2"), status_since_ms=1000)
+    src._on_snapshot(server.id, [new])
+    done = replace(agent(server.id, "p", Status.DONE, terminal_id="t2"), status_since_ms=MIN)
+    src._on_event(server.id, done)
+    assert notifier.calls == []
+    assert len(timers.pending) == 1
+
+
+def test_close_cancels_pending_timer_and_late_fire_posts_nothing():
+    src, server, notifier, timers = _live(now_ms=MIN)
+    src._on_snapshot(server.id, [st("p", Status.WORKING, 0, server.id)])
+    src._on_event(server.id, st("p", Status.DONE, MIN, server.id))
+    fn = timers.pending[0]["fn"]
+    src.close()
+    assert timers.pending[0]["cancelled"] is True
+    fn()  # a timer already running when close() hit
+    assert notifier.calls == []
+
+
+def test_stale_timer_does_not_pop_a_newer_entry():
+    src, server, notifier, timers = _live(now_ms=MIN)
+    src._on_snapshot(server.id, [st("p", Status.WORKING, 0, server.id)])
+    src._on_event(server.id, st("p", Status.DONE, MIN, server.id))
+    stale = timers.pending[0]["fn"]
+    src._on_event(server.id, st("p", Status.WORKING, 2 * MIN, server.id))
+    src._on_event(server.id, st("p", Status.DONE, 3 * MIN, server.id))
+    key = AgentKey(server.id, "p")
+    assert src._pending_done[key][0] == 3 * MIN
+    stale()
+    assert key in src._pending_done and src._pending_done[key][0] == 3 * MIN
+    assert notifier.calls == []
+
+
+def test_ensure_presence_thread_starts_exactly_one():
+    import threading
+
+    src, _server, _n, _t = _live()
+    src._presence_loop = lambda: None
+    results = []
+    barrier = threading.Barrier(8)
+
+    def go():
+        barrier.wait()
+        results.append(src._ensure_presence_thread())
+
+    threads = [threading.Thread(target=go) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert results.count(True) == 1
