@@ -1930,6 +1930,10 @@ async def _serve_connection(
             except ValueError:
                 msg = None
             kind = msg.get("type") if isinstance(msg, dict) else None
+            if readonly and kind == "presence":
+                # Read-only runtimes still report it; ignore silently, an
+                # error frame would fail their in-flight card reads.
+                continue
             if readonly and kind not in READONLY_MESSAGES:
                 req = msg.get("req") if isinstance(msg, dict) else None
                 await send(

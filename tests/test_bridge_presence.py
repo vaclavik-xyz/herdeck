@@ -88,8 +88,11 @@ async def test_readonly_client_cannot_report_presence():
     async with _bridge(hub) as url:
         ws, _ = await _connect(url, "view")
         await ws.send(json.dumps({"type": "presence", "idle_s": 1.0}))
-        reply = json.loads(await asyncio.wait_for(ws.recv(), 3))
-        assert reply["type"] == "error"
+        # Silently ignored: an error frame (empty req) would fail in-flight
+        # card reads on the runtime, which reports presence every 30 s.
+        with contextlib.suppress(TimeoutError):
+            frame = await asyncio.wait_for(ws.recv(), 0.3)
+            raise AssertionError(f"unexpected frame {frame!r}")
         assert hub.aggregate() == (None, 0)
         await ws.close()
 
