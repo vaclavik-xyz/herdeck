@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-01
+
 ### Added
 - Bridge-sent Telegram alerts (one-way and interactive) for the bridge's own
   agents, so they arrive while every Mac sleeps. Configured from the desktop
@@ -29,6 +31,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and every bot reply (stale, not authorized, /status, errors). The alert no
   longer shows the internal pane id; buttons of already-sent alerts keep
   working.
+
+### Fixed
+- Telegram: an alert's Approve / Deny / Stop buttons and text replies are
+  pinned to the question that alert showed. A tap on an older alert after the
+  agent asked something new in the same block answers "stale" instead of
+  answering the unseen question (bridge- and runtime-sent alerts).
+- Shared settings: a runtime ignores unknown sections from a newer bridge
+  instead of dropping the whole document.
 
 ## [0.14.0] - 2026-09-30
 
