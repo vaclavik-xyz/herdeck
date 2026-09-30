@@ -960,6 +960,9 @@ class LiveSource(
         with self._lock:
             self._remote_presence[server_id] = (self._presence_clock(), idle_s)
 
+    def _on_settings(self, server_id: str, frame) -> None:
+        """Connector callback: the bridge's shared settings (filled in later)."""
+
     def _remote_idles(self) -> list[float]:
         now = self._presence_clock()
         with self._lock:
@@ -1747,6 +1750,7 @@ def build_live_source(
             on_usage=source._on_usage,
             on_lifecycle=source._on_lifecycle,
             on_presence=source._on_presence,
+            on_settings=source._on_settings,
             events_cursor=source._events_cursor,
         )
         runner = runner_factory(connector)
