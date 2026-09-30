@@ -103,6 +103,8 @@ class RuntimeServices:
             send=self._send,
             current_agent=self._current_agent,
             config_for=self._config_for,
+            answer_claim=self._answer_claim,
+            claim_stale=self._claim_stale,
         )
         self.semantic = SemanticAPI(
             self.control,
@@ -176,6 +178,15 @@ class RuntimeServices:
     def _current_agent(self, key: AgentKey) -> AgentState | None:
         agent = getattr(self._source(), "semantic_agent", None)
         return agent(key) if callable(agent) else None
+
+    def _answer_claim(self, key: AgentKey) -> dict | None:
+        claim = getattr(self._source(), "telegram_answer_claim", None)
+        return claim(key) if callable(claim) else None
+
+    def _claim_stale(self, key: AgentKey, claim: dict) -> bool:
+        stale = getattr(self._source(), "telegram_claim_stale", None)
+        # a source that cannot judge a claim cannot vouch for it either
+        return stale(key, claim) if callable(stale) else True
 
     def _server_available(self, server_id: str) -> bool:
         available = getattr(self._source(), "semantic_server_available", None)

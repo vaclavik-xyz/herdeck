@@ -36,6 +36,7 @@ import threading
 import time
 
 from ..connector import EVENTS_CAPABILITY
+from ..events import prompt_revision
 from ..model import AgentKey, AgentState, Status
 from ..protocol import EventSync, LifecycleEvent
 from . import event_cursor as _event_cursor
@@ -99,6 +100,10 @@ class BridgeEventsMixin:
         self._ev_revision: dict[AgentKey, tuple[str, str | None]] = {}
         # Blocked panes whose bridge event came without a prompt (local read).
         self._ev_prompt_missing: set[AgentKey] = set()
+        # Guarded answers this runtime sent per pane (any origin: deck, card,
+        # banner, cockpit, Telegram). Under self._lock. A Telegram alert's
+        # claim is stale once another answer went out after it was pinned.
+        self._answers_sent: dict[AgentKey, int] = {}
 
     # --- connector hooks ------------------------------------------------------
     def _events_cursor(self, server_id: str) -> dict:
@@ -352,9 +357,13 @@ class BridgeEventsMixin:
             return msg
         if msg.get("type") == "act" and msg.get("guard") is False:
             return msg  # a forced key (stop) is not an answer
-        if "episode_id" in msg or not isinstance(msg.get("pane_id"), str):
+        if not isinstance(msg.get("pane_id"), str):
             return msg
         key = AgentKey(server_id, msg["pane_id"])
+        with self._lock:
+            self._answers_sent[key] = self._answers_sent.get(key, 0) + 1
+        if "episode_id" in msg:
+            return msg  # a claim (a Telegram alert's question) is kept as sent
         with self._lock:
             state = self._agents.get(key)
             if state is None or state.status is not Status.BLOCKED or not state.episode_id:
@@ -366,6 +375,55 @@ class BridgeEventsMixin:
         if revision is not None and revision[0] == state.episode_id and revision[1]:
             out["prompt_revision"] = revision[1]
         return out
+
+    # --- Telegram alert claims ---------------------------------------------------
+    def telegram_answer_claim(self, key: AgentKey) -> dict | None:
+        """The question ``key``'s interactive Telegram alert shows now (None:
+        not in a block episode). With an events bridge it names the bridge
+        episode + prompt revision, which also go on the wire (``wire``) so the
+        bridge's guard judges the claimed question; with an older bridge it is
+        the local block episode + the pre-read prompt's revision, checked
+        here only. Any thread."""
+        with self._lock:
+            return self._claim_locked(key)
+
+    def telegram_claim_stale(self, key: AgentKey, claim: dict) -> bool:
+        """Is the question ``claim`` pinned gone: another block episode, a
+        changed prompt, or an answer since (sent from here, or reported by an
+        events bridge) — even before the next question was read?"""
+        with self._lock:
+            now = self._claim_locked(key)
+        if now is None or now["episode"] != claim.get("episode"):
+            return True
+        if now["answers"] != claim.get("answers") or (now["spent"] and not claim.get("spent")):
+            return True
+        shown = claim.get("revision")
+        return bool(shown and now["revision"] and now["revision"] != shown)
+
+    def _claim_locked(self, key: AgentKey) -> dict | None:
+        state = self._agents.get(key)
+        episode = self._block_episode.get(key)
+        if state is None or state.status is not Status.BLOCKED or episode is None:
+            return None
+        events = state.episode_id == episode and self._bridge_events(key.server_id)
+        if events:
+            known = self._ev_revision.get(key)
+            revision = known[1] if known is not None and known[0] == episode else None
+        else:
+            prompt = self._preread.get(key)
+            revision = prompt_revision(prompt) if isinstance(prompt, str) and prompt else None
+        wire = {}
+        if events:
+            wire = {"episode_id": episode}
+            if revision:
+                wire["prompt_revision"] = revision
+        return {
+            "episode": episode,
+            "revision": revision,
+            "spent": episode in self._answered_episodes,
+            "answers": self._answers_sent.get(key, 0),
+            "wire": wire,
+        }
 
     def _wrap_runner(self, server_id: str, runner):
         return StampingRunner(runner, lambda msg: self._stamp_answer(server_id, msg))

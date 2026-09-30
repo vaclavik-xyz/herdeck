@@ -32,12 +32,19 @@ class RuntimeAgentControl:
         current_agent: Callable[[AgentKey], AgentState | None],
         clock=None,
         config_for: Callable[[str], Config | None] | None = None,
+        answer_claim: Callable[[AgentKey], dict | None] | None = None,
+        claim_stale: Callable[[AgentKey, dict], bool] | None = None,
     ):
         self._config = config
         # Per-server effective config (the agent's own bridge's shared
         # settings: answer profiles, [safety]); None / a None result = the
         # local config.
         self._config_for = config_for
+        # A Telegram alert pins the question it showed (``answer_claim``) and
+        # its answers are refused as stale once that question was answered or
+        # replaced (``claim_stale``); both read the runtime's episode state.
+        self._answer_claim = answer_claim
+        self._claim_stale = claim_stale
         self._send = send
         self._current_agent = current_agent
         self._clock = clock or time.monotonic
@@ -63,6 +70,18 @@ class RuntimeAgentControl:
 
     def current_agent(self, key: AgentKey) -> AgentState | None:
         return self._current_agent(key)
+
+    def answer_claim(self, key: AgentKey) -> dict | None:
+        """The question ``key``'s Telegram alert shows right now (None: none to
+        pin); TelegramInteractor passes it back with the alert's answers."""
+        return self._answer_claim(key) if self._answer_claim is not None else None
+
+    def _stale(self, key: AgentKey, claim: dict | None) -> bool:
+        return (
+            claim is not None
+            and self._claim_stale is not None
+            and self._claim_stale(key, claim)
+        )
 
     def owns(self, req: str, server_id: str | None = None) -> Command | None:
         """The command a pending request ``req`` belongs to (None when it is not
@@ -114,6 +133,7 @@ class RuntimeAgentControl:
         force: bool = False,
         always: bool = False,
         confirmed: bool = False,
+        claim: dict | None = None,
     ) -> ActionResult:
         return await self._act(
             "approve",
@@ -122,6 +142,7 @@ class RuntimeAgentControl:
             force=force,
             always=always,
             confirmed=confirmed,
+            claim=claim,
         )
 
     async def deny(
@@ -131,6 +152,7 @@ class RuntimeAgentControl:
         timeout: float | None = 3.0,
         force: bool = False,
         confirmed: bool = False,
+        claim: dict | None = None,
     ) -> ActionResult:
         return await self._act(
             "deny",
@@ -139,6 +161,7 @@ class RuntimeAgentControl:
             force=force,
             always=False,
             confirmed=confirmed,
+            claim=claim,
         )
 
     async def stop(
@@ -147,6 +170,7 @@ class RuntimeAgentControl:
         *,
         timeout: float | None = 3.0,
         confirmed: bool = False,
+        claim: dict | None = None,
     ) -> ActionResult:
         return await self._act(
             "stop",
@@ -155,14 +179,22 @@ class RuntimeAgentControl:
             force=True,
             always=False,
             confirmed=confirmed,
+            claim=claim,
         )
 
     async def send_text(
-        self, key: AgentKey, text: str, *, timeout: float | None = 3.0
+        self,
+        key: AgentKey,
+        text: str,
+        *,
+        timeout: float | None = 3.0,
+        claim: dict | None = None,
     ) -> ActionResult:
         agent = self.current_agent(key)
         if agent is None:
             return ActionResult(False, message="agent is no longer available")
+        if self._stale(key, claim):
+            return ActionResult(False, skipped=True, message="stale")
         if agent.backend == "t3":
             if "continue" not in agent.capabilities:
                 return ActionResult(False, message="T3 conversation is not ready for a message")
@@ -176,6 +208,7 @@ class RuntimeAgentControl:
                 agent.key.pane_id,
                 text=text,
                 terminal_id=agent.terminal_id or None,
+                episode_claim=(claim or {}).get("wire") or None,
             ),
             timeout=timeout,
         )
@@ -214,10 +247,13 @@ class RuntimeAgentControl:
         force: bool,
         always: bool,
         confirmed: bool = False,
+        claim: dict | None = None,
     ) -> ActionResult:
         agent = self.current_agent(key)
         if agent is None:
             return ActionResult(False, message="agent is no longer available")
+        if self._stale(key, claim):
+            return ActionResult(False, skipped=True, message="stale")
         action_id = self._action_id(action, force=force, always=always)
         cfg = self._cfg(key.server_id)
         if action_id in cfg.safety.require_confirm_for and not confirmed:
@@ -237,6 +273,8 @@ class RuntimeAgentControl:
             force=force,
             always=always,
         )
+        if command.kind != "backend_action":
+            command.episode_claim = (claim or {}).get("wire") or None
         return self._action_result(await self._request(command, timeout=timeout))
 
     def _action_id(self, action: str, *, force: bool, always: bool) -> str:

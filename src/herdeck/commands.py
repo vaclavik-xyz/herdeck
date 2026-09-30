@@ -18,6 +18,10 @@ class Command:
     decision_revision: str | None = None
     action: str | None = None
     payload: dict = field(default_factory=dict)
+    # The bridge episode an answer claims (``episode_id`` / ``prompt_revision``),
+    # set only by a Telegram alert's answer: a claim is never replaced by the
+    # pane's current episode when the runtime stamps outgoing answers.
+    episode_claim: dict | None = None
 
 
 def command_to_msg(cmd: Command, req: str | None) -> dict:
@@ -31,6 +35,8 @@ def command_to_msg(cmd: Command, req: str | None) -> dict:
     def with_identity(message: dict) -> dict:
         if cmd.terminal_id:
             message["terminal_id"] = cmd.terminal_id
+        if cmd.episode_claim:
+            message.update(cmd.episode_claim)
         return message
 
     if cmd.kind == "read":
