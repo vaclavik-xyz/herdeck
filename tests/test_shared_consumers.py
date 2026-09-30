@@ -381,3 +381,28 @@ def test_orchestrator_without_config_for_uses_its_own_config():
     new = replace(cfg, macros=[])
     orch.update_config(new)
     assert orch._config_for("b") is new
+
+
+def test_first_reminder_on_a_fresh_server_survives_checks_and_fires(tmp_path):
+    # Regression: the server set used to be snapshotted before the locked pass,
+    # so a reminder tracked in between (typically the first blocked agent on a
+    # server) was judged with interval 0 and deleted.
+    now = [1000.0]
+    src, notifier, _timers = _source(
+        tmp_path,
+        {"notifications": {"on": ["blocked", "done"], "remind_after": 5}},
+        clock=lambda: now[0],
+    )
+    try:
+        assert src.check_reminders() == 0  # nothing tracked yet
+        src._on_snapshot("b", [agent("b", "p", Status.WORKING)])
+        src._on_event("b", agent("b", "p", Status.BLOCKED))
+        assert AgentKey("b", "p") in src._reminders
+        now[0] += 60
+        assert src.check_reminders() == 0
+        assert AgentKey("b", "p") in src._reminders  # kept, not dropped
+        now[0] += 4 * 60
+        assert src.check_reminders() == 1
+        assert notifier.metas[-1]["agent"]["server_id"] == "b"
+    finally:
+        src.close()

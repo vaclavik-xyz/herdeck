@@ -867,18 +867,19 @@ class LiveSource(
         n = self._config.notifications
         if self._notifier is None:
             return 0
-        with self._lock:
-            servers = {key.server_id for key in self._reminders}
-        # Looked up outside self._lock (config_for takes its own locks).
-        intervals = {
-            sid: self.config_for(sid).notifications.remind_after * 60.0 for sid in servers
-        }
         now = self._notify_clock()
         due: list[tuple[AgentState, str, float]] = []
+        # One locked pass: a reminder tracked meanwhile is judged by its own
+        # server's interval, never dropped as unknown. config_for only takes
+        # leaf locks (shared view + memo), never self._lock, so it is safe here.
+        intervals: dict[str, float] = {}
         with self._lock:
             for key, (episode, since, sent) in list(self._reminders.items()):
                 state = self._agents.get(key)
-                interval = intervals.get(key.server_id, 0.0)
+                sid = key.server_id
+                if sid not in intervals:
+                    intervals[sid] = self.config_for(sid).notifications.remind_after * 60.0
+                interval = intervals[sid]
                 if (
                     state is None
                     or state.status is not Status.BLOCKED
