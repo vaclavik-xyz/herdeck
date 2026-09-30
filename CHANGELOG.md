@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-30
+
 ### Added
 - Notifications: `done_min_work` / `done_short_delay` quiet `done` alerts for
   short agent runs (a quick chat reply alerts only if still done after the delay).
@@ -17,6 +19,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   revisioned writes, offline cache, "apply to all bridges" across adopted, connected ones). `config.toml`
   remains the fallback; `[profiles.X]` overlays of shared keys apply only to
   it. Delivery (sound, backends, banners, Telegram) stays local.
+
+### Fixed
+- Notifications: a blocked-agent reminder tracked while a reminder check was
+  running is no longer lost.
 
 ## [0.13.1] - 2026-09-24
 
