@@ -326,6 +326,7 @@ pub fn run() {
             proxy::config_secret_set,
             proxy::config_secret_clear,
             proxy::config_bridge_settings,
+            proxy::config_bridge_telegram,
             proxy::setup_status,
             proxy::setup_connect,
             shortcuts::reload_hotkey,

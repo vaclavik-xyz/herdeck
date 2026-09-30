@@ -128,6 +128,8 @@ export interface ConfigTransport {
   clearSecret(tokenEnv: string): Promise<number>;
   /** `POST /bridge-settings/<id>` → `{status, body}` (bridgeSettings.ts). */
   putBridgeSettings(serverId: string, body: { base_revision: number; settings: Record<string, unknown> }): Promise<unknown>;
+  /** `POST /bridge-telegram/<id>[/token|/test]` → `{status, body}` (bridgeTelegram.ts). */
+  bridgeTelegram(serverId: string, sub: "" | "token" | "test", body: Record<string, unknown>): Promise<unknown>;
 }
 
 /** Structured deep copy for the JSON-shaped config model (no functions/dates). */
@@ -1108,6 +1110,7 @@ export function commandTransport(invoke: InvokeFn): ConfigTransport {
       return asCode(await invoke("config_secret_clear", { tokenEnv }));
     },
     putBridgeSettings: (serverId, body) => invoke("config_bridge_settings", { serverId, body }),
+    bridgeTelegram: (serverId, sub, body) => invoke("config_bridge_telegram", { serverId, sub, body }),
   };
 }
 

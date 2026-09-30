@@ -906,3 +906,19 @@ fn bridge_settings_path_encodes_the_server_id_as_one_segment() {
     assert_eq!(bridge_settings_path(""), None);
     assert!(BRIDGE_SETTINGS_TIMEOUT > std::time::Duration::from_secs(10));
 }
+
+// Editor calls to a bridge's Telegram document: same one-encoded-segment rule
+// as bridge settings, plus a closed set of sub-routes.
+#[test]
+fn bridge_telegram_path_encodes_the_id_and_limits_sub_routes() {
+    assert_eq!(bridge_telegram_path("m4", "").as_deref(), Some("/bridge-telegram/m4"));
+    assert_eq!(bridge_telegram_path("m4", "token").as_deref(), Some("/bridge-telegram/m4/token"));
+    assert_eq!(bridge_telegram_path("m4", "test").as_deref(), Some("/bridge-telegram/m4/test"));
+    assert_eq!(
+        bridge_telegram_path("local:personal", "test").as_deref(),
+        Some("/bridge-telegram/local%3Apersonal/test")
+    );
+    assert_eq!(bridge_telegram_path("a/b", "").as_deref(), Some("/bridge-telegram/a%2Fb"));
+    assert_eq!(bridge_telegram_path("", "test"), None);
+    assert_eq!(bridge_telegram_path("m4", "../x"), None);
+}

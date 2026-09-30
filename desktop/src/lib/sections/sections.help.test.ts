@@ -21,6 +21,7 @@ import AnswerProfilesSection from "./AnswerProfilesSection.svelte";
 import ProfilesSection from "./ProfilesSection.svelte";
 import DesktopSection from "./DesktopSection.svelte";
 import SharedTarget from "./SharedTarget.svelte";
+import TelegramBridgeSection from "./TelegramBridgeSection.svelte";
 import { parseBridges } from "../bridgeSettings";
 
 // Representative config: at least one entry in every list/map section so the
@@ -85,6 +86,13 @@ const SECTIONS: SectionSpec[] = [
       bridges: parseBridges({ m4: { offered: true, connected: true, revision: 1, set: true, source: "bridge", settings: {} }, mb: { offered: true, connected: true, revision: 2, set: true, source: "bridge", settings: {} } }),
       target: "m4", onTarget: () => {}, applyAll: false, onApplyAll: () => {}, editingProfile: true,
       overlayIgnored: [], results: [], baseConfig: {}, put: null, onAdopted: () => {},
+    },
+  },
+  {
+    name: "TelegramBridgeSection", key: "telegram_bridge", component: TelegramBridgeSection, overlay: false, reloadRev: false,
+    props: {
+      bridges: parseBridges({ m4: { offered: false, connected: true, revision: 0, set: false, source: "none", settings: null, telegram: { offered: true, revision: 1, settings: null, status: { token: "file", active: false, inbound: "off", recent_chats: [] } } } }),
+      localTelegram: null, call: null, onReload: async () => {}, initialTarget: "m4",
     },
   },
 ];

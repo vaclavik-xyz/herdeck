@@ -180,6 +180,7 @@ describe("commandTransport", () => {
     expect(await t.setSecret("TOK", "v")).toBe(204);
     expect(await t.clearSecret("TOK")).toBe(204);
     await t.putBridgeSettings("m4", { base_revision: 3, settings: {} });
+    await t.bridgeTelegram("m4", "token", { action: "clear" });
     expect(calls).toEqual([
       { cmd: "config_read", args: undefined },
       { cmd: "config_validate", args: { body } },
@@ -188,6 +189,7 @@ describe("commandTransport", () => {
       { cmd: "config_secret_set", args: { tokenEnv: "TOK", value: "v" } },
       { cmd: "config_secret_clear", args: { tokenEnv: "TOK" } },
       { cmd: "config_bridge_settings", args: { serverId: "m4", body: { base_revision: 3, settings: {} } } },
+      { cmd: "config_bridge_telegram", args: { serverId: "m4", sub: "token", body: { action: "clear" } } },
     ]);
   });
 });

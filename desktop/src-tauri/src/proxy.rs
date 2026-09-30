@@ -404,6 +404,50 @@ pub(crate) async fn config_bridge_settings(
     .await
 }
 
+/// `/bridge-telegram/<id>[/token|/test]` with the server id as one
+/// percent-encoded path segment. `sub` is "" (settings put), "token" or "test";
+/// anything else, or an empty id, is `None`.
+pub(crate) fn bridge_telegram_path(server_id: &str, sub: &str) -> Option<String> {
+    if server_id.is_empty() {
+        return None;
+    }
+    let suffix = match sub {
+        "" => "",
+        "token" => "/token",
+        "test" => "/test",
+        _ => return None,
+    };
+    Some(format!("/bridge-telegram/{}{}", http::percent_encode_segment(server_id), suffix))
+}
+
+/// Proxy `POST /bridge-telegram/{id}[/token|/test]` (header token) — the
+/// editor's Telegram put / token set-clear / test on a bridge → `{status, body}`.
+/// Like `config_bridge_settings` a non-200 is data. The forwarded body may carry
+/// the bot token typed by the user; it is never logged or read back.
+#[tauri::command]
+pub(crate) async fn config_bridge_telegram(
+    state: tauri::State<'_, AppState>,
+    server_id: String,
+    sub: String,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let path = bridge_telegram_path(&server_id, &sub)
+        .ok_or_else(|| "config_bridge_telegram: bad server id or route".to_string())?;
+    let d = current_discovery(&state)?;
+    run_blocking(move || {
+        let (code, text) = http::http_post_json(
+            &d.host,
+            d.port,
+            &path,
+            (HDR_TOKEN, &d.token),
+            &body.to_string(),
+            BRIDGE_SETTINGS_TIMEOUT,
+        )?;
+        Ok(crate::agent_card::agent_response(code, &text))
+    })
+    .await
+}
+
 /// Proxy `GET /setup` (token as query param) → the first-run status JSON.
 #[tauri::command]
 pub(crate) async fn setup_status(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
