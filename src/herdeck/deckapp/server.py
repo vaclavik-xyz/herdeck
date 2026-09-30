@@ -1416,6 +1416,12 @@ class DeckApp:
                     shared_state = getattr(app._source, "shared_state", None)
                     bridges = shared_state() if callable(shared_state) else {}
                     payload["bridges"] = bridges
+                    tg_state = getattr(app._source, "telegram_state", None)
+                    for sid, tg in (tg_state() if callable(tg_state) else {}).items():
+                        if sid in bridges:
+                            bridges[sid]["telegram"] = {
+                                k: tg[k] for k in ("offered", "revision", "settings", "status")
+                            }
                     # Adopted bridges ignore profile overlays of shared keys.
                     overlaid = overlaid_shared_keys(
                         {"profiles": payload.get("profiles") or {}},
@@ -1638,6 +1644,17 @@ class DeckApp:
                     if body is _BAD_BODY:
                         return
                     code, payload = settings_relay.handle_post(app._source, path, body)
+                    self._send_agent(code, payload)
+                elif settings_relay.telegram_route(path) is not None:
+                    # POST /bridge-telegram/{id}[/token|/test]: relay the bridge's
+                    # Telegram config edits (settings_relay.py). The body may carry
+                    # a bot token: never logged or echoed.
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    code, payload = settings_relay.handle_telegram_post(app._source, path, body)
                     self._send_agent(code, payload)
                 elif hooks_relay.route_server_id(path) is not None:
                     # POST /maintenance/servers/{id}/hooks: install / remove the

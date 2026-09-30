@@ -24,12 +24,16 @@ import threading
 from dataclasses import dataclass, field
 from urllib.parse import unquote
 
+from .. import secrets as _secrets
 from ..bridge_settings import SETTINGS_CAPABILITY
+from ..bridge_telegram import TELEGRAM_CONFIG_CAPABILITY
 
 SETTINGS_WAIT_S = 10.0
 _ROUTE_RE = re.compile(r"^/bridge-settings/([^/]+)$")
 # Not "st": stats.py owns that prefix (ids hk, ua, st, u, p, r, t are taken).
 _REQ_PREFIX = "sp"
+_TOKEN_ERRORS = ("invalid", "env_locked", "io_error")
+_TELEGRAM_RE = re.compile(r"^/bridge-telegram/([^/]+)(?:/(token|test))?$")
 _HTTP = {"stale_revision": 409, "invalid": 422, "too_large": 422}
 
 
@@ -102,6 +106,31 @@ class SettingsRelayMixin:
         wait_s: float = SETTINGS_WAIT_S,
     ) -> tuple[int, dict] | None:
         """Relay one put; returns (http status, payload). None = unknown server."""
+        relayed = self._relay(
+            server_id,
+            SETTINGS_CAPABILITY,
+            "this bridge does not offer shared settings",
+            {"type": "settings_put", "base_revision": base_revision, "settings": settings},
+            wait_s,
+        )
+        if relayed is None:
+            return None
+        if isinstance(relayed, tuple):
+            return relayed
+        return _put_result(relayed)
+
+    def _relay(
+        self,
+        server_id: str,
+        capability: str,
+        unsupported: str,
+        frame: dict,
+        wait_s: float,
+    ) -> dict | tuple[int, dict] | None:
+        """Send ``frame`` (plus a fresh request id) to the bridge and wait for
+        its result. Returns the result dict, a ready ``(http, payload)`` failure
+        (503 / 504 / 502) or None for an unknown server. Never logs ``frame``
+        (a telegram_token frame carries the secret)."""
         if server_id not in self._servers:
             return None
         runner = self._runners.get(server_id)
@@ -109,20 +138,13 @@ class SettingsRelayMixin:
             connected = bool(self._connected.get(server_id))
         if runner is None or not connected:
             return _fail(503, "disconnected", "the server is not connected")
-        if not self._offers_capability(server_id, SETTINGS_CAPABILITY):
-            return _fail(503, "unsupported", "this bridge does not offer shared settings")
+        if not self._offers_capability(server_id, capability):
+            return _fail(503, "unsupported", unsupported)
         req = f"{_REQ_PREFIX}{next(self._settings_reqs)}"
         wait = _Wait(server_id)
         with self._settings_lock:
             self._settings_waits[req] = wait
-        runner.send(
-            {
-                "type": "settings_put",
-                "req": req,
-                "base_revision": base_revision,
-                "settings": settings,
-            }
-        )
+        runner.send({**frame, "req": req})
         if not wait.event.wait(wait_s):
             with self._settings_lock:
                 self._settings_waits.pop(req, None)
@@ -132,20 +154,95 @@ class SettingsRelayMixin:
             if message == "disconnected":
                 return _fail(503, "disconnected", "the bridge disconnected")
             return _fail(502, "bridge_error", message)
-        data = wait.data
-        if data["ok"]:
-            return 200, {"ok": True, "revision": data.get("revision")}
-        error = data.get("error")
-        error = error if isinstance(error, str) else "failed"
-        messages = data.get("messages")
-        payload: dict = {
-            "ok": False,
-            "error": error,
-            "messages": messages if isinstance(messages, list) else [],
-        }
-        if "revision" in data:
-            payload["revision"] = data["revision"]
-        return _HTTP.get(error, 502), payload
+        return wait.data
+
+    def bridge_telegram_put(
+        self, server_id: str, base_revision: int, settings: dict, *, wait_s: float = SETTINGS_WAIT_S
+    ) -> tuple[int, dict] | None:
+        """Relay a telegram_put (same result mapping as a settings put)."""
+        relayed = self._relay(
+            server_id,
+            TELEGRAM_CONFIG_CAPABILITY,
+            "this bridge does not offer Telegram config",
+            {"type": "telegram_put", "base_revision": base_revision, "settings": settings},
+            wait_s,
+        )
+        if relayed is None or isinstance(relayed, tuple):
+            return relayed
+        return _put_result(relayed)
+
+    def bridge_telegram_token(
+        self,
+        server_id: str,
+        action: str,
+        token: str | None = None,
+        *,
+        from_local: bool = False,
+        wait_s: float = SETTINGS_WAIT_S,
+    ) -> tuple[int, dict] | None:
+        """Relay telegram_token set/clear. ``from_local`` resolves this
+        runtime's own bot token server-side (the [notifications.telegram]
+        token_env: env, then keychain); it is never returned to the caller."""
+        if server_id not in self._servers:
+            return None
+        if from_local:
+            tg = self._config.notifications.telegram
+            token = _secrets.get_secret(tg.token_env) if tg is not None else None
+            if not token:
+                return _fail(422, "no_local_token", "this runtime has no Telegram token")
+        frame: dict = {"type": "telegram_token", "action": action}
+        if action == "set":
+            frame["token"] = token
+        relayed = self._relay(
+            server_id,
+            TELEGRAM_CONFIG_CAPABILITY,
+            "this bridge does not offer Telegram config",
+            frame,
+            wait_s,
+        )
+        if relayed is None or isinstance(relayed, tuple):
+            if isinstance(relayed, tuple) and relayed[0] == 502:
+                # An error frame: never forward its text on the token path.
+                return _fail(502, "bridge_error", "the bridge refused the token request")
+            return relayed
+        if relayed["ok"]:
+            return 200, {"ok": True}
+        error = relayed.get("error")
+        error = error if error in _TOKEN_ERRORS else "failed"
+        return (422 if error in _TOKEN_ERRORS else 502), {"ok": False, "error": error}
+
+    def bridge_telegram_test(
+        self, server_id: str, *, wait_s: float = SETTINGS_WAIT_S
+    ) -> tuple[int, dict] | None:
+        relayed = self._relay(
+            server_id,
+            TELEGRAM_CONFIG_CAPABILITY,
+            "this bridge does not offer Telegram config",
+            {"type": "telegram_test"},
+            wait_s,
+        )
+        if relayed is None or isinstance(relayed, tuple):
+            return relayed
+        payload: dict = {"ok": relayed["ok"]}
+        if isinstance(relayed.get("error"), str):
+            payload["error"] = relayed["error"]
+        return 200, payload
+
+
+def _put_result(data: dict) -> tuple[int, dict]:
+    if data["ok"]:
+        return 200, {"ok": True, "revision": data.get("revision")}
+    error = data.get("error")
+    error = error if isinstance(error, str) else "failed"
+    messages = data.get("messages")
+    payload: dict = {
+        "ok": False,
+        "error": error,
+        "messages": messages if isinstance(messages, list) else [],
+    }
+    if "revision" in data:
+        payload["revision"] = data["revision"]
+    return _HTTP.get(error, 502), payload
 
 
 def handle_post(source, path: str, body: dict) -> tuple[int, dict | None]:
@@ -158,4 +255,52 @@ def handle_post(source, path: str, body: dict) -> tuple[int, dict | None]:
     if isinstance(base, bool) or not isinstance(base, int) or not isinstance(settings, dict):
         return _fail(400, "bad_request", "expected {base_revision: int, settings: object}")
     result = source.bridge_settings_put(server_id, base, settings)
+    return result if result is not None else (404, None)
+
+
+def telegram_route(path: str) -> tuple[str, str] | None:
+    """``/bridge-telegram/<id>[/token|/test]`` -> (server id, "" | "token" | "test")."""
+    match = _TELEGRAM_RE.fullmatch(path)
+    if match is None:
+        return None
+    server_id = unquote(match.group(1))
+    return (server_id, match.group(2) or "") if server_id else None
+
+
+def handle_telegram_post(source, path: str, body: dict) -> tuple[int, dict | None]:
+    """POST /bridge-telegram/{id}[/token|/test]. Bodies are never echoed."""
+    route = telegram_route(path)
+    if route is None:
+        return 404, None
+    server_id, sub = route
+    if sub == "":
+        if not callable(getattr(source, "bridge_telegram_put", None)):
+            return 404, None
+        base = body.get("base_revision")
+        settings = body.get("settings")
+        if isinstance(base, bool) or not isinstance(base, int) or not isinstance(settings, dict):
+            return _fail(400, "bad_request", "expected {base_revision: int, settings: object}")
+        result = source.bridge_telegram_put(server_id, base, settings)
+    elif sub == "token":
+        if not callable(getattr(source, "bridge_telegram_token", None)):
+            return 404, None
+        action = body.get("action")
+        token = body.get("token")
+        from_local = body.get("from_local")
+        if action not in ("set", "clear") or (from_local is not None and from_local is not True):
+            return _fail(400, "bad_request", "expected {action: set|clear, token?}")
+        if action == "set":
+            if (from_local is True) == (token is not None) or (
+                token is not None and (not isinstance(token, str) or not token)
+            ):
+                return _fail(400, "bad_request", "set needs exactly one of token, from_local")
+        elif token is not None or from_local is not None:
+            return _fail(400, "bad_request", "clear takes no token")
+        result = source.bridge_telegram_token(
+            server_id, action, token if action == "set" else None, from_local=from_local is True
+        )
+    else:
+        if not callable(getattr(source, "bridge_telegram_test", None)):
+            return 404, None
+        result = source.bridge_telegram_test(server_id)
     return result if result is not None else (404, None)
