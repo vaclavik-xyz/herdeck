@@ -86,3 +86,18 @@ def _isolated_shared_settings_cache(tmp_path, monkeypatch):
         "herdeck.deckapp.shared_view.default_cache_dir",
         lambda: tmp_path / "runtime" / "bridge-settings",
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_bridge_telegram(tmp_path, monkeypatch):
+    """Bridges never read or write ~/.config/herdeck Telegram files, and a
+    developer's own bot token never reaches a test bridge."""
+    monkeypatch.delenv("HERDECK_TELEGRAM_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "herdeck.bridge._telegram_default_paths",
+        lambda session=None: (
+            tmp_path / "bridge-telegram" / f"{session or 'bridge'}.toml",
+            tmp_path / "bridge-telegram" / f"{session or 'bridge'}-token",
+        ),
+        raising=False,
+    )
