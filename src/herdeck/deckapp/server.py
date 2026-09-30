@@ -18,6 +18,7 @@ from ..model import AgentKey
 from ..orchestrator import Orchestrator
 from ..pins import PinStore
 from ..protocol import WIRE_PROTOCOL
+from ..shared_settings import overlaid_shared_keys
 from . import agent_card, bridge_update, hooks_relay, settings_relay, stats, usage_agent_relay
 from .sinks import RenderFrame
 from .source import StateSource
@@ -1413,7 +1414,16 @@ class DeckApp:
                         return
                     payload = app._config_service.read()
                     shared_state = getattr(app._source, "shared_state", None)
-                    payload["bridges"] = shared_state() if callable(shared_state) else {}
+                    bridges = shared_state() if callable(shared_state) else {}
+                    payload["bridges"] = bridges
+                    # Adopted bridges ignore profile overlays of shared keys.
+                    overlaid = overlaid_shared_keys(
+                        {"profiles": payload.get("profiles") or {}},
+                        payload.get("active_profile") or "default",
+                    )
+                    payload["shared_overlay_ignored"] = (
+                        [sid for sid, st in bridges.items() if st.get("set")] if overlaid else []
+                    )
                     self._send(200, json.dumps(payload).encode(), "application/json")
                 elif path == "/setup":
                     if not self._require_query_token(url):

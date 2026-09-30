@@ -309,3 +309,40 @@ def test_snapshot_without_known_capabilities_keeps_cache(tmp_path):
     src = _source(tmp_path)  # no runner attached: capabilities unknown
     src._on_snapshot("a", [])
     assert src.config_for("a").notifications.done_min_work == 3
+
+
+# --- profile overlays apply only to the local fallback (Task 9) --------------
+
+
+def test_profile_overlay_applies_only_to_unset_bridges(tmp_path):
+    """The source config is already profile-resolved (overlay: no confirmations).
+    Unset "a" follows it; adopted "b" takes the bridge's own value."""
+    cfg = _two_server_config()
+    cfg.safety.require_confirm_for = []  # what [profiles.work.safety] resolves to
+    src = _source(tmp_path, cfg)
+    raw = {"safety": {"approve_always": True, "require_confirm_for": ["stop"]}}
+    src._on_settings("b", _frame("b", 3, raw))
+    assert src.config_for("a").safety.require_confirm_for == []
+    assert src.config_for("b").safety.require_confirm_for == ["stop"]
+
+
+def test_overlaid_shared_keys():
+    from herdeck.shared_settings import overlaid_shared_keys
+
+    data = {
+        "profiles": {
+            "base": {"notifications": {"on": ["done"], "sound": True}, "usage": {"alert_at": [80]}},
+            "work": {"extends": "base", "safety": {"require_confirm_for": []},
+                     "view": {"language": "cs"}, "macros": [], "usage": {"poll": 5}},
+            "plain": {"view": {"language": "cs"}, "notifications": {"sound": False},
+                      "usage": {"poll": 5}},
+        }
+    }
+    assert overlaid_shared_keys(data, "work") == [
+        "notifications.on", "usage.alert_at", "safety", "macros",
+    ]
+    assert overlaid_shared_keys(data, "plain") == []
+    assert overlaid_shared_keys(data, "default") == []
+    assert overlaid_shared_keys(data, "missing") == []
+    assert overlaid_shared_keys({}, "work") == []
+    assert overlaid_shared_keys({"profiles": {"x": {"extends": "x"}}}, "x") == []

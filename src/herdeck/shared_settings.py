@@ -232,7 +232,13 @@ def extract_shared(base: dict) -> dict:
 
 
 def apply_shared(config: Config, s: SharedSettings) -> Config:
-    """A copy of ``config`` with the shared fields replaced (input untouched)."""
+    """A copy of ``config`` with the shared fields replaced (input untouched).
+
+    ``config`` is already profile-resolved, so this replaces the shared fields
+    wholesale: deck-profile overlays (``[profiles.X]``) of shared keys are
+    ignored for a server that adopted bridge settings and apply only to the
+    local fallback (see ``overlaid_shared_keys`` for the editor notice).
+    """
     return dataclasses.replace(
         config,
         profiles=dict(s.answer_profiles),
@@ -251,3 +257,25 @@ def apply_shared(config: Config, s: SharedSettings) -> Config:
             config.usage, alert_at=list(s.alert_at), alert_reset=s.alert_reset
         ),
     )
+
+
+def overlaid_shared_keys(data: dict, profile: str) -> list[str]:
+    """Shared keys that deck profile ``profile`` (with its ``extends`` chain)
+    overlays in the raw config ``data``. Such overlays are ineffective for a
+    server that adopted bridge settings. Empty for "default" or a broken chain."""
+    from herdeck.settings import _profile_overlays
+
+    profiles = data.get("profiles")
+    if not profile or profile == "default" or not isinstance(profiles, dict):
+        return []
+    try:
+        overlays = _profile_overlays(profiles, profile)
+    except ConfigError:
+        return []
+    found: list[str] = []
+    for section, keys in (("notifications", SHARED_NOTIFICATION_KEYS), ("usage", SHARED_USAGE_KEYS)):
+        for key in keys:
+            if any(isinstance(o.get(section), dict) and key in o[section] for o in overlays):
+                found.append(f"{section}.{key}")
+    found.extend(sec for sec in SHARED_WHOLE_SECTIONS if any(sec in o for o in overlays))
+    return found

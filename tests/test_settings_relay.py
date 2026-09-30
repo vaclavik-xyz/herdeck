@@ -263,3 +263,35 @@ def test_concurrent_stats_and_settings_replies_reach_their_own_relay():
     src._on_bridge_error("prod", stats_req, "boom")
     t_stats.join(3)
     assert out["stats"]["ok"] is False
+
+
+def test_get_config_flags_adopted_servers_whose_profile_overlays_shared_keys(tmp_path):
+    from herdeck.protocol import Settings
+
+    (tmp_path / "config.toml").write_text(
+        '[profiles.work.safety]\nrequire_confirm_for = []\n'
+        '[profiles.calm.view]\nlanguage = "cs"\n'
+    )
+    app, src, _ = _serve(tmp_path=tmp_path)
+    try:
+        (tmp_path / "local.toml").write_text('active_profile = "work"\n')
+        assert _get_config(app)["shared_overlay_ignored"] == []  # not adopted yet
+        src._on_settings("prod", Settings("prod", 2, 1, "me", {"macros": []}))
+        assert _get_config(app)["shared_overlay_ignored"] == ["prod"]
+        (tmp_path / "local.toml").write_text('active_profile = "calm"\n')
+        assert _get_config(app)["shared_overlay_ignored"] == []
+    finally:
+        app.close()
+
+
+def test_get_config_shared_overlay_ignored_empty_without_a_live_source(tmp_path):
+    from herdeck.deckapp import MockSource
+
+    app = DeckApp(
+        MockSource(), host="127.0.0.1", port=0, serve=True, icon_provider=StubIcons(),
+        config_service=ConfigService(tmp_path / "config.toml", tmp_path / "local.toml"),
+    )
+    try:
+        assert _get_config(app)["shared_overlay_ignored"] == []
+    finally:
+        app.close()
