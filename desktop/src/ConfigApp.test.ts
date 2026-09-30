@@ -440,3 +440,323 @@ describe("ConfigApp Maintenance health badge", () => {
     }
   });
 });
+
+// Bridge shared settings (issue #116, spec S5-S7): the shared sections edit
+// the selected TARGET — a bridge's own document (saved with
+// POST /bridge-settings/<id> through `config_bridge_settings`) or This Mac's
+// config.toml (the fallback, saved exactly like today).
+describe("ConfigApp bridge shared settings", () => {
+  const BRIDGE_DOC = {
+    safety: { approve_always: false, require_confirm_for: ["act_force"] },
+    macros: [],
+  };
+
+  function sharedBridge(over: Record<string, unknown> = {}) {
+    return {
+      offered: true, connected: true, revision: 3, updated_at_ms: 1, updated_by: "mac", set: true,
+      source: "bridge", settings: BRIDGE_DOC, ...over,
+    };
+  }
+
+  function sharedConfig(extra: Record<string, unknown> = {}) {
+    return {
+      ...rawConfig(),
+      base: {
+        servers: [{ id: "m4", url: "ws://m4:8788", token_env: "T" }, { id: "mb", url: "ws://mb:8788", token_env: "T" }],
+        safety: { approve_always: true },
+      },
+      bridges: { m4: sharedBridge() },
+      shared_overlay_ignored: [],
+      ...extra,
+    };
+  }
+
+  function useConfig(raw: () => Record<string, unknown>, put: (serverId: string, body: unknown) => unknown = () => ({ status: 200, body: { ok: true, revision: 4 } })) {
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "config_read") return raw();
+      if (cmd === "config_bridge_settings") return put(args!.serverId as string, args!.body);
+      return mockInvoke(cmd);
+    });
+  }
+
+  async function openSection(target: HTMLElement, label: string): Promise<void> {
+    await vi.waitFor(() => expect(invokeMock.mock.calls.some(([cmd]) => cmd === "config_read")).toBe(true));
+    const nav = Array.from(target.querySelectorAll<HTMLButtonElement>(".sidebar button"))
+      .find((b) => b.textContent?.trim() === label);
+    nav!.click();
+    flushSync();
+    await vi.waitFor(() => expect(target.querySelector(".loading-card")).toBeNull());
+  }
+
+  function approveAlways(target: HTMLElement): HTMLInputElement {
+    const input = target.querySelector<HTMLElement>(".content [data-config-key='approve_always']")?.parentElement?.querySelector("input");
+    if (!(input instanceof HTMLInputElement)) throw new Error("approve_always not rendered");
+    return input;
+  }
+
+  function toggle(input: HTMLInputElement): void {
+    input.checked = !input.checked;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+  }
+
+  function clickApply(target: HTMLElement): void {
+    const apply = Array.from(target.querySelectorAll<HTMLButtonElement>(".savebar button"))
+      .find((b) => b.title.startsWith("Save the config"));
+    expect(apply!.disabled, "Apply must be enabled by a bridge edit").toBe(false);
+    apply!.click();
+  }
+
+  function pick(target: HTMLElement, value: string): void {
+    const select = target.querySelector<HTMLSelectElement>("[data-shared-target-select]")!;
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+  }
+
+  const bridgeCalls = () => invokeMock.mock.calls.filter(([cmd]) => cmd === "config_bridge_settings");
+
+  it("edits the first adopted bridge by default and Apply saves it there, not in config.toml", async () => {
+    useConfig(() => sharedConfig());
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      expect(target.querySelector<HTMLSelectElement>("[data-shared-target-select]")!.value).toBe("m4");
+      expect(approveAlways(target).checked, "shows the bridge's value, not config.toml's").toBe(false);
+      toggle(approveAlways(target));
+      clickApply(target);
+      await vi.waitFor(() => expect(bridgeCalls()).toHaveLength(1));
+      expect(bridgeCalls()[0][1]).toEqual({
+        serverId: "m4",
+        body: { base_revision: 3, settings: { safety: { approve_always: true, require_confirm_for: ["act_force"] }, macros: [] } },
+      });
+      expect(invokeMock).not.toHaveBeenCalledWith("config_write", expect.anything());
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("This Mac (fallback) edits config.toml exactly like today", async () => {
+    useConfig(() => sharedConfig());
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      pick(target, "");
+      expect(approveAlways(target).checked).toBe(true);
+      toggle(approveAlways(target));
+      clickApply(target);
+      await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledWith("config_write", expect.anything()));
+      const body = invokeMock.mock.calls.find(([cmd]) => cmd === "config_write")![1].body;
+      expect(body.base.safety).toEqual({ approve_always: false });
+      expect(bridgeCalls()).toHaveLength(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a stale revision (409) reloads that bridge's settings and says so", async () => {
+    let reads = 0;
+    useConfig(
+      () => {
+        reads += 1;
+        return sharedConfig(reads > 1 ? { bridges: { m4: sharedBridge({ revision: 5 }) } } : {});
+      },
+      () => ({ status: 409, body: { ok: false, error: "stale_revision", messages: [], revision: 5 } }),
+    );
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      toggle(approveAlways(target));
+      clickApply(target);
+      await vi.waitFor(() => expect(target.querySelector("[data-shared-results]")).not.toBeNull());
+      expect(reads).toBeGreaterThan(1);
+      expect(target.querySelector("[data-shared-results]")!.textContent).toContain("m4: changed elsewhere — reloaded");
+      expect(approveAlways(target).checked, "the draft is dropped for the reloaded value").toBe(false);
+      expect(target.querySelector(".dirty"), "nothing left unsaved").toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("Apply to all bridges posts once per adopted bridge with its own revision and lists failures", async () => {
+    useConfig(
+      () => sharedConfig({ bridges: { m4: sharedBridge(), mb: sharedBridge({ revision: 9 }) } }),
+      (id) => (id === "mb"
+        ? { status: 503, body: { ok: false, error: "disconnected", messages: ["bridge mb is not connected"] } }
+        : { status: 200, body: { ok: true, revision: 4 } }),
+    );
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      const all = target.querySelector<HTMLInputElement>("[data-action='apply-all']")!;
+      toggle(all);
+      toggle(approveAlways(target));
+      clickApply(target);
+      await vi.waitFor(() => expect(target.querySelector("[data-shared-results]")).not.toBeNull());
+      expect(bridgeCalls().map(([, a]) => [a.serverId, a.body.base_revision])).toEqual([["m4", 3], ["mb", 9]]);
+      const rows = Array.from(target.querySelectorAll("[data-shared-results] li")).map((li) => li.textContent?.trim());
+      expect(rows).toEqual(["m4: saved", "mb: bridge not connected"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("an offline target is read-only with a notice", async () => {
+    useConfig(() => sharedConfig({ bridges: { m4: sharedBridge({ connected: false, offered: false, source: "cache" }) } }));
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      expect(target.querySelector<HTMLSelectElement>("[data-shared-target-select]")!.value, "offline is never the default").toBe("");
+      pick(target, "m4");
+      expect(target.querySelector("[data-shared-offline]")!.textContent).toContain("Bridge offline — showing last known settings");
+      expect(approveAlways(target).checked).toBe(false);
+      expect(approveAlways(target).matches(":disabled")).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("hides profile-overlay controls of shared fields on an adopted target and explains why", async () => {
+    useConfig(() => sharedConfig({
+      active_profile: "night",
+      profiles: { night: { safety: { approve_always: true } } },
+      shared_overlay_ignored: ["m4"],
+    }));
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      expect(target.querySelector(".content .override"), "no overlay controls on the bridge").toBeNull();
+      expect(target.querySelector("[data-overlay-hidden]")).not.toBeNull();
+      expect(target.querySelector("[data-overlay-ignored]")).not.toBeNull();
+      pick(target, "");
+      expect(target.querySelector(".content .override"), "the fallback keeps profile overlays").not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  // The bridge answers a put before it broadcasts the new document, so the
+  // re-read right after Apply can still carry the old revision.
+  it("a save stays visible when the immediate re-read still predates it", async () => {
+    useConfig(() => sharedConfig(), () => ({ status: 200, body: { ok: true, revision: 4 } }));
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      toggle(approveAlways(target));
+      clickApply(target);
+      await vi.waitFor(() => expect(target.querySelector("[data-shared-results]")).not.toBeNull());
+      expect(approveAlways(target).checked, "the saved value, not the stale re-read").toBe(true);
+      expect(target.querySelector(".dirty")).toBeNull();
+      toggle(approveAlways(target));
+      clickApply(target);
+      await vi.waitFor(() => expect(bridgeCalls()).toHaveLength(2));
+      expect(bridgeCalls()[1][1].body.base_revision, "based on the saved revision").toBe(4);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("adoption moves the SAVED config.toml base, not unsaved edits, and is not offered again", async () => {
+    useConfig(
+      () => sharedConfig({ bridges: { m4: sharedBridge({ set: false, revision: 0, settings: null, source: "none" }) } }),
+      () => ({ status: 200, body: { ok: true, revision: 1 } }),
+    );
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      pick(target, "m4");
+      toggle(approveAlways(target)); // unsaved local edit: approve_always false
+      target.querySelector<HTMLButtonElement>("[data-action='adopt']")!.click();
+      await vi.waitFor(() => expect(bridgeCalls()).toHaveLength(1));
+      expect(bridgeCalls()[0][1]).toEqual({ serverId: "m4", body: { base_revision: 0, settings: { safety: { approve_always: true } } } });
+      await vi.waitFor(() => expect(target.querySelector("[data-action='adopt']"), "the stale re-read must not bring the button back").toBeNull());
+    } finally {
+      cleanup();
+    }
+  });
+
+  // A local Apply reloads the runtime, which reconnects every bridge: right
+  // after config_write the bridges read as disconnected for a moment.
+  it("a combined Apply puts the bridge before config.toml and recovers the bridge after the reload", async () => {
+    let reconnecting = false;
+    let readsAfterWrite = 0;
+    const order: string[] = [];
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "config_read") {
+        if (reconnecting) {
+          readsAfterWrite += 1;
+          if (readsAfterWrite >= 3) reconnecting = false;
+          return sharedConfig({ bridges: { m4: sharedBridge({ connected: false, offered: false, source: "cache" }) } });
+        }
+        return sharedConfig();
+      }
+      if (cmd === "config_bridge_settings") {
+        order.push("bridge");
+        if (reconnecting) return { status: 503, body: { ok: false, error: "disconnected", messages: [] } };
+        return { status: 200, body: { ok: true, revision: 4 } };
+      }
+      if (cmd === "config_write") {
+        order.push("write");
+        reconnecting = true;
+        return { errors: [] };
+      }
+      return mockInvoke(cmd);
+    });
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      toggle(approveAlways(target)); // bridge draft
+      pick(target, "");
+      toggle(approveAlways(target)); // config.toml edit
+      pick(target, "m4");
+      clickApply(target);
+      await vi.waitFor(() => expect(order).toEqual(["bridge", "write"]));
+      await vi.waitFor(() => expect(target.querySelector(".dirty")).toBeNull());
+      const rows = Array.from(target.querySelectorAll("[data-shared-results] li")).map((li) => li.textContent?.trim());
+      expect(rows).toEqual(["m4: saved"]);
+      expect(target.querySelector<HTMLSelectElement>("[data-shared-target-select]")!.value).toBe("m4");
+      expect(approveAlways(target).checked, "the saved bridge value survives the post-write reload").toBe(true);
+      await vi.waitFor(
+        () => expect(target.querySelector("[data-shared-offline]"), "the bridge section recovers").toBeNull(),
+        { timeout: 5000 },
+      );
+      expect(approveAlways(target).checked).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a rejected config.toml save never shows 'saved' after a successful bridge put", async () => {
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "config_read") return sharedConfig();
+      if (cmd === "config_bridge_settings") return { status: 200, body: { ok: true, revision: 4 } };
+      if (cmd === "config_write") return { errors: ["safety.approve_always: bad"] };
+      return mockInvoke(cmd);
+    });
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      toggle(approveAlways(target)); // bridge draft
+      pick(target, "");
+      toggle(approveAlways(target)); // config.toml edit
+      clickApply(target);
+      await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledWith("config_write", expect.anything()));
+      await vi.waitFor(() => expect(target.querySelector("[data-shared-results]")).not.toBeNull());
+      await new Promise((r) => setTimeout(r, 50));
+      expect(target.querySelector(".banner.success"), "config.toml was not saved").toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("shows no target picker when no bridge offers shared settings", async () => {
+    useConfig(() => sharedConfig({ bridges: { m4: sharedBridge({ offered: false, set: false, settings: null }) } }));
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      expect(target.querySelector("[data-shared-target]")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+});

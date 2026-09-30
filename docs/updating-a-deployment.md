@@ -28,6 +28,12 @@ bridge's `herdeck_version`, the runtime's `/health` lists it per server next to
 its own `version`, and both the desktop window and `herdeck-doctor` report a
 bridge whose version differs from the runtime's.
 
+Shared settings (README, "Shared settings on the bridge") follow the same
+order. Update the bridge first: only then does it advertise the `settings`
+capability, and a runtime that sees it can read and edit the bridge's shared
+settings. Against a bridge without the capability the runtime silently keeps
+using `config.toml`, and the editor offers no adoption for it.
+
 Changing `protocol.py`'s encode/decode contract has no safe order at all; both
 hosts move together, and `WIRE_PROTOCOL` in `protocol.py` must be bumped. A
 runtime that receives a newer protocol than it knows logs a WARNING

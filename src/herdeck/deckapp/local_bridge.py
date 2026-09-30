@@ -14,8 +14,11 @@ from ..bridge import start_local_bridge
 
 
 class LocalBridgeRunner:
-    def __init__(self, socket_path: str, *, start_bridge=start_local_bridge):
+    def __init__(
+        self, socket_path: str, *, session: str | None = None, start_bridge=start_local_bridge
+    ):
         self._socket_path = socket_path
+        self._session = session
         self._start_bridge = start_bridge
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
@@ -45,7 +48,7 @@ class LocalBridgeRunner:
         asyncio.set_event_loop(self._loop)
         try:
             host, port, token, handle = self._loop.run_until_complete(
-                self._start_bridge(self._socket_path)
+                self._start_bridge(self._socket_path, session=self._session)
             )
             self._bound = (host, port, token)
             self._handle = handle

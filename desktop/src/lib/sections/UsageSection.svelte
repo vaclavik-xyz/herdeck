@@ -14,8 +14,10 @@
   import { defineMessages, fieldHelp, locale } from "../i18n.svelte";
   import defaults from "../configDefaults.json";
 
-  let { payload = $bindable(), onChange, editProfile = null }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null } = $props();
+  // sharedOnBridge / sharedReadonly: alert_at + alert_reset follow the
+  // editor's target bridge (see NotificationsSection); the rest stays local.
+  let { payload = $bindable(), onChange, editProfile = null, sharedOnBridge = false, sharedReadonly = false }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; editProfile?: string | null; sharedOnBridge?: boolean; sharedReadonly?: boolean } = $props();
 
   const SEC = "usage";
   const overlay = $derived(editProfile != null && editProfile !== "default");
@@ -111,6 +113,13 @@
   function setOvProviders(list: string[]): void { setSc("providers", list); }
 </script>
 
+{#snippet alerts()}
+  <fieldset class="shared-fields" disabled={sharedReadonly} data-shared-fields="usage">
+    <TextField label="alert_at" help={HELP.alert_at} value={levelsText(alertAt)} oninput={setBaseLevels} />
+    <BooleanField label="alert_reset" help={HELP.alert_reset} value={alertReset} onchange={(v) => set("alert_reset", v)} />
+  </fieldset>
+{/snippet}
+
 <p class="hint">{lm.intro}</p>
 {#if overlay}
   <OverrideField label="providers" help={HELP.providers} state={scState("providers")} inheritedDisplay={hint("providers")} onstate={(s) => setScState("providers", s)}>
@@ -129,12 +138,16 @@
   <OverrideField label="refresh_secs" help={HELP.refresh_secs} state={scState("refresh_secs")} inheritedDisplay={hint("refresh_secs")} onstate={(s) => setScState("refresh_secs", s)}>
     <NumberField label="" int min={30} value={Number(scValue("refresh_secs"))} onchange={(v) => setScOrInherit("refresh_secs", v)} />
   </OverrideField>
-  <OverrideField label="alert_at" help={HELP.alert_at} state={scState("alert_at")} inheritedDisplay={hint("alert_at")} onstate={(s) => setScState("alert_at", s)}>
-    <TextField label="" value={levelsText(scValue("alert_at"))} oninput={setOvLevels} />
-  </OverrideField>
-  <OverrideField label="alert_reset" help={HELP.alert_reset} state={scState("alert_reset")} inheritedDisplay={hint("alert_reset")} onstate={(s) => setScState("alert_reset", s)}>
-    <BooleanField label={lm.enabled} help={HELP.alert_reset} value={Boolean(scValue("alert_reset"))} onchange={(v) => setSc("alert_reset", v)} />
-  </OverrideField>
+  {#if sharedOnBridge}
+    {@render alerts()}
+  {:else}
+    <OverrideField label="alert_at" help={HELP.alert_at} state={scState("alert_at")} inheritedDisplay={hint("alert_at")} onstate={(s) => setScState("alert_at", s)}>
+      <TextField label="" value={levelsText(scValue("alert_at"))} oninput={setOvLevels} />
+    </OverrideField>
+    <OverrideField label="alert_reset" help={HELP.alert_reset} state={scState("alert_reset")} inheritedDisplay={hint("alert_reset")} onstate={(s) => setScState("alert_reset", s)}>
+      <BooleanField label={lm.enabled} help={HELP.alert_reset} value={Boolean(scValue("alert_reset"))} onchange={(v) => setSc("alert_reset", v)} />
+    </OverrideField>
+  {/if}
   <details class="advanced-settings">
     <summary>{lm.technical_paths}</summary>
     <OverrideField label="codex_path" help={HELP.codex_path} state={scState("codex_path")} inheritedDisplay={hint("codex_path")} onstate={(s) => setScState("codex_path", s)}>
@@ -156,8 +169,7 @@
   <BooleanField label={lm.active_only} help={HELP.paid_only} value={paidOnly} onchange={(v) => set("paid_only", v)} />
   <SelectField label="source" help={HELP.source} value={usageSource} options={USAGE_SOURCES} onchange={(v) => set("source", v)} />
   <NumberField label="refresh_secs" help={HELP.refresh_secs} int min={30} value={refreshSecs} onchange={(v) => setOrRemove("refresh_secs", v)} />
-  <TextField label="alert_at" help={HELP.alert_at} value={levelsText(alertAt)} oninput={setBaseLevels} />
-  <BooleanField label="alert_reset" help={HELP.alert_reset} value={alertReset} onchange={(v) => set("alert_reset", v)} />
+  {@render alerts()}
   <details class="advanced-settings">
     <summary>{lm.technical_paths}</summary>
     <TextField label="codex_path" help={HELP.codex_path} value={codexPath} oninput={(v) => setOrRemove("codex_path", v.trim() === "" ? "" : v)} />
@@ -167,6 +179,7 @@
 {/if}
 
 <style>
+  .shared-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
   .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
   .advanced { margin: var(--s1) 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
   .advanced summary { cursor: pointer; user-select: none; }

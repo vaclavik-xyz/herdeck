@@ -20,6 +20,8 @@ import UsageSection from "./UsageSection.svelte";
 import AnswerProfilesSection from "./AnswerProfilesSection.svelte";
 import ProfilesSection from "./ProfilesSection.svelte";
 import DesktopSection from "./DesktopSection.svelte";
+import SharedTarget from "./SharedTarget.svelte";
+import { parseBridges } from "../bridgeSettings";
 
 // Representative config: at least one entry in every list/map section so the
 // per-entry fields (server id/url/token, macro label/text, …) actually render.
@@ -57,6 +59,7 @@ type SectionSpec = {
   component: unknown;
   overlay: boolean; // supports editProfile
   reloadRev: boolean; // takes reloadRev
+  props?: Record<string, unknown>; // extra props (a variant of the section)
 };
 
 const SECTIONS: SectionSpec[] = [
@@ -72,6 +75,18 @@ const SECTIONS: SectionSpec[] = [
   { name: "AnswerProfilesSection", key: "answer_profiles", component: AnswerProfilesSection, overlay: true, reloadRev: true },
   { name: "ProfilesSection", key: "profiles", component: ProfilesSection, overlay: false, reloadRev: false },
   { name: "DesktopSection", key: "desktop", component: DesktopSection, overlay: false, reloadRev: false },
+  // Bridge shared settings: the rule/alert fields render in base form inside a
+  // profile view on an adopted bridge — they need their tooltips there too.
+  { name: "NotificationsSection (bridge target)", key: "notifications", component: NotificationsSection, overlay: true, reloadRev: true, props: { sharedOnBridge: true } },
+  { name: "UsageSection (bridge target)", key: "usage", component: UsageSection, overlay: true, reloadRev: false, props: { sharedOnBridge: true } },
+  {
+    name: "SharedTarget", key: "shared", component: SharedTarget, overlay: false, reloadRev: false,
+    props: {
+      bridges: parseBridges({ m4: { offered: true, connected: true, revision: 1, set: true, source: "bridge", settings: {} }, mb: { offered: true, connected: true, revision: 2, set: true, source: "bridge", settings: {} } }),
+      target: "m4", onTarget: () => {}, applyAll: false, onApplyAll: () => {}, editingProfile: true,
+      overlayIgnored: [], results: [], baseConfig: {}, put: null, onAdopted: () => {},
+    },
+  },
 ];
 
 function assertLabelsHaveHelp(
@@ -89,6 +104,7 @@ function assertLabelsHaveHelp(
   };
   if (spec.reloadRev) props.reloadRev = 0;
   if (spec.overlay) props.editProfile = editProfile;
+  Object.assign(props, spec.props ?? {});
   const instance = mount(spec.component as never, { target, props });
   try {
     flushSync();

@@ -18,7 +18,8 @@ from ..model import AgentKey
 from ..orchestrator import Orchestrator
 from ..pins import PinStore
 from ..protocol import WIRE_PROTOCOL
-from . import agent_card, bridge_update, hooks_relay, stats, usage_agent_relay
+from ..shared_settings import overlaid_shared_keys
+from . import agent_card, bridge_update, hooks_relay, settings_relay, stats, usage_agent_relay
 from .sinks import RenderFrame
 from .source import StateSource
 
@@ -150,7 +151,12 @@ class DeckApp:
         # so repeated /state polls do not churn tile versions).
         config_path = getattr(config_service, "_config_path", None)
         self._pin_store = pin_store or (PinStore(Path(config_path).with_name("pins.json")) if config_path else None)
-        self._orch = Orchestrator(config, slots=self._slots, clock=self._clock)
+        # Decisions about an agent use its own bridge's shared settings
+        # (LiveSource.config_for); a swap builds a new orchestrator bound to
+        # the new source, so it never asks a stale source.
+        self._orch = Orchestrator(
+            config, slots=self._slots, clock=self._clock, config_for=_config_for_of(source)
+        )
         self._load_pins(self._orch)
         self._owns_icons = icon_provider is None
         self._icons_dir = config.hardware.icons_dir
@@ -289,7 +295,20 @@ class DeckApp:
             on_alert=self._deliver_usage_alerts,
             on_change=self._on_usage_changed,
             server_ids=self._usage_server_ids(self._source),
+            alert_settings=self._usage_alert_settings,
         )
+
+    def _usage_alert_settings(self, server_id: str) -> tuple[list[int], bool] | None:
+        """Bridge-fed usage of ``server_id`` alerts by that bridge's shared
+        ``alert_at`` / ``alert_reset`` (the CURRENT source's config_for);
+        None = the hub's own (local) settings."""
+        config_for = _config_for_of(getattr(self, "_source", None))
+        if config_for is None:
+            return None
+        usage = getattr(config_for(server_id), "usage", None)
+        if usage is None:
+            return None
+        return list(usage.alert_at), bool(usage.alert_reset)
 
     @staticmethod
     def _usage_server_ids(source) -> list[str]:
@@ -863,7 +882,9 @@ class DeckApp:
         cols, rows = new_source.config.grid
         fixed = getattr(self, "_fixed_slots", None)
         slots = fixed if fixed is not None else cols * rows - 2
-        orch = Orchestrator(new_source.config, slots=slots, clock=clk)
+        orch = Orchestrator(
+            new_source.config, slots=slots, clock=clk, config_for=_config_for_of(new_source)
+        )
         self._load_pins(orch)
         icons_dir = new_source.config.hardware.icons_dir
         icons = (
@@ -1391,8 +1412,19 @@ class DeckApp:
                     if app._config_service is None:
                         self._send(404)
                         return
-                    self._send(200, json.dumps(app._config_service.read()).encode(),
-                               "application/json")
+                    payload = app._config_service.read()
+                    shared_state = getattr(app._source, "shared_state", None)
+                    bridges = shared_state() if callable(shared_state) else {}
+                    payload["bridges"] = bridges
+                    # Adopted bridges ignore profile overlays of shared keys.
+                    overlaid = overlaid_shared_keys(
+                        {"profiles": payload.get("profiles") or {}},
+                        payload.get("active_profile") or "default",
+                    )
+                    payload["shared_overlay_ignored"] = (
+                        [sid for sid, st in bridges.items() if st.get("set")] if overlaid else []
+                    )
+                    self._send(200, json.dumps(payload).encode(), "application/json")
                 elif path == "/setup":
                     if not self._require_query_token(url):
                         return
@@ -1597,6 +1629,16 @@ class DeckApp:
                         return
                     code, payload = agent_card.handle_post(app._source, path, body)
                     self._send_agent(code, payload)
+                elif settings_relay.route_server_id(path) is not None:
+                    # POST /bridge-settings/{id}: relay an edit of that bridge's
+                    # shared settings (settings_relay.py).
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    code, payload = settings_relay.handle_post(app._source, path, body)
+                    self._send_agent(code, payload)
                 elif hooks_relay.route_server_id(path) is not None:
                     # POST /maintenance/servers/{id}/hooks: install / remove the
                     # subagent hooks on that bridge's machine (hooks_relay.py).
@@ -1732,6 +1774,13 @@ class DeckApp:
                     self._send(404)
 
         return Handler
+
+
+def _config_for_of(source):
+    """The source's per-server effective config lookup (LiveSource.config_for),
+    or None for a source without bridges (mock/demo): its own config applies."""
+    config_for = getattr(source, "config_for", None)
+    return config_for if callable(config_for) else None
 
 
 def _default_icons(overrides_dir: str | None = None):
@@ -2145,13 +2194,15 @@ def _load_partial_config():
         return None
 
 
-def _start_local_bridge(socket_path, *, runner_factory=None):
+def _start_local_bridge(socket_path, *, session=None, runner_factory=None):
     """Start the embedded bridge and synthesize its loopback (config, server).
     Returns (config, server, runner); the caller owns runner teardown."""
     from ..bootstrap import local_config
     from .local_bridge import LocalBridgeRunner
 
-    runner = (runner_factory or LocalBridgeRunner)(socket_path)
+    if session is None:
+        session = os.environ.get("HERDR_SESSION") or None
+    runner = (runner_factory or LocalBridgeRunner)(socket_path, session=session)
     try:
         _host, port, token = runner.start()
     except Exception:
@@ -2190,7 +2241,9 @@ def _start_local_session_bridges(
                     suffix += 1
                 server_id = f"{base}:{suffix}"
             used_ids.add(server_id)
-            runner = (runner_factory or LocalBridgeRunner)(session.socket_path)
+            runner = (runner_factory or LocalBridgeRunner)(
+                session.socket_path, session=session.name
+            )
             runner._herdeck_session_name = session.name
             try:
                 _host, port, token = runner.start()

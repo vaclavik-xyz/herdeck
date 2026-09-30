@@ -81,8 +81,9 @@ def test_selected_local_sessions_merge_with_remote_fleet():
     class _Runner:
         next_port = 9000
 
-        def __init__(self, socket_path):
+        def __init__(self, socket_path, session=None):
             self.socket_path = socket_path
+            self.session = session
             self.closed = False
 
         def start(self):
@@ -105,6 +106,7 @@ def test_selected_local_sessions_merge_with_remote_fleet():
         ]
         assert config.overview_order == ["local", "local:review", "workbox"]
         assert set(runners) == {"local", "local:review"}
+        assert [r.session for r in runners.values()] == ["default", "review"]
     finally:
         for runner in runners.values():
             runner.close()
@@ -122,7 +124,7 @@ def test_failed_session_runner_is_closed():
     class _FailingRunner:
         instance = None
 
-        def __init__(self, socket_path):
+        def __init__(self, socket_path, session=None):
             self.closed = False
             type(self).instance = self
 

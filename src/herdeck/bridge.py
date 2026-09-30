@@ -23,6 +23,13 @@ from . import history as _history
 from . import hooks_install as _hooks_install
 from . import status_since as _status_since
 from . import usage_agent_install as _usage_agent_install
+from .bridge_settings import (
+    SETTINGS_CAPABILITY,
+    BridgeSettingsStore,
+)
+from .bridge_settings import (
+    default_path as _settings_default_path,
+)
 from .decisions import decision_choices, decision_revision
 from .events import CAPABILITY as _EVENTS_CAPABILITY
 from .events import STALE as _STALE
@@ -1871,6 +1878,7 @@ async def _serve_connection(
     subagents: SubagentSpoolReader | None = None,
     events: EventHub | None = None,
     presence: PresenceHub | None = None,
+    settings: BridgeSettingsStore | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
@@ -1888,7 +1896,7 @@ async def _serve_connection(
     async def send(msg: str) -> bool:
         return await _send_to_client(ws, msg, send_lock)
 
-    extra_capabilities = _extra_capabilities(usage, events, presence)
+    extra_capabilities = _extra_capabilities(usage, events, presence, settings)
     # Who answered, for `answered` events: the label the client gave when it
     # subscribed to events.
     label = "client"
@@ -1900,6 +1908,9 @@ async def _serve_connection(
     # capability); later changes arrive through BridgeUsageFeed.run.
     first_usage = usage.current() if usage is not None else None
     if first_usage is not None and not await send(first_usage):
+        clients.pop(ws, None)
+        return
+    if settings is not None and not await send(encode(settings.frame(server_id))):
         clients.pop(ws, None)
         return
     observes: dict[str, tuple[asyncio.Task, dict]] = {}
@@ -2066,6 +2077,34 @@ async def _serve_connection(
                     presence.report(ws, msg.get("idle_s"))
                     await _broadcast_presence(presence, clients, server_id)
                 continue
+            if kind == "settings_put":
+                # Full token only (not in READONLY_MESSAGES, refused above).
+                req = msg.get("req")
+                req = req if isinstance(req, str) else ""
+                if settings is None:
+                    await send(
+                        encode({"type": "error", "req": req, "message": "settings unavailable"})
+                    )
+                    continue
+                base = msg.get("base_revision")
+                try:
+                    res = settings.put(base if type(base) is int else -1, msg.get("settings"), label)
+                except OSError:
+                    log.exception("shared settings write failed")
+                    await send(
+                        encode({"type": "error", "req": req, "message": "settings write failed"})
+                    )
+                    continue
+                data: dict = {"ok": res.ok, "revision": res.revision}
+                if not res.ok:
+                    data.update(error=res.error, messages=res.messages)
+                await send(encode({"type": "result", "req": req, "data": data}))
+                if res.ok:
+                    frame = encode(settings.frame(server_id))
+                    await asyncio.gather(
+                        *(_send_to_client(w, frame, lk) for w, lk in list(clients.items()))
+                    )
+                continue
             if kind == "update":
                 # Full token only (not in READONLY_MESSAGES, refused above).
                 # Runs in the background: pip can take minutes, and the
@@ -2172,6 +2211,7 @@ def _extra_capabilities(
     usage: BridgeUsageFeed | None,
     events: EventHub | None,
     presence: PresenceHub | None = None,
+    settings: BridgeSettingsStore | None = None,
 ) -> tuple[str, ...]:
     """Capabilities that depend on how this bridge was started."""
     caps = usage.capabilities if usage is not None else ()
@@ -2179,6 +2219,8 @@ def _extra_capabilities(
         caps = (*caps, _EVENTS_CAPABILITY)
     if presence is not None:
         caps = (*caps, PRESENCE_CAPABILITY)
+    if settings is not None:
+        caps = (*caps, SETTINGS_CAPABILITY)
     return caps
 
 
@@ -2257,7 +2299,7 @@ def _log_broadcast_task_failure(task: asyncio.Task) -> None:
         log.error("local bridge broadcast stopped: %s", exc, exc_info=exc)
 
 
-async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
+async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None, session="default"):
     """Bind an embedded bridge on a loopback ephemeral port with a random,
     in-memory token. Returns (host, port, token, (server, broadcast_task))."""
     import secrets
@@ -2291,6 +2333,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     icon_subs: dict = {}
     hub = EventHub(client_herdr, "local")
     presence = PresenceHub()
+    settings = BridgeSettingsStore(_settings_default_path(session or "default"))
 
     async def handler(ws):
         await _serve_connection(
@@ -2307,6 +2350,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
             subagents=subagents,
             events=hub,
             presence=presence,
+            settings=settings,
         )
 
     server = await websockets.serve(handler, host, 0)
@@ -2325,7 +2369,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
                 "local",
                 icon_subs=icon_subs,
                 icons=icons,
-                extra_capabilities=_extra_capabilities(None, hub, presence),
+                extra_capabilities=_extra_capabilities(None, hub, presence, settings),
                 events=hub,
             )
         finally:
@@ -2378,6 +2422,7 @@ async def serve(
     icon_subs: dict = {}
     hub = EventHub(client_herdr, server_id)  # event-loop only too
     presence = PresenceHub()
+    settings = BridgeSettingsStore(_settings_default_path())
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     # The exit seam: a verified self-update asks serve() to return (after a
@@ -2404,9 +2449,10 @@ async def serve(
             subagents=subagents,
             events=hub,
             presence=presence,
+            settings=settings,
         )
 
-    extra_capabilities = _extra_capabilities(usage, hub, presence)
+    extra_capabilities = _extra_capabilities(usage, hub, presence, settings)
     if usage is not None:
         usage.start()
     async with websockets.serve(handler, host, port):

@@ -285,9 +285,9 @@ def test_mock_reloader_retries_pending_selection_after_build_failure(
     assert calls == ["LIVE"]
 
 
-def _stub_runner_factory(socket_path):
+def _stub_runner_factory(socket_path, session=None):
     return LocalBridgeRunner(
-        socket_path, start_bridge=functools.partial(start_local_bridge, herdr=StubHerdr(panes=[]))
+        socket_path, session=session, start_bridge=functools.partial(start_local_bridge, herdr=StubHerdr(panes=[]))
     )
 
 

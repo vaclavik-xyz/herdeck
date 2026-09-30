@@ -383,7 +383,8 @@ class AgentCardMixin:
             "revision": revision,
             "options": options,
             "can_stop": stop_ok,
-            "stop_confirm": "act_force" in self._config.safety.require_confirm_for,
+            "stop_confirm": "act_force"
+            in self.config_for(server_id).safety.require_confirm_for,
             "can_text": text_ok,
             "can_focus": agent.backend != "t3",
             "subagents": subagent_rows(agent.subagents, int(time.time() * 1000)),
@@ -480,7 +481,7 @@ class AgentCardMixin:
                 if option["kind"] == "option":
                     cmd = self._blocked_option_command(key, agent, choice, prompt)
                 else:
-                    profile = profile_for(self._config, agent.agent_type)
+                    profile = profile_for(self.config_for(server_id), agent.agent_type)
                     cmd = Command(
                         "act_if_blocked",
                         server_id,
@@ -603,7 +604,7 @@ class AgentCardMixin:
                 "act_force",
                 server_id,
                 pane_id,
-                keys=list(profile_for(self._config, agent.agent_type).stop),
+                keys=list(profile_for(self.config_for(server_id), agent.agent_type).stop),
                 terminal_id=agent.terminal_id or None,
             )
         self._notify_throttle.note_interaction(key)

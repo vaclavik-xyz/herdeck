@@ -33,6 +33,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 
 from .. import notify as _notify
+from ..bridge_settings import SETTINGS_CAPABILITY
 from ..commands import Command, command_to_msg, profile_for
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
@@ -60,13 +61,17 @@ from ..orchestrator import Orchestrator, binary_answer
 from ..presence import IdleProbe
 from ..presence_hub import PRESENCE_CAPABILITY, PRESENCE_REPORT_S, PRESENCE_STALE_S
 from ..project_icons import ingest_project_icon
+from ..protocol import Settings
+from ..shared_settings import SharedSettings, apply_shared
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
+from . import shared_view as _shared_view
 from .agent_card import AgentCardMixin
 from .bridge_update import BridgeUpdateMixin
 from .event_cursor import EventCursorStore
 from .hooks_relay import HooksMixin
 from .live_events import BridgeEventsMixin
+from .settings_relay import SettingsRelayMixin
 from .source import StateSource
 from .stats import StatsMixin
 from .usage_agent_relay import UsageAgentMixin
@@ -128,6 +133,7 @@ class LiveSource(
     BridgeUpdateMixin,
     StatsMixin,
     HooksMixin,
+    SettingsRelayMixin,
     UsageAgentMixin,
     BridgeEventsMixin,
     StateSource,
@@ -161,11 +167,21 @@ class LiveSource(
         shell_banners: bool = True,
         event_store: EventCursorStore | None = None,
         done_timer=None,
+        shared_view: _shared_view.SharedSettingsView | None = None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
         # when it carries a fleet, every selected server participates.
         self._config = config
+        # Per-bridge shared settings (capability "settings"): warm-started from
+        # the runtime cache so a restart applies each bridge's rules before it
+        # answers. config_for(server_id) is local config + that bridge's
+        # document; memo per server: (settings, local config, result).
+        self._shared = shared_view or _shared_view.SharedSettingsView(
+            _shared_view.default_cache_dir()
+        )
+        self._shared_memo: dict[str, tuple[SharedSettings, Config, Config]] = {}
+        self._shared_memo_lock = threading.Lock()
         # Event notifications (newly_entered bookkeeping per event). The sink
         # records every alert into the feed; the deck shell posts both the
         # banner and sound under one acknowledged delivery. A plain osascript
@@ -293,6 +309,7 @@ class LiveSource(
         self._bridge_update_init()  # bridge self-update (bridge_update.BridgeUpdateMixin)
         self._bridge_events_init(event_store)  # bridge lifecycle events (live_events.py)
         self._stats_init()  # GET /stats relay (stats.StatsMixin)
+        self._settings_relay_init()  # bridge shared settings put relay (settings_relay.py)
         self._hooks_init()  # subagent hook install relay (hooks_relay.HooksMixin)
         self._usage_agent_init()  # usage agent install relay (usage_agent_relay.py)
 
@@ -300,6 +317,37 @@ class LiveSource(
     @property
     def config(self) -> Config:
         return self._config
+
+    def config_for(self, server_id: str) -> Config:
+        """The effective config for an agent on ``server_id``: the local
+        config with that bridge's shared settings applied, or the local config
+        itself when the bridge is unset, old (no capability) or unknown."""
+        config = self._config
+        shared = self._shared.settings_for(server_id)
+        if shared is None:
+            return config
+        with self._shared_memo_lock:
+            memo = self._shared_memo.get(server_id)
+            if memo is not None and memo[0] is shared and memo[1] is config:
+                return memo[2]
+        effective = apply_shared(config, shared)
+        with self._shared_memo_lock:
+            self._shared_memo[server_id] = (shared, config, effective)
+        return effective
+
+    def shared_state(self) -> dict[str, dict]:
+        """Per configured server: its shared settings state (see
+        SharedSettingsView.state) plus whether the bridge offers the
+        capability and is connected. Feeds the editor."""
+        with self._lock:
+            connected = dict(self._connected)
+        out: dict[str, dict] = {}
+        for sid in self._servers:
+            state = self._shared.state(sid)
+            state["offered"] = self._offers_capability(sid, SETTINGS_CAPABILITY)
+            state["connected"] = bool(connected.get(sid))
+            out[sid] = state
+        return out
 
     @property
     def language(self) -> str:
@@ -427,10 +475,11 @@ class LiveSource(
             return "stale"
         terminal_id = state.terminal_id or None
         if choice is not None:
+            cfg = self.config_for(key.server_id)  # the agent's own bridge's rules
             answer = binary_answer(
                 prompt if isinstance(prompt, str) else "",
-                profile_for(self._config, state.agent_type),
-                self._config.safety,
+                profile_for(cfg, state.agent_type),
+                cfg.safety,
             )
             if answer is None or answer.sig != sig:
                 return "stale"
@@ -690,8 +739,10 @@ class LiveSource(
         ``at_ms``: when the bridge saw the transition (reminders count from it)."""
         if self._notifier is None:
             return
+        # Which events alert is the agent's bridge's rule ([notifications].on
+        # is shared); how they are delivered (sound, backends) stays local.
         n = self._config.notifications
-        if event not in n.on:
+        if event not in self.config_for(agent.key.server_id).notifications.on:
             return
         if event == "done" and not deferred and self._quiet_done(agent):
             return
@@ -726,8 +777,8 @@ class LiveSource(
     def _quiet_done(self, agent: AgentState) -> bool:
         """[notifications].done_min_work: True when this "done" must not alert
         now — a short run is dropped (done_short_delay 0) or re-checked later.
-        An unknown run length counts as long."""
-        n = self._config.notifications
+        An unknown run length counts as long. The agent's bridge's rule."""
+        n = self.config_for(agent.key.server_id).notifications
         if n.done_min_work <= 0:
             return False
         with self._lock:
@@ -783,10 +834,12 @@ class LiveSource(
     def _track_reminder(self, key: AgentKey, at_ms: int | None = None) -> None:
         """A block episode began: remember when, for its reminders. With the
         bridge's ``at_ms`` they count from bridge time, not from when this
-        runtime heard of it (a replay after sleep)."""
-        if self._config.notifications.remind_after <= 0:
+        runtime heard of it (a replay after sleep). ``remind_after`` is the
+        agent's bridge's rule."""
+        interval = self.config_for(key.server_id).notifications.remind_after * 60.0
+        if interval <= 0:
             return
-        since, sent = self._reminder_start(at_ms)
+        since, sent = self._reminder_start(at_ms, interval)
         with self._lock:
             episode = self._block_episode.get(key)
             if episode is None:
@@ -812,21 +865,30 @@ class LiveSource(
     def check_reminders(self) -> int:
         """Alert again for every agent still blocked in the same episode
         ``remind_after`` minutes (x1, x2, x3) after it began. Returns how many
-        reminders were scheduled."""
+        reminders were scheduled. Each agent's interval is its bridge's
+        ``remind_after`` (0 there = no more reminders for it)."""
         n = self._config.notifications
-        if self._notifier is None or n.remind_after <= 0:
+        if self._notifier is None:
             return 0
-        interval = n.remind_after * 60.0
         now = self._notify_clock()
         due: list[tuple[AgentState, str, float]] = []
+        # One locked pass: a reminder tracked meanwhile is judged by its own
+        # server's interval, never dropped as unknown. config_for only takes
+        # leaf locks (shared view + memo), never self._lock, so it is safe here.
+        intervals: dict[str, float] = {}
         with self._lock:
             for key, (episode, since, sent) in list(self._reminders.items()):
                 state = self._agents.get(key)
+                sid = key.server_id
+                if sid not in intervals:
+                    intervals[sid] = self.config_for(sid).notifications.remind_after * 60.0
+                interval = intervals[sid]
                 if (
                     state is None
                     or state.status is not Status.BLOCKED
                     or self._block_episode.get(key) != episode
                     or sent >= REMIND_MAX
+                    or interval <= 0
                 ):
                     del self._reminders[key]
                     continue
@@ -960,6 +1022,36 @@ class LiveSource(
         with self._lock:
             self._remote_presence[server_id] = (self._presence_clock(), idle_s)
 
+    def _shared_on_snapshot(self, server_id: str) -> None:
+        """A snapshot carries the bridge's capabilities. Without "settings"
+        (an old bridge, or the id re-pointed at one) no frame will ever
+        replace a cached document, so drop it: the local config applies,
+        exactly as before shared settings existed."""
+        connector = getattr(self._runners.get(server_id), "connector", None)
+        caps = getattr(connector, "capabilities", None)
+        if not isinstance(caps, frozenset | set) or SETTINGS_CAPABILITY in caps:
+            return  # capabilities unknown, or the bridge's frame follows
+        if self._shared.clear(server_id):
+            self._shared_changed(server_id)
+
+    def _shared_changed(self, server_id: str) -> None:
+        def mutate():
+            with self._lock:
+                self._bump_semantic_locked(
+                    key for key in self._agents if key.server_id == server_id
+                )
+            return True
+
+        self._apply(mutate)
+
+    def _on_settings(self, server_id: str, frame: Settings) -> None:
+        """Connector callback: the bridge's shared settings document. A change
+        re-renders the deck (labels showing macros / start profiles) and bumps
+        the server's agents' semantic generation (a pending confirmation made
+        under the old rules dies with it)."""
+        if self._shared.update(server_id, frame):
+            self._shared_changed(server_id)
+
     def _remote_idles(self) -> list[float]:
         now = self._presence_clock()
         with self._lock:
@@ -970,10 +1062,13 @@ class LiveSource(
             if idle is not None and now - at <= PRESENCE_STALE_S
         ]
 
-    def _offers_presence(self, server_id: str) -> bool:
+    def _offers_capability(self, server_id: str, capability: str) -> bool:
         connector = getattr(self._runners.get(server_id), "connector", None)
         caps = getattr(connector, "capabilities", None)
-        return isinstance(caps, frozenset | set) and PRESENCE_CAPABILITY in caps
+        return isinstance(caps, frozenset | set) and capability in caps
+
+    def _offers_presence(self, server_id: str) -> bool:
+        return self._offers_capability(server_id, PRESENCE_CAPABILITY)
 
     def report_presence(self) -> int:
         """Send this runtime's idle to every connected bridge offering presence."""
@@ -1052,9 +1147,8 @@ class LiveSource(
         # Answers go out as herdr keystrokes / text; other backends (T3) have
         # their own decision API and keep plain banners.
         if n.banner_actions and "macos" in n.backends and agent.backend == "herdr":
-            answer = binary_answer(
-                prompt, profile_for(self._config, agent.agent_type), self._config.safety
-            )
+            cfg = self.config_for(agent.key.server_id)  # the agent's bridge's rules
+            answer = binary_answer(prompt, profile_for(cfg, agent.agent_type), cfg.safety)
             if answer is not None:
                 meta["actions"] = [
                     {"id": "approve", "label": tr(lang, "act.approve")},
@@ -1115,9 +1209,17 @@ class LiveSource(
         banners of keys that left the status and return the states that just
         entered it (to alert). The caller fires alerts only after EVERY event
         withdrew — a done->blocked agent's new blocked banner must never be
-        removed by the withdraw of its old done banner."""
-        if self._notifier is None or event not in self._config.notifications.on:
+        removed by the withdraw of its old done banner. Only agents whose
+        bridge's [notifications].on names ``event`` take part."""
+        if self._notifier is None:
             return []
+        servers = {key.server_id for key in scope} | {s.key.server_id for s in states}
+        active = {sid for sid in servers if event in self.config_for(sid).notifications.on}
+        if not active:
+            return []
+        if active != servers:
+            scope = {key for key in scope if key.server_id in active}
+            states = [s for s in states if s.key.server_id in active]
         tracked = self._notify_keys[event]
         to, entered_here = newly_entered(NOTIFY_EVENT_STATUSES[event], tracked & scope, states)
         self._notify_keys[event] = (tracked - scope) | entered_here
@@ -1130,11 +1232,18 @@ class LiveSource(
         """Advance the subagent bursts of ``states`` and alert the ones whose
         last subagent finished while the agent is not working (once per burst).
         Bridge lifecycle events carry no subagent news, so this always runs
-        on the runtime's own view."""
-        if self._notifier is None or not self._config.notifications.subagents_done:
+        on the runtime's own view. Only for agents whose bridge enables
+        [notifications].subagents_done."""
+        if self._notifier is None:
             return
         self._subagent_bursts.forget(gone)
+        enabled: dict[str, bool] = {}
         for state in states:
+            sid = state.key.server_id
+            if sid not in enabled:
+                enabled[sid] = self.config_for(sid).notifications.subagents_done
+            if not enabled[sid]:
+                continue
             count = self._subagent_bursts.observe(state)
             if count is not None:
                 self._fire_subagents_done(state, count)
@@ -1178,6 +1287,7 @@ class LiveSource(
             if first:  # report at once on (re)connect instead of after 30 s
                 if not self._ensure_presence_thread():
                     self._presence_wake.set()
+        self._shared_on_snapshot(server_id)
         self._bridge_update_on_snapshot(server_id)
         self._hooks_on_snapshot(server_id)
         self._usage_agent_on_snapshot(server_id)
@@ -1326,6 +1436,7 @@ class LiveSource(
             with self._lock:
                 self._remote_presence.pop(server_id, None)
                 self._presence_announced.discard(server_id)
+            self._shared.forget_live(server_id)
         def mutate():
             with self._lock:
                 self._connected[server_id] = up
@@ -1359,6 +1470,7 @@ class LiveSource(
         self._bridge_update_on_connection(server_id, up)
         self._stats_on_connection(server_id, up)
         self._hooks_on_connection(server_id, up)
+        self._settings_relay_on_connection(server_id, up)
         self._usage_agent_on_connection(server_id, up)
 
     def _on_result(self, *args) -> None:
@@ -1382,6 +1494,8 @@ class LiveSource(
             return  # a GET /stats reply (stats.py), not a deck command
         if self._hooks_on_result(req, data):
             return  # a hooks reply (hooks_relay.py), not a deck command
+        if self._settings_relay_on_result(req, data):
+            return  # a settings_put reply (settings_relay.py), not a deck command
         if self._usage_agent_on_result(req, data):
             return  # a usage_agent reply (usage_agent_relay.py), not a deck command
         tap = self._result_tap
@@ -1747,6 +1861,7 @@ def build_live_source(
             on_usage=source._on_usage,
             on_lifecycle=source._on_lifecycle,
             on_presence=source._on_presence,
+            on_settings=source._on_settings,
             events_cursor=source._events_cursor,
         )
         runner = runner_factory(connector)

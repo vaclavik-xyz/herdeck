@@ -31,8 +31,13 @@ class RuntimeAgentControl:
         send: Callable[[Command, str], Awaitable[None]],
         current_agent: Callable[[AgentKey], AgentState | None],
         clock=None,
+        config_for: Callable[[str], Config | None] | None = None,
     ):
         self._config = config
+        # Per-server effective config (the agent's own bridge's shared
+        # settings: answer profiles, [safety]); None / a None result = the
+        # local config.
+        self._config_for = config_for
         self._send = send
         self._current_agent = current_agent
         self._clock = clock or time.monotonic
@@ -44,6 +49,13 @@ class RuntimeAgentControl:
     def update_config(self, config: Config) -> None:
         self._config = config
         self._pending_confirm = None
+
+    def _cfg(self, server_id: str | None) -> Config:
+        if server_id is not None and self._config_for is not None:
+            found = self._config_for(server_id)
+            if found is not None:
+                return found
+        return self._config
 
     def reset_confirmation(self, key: AgentKey | None = None) -> None:
         if key is None or (self._pending_confirm is not None and self._pending_confirm[1] == key):
@@ -207,7 +219,8 @@ class RuntimeAgentControl:
         if agent is None:
             return ActionResult(False, message="agent is no longer available")
         action_id = self._action_id(action, force=force, always=always)
-        if action_id in self._config.safety.require_confirm_for and not confirmed:
+        cfg = self._cfg(key.server_id)
+        if action_id in cfg.safety.require_confirm_for and not confirmed:
             armed = (
                 self._pending_confirm == (action_id, key)
                 and self._clock() - self._pending_confirm_at <= _CONFIRM_TTL_S
@@ -220,7 +233,7 @@ class RuntimeAgentControl:
         command = build_action_command(
             action,
             agent,
-            profile_for(self._config, agent.agent_type),
+            profile_for(cfg, agent.agent_type),
             force=force,
             always=always,
         )
@@ -234,10 +247,17 @@ class RuntimeAgentControl:
         return action
 
     def requires_confirmation(
-        self, action: str, *, force: bool = False, always: bool = False
+        self,
+        action: str,
+        *,
+        force: bool = False,
+        always: bool = False,
+        server_id: str | None = None,
     ) -> bool:
+        """Does ``action`` need a confirmation on ``server_id``'s agents (its
+        bridge's [safety]; the local config without a server)?"""
         return self._action_id(action, force=force, always=always) in (
-            self._config.safety.require_confirm_for
+            self._cfg(server_id).safety.require_confirm_for
         )
 
     def _action_result(self, data: dict) -> ActionResult:

@@ -139,7 +139,9 @@ async def resolve_runtime_config(
     if mode[0] == "remote":
         return file_config, _noop
     if mode[0] == "local":
-        _host, port, token, handle = await start_local_bridge(mode[1])
+        _host, port, token, handle = await start_local_bridge(
+            mode[1], session=os.environ.get("HERDR_SESSION") or None
+        )
         server, btask = handle
 
         async def _close() -> None:

@@ -23,13 +23,16 @@ order) and ``paid_only`` apply exactly as they do to the local poller. With
 several bridges each provider comes from the first server in config order
 that has it (under paid_only: the first with a paid subscription).
 
-Alerts and pace: a local poller keeps doing both itself. For bridge data the
-hub runs its own ``usage_alerts.UsageTracker`` (this runtime's ``alert_at`` /
-``alert_reset``) over the visible providers on every change and once per
-``refresh_secs`` for the clock-driven reset alert; the pace hint
-(``full_early_s``) is the bridge's, whose poller sees every poll. The tracker
-restarts with a silent baseline whenever the hub switches to bridge data, so a
-switch never re-announces a level the local poller already announced.
+Alerts and pace: a local poller keeps doing both itself (this runtime's
+``alert_at`` / ``alert_reset``). For bridge data the hub runs its own
+``usage_alerts.UsageTracker`` over the visible providers on every change and
+once per ``refresh_secs`` for the clock-driven reset alert; each provider is
+judged by the ``alert_at`` / ``alert_reset`` of the bridge it came from
+(``alert_settings(server_id)``: that bridge's shared settings, else this
+runtime's), one tracker per distinct setting. The pace hint (``full_early_s``)
+is the bridge's, whose poller sees every poll. The trackers restart with a
+silent baseline whenever the hub switches to bridge data, so a switch never
+re-announces a level the local poller already announced.
 """
 
 from __future__ import annotations
@@ -84,6 +87,7 @@ class UsageHub:
         empty_grace_s: float = _EMPTY_GRACE_S,
         tick_s: float = _TICK_S,
         run_thread: bool = True,
+        alert_settings: Callable[[str], tuple[list[int], bool] | None] | None = None,
     ):
         self._source = getattr(usage_config, "source", "auto")
         self._providers = list(usage_config.providers)
@@ -91,6 +95,7 @@ class UsageHub:
         self._refresh = max(30.0, float(usage_config.refresh_secs))
         self._alert_at = list(usage_config.alert_at)
         self._alert_reset = bool(usage_config.alert_reset)
+        self._alert_lookup = alert_settings
         self._local_factory = local_factory
         self._on_alert = on_alert
         self._on_change = on_change
@@ -107,7 +112,10 @@ class UsageHub:
         self._undecided_since = clock()
         self._mode: str | None = None  # "local" | "bridge" | None (undecided)
         self._local = None
-        self._tracker = UsageTracker(self._alert_at, self._alert_reset)
+        # Bridge-data alert trackers, one per (alert_at, alert_reset) in use:
+        # servers that share a setting share a tracker (a provider moving
+        # between them keeps its state). Only touched under _eval_lock.
+        self._trackers: dict[tuple[tuple[int, ...], bool], UsageTracker] = {}
         self._last_observe = float("-inf")
         self._last_view: list | None = None
         self._closed = False
@@ -239,16 +247,17 @@ class UsageHub:
                     start_local = True
                 else:
                     # Silent baseline on every switch to bridge data.
-                    self._tracker = UsageTracker(self._alert_at, self._alert_reset)
+                    self._trackers = {}
                     self._last_observe = float("-inf")
                     self._last_view = None
             if self._mode == "bridge":
-                view = self._bridge_view_locked(now)
+                sourced = self._bridge_sourced_locked(now)
+                view = [usage for _sid, usage in sourced]
                 if view != self._last_view or now - self._last_observe >= self._refresh:
                     changed = changed or view != self._last_view
                     self._last_view = view
                     self._last_observe = now
-                    observe = view
+                    observe = sourced
         if stop_local is not None:
             # Off-thread: a poller close joins its thread and stops codex.
             threading.Thread(target=_close_quietly, args=(stop_local,), daemon=True).start()
@@ -292,6 +301,10 @@ class UsageHub:
         return [*self._order, *extra]
 
     def _bridge_view_locked(self, now: float) -> list:
+        return [usage for _sid, usage in self._bridge_sourced_locked(now)]
+
+    def _bridge_sourced_locked(self, now: float) -> list[tuple[str, object]]:
+        """The visible bridge providers, each with the server it came from."""
         live = [sid for sid in self._ordered_ids_locked() if self._live(sid, now)]
         out = []
         for provider in self._providers:
@@ -301,9 +314,22 @@ class UsageHub:
                     continue
                 if self._paid_only and usage.subscription != "paid":
                     continue
-                out.append(usage)
+                out.append((sid, usage))
                 break
         return out
+
+    def _alert_settings(self, server_id: str) -> tuple[list[int], bool]:
+        """``server_id``'s (alert_at, alert_reset): its bridge's shared
+        settings via ``alert_settings``, else this runtime's own."""
+        if self._alert_lookup is not None:
+            try:
+                found = self._alert_lookup(server_id)
+            except Exception:
+                log.warning("usage alert settings lookup failed", exc_info=True)
+                found = None
+            if found is not None:
+                return list(found[0]), bool(found[1])
+        return list(self._alert_at), self._alert_reset
 
     def _start_local(self) -> None:
         try:
@@ -324,9 +350,28 @@ class UsageHub:
             return
         poller.start()
 
-    def _observe(self, view: list) -> None:
-        # The tracker's pace annotation is discarded: the bridge's is better.
-        _annotated, alerts = self._tracker.observe(view, self._wall_clock())
+    def _observe(self, sourced: list) -> None:
+        # Runs under _eval_lock, never under the hub lock: the settings lookup
+        # may take the source's locks.
+        groups: dict[tuple[tuple[int, ...], bool], list] = {
+            sig: [] for sig in self._trackers
+        }
+        for sid, usage in sourced:
+            levels, reset = self._alert_settings(sid)
+            groups.setdefault((tuple(sorted(set(levels))), reset), []).append(usage)
+        now = self._wall_clock()
+        alerts: list = []
+        for sig, usages in groups.items():
+            others = {u.provider for other, us in groups.items() if other != sig for u in us}
+            tracker = self._trackers.get(sig)
+            if tracker is not None and others:
+                tracker.forget(others)
+            if tracker is None:
+                tracker = self._trackers[sig] = UsageTracker(list(sig[0]), sig[1])
+            # An empty group still runs the clock-driven reset check. The
+            # tracker's pace annotation is discarded: the bridge's is better.
+            _annotated, found = tracker.observe(usages, now)
+            alerts.extend(found)
         if alerts and self._on_alert is not None:
             try:
                 self._on_alert(alerts)

@@ -1323,6 +1323,61 @@ Qoder, and Qwen. A custom type uses a generated letter mark unless
 
 Custom `[answer_profiles.<name>]` sections can be defined in the base config and overridden per-profile via `[profiles.<name>.answer_profiles.<type>]`. The built-in `claude`, `codex`, and `default` types are always available for profile overrides even when omitted from the base config.
 
+## Shared settings on the bridge
+
+By default every Mac keeps its own `config.toml`. A bridge can instead own the
+rules that describe how *its* agents should be handled, so every Herdeck
+runtime attached to it (its deck, desktop window and web cockpit) applies the
+same ones. The Elgato Stream Deck plugin and `herdeck ctl` still read the local
+`config.toml` for now.
+
+**Shared** (follow the bridge): `[answer_profiles]`, `[safety]`, `[[macros]]`,
+`[start_profiles]`, the notification rules `on`, `done_min_work`,
+`done_short_delay`, `remind_after`, `subagents_done`, and the usage alerts
+`alert_at`, `alert_reset`. **Local** (always per Mac): everything else,
+including notification delivery (`enabled`, `backends`, sounds, banners,
+Telegram), theme, view and deck settings.
+
+Behaviour:
+
+- **Adoption is explicit.** A bridge starts with no shared settings. In the
+  desktop editor, the shared sections have a target picker; choosing an unset
+  bridge offers to adopt it, which copies your current `config.toml` values of
+  the shared keys to the bridge. Until then, and for bridges older
+  than this feature (no `settings` capability), the runtime keeps using
+  `config.toml` as the fallback.
+- **Profile overlays.** `[profiles.X]` overlays of shared keys apply only to the
+  local fallback. For a bridge that adopted settings they are ignored (the
+  editor tells you when the active profile has such overlays).
+- **Several bridges.** Each bridge has its own document and each agent uses the
+  settings of the bridge it runs on. "Apply to all bridges" in the editor writes
+  the same values to every connected bridge that has already adopted shared
+  settings (the option appears once at least two such bridges are connected);
+  unset or disconnected bridges are skipped. The per-bridge results are listed
+  after Apply.
+- **Offline.** The runtime caches the last document per bridge in
+  `$HERDECK_RUNTIME_DIR/bridge-settings` (default `~/.cache/herdeck/bridge-settings`),
+  so a restarted runtime applies the right rules before the bridge answers. A
+  disconnected bridge is read-only in the editor. If a bridge reports no
+  document or stops offering the capability, its cache is dropped and the
+  fallback applies again.
+- **Conflicts and permissions.** Every write carries the revision it was based
+  on; a stale write is rejected (HTTP 409) and the editor reloads. Only clients
+  with a full (non read-only) token can change shared settings.
+- **Where it lives.** The bridge stores the document (0600, atomic writes) in
+  `$HERDECK_BRIDGE_SETTINGS`, default `~/.config/herdeck/bridge-settings.toml`.
+  An embedded local bridge (one per Herdr session) uses
+  `~/.config/herdeck/local-bridge-settings-<herdr session>.toml`.
+
+The editor talks to the runtime, which relays the change to the bridge:
+`POST /bridge-settings/<server id>` with `{"base_revision", "settings"}`
+answers 200, 409 (stale revision), 422 (invalid or too large), 503 (bridge
+disconnected or without the capability), 504 (no answer) or 502 (bridge error,
+e.g. a read-only token).
+
+Delivery stays local in this phase: sounds, backends, banners and Telegram are
+still read from each Mac's `config.toml`.
+
 ## Notifications
 Get notified when an agent enters the **blocked** state (waiting for your input)
 or the **done** state (task finished), so you don't have to watch the deck.

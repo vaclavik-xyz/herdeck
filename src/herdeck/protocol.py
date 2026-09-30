@@ -215,6 +215,18 @@ class Presence:
 
 
 @dataclass
+class Settings:
+    """The bridge's shared settings document (see bridge_settings.py);
+    ``settings`` is None while nothing has been stored yet."""
+
+    server_id: str
+    revision: int
+    updated_at_ms: int
+    updated_by: str
+    settings: dict | None
+
+
+@dataclass
 class Usage:
     """A bridge's provider usage snapshot (capability ``usage``), sent on
     connect and whenever it changes. ``providers`` is the validated
@@ -344,6 +356,7 @@ def decode_inbound(
     | Progress
     | Usage
     | Presence
+    | Settings
     | Unknown
 ):
     msg = json.loads(raw)
@@ -435,6 +448,20 @@ def decode_inbound(
             clean_idle(msg.get("idle_s")),
             clients if type(clients) is int and clients >= 0 else 0,
         )
+    if kind == "settings":
+        sid = msg.get("server_id")
+        revision, at_ms = msg.get("revision"), msg.get("updated_at_ms")
+        by, doc = msg.get("updated_by", ""), msg.get("settings")
+        if not isinstance(sid, str):
+            raise ValueError("settings frame missing server_id")
+        for value in (revision, at_ms):
+            if type(value) is not int or value < 0:
+                raise ValueError("settings frame has a bad revision/updated_at_ms")
+        if not isinstance(by, str):
+            raise ValueError("settings frame has a bad updated_by")
+        if doc is not None and not isinstance(doc, dict):
+            raise ValueError("settings frame has a bad settings document")
+        return Settings(sid, revision, at_ms, by[:64], doc)
     # Forward compatibility: a newer bridge may add frame types. Raising here
     # would reach Connector's on_error (ctl fails every pending request on it).
     return Unknown(str(kind))

@@ -55,6 +55,13 @@ tile_icon = "agent"
 # [view.project_icons]
 # herdeck = "~/icons/herdeck.png"
 
+# Bridge shared settings: [safety], [[macros]], [start_profiles], answer
+# profiles, notifications on / done_min_work / done_short_delay / remind_after /
+# subagents_done and usage alert_at / alert_reset can be owned by a bridge (see
+# README "Shared settings on the bridge"). Once a bridge adopted them, the
+# values below (and [profiles.X] overlays of them) are only the fallback for
+# unset or older bridges. Delivery keys (enabled, backends, sounds, banners,
+# Telegram) always stay local.
 [notifications]
 enabled = false
 backends = ["macos"]
@@ -87,6 +94,7 @@ subagents_done = false
 # blocked = "Basso"
 # done = "Ping"
 
+# Shared with the bridge (see the note above [notifications]).
 [safety]
 approve_always = true
 # Stop (act_force) needs a second confirming press by default — it is an
@@ -116,6 +124,7 @@ alert_reset = false
 # machine's own poll; "local" = always poll here; "bridge" = bridge data only.
 source = "auto"
 
+# Shared with the bridge.
 [[macros]]
 label = "continue"
 text = "continue"
@@ -132,6 +141,7 @@ text = "commit the changes"
 label = "/compact"
 text = "/compact"
 
+# Shared with the bridge.
 [start_profiles]
 claude = ["claude"]
 codex = ["codex"]

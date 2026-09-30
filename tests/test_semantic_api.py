@@ -20,7 +20,7 @@ class FakeControl:
     def current_agent(self, key):
         return next((agent for agent in self.agents if agent.key == key), None)
 
-    def requires_confirmation(self, action):
+    def requires_confirmation(self, action, *, server_id=None):
         return action in self.confirm_actions
 
     async def approve(self, key, *, confirmed=False):

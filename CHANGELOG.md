@@ -11,6 +11,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   short agent runs (a quick chat reply alerts only if still done after the delay).
 - Notifications: Telegram `only_when_away` now counts input on every Mac
   connected to the bridge (bridge-aggregated presence).
+- Shared settings on the bridge (capability `settings`): answer profiles,
+  safety, macros, start profiles, notification rules and usage alerts can be
+  owned by a bridge and are edited from the desktop app (explicit adoption,
+  revisioned writes, offline cache, "apply to all bridges" across adopted, connected ones). `config.toml`
+  remains the fallback; `[profiles.X]` overlays of shared keys apply only to
+  it. Delivery (sound, backends, banners, Telegram) stays local.
 
 ## [0.13.1] - 2026-09-24
 

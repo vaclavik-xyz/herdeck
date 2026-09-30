@@ -58,7 +58,7 @@ async def test_resolve_runtime_config_local_starts_bridge(monkeypatch):
         def cancel(self):
             closed["task"] = True
 
-    async def fake_start_local_bridge(socket_path):
+    async def fake_start_local_bridge(socket_path, session=None):
         return ("127.0.0.1", 5555, "tok", (FakeServer(), FakeTask()))
 
     monkeypatch.setattr("herdeck.bootstrap.start_local_bridge", fake_start_local_bridge)

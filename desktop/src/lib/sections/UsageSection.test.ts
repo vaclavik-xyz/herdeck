@@ -103,3 +103,46 @@ describe("UsageSection", () => {
     }
   });
 });
+
+// Bridge shared settings: only alert_at / alert_reset follow the target.
+describe("UsageSection shared alert fields", () => {
+  function mountShared(props: Record<string, unknown>) {
+    const target = document.createElement("div");
+    const instance = mount(UsageSection, {
+      target,
+      props: {
+        payload: parseConfig({ base: { usage: { alert_at: [80] } }, profiles: { night: {} } })!,
+        onChange: () => {},
+        onError: () => {},
+        ...props,
+      },
+    });
+    flushSync();
+    return { target, cleanup: () => unmount(instance) };
+  }
+
+  it("on an adopted bridge, a profile view edits the alerts directly", () => {
+    const { target, cleanup } = mountShared({ editProfile: "night", sharedOnBridge: true });
+    try {
+      const overrides = Array.from(target.querySelectorAll(".override > [data-config-key]"))
+        .map((n) => (n as HTMLElement).dataset.configKey);
+      expect(overrides).not.toContain("alert_at");
+      expect(overrides).not.toContain("alert_reset");
+      expect(overrides).toContain("refresh_secs");
+      expect(inputFor(target, "alert_at").value).toBe("80");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("read-only shared fields disable only the alerts", () => {
+    const { target, cleanup } = mountShared({ sharedReadonly: true });
+    try {
+      expect(inputFor(target, "alert_at").matches(":disabled")).toBe(true);
+      expect(inputFor(target, "alert_reset").matches(":disabled")).toBe(true);
+      expect(inputFor(target, "refresh_secs").matches(":disabled")).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+});
