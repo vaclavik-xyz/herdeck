@@ -891,3 +891,18 @@ fn zoom_menu_ids_map_to_the_floating_scale_commands_they_name() {
     assert_eq!(zoom_command_for_menu_id("hide_deck"), None);
     assert_eq!(zoom_command_for_menu_id("deck_aot"), None);
 }
+
+// Editor put of a bridge's shared settings: the server id is ONE encoded path
+// segment (an id like `local:personal` or one with a slash must not change the
+// route), and the proxy outlasts the runtime's 10 s bridge wait.
+#[test]
+fn bridge_settings_path_encodes_the_server_id_as_one_segment() {
+    assert_eq!(bridge_settings_path("m4").as_deref(), Some("/bridge-settings/m4"));
+    assert_eq!(
+        bridge_settings_path("local:personal").as_deref(),
+        Some("/bridge-settings/local%3Apersonal")
+    );
+    assert_eq!(bridge_settings_path("a/b").as_deref(), Some("/bridge-settings/a%2Fb"));
+    assert_eq!(bridge_settings_path(""), None);
+    assert!(BRIDGE_SETTINGS_TIMEOUT > std::time::Duration::from_secs(10));
+}

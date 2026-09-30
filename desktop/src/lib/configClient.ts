@@ -5,6 +5,7 @@
 // token-free config_* commands (see src-tauri/src/proxy.rs).
 import defaults from "./configDefaults.json";
 import { DEFAULT_STATUS_COLORS } from "./statusColors";
+import { parseBridges, parseOverlayIgnored, type BridgeShared } from "./bridgeSettings";
 
 /** A redacted secret flag: presence + where it resolves, never a value. */
 export interface SecretFlag {
@@ -28,6 +29,10 @@ export interface ConfigPayload {
   localSessions: LocalSessionRecord[];
   /** On-disk content revision the payload was loaded from (staleness guard). */
   revision: string | null;
+  /** Per configured server: its bridge-owned shared settings (bridgeSettings.ts). */
+  bridges: Record<string, BridgeShared>;
+  /** Adopted bridges that ignore the active profile's overlays of shared keys. */
+  sharedOverlayIgnored: string[];
 }
 
 /** What `POST /config[/validate]` takes: the editable config minus `secrets`. */
@@ -66,7 +71,10 @@ export function parseConfig(raw: unknown): ConfigPayload | null {
     ? v.local_sessions.map(parseLocalSession).filter((item): item is LocalSessionRecord => item != null)
     : [];
   const revision = typeof v.revision === "string" ? v.revision : null;
-  return { base: obj(v.base), profiles, local: obj(v.local), secrets, envLocked, activeProfile, runtimeDeck, localSessions, revision };
+  return {
+    base: obj(v.base), profiles, local: obj(v.local), secrets, envLocked, activeProfile, runtimeDeck, localSessions, revision,
+    bridges: parseBridges(v.bridges), sharedOverlayIgnored: parseOverlayIgnored(v.shared_overlay_ignored),
+  };
 }
 
 /** Extract the `errors` string list from a `{errors: [...]}` reply, dropping
@@ -118,6 +126,8 @@ export interface ConfigTransport {
   setActive(name: string): Promise<unknown>;
   setSecret(tokenEnv: string, value: string): Promise<number>;
   clearSecret(tokenEnv: string): Promise<number>;
+  /** `POST /bridge-settings/<id>` → `{status, body}` (bridgeSettings.ts). */
+  putBridgeSettings(serverId: string, body: { base_revision: number; settings: Record<string, unknown> }): Promise<unknown>;
 }
 
 /** Structured deep copy for the JSON-shaped config model (no functions/dates). */
@@ -1097,6 +1107,7 @@ export function commandTransport(invoke: InvokeFn): ConfigTransport {
     async clearSecret(tokenEnv) {
       return asCode(await invoke("config_secret_clear", { tokenEnv }));
     },
+    putBridgeSettings: (serverId, body) => invoke("config_bridge_settings", { serverId, body }),
   };
 }
 

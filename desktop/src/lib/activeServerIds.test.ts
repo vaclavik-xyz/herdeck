@@ -20,6 +20,8 @@ function payload(
     runtimeDeck: null,
     localSessions: [],
     revision: null,
+    bridges: {},
+    sharedOverlayIgnored: [],
   };
 }
 

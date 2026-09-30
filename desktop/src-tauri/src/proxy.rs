@@ -362,6 +362,48 @@ pub(crate) async fn config_secret_clear(
     .await
 }
 
+/// The runtime waits up to 10 s for the bridge's answer to a settings put
+/// (deckapp/settings_relay.py SETTINGS_WAIT_S); outlast it by 6 s like the
+/// other relayed calls so an answer on its way is never cut off.
+pub(crate) const BRIDGE_SETTINGS_TIMEOUT: Duration = Duration::from_secs(16);
+
+/// `/bridge-settings/<id>` with the server id as one percent-encoded path
+/// segment, or `None` for an empty id.
+pub(crate) fn bridge_settings_path(server_id: &str) -> Option<String> {
+    if server_id.is_empty() {
+        return None;
+    }
+    Some(format!("/bridge-settings/{}", http::percent_encode_segment(server_id)))
+}
+
+/// Proxy `POST /bridge-settings/{id}` (header token) — the editor's put of a
+/// bridge's shared settings `{base_revision, settings}` → `{status, body}`.
+/// Unlike `config_post_json`, a non-200 is data, not an `Err`: 409 (stale
+/// revision), 422 (invalid) and 503 (bridge offline) carry a body the editor
+/// explains. `Err` only when the runtime is unreachable.
+#[tauri::command]
+pub(crate) async fn config_bridge_settings(
+    state: tauri::State<'_, AppState>,
+    server_id: String,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let path = bridge_settings_path(&server_id)
+        .ok_or_else(|| "config_bridge_settings: empty server id".to_string())?;
+    let d = current_discovery(&state)?;
+    run_blocking(move || {
+        let (code, text) = http::http_post_json(
+            &d.host,
+            d.port,
+            &path,
+            (HDR_TOKEN, &d.token),
+            &body.to_string(),
+            BRIDGE_SETTINGS_TIMEOUT,
+        )?;
+        Ok(crate::agent_card::agent_response(code, &text))
+    })
+    .await
+}
+
 /// Proxy `GET /setup` (token as query param) → the first-run status JSON.
 #[tauri::command]
 pub(crate) async fn setup_status(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
