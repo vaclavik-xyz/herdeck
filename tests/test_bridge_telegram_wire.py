@@ -645,3 +645,199 @@ async def test_embedded_bridges_use_per_session_paths_and_ignore_env(monkeypatch
     assert seen == ["alpha", "beta"]
     assert all(t.closed for t in built)
     assert orig_paths("alpha") != orig_paths("beta")
+
+
+# --- capability flip vs snapshot broadcasts (serialized) ------------------------------
+
+
+class FakeWs:
+    """A client whose sends are recorded (in the order they reach it)."""
+
+    def __init__(self):
+        self.got: list[dict] = []
+
+    async def send(self, msg: str) -> None:
+        assert TOKEN not in msg
+        self.got.append(json.loads(msg))
+
+    async def close(self, **kw) -> None:
+        pass
+
+    def snapshots(self) -> list[dict]:
+        return [m for m in self.got if m["type"] == "snapshot"]
+
+
+def _flip(tg) -> asyncio.Task:
+    """Enable Telegram (active flips on) and start its immediate broadcast,
+    as a telegram_put handler would."""
+    assert tg.store.put(tg.store.revision, ON, "t").ok
+    tg.refresh()
+    return asyncio.get_running_loop().create_task(tg.broadcast())
+
+
+def _pane(pid: str) -> dict:
+    p = {"pane_id": pid, "status": "idle", "agent_type": "claude", "label": pid,
+         "workspace": "w", "terminal_id": "t-" + pid}
+    EventHub.stamp([p])
+    return p
+
+
+async def _flip_during_broadcast(tmp_path, *, flip_first: bool):
+    """A real snapshot broadcast of P2 races a flip's snapshot resend.
+
+    The client's send lock is held by the test, so both sends queue on it.
+    ``flip_first``: the flip's broadcast task is created while _broadcast
+    computes its capabilities, i.e. it reaches the client lock FIRST;
+    otherwise the flip happens while P2's send is already queued."""
+    ws, client_lock = FakeWs(), asyncio.Lock()
+    clients = {ws: client_lock}
+    _, hub, tg = _build(tmp_path, clients, token=True)
+    p1, p2 = [_pane("w:p1")], [_pane("w:p2")]
+    steps: asyncio.Queue = asyncio.Queue()
+    flips: list[asyncio.Task] = []
+
+    async def stream():
+        while True:
+            yield await steps.get()
+
+    if flip_first:
+        original = tg.capabilities
+
+        def hooked():
+            caps = original()
+            if len(flips) == 0 and tg._panes is not None and steps.empty():
+                flips.append(_flip(tg))
+            return caps
+
+        tg.capabilities = hooked
+
+    btask = asyncio.create_task(_broadcast(stream(), clients, "s", events=hub, telegram=tg))
+    try:
+        await steps.put(p1)
+        for _ in range(50):
+            if tg._panes is not None:
+                break
+            await asyncio.sleep(0.01)
+        await client_lock.acquire()
+        await steps.put(p2)
+        await asyncio.sleep(0.05)
+        if not flip_first:
+            flips.append(_flip(tg))
+            await asyncio.sleep(0.05)
+        assert flips, "flip never happened"
+        client_lock.release()
+        await asyncio.wait_for(flips[0], 3)
+        for _ in range(50):
+            if len(ws.snapshots()) >= 3:
+                break
+            await asyncio.sleep(0.01)
+        return ws
+    finally:
+        btask.cancel()
+        await asyncio.gather(btask, return_exceptions=True)
+        await tg.close()
+        await hub.close()
+
+
+@pytest.mark.parametrize("flip_first", [False, True])
+async def test_flip_resend_never_stale_or_capability_less(tmp_path, flip_first):
+    ws = await _flip_during_broadcast(tmp_path, flip_first=flip_first)
+    snaps = ws.snapshots()
+    last = snaps[-1]
+    assert [p["pane_id"] for p in last["panes"]] == ["w:p2"], "stale pane list went out last"
+    assert TELEGRAM_CAPABILITY in last["capabilities"], "latest snapshot lacks telegram"
+    # The P2 list never follows... and no older list after a newer one.
+    order = [p["pane_id"] for s in snaps for p in s["panes"]]
+    assert order.index("w:p2") > order.index("w:p1")
+    assert "w:p1" not in order[order.index("w:p2"):]
+    assert ws.got[-1]["type"] == "telegram" and ws.got[-1]["status"]["active"] is True
+
+
+async def test_flip_while_connecting_reaches_the_new_client(tmp_path):
+    """A flip between the connect snapshot's capabilities and the client's
+    registration must still reach that client."""
+
+    class ConnWs(FakeWs):
+        def __init__(self):
+            super().__init__()
+            self.request = type("R", (), {"headers": {"Authorization": "Bearer tok"}})()
+            self.done = asyncio.Event()
+
+        async def send(self, msg: str) -> None:
+            if not self.got:
+                await asyncio.sleep(0.05)  # the first snapshot's send yields
+            await super().send(msg)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await self.done.wait()
+            raise StopAsyncIteration
+
+    clients: dict = {}
+    herdr, hub, tg = _build(tmp_path, clients, token=True)
+    tg.observe_panes([])  # a broadcast list exists
+    flips: list[asyncio.Task] = []
+    original = tg.capabilities
+
+    def hooked():
+        caps = original()
+        if not flips:
+            flips.append(_flip(tg))  # right after the connect snapshot's caps
+        return caps
+
+    tg.capabilities = hooked
+    ws = ConnWs()
+    conn = asyncio.create_task(_serve_connection(
+        ws, herdr, "s", "tok", clients, "/unused.sock", events=hub, telegram=tg,
+    ))
+    try:
+        for _ in range(100):
+            if flips and flips[0].done() and ws in clients:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        snaps = ws.snapshots()
+        assert snaps and TELEGRAM_CAPABILITY in snaps[-1]["capabilities"]
+        assert [m for m in ws.got if m["type"] == "telegram"][-1]["status"]["active"] is True
+    finally:
+        ws.done.set()
+        await asyncio.wait_for(conn, 3)
+        await tg.close()
+        await hub.close()
+
+
+async def test_hub_closes_even_if_telegram_close_fails(monkeypatch):
+    built = []
+    orig_build = bridge_mod.build_bridge_telegram
+
+    def build(*a, **k):
+        tg = orig_build(*a, **k)
+
+        async def boom():
+            raise RuntimeError("close failed")
+
+        tg.close = boom
+        built.append(tg)
+        return tg
+
+    monkeypatch.setattr(bridge_mod, "build_bridge_telegram", build)
+    closed = []
+    orig_close = EventHub.close
+
+    async def hub_close(self):
+        closed.append(self)
+        await orig_close(self)
+
+    monkeypatch.setattr(EventHub, "close", hub_close)
+    *_, (server, btask) = await bridge_mod.start_local_bridge(
+        "unused.sock", herdr=StubHerdr(panes=[]), session="x"
+    )
+    await asyncio.sleep(0.05)
+    btask.cancel()
+    with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+        await btask
+    server.close()
+    await server.wait_closed()
+    assert closed, "hub.close() skipped after telegram.close() raised"

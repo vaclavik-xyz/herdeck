@@ -1465,23 +1465,27 @@ async def _broadcast(
     adds its current capabilities to every snapshot.
     """
     async for panes in snapshot_stream:
-        if events is not None:
-            events.stamp(panes)
-        caps = extra_capabilities
-        if telegram is not None:
-            caps = (*caps, *telegram.capabilities())
-        msg = encode(_snapshot_message(server_id, panes, caps))
-        if clients:
-            await asyncio.gather(
-                *(
-                    _deliver_snapshot(ws, lock, msg, panes, server_id, icon_subs, icons)
-                    for ws, lock in list(clients.items())
+        # Under the Telegram lock: a capability flip's snapshot resend
+        # (BridgeTelegram.broadcast) never interleaves with this fan-out, so
+        # it always resends THIS list, after it, with the new capabilities.
+        async with telegram.lock if telegram is not None else contextlib.nullcontext():
+            if events is not None:
+                events.stamp(panes)
+            caps = extra_capabilities
+            if telegram is not None:
+                caps = (*caps, *telegram.capabilities())
+            msg = encode(_snapshot_message(server_id, panes, caps))
+            if clients:
+                await asyncio.gather(
+                    *(
+                        _deliver_snapshot(ws, lock, msg, panes, server_id, icon_subs, icons)
+                        for ws, lock in list(clients.items())
+                    )
                 )
-            )
-        if events is not None:
-            events.observe(panes)
-        if telegram is not None:
-            telegram.observe_panes(panes)
+            if events is not None:
+                events.observe(panes)
+            if telegram is not None:
+                telegram.observe_panes(panes)
 
 
 async def _deliver_snapshot(ws, lock, msg, panes, server_id, icon_subs, icons) -> None:
@@ -1925,9 +1929,13 @@ async def _serve_connection(
     # subscribed to events.
     label = "client"
     panes = await _wired_snapshot(herdr, icons, status_since, subagents, events)
-    if not await send(encode(_snapshot_message(server_id, panes, extra_capabilities()))):
-        return
-    clients[ws] = send_lock
+    # Capabilities + first send + registration under the Telegram lock: a
+    # capability flip either lands in this snapshot or, once registered, its
+    # resend reaches this client too.
+    async with telegram.lock if telegram is not None else contextlib.nullcontext():
+        if not await send(encode(_snapshot_message(server_id, panes, extra_capabilities()))):
+            return
+        clients[ws] = send_lock
     # The current usage right after the first snapshot (which advertised the
     # capability); later changes arrive through BridgeUsageFeed.run.
     first_usage = usage.current() if usage is not None else None
@@ -2370,6 +2378,10 @@ class BridgeTelegram:
         self._active = bool(notifier.status().get("active"))
         self._panes: list[dict] | None = None
         self._pending: asyncio.TimerHandle | None = None
+        # Serializes capability changes with snapshot sends: held by
+        # _broadcast's fan-out, a connection's first snapshot + registration,
+        # and broadcast() (flip resend + frame).
+        self.lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
         self._running = False
         self.closed = False
@@ -2423,6 +2435,10 @@ class BridgeTelegram:
         if self._pending is not None:
             self._pending.cancel()
             self._pending = None
+        async with self.lock:
+            await self._broadcast_locked()
+
+    async def _broadcast_locked(self) -> None:
         try:
             status = self.notifier.status()
             msgs = []
@@ -2533,6 +2549,15 @@ class BridgeTelegram:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         await self.notifier.close()
+
+
+async def _close_telegram(telegram: BridgeTelegram) -> None:
+    """Close it; a failure is logged (type only) and never skips the rest of
+    the bridge's shutdown."""
+    try:
+        await telegram.close()
+    except Exception as exc:
+        log.warning("telegram close failed: %s", type(exc).__name__)
 
 
 def build_bridge_telegram(
@@ -2766,7 +2791,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None, session=
             reconcile.cancel()
             notifier.cancel()
             await asyncio.gather(notifier, return_exceptions=True)
-            await telegram.close()
+            await _close_telegram(telegram)
             await hub.close()
 
     btask = asyncio.create_task(broadcast())
@@ -2890,7 +2915,7 @@ async def serve(
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             # Releases executor threads still waiting on a getUpdates long poll.
-            await telegram.close()
+            await _close_telegram(telegram)
             await hub.close()
             status_since.close()  # a restart must not lose the debounced last write
             if history is not None:
