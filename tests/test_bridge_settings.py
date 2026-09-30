@@ -60,3 +60,22 @@ def test_negative_updated_at_is_served_unset_with_error(tmp_path):
     p.write_text('revision = 2\nupdated_at_ms = -5\nupdated_by = "a"\n', encoding="utf-8")
     st = BridgeSettingsStore(p)
     assert st.raw is None and st.revision == 0 and st.updated_at_ms == 0 and st.error
+
+
+def test_unencodable_string_is_invalid_and_leaves_file_untouched(tmp_path):
+    p = tmp_path / "b.toml"
+    st = BridgeSettingsStore(p)
+    st.put(0, GOOD, "a")
+    before = p.read_bytes()
+    res = st.put(1, {"macros": [{"label": "go", "text": "\ud800"}]}, "b")
+    assert (res.ok, res.error, res.revision) == (False, "invalid", 1) and res.messages
+    assert p.read_bytes() == before and st.revision == 1
+    assert list(tmp_path.iterdir()) == [p]  # no temp file left behind
+
+
+def test_unencodable_write_is_invalid_even_past_validation(tmp_path):
+    p = tmp_path / "b.toml"
+    st = BridgeSettingsStore(p)
+    res = st.put(0, GOOD, "\ud800")  # only the writer label is unencodable
+    assert (res.ok, res.error, res.revision) == (False, "invalid", 0)
+    assert not p.exists() and list(tmp_path.iterdir()) == []

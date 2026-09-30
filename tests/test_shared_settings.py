@@ -74,3 +74,16 @@ def test_apply_replaces_shared_and_keeps_local_delivery():
     assert out.usage.alert_at == [80, 95] and out.safety.approve_always is False
     assert cfg.notifications.done_min_work == 0  # original untouched
     assert out is not cfg and dataclasses.is_dataclass(out)
+
+
+@pytest.mark.parametrize("bad", [
+    {"macros": [{"label": "go", "text": "\ud800"}]},
+    {"macros": [{"label": "\udfff", "text": "x"}]},
+    {"start_profiles": {"claude": ["claude", "\ud800"]}},
+    {"start_profiles": {"\ud800": ["claude"]}},
+    {"answer_profiles": {"claude": {"approve": ["\ud800"]}}},
+    {"safety": {"require_confirm_for": ["\ud800"]}},
+])
+def test_lone_surrogates_are_rejected(bad):
+    with pytest.raises(ConfigError):
+        parse_shared(bad)

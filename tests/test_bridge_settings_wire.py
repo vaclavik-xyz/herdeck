@@ -147,3 +147,20 @@ async def test_embedded_bridges_get_distinct_settings_paths(monkeypatch):
     from herdeck.bridge_settings import default_path
 
     assert default_path("alpha") != default_path("beta")
+
+
+async def test_unencodable_put_is_invalid_and_connection_stays_open(tmp_path):
+    store = BridgeSettingsStore(tmp_path / "s.toml")
+    async with _bridge(store) as url:
+        a, _ = await _connect(url)
+        await _recv(a)
+        bad = {"macros": [{"label": "go", "text": "\ud800"}]}
+        await a.send(json.dumps(
+            {"type": "settings_put", "req": "r1", "base_revision": 0, "settings": bad}))
+        res = await _recv(a)
+        assert res["type"] == "result" and res["req"] == "r1"
+        assert res["data"]["ok"] is False and res["data"]["error"] == "invalid"
+        assert store.revision == 0 and not (tmp_path / "s.toml").exists()
+        await a.send(json.dumps({"type": "health", "req": "h"}))
+        assert (await _recv(a))["req"] == "h"  # connection still alive
+        await a.close()

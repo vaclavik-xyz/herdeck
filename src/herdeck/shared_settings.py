@@ -163,10 +163,28 @@ def _parse_usage(raw) -> tuple[list[int], bool]:
     return sorted(set(alert_at)), alert_reset
 
 
+def _reject_unencodable(value, where: str = "settings") -> None:
+    """Every string (key or value) must be valid UTF-8: JSON lets a client send
+    a lone surrogate such as "\\ud800", which the TOML/UTF-8 writer cannot store."""
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ConfigError(f"{where} contains text that is not valid UTF-8") from None
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _reject_unencodable(key, where)
+            _reject_unencodable(item, f"{where}.{key}" if isinstance(key, str) else where)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_unencodable(item, where)
+
+
 def parse_shared(raw: dict) -> SharedSettings:
     """Strictly validate a shared-settings document; raises ConfigError."""
     if not isinstance(raw, dict):
         raise ConfigError("settings must be a table")
+    _reject_unencodable(raw)
     _reject_unknown(raw, _SECTIONS, "settings")
     n = _table(raw.get("notifications"), "notifications")
     _reject_unknown(n, SHARED_NOTIFICATION_KEYS, "notifications")

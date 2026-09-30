@@ -103,7 +103,12 @@ class BridgeSettingsStore:
         revision = self.revision + 1
         at = int(self._clock() * 1000)
         by = str(by)
-        self._write({"revision": revision, "updated_at_ms": at, "updated_by": by, **normalized})
+        try:
+            self._write({"revision": revision, "updated_at_ms": at, "updated_by": by, **normalized})
+        except UnicodeError:
+            # Backstop for text parse_shared let through (e.g. the writer label):
+            # _write already removed its temp file, the stored file is untouched.
+            return PutResult(False, self.revision, "invalid", ["settings are not valid UTF-8"])
         self.revision, self.updated_at_ms, self.updated_by = revision, at, by
         self.raw, self.error = normalized, None
         return PutResult(True, revision)
