@@ -41,6 +41,16 @@ updated (0.14.0) keeps sending its own Telegram, so until it is updated you
 get duplicate alerts, and an old runtime polling the same bot conflicts (409)
 with the bridge. Update every runtime, then turn off local Telegram.
 
+Give the bridge its token from the editor ("Telegram on the bridge", "Set"),
+not by copying the runtime's `HERDECK_TELEGRAM_TOKEN` into the bridge's
+environment (launchd plist, systemd unit, shell profile). The bridge reads the
+same variable, and once it has a token it long-polls that bot for chat
+discovery even while its Telegram is disabled, so a runtime token leaked into
+its environment makes the two fight over one bot (409, stolen button presses).
+Export `HERDECK_TELEGRAM_TOKEN` to a bridge only for a bot meant for that
+bridge. After a restart the bridge's log says where its token came from
+(`telegram bot token source: env|file|none`).
+
 Changing `protocol.py`'s encode/decode contract has no safe order at all; both
 hosts move together, and `WIRE_PROTOCOL` in `protocol.py` must be bumped. A
 runtime that receives a newer protocol than it knows logs a WARNING

@@ -9,11 +9,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - Bridge-sent Telegram alerts (one-way and interactive) for the bridge's own
   agents, so they arrive while every Mac sleeps. Configured from the desktop
-  editor (Notifications, Telegram on the bridge: token, recent chats, Test,
+  editor (Notifications, Telegram on the bridge: "Set" / "Save token", recent
+  chats with "Refresh", "Save Telegram settings", "Send test message",
   "Move Telegram from this Mac to the bridge"). Separate revisioned document
   (`HERDECK_BRIDGE_TELEGRAM`) and token (`HERDECK_TELEGRAM_TOKEN` or
-  `HERDECK_TELEGRAM_TOKEN_FILE`); new capabilities `telegram_config` and
-  `telegram`.
+  `HERDECK_TELEGRAM_TOKEN_FILE`; prefer the editor, which writes the token
+  file, over exporting the runtime's `HERDECK_TELEGRAM_TOKEN` to the bridge);
+  new capabilities `telegram_config` and `telegram`. The bridge logs its token
+  source at startup and warns once about a malformed token. To find a group
+  topic, send `/start@<botname>` in it (bots in privacy mode see only commands
+  addressed to them).
 - Runtime duplicate guard: no Telegram from a runtime for agents of a bridge
   that sends it; the runtime's poller idles when every connected bridge does.
   One bot per bridge (a shared token conflicts with HTTP 409; inbound retries

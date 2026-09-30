@@ -427,10 +427,20 @@ Setup:
 
 1. Create a bot with @BotFather and a Telegram group with topics; add the bot.
 2. In the desktop editor open Notifications, then "Telegram on the bridge",
-   and use Set token.
-3. Send a message in the target topic. The bridge lists the chats it sees while
-   a token is set under "Recent chats"; pick the chat/topic there.
-4. Press Test, then enable.
+   pick the bridge, press "Set", paste the token and press "Save token".
+3. Inside the target topic send `/start@<botname>` (any `/command@<botname>`
+   works). A bot in a group is in privacy mode by default and only receives
+   commands addressed to it, replies to its own messages and service messages,
+   so an ordinary message in the topic never reaches it. Alternatively turn
+   privacy off (BotFather `/setprivacy`, then re-add the bot to the group) or
+   make the bot an admin. While a token is set the bridge lists the chats it
+   sees under "Recent chats" (the editor refreshes them every 3 seconds, or
+   press "Refresh"); click the chat/topic there to fill `chat_id` and
+   `message_thread_id`. The bridge never answers these messages while it only
+   discovers chats.
+4. Tick `enabled` and press "Save Telegram settings". Then press "Send test
+   message": the test goes to the saved `chat_id`/topic (unsaved edits in the
+   form are not used), and works whether or not `enabled` is on.
 
 Fields: `enabled`, `chat_id`, `message_thread_id`, `interactive`,
 `allowed_user_ids`, `prompt_max_chars` (200-4000, default 1200),
@@ -442,10 +452,21 @@ alert text (with buttons) is always English; other messages follow `language`.
 Token: the env var `HERDECK_TELEGRAM_TOKEN` wins over the token file
 (`$HERDECK_TELEGRAM_TOKEN_FILE`, default `~/.config/herdeck/telegram-token`,
 mode 0600). A token set through the environment cannot be changed or cleared
-from the editor. The token never appears in wire frames or logs. The embedded
-local bridge of the desktop app (no separate bridge) uses only its own
-per-session token file and ignores `HERDECK_TELEGRAM_TOKEN`, which belongs to
-the runtime's own Telegram.
+from the editor. The token never appears in wire frames or logs. At startup the
+bridge logs where its token comes from (`env`, `file` or `none`, never the
+value); a malformed token (env or file) is logged once as a warning and
+ignored, so the editor shows "not set". The embedded local bridge of the
+desktop app (no separate bridge) uses only its own per-session token file and
+ignores `HERDECK_TELEGRAM_TOKEN`, which belongs to the runtime's own Telegram.
+
+Prefer setting a standalone bridge's token from the editor (it goes to the
+token file). `HERDECK_TELEGRAM_TOKEN` is the same variable the runtime's
+`[notifications.telegram]` reads by default, so do not export the runtime's
+value into the bridge's environment (shell profile, launchd plist, systemd
+unit) unless that bot is meant for the bridge: with any token the bridge
+long-polls `getUpdates` for chat discovery even while its Telegram is
+disabled, so it would compete with the runtime for that bot (HTTP 409 on both
+sides, and button presses on the runtime's alerts reaching the wrong process).
 
 One bot per bridge. Telegram allows a single `getUpdates` poller per bot, so
 the same token on two bridges, or on a bridge and a runtime that still uses it
