@@ -1326,8 +1326,10 @@ Custom `[answer_profiles.<name>]` sections can be defined in the base config and
 ## Shared settings on the bridge
 
 By default every Mac keeps its own `config.toml`. A bridge can instead own the
-rules that describe how *its* agents should be handled, so every deck, window
-and cockpit attached to it applies the same ones.
+rules that describe how *its* agents should be handled, so every Herdeck
+runtime attached to it (its deck, desktop window and web cockpit) applies the
+same ones. The Elgato Stream Deck plugin and `herdeck ctl` still read the local
+`config.toml` for now.
 
 **Shared** (follow the bridge): `[answer_profiles]`, `[safety]`, `[[macros]]`,
 `[start_profiles]`, the notification rules `on`, `done_min_work`,
