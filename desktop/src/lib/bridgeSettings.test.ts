@@ -118,6 +118,30 @@ describe("compose / split", () => {
     expect(shared.safety).toEqual({ approve_always: false, require_confirm_for: [] });
     expect(stableJson(splitShared(original, view).payload)).toBe(stableJson(original));
   });
+
+  it("keeps empty [notifications]/[usage] tables so a bridge edit leaves config.toml clean", () => {
+    const original = payload({
+      base: { notifications: {}, usage: {}, view: { language: "en" } },
+      profiles: { night: { notifications: {}, usage: {} } },
+    });
+    const settings = parseBridges({ m4: bridge() }).m4.settings!;
+    const view = composeShared(original, settings);
+    const edited: ConfigPayload = {
+      ...view,
+      base: { ...view.base, notifications: { ...(view.base.notifications as object), done_min_work: 9 } },
+    };
+    const { payload: local, shared } = splitShared(original, edited);
+    expect(stableJson(local)).toBe(stableJson(original));
+    expect((shared.notifications as Record<string, unknown>).done_min_work).toBe(9);
+    expect(stableJson(splitShared(original, view).payload)).toBe(stableJson(original));
+  });
+
+  it("does not add an empty table the original config did not have", () => {
+    const original = payload({ base: { view: { language: "en" } }, profiles: {} });
+    const settings = parseBridges({ m4: bridge() }).m4.settings!;
+    const view = composeShared(original, settings);
+    expect(stableJson(splitShared(original, view).payload)).toBe(stableJson(original));
+  });
 });
 
 describe("targets", () => {

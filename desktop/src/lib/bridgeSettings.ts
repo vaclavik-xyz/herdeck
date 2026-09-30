@@ -97,19 +97,21 @@ export function extractShared(table: Rec): Rec {
 }
 
 /** A copy of `table` whose every shared location holds `source`'s value (or
- *  is absent when `source` lacks it). Non-shared keys and key order stay. */
-export function overwriteShared(table: Rec, source: Rec): Rec {
+ *  is absent when `source` lacks it). Non-shared keys and key order stay.
+ *  A partial section ([notifications]/[usage]) left empty is kept when `like`
+ *  (the config table being restored, default `table`) has it — an empty
+ *  `[notifications]` in config.toml must survive a bridge edit unchanged. */
+export function overwriteShared(table: Rec, source: Rec, like: Rec = table): Rec {
   const out = clone(table) ?? {};
   for (const [section, keys] of Object.entries(SHARED_PARTIAL)) {
     const src = rec(source[section]);
-    const had = section in out;
     const t: Rec = rec(out[section]);
     for (const key of keys) {
       if (key in src) t[key] = clone(src[key]);
       else delete t[key];
     }
-    if (had || Object.keys(t).length > 0) out[section] = t;
-    if (Object.keys(t).length === 0 && !(section in source)) delete out[section];
+    if (Object.keys(t).length > 0 || section in like) out[section] = t;
+    else delete out[section];
   }
   for (const section of SHARED_WHOLE_SECTIONS) {
     if (section in source) out[section] = clone(source[section]);
@@ -132,10 +134,11 @@ export function composeShared(payload: ConfigPayload, settings: Rec): ConfigPayl
 export function splitShared(original: ConfigPayload, edited: ConfigPayload): { payload: ConfigPayload; shared: Rec } {
   const profiles: Record<string, Rec> = {};
   for (const [name, overlay] of Object.entries(edited.profiles)) {
-    profiles[name] = overwriteShared(overlay, extractShared(original.profiles[name] ?? {}));
+    const was = original.profiles[name] ?? {};
+    profiles[name] = overwriteShared(overlay, extractShared(was), was);
   }
   return {
-    payload: { ...edited, base: overwriteShared(edited.base, extractShared(original.base)), profiles },
+    payload: { ...edited, base: overwriteShared(edited.base, extractShared(original.base), original.base), profiles },
     shared: extractShared(edited.base),
   };
 }
