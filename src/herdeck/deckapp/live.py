@@ -71,6 +71,7 @@ from .bridge_update import BridgeUpdateMixin
 from .event_cursor import EventCursorStore
 from .hooks_relay import HooksMixin
 from .live_events import BridgeEventsMixin
+from .settings_relay import SettingsRelayMixin
 from .source import StateSource
 from .stats import StatsMixin
 from .usage_agent_relay import UsageAgentMixin
@@ -132,6 +133,7 @@ class LiveSource(
     BridgeUpdateMixin,
     StatsMixin,
     HooksMixin,
+    SettingsRelayMixin,
     UsageAgentMixin,
     BridgeEventsMixin,
     StateSource,
@@ -307,6 +309,7 @@ class LiveSource(
         self._bridge_update_init()  # bridge self-update (bridge_update.BridgeUpdateMixin)
         self._bridge_events_init(event_store)  # bridge lifecycle events (live_events.py)
         self._stats_init()  # GET /stats relay (stats.StatsMixin)
+        self._settings_relay_init()  # bridge shared settings put relay (settings_relay.py)
         self._hooks_init()  # subagent hook install relay (hooks_relay.HooksMixin)
         self._usage_agent_init()  # usage agent install relay (usage_agent_relay.py)
 
@@ -1467,6 +1470,7 @@ class LiveSource(
         self._bridge_update_on_connection(server_id, up)
         self._stats_on_connection(server_id, up)
         self._hooks_on_connection(server_id, up)
+        self._settings_relay_on_connection(server_id, up)
         self._usage_agent_on_connection(server_id, up)
 
     def _on_result(self, *args) -> None:
@@ -1490,6 +1494,8 @@ class LiveSource(
             return  # a GET /stats reply (stats.py), not a deck command
         if self._hooks_on_result(req, data):
             return  # a hooks reply (hooks_relay.py), not a deck command
+        if self._settings_relay_on_result(req, data):
+            return  # a settings_put reply (settings_relay.py), not a deck command
         if self._usage_agent_on_result(req, data):
             return  # a usage_agent reply (usage_agent_relay.py), not a deck command
         tap = self._result_tap

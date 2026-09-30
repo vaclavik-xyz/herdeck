@@ -18,7 +18,7 @@ from ..model import AgentKey
 from ..orchestrator import Orchestrator
 from ..pins import PinStore
 from ..protocol import WIRE_PROTOCOL
-from . import agent_card, bridge_update, hooks_relay, stats, usage_agent_relay
+from . import agent_card, bridge_update, hooks_relay, settings_relay, stats, usage_agent_relay
 from .sinks import RenderFrame
 from .source import StateSource
 
@@ -1411,8 +1411,10 @@ class DeckApp:
                     if app._config_service is None:
                         self._send(404)
                         return
-                    self._send(200, json.dumps(app._config_service.read()).encode(),
-                               "application/json")
+                    payload = app._config_service.read()
+                    shared_state = getattr(app._source, "shared_state", None)
+                    payload["bridges"] = shared_state() if callable(shared_state) else {}
+                    self._send(200, json.dumps(payload).encode(), "application/json")
                 elif path == "/setup":
                     if not self._require_query_token(url):
                         return
@@ -1616,6 +1618,16 @@ class DeckApp:
                     if body is _BAD_BODY:
                         return
                     code, payload = agent_card.handle_post(app._source, path, body)
+                    self._send_agent(code, payload)
+                elif settings_relay.route_server_id(path) is not None:
+                    # POST /bridge-settings/{id}: relay an edit of that bridge's
+                    # shared settings (settings_relay.py).
+                    if not self._require_header_token():
+                        return
+                    body = self._json_body()
+                    if body is _BAD_BODY:
+                        return
+                    code, payload = settings_relay.handle_post(app._source, path, body)
                     self._send_agent(code, payload)
                 elif hooks_relay.route_server_id(path) is not None:
                     # POST /maintenance/servers/{id}/hooks: install / remove the
