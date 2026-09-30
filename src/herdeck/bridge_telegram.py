@@ -38,8 +38,8 @@ ENV_TOKEN_FILE = "HERDECK_TELEGRAM_TOKEN_FILE"
 
 _META = ("revision", "updated_at_ms", "updated_by")
 # Used with fullmatch(): a trailing newline must not slip past `$`.
-_TOKEN_RE = re.compile(r"\d{5,16}:[A-Za-z0-9_-]{30,64}")
-_CHAT_RE = re.compile(r"-?\d{1,20}|@[A-Za-z0-9_]{5,32}")
+_TOKEN_RE = re.compile(r"[0-9]{5,16}:[A-Za-z0-9_-]{30,64}")
+_CHAT_RE = re.compile(r"-?[0-9]{1,20}|@[A-Za-z0-9_]{5,32}")
 
 
 @dataclass
@@ -216,7 +216,8 @@ class BridgeTelegramStore:
 
     def _env_token(self) -> str | None:
         v = self._env.get(ENV_TOKEN)
-        return v.strip() if v and v.strip() else None
+        v = v.strip() if v else ""
+        return v if _TOKEN_RE.fullmatch(v) else None
 
     def token(self) -> str | None:
         env = self._env_token()
@@ -226,7 +227,7 @@ class BridgeTelegramStore:
             v = self.token_path.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeDecodeError):
             return None
-        return v or None
+        return v if _TOKEN_RE.fullmatch(v) else None
 
     def token_source(self) -> str | None:
         if self._env_token():

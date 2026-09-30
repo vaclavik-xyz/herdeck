@@ -162,3 +162,26 @@ def test_default_paths(monkeypatch, tmp_path):
 def test_parse_error_type():
     with pytest.raises(ConfigError):
         parse_telegram({"nope": 1})
+
+
+def test_token_non_ascii_digits_invalid(tmp_path):
+    s = mk(tmp_path)
+    assert s.set_token("١٢٣٤٥:" + "A" * 35) == "invalid"
+    assert not s.token_path.exists()
+    s.set_token(TOKEN)
+    assert s.set_token("١٢٣٤٥:" + "A" * 35) == "invalid"
+    assert s.token_path.read_text() == TOKEN
+
+
+def test_chat_id_non_ascii_digits_invalid():
+    with pytest.raises(ConfigError):
+        parse_telegram({"chat_id": "١٢٣"})
+
+
+def test_garbage_token_ignored(tmp_path):
+    s = mk(tmp_path)
+    s.token_path.write_text("garbage")
+    assert s.token() is None and s.token_source() is None
+    s2 = mk(tmp_path, {"HERDECK_TELEGRAM_TOKEN": "junk"})
+    assert s2.token() is None and s2.token_source() is None
+    assert s2.set_token(TOKEN) is None
