@@ -937,3 +937,11 @@ def test_t3_desktop_read_state_is_a_t3_server_option(tmp_path, monkeypatch):
     config = write(tmp_path / "config.toml", base + "desktop_read_state = true\n")
     with pytest.raises(ConfigError, match="T3 servers only"):
         resolve_profile(load_settings(config))
+
+
+def test_notifications_payload_done_rules_parsed():
+    from herdeck.settings import _notifications_config
+
+    n = _notifications_config({"done_min_work": 3, "done_short_delay": 10})
+    assert (n.done_min_work, n.done_short_delay) == (3, 10)
+    assert _notifications_config({}).done_min_work == 0

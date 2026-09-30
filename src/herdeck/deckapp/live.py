@@ -49,6 +49,7 @@ from ..notify import (
 )
 from ..notify_events import (
     NOTIFY_EVENT_STATUSES,
+    RunTracker,
     SubagentBursts,
     event_notification_body,
     newly_entered,
@@ -57,6 +58,7 @@ from ..notify_events import interaction_keys as _interaction_keys
 from ..notify_icons import NotificationIconCache
 from ..orchestrator import Orchestrator, binary_answer
 from ..presence import IdleProbe
+from ..presence_hub import PRESENCE_CAPABILITY, PRESENCE_REPORT_S, PRESENCE_STALE_S
 from ..project_icons import ingest_project_icon
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
@@ -113,6 +115,14 @@ def _thread_notify_schedule(fn) -> None:
     threading.Thread(target=fn, daemon=True, name="herdeck-notify").start()
 
 
+def _start_done_timer(delay: float, fn):
+    """A deferred short-run "done" check (daemon timer thread)."""
+    timer = threading.Timer(delay, fn)
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
 class LiveSource(
     AgentCardMixin,
     BridgeUpdateMixin,
@@ -150,6 +160,7 @@ class LiveSource(
         idle_probe: IdleProbe | None = None,
         shell_banners: bool = True,
         event_store: EventCursorStore | None = None,
+        done_timer=None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
@@ -171,6 +182,13 @@ class LiveSource(
         # [notifications].subagents_done: per-agent subagent bursts
         # (connector thread only, like _notify_keys).
         self._subagent_bursts = SubagentBursts()
+        # [notifications].done_min_work / done_short_delay: run length per
+        # agent (under self._lock) and the pending deferred "done" check per
+        # agent (one at a time; a newer done episode replaces it).
+        self._runs = RunTracker()
+        self._done_timer = done_timer or _start_done_timer
+        self._pending_done: dict[AgentKey, tuple[int, object]] = {}
+        self._wall_ms = lambda: time.time_ns() // 1_000_000
         # Blocked episodes that may get reminders: key -> (episode, since, sent).
         self._reminders: dict[AgentKey, tuple[str, float, int]] = {}
         self._reminder_stop = threading.Event()
@@ -181,6 +199,15 @@ class LiveSource(
         # When the deck (a key, the triage hotkey, a banner drill) was last
         # used; None = not since start. [notifications.telegram].only_when_away.
         self._last_deck_press: float | None = None
+        # Presence across machines (bridge capability "presence"): this
+        # runtime's idle goes to every bridge every PRESENCE_REPORT_S; the
+        # bridge's aggregate per server (received at, idle s) feeds _user_away.
+        self._presence_clock = time.monotonic
+        self._remote_presence: dict[str, tuple[float, float | None]] = {}
+        self._presence_announced: set[str] = set()
+        self._presence_stop = threading.Event()
+        self._presence_wake = threading.Event()
+        self._presence_thread: threading.Thread | None = None
         self._notify_feed = NotificationFeed()
         self._notification_fallback = notification_fallback or _macos_sink
         self._notify_gate: Callable[[], bool] = lambda: False
@@ -517,6 +544,13 @@ class LiveSource(
 
     def close(self) -> None:
         self._reminder_stop.set()
+        self._presence_stop.set()
+        self._presence_wake.set()
+        with self._lock:
+            pending = [handle for _since, handle in self._pending_done.values()]
+            self._pending_done.clear()
+        for handle in pending:
+            handle.cancel()
         self._card_close()  # stop card terminal previews while runners still send
         for runner in list(self._runners.values()):
             runner.close()
@@ -649,13 +683,17 @@ class LiveSource(
         )
 
     # --- connector callbacks (run on the connector's loop thread) ---
-    def _fire_notify(self, event: str, agent: AgentState, *, at_ms: int | None = None) -> None:
+    def _fire_notify(
+        self, event: str, agent: AgentState, *, at_ms: int | None = None, deferred: bool = False
+    ) -> None:
         """Schedule one event alert (never raises, never blocks the loop).
         ``at_ms``: when the bridge saw the transition (reminders count from it)."""
         if self._notifier is None:
             return
         n = self._config.notifications
         if event not in n.on:
+            return
+        if event == "done" and not deferred and self._quiet_done(agent):
             return
         if event == "blocked":
             self._track_reminder(agent.key, at_ms)
@@ -684,6 +722,61 @@ class LiveSource(
             time.time_ns() // 1_000_000,
         )
         self._notify_schedule(lambda: self._deliver_alert(event, agent, title, body, sound, meta))
+
+    def _quiet_done(self, agent: AgentState) -> bool:
+        """[notifications].done_min_work: True when this "done" must not alert
+        now — a short run is dropped (done_short_delay 0) or re-checked later.
+        An unknown run length counts as long."""
+        n = self._config.notifications
+        if n.done_min_work <= 0:
+            return False
+        with self._lock:
+            run = self._runs.last(agent.key)
+        if run is None or run[1] is None or run[1] >= n.done_min_work * 60_000:
+            return False
+        done_since, run_ms = run
+        if n.done_short_delay <= 0:
+            log.info(
+                "done alert suppressed (short run %ds) agent=%s:%s",
+                run_ms // 1000, agent.key.server_id, agent.key.pane_id,
+            )
+            return True
+        due_ms = done_since + n.done_short_delay * 60_000
+        remaining = max(0.0, (due_ms - self._wall_ms()) / 1000.0)
+        key = agent.key
+        with self._lock:
+            old = self._pending_done.pop(key, None)
+        if old is not None:
+            old[1].cancel()
+        handle = self._done_timer(remaining, lambda: self._deferred_done(key, done_since))
+        with self._lock:
+            self._pending_done[key] = (done_since, handle)
+        log.info(
+            "done alert deferred %.0fs (short run %ds) agent=%s:%s",
+            remaining, run_ms // 1000, key.server_id, key.pane_id,
+        )
+        return True
+
+    def _deferred_done(self, key: AgentKey, done_since: int) -> None:
+        """Timer thread: alert a short-run "done" still unanswered."""
+        if self._reminder_stop.is_set():  # close() ran
+            return
+        with self._lock:
+            # Pop only our own entry: a newer timer may have replaced it.
+            entry = self._pending_done.get(key)
+            if entry is not None and entry[0] == done_since:
+                del self._pending_done[key]
+            state = self._agents.get(key)
+            run = self._runs.last(key)
+        if state is None or state.status is not Status.DONE or run is None or run[0] != done_since:
+            return
+        self._fire_notify("done", state, deferred=True)
+
+    def _cancel_pending_done(self, key: AgentKey) -> None:
+        """Caller holds self._lock."""
+        entry = self._pending_done.pop(key, None)
+        if entry is not None:
+            entry[1].cancel()
 
     # --- reminders ([notifications].remind_after) -----------------------------
 
@@ -850,15 +943,85 @@ class LiveSource(
         for key in keys:
             self._notify_feed.withdraw({"server_id": key.server_id, "pane_id": key.pane_id})
 
-    def _user_away(self, seconds: float) -> bool:
-        """Idle on the deck host (HIDIdleTime) AND no deck press for ``seconds``
-        (notify thread). An unknown idle time (Linux) leaves only the deck
-        press to decide."""
+    def _local_idle(self) -> float | None:
+        """Seconds since input on this Mac or a deck press (the smaller), None
+        when both are unknown. Notify/presence threads only (may run ioreg)."""
+        known = []
         pressed = self._last_deck_press
-        if pressed is not None and time.monotonic() - pressed < seconds:
-            return False
+        if pressed is not None:
+            known.append(max(0.0, time.monotonic() - pressed))
         idle = self._idle_probe.idle_seconds()
-        return idle is None or idle >= seconds
+        if idle is not None:
+            known.append(idle)
+        return min(known) if known else None
+
+    def _on_presence(self, server_id: str, idle_s: float | None) -> None:
+        """Connector callback: a bridge's aggregate presence."""
+        with self._lock:
+            self._remote_presence[server_id] = (self._presence_clock(), idle_s)
+
+    def _remote_idles(self) -> list[float]:
+        now = self._presence_clock()
+        with self._lock:
+            reports = list(self._remote_presence.values())
+        return [
+            idle + (now - at)
+            for at, idle in reports
+            if idle is not None and now - at <= PRESENCE_STALE_S
+        ]
+
+    def _offers_presence(self, server_id: str) -> bool:
+        connector = getattr(self._runners.get(server_id), "connector", None)
+        caps = getattr(connector, "capabilities", None)
+        return isinstance(caps, frozenset | set) and PRESENCE_CAPABILITY in caps
+
+    def report_presence(self) -> int:
+        """Send this runtime's idle to every connected bridge offering presence."""
+        with self._lock:
+            connected = dict(self._connected)
+        targets = [
+            runner
+            for sid, runner in list(self._runners.items())
+            if connected.get(sid) and self._offers_presence(sid)
+        ]
+        if not targets:
+            return 0
+        msg = {"type": "presence", "idle_s": self._local_idle()}
+        for runner in targets:
+            runner.send(msg)
+        return len(targets)
+
+    def _presence_loop(self) -> None:
+        while not self._presence_stop.is_set():
+            try:
+                self.report_presence()
+            except Exception:
+                log.warning("presence report failed", exc_info=True)
+            self._presence_wake.wait(PRESENCE_REPORT_S)
+            self._presence_wake.clear()
+
+    def _ensure_presence_thread(self) -> bool:
+        """Start the reporter once; True when this call started it (it reports
+        immediately, so the caller need not wake it)."""
+        with self._lock:
+            if self._presence_thread is not None or self._presence_stop.is_set():
+                return False
+            thread = threading.Thread(
+                target=self._presence_loop, name="herdeck-presence", daemon=True
+            )
+            self._presence_thread = thread
+        thread.start()
+        return True
+
+    def _user_away(self, seconds: float) -> bool:
+        """No input on this Mac, no deck press, and no input on any other Mac
+        reporting to a bridge (capability "presence") for ``seconds``. Nothing
+        known at all counts as away."""
+        known = self._remote_idles()
+        local = self._local_idle()
+        if local is not None:
+            known.append(local)
+        return not known or min(known) >= seconds
 
     def _user_present(self) -> bool:
         """The user touched this host recently (notify thread: may run ioreg).
@@ -1008,6 +1171,13 @@ class LiveSource(
         )
 
     def _on_snapshot(self, server_id: str, states: list[AgentState]) -> None:
+        if self._offers_presence(server_id):
+            with self._lock:
+                first = server_id not in self._presence_announced
+                self._presence_announced.add(server_id)
+            if first:  # report at once on (re)connect instead of after 30 s
+                if not self._ensure_presence_thread():
+                    self._presence_wake.set()
         self._bridge_update_on_snapshot(server_id)
         self._hooks_on_snapshot(server_id)
         self._usage_agent_on_snapshot(server_id)
@@ -1038,6 +1208,15 @@ class LiveSource(
                     if key.server_id != server_id
                 }
                 self._agents.update(new_by_key)
+                now = self._wall_ms()
+                self._runs.forget(prev_keys - new_by_key.keys())
+                # Forget a recycled pane's old run BEFORE observing, or the
+                # first observation of the new one would be wiped.
+                for key in recycled:
+                    self._runs.forget((key,))
+                    self._cancel_pending_done(key)
+                for state in states:
+                    self._runs.observe(state, now)
                 for key in recycled:
                     self._preread.pop(key, None)
                     self._preread_req.pop(key, None)
@@ -1101,6 +1280,10 @@ class LiveSource(
                     self._bump_semantic_locked((state.key,))
                 self._agents[state.key] = state
                 if recycled:
+                    self._runs.forget((state.key,))
+                    self._cancel_pending_done(state.key)
+                self._runs.observe(state, self._wall_ms())
+                if recycled:
                     self._preread.pop(state.key, None)
                     self._preread_req.pop(state.key, None)
                     self._block_episode.pop(state.key, None)
@@ -1139,6 +1322,10 @@ class LiveSource(
         )
 
     def _on_connection(self, server_id: str, up: bool) -> None:
+        if not up:
+            with self._lock:
+                self._remote_presence.pop(server_id, None)
+                self._presence_announced.discard(server_id)
         def mutate():
             with self._lock:
                 self._connected[server_id] = up
@@ -1559,6 +1746,7 @@ def build_live_source(
             ),
             on_usage=source._on_usage,
             on_lifecycle=source._on_lifecycle,
+            on_presence=source._on_presence,
             events_cursor=source._events_cursor,
         )
         runner = runner_factory(connector)

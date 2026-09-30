@@ -28,6 +28,7 @@ from .events import CAPABILITY as _EVENTS_CAPABILITY
 from .events import STALE as _STALE
 from .events import EventHub, client_label, prompt_forms
 from .model import Status, WorkContext
+from .presence_hub import PRESENCE_CAPABILITY, PresenceHub
 from .project_icon_discovery import ProjectIconIndex
 from .protocol import WIRE_PROTOCOL, encode
 from .self_update import EXIT_GRACE_S, BridgeUpdater, not_managed_result
@@ -1869,6 +1870,7 @@ async def _serve_connection(
     usage: BridgeUsageFeed | None = None,
     subagents: SubagentSpoolReader | None = None,
     events: EventHub | None = None,
+    presence: PresenceHub | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
@@ -1886,7 +1888,7 @@ async def _serve_connection(
     async def send(msg: str) -> bool:
         return await _send_to_client(ws, msg, send_lock)
 
-    extra_capabilities = _extra_capabilities(usage, events)
+    extra_capabilities = _extra_capabilities(usage, events, presence)
     # Who answered, for `answered` events: the label the client gave when it
     # subscribed to events.
     label = "client"
@@ -1928,6 +1930,10 @@ async def _serve_connection(
             except ValueError:
                 msg = None
             kind = msg.get("type") if isinstance(msg, dict) else None
+            if readonly and kind == "presence":
+                # Read-only runtimes still report it; ignore silently, an
+                # error frame would fail their in-flight card reads.
+                continue
             if readonly and kind not in READONLY_MESSAGES:
                 req = msg.get("req") if isinstance(msg, dict) else None
                 await send(
@@ -2054,6 +2060,12 @@ async def _serve_connection(
                 # installs/removes a launchd/systemd unit; off the event loop.
                 await send(encode(await _usage_agent_install.bridge_reply(msg)))
                 continue
+            if kind == "presence":
+                # Full token only. No reply: the aggregate goes to every reporter.
+                if presence is not None:
+                    presence.report(ws, msg.get("idle_s"))
+                    await _broadcast_presence(presence, clients, server_id)
+                continue
             if kind == "update":
                 # Full token only (not in READONLY_MESSAGES, refused above).
                 # Runs in the background: pip can take minutes, and the
@@ -2136,6 +2148,10 @@ async def _serve_connection(
             await send(out)
     finally:
         clients.pop(ws, None)
+        if presence is not None:
+            with contextlib.suppress(Exception):
+                if presence.drop(ws):
+                    await _broadcast_presence(presence, clients, server_id)
         if events is not None:
             events.unsubscribe(ws)
         if icon_subs is not None:
@@ -2153,11 +2169,26 @@ async def _serve_connection(
 
 
 def _extra_capabilities(
-    usage: BridgeUsageFeed | None, events: EventHub | None
+    usage: BridgeUsageFeed | None,
+    events: EventHub | None,
+    presence: PresenceHub | None = None,
 ) -> tuple[str, ...]:
     """Capabilities that depend on how this bridge was started."""
     caps = usage.capabilities if usage is not None else ()
-    return (*caps, _EVENTS_CAPABILITY) if events is not None else caps
+    if events is not None:
+        caps = (*caps, _EVENTS_CAPABILITY)
+    if presence is not None:
+        caps = (*caps, PRESENCE_CAPABILITY)
+    return caps
+
+
+async def _broadcast_presence(presence: PresenceHub, clients: dict, server_id: str) -> None:
+    """Send the aggregate to every connection that reports presence."""
+    idle, count = presence.aggregate()
+    msg = encode({"type": "presence", "server_id": server_id, "idle_s": idle, "clients": count})
+    await asyncio.gather(
+        *(_send_to_client(ws, msg, clients[ws]) for ws in presence.reporters() if ws in clients)
+    )
 
 
 def _answer_sent(out: str) -> bool:
@@ -2259,6 +2290,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
     clients: dict = {}
     icon_subs: dict = {}
     hub = EventHub(client_herdr, "local")
+    presence = PresenceHub()
 
     async def handler(ws):
         await _serve_connection(
@@ -2274,6 +2306,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
             history=history,
             subagents=subagents,
             events=hub,
+            presence=presence,
         )
 
     server = await websockets.serve(handler, host, 0)
@@ -2292,7 +2325,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None):
                 "local",
                 icon_subs=icon_subs,
                 icons=icons,
-                extra_capabilities=_extra_capabilities(None, hub),
+                extra_capabilities=_extra_capabilities(None, hub, presence),
                 events=hub,
             )
         finally:
@@ -2344,6 +2377,7 @@ async def serve(
     clients: dict = {}
     icon_subs: dict = {}
     hub = EventHub(client_herdr, server_id)  # event-loop only too
+    presence = PresenceHub()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     # The exit seam: a verified self-update asks serve() to return (after a
@@ -2369,9 +2403,10 @@ async def serve(
             usage=usage,
             subagents=subagents,
             events=hub,
+            presence=presence,
         )
 
-    extra_capabilities = _extra_capabilities(usage, hub)
+    extra_capabilities = _extra_capabilities(usage, hub, presence)
     if usage is not None:
         usage.start()
     async with websockets.serve(handler, host, port):

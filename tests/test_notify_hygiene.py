@@ -418,3 +418,19 @@ def test_only_when_away_validates_minutes():
     assert parse_notifications({"telegram": {**tg, "only_when_away": 5}}).telegram.only_when_away == 5
     with pytest.raises(ConfigError, match="notifications.telegram.only_when_away"):
         parse_notifications({"telegram": {**tg, "only_when_away": -5}})
+
+
+def test_done_rules_parse_and_validate():
+    import pytest
+
+    from herdeck.config import ConfigError, parse_notifications
+
+    n = parse_notifications({})
+    assert (n.done_min_work, n.done_short_delay) == (0, 0)
+    n = parse_notifications({"done_min_work": 3, "done_short_delay": 10})
+    assert (n.done_min_work, n.done_short_delay) == (3, 10)
+    for bad in (-1, 1441, 2.5, "3", True):
+        with pytest.raises(ConfigError):
+            parse_notifications({"done_min_work": bad})
+        with pytest.raises(ConfigError):
+            parse_notifications({"done_short_delay": bad})
