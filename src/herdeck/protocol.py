@@ -216,7 +216,7 @@ class Presence:
 
 @dataclass
 class Settings:
-    """The bridge's shared settings document (see settings_store.py);
+    """The bridge's shared settings document (see bridge_settings.py);
     ``settings`` is None while nothing has been stored yet."""
 
     server_id: str

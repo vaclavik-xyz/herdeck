@@ -76,3 +76,13 @@ def _isolated_bridge_settings(tmp_path, monkeypatch):
         "herdeck.bridge._settings_default_path",
         lambda session=None: tmp_path / "bridge-settings" / f"{session or 'bridge'}.toml",
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_shared_settings_cache(tmp_path, monkeypatch):
+    """The runtime's per-bridge shared settings cache (deckapp/shared_view.py)
+    never reads or writes ~/.cache/herdeck/bridge-settings."""
+    monkeypatch.setattr(
+        "herdeck.deckapp.shared_view.default_cache_dir",
+        lambda: tmp_path / "runtime" / "bridge-settings",
+    )

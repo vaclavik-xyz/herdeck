@@ -33,6 +33,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 
 from .. import notify as _notify
+from ..bridge_settings import SETTINGS_CAPABILITY
 from ..commands import Command, command_to_msg, profile_for
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
@@ -60,8 +61,11 @@ from ..orchestrator import Orchestrator, binary_answer
 from ..presence import IdleProbe
 from ..presence_hub import PRESENCE_CAPABILITY, PRESENCE_REPORT_S, PRESENCE_STALE_S
 from ..project_icons import ingest_project_icon
+from ..protocol import Settings
+from ..shared_settings import SharedSettings, apply_shared
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
+from . import shared_view as _shared_view
 from .agent_card import AgentCardMixin
 from .bridge_update import BridgeUpdateMixin
 from .event_cursor import EventCursorStore
@@ -161,11 +165,21 @@ class LiveSource(
         shell_banners: bool = True,
         event_store: EventCursorStore | None = None,
         done_timer=None,
+        shared_view: _shared_view.SharedSettingsView | None = None,
     ):
         # ``server`` remains accepted for source compatibility with callers that
         # built a one-server source explicitly. The resolved config is authoritative:
         # when it carries a fleet, every selected server participates.
         self._config = config
+        # Per-bridge shared settings (capability "settings"): warm-started from
+        # the runtime cache so a restart applies each bridge's rules before it
+        # answers. config_for(server_id) is local config + that bridge's
+        # document; memo per server: (settings, local config, result).
+        self._shared = shared_view or _shared_view.SharedSettingsView(
+            _shared_view.default_cache_dir()
+        )
+        self._shared_memo: dict[str, tuple[SharedSettings, Config, Config]] = {}
+        self._shared_memo_lock = threading.Lock()
         # Event notifications (newly_entered bookkeeping per event). The sink
         # records every alert into the feed; the deck shell posts both the
         # banner and sound under one acknowledged delivery. A plain osascript
@@ -300,6 +314,37 @@ class LiveSource(
     @property
     def config(self) -> Config:
         return self._config
+
+    def config_for(self, server_id: str) -> Config:
+        """The effective config for an agent on ``server_id``: the local
+        config with that bridge's shared settings applied, or the local config
+        itself when the bridge is unset, old (no capability) or unknown."""
+        config = self._config
+        shared = self._shared.settings_for(server_id)
+        if shared is None:
+            return config
+        with self._shared_memo_lock:
+            memo = self._shared_memo.get(server_id)
+            if memo is not None and memo[0] is shared and memo[1] is config:
+                return memo[2]
+        effective = apply_shared(config, shared)
+        with self._shared_memo_lock:
+            self._shared_memo[server_id] = (shared, config, effective)
+        return effective
+
+    def shared_state(self) -> dict[str, dict]:
+        """Per configured server: its shared settings state (see
+        SharedSettingsView.state) plus whether the bridge offers the
+        capability and is connected. Feeds the editor."""
+        with self._lock:
+            connected = dict(self._connected)
+        out: dict[str, dict] = {}
+        for sid in self._servers:
+            state = self._shared.state(sid)
+            state["offered"] = self._offers_capability(sid, SETTINGS_CAPABILITY)
+            state["connected"] = bool(connected.get(sid))
+            out[sid] = state
+        return out
 
     @property
     def language(self) -> str:
@@ -960,8 +1005,22 @@ class LiveSource(
         with self._lock:
             self._remote_presence[server_id] = (self._presence_clock(), idle_s)
 
-    def _on_settings(self, server_id: str, frame) -> None:
-        """Connector callback: the bridge's shared settings (filled in later)."""
+    def _on_settings(self, server_id: str, frame: Settings) -> None:
+        """Connector callback: the bridge's shared settings document. A change
+        re-renders the deck (labels showing macros / start profiles) and bumps
+        the server's agents' semantic generation (a pending confirmation made
+        under the old rules dies with it)."""
+        if not self._shared.update(server_id, frame):
+            return
+
+        def mutate():
+            with self._lock:
+                self._bump_semantic_locked(
+                    key for key in self._agents if key.server_id == server_id
+                )
+            return True
+
+        self._apply(mutate)
 
     def _remote_idles(self) -> list[float]:
         now = self._presence_clock()
@@ -973,10 +1032,13 @@ class LiveSource(
             if idle is not None and now - at <= PRESENCE_STALE_S
         ]
 
-    def _offers_presence(self, server_id: str) -> bool:
+    def _offers_capability(self, server_id: str, capability: str) -> bool:
         connector = getattr(self._runners.get(server_id), "connector", None)
         caps = getattr(connector, "capabilities", None)
-        return isinstance(caps, frozenset | set) and PRESENCE_CAPABILITY in caps
+        return isinstance(caps, frozenset | set) and capability in caps
+
+    def _offers_presence(self, server_id: str) -> bool:
+        return self._offers_capability(server_id, PRESENCE_CAPABILITY)
 
     def report_presence(self) -> int:
         """Send this runtime's idle to every connected bridge offering presence."""
@@ -1329,6 +1391,7 @@ class LiveSource(
             with self._lock:
                 self._remote_presence.pop(server_id, None)
                 self._presence_announced.discard(server_id)
+            self._shared.forget_live(server_id)
         def mutate():
             with self._lock:
                 self._connected[server_id] = up
