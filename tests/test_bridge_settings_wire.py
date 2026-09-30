@@ -119,3 +119,31 @@ async def test_no_store_no_capability_no_frame():
             await asyncio.wait_for(ws.recv(), 0.3)
             raise AssertionError("no settings frame expected")
         await ws.close()
+
+
+async def test_embedded_bridges_get_distinct_settings_paths(monkeypatch):
+    import contextlib as cl
+
+    from herdeck import bridge as bridge_mod
+
+    seen = []
+    orig = bridge_mod._settings_default_path
+    monkeypatch.setattr(
+        bridge_mod, "_settings_default_path", lambda s=None: (seen.append(s), orig(s))[1]
+    )
+    handles = []
+    for name in ("alpha", "beta"):
+        *_, handle = await bridge_mod.start_local_bridge(
+            "unused.sock", herdr=StubHerdr(panes=[]), session=name
+        )
+        handles.append(handle)
+    for server, btask in handles:
+        btask.cancel()
+        with cl.suppress(asyncio.CancelledError):
+            await btask
+        server.close()
+        await server.wait_closed()
+    assert seen == ["alpha", "beta"]
+    from herdeck.bridge_settings import default_path
+
+    assert default_path("alpha") != default_path("beta")

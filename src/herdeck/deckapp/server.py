@@ -2145,13 +2145,15 @@ def _load_partial_config():
         return None
 
 
-def _start_local_bridge(socket_path, *, runner_factory=None):
+def _start_local_bridge(socket_path, *, session=None, runner_factory=None):
     """Start the embedded bridge and synthesize its loopback (config, server).
     Returns (config, server, runner); the caller owns runner teardown."""
     from ..bootstrap import local_config
     from .local_bridge import LocalBridgeRunner
 
-    runner = (runner_factory or LocalBridgeRunner)(socket_path)
+    if session is None:
+        session = os.environ.get("HERDR_SESSION") or None
+    runner = (runner_factory or LocalBridgeRunner)(socket_path, session=session)
     try:
         _host, port, token = runner.start()
     except Exception:
@@ -2190,7 +2192,9 @@ def _start_local_session_bridges(
                     suffix += 1
                 server_id = f"{base}:{suffix}"
             used_ids.add(server_id)
-            runner = (runner_factory or LocalBridgeRunner)(session.socket_path)
+            runner = (runner_factory or LocalBridgeRunner)(
+                session.socket_path, session=session.name
+            )
             runner._herdeck_session_name = session.name
             try:
                 _host, port, token = runner.start()

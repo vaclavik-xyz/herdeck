@@ -67,3 +67,12 @@ def _isolated_usage_agent(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(usage_agent_install, "_managed_prefix", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_bridge_settings(tmp_path, monkeypatch):
+    """Embedded/standalone bridges never read or write ~/.config/herdeck settings."""
+    monkeypatch.setattr(
+        "herdeck.bridge._settings_default_path",
+        lambda session=None: tmp_path / "bridge-settings" / f"{session or 'bridge'}.toml",
+    )
