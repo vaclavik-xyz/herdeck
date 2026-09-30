@@ -278,6 +278,19 @@ describe("recent chats", () => {
     expect(target.querySelector("[data-tg-chat]")).toBeNull();
     expect(text(q(target, "[data-tg-chats-empty]"))).toContain("Write to the bot");
   });
+
+  it("tells how a bot in privacy mode sees a group topic, in en and cs", () => {
+    for (const lang of ["en", "cs"] as const) {
+      setLang(lang);
+      const { target } = render({ initialTarget: "fresh" });
+      const hint = text(q(target, "[data-tg-chats-empty]"));
+      expect(hint).toContain("/start@");
+      expect(hint).toContain("/setprivacy");
+      expect(hint).toContain("admin");
+      cleanup?.();
+      cleanup = null;
+    }
+  });
 });
 
 describe("test button", () => {
