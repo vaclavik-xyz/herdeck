@@ -168,9 +168,9 @@ describe("SharedTarget apply to all", () => {
 
   it("lists per-bridge results, a stale one as changed elsewhere and reloaded", () => {
     const results: PutOutcome[] = [
-      { serverId: "m4", ok: true, status: 200, revision: 4, error: null, messages: [] },
-      { serverId: "mb", ok: false, status: 409, revision: 10, error: "stale_revision", messages: [] },
-      { serverId: "x", ok: false, status: 422, revision: null, error: "invalid", messages: ["macros[0].label must be a non-empty string"] },
+      { serverId: "m4", ok: true, status: 200, revision: 4, error: null, messages: [], sent: {} },
+      { serverId: "mb", ok: false, status: 409, revision: 10, error: "stale_revision", messages: [], sent: {} },
+      { serverId: "x", ok: false, status: 422, revision: null, error: "invalid", messages: ["macros[0].label must be a non-empty string"], sent: {} },
     ];
     const target = render({ results });
     const rows = Array.from(target.querySelectorAll("[data-shared-results] li")).map(text);
@@ -183,7 +183,7 @@ describe("SharedTarget apply to all", () => {
 
   it("speaks Czech", () => {
     setLang("cs");
-    const target = render({ target: "gone", results: [{ serverId: "mb", ok: false, status: 409, revision: 1, error: "stale_revision", messages: [] }] });
+    const target = render({ target: "gone", results: [{ serverId: "mb", ok: false, status: 409, revision: 1, error: "stale_revision", messages: [], sent: {} }] });
     expect(text(target.querySelector("[data-shared-offline]")!)).not.toContain("Bridge offline");
     expect(text(target.querySelector("[data-shared-results] li")!)).toBe("mb: změněno jinde — načteno znovu");
     expect(target.querySelector<HTMLSelectElement>("select")!.options[0].textContent?.trim()).toBe("Tento Mac (záloha)");

@@ -42,7 +42,7 @@
   import {
     SHARED_NOTIFICATION_KEYS, SHARED_SECTIONS, SHARED_USAGE_KEYS, SHARED_WHOLE_SECTIONS,
     composeShared, defaultTarget, extractShared, resolveTarget, saveDrafts, splitShared, stableJson,
-    targetIds, targetMode, type BridgeDraft, type PutOutcome,
+    keepSaved, targetIds, targetMode, type BridgeDraft, type PutOutcome,
   } from "./lib/bridgeSettings";
   import { settingsRequest } from "./lib/settingsRequest.svelte";
   import { healthState, maintenanceBadge } from "./lib/healthState.svelte";
@@ -471,16 +471,19 @@
     reloadRev += 1; // map sections re-seed their rows from the new target
   }
 
-  /** Re-read only the bridges' state, keeping any unsaved config.toml edit. */
-  async function refreshBridges(): Promise<void> {
+  /** Re-read only the bridges' state, keeping any unsaved config.toml edit.
+   *  `saved` puts are kept even when the re-read still predates them
+   *  (keepSaved: the bridge broadcasts after it answers). */
+  async function refreshBridges(saved: PutOutcome[] = []): Promise<void> {
     try {
       const fresh = parseConfig(await cfg.read());
       if (fresh == null || payload == null) return;
-      payload = { ...payload, bridges: fresh.bridges, sharedOverlayIgnored: fresh.sharedOverlayIgnored };
-      reloadRev += 1;
+      payload = { ...payload, bridges: keepSaved(fresh.bridges, saved), sharedOverlayIgnored: fresh.sharedOverlayIgnored };
     } catch {
+      if (payload != null) payload = { ...payload, bridges: keepSaved(payload.bridges, saved) };
       setBanner("warning", lm.refresh_failed);
     }
+    reloadRev += 1;
   }
 
   /** Put every bridge draft (Apply). A saved or stale (409) draft is dropped
@@ -492,7 +495,7 @@
     const drafts = { ...bridgeDrafts };
     for (const r of results) if (r.ok || r.error === "stale_revision") delete drafts[r.serverId];
     bridgeDrafts = drafts;
-    await refreshBridges();
+    await refreshBridges(results);
     sharedResults = results;
     if (results.some((r) => !r.ok)) setBanner("warning", lm.bridge_save_failed);
     else if (banner == null) setBanner("success", lm.saved);
@@ -500,7 +503,7 @@
 
   async function onAdopted(outcome: PutOutcome): Promise<void> {
     sharedResults = [];
-    await refreshBridges();
+    await refreshBridges([outcome]);
     if (outcome.ok) setBanner("success", fmt(lm.adopted, { id: outcome.serverId }));
   }
 
@@ -1122,7 +1125,7 @@
                 editingProfile={editProfile != null && editProfile !== "default"}
                 overlayIgnored={payload.sharedOverlayIgnored}
                 results={sharedResults}
-                baseConfig={payload.base}
+                baseConfig={(appliedPayload ?? payload).base}
                 put={browserMode ? null : cfg.putBridgeSettings}
                 onAdopted={(o) => void onAdopted(o)}
                 sharedKeys={active === "notifications" ? SHARED_NOTIFICATION_KEYS : active === "usage" ? SHARED_USAGE_KEYS : null}

@@ -635,6 +635,46 @@ describe("ConfigApp bridge shared settings", () => {
     }
   });
 
+  // The bridge answers a put before it broadcasts the new document, so the
+  // re-read right after Apply can still carry the old revision.
+  it("a save stays visible when the immediate re-read still predates it", async () => {
+    useConfig(() => sharedConfig(), () => ({ status: 200, body: { ok: true, revision: 4 } }));
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      toggle(approveAlways(target));
+      clickApply(target);
+      await vi.waitFor(() => expect(target.querySelector("[data-shared-results]")).not.toBeNull());
+      expect(approveAlways(target).checked, "the saved value, not the stale re-read").toBe(true);
+      expect(target.querySelector(".dirty")).toBeNull();
+      toggle(approveAlways(target));
+      clickApply(target);
+      await vi.waitFor(() => expect(bridgeCalls()).toHaveLength(2));
+      expect(bridgeCalls()[1][1].body.base_revision, "based on the saved revision").toBe(4);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("adoption moves the SAVED config.toml base, not unsaved edits, and is not offered again", async () => {
+    useConfig(
+      () => sharedConfig({ bridges: { m4: sharedBridge({ set: false, revision: 0, settings: null, source: "none" }) } }),
+      () => ({ status: 200, body: { ok: true, revision: 1 } }),
+    );
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      pick(target, "m4");
+      toggle(approveAlways(target)); // unsaved local edit: approve_always false
+      target.querySelector<HTMLButtonElement>("[data-action='adopt']")!.click();
+      await vi.waitFor(() => expect(bridgeCalls()).toHaveLength(1));
+      expect(bridgeCalls()[0][1]).toEqual({ serverId: "m4", body: { base_revision: 0, settings: { safety: { approve_always: true } } } });
+      await vi.waitFor(() => expect(target.querySelector("[data-action='adopt']"), "the stale re-read must not bring the button back").toBeNull());
+    } finally {
+      cleanup();
+    }
+  });
+
   it("shows no target picker when no bridge offers shared settings", async () => {
     useConfig(() => sharedConfig({ bridges: { m4: sharedBridge({ offered: false, set: false, settings: null }) } }));
     const { target, cleanup } = renderConfigApp();

@@ -9,6 +9,7 @@ import {
   composeShared,
   defaultTarget,
   extractShared,
+  keepSaved,
   parseBridges,
   putBridgeSettings,
   resolveTarget,
@@ -183,5 +184,25 @@ describe("saving", () => {
     const put = vi.fn(async () => ({ status: 200, body: { ok: true, revision: 4 } }));
     await saveDrafts(put, bridges, { mb: { baseRevision: 9, settings: {} } }, null);
     expect(put.mock.calls).toEqual([["mb", { base_revision: 9, settings: {} }]]);
+  });
+});
+
+describe("keepSaved", () => {
+  const doc = { safety: { approve_always: true, require_confirm_for: [] } };
+  const ok = (id: string, revision: number) => ({ serverId: id, ok: true, status: 200, revision, error: null, messages: [], sent: doc });
+
+  it("never goes back to a revision older than a save just made", () => {
+    const stale = parseBridges({ m4: bridge({ revision: 3 }), fresh: bridge({ set: false, revision: 0, settings: null, source: "none" }) });
+    const out = keepSaved(stale, [ok("m4", 4), ok("fresh", 1)]);
+    expect(out.m4).toMatchObject({ revision: 4, settings: doc, set: true, source: "bridge" });
+    expect(out.fresh).toMatchObject({ revision: 1, settings: doc, set: true });
+    expect(stale.m4.revision, "input untouched").toBe(3);
+  });
+
+  it("keeps a re-read that already caught up, and ignores failed puts", () => {
+    const caught = parseBridges({ m4: bridge({ revision: 5 }) });
+    expect(keepSaved(caught, [ok("m4", 4)]).m4.revision).toBe(5);
+    const failed = { ...ok("m4", 9), ok: false, error: "invalid" as const };
+    expect(keepSaved(caught, [failed]).m4.revision).toBe(5);
   });
 });

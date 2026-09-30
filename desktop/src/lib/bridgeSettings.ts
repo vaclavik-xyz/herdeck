@@ -213,6 +213,9 @@ export interface PutOutcome {
   revision: number | null;
   error: PutErrorCode | null;
   messages: string[];
+  /** The document that was sent (kept so a save can be shown before the
+   *  bridge's broadcast reaches the runtime, see `keepSaved`). */
+  sent: Rec;
 }
 
 function errorCode(status: number, error: unknown): PutErrorCode {
@@ -234,9 +237,9 @@ export async function putBridgeSettings(put: BridgePutFn, serverId: string, base
     const revision = typeof body.revision === "number" ? body.revision : null;
     const messages = Array.isArray(body.messages) ? body.messages.filter((m): m is string => typeof m === "string") : [];
     const ok = status === 200 && body.ok === true;
-    return { serverId, ok, status, revision, error: ok ? null : errorCode(status, body.error), messages };
+    return { serverId, ok, status, revision, error: ok ? null : errorCode(status, body.error), messages, sent: settings };
   } catch (e) {
-    return { serverId, ok: false, status: 0, revision: null, error: "unreachable", messages: [String(e)] };
+    return { serverId, ok: false, status: 0, revision: null, error: "unreachable", messages: [String(e)], sent: settings };
   }
 }
 
@@ -260,5 +263,19 @@ export async function saveDrafts(
   }
   const out: PutOutcome[] = [];
   for (const [id, draft] of plan) out.push(await putBridgeSettings(put, id, draft.baseRevision, draft.settings));
+  return out;
+}
+
+/** The bridge answers a put BEFORE it broadcasts the new `settings` frame
+ *  (bridge.py), so a `GET /config` right after a save can still report the old
+ *  revision/document. Never go backwards: for each saved put whose revision is
+ *  newer than the re-read one, show what was sent at the saved revision. */
+export function keepSaved(bridges: Record<string, BridgeShared>, saved: PutOutcome[]): Record<string, BridgeShared> {
+  const out = { ...bridges };
+  for (const r of saved) {
+    const b = out[r.serverId];
+    if (!r.ok || r.revision == null || b == null || b.revision >= r.revision) continue;
+    out[r.serverId] = { ...b, revision: r.revision, settings: clone(r.sent), set: true, source: "bridge" };
+  }
   return out;
 }

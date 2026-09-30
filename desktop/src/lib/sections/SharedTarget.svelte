@@ -26,7 +26,7 @@
     /** Adopted bridges that ignore the active profile's overlays of shared keys. */
     overlayIgnored: string[];
     results: PutOutcome[];
-    /** The editor's current config.toml base — adoption moves its shared part. */
+    /** The SAVED config.toml base (not unsaved edits, spec S5) — adoption moves its shared part. */
     baseConfig: Record<string, unknown>;
     /** null = no runtime to talk to (browser preview): adoption is not offered. */
     put: BridgePutFn | null;
