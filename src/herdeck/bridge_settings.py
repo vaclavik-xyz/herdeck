@@ -72,7 +72,7 @@ class BridgeSettingsStore:
             by = data.get("updated_by", "")
             if (
                 type(revision) is not int or revision < 1
-                or type(at) is not int
+                or type(at) is not int or at < 0
                 or not isinstance(by, str)
             ):
                 raise ConfigError("invalid revision metadata")

@@ -53,3 +53,10 @@ def test_default_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     assert default_path() == tmp_path / ".config/herdeck/bridge-settings.toml"
     assert default_path("work") == tmp_path / ".config/herdeck/local-bridge-settings-work.toml"
+
+
+def test_negative_updated_at_is_served_unset_with_error(tmp_path):
+    p = tmp_path / "b.toml"
+    p.write_text('revision = 2\nupdated_at_ms = -5\nupdated_by = "a"\n', encoding="utf-8")
+    st = BridgeSettingsStore(p)
+    assert st.raw is None and st.revision == 0 and st.updated_at_ms == 0 and st.error
