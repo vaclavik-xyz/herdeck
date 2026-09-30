@@ -98,7 +98,7 @@ def test_ok_relays_the_put_frame():
         {"ok": True, "revision": 4},
     )
     assert runner.sent == [
-        {"type": "settings_put", "req": "st1", "base_revision": 3, "settings": BODY["settings"]}
+        {"type": "settings_put", "req": "sp1", "base_revision": 3, "settings": BODY["settings"]}
     ]
 
 
@@ -133,7 +133,8 @@ def test_silence_times_out_with_504_and_a_late_reply_is_dropped():
     assert src.bridge_settings_put("prod", 0, {}, wait_s=0.05)[0] == 504
     seen = []
     src.set_result_tap(lambda sid, req, data: seen.append(req))
-    src._on_result("prod", "st1", {"ok": True, "revision": 1})
+    src._on_result("prod", "sp1", {"ok": True, "revision": 1})
+    assert seen == []
     assert src._settings_waits == {}
 
 
@@ -233,3 +234,32 @@ def test_get_config_bridges_empty_without_a_live_source(tmp_path):
         assert _get_config(app)["bridges"] == {}
     finally:
         app.close()
+
+
+def test_concurrent_stats_and_settings_replies_reach_their_own_relay():
+    import threading
+    import time
+
+    src, runner = make(capabilities=("settings", "history"))
+    out: dict = {}
+    t_stats = threading.Thread(
+        target=lambda: out.__setitem__("stats", src.stats(7, "day", wait_s=3))
+    )
+    t_stats.start()
+    while not any(m["type"] == "stats" for m in runner.sent):
+        time.sleep(0.005)
+    stats_req = next(m["req"] for m in runner.sent if m["type"] == "stats")
+    t_put = threading.Thread(
+        target=lambda: out.__setitem__("put", src.bridge_settings_put("prod", 0, {}, wait_s=3))
+    )
+    t_put.start()
+    while not any(m["type"] == "settings_put" for m in runner.sent):
+        time.sleep(0.005)
+    put_req = next(m["req"] for m in runner.sent if m["type"] == "settings_put")
+    assert put_req != stats_req
+    src._on_result("prod", put_req, {"ok": True, "revision": 9})
+    t_put.join(3)
+    assert out["put"] == (200, {"ok": True, "revision": 9})
+    src._on_bridge_error("prod", stats_req, "boom")
+    t_stats.join(3)
+    assert out["stats"]["ok"] is False

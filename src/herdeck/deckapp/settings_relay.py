@@ -28,6 +28,8 @@ from ..bridge_settings import SETTINGS_CAPABILITY
 
 SETTINGS_WAIT_S = 10.0
 _ROUTE_RE = re.compile(r"^/bridge-settings/([^/]+)$")
+# Not "st": stats.py owns that prefix (ids hk, ua, st, u, p, r, t are taken).
+_REQ_PREFIX = "sp"
 _HTTP = {"stale_revision": 409, "invalid": 422, "too_large": 422}
 
 
@@ -65,7 +67,9 @@ class SettingsRelayMixin:
         with self._settings_lock:
             wait = self._settings_waits.pop(req, None)
         if wait is None:
-            return False
+            # A late reply to a put that already timed out is still ours:
+            # swallow it so it never reaches the deck's result handling.
+            return req.startswith(_REQ_PREFIX) and req[len(_REQ_PREFIX) :].isdigit()
         if error is None and isinstance(data, dict) and isinstance(data.get("ok"), bool):
             wait.data = data
         else:
@@ -107,7 +111,7 @@ class SettingsRelayMixin:
             return _fail(503, "disconnected", "the server is not connected")
         if not self._offers_capability(server_id, SETTINGS_CAPABILITY):
             return _fail(503, "unsupported", "this bridge does not offer shared settings")
-        req = f"st{next(self._settings_reqs)}"
+        req = f"{_REQ_PREFIX}{next(self._settings_reqs)}"
         wait = _Wait(server_id)
         with self._settings_lock:
             self._settings_waits[req] = wait
