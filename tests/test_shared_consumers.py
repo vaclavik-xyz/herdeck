@@ -384,9 +384,8 @@ def test_orchestrator_without_config_for_uses_its_own_config():
 
 
 def test_first_reminder_on_a_fresh_server_survives_checks_and_fires(tmp_path):
-    # Regression: the server set used to be snapshotted before the locked pass,
-    # so a reminder tracked in between (typically the first blocked agent on a
-    # server) was judged with interval 0 and deleted.
+    # The first blocked agent on a server is kept by early checks and reminded
+    # after its bridge's remind_after (the race itself: the next test).
     now = [1000.0]
     src, notifier, _timers = _source(
         tmp_path,
@@ -404,5 +403,42 @@ def test_first_reminder_on_a_fresh_server_survives_checks_and_fires(tmp_path):
         now[0] += 4 * 60
         assert src.check_reminders() == 1
         assert notifier.metas[-1]["agent"]["server_id"] == "b"
+    finally:
+        src.close()
+
+
+def test_reminder_tracked_during_a_check_is_not_dropped(tmp_path):
+    # Deterministic race: while check_reminders looks up an interval, another
+    # thread tracks the first reminder for a server not seen yet. It must be
+    # kept (judged by its own server's remind_after), never deleted as "0".
+    now = [1000.0]
+    src, _notifier, _timers = _source(
+        tmp_path,
+        {"notifications": {"on": ["blocked", "done"], "remind_after": 5}},
+        clock=lambda: now[0],
+    )
+    cfg = _config()
+    cfg.notifications.remind_after = 5
+    src._config = cfg
+    try:
+        src._on_snapshot("a", [agent("a", "p", Status.WORKING)])
+        src._on_event("a", agent("a", "p", Status.BLOCKED))
+        key_b = AgentKey("b", "p")
+        real = src.config_for
+        injected = []
+
+        def config_for(sid):
+            if not injected:
+                injected.append(sid)
+                # Plain dict writes (a real tracker would hold self._lock).
+                src._agents[key_b] = agent("b", "p", Status.BLOCKED)
+                src._block_episode[key_b] = "ep-b"
+                src._reminders[key_b] = ("ep-b", now[0], 0)
+            return real(sid)
+
+        src.config_for = config_for
+        src.check_reminders()
+        assert injected
+        assert key_b in src._reminders
     finally:
         src.close()
