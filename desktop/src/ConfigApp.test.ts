@@ -675,6 +675,57 @@ describe("ConfigApp bridge shared settings", () => {
     }
   });
 
+  // A local Apply reloads the runtime, which reconnects every bridge: right
+  // after config_write the bridges read as disconnected for a moment.
+  it("a combined Apply puts the bridge before config.toml and recovers the bridge after the reload", async () => {
+    let reconnecting = false;
+    let readsAfterWrite = 0;
+    const order: string[] = [];
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "config_read") {
+        if (reconnecting) {
+          readsAfterWrite += 1;
+          if (readsAfterWrite >= 3) reconnecting = false;
+          return sharedConfig({ bridges: { m4: sharedBridge({ connected: false, offered: false, source: "cache" }) } });
+        }
+        return sharedConfig();
+      }
+      if (cmd === "config_bridge_settings") {
+        order.push("bridge");
+        if (reconnecting) return { status: 503, body: { ok: false, error: "disconnected", messages: [] } };
+        return { status: 200, body: { ok: true, revision: 4 } };
+      }
+      if (cmd === "config_write") {
+        order.push("write");
+        reconnecting = true;
+        return { errors: [] };
+      }
+      return mockInvoke(cmd);
+    });
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      toggle(approveAlways(target)); // bridge draft
+      pick(target, "");
+      toggle(approveAlways(target)); // config.toml edit
+      pick(target, "m4");
+      clickApply(target);
+      await vi.waitFor(() => expect(order).toEqual(["bridge", "write"]));
+      await vi.waitFor(() => expect(target.querySelector(".dirty")).toBeNull());
+      const rows = Array.from(target.querySelectorAll("[data-shared-results] li")).map((li) => li.textContent?.trim());
+      expect(rows).toEqual(["m4: saved"]);
+      expect(target.querySelector<HTMLSelectElement>("[data-shared-target-select]")!.value).toBe("m4");
+      expect(approveAlways(target).checked, "the saved bridge value survives the post-write reload").toBe(true);
+      await vi.waitFor(
+        () => expect(target.querySelector("[data-shared-offline]"), "the bridge section recovers").toBeNull(),
+        { timeout: 5000 },
+      );
+      expect(approveAlways(target).checked).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("shows no target picker when no bridge offers shared settings", async () => {
     useConfig(() => sharedConfig({ bridges: { m4: sharedBridge({ offered: false, set: false, settings: null }) } }));
     const { target, cleanup } = renderConfigApp();

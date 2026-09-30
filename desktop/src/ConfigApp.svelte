@@ -489,7 +489,7 @@
   /** Put every bridge draft (Apply). A saved or stale (409) draft is dropped
    *  and the bridge re-read, so a lost race shows the other editor's values
    *  ("changed elsewhere — reloaded") instead of overwriting them. */
-  async function applyBridges(): Promise<void> {
+  async function applyBridges(): Promise<PutOutcome[]> {
     const fanOut = sharedApplyAll && sharedMode === "adopted" && bridgeDrafts[sharedTarget] != null ? sharedTarget : null;
     const results = await saveDrafts(cfg.putBridgeSettings, bridges, bridgeDrafts, fanOut);
     const drafts = { ...bridgeDrafts };
@@ -497,8 +497,29 @@
     bridgeDrafts = drafts;
     await refreshBridges(results);
     sharedResults = results;
-    if (results.some((r) => !r.ok)) setBanner("warning", lm.bridge_save_failed);
-    else if (banner == null) setBanner("success", lm.saved);
+    return results;
+  }
+
+  // A config.toml save reloads the runtime, which rebuilds every bridge
+  // connection: for a moment GET /config reports them disconnected (adopted
+  // bridges read "offline", unadopted ones leave the picker). Re-read the
+  // bridges a few times until the ones connected before the save are back.
+  const SETTLE_POLL_MS = 1000;
+  const SETTLE_POLLS = 5;
+  let settleRun = 0;
+
+  function bridgesBack(before: string[]): boolean {
+    const now = payload?.bridges ?? {};
+    return before.every((id) => now[id]?.connected === true);
+  }
+
+  async function settleBridges(before: string[], saved: PutOutcome[]): Promise<void> {
+    const run = ++settleRun;
+    for (let i = 0; i < SETTLE_POLLS && !bridgesBack(before); i++) {
+      await new Promise((r) => setTimeout(r, SETTLE_POLL_MS));
+      if (run !== settleRun) return; // superseded or unmounted
+      await refreshBridges(saved);
+    }
   }
 
   async function onAdopted(outcome: PutOutcome): Promise<void> {
@@ -632,13 +653,16 @@
     }
   }
 
-  async function load(): Promise<void> {
+  /** `saved`: bridge puts of this Apply, kept even when the re-read predates
+   *  them (see refreshBridges). */
+  async function load(saved: PutOutcome[] = []): Promise<void> {
     try {
-      const fresh = parseConfig(await cfg.read());
-      if (fresh == null) {
+      const read = parseConfig(await cfg.read());
+      if (read == null) {
         setBanner("warning", lm.bad_config_reply);
         return;
       }
+      const fresh = saved.length > 0 ? { ...read, bridges: keepSaved(read.bridges, saved) } : read;
       payload = fresh;
       appliedPayload = fresh;
       if (sharedTargetPick == null && targetIds(fresh.bridges).length > 0) sharedTargetPick = defaultTarget(fresh.bridges);
@@ -683,15 +707,26 @@
     if (!payload) return;
     busy = true;
     try {
-      if (dirty && !(await applyLocal())) return;
-      if (bridgeDirty) await applyBridges();
+      // Bridges first: a config.toml save reloads the runtime and drops every
+      // bridge connection, so a put right after it would fail with 503.
+      const results = bridgeDirty ? await applyBridges() : [];
+      if (dirty) {
+        const connectedBefore = Object.entries(payload.bridges)
+          .filter(([, b]) => b.connected).map(([id]) => id);
+        if (await applyLocal(results)) void settleBridges(connectedBefore, results);
+      }
+      if (results.some((r) => !r.ok)) {
+        if (banner == null || banner.kind === "success") setBanner("warning", lm.bridge_save_failed);
+      } else if (results.length > 0 && banner == null) {
+        setBanner("success", lm.saved);
+      }
     } finally {
       busy = false;
     }
   }
 
   /** Save config.toml (the pre-existing Apply). True when it was saved. */
-  async function applyLocal(): Promise<boolean> {
+  async function applyLocal(saved: PutOutcome[] = []): Promise<boolean> {
     if (!payload) return false;
     try {
       const raw = await cfg.write(toWriteBody(payload));
@@ -721,7 +756,7 @@
         const restartKeys = restartRequiredChanges(appliedPayload, payload);
         appliedPayload = JSON.parse(JSON.stringify(payload)) as ConfigPayload;
         dirty = false;
-        await load(); // re-read saved state (preview refreshes itself via its own poll)
+        await load(saved); // re-read saved state (preview refreshes itself via its own poll)
         // A changed [hotkeys] accelerator only takes effect once Rust re-registers
         // it; a registration failure (taken/invalid accelerator) comes back as
         // Err and must be shown instead of claiming success.
@@ -902,6 +937,7 @@
     })();
     return () => {
       alive = false;
+      settleRun += 1;
       statusPoll.stop();
       unlisten?.();
       unlistenDeckVisibility?.();
