@@ -246,15 +246,19 @@ def test_concurrent_stats_and_settings_replies_reach_their_own_relay():
         target=lambda: out.__setitem__("stats", src.stats(7, "day", wait_s=3))
     )
     t_stats.start()
-    while not any(m["type"] == "stats" for m in runner.sent):
+    deadline = time.monotonic() + 3
+    while not any(m["type"] == "stats" for m in runner.sent) and time.monotonic() < deadline:
         time.sleep(0.005)
+    assert any(m["type"] == "stats" for m in runner.sent)
     stats_req = next(m["req"] for m in runner.sent if m["type"] == "stats")
     t_put = threading.Thread(
         target=lambda: out.__setitem__("put", src.bridge_settings_put("prod", 0, {}, wait_s=3))
     )
     t_put.start()
-    while not any(m["type"] == "settings_put" for m in runner.sent):
+    deadline = time.monotonic() + 3
+    while not any(m["type"] == "settings_put" for m in runner.sent) and time.monotonic() < deadline:
         time.sleep(0.005)
+    assert any(m["type"] == "settings_put" for m in runner.sent)
     put_req = next(m["req"] for m in runner.sent if m["type"] == "settings_put")
     assert put_req != stats_req
     src._on_result("prod", put_req, {"ok": True, "revision": 9})
