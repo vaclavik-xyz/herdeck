@@ -165,6 +165,10 @@ class TelegramAlertRecord:
     message_id: int
     created_at: float
     terminal_id: str = ""
+    # The question the alert shows, from ``control.answer_claim`` (None when the
+    # control has none): passed back with every answer from this alert so the
+    # control can refuse it once that question was answered or replaced.
+    claim: dict | None = None
 
 
 class TelegramAlertStore:
@@ -279,6 +283,7 @@ class TelegramInteractor:
             prompt = await self._control.read_prompt(agent.key, timeout=3.0)
         except Exception:
             prompt = ""
+        self._pin(record)
         text, markup = self._formatter.blocked_alert(
             agent,
             metadata_body=_metadata_body(agent, body),
@@ -308,6 +313,18 @@ class TelegramInteractor:
             self._store.discard(record.token)
             return
         self._store.attach_message(record.token, chat_id=self._chat_id, message_id=message_id)
+
+    def _pin(self, record: TelegramAlertRecord) -> None:
+        """Pin ``record`` to the question its message shows right now."""
+        answer_claim = getattr(self._control, "answer_claim", None)
+        try:
+            record.claim = answer_claim(record.key) if callable(answer_claim) else None
+        except Exception:
+            record.claim = None
+
+    @staticmethod
+    def _claim_kwargs(record: TelegramAlertRecord) -> dict:
+        return {} if record.claim is None else {"claim": record.claim}
 
     def _is_webhook_conflict(self, exc: TelegramApiError) -> bool:
         return exc.error_code == 409 and "webhook" in exc.description.lower()
@@ -357,13 +374,19 @@ class TelegramInteractor:
         action = parts[2]
         try:
             if action == "approve":
-                result = await self._control.approve(record.key, timeout=3.0)
+                result = await self._control.approve(
+                    record.key, timeout=3.0, **self._claim_kwargs(record)
+                )
                 status, ok = self._action_status(result)
             elif action == "deny":
-                result = await self._control.deny(record.key, timeout=3.0)
+                result = await self._control.deny(
+                    record.key, timeout=3.0, **self._claim_kwargs(record)
+                )
                 status, ok = self._action_status(result)
             elif action == "stop":
-                result = await self._control.stop(record.key, timeout=3.0)
+                result = await self._control.stop(
+                    record.key, timeout=3.0, **self._claim_kwargs(record)
+                )
                 status, ok = self._action_status(result)
             elif action == "read":
                 await self._refresh_prompt(record)
@@ -411,6 +434,8 @@ class TelegramInteractor:
     def _action_status(self, result) -> tuple[str, bool]:
         if result.sent:
             return "sent", True
+        if result.skipped and result.message == "stale":
+            return "stale", True
         if result.skipped:
             return "skipped", True
         return result.message or "failed", False
@@ -428,6 +453,7 @@ class TelegramInteractor:
                 prompt = await self._control.read_prompt(record.key, timeout=3.0)
             except Exception:
                 prompt = ""
+            self._pin(record)
             text, markup = self._formatter.blocked_alert(
                 agent,
                 metadata_body=_metadata_body(agent, agent.repo or agent.label),
@@ -467,7 +493,9 @@ class TelegramInteractor:
             )
             return False
         try:
-            result = await self._control.send_text(record.key, text, timeout=3.0)
+            result = await self._control.send_text(
+                record.key, text, timeout=3.0, **self._claim_kwargs(record)
+            )
             status = (
                 f"sent to {record.key.server_id}:{record.key.pane_id}"
                 if result.sent

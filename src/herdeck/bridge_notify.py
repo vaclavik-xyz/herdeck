@@ -94,6 +94,41 @@ class BridgeAgentControl:
         if key is None or (self._pending_confirm is not None and self._pending_confirm[1] == key):
             self._pending_confirm = None
 
+    def answer_claim(self, key: AgentKey) -> dict | None:
+        """The question a Telegram alert shows right now: its episode, prompt
+        revision and whether it was answered yet (None: no open blocked
+        episode). ``TelegramInteractor`` passes it back with every answer from
+        that alert, see ``_claim_stale``."""
+        agent = self.current_agent(key)
+        if agent is None or not self._episode_fields(agent):
+            return None
+        ep = self._episodes.open_episode(key.pane_id)
+        return {
+            "episode_id": ep.id,
+            "prompt_revision": ep.revision,
+            "answered_revision": ep.answered_revision,
+        }
+
+    def _claim_stale(self, agent: AgentState, claim: dict) -> bool:
+        """An answer from an alert is stale once the episode it showed ended,
+        its prompt changed, or anyone answered it since (the next question of
+        the same episode may not have been read yet, so a changed
+        ``answered_revision`` alone is enough)."""
+        ep = self._episodes.open_episode(agent.key.pane_id)
+        if not self._episode_fields(agent) or ep is None or ep.id != claim.get("episode_id"):
+            return True
+        shown = claim.get("prompt_revision")
+        if shown and ep.revision and ep.revision != shown:
+            return True
+        return ep.answered_revision != claim.get("answered_revision")
+
+    @staticmethod
+    def _claim_fields(claim: dict) -> dict:
+        fields = {"episode_id": claim["episode_id"]}
+        if claim.get("prompt_revision"):
+            fields["prompt_revision"] = claim["prompt_revision"]
+        return fields
+
     def _episode_fields(self, agent: AgentState) -> dict:
         """episode_id / prompt_revision of the pane's open blocked episode."""
         ep = self._episodes.open_episode(agent.key.pane_id)
@@ -119,43 +154,56 @@ class BridgeAgentControl:
     # --- answers ------------------------------------------------------------
     async def approve(
         self, key: AgentKey, *, timeout: float | None = 3.0, force: bool = False,
-        always: bool = False, confirmed: bool = False,
+        always: bool = False, confirmed: bool = False, claim: dict | None = None,
     ) -> ActionResult:
-        return await self._act("approve", key, force=force, always=always, confirmed=confirmed)
+        return await self._act(
+            "approve", key, force=force, always=always, confirmed=confirmed, claim=claim
+        )
 
     async def deny(
         self, key: AgentKey, *, timeout: float | None = 3.0, force: bool = False,
-        confirmed: bool = False,
+        confirmed: bool = False, claim: dict | None = None,
     ) -> ActionResult:
-        return await self._act("deny", key, force=force, always=False, confirmed=confirmed)
+        return await self._act(
+            "deny", key, force=force, always=False, confirmed=confirmed, claim=claim
+        )
 
     async def stop(
-        self, key: AgentKey, *, timeout: float | None = 3.0, confirmed: bool = False
+        self, key: AgentKey, *, timeout: float | None = 3.0, confirmed: bool = False,
+        claim: dict | None = None,
     ) -> ActionResult:
-        return await self._act("stop", key, force=True, always=False, confirmed=confirmed)
+        return await self._act(
+            "stop", key, force=True, always=False, confirmed=confirmed, claim=claim
+        )
 
     async def send_text(
-        self, key: AgentKey, text: str, *, timeout: float | None = 3.0
+        self, key: AgentKey, text: str, *, timeout: float | None = 3.0,
+        claim: dict | None = None,
     ) -> ActionResult:
         agent = self.current_agent(key)
         if agent is None:
             return ActionResult(False, message="agent is no longer available")
         if agent.backend != "herdr":
             return ActionResult(False, message="agent is not answerable from the bridge")
+        if claim is not None and self._claim_stale(agent, claim):
+            return ActionResult(False, skipped=True, message="stale")
         msg: dict = {"type": "send_text", "req": "tg", "pane_id": key.pane_id, "text": text}
         if agent.terminal_id:
             msg["terminal_id"] = agent.terminal_id
-        msg.update(self._episode_fields(agent))
+        msg.update(self._claim_fields(claim) if claim else self._episode_fields(agent))
         return await self._run(msg)
 
     async def _act(
-        self, action: str, key: AgentKey, *, force: bool, always: bool, confirmed: bool
+        self, action: str, key: AgentKey, *, force: bool, always: bool, confirmed: bool,
+        claim: dict | None = None,
     ) -> ActionResult:
         agent = self.current_agent(key)
         if agent is None:
             return ActionResult(False, message="agent is no longer available")
         if agent.backend != "herdr":
             return ActionResult(False, message="agent is not answerable from the bridge")
+        if claim is not None and self._claim_stale(agent, claim):
+            return ActionResult(False, skipped=True, message="stale")
         shared = self._shared()
         action_id = self._action_id(action, force=force, always=always)
         if action_id in shared.safety.require_confirm_for and not confirmed:
@@ -172,7 +220,7 @@ class BridgeAgentControl:
         profile = profile_for(SimpleNamespace(profiles=shared.answer_profiles), agent.agent_type)
         command = build_action_command(action, agent, profile, force=force, always=always)
         msg = command_to_msg(command, "tg")
-        msg.update(self._episode_fields(agent))
+        msg.update(self._claim_fields(claim) if claim else self._episode_fields(agent))
         return await self._run(msg)
 
     @staticmethod

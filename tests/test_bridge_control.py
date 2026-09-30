@@ -218,3 +218,118 @@ async def test_execute_error_becomes_unsent_result(tmp_path):
     result = await control.approve(KEY)
     assert not result.sent and not result.skipped and result.message == "pane gone"
     await hub.close()
+
+
+# --- a Telegram alert pins the question it showed -----------------------------
+
+Q2 = "Run tests?\n1. Yes\n2. No"
+
+
+class FakeBot:
+    """The Bot API calls TelegramInteractor makes, recorded."""
+
+    def __init__(self):
+        self.sent, self.answers = [], []
+
+    def send_message(self, **fields):
+        self.sent.append(fields)
+        return {"message_id": 100 + len(self.sent)}
+
+    def answer_callback_query(self, cb_id, *, text=""):
+        self.answers.append(text)
+
+    def edit_message_text(self, **fields):
+        return {}
+
+
+def interactor(control, bot):
+    from herdeck.telegram import TelegramInteractor
+
+    return TelegramInteractor(bot, control, chat_id="-100", message_thread_id=None,
+                              allowed_user_ids=[7])
+
+
+def tap(bot, action):
+    token = bot.sent[0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"].split(":")[1]
+    return {"callback_query": {"id": "cb", "from": {"id": 7}, "data": f"h:{token}:{action}",
+                               "message": {"message_id": 101, "chat": {"id": -100}}}}
+
+
+def reply(text):
+    return {"message": {"message_id": 500, "from": {"id": 7}, "chat": {"id": -100},
+                        "text": text, "reply_to_message": {"message_id": 101}}}
+
+
+async def deck_answers_q1_then_q2_appears(herdr, hub, *, reread=True):
+    ep = hub.open_episode("w1:p1")
+    msg = {"type": "act", "req": "r", "pane_id": "w1:p1", "keys": ["1"], "episode_id": ep.id,
+           "prompt_revision": ep.revision}
+    assert (await execute_answer(herdr, "srv", msg, "deck", events=hub)) == {"sent": True}
+    herdr.detection["w1:p1"] = Q2
+    if reread:
+        await hub._fresh_read(ep)
+        assert ep.revision != ep.answered_revision  # Q2 is the open question now
+
+
+async def test_old_alert_button_does_not_answer_the_next_question(tmp_path):
+    herdr, hub, control = await make(tmp_path)
+    bot = FakeBot()
+    tg = interactor(control, bot)
+    await tg.notify_blocked(agent(), body="api", sound=False, multi_server=False)
+    assert PROMPT in bot.sent[0]["text"]
+    await deck_answers_q1_then_q2_appears(herdr, hub)  # Q2 not sent to Telegram
+    for action in ("approve", "deny", "stop"):
+        await tg.process_update(tap(bot, action))
+        assert bot.answers[-1] == "stale"
+    assert herdr.sent == [("w1:p1", ["1"])]  # only the deck's answer reached the pane
+    await hub.close()
+
+
+async def test_old_alert_is_stale_even_before_the_next_question_is_read(tmp_path):
+    herdr, hub, control = await make(tmp_path)
+    bot = FakeBot()
+    tg = interactor(control, bot)
+    await tg.notify_blocked(agent(), body="api", sound=False, multi_server=False)
+    await deck_answers_q1_then_q2_appears(herdr, hub, reread=False)
+    await tg.process_update(tap(bot, "approve"))
+    assert bot.answers[-1] == "stale"
+    assert herdr.sent == [("w1:p1", ["1"])]
+    await hub.close()
+
+
+async def test_reply_to_old_alert_does_not_reach_the_next_question(tmp_path):
+    herdr, hub, control = await make(tmp_path)
+    bot = FakeBot()
+    tg = interactor(control, bot)
+    await tg.notify_blocked(agent(), body="api", sound=False, multi_server=False)
+    await deck_answers_q1_then_q2_appears(herdr, hub)
+    await tg.process_update(reply("do it"))
+    assert bot.sent[-1]["text"] == "stale"
+    assert herdr.sent == [("w1:p1", ["1"])]  # the text never reached the pane
+    await hub.close()
+
+
+async def test_button_on_the_current_question_still_answers(tmp_path):
+    herdr, hub, control = await make(tmp_path)
+    bot = FakeBot()
+    tg = interactor(control, bot)
+    await tg.notify_blocked(agent(), body="api", sound=False, multi_server=False)
+    await tg.process_update(tap(bot, "approve"))
+    assert bot.answers[-1] == "sent"
+    assert len(herdr.sent) == 1
+    answered = [e for e in hub.events() if e["kind"] == "answered"]
+    assert len(answered) == 1 and answered[0]["by"] == "telegram"
+    await hub.close()
+
+
+async def test_read_again_repins_the_alert_to_the_current_question(tmp_path):
+    herdr, hub, control = await make(tmp_path)
+    bot = FakeBot()
+    tg = interactor(control, bot)
+    await tg.notify_blocked(agent(), body="api", sound=False, multi_server=False)
+    await deck_answers_q1_then_q2_appears(herdr, hub)
+    await tg.process_update(tap(bot, "read"))  # the message now shows Q2
+    await tg.process_update(tap(bot, "approve"))
+    assert bot.answers[-1] == "sent"
+    assert len(herdr.sent) == 2
+    await hub.close()
