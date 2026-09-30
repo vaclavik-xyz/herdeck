@@ -569,7 +569,10 @@ class BridgeNotifier:
             and s.allowed_user_ids
         )
         sig = (
-            (token, s.chat_id, s.message_thread_id, tuple(s.allowed_user_ids), s.prompt_max_chars)
+            (
+                token, s.chat_id, s.message_thread_id, tuple(s.allowed_user_ids),
+                s.prompt_max_chars, s.language,
+            )
             if interactive
             else None
         )
@@ -588,6 +591,7 @@ class BridgeNotifier:
                 store=self._alert_store,
                 prompt_max_chars=s.prompt_max_chars,
                 offset=self._offset,
+                language=s.language,
             )
 
     def _record_chats(self, updates: object) -> None:

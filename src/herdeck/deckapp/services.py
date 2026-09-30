@@ -244,6 +244,7 @@ class RuntimeServices:
                 tg.message_thread_id,
                 tuple(tg.allowed_user_ids),
                 tg.prompt_max_chars,
+                config.view.language,
             )
         elif requested and not self._tg_warned:
             self._tg_warned = True
@@ -264,6 +265,7 @@ class RuntimeServices:
                 message_thread_id=tg.message_thread_id,
                 allowed_user_ids=tg.allowed_user_ids,
                 prompt_max_chars=tg.prompt_max_chars,
+                language=config.view.language,
                 store=self._tg_store,
                 # continue from the old cursor: never re-run acted-on updates
                 offset=previous.offset if previous is not None else None,

@@ -24,6 +24,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that sends it; the runtime's poller idles when every connected bridge does.
   One bot per bridge (a shared token conflicts with HTTP 409; inbound retries
   every 60 s). Update the bridge first; 0.14.0 runtimes still send their own.
+- Interactive Telegram alerts (bridge- and runtime-sent) are localized (en/cs):
+  the headline matches the one-way alerts ("claude · needs input"), buttons,
+  and every bot reply (stale, not authorized, /status, errors). The alert no
+  longer shows the internal pane id; buttons of already-sent alerts keep
+  working.
 
 ## [0.14.0] - 2026-09-30
 

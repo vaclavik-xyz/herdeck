@@ -146,8 +146,8 @@ def test_alert_formatter_truncates_prompt_and_builds_keyboard():
         agent, metadata_body="herdeck · feat/tg", prompt="0123456789abcdef", token="tok1"
     )
 
-    assert "codex blocked" in text
-    assert "local:p1" in text
+    assert text.startswith("codex · needs input\nherdeck · feat/tg\n")
+    assert "local:p1" not in text
     assert "0123456789ab..." in text
     assert markup["inline_keyboard"][0][0] == {
         "text": "Approve",
@@ -625,7 +625,7 @@ async def test_callback_confirmation_required_keeps_token_for_second_tap():
     ]
     assert (
         "answerCallbackQuery",
-        {"callback_query_id": "cb1", "text": "confirmation required"},
+        {"callback_query_id": "cb1", "text": "tap again to confirm"},
     ) in calls
     assert ("answerCallbackQuery", {"callback_query_id": "cb2", "text": "sent"}) in calls
 
@@ -716,7 +716,7 @@ async def test_callback_read_again_resets_pending_confirmation_before_next_actio
     assert store.by_token(record.token) is record
     assert (
         "answerCallbackQuery",
-        {"callback_query_id": "cb3", "text": "confirmation required"},
+        {"callback_query_id": "cb3", "text": "tap again to confirm"},
     ) in calls
 
 
@@ -898,7 +898,7 @@ async def test_callback_action_error_is_answered_without_raising():
 
 
 @pytest.mark.asyncio
-async def test_callback_failed_action_result_uses_failure_message():
+async def test_callback_failed_action_result_with_unknown_detail_says_failed():
     from herdeck.app_control import ActionResult
     from herdeck.telegram import TelegramAlertStore, TelegramBotClient, TelegramInteractor
 
@@ -944,7 +944,7 @@ async def test_callback_failed_action_result_uses_failure_message():
     assert control.actions == [("approve", AgentKey("local", "p1"), 3.0)]
     assert (
         "answerCallbackQuery",
-        {"callback_query_id": "cb1", "text": "connection lost"},
+        {"callback_query_id": "cb1", "text": "failed"},  # unknown detail: a plain "failed"
     ) in calls
 
 
@@ -1201,7 +1201,7 @@ async def test_reply_to_known_alert_sends_text_to_agent():
     assert ok is True
     assert control.actions == [("send_text", AgentKey("local", "p1"), "please continue", 3.0)]
     assert calls[-1][0] == "sendMessage"
-    assert "sent to local:p1" in calls[-1][1]["text"]
+    assert calls[-1][1]["text"] == "sent to the agent"
 
 
 @pytest.mark.asyncio
@@ -1251,7 +1251,7 @@ async def test_reply_send_text_timeout_reports_failure_status():
         "sendMessage",
         {
             "chat_id": "-1001",
-            "text": "delivery timed out",
+            "text": "timed out",
             "disable_notification": "true",
             "message_thread_id": "456",
             "reply_parameters": '{"message_id":30}',

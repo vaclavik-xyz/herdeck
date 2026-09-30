@@ -446,8 +446,9 @@ Fields: `enabled`, `chat_id`, `message_thread_id`, `interactive`,
 `allowed_user_ids`, `prompt_max_chars` (200-4000, default 1200),
 `only_when_away` (minutes, 0-1440, 0 = off; counts "no Mac reporting presence"
 as away), `language` and `sound`. Telegram is active on the bridge only when
-it is enabled, a token is set and `chat_id` is set. The interactive blocked
-alert text (with buttons) is always English; other messages follow `language`.
+it is enabled, a token is set and `chat_id` is set. Every message, button and
+bot reply follows `language` (`en` or `cs`); a runtime's own interactive
+Telegram follows `[view].language`.
 
 Token: the env var `HERDECK_BRIDGE_TELEGRAM_TOKEN` wins over the token file
 (`$HERDECK_BRIDGE_TELEGRAM_TOKEN_FILE`, default
