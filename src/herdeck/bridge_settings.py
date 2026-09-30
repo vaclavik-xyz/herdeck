@@ -24,6 +24,8 @@ from herdeck.shared_settings import MAX_SHARED_BYTES, parse_shared, to_raw
 
 log = logging.getLogger(__name__)
 
+SETTINGS_CAPABILITY = "settings"
+
 _META = ("revision", "updated_at_ms", "updated_by")
 
 

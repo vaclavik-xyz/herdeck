@@ -2704,6 +2704,7 @@ async def _open_bridge_client(socket_path="/unused.sock"):
         additional_headers={"Authorization": f"Bearer {token}"},
     )
     assert json.loads(await ws.recv())["type"] == "snapshot"
+    assert json.loads(await ws.recv())["type"] == "settings"
     return ws, server, btask
 
 
@@ -3066,6 +3067,7 @@ async def test_observe_global_cap_spans_clients_and_releases(fake_observe_bin):
                 additional_headers={"Authorization": f"Bearer {token}"},
             )
             assert json.loads(await ws.recv())["type"] == "snapshot"
+            assert json.loads(await ws.recv())["type"] == "settings"
             clients.append(ws)
 
         counts = (3, 3, 2)
@@ -3403,11 +3405,13 @@ async def test_local_bridge_opt_in_gates_icon_frames(tmp_path):
             first = json.loads(await asyncio.wait_for(plain.recv(), 3))
             assert first["type"] == "snapshot" and "project_icon" in first["capabilities"]
             assert first["panes"][0]["project_icon"] == icon_hash(ICON)
+            assert json.loads(await asyncio.wait_for(plain.recv(), 3))["type"] == "settings"
             await plain.send(json.dumps({"type": "list"}))
             plain_frames = await _frames(plain)
             assert plain_frames and {f["type"] for f in plain_frames} == {"snapshot"}
 
             assert json.loads(await asyncio.wait_for(opted.recv(), 3))["type"] == "snapshot"
+            assert json.loads(await asyncio.wait_for(opted.recv(), 3))["type"] == "settings"
             await opted.send(json.dumps({"type": "list", "features": ["project_icon"]}))
             types = [f["type"] for f in await _frames(opted)]
             assert types.count("project_icon") == 1
