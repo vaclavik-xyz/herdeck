@@ -11,9 +11,11 @@ import os
 import shlex
 import shutil
 import stat
+import threading
 import time
 import unicodedata
 from collections.abc import Callable
+from functools import partial
 from typing import Protocol
 
 import websockets
@@ -23,6 +25,8 @@ from . import history as _history
 from . import hooks_install as _hooks_install
 from . import status_since as _status_since
 from . import usage_agent_install as _usage_agent_install
+from .bridge_answers import answer_frame, execute_answer
+from .bridge_notify import BridgeAgentControl, BridgeNotifier, TelegramSendError, scrub
 from .bridge_settings import (
     SETTINGS_CAPABILITY,
     BridgeSettingsStore,
@@ -30,9 +34,16 @@ from .bridge_settings import (
 from .bridge_settings import (
     default_path as _settings_default_path,
 )
+from .bridge_telegram import (
+    TELEGRAM_CAPABILITY,
+    TELEGRAM_CONFIG_CAPABILITY,
+    BridgeTelegramStore,
+)
+from .bridge_telegram import (
+    default_paths as _telegram_default_paths,
+)
 from .decisions import decision_choices, decision_revision
 from .events import CAPABILITY as _EVENTS_CAPABILITY
-from .events import STALE as _STALE
 from .events import EventHub, client_label, prompt_forms
 from .model import Status, WorkContext
 from .presence_hub import PRESENCE_CAPABILITY, PresenceHub
@@ -44,6 +55,7 @@ from .status_since import StatusSinceTracker
 from .subagent_reconcile import SubagentReconciler
 from .subagent_spool import CAPABILITY as _SUBAGENTS_CAPABILITY
 from .subagent_spool import SubagentSpoolReader
+from .telegram import TelegramBotClient
 from .usage import USAGE_CAPABILITY, bridge_usage_config, bridge_usage_enabled, usage_to_wire
 
 log = logging.getLogger(__name__)
@@ -1436,6 +1448,7 @@ async def _broadcast(
     icons: ProjectIconIndex | None = None,
     extra_capabilities: tuple[str, ...] = (),
     events: EventHub | None = None,
+    telegram: BridgeTelegram | None = None,
 ) -> None:
     """Forward each changed full agent list to all clients as a snapshot.
 
@@ -1447,21 +1460,32 @@ async def _broadcast(
     (``icon_subs``: ws -> hashes already sent) get each newly referenced icon
     right AFTER the snapshot that references it. ``events`` (the lifecycle
     event hub) sees each list after it went out, so an event never reaches a
-    client ahead of the snapshot that shows its status.
+    client ahead of the snapshot that shows its status. ``telegram`` (the
+    bridge's Telegram notifier) sees each list right after ``events``, and
+    adds its current capabilities to every snapshot.
     """
     async for panes in snapshot_stream:
-        if events is not None:
-            events.stamp(panes)
-        msg = encode(_snapshot_message(server_id, panes, extra_capabilities))
-        if clients:
-            await asyncio.gather(
-                *(
-                    _deliver_snapshot(ws, lock, msg, panes, server_id, icon_subs, icons)
-                    for ws, lock in list(clients.items())
+        # Under the Telegram lock: a capability flip's snapshot resend
+        # (BridgeTelegram.broadcast) never interleaves with this fan-out, so
+        # it always resends THIS list, after it, with the new capabilities.
+        async with telegram.lock if telegram is not None else contextlib.nullcontext():
+            if events is not None:
+                events.stamp(panes)
+            caps = extra_capabilities
+            if telegram is not None:
+                caps = (*caps, *telegram.capabilities())
+            msg = encode(_snapshot_message(server_id, panes, caps))
+            if clients:
+                await asyncio.gather(
+                    *(
+                        _deliver_snapshot(ws, lock, msg, panes, server_id, icon_subs, icons)
+                        for ws, lock in list(clients.items())
+                    )
                 )
-            )
-        if events is not None:
-            events.observe(panes)
+            if events is not None:
+                events.observe(panes)
+            if telegram is not None:
+                telegram.observe_panes(panes)
 
 
 async def _deliver_snapshot(ws, lock, msg, panes, server_id, icon_subs, icons) -> None:
@@ -1879,6 +1903,7 @@ async def _serve_connection(
     events: EventHub | None = None,
     presence: PresenceHub | None = None,
     settings: BridgeSettingsStore | None = None,
+    telegram: BridgeTelegram | None = None,
 ):
     global _observe_total
     auth = ws.request.headers.get("Authorization", "")
@@ -1896,14 +1921,21 @@ async def _serve_connection(
     async def send(msg: str) -> bool:
         return await _send_to_client(ws, msg, send_lock)
 
-    extra_capabilities = _extra_capabilities(usage, events, presence, settings)
+    def extra_capabilities() -> tuple[str, ...]:
+        # Evaluated per use: ``telegram`` follows the bridge's Telegram status.
+        return _extra_capabilities(usage, events, presence, settings, telegram)
+
     # Who answered, for `answered` events: the label the client gave when it
     # subscribed to events.
     label = "client"
     panes = await _wired_snapshot(herdr, icons, status_since, subagents, events)
-    if not await send(encode(_snapshot_message(server_id, panes, extra_capabilities))):
-        return
-    clients[ws] = send_lock
+    # Capabilities + first send + registration under the Telegram lock: a
+    # capability flip either lands in this snapshot or, once registered, its
+    # resend reaches this client too.
+    async with telegram.lock if telegram is not None else contextlib.nullcontext():
+        if not await send(encode(_snapshot_message(server_id, panes, extra_capabilities()))):
+            return
+        clients[ws] = send_lock
     # The current usage right after the first snapshot (which advertised the
     # capability); later changes arrive through BridgeUsageFeed.run.
     first_usage = usage.current() if usage is not None else None
@@ -1911,6 +1943,9 @@ async def _serve_connection(
         clients.pop(ws, None)
         return
     if settings is not None and not await send(encode(settings.frame(server_id))):
+        clients.pop(ws, None)
+        return
+    if telegram is not None and not await send(telegram.frame()):
         clients.pop(ws, None)
         return
     observes: dict[str, tuple[asyncio.Task, dict]] = {}
@@ -2105,6 +2140,23 @@ async def _serve_connection(
                         *(_send_to_client(w, frame, lk) for w, lk in list(clients.items()))
                     )
                 continue
+            if kind in ("telegram_put", "telegram_token", "telegram_test"):
+                # Full token only (not in READONLY_MESSAGES, refused above).
+                # The bot token never appears in a reply or frame.
+                if telegram is None:
+                    req = msg.get("req")
+                    await send(
+                        encode(
+                            {
+                                "type": "error",
+                                "req": req if isinstance(req, str) else "",
+                                "message": "telegram unavailable",
+                            }
+                        )
+                    )
+                else:
+                    await telegram.handle(kind, msg, label, send)
+                continue
             if kind == "update":
                 # Full token only (not in READONLY_MESSAGES, refused above).
                 # Runs in the background: pip can take minutes, and the
@@ -2137,7 +2189,7 @@ async def _serve_connection(
                     panes = None
                 if panes is not None:
                     if not await send(
-                        encode(_snapshot_message(server_id, panes, extra_capabilities))
+                        encode(_snapshot_message(server_id, panes, extra_capabilities()))
                     ):
                         continue
                     sent = icon_subs.get(ws) if icon_subs is not None else None
@@ -2152,39 +2204,20 @@ async def _serve_connection(
                     label = client_label(request.get("client"))
                     await events.subscribe(ws, send_lock, request)
                 continue
-            ticket = (
-                await events.begin_answer(msg, label)
-                if events is not None and isinstance(msg, dict)
-                else None
-            )
-            if ticket == _STALE:
-                req = msg.get("req")
-                await send(
-                    encode(
-                        {
-                            "type": "result",
-                            "req": req if isinstance(req, str) else "",
-                            "data": {"skipped": True, "message": _STALE},
-                        }
-                    )
-                )
-                continue
-            try:
-                out = await handle_client_message(
+            await send(
+                await answer_frame(
                     herdr,
                     server_id,
                     raw,
-                    icons,
-                    status_since,
-                    extra_capabilities,
-                    subagents=subagents,
+                    msg,
+                    label,
                     events=events,
+                    icons=icons,
+                    status_since=status_since,
+                    extra_capabilities=extra_capabilities(),
+                    subagents=subagents,
                 )
-            except Exception as exc:
-                out = encode({"type": "error", "message": str(exc)})
-            if ticket is not None:
-                events.end_answer(ticket, sent=_answer_sent(out))
-            await send(out)
+            )
     finally:
         clients.pop(ws, None)
         if presence is not None:
@@ -2212,8 +2245,10 @@ def _extra_capabilities(
     events: EventHub | None,
     presence: PresenceHub | None = None,
     settings: BridgeSettingsStore | None = None,
+    telegram: BridgeTelegram | None = None,
 ) -> tuple[str, ...]:
-    """Capabilities that depend on how this bridge was started."""
+    """Capabilities that depend on how this bridge was started (and, for
+    ``telegram``, on its current Telegram status)."""
     caps = usage.capabilities if usage is not None else ()
     if events is not None:
         caps = (*caps, _EVENTS_CAPABILITY)
@@ -2221,6 +2256,8 @@ def _extra_capabilities(
         caps = (*caps, PRESENCE_CAPABILITY)
     if settings is not None:
         caps = (*caps, SETTINGS_CAPABILITY)
+    if telegram is not None:
+        caps = (*caps, *telegram.capabilities())
     return caps
 
 
@@ -2233,13 +2270,378 @@ async def _broadcast_presence(presence: PresenceHub, clients: dict, server_id: s
     )
 
 
-def _answer_sent(out: str) -> bool:
-    """Did an answer's reply say it went out to the pane?"""
+# Telegram status changes (a send error, a newly seen chat, an inbound 409...)
+# reach the clients at most this often; config and token changes go out at once.
+TELEGRAM_STATUS_DEBOUNCE_S = 2.0
+# How long a bridge-side Telegram answer waits for herdr's prompt capture.
+_TELEGRAM_PROMPT_READ_TIMEOUT = 3.0
+
+
+class _Abandon:
+    """Bridge shutdown for ``_DetachedBotClient`` calls (any thread)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._set = False
+        self._waiters: set[threading.Event] = set()
+
+    def set(self) -> None:
+        with self._lock:
+            self._set = True
+            waiters = list(self._waiters)
+        for done in waiters:
+            done.set()
+
+    def wait(self, done: threading.Event) -> None:
+        """Block until ``done`` is set or the bridge shuts down."""
+        with self._lock:
+            if self._set:
+                return
+            self._waiters.add(done)
+        try:
+            done.wait()
+        finally:
+            with self._lock:
+                self._waiters.discard(done)
+
+
+class _DetachedBotClient:
+    """A Bot API client whose every call runs on its own daemon thread.
+
+    The calling ``asyncio.to_thread`` worker waits for it, or returns at once
+    (``TelegramSendError``) when the bridge shuts down. A 20 s getUpdates long
+    poll cannot be cancelled; on the stock executor its non-daemon worker would
+    otherwise hold ``asyncio.run``'s executor join and the interpreter exit
+    for the whole poll (and launchd/systemd's stop timeout)."""
+
+    def __init__(self, client, abandon: _Abandon):
+        self._client = client
+        self._abandon = abandon
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._client, name)
+        if not callable(attr):
+            return attr
+        return partial(self._call, attr)
+
+    def _call(self, fn, *args, **kwargs):
+        box: dict = {}
+        done = threading.Event()
+
+        def run() -> None:
+            try:
+                box["result"] = fn(*args, **kwargs)
+            except BaseException as exc:  # noqa: BLE001 - handed to the caller
+                box["error"] = exc
+            finally:
+                done.set()
+
+        threading.Thread(target=run, name="herdeck-telegram-io", daemon=True).start()
+        self._abandon.wait(done)
+        if "error" in box:
+            raise box["error"]
+        if "result" in box:
+            return box["result"]
+        raise TelegramSendError("bridge shutting down")
+
+
+class BridgeTelegram:
+    """One bridge's Telegram: the config/token store, the notifier that sends
+    the alerts, and their wire side — the ``telegram`` frame to every client
+    (readonly included), the ``telegram_config`` / ``telegram`` capabilities,
+    and the full-token ``telegram_put`` / ``telegram_token`` /
+    ``telegram_test`` messages. Event-loop only. The bot token never leaves
+    the store: frames carry ``status.token`` = "env" | "file" | null only."""
+
+    def __init__(
+        self,
+        server_id: str,
+        store: BridgeTelegramStore,
+        notifier: BridgeNotifier,
+        control: BridgeAgentControl,
+        clients: dict,
+        abandon: _Abandon,
+        *,
+        base_capabilities: tuple[str, ...] = (),
+        debounce_s: float = TELEGRAM_STATUS_DEBOUNCE_S,
+    ):
+        self.server_id = server_id
+        self.store = store
+        self.notifier = notifier
+        self.control = control
+        self._clients = clients
+        self._abandon = abandon
+        self._base_capabilities = base_capabilities
+        self._debounce_s = debounce_s
+        # The advertised ``telegram`` capability; changes only in broadcast(),
+        # which then resends the latest snapshot so clients see it promptly.
+        self._active = bool(notifier.status().get("active"))
+        self._panes: list[dict] | None = None
+        self._pending: asyncio.TimerHandle | None = None
+        # Serializes capability changes with snapshot sends: held by
+        # _broadcast's fan-out, a connection's first snapshot + registration,
+        # and broadcast() (flip resend + frame).
+        self.lock = asyncio.Lock()
+        self._tasks: set[asyncio.Task] = set()
+        self._running = False
+        self.closed = False
+        notifier.on_status_change = self._status_changed
+
+    # --- capabilities / frames ----------------------------------------------------
+    def capabilities(self) -> tuple[str, ...]:
+        if self._active:
+            return (TELEGRAM_CONFIG_CAPABILITY, TELEGRAM_CAPABILITY)
+        return (TELEGRAM_CONFIG_CAPABILITY,)
+
+    def frame(self) -> str:
+        return encode(self.store.frame(self.server_id, self.notifier.status()))
+
+    def observe_panes(self, panes: list[dict]) -> None:
+        """Each broadcast pane list (after ``events.observe``)."""
+        self._panes = panes
+        self.notifier.observe_panes(panes)
+
+    def refresh(self) -> None:
+        try:
+            self.notifier.refresh()
+        except Exception as exc:  # e.g. a token-file read error; never the token
+            log.warning("telegram refresh failed: %s", type(exc).__name__)
+
+    def _status_changed(self) -> None:
+        if self.closed or self._pending is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._pending = loop.call_later(self._debounce_s, self._debounced)
+
+    def _debounced(self) -> None:
+        self._pending = None
+        self._spawn(self.broadcast())
+
+    def _spawn(self, coro) -> None:
+        if self.closed:
+            coro.close()
+            return
+        task = asyncio.get_running_loop().create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def broadcast(self) -> None:
+        """The current frame to every client now (a pending debounced one is
+        folded in). When ``telegram`` changed, a snapshot with the new
+        capabilities goes out first."""
+        if self._pending is not None:
+            self._pending.cancel()
+            self._pending = None
+        async with self.lock:
+            await self._broadcast_locked()
+
+    async def _broadcast_locked(self) -> None:
+        try:
+            status = self.notifier.status()
+            msgs = []
+            active = bool(status.get("active"))
+            if active != self._active:
+                self._active = active
+                if self._panes is not None:
+                    caps = (*self._base_capabilities, *self.capabilities())
+                    msgs.append(encode(_snapshot_message(self.server_id, self._panes, caps)))
+            msgs.append(encode(self.store.frame(self.server_id, status)))
+        except Exception as exc:
+            log.warning("telegram frame failed: %s", type(exc).__name__)
+            return
+
+        async def deliver(ws, lock) -> None:
+            for msg in msgs:
+                if not await _send_to_client(ws, msg, lock):
+                    return
+
+        await asyncio.gather(*(deliver(ws, lock) for ws, lock in list(self._clients.items())))
+
+    # --- client messages (full token only) ------------------------------------------
+    async def handle(self, kind: str, msg: dict, label: str, send) -> None:
+        req = msg.get("req")
+        req = req if isinstance(req, str) else ""
+        if kind == "telegram_put":
+            base = msg.get("base_revision")
+            try:
+                res = self.store.put(base if type(base) is int else -1, msg.get("settings"), label)
+            except OSError as exc:
+                log.warning("telegram config write failed: %s", type(exc).__name__)
+                await send(encode({"type": "error", "req": req, "message": "telegram write failed"}))
+                return
+            data: dict = {"ok": res.ok, "revision": res.revision}
+            if not res.ok:
+                data.update(error=res.error, messages=res.messages)
+            await send(encode({"type": "result", "req": req, "data": data}))
+            if res.ok:
+                self.refresh()
+                await self.broadcast()
+            return
+        if kind == "telegram_token":
+            error = self._token(msg.get("action"), msg.get("token"))
+            data = {"ok": error is None}
+            if error is not None:
+                data["error"] = error
+            await send(encode({"type": "result", "req": req, "data": data}))
+            if error is None:
+                self.refresh()
+                await self.broadcast()
+            return
+        if kind == "telegram_test":
+            # In the background: a slow Bot API must not hold this
+            # connection's deck messages.
+            self._spawn(self._test(req, send))
+            return
+        raise ValueError(f"not a telegram message: {kind}")
+
+    def _token(self, action: object, token: object) -> str | None:
+        """None on success, else "invalid" | "env_locked" | "io_error"."""
+        try:
+            if action == "set":
+                error = self.store.set_token(token)
+            elif action == "clear":
+                error = self.store.clear_token()
+            else:
+                return "invalid"
+        except OSError as exc:
+            log.warning("telegram token %s failed: %s", action, type(exc).__name__)
+            return "io_error"
+        if error is None:
+            log.info("telegram token %s", "stored" if action == "set" else "cleared")
+        return error
+
+    async def _test(self, req: str, send) -> None:
+        try:
+            ok, error = await self.notifier.send_test()
+        except Exception as exc:  # send_test guards; belt and braces
+            ok, error = False, type(exc).__name__
+        data: dict = {"ok": bool(ok)}
+        if not ok:
+            data["error"] = scrub(str(error) or "failed")
+        await send(encode({"type": "result", "req": req, "data": data}))
+
+    # --- lifecycle --------------------------------------------------------------------
+    async def run(self) -> None:
+        """The notifier's poller (and its timers); cancelled by the bridge."""
+        self._running = True
+        try:
+            await self.notifier.run()
+        finally:
+            self._running = False
+
+    def notifier_running(self) -> bool:
+        return self._running
+
+    async def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        if self._pending is not None:
+            self._pending.cancel()
+            self._pending = None
+        self._abandon.set()  # release executor threads waiting on the Bot API
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await self.notifier.close()
+
+
+async def _close_telegram(telegram: BridgeTelegram) -> None:
+    """Close it; a failure is logged (type only) and never skips the rest of
+    the bridge's shutdown."""
     try:
-        data = json.loads(out).get("data")
-    except (ValueError, AttributeError):
-        return False
-    return isinstance(data, dict) and data.get("sent") is True
+        await telegram.close()
+    except Exception as exc:
+        log.warning("telegram close failed: %s", type(exc).__name__)
+
+
+def build_bridge_telegram(
+    server_id: str,
+    *,
+    herdr: HerdrClient,
+    events: EventHub,
+    settings: BridgeSettingsStore,
+    presence: PresenceHub | None,
+    clients: dict,
+    paths: tuple,
+    env=os.environ,
+    client_factory: Callable[[str], object] | None = None,
+    icons: ProjectIconIndex | None = None,
+    status_since: StatusSinceTracker | None = None,
+    subagents: SubagentSpoolReader | None = None,
+    extra_capabilities: tuple[str, ...] = (),
+    debounce_s: float = TELEGRAM_STATUS_DEBOUNCE_S,
+) -> BridgeTelegram:
+    """Store + agent control + notifier for one bridge, wired to its event hub.
+    Bridge-side answers go through ``execute_answer`` with the same extras as
+    a client's answer (so the same episode guard)."""
+    store = BridgeTelegramStore(paths[0], paths[1], env=env)
+    # Where the bot token comes from (never the value).
+    source = store.token_source()
+    log.info(
+        "telegram bot token source: %s%s",
+        source or "none",
+        " (HERDECK_BRIDGE_TELEGRAM_TOKEN; the editor cannot change it)"
+        if source == "env"
+        else f" ({store.token_path})" if source == "file" else "",
+    )
+    abandon = _Abandon()
+
+    def make_client(token: str):
+        base = client_factory(token) if client_factory is not None else TelegramBotClient(token)
+        return _DetachedBotClient(base, abandon)
+
+    async def read_prompt(pane_id: str) -> str | None:
+        try:
+            return await asyncio.wait_for(
+                herdr.read_pane(pane_id, "detection"), _TELEGRAM_PROMPT_READ_TIMEOUT
+            )
+        except Exception as exc:
+            log.warning("telegram prompt read failed: %s", type(exc).__name__)
+            return None
+
+    holder: dict = {}
+    control = BridgeAgentControl(
+        execute=partial(
+            execute_answer,
+            herdr,
+            server_id,
+            events=events,
+            icons=icons,
+            status_since=status_since,
+            extra_capabilities=extra_capabilities,
+            subagents=subagents,
+        ),
+        agents=lambda: holder["notifier"].agents(),
+        episodes=events,
+        settings=settings,
+        read_prompt=read_prompt,
+    )
+    notifier = BridgeNotifier(
+        server_id=server_id,
+        telegram=store,
+        settings=settings,
+        presence=presence,
+        control=control,
+        client_factory=make_client,
+    )
+    holder["notifier"] = notifier
+    events.add_listener(notifier.on_event)
+    return BridgeTelegram(
+        server_id,
+        store,
+        notifier,
+        control,
+        clients,
+        abandon,
+        base_capabilities=extra_capabilities,
+        debounce_s=debounce_s,
+    )
 
 
 async def _require_snapshot_support(herdr: HerdrClient) -> None:
@@ -2334,6 +2736,23 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None, session=
     hub = EventHub(client_herdr, "local")
     presence = PresenceHub()
     settings = BridgeSettingsStore(_settings_default_path(session or "default"))
+    base_capabilities = _extra_capabilities(None, hub, presence, settings)
+    # Per-session Telegram files; the process env is the runtime's, so an
+    # embedded bridge never picks a bot token (or token file) from it.
+    telegram = build_bridge_telegram(
+        "local",
+        herdr=client_herdr,
+        events=hub,
+        settings=settings,
+        presence=presence,
+        clients=clients,
+        paths=_telegram_default_paths(session or "default"),
+        env={},
+        icons=icons,
+        status_since=status_since,
+        subagents=subagents,
+        extra_capabilities=base_capabilities,
+    )
 
     async def handler(ws):
         await _serve_connection(
@@ -2351,6 +2770,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None, session=
             events=hub,
             presence=presence,
             settings=settings,
+            telegram=telegram,
         )
 
     server = await websockets.serve(handler, host, 0)
@@ -2362,6 +2782,7 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None, session=
     async def broadcast() -> None:
         poll = asyncio.create_task(hub.run())
         reconcile = asyncio.create_task(reconciler.run())
+        notifier = asyncio.create_task(telegram.run())
         try:
             await _broadcast(
                 events.stream(),
@@ -2369,12 +2790,16 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None, session=
                 "local",
                 icon_subs=icon_subs,
                 icons=icons,
-                extra_capabilities=_extra_capabilities(None, hub, presence, settings),
+                extra_capabilities=base_capabilities,
                 events=hub,
+                telegram=telegram,
             )
         finally:
             poll.cancel()
             reconcile.cancel()
+            notifier.cancel()
+            await asyncio.gather(notifier, return_exceptions=True)
+            await _close_telegram(telegram)
             await hub.close()
 
     btask = asyncio.create_task(broadcast())
@@ -2423,6 +2848,20 @@ async def serve(
     hub = EventHub(client_herdr, server_id)  # event-loop only too
     presence = PresenceHub()
     settings = BridgeSettingsStore(_settings_default_path())
+    extra_capabilities = _extra_capabilities(usage, hub, presence, settings)
+    telegram = build_bridge_telegram(
+        server_id,
+        herdr=client_herdr,
+        events=hub,
+        settings=settings,
+        presence=presence,
+        clients=clients,
+        paths=_telegram_default_paths(),
+        icons=icons,
+        status_since=status_since,
+        subagents=subagents,
+        extra_capabilities=extra_capabilities,
+    )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     # The exit seam: a verified self-update asks serve() to return (after a
@@ -2450,9 +2889,9 @@ async def serve(
             events=hub,
             presence=presence,
             settings=settings,
+            telegram=telegram,
         )
 
-    extra_capabilities = _extra_capabilities(usage, hub, presence, settings)
     if usage is not None:
         usage.start()
     async with websockets.serve(handler, host, port):
@@ -2466,10 +2905,13 @@ async def serve(
                 icons=icons,
                 extra_capabilities=extra_capabilities,
                 events=hub,
+                telegram=telegram,
             )
         )
         stopper = asyncio.create_task(stop.wait())
         tasks = {broadcast, stopper, asyncio.create_task(hub.run())}
+        # Telegram alerts sent by this bridge (poller + reminder timers).
+        tasks.add(asyncio.create_task(telegram.run()))
         # Transcript fallback for subagents whose stop hook never came.
         tasks.add(asyncio.create_task(SubagentReconciler(subagents, client_herdr).run()))
         if usage is not None:
@@ -2480,6 +2922,8 @@ async def serve(
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            # Releases executor threads still waiting on a getUpdates long poll.
+            await _close_telegram(telegram)
             await hub.close()
             status_since.close()  # a restart must not lose the debounced last write
             if history is not None:

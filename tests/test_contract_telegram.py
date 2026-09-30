@@ -135,8 +135,9 @@ def test_blocked_alert_carries_prompt_and_answer_buttons(interactive):
     assert fields["message_thread_id"] == str(THREAD)
     assert fields["disable_notification"] == "true"  # sound = false
     text = fields["text"]
-    assert text.startswith("claude blocked\n")
-    assert text.startswith("claude blocked\nrepo-p1 · main · local:p1\n\n")
+    assert text.startswith("claude · needs input\n")
+    # the agent's labels, never the internal pane id
+    assert text.startswith("claude · needs input\nrepo-p1 · main\n\n")
     assert f"Waiting for:\n{PROMPT}" in text
     assert text.endswith("Reply to this message to send text to the agent.")
     assert _keyboard(fields) == [
@@ -194,7 +195,7 @@ def test_reply_read_again_status_and_approve(interactive):
     )
     sent = bridge.wait_message(lambda m: m.get("type") == "send_text")
     assert sent["text"] == "use the staging db" and sent["pane_id"] == "p1"
-    reply = telegram.wait_call("sendMessage", lambda f: f.get("text") == "sent to local:p1")
+    reply = telegram.wait_call("sendMessage", lambda f: f.get("text") == "sent to the agent")
     assert json.loads(reply["reply_parameters"]) == {"message_id": 500}
     assert reply["message_thread_id"] == str(THREAD)
 
@@ -211,7 +212,7 @@ def test_reply_read_again_status_and_approve(interactive):
             },
         }
     )
-    telegram.wait_call("sendMessage", lambda f: f.get("text") == "tracked blocked alerts:\n- local:p1")
+    telegram.wait_call("sendMessage", lambda f: f.get("text") == "tracked blocked alerts:\n- repo-p1 · main")
 
     # read again refreshes the alert in place
     reads = len(bridge.messages("read"))
@@ -257,7 +258,7 @@ def test_stop_needs_a_second_tap(interactive):
     _proc, bridge, telegram = interactive
     _fields, token = _alert(bridge, telegram)
     telegram.queue_update(_callback(20, 101, f"h:{token}:stop"))
-    assert _answer(telegram, 20)["text"] == "confirmation required"
+    assert _answer(telegram, 20)["text"] == "tap again to confirm"
     time.sleep(0.3)
     assert bridge.messages("act") == []
     telegram.queue_update(_callback(21, 101, f"h:{token}:stop"))
@@ -328,7 +329,7 @@ def test_a_focused_pane_still_alerts_on_telegram(interactive):
     time.sleep(0.3)  # the working snapshot is the baseline
     bridge.push_event(pane("p1", "blocked", label="alpha", focused=True))
     fields = telegram.wait_call("sendMessage", lambda f: "reply_markup" in f)
-    assert "local:p1" in fields["text"]
+    assert fields["text"].startswith("claude · needs input\n")
 
 
 def test_a_focused_pane_still_alerts_one_way(tmp_path):

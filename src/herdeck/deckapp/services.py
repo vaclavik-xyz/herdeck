@@ -103,6 +103,8 @@ class RuntimeServices:
             send=self._send,
             current_agent=self._current_agent,
             config_for=self._config_for,
+            answer_claim=self._answer_claim,
+            claim_stale=self._claim_stale,
         )
         self.semantic = SemanticAPI(
             self.control,
@@ -177,6 +179,15 @@ class RuntimeServices:
         agent = getattr(self._source(), "semantic_agent", None)
         return agent(key) if callable(agent) else None
 
+    def _answer_claim(self, key: AgentKey) -> dict | None:
+        claim = getattr(self._source(), "telegram_answer_claim", None)
+        return claim(key) if callable(claim) else None
+
+    def _claim_stale(self, key: AgentKey, claim: dict) -> bool:
+        stale = getattr(self._source(), "telegram_claim_stale", None)
+        # a source that cannot judge a claim cannot vouch for it either
+        return stale(key, claim) if callable(stale) else True
+
     def _server_available(self, server_id: str) -> bool:
         available = getattr(self._source(), "semantic_server_available", None)
         return bool(available(server_id)) if callable(available) else False
@@ -233,6 +244,7 @@ class RuntimeServices:
                 tg.message_thread_id,
                 tuple(tg.allowed_user_ids),
                 tg.prompt_max_chars,
+                config.view.language,
             )
         elif requested and not self._tg_warned:
             self._tg_warned = True
@@ -253,12 +265,23 @@ class RuntimeServices:
                 message_thread_id=tg.message_thread_id,
                 allowed_user_ids=tg.allowed_user_ids,
                 prompt_max_chars=tg.prompt_max_chars,
+                language=config.view.language,
                 store=self._tg_store,
                 # continue from the old cursor: never re-run acted-on updates
                 offset=previous.offset if previous is not None else None,
             )
         self._interactor = interactor
         self._interactor_generation += 1
+
+    def _bridges_own_telegram(self) -> bool:
+        """Never raises: the poll loop must survive a source that is not
+        ready yet (or has no such hook)."""
+        try:
+            owned = getattr(self._source(), "bridges_own_telegram", None)
+            return bool(owned()) if callable(owned) else False
+        except Exception:
+            log.debug("bridges_own_telegram failed", exc_info=True)
+            return False
 
     def telegram_active(self) -> bool:
         return self._interactor is not None
@@ -281,7 +304,11 @@ class RuntimeServices:
         while True:
             interactor = self._interactor
             generation = self._interactor_generation
-            if interactor is None:
+            if interactor is None or self._bridges_own_telegram():
+                # Idle while every connected bridge sends Telegram itself: a
+                # second getUpdates on the same bot would 409 the bridge's
+                # poller and steal its callbacks. Alerts still route per agent
+                # (LiveSource skips agents whose bridge sends Telegram).
                 await asyncio.sleep(1)
                 continue
             if previous is not None and previous is not interactor:

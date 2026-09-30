@@ -11,6 +11,7 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .i18n import tr
 from .model import AgentKey, AgentState, Status
 
 log = logging.getLogger("herdeck.telegram")
@@ -21,6 +22,20 @@ def _metadata_body(agent: AgentState, body: str) -> str:
     return f"{body} · {item}" if item and item not in body else body
 
 
+# What a control reports (ActionResult.message, or a bridge's skip reason) ->
+# the reply the user reads; anything else is a plain "failed".
+_RESULT_KEYS = {
+    "stale": "tg.stale",
+    "stale_choice": "tg.stale",
+    "confirmation required": "tg.confirm",
+    "agent is no longer available": "tg.agent_gone",
+    "agent is not answerable from the bridge": "tg.not_answerable",
+    "not_blocked": "tg.not_blocked",
+    "agent identity changed": "tg.identity_changed",
+    "T3 conversation is not ready for a message": "tg.not_ready",
+}
+
+
 class TelegramApiError(RuntimeError):
     def __init__(self, error_code: int, description: str):
         super().__init__(description)
@@ -28,11 +43,15 @@ class TelegramApiError(RuntimeError):
         self.description = description
 
 
+# Socket timeout of one Bot API call (a getUpdates long poll stays below it).
+BOT_API_TIMEOUT_S = 25
+
+
 def _request_json(token: str, method: str, fields: dict[str, str]):
     data = urllib.parse.urlencode(fields).encode()
     url = f"https://api.telegram.org/bot{token}/{method}"
     try:
-        with urllib.request.urlopen(url, data=data, timeout=25) as resp:
+        with urllib.request.urlopen(url, data=data, timeout=BOT_API_TIMEOUT_S) as resp:
             payload = json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         try:
@@ -114,36 +133,41 @@ class TelegramBotClient:
 
 
 class TelegramAlertFormatter:
-    def __init__(self, *, prompt_max_chars: int = 1200):
+    def __init__(self, *, prompt_max_chars: int = 1200, language: str = "en"):
         self._prompt_max_chars = prompt_max_chars
+        self._lang = language
 
     def blocked_alert(
         self, agent: AgentState, *, metadata_body: str, prompt: str, token: str
     ) -> tuple[str, dict]:
+        """The alert text (the one-way title, the agent's labels — the server
+        id only in multi-server setups, via ``metadata_body`` — never pane ids)
+        and its buttons. ``callback_data`` stays language-independent, so
+        buttons of messages already sent keep working."""
+        lang = self._lang
         has_prompt = bool(prompt.strip())
         prompt = (
-            self._truncate(prompt.strip()) if has_prompt else "Prompt unavailable; use Read again."
+            self._truncate(prompt.strip()) if has_prompt else tr(lang, "tg.prompt_unavailable")
         )
         text = (
-            f"{agent.agent_type} {Status.BLOCKED.value}\n"
-            f"{metadata_body} · {agent.key.server_id}:{agent.key.pane_id}\n\n"
-            f"Waiting for:\n{prompt}\n\n"
-            "Reply to this message to send text to the agent."
+            f"{tr(lang, 'notify.title_blocked', agent=agent.agent_type or 'agent')}\n"
+            f"{metadata_body}\n\n"
+            f"{tr(lang, 'tg.waiting_for')}\n{prompt}\n\n"
+            f"{tr(lang, 'tg.reply_hint')}"
         )
+        stop = {"text": tr(lang, "act.stop"), "callback_data": f"h:{token}:stop"}
+        read = [{"text": tr(lang, "tg.read_again"), "callback_data": f"h:{token}:read"}]
         if has_prompt:
             keyboard = [
                 [
-                    {"text": "Approve", "callback_data": f"h:{token}:approve"},
-                    {"text": "Deny", "callback_data": f"h:{token}:deny"},
-                    {"text": "Stop", "callback_data": f"h:{token}:stop"},
+                    {"text": tr(lang, "act.approve"), "callback_data": f"h:{token}:approve"},
+                    {"text": tr(lang, "act.deny"), "callback_data": f"h:{token}:deny"},
+                    stop,
                 ],
-                [{"text": "Read again", "callback_data": f"h:{token}:read"}],
+                read,
             ]
         else:
-            keyboard = [
-                [{"text": "Stop", "callback_data": f"h:{token}:stop"}],
-                [{"text": "Read again", "callback_data": f"h:{token}:read"}],
-            ]
+            keyboard = [[stop], read]
         markup = {"inline_keyboard": keyboard}
         return text, markup
 
@@ -161,6 +185,13 @@ class TelegramAlertRecord:
     message_id: int
     created_at: float
     terminal_id: str = ""
+    # The question the alert shows, from ``control.answer_claim`` (None when the
+    # control has none): passed back with every answer from this alert so the
+    # control can refuse it once that question was answered or replaced.
+    claim: dict | None = None
+    # The agent line the alert shows (labels, no pane ids): re-used by "Read
+    # again" and /status.
+    body: str = ""
 
 
 class TelegramAlertStore:
@@ -242,6 +273,7 @@ class TelegramInteractor:
         store: TelegramAlertStore | None = None,
         prompt_max_chars: int = 1200,
         offset: int | None = None,
+        language: str = "en",
     ):
         self._client = client
         self._control = control
@@ -249,7 +281,10 @@ class TelegramInteractor:
         self._message_thread_id = message_thread_id
         self._allowed_user_ids = set(int(v) for v in allowed_user_ids)
         self._store = store or TelegramAlertStore()
-        self._formatter = TelegramAlertFormatter(prompt_max_chars=prompt_max_chars)
+        self._lang = language
+        self._formatter = TelegramAlertFormatter(
+            prompt_max_chars=prompt_max_chars, language=language
+        )
         self._inbound_disabled = False
         # getUpdates cursor. A rebuilt interactor (config reload) continues
         # from its predecessor's cursor: starting from None would re-deliver
@@ -275,9 +310,11 @@ class TelegramInteractor:
             prompt = await self._control.read_prompt(agent.key, timeout=3.0)
         except Exception:
             prompt = ""
+        self._pin(record)
+        record.body = _metadata_body(agent, body)
         text, markup = self._formatter.blocked_alert(
             agent,
-            metadata_body=_metadata_body(agent, body),
+            metadata_body=record.body,
             prompt=str(prompt or ""),
             token=record.token,
         )
@@ -304,6 +341,24 @@ class TelegramInteractor:
             self._store.discard(record.token)
             return
         self._store.attach_message(record.token, chat_id=self._chat_id, message_id=message_id)
+
+    def _t(self, key: str, **fmt: object) -> str:
+        return tr(self._lang, key, **fmt)
+
+    async def _answer(self, cb_id: str, key: str) -> None:
+        await asyncio.to_thread(self._client.answer_callback_query, cb_id, text=self._t(key))
+
+    def _pin(self, record: TelegramAlertRecord) -> None:
+        """Pin ``record`` to the question its message shows right now."""
+        answer_claim = getattr(self._control, "answer_claim", None)
+        try:
+            record.claim = answer_claim(record.key) if callable(answer_claim) else None
+        except Exception:
+            record.claim = None
+
+    @staticmethod
+    def _claim_kwargs(record: TelegramAlertRecord) -> dict:
+        return {} if record.claim is None else {"claim": record.claim}
 
     def _is_webhook_conflict(self, exc: TelegramApiError) -> bool:
         return exc.error_code == 409 and "webhook" in exc.description.lower()
@@ -337,46 +392,50 @@ class TelegramInteractor:
         cb_id = str(query.get("id", ""))
         message = query.get("message", {})
         if not self._authorized(query.get("from", {}), message):
-            await asyncio.to_thread(
-                self._client.answer_callback_query, cb_id, text="not authorized"
-            )
+            await self._answer(cb_id, "tg.not_authorized")
             return False
         data = str(query.get("data", ""))
         parts = data.split(":")
         if len(parts) != 3 or parts[0] != "h":
-            await asyncio.to_thread(self._client.answer_callback_query, cb_id, text="stale")
+            await self._answer(cb_id, "tg.stale")
             return False
         record = self._store.by_token(parts[1])
         if record is None or not self._callback_matches_record(record, message):
-            await asyncio.to_thread(self._client.answer_callback_query, cb_id, text="stale")
+            await self._answer(cb_id, "tg.stale")
             return False
         action = parts[2]
         try:
             if action == "approve":
-                result = await self._control.approve(record.key, timeout=3.0)
+                result = await self._control.approve(
+                    record.key, timeout=3.0, **self._claim_kwargs(record)
+                )
                 status, ok = self._action_status(result)
             elif action == "deny":
-                result = await self._control.deny(record.key, timeout=3.0)
+                result = await self._control.deny(
+                    record.key, timeout=3.0, **self._claim_kwargs(record)
+                )
                 status, ok = self._action_status(result)
             elif action == "stop":
-                result = await self._control.stop(record.key, timeout=3.0)
+                result = await self._control.stop(
+                    record.key, timeout=3.0, **self._claim_kwargs(record)
+                )
                 status, ok = self._action_status(result)
             elif action == "read":
                 await self._refresh_prompt(record)
-                status = "refreshed"
+                status = "tg.refreshed"
                 ok = True
             else:
-                await asyncio.to_thread(self._client.answer_callback_query, cb_id, text="stale")
+                await self._answer(cb_id, "tg.stale")
                 return False
         except TimeoutError:
-            await asyncio.to_thread(self._client.answer_callback_query, cb_id, text="timed out")
+            await self._answer(cb_id, "tg.timed_out")
             return False
         except Exception:
-            await asyncio.to_thread(self._client.answer_callback_query, cb_id, text="failed")
+            await self._answer(cb_id, "tg.failed")
             return False
         if ok and action != "read":
             self._store.discard(record.token)
-        await asyncio.to_thread(self._client.answer_callback_query, cb_id, text=status)
+        await self._answer(cb_id, status)
         return ok
 
     def _callback_matches_record(self, record: TelegramAlertRecord, message: dict) -> bool:
@@ -405,11 +464,14 @@ class TelegramInteractor:
         return True
 
     def _action_status(self, result) -> tuple[str, bool]:
+        """The i18n key of an action's outcome, and whether it settled the alert."""
         if result.sent:
-            return "sent", True
+            return "tg.sent", True
+        if result.skipped and result.message == "stale":
+            return "tg.stale", True
         if result.skipped:
-            return "skipped", True
-        return result.message or "failed", False
+            return "tg.skipped", True
+        return _RESULT_KEYS.get(result.message, "tg.failed"), False
 
     async def _refresh_prompt(self, record: TelegramAlertRecord) -> None:
         reset_confirmation = getattr(self._control, "reset_confirmation", None)
@@ -417,16 +479,17 @@ class TelegramInteractor:
             reset_confirmation(record.key)
         agent = self._control.current_agent(record.key)
         if agent is None:
-            text = "agent is no longer available"
+            text = self._t("tg.agent_gone")
             markup = None
         else:
             try:
                 prompt = await self._control.read_prompt(record.key, timeout=3.0)
             except Exception:
                 prompt = ""
+            self._pin(record)
             text, markup = self._formatter.blocked_alert(
                 agent,
-                metadata_body=_metadata_body(agent, agent.repo or agent.label),
+                metadata_body=record.body or _metadata_body(agent, agent.repo or agent.label),
                 prompt=str(prompt or ""),
                 token=record.token,
             )
@@ -458,35 +521,31 @@ class TelegramInteractor:
             record = None
         if record is None:
             await self._send_thread_message(
-                "alert is stale",
+                self._t("tg.alert_stale"),
                 reply_to_message_id=message.get("message_id"),
             )
             return False
         try:
-            result = await self._control.send_text(record.key, text, timeout=3.0)
-            status = (
-                f"sent to {record.key.server_id}:{record.key.pane_id}"
-                if result.sent
-                else result.message or "delivery failed"
+            result = await self._control.send_text(
+                record.key, text, timeout=3.0, **self._claim_kwargs(record)
             )
+            key, ok = ("tg.text_sent", True) if result.sent else self._action_status(result)
             ok = result.sent
         except TimeoutError:
-            status = "delivery timed out"
-            ok = False
+            key, ok = "tg.timed_out", False
         except Exception:
-            status = "delivery failed"
-            ok = False
-        await self._send_thread_message(status, reply_to_message_id=message.get("message_id"))
+            key, ok = "tg.failed", False
+        await self._send_thread_message(self._t(key), reply_to_message_id=message.get("message_id"))
         return ok
 
     async def _send_status(self, message: dict) -> None:
         self._prune_alerts()
         records = self._store.records()
         if records:
-            lines = ["tracked blocked alerts:"]
-            lines.extend(f"- {r.key.server_id}:{r.key.pane_id}" for r in records)
+            lines = [self._t("tg.status_tracked")]
+            lines.extend(f"- {r.body or r.key.server_id}" for r in records)
         else:
-            lines = ["no tracked blocked alerts"]
+            lines = [self._t("tg.status_none")]
         await self._send_thread_message(
             "\n".join(lines),
             reply_to_message_id=message.get("message_id"),

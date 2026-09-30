@@ -760,3 +760,63 @@ describe("ConfigApp bridge shared settings", () => {
     }
   });
 });
+
+// The Telegram-on-the-bridge section polls the bridges every 3 s while a
+// bridge is picked. That poll must be quiet: it updates `bridges` only — no
+// reloadRev bump (would reset other sections' drafts every 3 s) and no
+// "refresh failed" banner while the runtime is unreachable.
+describe("ConfigApp bridge Telegram status poll", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function telegramBridge() {
+    return {
+      offered: true, connected: true, revision: 0, set: false, source: "none", settings: null,
+      telegram: {
+        offered: true, revision: 1, settings: { enabled: false, chat_id: "" },
+        status: { token: "file", active: false, inbound: "off", last_error: null, last_sent_at_ms: null, recent_chats: [] },
+      },
+    };
+  }
+
+  it("re-reads the config quietly: no reloadRev bump, no banner", async () => {
+    let readFails = false;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "config_read") {
+        if (readFails) throw new Error("sidecar down");
+        return { ...rawConfig(), bridges: { m4: telegramBridge() } };
+      }
+      return mockInvoke(cmd);
+    });
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await vi.waitFor(() => expect(target.querySelector(".loading-card")).toBeNull());
+      const nav = Array.from(target.querySelectorAll<HTMLButtonElement>(".sidebar button"))
+        .find((b) => b.textContent?.includes("Notifications"));
+      nav!.click();
+      flushSync();
+      await vi.waitFor(() => expect(target.querySelector("select[data-tg-target]")).not.toBeNull());
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const select = target.querySelector<HTMLSelectElement>("select[data-tg-target]")!;
+      select.value = "m4";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      flushSync();
+      const rev = target.querySelector<HTMLElement>(".content")!.dataset.reloadRev;
+      const reads = () => invokeMock.mock.calls.filter(([c]) => c === "config_read").length;
+      const before = reads();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.waitFor(() => expect(reads()).toBe(before + 1));
+      flushSync();
+      expect(target.querySelector<HTMLElement>(".content")!.dataset.reloadRev).toBe(rev);
+      readFails = true;
+      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.waitFor(() => expect(reads()).toBe(before + 2));
+      flushSync();
+      expect(target.textContent).not.toContain("config refresh from the sidecar failed");
+      expect(target.querySelector<HTMLElement>(".content")!.dataset.reloadRev).toBe(rev);
+    } finally {
+      cleanup();
+    }
+  });
+});

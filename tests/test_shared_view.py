@@ -113,7 +113,7 @@ def test_forget_live_keeps_values(tmp_path):
 def test_garbage_cache_file_is_ignored(tmp_path):
     (tmp_path / "x.json").write_text("{nope")
     (tmp_path / "y.json").write_text(json.dumps({"server_id": "y", "revision": 2, "updated_at_ms": 0,
-                                                 "updated_by": "", "settings": {"theme": {}}}))
+                                                 "updated_by": "", "settings": {"notifications": {"bogus": 1}}}))
     view = SharedSettingsView(tmp_path)
     assert view.settings_for("x") is None and view.settings_for("y") is None
 
@@ -354,3 +354,13 @@ def test_overlaid_shared_keys_non_table_profile_is_empty():
     assert overlaid_shared_keys({"profiles": {"x": 3}}, "x") == []
     assert overlaid_shared_keys({"profiles": {"x": {"extends": "y"}, "y": "s"}}, "x") == []
     assert overlaid_shared_keys({"profiles": {"x": {"extends": 3}}}, "x") == []
+
+
+def test_unknown_section_from_newer_bridge_keeps_known_values(tmp_path):
+    view = SharedSettingsView(tmp_path)
+    raw = {**_raw(6), "future": {"a": 1}}
+    assert view.update("a", _frame("a", 5, raw)) is True
+    assert view.settings_for("a").done_min_work == 6
+    assert view.state("a")["source"] == "bridge"
+    # warm start from the cache written with the unknown section also works
+    assert SharedSettingsView(tmp_path).settings_for("a").done_min_work == 6

@@ -34,6 +34,22 @@ capability, and a runtime that sees it can read and edit the bridge's shared
 settings. Against a bridge without the capability the runtime silently keeps
 using `config.toml`, and the editor offers no adoption for it.
 
+Bridge-sent Telegram follows the same order. Update the bridge first: it then
+advertises `telegram_config` (and `telegram` once active), and an updated
+runtime stops sending Telegram for that bridge's agents. A runtime that is not
+updated (0.14.0) keeps sending its own Telegram, so until it is updated you
+get duplicate alerts, and an old runtime polling the same bot conflicts (409)
+with the bridge. Update every runtime, then turn off local Telegram.
+
+Give the bridge its token from the editor ("Telegram on the bridge", "Set").
+The bridge reads only `HERDECK_BRIDGE_TELEGRAM_TOKEN` (or its token file),
+never the runtime's `HERDECK_TELEGRAM_TOKEN`, so an environment shared with a
+runtime is safe. Do not give the bridge the same bot token a runtime still
+uses: once it has a token it long-polls that bot for chat discovery even while
+its Telegram is disabled, and the two fight over one bot (409, stolen button
+presses). After a restart the bridge's log says where its token came from
+(`telegram bot token source: env|file|none`).
+
 Changing `protocol.py`'s encode/decode contract has no safe order at all; both
 hosts move together, and `WIRE_PROTOCOL` in `protocol.py` must be bumped. A
 runtime that receives a newer protocol than it knows logs a WARNING

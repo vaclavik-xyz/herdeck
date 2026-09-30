@@ -8,6 +8,7 @@ config validators are reused so there is one validation code path.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from dataclasses import dataclass
 
 from herdeck.config import (
@@ -36,6 +37,9 @@ _SECTIONS = ("notifications", "usage", *SHARED_WHOLE_SECTIONS)
 MAX_SHARED_BYTES = 64 * 1024
 
 _PROFILE_KEYS = ("approve", "deny", "stop", "approve_always")
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -180,12 +184,22 @@ def _reject_unencodable(value, where: str = "settings") -> None:
             _reject_unencodable(item, where)
 
 
-def parse_shared(raw: dict) -> SharedSettings:
-    """Strictly validate a shared-settings document; raises ConfigError."""
+def parse_shared(raw: dict, *, strict: bool = True) -> SharedSettings:
+    """Validate a shared-settings document; raises ConfigError.
+
+    ``strict=False`` (runtime side) drops unknown top-level sections with a
+    WARN so an older runtime tolerates a newer bridge; unknown keys inside
+    known sections still raise in both modes.
+    """
     if not isinstance(raw, dict):
         raise ConfigError("settings must be a table")
     _reject_unencodable(raw)
-    _reject_unknown(raw, _SECTIONS, "settings")
+    if strict:
+        _reject_unknown(raw, _SECTIONS, "settings")
+    else:
+        unknown = sorted(str(k) for k in raw if k not in _SECTIONS)
+        if unknown:
+            log.warning("ignoring unknown shared-settings section(s) %s", unknown)
     n = _table(raw.get("notifications"), "notifications")
     _reject_unknown(n, SHARED_NOTIFICATION_KEYS, "notifications")
     alert_at, alert_reset = _parse_usage(raw.get("usage"))

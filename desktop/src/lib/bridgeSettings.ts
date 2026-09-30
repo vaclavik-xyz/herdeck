@@ -13,6 +13,7 @@
 // SHARED_USAGE_KEYS, SHARED_WHOLE_SECTIONS, extract_shared). The bridge rejects
 // any other key, so keep them in sync — bridgeSettings.test.ts pins them.
 import type { ConfigPayload } from "./configClient";
+import { parseBridgeTelegram, type BridgeTelegram } from "./bridgeTelegram";
 
 export const SHARED_NOTIFICATION_KEYS = ["on", "done_min_work", "done_short_delay", "remind_after", "subagents_done"] as const;
 export const SHARED_USAGE_KEYS = ["alert_at", "alert_reset"] as const;
@@ -51,6 +52,8 @@ export interface BridgeShared {
   set: boolean;
   source: "bridge" | "cache" | "none";
   settings: Rec | null;
+  /** Telegram config the bridge offers (`telegram_config`); absent for older bridges. */
+  telegram?: BridgeTelegram;
 }
 
 export function parseBridges(raw: unknown): Record<string, BridgeShared> {
@@ -71,6 +74,7 @@ export function parseBridges(raw: unknown): Record<string, BridgeShared> {
       set: v.set === true && settings != null,
       source,
       settings,
+      ...(v.telegram != null && typeof v.telegram === "object" ? { telegram: parseBridgeTelegram(v.telegram) } : {}),
     };
   }
   return out;

@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import re
-import tempfile
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -19,6 +18,7 @@ from pathlib import Path
 
 import tomli_w
 
+from herdeck._atomic import atomic_write_private
 from herdeck.config import ConfigError
 from herdeck.shared_settings import MAX_SHARED_BYTES, parse_shared, to_raw
 
@@ -114,21 +114,7 @@ class BridgeSettingsStore:
         return PutResult(True, revision)
 
     def _write(self, doc: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = tempfile.NamedTemporaryFile(
-            "wb", dir=self.path.parent, prefix=self.path.name + ".", delete=False
-        )
-        try:
-            with tmp:
-                tmp.write(tomli_w.dumps(doc).encode("utf-8"))
-            os.chmod(tmp.name, 0o600)
-            os.replace(tmp.name, self.path)
-        except BaseException:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
-            raise
+        atomic_write_private(self.path, tomli_w.dumps(doc).encode("utf-8"))
 
     def frame(self, server_id: str) -> dict:
         return {

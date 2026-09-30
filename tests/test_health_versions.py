@@ -57,6 +57,7 @@ async def test_health_message_reports_version_protocol_herdr_and_clients():
         async with websockets.connect(url, additional_headers=headers) as ws:
             assert json.loads(await ws.recv())["type"] == "snapshot"
             assert json.loads(await ws.recv())["type"] == "settings"
+            assert json.loads(await ws.recv())["type"] == "telegram"
             await ws.send(json.dumps({"type": "health", "req": "h1"}))
             reply = json.loads(await asyncio.wait_for(ws.recv(), 3))
     assert reply == {
@@ -82,6 +83,7 @@ async def test_health_message_reports_unreachable_herdr():
         async with websockets.connect(url, additional_headers=headers) as ws:
             await ws.recv()
             await ws.recv()  # settings frame
+            await ws.recv()  # telegram frame
             herdr.__class__ = DeadHerdr  # herdr goes away after the greeting
             await ws.send(json.dumps({"type": "health", "req": "h2"}))
             reply = json.loads(await asyncio.wait_for(ws.recv(), 3))
