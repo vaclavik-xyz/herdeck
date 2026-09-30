@@ -23,6 +23,7 @@ from . import history as _history
 from . import hooks_install as _hooks_install
 from . import status_since as _status_since
 from . import usage_agent_install as _usage_agent_install
+from .bridge_answers import answer_frame
 from .bridge_settings import (
     SETTINGS_CAPABILITY,
     BridgeSettingsStore,
@@ -32,7 +33,6 @@ from .bridge_settings import (
 )
 from .decisions import decision_choices, decision_revision
 from .events import CAPABILITY as _EVENTS_CAPABILITY
-from .events import STALE as _STALE
 from .events import EventHub, client_label, prompt_forms
 from .model import Status, WorkContext
 from .presence_hub import PRESENCE_CAPABILITY, PresenceHub
@@ -2152,39 +2152,20 @@ async def _serve_connection(
                     label = client_label(request.get("client"))
                     await events.subscribe(ws, send_lock, request)
                 continue
-            ticket = (
-                await events.begin_answer(msg, label)
-                if events is not None and isinstance(msg, dict)
-                else None
-            )
-            if ticket == _STALE:
-                req = msg.get("req")
-                await send(
-                    encode(
-                        {
-                            "type": "result",
-                            "req": req if isinstance(req, str) else "",
-                            "data": {"skipped": True, "message": _STALE},
-                        }
-                    )
-                )
-                continue
-            try:
-                out = await handle_client_message(
+            await send(
+                await answer_frame(
                     herdr,
                     server_id,
                     raw,
-                    icons,
-                    status_since,
-                    extra_capabilities,
-                    subagents=subagents,
+                    msg,
+                    label,
                     events=events,
+                    icons=icons,
+                    status_since=status_since,
+                    extra_capabilities=extra_capabilities,
+                    subagents=subagents,
                 )
-            except Exception as exc:
-                out = encode({"type": "error", "message": str(exc)})
-            if ticket is not None:
-                events.end_answer(ticket, sent=_answer_sent(out))
-            await send(out)
+            )
     finally:
         clients.pop(ws, None)
         if presence is not None:
@@ -2231,15 +2212,6 @@ async def _broadcast_presence(presence: PresenceHub, clients: dict, server_id: s
     await asyncio.gather(
         *(_send_to_client(ws, msg, clients[ws]) for ws in presence.reporters() if ws in clients)
     )
-
-
-def _answer_sent(out: str) -> bool:
-    """Did an answer's reply say it went out to the pane?"""
-    try:
-        data = json.loads(out).get("data")
-    except (ValueError, AttributeError):
-        return False
-    return isinstance(data, dict) and data.get("sent") is True
 
 
 async def _require_snapshot_support(herdr: HerdrClient) -> None:
