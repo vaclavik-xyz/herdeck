@@ -24,6 +24,7 @@ Secret hygiene: bridge tokens live only inside their ``Connector`` instances
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import re
 import threading
@@ -34,6 +35,7 @@ from collections.abc import Callable
 
 from .. import notify as _notify
 from ..bridge_settings import SETTINGS_CAPABILITY
+from ..bridge_telegram import TELEGRAM_CAPABILITY, TELEGRAM_CONFIG_CAPABILITY
 from ..commands import Command, command_to_msg, profile_for
 from ..config import Config, ServerConfig
 from ..connector import Connector, create_connector
@@ -61,7 +63,7 @@ from ..orchestrator import Orchestrator, binary_answer
 from ..presence import IdleProbe
 from ..presence_hub import PRESENCE_CAPABILITY, PRESENCE_REPORT_S, PRESENCE_STALE_S
 from ..project_icons import ingest_project_icon
-from ..protocol import Settings
+from ..protocol import Settings, TelegramFrame
 from ..shared_settings import SharedSettings, apply_shared
 from ..terminal_app import activate_terminal_app
 from ..usage_alerts import usage_alert_message, usage_alert_sound
@@ -240,6 +242,11 @@ class LiveSource(
         self._tg_interactive: Callable[[], bool] = lambda: False
         self._tg_notify_blocked = None
         self._alert_context = threading.local()
+        # Per-bridge Telegram frame (capability "telegram_config"), under
+        # self._lock; the editor reads it through telegram_state(). Whether a
+        # bridge is actively delivering is NOT cached here: every alert reads
+        # the "telegram" capability of that server's latest snapshot.
+        self._telegram_frames: dict[str, TelegramFrame] = {}
         # Cockpit semantic API bookkeeping: a server is "available" only after
         # a snapshot on its current connection; every agent change bumps that
         # agent's generation (a stop confirmation dies with it).
@@ -627,6 +634,8 @@ class LiveSource(
         sink = _notify.make_telegram_sink(token, chat_id, message_thread_id)
 
         def one_way(title: str, body: str, sound, icon: str | None = None) -> None:
+            if getattr(self._alert_context, "bridge_telegram", False):
+                return  # the agent's bridge sends this alert to Telegram itself
             if getattr(self._alert_context, "event", None) == "blocked" and self._tg_interactive():
                 return  # the interactive chain owns blocked alerts
             sink(title, body, sound, icon)
@@ -931,6 +940,11 @@ class LiveSource(
         ([notifications].banner_actions / banner_prompt), then send it."""
         n = self._config.notifications
         plain_body = body
+        # Decided per alert from the server's latest snapshot: a bridge that
+        # advertises "telegram" delivers this agent's Telegram alerts itself,
+        # so this runtime sends none (one-way, interactive, reminders) and
+        # only the local banner remains. Old bridges: unchanged.
+        bridge_telegram = self._bridge_sends_telegram(agent.key.server_id)
         skip_local = bool(n.skip_focused and agent.focused and self._user_present())
         if skip_local:
             log.info(
@@ -939,8 +953,8 @@ class LiveSource(
                 agent.key.server_id,
                 agent.key.pane_id,
             )
-            remote = "telegram" in n.backends or (
-                event == "blocked" and self._tg_interactive()
+            remote = not bridge_telegram and (
+                "telegram" in n.backends or (event == "blocked" and self._tg_interactive())
             )
             if not remote:
                 return
@@ -967,12 +981,14 @@ class LiveSource(
                 self._bannered.setdefault(agent.key, set()).add(event)
         self._alert_context.event = event
         self._alert_context.skip_local = skip_local
+        self._alert_context.bridge_telegram = bridge_telegram
         try:
             self._notifier.notify(title, body, sound, icon=self._banner_icon(agent), meta=meta)
         finally:
             self._alert_context.event = None
             self._alert_context.skip_local = False
-        if event == "blocked" and self._tg_interactive():
+            self._alert_context.bridge_telegram = False
+        if event == "blocked" and not bridge_telegram and self._tg_interactive():
             self._notify_blocked_interactive(agent, plain_body, sound)
 
     def _alert_current(self, event: str, key: AgentKey, episode: str | None) -> bool:
@@ -1069,6 +1085,60 @@ class LiveSource(
 
     def _offers_presence(self, server_id: str) -> bool:
         return self._offers_capability(server_id, PRESENCE_CAPABILITY)
+
+    # --- bridge-sent Telegram (capabilities "telegram_config" / "telegram") ---
+
+    def _bridge_sends_telegram(self, server_id: str) -> bool:
+        """Does ``server_id``'s bridge deliver Telegram alerts itself (its
+        latest snapshot advertises "telegram")? Read at decision time."""
+        return self._offers_capability(server_id, TELEGRAM_CAPABILITY)
+
+    def bridges_own_telegram(self) -> bool:
+        """True while at least one server is connected and EVERY connected
+        server's bridge sends Telegram: this runtime's interactive poller
+        (getUpdates) must then stay idle, or it would fight the bridge for the
+        same bot (409 "terminated by other getUpdates", stolen callbacks)."""
+        with self._lock:
+            connected = [sid for sid, up in self._connected.items() if up]
+        return bool(connected) and all(self._bridge_sends_telegram(sid) for sid in connected)
+
+    def _on_telegram(self, server_id: str, frame: TelegramFrame) -> None:
+        """Connector callback: the bridge's Telegram config + status frame."""
+        with self._lock:
+            self._telegram_frames[server_id] = frame
+
+    def _telegram_on_snapshot(self, server_id: str) -> None:
+        """A bridge without "telegram_config" (an old one, or the id
+        re-pointed at one) never refreshes a stored frame: drop it."""
+        connector = getattr(self._runners.get(server_id), "connector", None)
+        caps = getattr(connector, "capabilities", None)
+        if not isinstance(caps, frozenset | set) or TELEGRAM_CONFIG_CAPABILITY in caps:
+            return
+        with self._lock:
+            self._telegram_frames.pop(server_id, None)
+
+    def telegram_state(self) -> dict[str, dict]:
+        """Per configured server: its bridge's Telegram state for the editor —
+        ``offered`` (capability "telegram_config"), ``active`` ("telegram"),
+        ``connected`` and the latest frame's revision / settings / status
+        (None until a frame arrived). Deep copies; never holds a token."""
+        with self._lock:
+            connected = dict(self._connected)
+            frames = dict(self._telegram_frames)
+        out: dict[str, dict] = {}
+        for sid in self._servers:
+            frame = frames.get(sid)
+            out[sid] = {
+                "offered": self._offers_capability(sid, TELEGRAM_CONFIG_CAPABILITY),
+                "active": self._bridge_sends_telegram(sid),
+                "connected": bool(connected.get(sid)),
+                "revision": frame.revision if frame else None,
+                "updated_at_ms": frame.updated_at_ms if frame else None,
+                "updated_by": frame.updated_by if frame else None,
+                "settings": copy.deepcopy(frame.settings) if frame else None,
+                "status": copy.deepcopy(frame.status) if frame else None,
+            }
+        return out
 
     def report_presence(self) -> int:
         """Send this runtime's idle to every connected bridge offering presence."""
@@ -1288,6 +1358,7 @@ class LiveSource(
                 if not self._ensure_presence_thread():
                     self._presence_wake.set()
         self._shared_on_snapshot(server_id)
+        self._telegram_on_snapshot(server_id)
         self._bridge_update_on_snapshot(server_id)
         self._hooks_on_snapshot(server_id)
         self._usage_agent_on_snapshot(server_id)
@@ -1436,6 +1507,7 @@ class LiveSource(
             with self._lock:
                 self._remote_presence.pop(server_id, None)
                 self._presence_announced.discard(server_id)
+                self._telegram_frames.pop(server_id, None)
             self._shared.forget_live(server_id)
         def mutate():
             with self._lock:
@@ -1862,6 +1934,7 @@ def build_live_source(
             on_lifecycle=source._on_lifecycle,
             on_presence=source._on_presence,
             on_settings=source._on_settings,
+            on_telegram=source._on_telegram,
             events_cursor=source._events_cursor,
         )
         runner = runner_factory(connector)

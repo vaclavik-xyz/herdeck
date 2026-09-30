@@ -260,6 +260,16 @@ class RuntimeServices:
         self._interactor = interactor
         self._interactor_generation += 1
 
+    def _bridges_own_telegram(self) -> bool:
+        """Never raises: the poll loop must survive a source that is not
+        ready yet (or has no such hook)."""
+        try:
+            owned = getattr(self._source(), "bridges_own_telegram", None)
+            return bool(owned()) if callable(owned) else False
+        except Exception:
+            log.debug("bridges_own_telegram failed", exc_info=True)
+            return False
+
     def telegram_active(self) -> bool:
         return self._interactor is not None
 
@@ -281,7 +291,11 @@ class RuntimeServices:
         while True:
             interactor = self._interactor
             generation = self._interactor_generation
-            if interactor is None:
+            if interactor is None or self._bridges_own_telegram():
+                # Idle while every connected bridge sends Telegram itself: a
+                # second getUpdates on the same bot would 409 the bridge's
+                # poller and steal its callbacks. Alerts still route per agent
+                # (LiveSource skips agents whose bridge sends Telegram).
                 await asyncio.sleep(1)
                 continue
             if previous is not None and previous is not interactor:

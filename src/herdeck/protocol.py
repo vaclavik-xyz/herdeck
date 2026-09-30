@@ -227,6 +227,21 @@ class Settings:
 
 
 @dataclass
+class TelegramFrame:
+    """A bridge's Telegram config + delivery status (capability
+    ``telegram_config``; see bridge_telegram.py / bridge_notify.py).
+    ``settings`` is None while the document is unset; ``status`` names the
+    token's source ("env" | "file" | None) — never the token itself."""
+
+    server_id: str
+    revision: int
+    updated_at_ms: int
+    updated_by: str
+    settings: dict | None
+    status: dict
+
+
+@dataclass
 class Usage:
     """A bridge's provider usage snapshot (capability ``usage``), sent on
     connect and whenever it changes. ``providers`` is the validated
@@ -357,6 +372,7 @@ def decode_inbound(
     | Usage
     | Presence
     | Settings
+    | TelegramFrame
     | Unknown
 ):
     msg = json.loads(raw)
@@ -462,6 +478,22 @@ def decode_inbound(
         if doc is not None and not isinstance(doc, dict):
             raise ValueError("settings frame has a bad settings document")
         return Settings(sid, revision, at_ms, by[:64], doc)
+    if kind == "telegram":
+        sid = msg.get("server_id")
+        revision, at_ms = msg.get("revision"), msg.get("updated_at_ms")
+        by, doc, status = msg.get("updated_by", ""), msg.get("settings"), msg.get("status")
+        if not isinstance(sid, str):
+            raise ValueError("telegram frame missing server_id")
+        for value in (revision, at_ms):
+            if type(value) is not int or value < 0:
+                raise ValueError("telegram frame has a bad revision/updated_at_ms")
+        if not isinstance(by, str):
+            raise ValueError("telegram frame has a bad updated_by")
+        if doc is not None and not isinstance(doc, dict):
+            raise ValueError("telegram frame has a bad settings document")
+        if not isinstance(status, dict):
+            raise ValueError("telegram frame has a bad status")
+        return TelegramFrame(sid, revision, at_ms, by[:64], doc, status)
     # Forward compatibility: a newer bridge may add frame types. Raising here
     # would reach Connector's on_error (ctl fails every pending request on it).
     return Unknown(str(kind))

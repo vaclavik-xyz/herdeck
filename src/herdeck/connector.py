@@ -22,6 +22,7 @@ from .protocol import (
     Result,
     Settings,
     Snapshot,
+    TelegramFrame,
     TermClosed,
     TermFrame,
     Unknown,
@@ -94,6 +95,7 @@ class Connector:
         on_lifecycle: Callable[[str, LifecycleEvent | EventSync], None] | None = None,
         on_presence: Callable[[str, float | None], None] | None = None,
         on_settings: Callable[[str, Settings], None] | None = None,
+        on_telegram: Callable[[str, TelegramFrame], None] | None = None,
         events_cursor: Callable[[str], dict] | None = None,
     ):
         self.server = server
@@ -115,6 +117,10 @@ class Connector:
         self._on_usage = on_usage
         self._on_presence = on_presence
         self._on_settings = on_settings
+        # The bridge's Telegram config/status frame (capability
+        # ``telegram_config``); whether it is delivering is the ``telegram``
+        # capability of its latest snapshot, read via ``capabilities``.
+        self._on_telegram = on_telegram
         # Bridge lifecycle events (capability "events"): the consumer's
         # callback, and ``events_cursor(server_id)`` -> the ``events`` field
         # of the connect-time ``list`` ({"after", "epoch", "client"}). A
@@ -366,6 +372,9 @@ class Connector:
         elif isinstance(msg, Settings):
             if self._on_settings is not None:
                 self._on_settings(self.server.id, msg)
+        elif isinstance(msg, TelegramFrame):
+            if self._on_telegram is not None:
+                self._on_telegram(self.server.id, msg)
         elif isinstance(msg, Unknown):
             return  # a newer bridge's frame type: ignored by design
         elif isinstance(msg, Error):
