@@ -480,17 +480,20 @@
 
   /** Re-read only the bridges' state, keeping any unsaved config.toml edit.
    *  `saved` puts are kept even when the re-read still predates them
-   *  (keepSaved: the bridge broadcasts after it answers). */
-  async function refreshBridges(saved: PutOutcome[] = []): Promise<void> {
+   *  (keepSaved: the bridge broadcasts after it answers).
+   *  `quiet` (a periodic status poll): only `bridges` changes — no reloadRev
+   *  bump (it would reset the sections' drafts every poll) and no banner. */
+  async function refreshBridges(saved: PutOutcome[] = [], { quiet = false }: { quiet?: boolean } = {}): Promise<void> {
     try {
       const fresh = parseConfig(await cfg.read());
       if (fresh == null || payload == null) return;
       payload = { ...payload, bridges: keepSaved(fresh.bridges, saved), sharedOverlayIgnored: fresh.sharedOverlayIgnored };
     } catch {
+      if (quiet) return;
       if (payload != null) payload = { ...payload, bridges: keepSaved(payload.bridges, saved) };
       setBanner("warning", lm.refresh_failed);
     }
-    reloadRev += 1;
+    if (!quiet) reloadRev += 1;
   }
 
   /** Put every bridge draft (Apply). A saved or stale (409) draft is dropped
@@ -1042,7 +1045,7 @@
       <div class="sidebar-version"><strong>Herdeck Desktop</strong><span>v{__APP_VERSION__}</span></div>
     </nav>
 
-    <section class="content" bind:this={contentRoot}>
+    <section class="content" bind:this={contentRoot} data-reload-rev={reloadRev}>
       {#if active === "overview"}
         <div class="page-heading">
           <div><h1>{lm.overview_title}</h1><p>{runtimeReady ? lm.overview_ready : lm.overview_connecting}</p></div>
@@ -1191,6 +1194,7 @@
                 localTelegram={telegramSaved}
                 call={browserMode ? null : cfg.bridgeTelegram}
                 onReload={() => refreshBridges()}
+                onPoll={() => refreshBridges([], { quiet: true })}
               />
             {:else if active === "safety"}
               <fieldset class="shared-lock" disabled={sharedReadonly}><SafetySection bind:payload={() => sectionPayload!, setSectionPayload} editProfile={sharedEditProfile} {reloadRev} onChange={sectionOnChange} onError={(m) => setBanner("error", m)} /></fieldset>

@@ -3,6 +3,7 @@ import { flushSync, mount, unmount } from "svelte";
 import { setLang } from "../i18n.svelte";
 import { FIELD_HELP } from "../help";
 import { parseBridges } from "../bridgeSettings";
+import { reactiveProps } from "../testProps.svelte";
 import TelegramBridgeSection from "./TelegramBridgeSection.svelte";
 
 const SECRET = "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -468,5 +469,86 @@ describe("refreshing the bridge's status", () => {
     cleanup = null;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onReload).toHaveBeenCalledTimes(before);
+  });
+});
+
+describe("a bridge flap while it is shown", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const DOWN = () => parseBridges({
+    m4: tgBridge({ connected: false }, { offered: false, revision: 0, settings: null, status: null }),
+    fresh: tgBridge(),
+  });
+
+  function mountReactive(extra: Record<string, unknown> = {}) {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const props = reactiveProps({
+      bridges: BRIDGES(), localTelegram: null, call: vi.fn(async () => ok()),
+      onReload: vi.fn(async () => {}), onPoll: vi.fn(async () => {}), initialTarget: "m4", ...extra,
+    });
+    const instance = mount(TelegramBridgeSection, { target, props });
+    flushSync();
+    cleanup = () => { unmount(instance); target.remove(); };
+    return { target, props };
+  }
+
+  it("keeps the bridge picked, keeps polling and keeps unsaved edits", async () => {
+    vi.useFakeTimers();
+    const { target, props } = mountReactive();
+    const onPoll = props.onPoll as ReturnType<typeof vi.fn>;
+    await type(field(target, "chat_id"), "-555");
+    props.bridges = DOWN();
+    flushSync();
+    expect(q<HTMLSelectElement>(target, "select[data-tg-target]").value).toBe("m4");
+    expect(target.querySelector("[data-tg-this-mac]")).toBeNull();
+    expect(text(q(target, "[data-tg-disconnected]"))).toContain("m4");
+    expect(target.querySelector("[data-action='tg-refresh']")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onPoll).toHaveBeenCalledTimes(1);
+    props.bridges = BRIDGES(); // back, same revision
+    flushSync();
+    expect(target.querySelector("[data-tg-disconnected]")).toBeNull();
+    expect(field(target, "chat_id").value).toBe("-555");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onPoll).toHaveBeenCalledTimes(2);
+    expect(props.onReload).not.toHaveBeenCalled(); // polls are the quiet read
+  });
+
+  it("the whole section stays when the only bridge flaps", () => {
+    const { target, props } = mountReactive({
+      bridges: parseBridges({ m4: tgBridge() }),
+    });
+    props.bridges = parseBridges({ m4: tgBridge({ connected: false }, { offered: false }) });
+    flushSync();
+    expect(target.querySelector("[data-tg-disconnected]")).not.toBeNull();
+  });
+
+  it("a new revision from the bridge still reseeds the form", async () => {
+    const { target, props } = mountReactive();
+    await type(field(target, "chat_id"), "-555");
+    const next = BRIDGES();
+    next.m4.telegram = { ...next.m4.telegram!, revision: 9, settings: { ...next.m4.telegram!.settings!, chat_id: "-100777" } };
+    props.bridges = next;
+    flushSync();
+    expect(field(target, "chat_id").value).toBe("-100777");
+  });
+
+  it("an explicit reload during a poll runs after it, never alongside", async () => {
+    let release: () => void = () => {};
+    const onPoll = vi.fn(() => new Promise<void>((r) => { release = r; }));
+    vi.useFakeTimers();
+    const { target, props } = mountReactive({ onPoll });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onPoll).toHaveBeenCalledTimes(1);
+    q<HTMLButtonElement>(target, "[data-action='tg-save']").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(props.call).toHaveBeenCalled();
+    expect(props.onReload).not.toHaveBeenCalled();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(props.onReload).toHaveBeenCalledTimes(1);
   });
 });

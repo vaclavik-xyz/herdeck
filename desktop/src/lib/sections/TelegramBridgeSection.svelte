@@ -21,7 +21,7 @@
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
 
   let {
-    bridges, localTelegram, call, onReload, initialTarget = "",
+    bridges, localTelegram, call, onReload, onPoll, initialTarget = "",
   }: {
     bridges: Record<string, BridgeShared>;
     /** This Mac's saved `[notifications.telegram]` (null = none): source of "Move". */
@@ -30,6 +30,8 @@
     call: TelegramCallFn | null;
     /** Re-read `GET /config` (after a 409 or a change). */
     onReload: () => Promise<void>;
+    /** The periodic status read: bridges only, quietly (default: onReload). */
+    onPoll?: () => Promise<void>;
     initialTarget?: string;
   } = $props();
 
@@ -94,6 +96,7 @@
       move_no_token: "Settings moved to bridge {id}. {detail}",
       no_runtime: "Not available in the browser preview.",
       refresh: "Refresh",
+      disconnected: "Bridge {id} is not connected. Its Telegram settings come back when it reconnects; unsaved edits here are kept.",
       refresh_title: "Re-read the bridge's Telegram status and recent chats now (also refreshed every 3 s while shown)",
     },
     cs: {
@@ -155,6 +158,7 @@
       move_no_token: "Nastavení přesunuto na bridge {id}. {detail}",
       no_runtime: "V náhledu v prohlížeči není k dispozici.",
       refresh: "Obnovit",
+      disconnected: "Bridge {id} není připojený. Nastavení Telegramu se vrátí, až se znovu připojí; neuložené úpravy tady zůstanou.",
       refresh_title: "Znovu načte stav Telegramu na bridgi a nedávné chaty (když je vidět, obnovuje se i samo každé 3 s)",
     },
   });
@@ -162,8 +166,13 @@
 
   let pick = $state(untrack(() => initialTarget));
   const ids = $derived(telegramIds(bridges));
-  const target = $derived(ids.includes(pick) ? pick : "");
-  const bt = $derived(target === "" ? undefined : bridges[target]?.telegram);
+  // A picked bridge stays the target while it is briefly disconnected (a flap
+  // must not fall back to This Mac, stop the polling or drop unsaved edits); only
+  // a bridge that left the config falls back.
+  const target = $derived(ids.includes(pick) || (pick !== "" && pick in bridges) ? pick : "");
+  const available = $derived(target !== "" && ids.includes(target));
+  const options = $derived(target === "" || ids.includes(target) ? ids : [...ids, target].sort());
+  const bt = $derived(available ? bridges[target]?.telegram : undefined);
 
   // What this editor saved, until the bridge's broadcast reaches `GET /config`.
   let known = $state<Record<string, { revision: number; settings: Record<string, unknown> }>>({});
@@ -186,9 +195,15 @@
   let tokenValue = $state("");
   let tokenAssumed = $state<{ id: string; value: "file" | null } | null>(null);
 
-  const seedKey = $derived(`${target}|${bt?.revision ?? -1}|${seedTick}`);
+  // Reseed the form only from a connected bridge's document, and only when the
+  // bridge, its revision or a forced reseed changed — not when it merely went
+  // away and came back with the same revision.
+  const seedKey = $derived(available ? `${target}|${bt?.revision ?? -1}|${seedTick}` : null);
+  let seeded: string | null = null;
   $effect(() => {
-    void seedKey;
+    const key = seedKey;
+    if (key == null || key === seeded) return;
+    seeded = key;
     untrack(() => {
       doc = docFrom(currentSettings());
       usersText = doc.allowed_user_ids.join(", ");
@@ -215,24 +230,40 @@
     if (tokenAssumed != null && tokenAssumed.id === target && (bt?.status.token ?? null) === tokenAssumed.value) tokenAssumed = null;
   });
 
-  const canCall = $derived(call != null && !busy);
+  const canCall = $derived(call != null && !busy && available);
 
   // The bridge's status (last sent/error, inbound, recent chats) changes on its
   // own; re-read it while a bridge is shown. One read at a time.
+  // Every read goes through `refresh` — one at a time, so an older response can
+  // never land after a newer one. A poll during a read is skipped; an explicit
+  // reload (`loud`) during a read runs once more after it.
   const POLL_MS = 3000;
-  let reloading = false;
-  async function reload(): Promise<void> {
-    if (reloading) return;
-    reloading = true;
+  let inflight: Promise<void> | null = null;
+  let queuedLoud = false;
+  async function drain(loud: boolean): Promise<void> {
     try {
-      await onReload();
+      let next: boolean | null = loud;
+      while (next != null) {
+        await (next || onPoll == null ? onReload() : onPoll());
+        next = queuedLoud ? true : null;
+        queuedLoud = false;
+      }
     } finally {
-      reloading = false;
+      inflight = null;
     }
   }
+  function refresh(loud: boolean): Promise<void> {
+    if (inflight == null) {
+      queuedLoud = false;
+      inflight = drain(loud);
+    } else if (loud) {
+      queuedLoud = true;
+    }
+    return inflight;
+  }
   $effect(() => {
-    if (target === "") return;
-    const timer = setInterval(() => void reload(), POLL_MS);
+    if (pick === "") return;
+    const timer = setInterval(() => void refresh(false), POLL_MS);
     return () => clearInterval(timer);
   });
   let trailing: ReturnType<typeof setTimeout> | null = null;
@@ -252,7 +283,7 @@
 
   async function reloadAfterStale(): Promise<void> {
     delete known[target];
-    await onReload();
+    await refresh(true);
     seedTick += 1;
   }
 
@@ -272,7 +303,7 @@
         const rev = typeof r.body.revision === "number" ? r.body.revision : baseRev + 1;
         known[target] = { revision: rev, settings };
         message = { bad: false, text: fmt(lm.saved, { rev }) };
-        void onReload();
+        void refresh(true);
       } else {
         message = { bad: true, text: reply(r) };
         if (r.status === 409) await reloadAfterStale();
@@ -304,12 +335,12 @@
       if (kind == null) {
         message = { bad: false, text: done };
         tokenAssumed = { id: target, value: assumed };
-        await onReload();
+        await refresh(true);
         // The bridge's status frame can trail its answer.
         if (trailing != null) clearTimeout(trailing);
         trailing = setTimeout(() => {
           trailing = null;
-          void reload();
+          void refresh(false);
         }, 1500);
       } else {
         message = { bad: true, text: tokenMessage(kind) };
@@ -339,7 +370,7 @@
     } finally {
       busy = false;
     }
-    void reload(); // last sent / last error changed
+    void refresh(false); // last sent / last error changed
   }
 
   function useChat(c: RecentChat): void {
@@ -375,7 +406,7 @@
         message = { bad: true, text: fmt(lm.move_no_token, { id: target, detail: tokenMessage(kind) }) };
       }
       seedTick += 1;
-      await onReload();
+      await refresh(true);
     } finally {
       busy = false;
     }
@@ -386,19 +417,24 @@
   }
 </script>
 
-{#if ids.length > 0}
+{#if options.length > 0}
   <div data-tg-section>
     <FieldGroup title={lm.title} description={lm.description}>
       <label class="field">
         <FieldCopy label="target" help={HELP.target} />
         <select data-tg-target value={target} onchange={(e) => (pick = (e.target as HTMLSelectElement).value)}>
           <option value="">{lm.this_mac}</option>
-          {#each ids as id (id)}<option value={id}>{id}</option>{/each}
+          {#each options as id (id)}<option value={id}>{id}</option>{/each}
         </select>
       </label>
 
       {#if target === ""}
         <p class="note" data-tg-this-mac>{lm.this_mac_note}</p>
+      {:else if !available}
+        <p class="note bad" role="status" data-tg-disconnected>{fmt(lm.disconnected, { id: target })}</p>
+        <div class="actions">
+          <button type="button" data-action="tg-refresh" title={lm.refresh_title} onclick={() => void refresh(true)}>{lm.refresh}</button>
+        </div>
       {:else}
         <div data-tg-form>
           <BooleanField label="enabled" help={HELP.enabled} value={doc.enabled} onchange={(v) => (doc.enabled = v)} />
@@ -461,7 +497,7 @@
           {#if canMove}
             <button type="button" data-action="tg-move" disabled={!canCall} title={fmt(lm.move_title, { id: target })} onclick={() => void move()}>{lm.move}</button>
           {/if}
-          <button type="button" data-action="tg-refresh" title={lm.refresh_title} onclick={() => void reload()}>{lm.refresh}</button>
+          <button type="button" data-action="tg-refresh" title={lm.refresh_title} onclick={() => void refresh(true)}>{lm.refresh}</button>
         </div>
         {#if message}<p class="note" class:bad={message.bad} role="status" data-tg-message>{message.text}</p>{/if}
         {#if testResult}<p class="note" class:bad={testResult.bad} role="status" data-tg-test-result>{testResult.text}</p>{/if}
