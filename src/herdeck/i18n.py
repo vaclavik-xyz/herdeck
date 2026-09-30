@@ -92,6 +92,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "notify.usage_resets_at": "resets {at}",
         "notify.usage_reset_title": "{provider} {window} reset",
         "notify.usage_reset_body": "you can continue",
+        # bridge-sent Telegram: the "Test" button of the editor (bridge_notify)
+        "telegram.test": "herdeck ✓ test",
         # accessible tile descriptions (desktop aria-label via /state)
         "a11y.empty_tile": "empty tile {n}",
         "a11y.pinned": "pinned",
@@ -206,6 +208,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "notify.usage_resets_at": "obnova {at}",
         "notify.usage_reset_title": "{provider} {window} obnoveno",
         "notify.usage_reset_body": "můžeš pokračovat",
+        "telegram.test": "herdeck ✓ zkušební zpráva",
         "a11y.empty_tile": "prázdná dlaždice {n}",
         "a11y.pinned": "připnuto",
         "a11y.subagents": "běžící subagenti: {n}",

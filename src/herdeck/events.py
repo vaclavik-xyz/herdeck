@@ -230,6 +230,9 @@ class EventHub:
         self._queue: asyncio.Queue[dict] | None = None
         self._pump: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
+        # In-process consumers of every emitted frame (the bridge's own
+        # Telegram notifier), called synchronously from _emit.
+        self._listeners: list[Callable[[dict], None]] = []
 
     def _now_ms(self) -> int:
         return int(self._clock() * 1000)
@@ -455,6 +458,11 @@ class EventHub:
             self._spawn(self._after_answer(ep))
 
     # --- the ring and the fan-out -------------------------------------------
+    def add_listener(self, fn: Callable[[dict], None]) -> None:
+        """Call ``fn(frame)`` for every emitted event frame (synchronously, on
+        the event loop). A failing listener is logged, never raised."""
+        self._listeners.append(fn)
+
     def _emit(self, ep: Episode, kind: str, *, at_ms: int, **extra) -> dict:
         self.seq += 1
         frame = {
@@ -478,6 +486,11 @@ class EventHub:
             self._ensure_pump()
             assert self._queue is not None
             self._queue.put_nowait(frame)
+        for listener in list(self._listeners):
+            try:
+                listener(frame)
+            except Exception:
+                log.warning("event listener failed", exc_info=True)
         return frame
 
     def _prune(self) -> None:
