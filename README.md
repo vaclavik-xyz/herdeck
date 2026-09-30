@@ -1349,8 +1349,10 @@ Behaviour:
   editor tells you when the active profile has such overlays).
 - **Several bridges.** Each bridge has its own document and each agent uses the
   settings of the bridge it runs on. "Apply to all bridges" in the editor writes
-  the same values to every connected bridge that supports the capability; the
-  per-bridge results are listed after Apply.
+  the same values to every connected bridge that has already adopted shared
+  settings (the option appears once at least two such bridges are connected);
+  unset or disconnected bridges are skipped. The per-bridge results are listed
+  after Apply.
 - **Offline.** The runtime caches the last document per bridge in
   `$HERDECK_RUNTIME_DIR/bridge-settings` (default `~/.cache/herdeck/bridge-settings`),
   so a restarted runtime applies the right rules before the bridge answers. A
