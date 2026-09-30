@@ -110,7 +110,7 @@ class SharedSettingsView:
             )
         else:
             try:
-                parsed = parse_shared(frame.settings)
+                parsed = parse_shared(frame.settings, strict=False)
             except (ConfigError, TypeError, ValueError) as exc:
                 log.warning(
                     "bridge %s sent invalid shared settings (revision %s), keeping previous: %s",
@@ -225,7 +225,7 @@ class SharedSettingsView:
                     updated_at_ms=doc.get("updated_at_ms") if _is_int(doc.get("updated_at_ms")) else 0,
                     updated_by=doc.get("updated_by") if isinstance(doc.get("updated_by"), str) else "",
                     raw=doc["settings"],
-                    settings=parse_shared(doc["settings"]),
+                    settings=parse_shared(doc["settings"], strict=False),
                     source="cache",
                 )
             except (OSError, ValueError, KeyError, TypeError, ConfigError):

@@ -87,3 +87,24 @@ def test_apply_replaces_shared_and_keeps_local_delivery():
 def test_lone_surrogates_are_rejected(bad):
     with pytest.raises(ConfigError):
         parse_shared(bad)
+
+
+def test_non_strict_ignores_unknown_top_level_section_with_warning(caplog):
+    raw = {"future": {"x": 1}, "macros": [{"label": "go", "text": "continue"}]}
+    with caplog.at_level("WARNING", logger="herdeck.shared_settings"):
+        s = parse_shared(raw, strict=False)
+    assert [m.label for m in s.macros] == ["go"]
+    assert "future" in caplog.text
+
+
+def test_strict_still_rejects_unknown_top_level_section():
+    with pytest.raises(ConfigError):
+        parse_shared({"future": {}, "macros": []})
+    with pytest.raises(ConfigError):
+        parse_shared({"future": {}}, strict=True)
+
+
+def test_unknown_key_inside_known_section_rejected_in_both_modes():
+    for strict in (True, False):
+        with pytest.raises(ConfigError):
+            parse_shared({"notifications": {"bogus": 1}}, strict=strict)
