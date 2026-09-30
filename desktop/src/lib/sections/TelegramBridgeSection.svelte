@@ -6,7 +6,7 @@
   // immediately with its own button (base revision -> 409 = changed elsewhere,
   // reload), not with the editor's Apply. The bot token is write-only: only its
   // status is ever shown.
-  import { untrack } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import BooleanField from "../fields/BooleanField.svelte";
   import NumberField from "../fields/NumberField.svelte";
   import SelectField from "../fields/SelectField.svelte";
@@ -93,6 +93,8 @@
       moved: "Telegram moved to bridge {id}. This Mac's own Telegram can now be turned off — the runtime already stops sending Telegram for agents on that bridge.",
       move_no_token: "Settings moved to bridge {id}. {detail}",
       no_runtime: "Not available in the browser preview.",
+      refresh: "Refresh",
+      refresh_title: "Re-read the bridge's Telegram status and recent chats now (also refreshed every 3 s while shown)",
     },
     cs: {
       title: "Telegram na bridgi",
@@ -152,6 +154,8 @@
       moved: "Telegram přesunut na bridge {id}. Vlastní Telegram tohoto Macu už můžeš vypnout — runtime pro agenty na tomto bridgi Telegram už sám neposílá.",
       move_no_token: "Nastavení přesunuto na bridge {id}. {detail}",
       no_runtime: "V náhledu v prohlížeči není k dispozici.",
+      refresh: "Obnovit",
+      refresh_title: "Znovu načte stav Telegramu na bridgi a nedávné chaty (když je vidět, obnovuje se i samo každé 3 s)",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -212,6 +216,29 @@
   });
 
   const canCall = $derived(call != null && !busy);
+
+  // The bridge's status (last sent/error, inbound, recent chats) changes on its
+  // own; re-read it while a bridge is shown. One read at a time.
+  const POLL_MS = 3000;
+  let reloading = false;
+  async function reload(): Promise<void> {
+    if (reloading) return;
+    reloading = true;
+    try {
+      await onReload();
+    } finally {
+      reloading = false;
+    }
+  }
+  $effect(() => {
+    if (target === "") return;
+    const timer = setInterval(() => void reload(), POLL_MS);
+    return () => clearInterval(timer);
+  });
+  let trailing: ReturnType<typeof setTimeout> | null = null;
+  onDestroy(() => {
+    if (trailing != null) clearTimeout(trailing);
+  });
 
   function reply(r: TelegramReply): string {
     const detail = Array.isArray(r.body.messages) ? r.body.messages.filter((m): m is string => typeof m === "string").join("; ") : "";
@@ -278,7 +305,12 @@
         message = { bad: false, text: done };
         tokenAssumed = { id: target, value: assumed };
         await onReload();
-        setTimeout(() => void onReload(), 1500); // the bridge's status frame can trail its answer
+        // The bridge's status frame can trail its answer.
+        if (trailing != null) clearTimeout(trailing);
+        trailing = setTimeout(() => {
+          trailing = null;
+          void reload();
+        }, 1500);
       } else {
         message = { bad: true, text: tokenMessage(kind) };
       }
@@ -307,6 +339,7 @@
     } finally {
       busy = false;
     }
+    void reload(); // last sent / last error changed
   }
 
   function useChat(c: RecentChat): void {
@@ -428,6 +461,7 @@
           {#if canMove}
             <button type="button" data-action="tg-move" disabled={!canCall} title={fmt(lm.move_title, { id: target })} onclick={() => void move()}>{lm.move}</button>
           {/if}
+          <button type="button" data-action="tg-refresh" title={lm.refresh_title} onclick={() => void reload()}>{lm.refresh}</button>
         </div>
         {#if message}<p class="note" class:bad={message.bad} role="status" data-tg-message>{message.text}</p>{/if}
         {#if testResult}<p class="note" class:bad={testResult.bad} role="status" data-tg-test-result>{testResult.text}</p>{/if}

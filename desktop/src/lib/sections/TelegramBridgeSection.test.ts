@@ -378,3 +378,82 @@ describe("browser preview / language", () => {
     }
   });
 });
+
+describe("refreshing the bridge's status", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("Refresh re-reads the config and has a tooltip in en and cs", async () => {
+    for (const lang of ["en", "cs"] as const) {
+      setLang(lang);
+      const onReload = vi.fn(async () => {});
+      const { target } = render({ onReload });
+      const button = q<HTMLButtonElement>(target, "[data-action='tg-refresh']");
+      expect(text(button)).toBe(lang === "en" ? "Refresh" : "Obnovit");
+      expect(button.title).toContain(lang === "en" ? "status" : "stav");
+      button.click();
+      await vi.waitFor(() => expect(onReload).toHaveBeenCalledTimes(1));
+      cleanup?.();
+      cleanup = null;
+    }
+  });
+
+  it("a finished test re-reads the status (last sent / last error)", async () => {
+    const onReload = vi.fn(async () => {});
+    const call = vi.fn(async () => ({ status: 200, body: { ok: false, error: "chat not found" } }));
+    const { target } = render({ call, onReload });
+    q<HTMLButtonElement>(target, "[data-action='tg-test']").click();
+    await vi.waitFor(() => expect(text(q(target, "[data-tg-test-result]"))).toContain("chat not found"));
+    await vi.waitFor(() => expect(onReload).toHaveBeenCalled());
+  });
+
+  it("polls every 3 s while a bridge is shown, stops for This Mac and on unmount", async () => {
+    vi.useFakeTimers();
+    const onReload = vi.fn(async () => {});
+    const { target } = render({ onReload });
+    await vi.advanceTimersByTimeAsync(2_900);
+    expect(onReload).toHaveBeenCalledTimes(0);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(onReload).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onReload).toHaveBeenCalledTimes(2);
+    await type(q<HTMLSelectElement>(target, "select[data-tg-target]"), "");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(onReload).toHaveBeenCalledTimes(2);
+    await type(q<HTMLSelectElement>(target, "select[data-tg-target]"), "fresh");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onReload).toHaveBeenCalledTimes(3);
+    cleanup?.();
+    cleanup = null;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(onReload).toHaveBeenCalledTimes(3);
+  });
+
+  it("a slow reload is not overlapped by the next poll", async () => {
+    vi.useFakeTimers();
+    let release: () => void = () => {};
+    const onReload = vi.fn(() => new Promise<void>((r) => { release = r; }));
+    render({ onReload });
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(onReload).toHaveBeenCalledTimes(1);
+    release();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onReload).toHaveBeenCalledTimes(2);
+  });
+
+  it("the delayed re-read after a token change does not fire after unmount", async () => {
+    vi.useFakeTimers();
+    const onReload = vi.fn(async () => {});
+    const call = vi.fn(async () => ({ status: 200, body: { ok: true } }));
+    const { target } = render({ call, onReload, initialTarget: "m4" });
+    q<HTMLButtonElement>(target, "[data-action='tg-token-clear']").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call).toHaveBeenCalledWith("m4", "token", { action: "clear" });
+    const before = onReload.mock.calls.length;
+    cleanup?.();
+    cleanup = null;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onReload).toHaveBeenCalledTimes(before);
+  });
+});
