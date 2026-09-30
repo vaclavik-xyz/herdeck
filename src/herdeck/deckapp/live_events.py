@@ -371,14 +371,14 @@ class BridgeEventsMixin:
         return StampingRunner(runner, lambda msg: self._stamp_answer(server_id, msg))
 
     # --- reminders --------------------------------------------------------------
-    def _reminder_start(self, at_ms: int | None) -> tuple[float, int]:
+    def _reminder_start(self, at_ms: int | None, interval: float) -> tuple[float, int]:
         """(since on the notify clock, reminders already due) for a block that
-        began at bridge time ``at_ms`` (None: now)."""
+        began at bridge time ``at_ms`` (None: now); ``interval`` = the agent's
+        bridge's remind_after in seconds."""
         now = self._notify_clock()
         if at_ms is None:
             return now, 0
         elapsed = max(0.0, time.time() - at_ms / 1000.0)
-        interval = self._config.notifications.remind_after * 60.0
         # Reminders that fell due before we heard of the block are not sent late.
         return now - elapsed, int(elapsed // interval) if interval > 0 else 0
 

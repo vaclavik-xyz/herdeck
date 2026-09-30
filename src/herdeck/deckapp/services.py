@@ -99,7 +99,10 @@ class RuntimeServices:
         self._thread.start()
         self._ready.wait(5)
         self.control = RuntimeAgentControl(
-            config, send=self._send, current_agent=self._current_agent
+            config,
+            send=self._send,
+            current_agent=self._current_agent,
+            config_for=self._config_for,
         )
         self.semantic = SemanticAPI(
             self.control,
@@ -163,6 +166,12 @@ class RuntimeServices:
     def _agents(self) -> list[AgentState]:
         agents = getattr(self._source(), "semantic_agents", None)
         return list(agents()) if callable(agents) else []
+
+    def _config_for(self, server_id: str) -> Config | None:
+        """The CURRENT source's effective config for ``server_id``'s agents
+        (looked up per call, so a swapped source is never stale)."""
+        config_for = getattr(self._source(), "config_for", None)
+        return config_for(server_id) if callable(config_for) else None
 
     def _current_agent(self, key: AgentKey) -> AgentState | None:
         agent = getattr(self._source(), "semantic_agent", None)

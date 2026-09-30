@@ -150,7 +150,12 @@ class DeckApp:
         # so repeated /state polls do not churn tile versions).
         config_path = getattr(config_service, "_config_path", None)
         self._pin_store = pin_store or (PinStore(Path(config_path).with_name("pins.json")) if config_path else None)
-        self._orch = Orchestrator(config, slots=self._slots, clock=self._clock)
+        # Decisions about an agent use its own bridge's shared settings
+        # (LiveSource.config_for); a swap builds a new orchestrator bound to
+        # the new source, so it never asks a stale source.
+        self._orch = Orchestrator(
+            config, slots=self._slots, clock=self._clock, config_for=_config_for_of(source)
+        )
         self._load_pins(self._orch)
         self._owns_icons = icon_provider is None
         self._icons_dir = config.hardware.icons_dir
@@ -289,7 +294,20 @@ class DeckApp:
             on_alert=self._deliver_usage_alerts,
             on_change=self._on_usage_changed,
             server_ids=self._usage_server_ids(self._source),
+            alert_settings=self._usage_alert_settings,
         )
+
+    def _usage_alert_settings(self, server_id: str) -> tuple[list[int], bool] | None:
+        """Bridge-fed usage of ``server_id`` alerts by that bridge's shared
+        ``alert_at`` / ``alert_reset`` (the CURRENT source's config_for);
+        None = the hub's own (local) settings."""
+        config_for = _config_for_of(getattr(self, "_source", None))
+        if config_for is None:
+            return None
+        usage = getattr(config_for(server_id), "usage", None)
+        if usage is None:
+            return None
+        return list(usage.alert_at), bool(usage.alert_reset)
 
     @staticmethod
     def _usage_server_ids(source) -> list[str]:
@@ -863,7 +881,9 @@ class DeckApp:
         cols, rows = new_source.config.grid
         fixed = getattr(self, "_fixed_slots", None)
         slots = fixed if fixed is not None else cols * rows - 2
-        orch = Orchestrator(new_source.config, slots=slots, clock=clk)
+        orch = Orchestrator(
+            new_source.config, slots=slots, clock=clk, config_for=_config_for_of(new_source)
+        )
         self._load_pins(orch)
         icons_dir = new_source.config.hardware.icons_dir
         icons = (
@@ -1732,6 +1752,13 @@ class DeckApp:
                     self._send(404)
 
         return Handler
+
+
+def _config_for_of(source):
+    """The source's per-server effective config lookup (LiveSource.config_for),
+    or None for a source without bridges (mock/demo): its own config applies."""
+    config_for = getattr(source, "config_for", None)
+    return config_for if callable(config_for) else None
 
 
 def _default_icons(overrides_dir: str | None = None):

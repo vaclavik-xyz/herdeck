@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from . import layout
@@ -155,10 +156,16 @@ class Orchestrator:
         clock=None,
         project_icons: ProjectIconStore | None = None,
         wall_clock=None,
+        config_for: Callable[[str], Config] | None = None,
     ):
         import time
 
         self.config = config
+        # Per-server effective config (LiveSource.config_for: the local config
+        # with that bridge's shared settings applied). Every decision about an
+        # agent (answer profile, safety, macros) and the launcher's target
+        # server read it; None = this orchestrator's own config for all.
+        self._server_config = config_for
         cols, rows = config.grid
         self.slots = slots if slots is not None else cols * rows
         self._clock = clock or time.monotonic
@@ -504,7 +511,8 @@ class Orchestrator:
         agent = self._agents.get(key)
         if agent is None:
             return []
-        safety = self.config.safety
+        cfg = self._config_for(key.server_id)
+        safety = cfg.safety
         confirm_for = set(safety.require_confirm_for)
         out: list[dict] = []
         if agent.backend == "t3":
@@ -521,7 +529,7 @@ class Orchestrator:
             return out
         if agent.status is not Status.BLOCKED or not prompt.strip():
             return []
-        profile = profile_for(self.config, agent.agent_type)
+        profile = profile_for(cfg, agent.agent_type)
         options = layout.parse_options(prompt)
         if options:
             for opt in options:
@@ -1035,14 +1043,15 @@ class Orchestrator:
         return RenderState(tiles, PanelView(self._tr("profiles_title"), headline=locked))
 
     def _render_launcher(self) -> RenderState:
-        types = list(self.config.start_profiles)
+        start_profiles = self._launch_start_profiles()
+        types = list(start_profiles)
         entries = types + (["Profiles"] if len(self.config.meta.profile_names) > 1 else [])
         back_i = self.slots - 1
         tiles: list[TileView] = []
         for i in range(self.slots):
             if i < len(entries) and i < back_i:
                 entry = entries[i]
-                agent_type = entry if entry in self.config.start_profiles else None
+                agent_type = entry if entry in start_profiles else None
                 # "Profiles" is a logic sentinel matched by _press_launcher — translate
                 # only the rendered label, never the entries list.
                 label = self._tr("profiles_entry") if agent_type is None else entry
@@ -1071,6 +1080,18 @@ class Orchestrator:
     def _launch_server(self) -> str | None:
         """Where a launcher press starts the agent: the first overview server."""
         return self.config.overview_order[0] if self.config.overview_order else None
+
+    def _launch_start_profiles(self) -> dict[str, list[str]]:
+        """The launcher's agent types: the TARGET server's [start_profiles]."""
+        target = self._launch_server()
+        cfg = self._config_for(target) if target is not None else self.config
+        return cfg.start_profiles
+
+    def _config_for(self, server_id: str) -> Config:
+        """The effective config for decisions about ``server_id``'s agents."""
+        if self._server_config is None:
+            return self.config
+        return self._server_config(server_id)
 
     def tick(self) -> list[int]:
         """Advance the spinner phase; return overview tile indices that are working.
@@ -1108,9 +1129,10 @@ class Orchestrator:
         agent = self._agents.get(self._drill)
         stop_i, back_i = self.slots - 2, self.slots - 1
         actions: list[dict] = []
+        cfg = self._config_for(self._drill.server_id) if self._drill is not None else self.config
         if agent is not None and agent.backend == "t3":
             for option in agent.backend_actions:
-                if option["id"] == "approve_always" and not self.config.safety.approve_always:
+                if option["id"] == "approve_always" and not cfg.safety.approve_always:
                     continue
                 actions.append({"id": option["id"], "label": option["label"], "confirm": option.get("confirm", False),
                     "subtext": option.get("subtext", ""),
@@ -1119,7 +1141,7 @@ class Orchestrator:
                         "backend_action", key.server_id, key.pane_id, action=o["id"],
                         payload=o["payload"], decision_revision=rev)})
             if "continue" in agent.capabilities:
-                for macro in self.config.macros:
+                for macro in cfg.macros:
                     actions.append({"label": macro.label[:_OPTION_LABEL_MAX],
                         "make": lambda key, text=macro.text, rev=agent.backend_revision: Command(
                             "backend_action", key.server_id, key.pane_id, action="continue",
@@ -1131,7 +1153,7 @@ class Orchestrator:
                 profile = self._profile_for(self._drill)
                 for opt in options:
                     action_id = self._option_action_id(opt.key, opt.label, profile)
-                    if action_id == "approve_always" and not self.config.safety.approve_always:
+                    if action_id == "approve_always" and not cfg.safety.approve_always:
                         continue
                     actions.append(
                         {
@@ -1163,7 +1185,7 @@ class Orchestrator:
                 # approval before the prompt has been read.)
                 profile = self._profile_for(self._drill)
                 fallback = [("approve", self._tr("act.approve"), profile.approve)]
-                if self.config.safety.approve_always:
+                if cfg.safety.approve_always:
                     fallback.append(
                         ("approve_always", self._tr("act.approve_always"), profile.approve_always)
                     )
@@ -1201,7 +1223,7 @@ class Orchestrator:
                         ),
                     }
                 )
-            for m in self.config.macros:
+            for m in cfg.macros:
                 actions.append(
                     {
                         "label": m.label[:_OPTION_LABEL_MAX],
@@ -1334,7 +1356,7 @@ class Orchestrator:
 
     # --- presses ---
     def _profile_for(self, key: AgentKey):
-        return profile_for(self.config, self._agents[key].agent_type)
+        return profile_for(self._config_for(key.server_id), self._agents[key].agent_type)
 
     def _option_action_id(self, option_key: str, option_label: str, profile) -> str | None:
         return option_action_id(option_key, option_label, profile)
@@ -1527,7 +1549,8 @@ class Orchestrator:
         return []
 
     def _press_launcher(self, index: int) -> list[Command]:
-        types = list(self.config.start_profiles)
+        start_profiles = self._launch_start_profiles()
+        types = list(start_profiles)
         entries = types + (["Profiles"] if len(self.config.meta.profile_names) > 1 else [])
         back_i = self.slots - 1
         if index == back_i:
@@ -1541,7 +1564,7 @@ class Orchestrator:
                 self._profile_menu_origin = "launcher"
                 self._launcher = False
                 return []
-            argv = list(self.config.start_profiles[name])
+            argv = list(start_profiles[name])
             server = self._launch_server()
             if server is None:
                 return []
@@ -1591,7 +1614,8 @@ class Orchestrator:
             if target.backend == "t3" and "stop" not in target.capabilities:
                 return []
             action = "act_force"
-            if action in self.config.safety.require_confirm_for and not self._confirm_armed(
+            confirm_for = self._config_for(key.server_id).safety.require_confirm_for
+            if action in confirm_for and not self._confirm_armed(
                 action, key
             ):
                 self._arm_confirm(action, key)  # (re-)arm; an expired arm never fires
@@ -1613,7 +1637,8 @@ class Orchestrator:
         if index < len(actions):  # send option number or macro text
             action_id = actions[index].get("id")
             confirm_key = actions[index].get("confirm_key") or f"idx:{index}"
-            if (actions[index].get("confirm") or action_id in self.config.safety.require_confirm_for) and not self._confirm_armed(
+            confirm_for = self._config_for(key.server_id).safety.require_confirm_for
+            if (actions[index].get("confirm") or action_id in confirm_for) and not self._confirm_armed(
                 confirm_key, key
             ):
                 self._arm_confirm(confirm_key, key)  # (re-)arm; an expired arm never fires

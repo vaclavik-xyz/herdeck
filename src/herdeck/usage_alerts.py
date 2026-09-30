@@ -94,6 +94,12 @@ class UsageTracker:
         self._reset_level = max(self._levels, default=100)
         self._states: dict[tuple[str, str], _WindowState] = {}
 
+    def forget(self, providers) -> None:
+        """Drop the window state of ``providers`` (now judged by another
+        tracker), so a clock-driven reset is never announced twice."""
+        gone = set(providers)
+        self._states = {k: v for k, v in self._states.items() if k[0] not in gone}
+
     def observe(self, usages, now: float):
         """Feed one poll (``now`` = wall-clock seconds).
 

@@ -472,10 +472,11 @@ class LiveSource(
             return "stale"
         terminal_id = state.terminal_id or None
         if choice is not None:
+            cfg = self.config_for(key.server_id)  # the agent's own bridge's rules
             answer = binary_answer(
                 prompt if isinstance(prompt, str) else "",
-                profile_for(self._config, state.agent_type),
-                self._config.safety,
+                profile_for(cfg, state.agent_type),
+                cfg.safety,
             )
             if answer is None or answer.sig != sig:
                 return "stale"
@@ -735,8 +736,10 @@ class LiveSource(
         ``at_ms``: when the bridge saw the transition (reminders count from it)."""
         if self._notifier is None:
             return
+        # Which events alert is the agent's bridge's rule ([notifications].on
+        # is shared); how they are delivered (sound, backends) stays local.
         n = self._config.notifications
-        if event not in n.on:
+        if event not in self.config_for(agent.key.server_id).notifications.on:
             return
         if event == "done" and not deferred and self._quiet_done(agent):
             return
@@ -771,8 +774,8 @@ class LiveSource(
     def _quiet_done(self, agent: AgentState) -> bool:
         """[notifications].done_min_work: True when this "done" must not alert
         now — a short run is dropped (done_short_delay 0) or re-checked later.
-        An unknown run length counts as long."""
-        n = self._config.notifications
+        An unknown run length counts as long. The agent's bridge's rule."""
+        n = self.config_for(agent.key.server_id).notifications
         if n.done_min_work <= 0:
             return False
         with self._lock:
@@ -828,10 +831,12 @@ class LiveSource(
     def _track_reminder(self, key: AgentKey, at_ms: int | None = None) -> None:
         """A block episode began: remember when, for its reminders. With the
         bridge's ``at_ms`` they count from bridge time, not from when this
-        runtime heard of it (a replay after sleep)."""
-        if self._config.notifications.remind_after <= 0:
+        runtime heard of it (a replay after sleep). ``remind_after`` is the
+        agent's bridge's rule."""
+        interval = self.config_for(key.server_id).notifications.remind_after * 60.0
+        if interval <= 0:
             return
-        since, sent = self._reminder_start(at_ms)
+        since, sent = self._reminder_start(at_ms, interval)
         with self._lock:
             episode = self._block_episode.get(key)
             if episode is None:
@@ -857,21 +862,29 @@ class LiveSource(
     def check_reminders(self) -> int:
         """Alert again for every agent still blocked in the same episode
         ``remind_after`` minutes (x1, x2, x3) after it began. Returns how many
-        reminders were scheduled."""
+        reminders were scheduled. Each agent's interval is its bridge's
+        ``remind_after`` (0 there = no more reminders for it)."""
         n = self._config.notifications
-        if self._notifier is None or n.remind_after <= 0:
+        if self._notifier is None:
             return 0
-        interval = n.remind_after * 60.0
+        with self._lock:
+            servers = {key.server_id for key in self._reminders}
+        # Looked up outside self._lock (config_for takes its own locks).
+        intervals = {
+            sid: self.config_for(sid).notifications.remind_after * 60.0 for sid in servers
+        }
         now = self._notify_clock()
         due: list[tuple[AgentState, str, float]] = []
         with self._lock:
             for key, (episode, since, sent) in list(self._reminders.items()):
                 state = self._agents.get(key)
+                interval = intervals.get(key.server_id, 0.0)
                 if (
                     state is None
                     or state.status is not Status.BLOCKED
                     or self._block_episode.get(key) != episode
                     or sent >= REMIND_MAX
+                    or interval <= 0
                 ):
                     del self._reminders[key]
                     continue
@@ -1130,9 +1143,8 @@ class LiveSource(
         # Answers go out as herdr keystrokes / text; other backends (T3) have
         # their own decision API and keep plain banners.
         if n.banner_actions and "macos" in n.backends and agent.backend == "herdr":
-            answer = binary_answer(
-                prompt, profile_for(self._config, agent.agent_type), self._config.safety
-            )
+            cfg = self.config_for(agent.key.server_id)  # the agent's bridge's rules
+            answer = binary_answer(prompt, profile_for(cfg, agent.agent_type), cfg.safety)
             if answer is not None:
                 meta["actions"] = [
                     {"id": "approve", "label": tr(lang, "act.approve")},
@@ -1193,9 +1205,17 @@ class LiveSource(
         banners of keys that left the status and return the states that just
         entered it (to alert). The caller fires alerts only after EVERY event
         withdrew — a done->blocked agent's new blocked banner must never be
-        removed by the withdraw of its old done banner."""
-        if self._notifier is None or event not in self._config.notifications.on:
+        removed by the withdraw of its old done banner. Only agents whose
+        bridge's [notifications].on names ``event`` take part."""
+        if self._notifier is None:
             return []
+        servers = {key.server_id for key in scope} | {s.key.server_id for s in states}
+        active = {sid for sid in servers if event in self.config_for(sid).notifications.on}
+        if not active:
+            return []
+        if active != servers:
+            scope = {key for key in scope if key.server_id in active}
+            states = [s for s in states if s.key.server_id in active]
         tracked = self._notify_keys[event]
         to, entered_here = newly_entered(NOTIFY_EVENT_STATUSES[event], tracked & scope, states)
         self._notify_keys[event] = (tracked - scope) | entered_here
@@ -1208,11 +1228,18 @@ class LiveSource(
         """Advance the subagent bursts of ``states`` and alert the ones whose
         last subagent finished while the agent is not working (once per burst).
         Bridge lifecycle events carry no subagent news, so this always runs
-        on the runtime's own view."""
-        if self._notifier is None or not self._config.notifications.subagents_done:
+        on the runtime's own view. Only for agents whose bridge enables
+        [notifications].subagents_done."""
+        if self._notifier is None:
             return
         self._subagent_bursts.forget(gone)
+        enabled: dict[str, bool] = {}
         for state in states:
+            sid = state.key.server_id
+            if sid not in enabled:
+                enabled[sid] = self.config_for(sid).notifications.subagents_done
+            if not enabled[sid]:
+                continue
             count = self._subagent_bursts.observe(state)
             if count is not None:
                 self._fire_subagents_done(state, count)

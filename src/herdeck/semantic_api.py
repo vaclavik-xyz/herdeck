@@ -181,7 +181,9 @@ class SemanticAPI:
         if capacity_error is not None:
             return capacity_error
 
-        requires_confirmation = action == "stop" or self._control.requires_confirmation(action)
+        requires_confirmation = action == "stop" or self._control.requires_confirmation(
+            action, server_id=target[0]
+        )
         if requires_confirmation:
             confirmation = payload.get("confirmation")
             if confirmation is None:
