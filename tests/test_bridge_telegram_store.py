@@ -113,11 +113,19 @@ def test_token_invalid_leaves_file(tmp_path, bad):
 
 def test_token_env_wins(tmp_path):
     env_tok = "987654321:" + "B" * 35
-    s = mk(tmp_path, {"HERDECK_TELEGRAM_TOKEN": env_tok})
+    s = mk(tmp_path, {"HERDECK_BRIDGE_TELEGRAM_TOKEN": env_tok})
     assert s.token() == env_tok and s.token_source() == "env"
     assert s.set_token(TOKEN) == "env_locked"
     assert s.clear_token() == "env_locked"
     assert not s.token_path.exists()
+
+
+def test_runtime_token_env_is_not_the_bridges(tmp_path):
+    # HERDECK_TELEGRAM_TOKEN is the runtime's own [notifications.telegram]
+    # variable; a bridge sharing that environment must not pick its bot up.
+    s = mk(tmp_path, {"HERDECK_TELEGRAM_TOKEN": "987654321:" + "B" * 35})
+    assert s.token() is None and s.token_source() is None
+    assert s.set_token(TOKEN) is None and s.token_source() == "file"
 
 
 def test_frame_never_has_token(tmp_path):
@@ -149,13 +157,13 @@ def test_corrupt_doc_served_unset(tmp_path):
 def test_default_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("HERDECK_BRIDGE_TELEGRAM", raising=False)
-    monkeypatch.delenv("HERDECK_TELEGRAM_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("HERDECK_BRIDGE_TELEGRAM_TOKEN_FILE", raising=False)
     doc, tok = default_paths()
-    assert doc.name == "bridge-telegram.toml" and tok.name == "telegram-token"
+    assert doc.name == "bridge-telegram.toml" and tok.name == "bridge-telegram-token"
     doc, tok = default_paths("a/b")
     assert doc.name == "local-bridge-telegram-a_b.toml"
     monkeypatch.setenv("HERDECK_BRIDGE_TELEGRAM", "/x/d.toml")
-    monkeypatch.setenv("HERDECK_TELEGRAM_TOKEN_FILE", "/x/t")
+    monkeypatch.setenv("HERDECK_BRIDGE_TELEGRAM_TOKEN_FILE", "/x/t")
     assert default_paths() == (type(doc)("/x/d.toml"), type(doc)("/x/t"))
 
 
@@ -182,7 +190,7 @@ def test_garbage_token_ignored(tmp_path):
     s = mk(tmp_path)
     s.token_path.write_text("garbage")
     assert s.token() is None and s.token_source() is None
-    s2 = mk(tmp_path, {"HERDECK_TELEGRAM_TOKEN": "junk"})
+    s2 = mk(tmp_path, {"HERDECK_BRIDGE_TELEGRAM_TOKEN": "junk"})
     assert s2.token() is None and s2.token_source() is None
     assert s2.set_token(TOKEN) is None
 
@@ -198,13 +206,13 @@ def _tg_warnings(caplog):
 
 def test_invalid_env_token_warned_once_without_value(tmp_path, caplog):
     caplog.set_level("WARNING", logger="herdeck.bridge_telegram")
-    s = mk(tmp_path, {"HERDECK_TELEGRAM_TOKEN": BAD_ENV})
+    s = mk(tmp_path, {"HERDECK_BRIDGE_TELEGRAM_TOKEN": BAD_ENV})
     for _ in range(5):
         assert s.token() is None
         s.token_source()
     warned = _tg_warnings(caplog)
     assert len(warned) == 1
-    assert "HERDECK_TELEGRAM_TOKEN" in warned[0].getMessage()
+    assert "HERDECK_BRIDGE_TELEGRAM_TOKEN" in warned[0].getMessage()
     for part in (BAD_ENV, "12345678", "short-typo-secretish", "typo"):
         assert part not in caplog.text
 
@@ -228,7 +236,7 @@ def test_invalid_token_file_warned_once_and_again_after_a_fix(tmp_path, caplog):
 
 def test_missing_or_empty_token_not_warned(tmp_path, caplog):
     caplog.set_level("WARNING", logger="herdeck.bridge_telegram")
-    s = mk(tmp_path, {"HERDECK_TELEGRAM_TOKEN": "  "})
+    s = mk(tmp_path, {"HERDECK_BRIDGE_TELEGRAM_TOKEN": "  "})
     assert s.token() is None
     s.token_path.write_text("\n")
     assert s.token() is None

@@ -449,24 +449,24 @@ as away), `language` and `sound`. Telegram is active on the bridge only when
 it is enabled, a token is set and `chat_id` is set. The interactive blocked
 alert text (with buttons) is always English; other messages follow `language`.
 
-Token: the env var `HERDECK_TELEGRAM_TOKEN` wins over the token file
-(`$HERDECK_TELEGRAM_TOKEN_FILE`, default `~/.config/herdeck/telegram-token`,
-mode 0600). A token set through the environment cannot be changed or cleared
-from the editor. The token never appears in wire frames or logs. At startup the
-bridge logs where its token comes from (`env`, `file` or `none`, never the
-value); a malformed token (env or file) is logged once as a warning and
-ignored, so the editor shows "not set". The embedded local bridge of the
-desktop app (no separate bridge) uses only its own per-session token file and
-ignores `HERDECK_TELEGRAM_TOKEN`, which belongs to the runtime's own Telegram.
+Token: the env var `HERDECK_BRIDGE_TELEGRAM_TOKEN` wins over the token file
+(`$HERDECK_BRIDGE_TELEGRAM_TOKEN_FILE`, default
+`~/.config/herdeck/bridge-telegram-token`, mode 0600). A token set through the
+environment cannot be changed or cleared from the editor. The token never
+appears in wire frames or logs. At startup the bridge logs where its token
+comes from (`env`, `file` or `none`, never the value); a malformed token (env
+or file) is logged once as a warning and ignored, so the editor shows "not
+set". The embedded local bridge of the desktop app (no separate bridge) uses
+only its own per-session token file and ignores the environment.
 
-Prefer setting a standalone bridge's token from the editor (it goes to the
-token file). `HERDECK_TELEGRAM_TOKEN` is the same variable the runtime's
-`[notifications.telegram]` reads by default, so do not export the runtime's
-value into the bridge's environment (shell profile, launchd plist, systemd
-unit) unless that bot is meant for the bridge: with any token the bridge
-long-polls `getUpdates` for chat discovery even while its Telegram is
-disabled, so it would compete with the runtime for that bot (HTTP 409 on both
-sides, and button presses on the runtime's alerts reaching the wrong process).
+The bridge deliberately does not read `HERDECK_TELEGRAM_TOKEN`, the variable
+the runtime's `[notifications.telegram]` uses by default, so a bridge that
+shares an environment with a runtime never picks up the runtime's bot. Prefer
+setting a standalone bridge's token from the editor (it goes to the token
+file). With any token the bridge long-polls `getUpdates` for chat discovery
+even while its Telegram is disabled, so give it a bot of its own: the same
+token on a bridge and a runtime (or two bridges) makes them fight over one bot
+(HTTP 409 on both sides, button presses reaching the wrong process).
 
 One bot per bridge. Telegram allows a single `getUpdates` poller per bot, so
 the same token on two bridges, or on a bridge and a runtime that still uses it

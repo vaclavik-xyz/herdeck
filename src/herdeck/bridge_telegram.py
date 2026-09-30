@@ -2,7 +2,7 @@
 
 The document is a separate revisioned TOML file (not part of the shared
 settings) so older runtimes that reject unknown shared sections are unaffected.
-The bot token lives in its own 0600 file (or the ``HERDECK_TELEGRAM_TOKEN``
+The bot token lives in its own 0600 file (or the ``HERDECK_BRIDGE_TELEGRAM_TOKEN``
 env var, which wins). The token never appears in frames, results, logs or
 exception messages. Used from the bridge event loop only (no locking).
 """
@@ -33,8 +33,8 @@ TELEGRAM_CONFIG_CAPABILITY = "telegram_config"
 TELEGRAM_CAPABILITY = "telegram"
 
 ENV_DOC = "HERDECK_BRIDGE_TELEGRAM"
-ENV_TOKEN = "HERDECK_TELEGRAM_TOKEN"
-ENV_TOKEN_FILE = "HERDECK_TELEGRAM_TOKEN_FILE"
+ENV_TOKEN = "HERDECK_BRIDGE_TELEGRAM_TOKEN"
+ENV_TOKEN_FILE = "HERDECK_BRIDGE_TELEGRAM_TOKEN_FILE"
 
 _META = ("revision", "updated_at_ms", "updated_by")
 # Used with fullmatch(): a trailing newline must not slip past `$`.
@@ -128,10 +128,10 @@ def default_paths(session: str | None = None) -> tuple[Path, Path]:
         tok = os.environ.get(ENV_TOKEN_FILE)
         return (
             Path(doc) if doc else base / "bridge-telegram.toml",
-            Path(tok) if tok else base / "telegram-token",
+            Path(tok) if tok else base / "bridge-telegram-token",
         )
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session)
-    return base / f"local-bridge-telegram-{safe}.toml", base / f"local-telegram-token-{safe}"
+    return base / f"local-bridge-telegram-{safe}.toml", base / f"local-bridge-telegram-token-{safe}"
 
 
 class BridgeTelegramStore:

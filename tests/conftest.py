@@ -93,6 +93,7 @@ def _isolated_bridge_telegram(tmp_path, monkeypatch):
     """Bridges never read or write ~/.config/herdeck Telegram files, and a
     developer's own bot token never reaches a test bridge."""
     monkeypatch.delenv("HERDECK_TELEGRAM_TOKEN", raising=False)
+    monkeypatch.delenv("HERDECK_BRIDGE_TELEGRAM_TOKEN", raising=False)
     monkeypatch.setattr(
         "herdeck.bridge._telegram_default_paths",
         lambda session=None: (

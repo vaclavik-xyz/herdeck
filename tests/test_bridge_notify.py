@@ -608,7 +608,7 @@ async def test_status_shape(tmp_path):
 
 
 async def test_env_token_status(tmp_path):
-    n = await make(tmp_path, env={"HERDECK_TELEGRAM_TOKEN": TOKEN})
+    n = await make(tmp_path, env={"HERDECK_BRIDGE_TELEGRAM_TOKEN": TOKEN})
     assert n.status()["token"] == "env" and n.status()["active"] is True
 
 

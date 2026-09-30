@@ -229,7 +229,7 @@ describe("token row", () => {
     expect(text(q(target, "[data-tg-token]"))).toContain("set (env)");
     const clear = q<HTMLButtonElement>(target, "[data-action='tg-token-clear']");
     expect(clear.disabled).toBe(true);
-    expect(clear.title).toContain("HERDECK_TELEGRAM_TOKEN");
+    expect(clear.title).toContain("HERDECK_BRIDGE_TELEGRAM_TOKEN");
     expect(q<HTMLButtonElement>(target, "[data-action='tg-token-set']").disabled).toBe(true);
   });
 

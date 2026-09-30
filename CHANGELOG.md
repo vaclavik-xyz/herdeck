@@ -12,9 +12,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   editor (Notifications, Telegram on the bridge: "Set" / "Save token", recent
   chats with "Refresh", "Save Telegram settings", "Send test message",
   "Move Telegram from this Mac to the bridge"). Separate revisioned document
-  (`HERDECK_BRIDGE_TELEGRAM`) and token (`HERDECK_TELEGRAM_TOKEN` or
-  `HERDECK_TELEGRAM_TOKEN_FILE`; prefer the editor, which writes the token
-  file, over exporting the runtime's `HERDECK_TELEGRAM_TOKEN` to the bridge);
+  (`HERDECK_BRIDGE_TELEGRAM`) and token (`HERDECK_BRIDGE_TELEGRAM_TOKEN` or
+  `HERDECK_BRIDGE_TELEGRAM_TOKEN_FILE`, default
+  `~/.config/herdeck/bridge-telegram-token`; the bridge never reads the
+  runtime's `HERDECK_TELEGRAM_TOKEN`; prefer setting it from the editor);
   new capabilities `telegram_config` and `telegram`. The bridge logs its token
   source at startup and warns once about a malformed token. To find a group
   topic, send `/start@<botname>` in it (bots in privacy mode see only commands

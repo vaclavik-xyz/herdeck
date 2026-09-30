@@ -274,7 +274,7 @@ async def test_token_invalid(tmp_path, frames, msg):
 
 
 async def test_token_env_locked(tmp_path, frames):
-    async with _bridge(tmp_path, env={"HERDECK_TELEGRAM_TOKEN": OTHER}) as (url, _):
+    async with _bridge(tmp_path, env={"HERDECK_BRIDGE_TELEGRAM_TOKEN": OTHER}) as (url, _):
         a, _snap, first = await _connect(url, frames)
         assert first["status"]["token"] == "env"
         for msg in ({"action": "set", "token": TOKEN}, {"action": "clear"}):
@@ -565,7 +565,7 @@ def test_process_exit_is_not_held_by_a_long_poll(tmp_path, monkeypatch):
     """asyncio.run joins the default executor on exit; a pending 10 s fake
     getUpdates must not hold serve()'s shutdown."""
     monkeypatch.setattr(bridge_mod, "EXIT_GRACE_S", 0.01)
-    monkeypatch.setenv("HERDECK_TELEGRAM_TOKEN", TOKEN)
+    monkeypatch.setenv("HERDECK_BRIDGE_TELEGRAM_TOKEN", TOKEN)
     block = threading.Event()
     transport = Transport(block=block)
     monkeypatch.setattr(
@@ -603,7 +603,7 @@ def test_process_exit_is_not_held_by_a_long_poll(tmp_path, monkeypatch):
 
 
 async def test_embedded_bridges_use_per_session_paths_and_ignore_env(monkeypatch, frames):
-    monkeypatch.setenv("HERDECK_TELEGRAM_TOKEN", TOKEN)
+    monkeypatch.setenv("HERDECK_BRIDGE_TELEGRAM_TOKEN", TOKEN)
     seen = []
     built = []
     orig_paths = bridge_mod._telegram_default_paths
@@ -845,7 +845,7 @@ async def test_hub_closes_even_if_telegram_close_fails(monkeypatch):
 
 @pytest.mark.parametrize(
     ("env", "file_token", "source"),
-    [({"HERDECK_TELEGRAM_TOKEN": OTHER}, False, "env"), ({}, True, "file"), ({}, False, "none")],
+    [({"HERDECK_BRIDGE_TELEGRAM_TOKEN": OTHER}, False, "env"), ({}, True, "file"), ({}, False, "none")],
 )
 def test_startup_logs_token_source_never_value(tmp_path, caplog, env, file_token, source):
     caplog.set_level("INFO", logger="herdeck.bridge")
@@ -855,5 +855,6 @@ def test_startup_logs_token_source_never_value(tmp_path, caplog, env, file_token
     lines = [r.getMessage() for r in caplog.records
              if r.name == "herdeck.bridge" and "token source" in r.getMessage()]
     assert len(lines) == 1 and f"token source: {source}" in lines[0]
+    assert ("tg-token" in lines[0]) == (source == "file")  # no path when unused
     for secret in (TOKEN, OTHER):
         assert secret not in caplog.text and secret.partition(":")[2] not in caplog.text

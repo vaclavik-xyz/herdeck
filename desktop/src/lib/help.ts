@@ -136,7 +136,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       only_when_away: "Minutes 0-1440: alert only when no Mac reporting to this bridge was used that long; 0 = always (default).",
       language: "Language of the Telegram message text: en (default) or cs.",
       sound: "Messages notify with a sound; off sends them silently (default on).",
-      token: "Bot token stored on the bridge: shown only as set (file/env) or not set. A token in HERDECK_TELEGRAM_TOKEN wins and is read-only.",
+      token: "Bot token stored on the bridge: shown only as set (file/env) or not set. A token in HERDECK_BRIDGE_TELEGRAM_TOKEN wins and is read-only.",
       recent_chats: "Chats and topics the bot recently saw a message in; click one to fill chat_id and message_thread_id.",
     },
     shared: {
@@ -272,7 +272,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       only_when_away: "Minuty 0-1440: alert jen když se tak dlouho nepoužil žádný Mac hlásící bridgi; 0 = vždy (výchozí).",
       language: "Jazyk textu zpráv v Telegramu: en (výchozí) nebo cs.",
       sound: "Zprávy upozorní zvukem; vypnuto = odešlou se tiše (výchozí zapnuto).",
-      token: "Token bota uložený na bridgi: jen stav nastaven (file/env) nebo nenastaven. Token v HERDECK_TELEGRAM_TOKEN má přednost.",
+      token: "Token bota uložený na bridgi: jen stav nastaven (file/env) nebo nenastaven. Token v HERDECK_BRIDGE_TELEGRAM_TOKEN má přednost.",
       recent_chats: "Chaty a témata, v nichž bot nedávno viděl zprávu; kliknutím vyplníš chat_id a message_thread_id.",
     },
     shared: {

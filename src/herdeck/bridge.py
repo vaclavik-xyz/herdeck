@@ -2581,14 +2581,14 @@ def build_bridge_telegram(
     Bridge-side answers go through ``execute_answer`` with the same extras as
     a client's answer (so the same episode guard)."""
     store = BridgeTelegramStore(paths[0], paths[1], env=env)
-    # Where the bot token comes from (never the value): an env token here that
-    # was meant for a runtime's own bot makes this bridge poll that bot too.
+    # Where the bot token comes from (never the value).
+    source = store.token_source()
     log.info(
         "telegram bot token source: %s%s",
-        store.token_source() or "none",
-        " (HERDECK_TELEGRAM_TOKEN; the editor cannot change it)"
-        if store.token_source() == "env"
-        else f" ({store.token_path})",
+        source or "none",
+        " (HERDECK_BRIDGE_TELEGRAM_TOKEN; the editor cannot change it)"
+        if source == "env"
+        else f" ({store.token_path})" if source == "file" else "",
     )
     abandon = _Abandon()
 
@@ -2737,9 +2737,8 @@ async def start_local_bridge(socket_path, host="127.0.0.1", herdr=None, session=
     presence = PresenceHub()
     settings = BridgeSettingsStore(_settings_default_path(session or "default"))
     base_capabilities = _extra_capabilities(None, hub, presence, settings)
-    # Per-session Telegram files; the process env is the runtime's (its own
-    # [notifications.telegram] may name HERDECK_TELEGRAM_TOKEN), so an
-    # embedded bridge never picks a bot token from it.
+    # Per-session Telegram files; the process env is the runtime's, so an
+    # embedded bridge never picks a bot token (or token file) from it.
     telegram = build_bridge_telegram(
         "local",
         herdr=client_herdr,
