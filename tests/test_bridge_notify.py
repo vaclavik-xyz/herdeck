@@ -959,3 +959,29 @@ async def test_event_hub_listener_exceptions_are_logged_not_raised(caplog):
 def test_i18n_test_message_keys():
     assert STRINGS["en"]["telegram.test"] == "herdeck ✓ test"
     assert "telegram.test" in STRINGS["cs"]
+
+
+async def test_token_change_mid_interactive_poll_drops_old_cursor(tmp_path):
+    """The getUpdates cursor belongs to one bot: an interactive poll that was in
+    flight for the old token must not carry its offset over to the new bot."""
+    tg = {**TG_ON, "interactive": True, "allowed_user_ids": [USER]}
+    n = await make(tmp_path, tg=tg)
+    n.t.updates.append([{"update_id": 50}])
+    await n.poll_step()
+    assert n._offset == 51
+    n.t.block_updates = threading.Event()
+    n.t.updates.append([{"update_id": 60}])
+    n.t.polling.clear()
+    step = asyncio.create_task(n.poll_step())
+    await asyncio.to_thread(n.t.polling.wait, 2)
+    assert n.t.polls()[-1]["offset"] == "51"
+    assert n.tg_store.set_token("987654321:" + "B" * 35) is None
+    n.refresh()
+    assert n._offset is None
+    n.t.block_updates.set()
+    await step
+    assert n._offset is None  # not the old bot's cursor
+    n.t.block_updates = None
+    await n.poll_step()
+    assert "offset" not in n.t.polls()[-1]
+    await n.close()

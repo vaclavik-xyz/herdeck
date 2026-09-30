@@ -978,7 +978,7 @@ class BridgeNotifier:
         interactor = self._interactor
         try:
             if interactor is not None:
-                await self._poll_interactive(interactor, generation)
+                await self._poll_interactive(interactor, generation, self._token)
                 if interactor.inbound_disabled:
                     return self._inbound_conflict()
             else:
@@ -990,7 +990,9 @@ class BridgeNotifier:
         self._check_status()
         return 0.0
 
-    async def _poll_interactive(self, interactor: TelegramInteractor, generation: int) -> None:
+    async def _poll_interactive(
+        self, interactor: TelegramInteractor, generation: int, token: str | None
+    ) -> None:
         if self._offset is not None and (interactor.offset is None or interactor.offset < self._offset):
             interactor._offset = self._offset  # noqa: SLF001 - cursor carry-over
         try:
@@ -999,8 +1001,16 @@ class BridgeNotifier:
                 is_current=lambda: generation == self._generation and not self._closed,
             )
         finally:
+            # The cursor belongs to one bot: a poll that outlived a token
+            # change must not hand the old bot's update_id to the new one
+            # (Telegram would drop the new bot's updates below it). A mere
+            # settings rebuild keeps the same bot, so its progress is kept.
             offset = interactor.offset
-            if offset is not None and (self._offset is None or offset > self._offset):
+            if (
+                token == self._token
+                and offset is not None
+                and (self._offset is None or offset > self._offset)
+            ):
                 self._offset = offset
 
     async def _poll_discovery(self, client: _GuardedClient, generation: int) -> None:
