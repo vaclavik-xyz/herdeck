@@ -6,6 +6,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Bridge-sent Telegram alerts (one-way and interactive) for the bridge's own
+  agents, so they arrive while every Mac sleeps. Configured from the desktop
+  editor (Notifications, Telegram on the bridge: token, recent chats, Test,
+  "Move Telegram from this Mac to the bridge"). Separate revisioned document
+  (`HERDECK_BRIDGE_TELEGRAM`) and token (`HERDECK_TELEGRAM_TOKEN` or
+  `HERDECK_TELEGRAM_TOKEN_FILE`); new capabilities `telegram_config` and
+  `telegram`.
+- Runtime duplicate guard: no Telegram from a runtime for agents of a bridge
+  that sends it; the runtime's poller idles when every connected bridge does.
+  One bot per bridge (a shared token conflicts with HTTP 409; inbound retries
+  every 60 s). Update the bridge first; 0.14.0 runtimes still send their own.
+
 ## [0.14.0] - 2026-09-30
 
 ### Added

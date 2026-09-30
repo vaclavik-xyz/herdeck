@@ -413,6 +413,56 @@ bridge answers `{"type": "result", "req": "<id>", "data": {"herdeck_version",
 older than 0.8.1 answers with an `error` frame instead. `managed` says whether
 the bridge may update itself (below).
 
+### Telegram alerts from the bridge
+
+The bridge can send Telegram alerts itself (one-way and interactive) for the
+agents it serves, so they keep arriving while every Mac is asleep. It applies
+the same rules as a runtime (quiet `done`, reminders, subagent bursts,
+cooldown) using the bridge's shared settings for `on`, `remind_after` and the
+like. Its Telegram config is a separate revisioned document
+(`$HERDECK_BRIDGE_TELEGRAM`, default `~/.config/herdeck/bridge-telegram.toml`),
+edited from the desktop app.
+
+Setup:
+
+1. Create a bot with @BotFather and a Telegram group with topics; add the bot.
+2. In the desktop editor open Notifications, then "Telegram on the bridge",
+   and use Set token.
+3. Send a message in the target topic. The bridge lists the chats it sees while
+   a token is set under "Recent chats"; pick the chat/topic there.
+4. Press Test, then enable.
+
+Fields: `enabled`, `chat_id`, `message_thread_id`, `interactive`,
+`allowed_user_ids`, `prompt_max_chars` (200-4000, default 1200),
+`only_when_away` (minutes, 0-1440, 0 = off; counts "no Mac reporting presence"
+as away), `language` and `sound`. Telegram is active on the bridge only when
+it is enabled, a token is set and `chat_id` is set. The interactive blocked
+alert text (with buttons) is always English; other messages follow `language`.
+
+Token: the env var `HERDECK_TELEGRAM_TOKEN` wins over the token file
+(`$HERDECK_TELEGRAM_TOKEN_FILE`, default `~/.config/herdeck/telegram-token`,
+mode 0600). A token set through the environment cannot be changed or cleared
+from the editor. The token never appears in wire frames or logs. The embedded
+local bridge of the desktop app (no separate bridge) uses only its own
+per-session token file and ignores `HERDECK_TELEGRAM_TOKEN`, which belongs to
+the runtime's own Telegram.
+
+One bot per bridge. Telegram allows a single `getUpdates` poller per bot, so
+the same token on two bridges, or on a bridge and a runtime that still uses it
+for local interactive Telegram, conflicts (HTTP 409). The bridge then marks
+inbound "disabled" and retries every 60 seconds. "Move Telegram from this Mac
+to the bridge" in the editor copies this Mac's Telegram fields and token (the
+runtime relays its own token; the browser never sees it); afterwards turn off
+this Mac's own Telegram.
+
+Duplicate guard: a runtime stops sending Telegram for agents of a bridge that
+advertises active Telegram, and stops polling entirely only when every
+connected bridge sends Telegram. In a mixed fleet (some bridges without it) use
+a separate bot for the bridge. Runtimes older than this version (0.14.0) keep
+sending their own Telegram, so update runtimes too (bridge first, see
+`docs/updating-a-deployment.md`). Usage-limit alerts still come from the
+runtime.
+
 ### Lifecycle events (capability `events`)
 
 The bridge is the single source of truth for "an agent just blocked / just
@@ -1441,6 +1491,8 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 - Telegram setup: create a bot with @BotFather, `export HERDECK_TELEGRAM_TOKEN=<token>`
   (never commit the token), and set your numeric `chat_id`. A missing token or
   chat_id makes herdeck skip telegram with a warning — other backends still fire.
+- **Telegram sent by the bridge** (see "Telegram alerts from the bridge" below)
+  is the alternative that keeps working while every Mac sleeps.
 - **Clicking a macOS banner** brings the deck forward and opens that agent's
   drill (the runtime's token-authenticated `POST /agents/drill`).
 - `banner_actions = true` (opt-in, desktop app on macOS): a blocked banner waits
@@ -1488,7 +1540,8 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   the bridge from every connected runtime (bridge capability `presence`), so
   typing on any connected Mac counts as present. Run Telegram from ONE
   always-on runtime (e.g. the web cockpit next to the bridge); a second
-  runtime polling the same bot conflicts.
+  runtime polling the same bot conflicts. When the bridge itself sends
+  Telegram, "no Mac reporting presence" counts as away.
 - `banner_prompt = true` (opt-in) appends a one-line, sanitized excerpt of the
   blocked prompt (about 180 characters) to the alert body — on every backend,
   so it also shows on a locked screen and in Telegram.
@@ -1500,7 +1553,8 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
   `allowed_user_ids`, only in the configured `chat_id`, and only in `message_thread_id`
   when one is configured. Interactive alerts run in `herdeck` / `herdeck-web`;
   the desktop runtime keeps sending one-way Telegram alerts, so two processes
-  never compete for the bot's updates.
+  never compete for the bot's updates. (Bridge-sent Telegram, below, can be
+  interactive too.)
 - `on` defaults to both events (`["blocked", "done"]`); set `on = ["blocked"]`
   to mute done alerts. The desktop settings warn next to a per-event sound whose
   event is not in `on`.
