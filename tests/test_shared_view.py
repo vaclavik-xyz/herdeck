@@ -266,3 +266,46 @@ def test_shared_state_and_connection_loss(tmp_path):
     state = src.shared_state()
     assert state["a"]["source"] == "cache" and state["a"]["connected"] is False
     assert src.config_for("a").notifications.done_min_work == 3
+
+
+def test_clear_drops_entry_and_cache(tmp_path):
+    view = SharedSettingsView(tmp_path)
+    view.update("a", _frame("a", 5, _raw(3)))
+    assert view.clear("a") is True
+    assert view.settings_for("a") is None and _files(tmp_path) == []
+    assert view.clear("a") is False
+
+
+def test_old_bridge_without_capability_drops_cached_settings(tmp_path):
+    """Review Focus 3: server "a" once had a settings-capable bridge; its id now
+    points at an old bridge that never sends a settings frame."""
+    SharedSettingsView(tmp_path).update("a", _frame("a", 5, _raw(3)))
+    src = _source(tmp_path)
+    assert src.config_for("a").notifications.done_min_work == 3  # warm start
+    src._runners["a"] = _Runner({"usage"})  # capabilities of the old bridge
+    src._agents[AgentKey("a", "p1")] = object()
+    src._bump_semantic_locked([AgentKey("a", "p1")])
+    gen = src.semantic_generation("a", "p1")
+    src._on_snapshot("a", [])
+    assert src.config_for("a") is src.config
+    assert _files(tmp_path) == []
+    assert src.shared_state()["a"]["source"] == "none"
+    assert src.semantic_generation("a", "p1") > gen
+
+
+def test_bridge_with_capability_keeps_cache_until_frame(tmp_path):
+    SharedSettingsView(tmp_path).update("a", _frame("a", 5, _raw(3)))
+    src = _source(tmp_path)
+    src._runners["a"] = _Runner({SETTINGS_CAPABILITY})
+    src._on_snapshot("a", [])
+    assert src.config_for("a").notifications.done_min_work == 3
+    assert len(_files(tmp_path)) == 1
+    src._on_settings("a", _frame("a", 6, _raw(4)))
+    assert src.config_for("a").notifications.done_min_work == 4
+
+
+def test_snapshot_without_known_capabilities_keeps_cache(tmp_path):
+    SharedSettingsView(tmp_path).update("a", _frame("a", 5, _raw(3)))
+    src = _source(tmp_path)  # no runner attached: capabilities unknown
+    src._on_snapshot("a", [])
+    assert src.config_for("a").notifications.done_min_work == 3

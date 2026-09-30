@@ -138,6 +138,16 @@ class SharedSettingsView:
                 self._write(server_id, entry)
         return previous.revision != entry.revision or previous.settings != entry.settings
 
+    def clear(self, server_id: str) -> bool:
+        """Drop what is known about ``server_id`` (memory and cache file):
+        its bridge does not offer the capability, so no frame will ever
+        replace the cached document and the local config must apply.
+        True when there was something to drop."""
+        with self._lock:
+            previous = self._entries.pop(server_id, None)
+            self._remove(server_id)
+        return previous is not None and previous.settings is not None
+
     def forget_live(self, server_id: str) -> None:
         """The bridge connection dropped: keep the values, mark them cached."""
         with self._lock:

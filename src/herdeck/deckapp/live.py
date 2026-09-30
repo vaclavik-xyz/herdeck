@@ -1005,14 +1005,19 @@ class LiveSource(
         with self._lock:
             self._remote_presence[server_id] = (self._presence_clock(), idle_s)
 
-    def _on_settings(self, server_id: str, frame: Settings) -> None:
-        """Connector callback: the bridge's shared settings document. A change
-        re-renders the deck (labels showing macros / start profiles) and bumps
-        the server's agents' semantic generation (a pending confirmation made
-        under the old rules dies with it)."""
-        if not self._shared.update(server_id, frame):
-            return
+    def _shared_on_snapshot(self, server_id: str) -> None:
+        """A snapshot carries the bridge's capabilities. Without "settings"
+        (an old bridge, or the id re-pointed at one) no frame will ever
+        replace a cached document, so drop it: the local config applies,
+        exactly as before shared settings existed."""
+        connector = getattr(self._runners.get(server_id), "connector", None)
+        caps = getattr(connector, "capabilities", None)
+        if not isinstance(caps, frozenset | set) or SETTINGS_CAPABILITY in caps:
+            return  # capabilities unknown, or the bridge's frame follows
+        if self._shared.clear(server_id):
+            self._shared_changed(server_id)
 
+    def _shared_changed(self, server_id: str) -> None:
         def mutate():
             with self._lock:
                 self._bump_semantic_locked(
@@ -1021,6 +1026,14 @@ class LiveSource(
             return True
 
         self._apply(mutate)
+
+    def _on_settings(self, server_id: str, frame: Settings) -> None:
+        """Connector callback: the bridge's shared settings document. A change
+        re-renders the deck (labels showing macros / start profiles) and bumps
+        the server's agents' semantic generation (a pending confirmation made
+        under the old rules dies with it)."""
+        if self._shared.update(server_id, frame):
+            self._shared_changed(server_id)
 
     def _remote_idles(self) -> list[float]:
         now = self._presence_clock()
@@ -1243,6 +1256,7 @@ class LiveSource(
             if first:  # report at once on (re)connect instead of after 30 s
                 if not self._ensure_presence_thread():
                     self._presence_wake.set()
+        self._shared_on_snapshot(server_id)
         self._bridge_update_on_snapshot(server_id)
         self._hooks_on_snapshot(server_id)
         self._usage_agent_on_snapshot(server_id)
