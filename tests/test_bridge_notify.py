@@ -985,3 +985,67 @@ async def test_token_change_mid_interactive_poll_drops_old_cursor(tmp_path):
     await n.poll_step()
     assert "offset" not in n.t.polls()[-1]
     await n.close()
+
+
+# --- the same blocked episode asks again ------------------------------------------
+
+
+def _reask(n, p, revision, prompt="Run tests?\n1. Yes\n2. No"):
+    n.observe_panes([p])
+    n.on_event(frame("blocked", p, prompt=prompt, prompt_revision=revision))
+
+
+async def test_blocked_new_revision_without_answer_is_not_realerted(tmp_path):
+    n = await make(tmp_path)
+    await start(n)
+    p = await block(n)
+    assert len(n.t.sent()) == 1
+    n.clock.now += 60  # well past the blocked cooldown
+    _reask(n, p, "r2")
+    await n.flush()
+    assert len(n.t.sent()) == 1  # still the same unanswered question for the user
+
+
+async def test_blocked_new_revision_after_answer_realerts(tmp_path):
+    n = await make(tmp_path)
+    await start(n)
+    p = await block(n)
+    n.on_event(frame("answered", p, by="deck"))
+    n.clock.now += 60
+    _reask(n, p, "r2")
+    await n.flush()
+    sent = n.t.sent()
+    assert len(sent) == 2
+    assert "Run tests?" in sent[1]["text"]
+    # the re-announced question is open again: the same revision re-sent
+    # (snapshot churn) is not news
+    _reask(n, p, "r2")
+    await n.flush()
+    assert len(n.t.sent()) == 2
+
+
+async def test_blocked_same_revision_after_answer_is_not_realerted(tmp_path):
+    n = await make(tmp_path)
+    await start(n)
+    p = await block(n)
+    n.on_event(frame("answered", p, by="deck"))
+    n.clock.now += 60
+    _reask(n, p, "r1", prompt="Allow edit?\n1. Yes\n2. No")
+    await n.flush()
+    assert len(n.t.sent()) == 1
+
+
+async def test_blocked_reopen_after_answer_respects_cooldown(tmp_path):
+    n = await make(tmp_path)
+    await start(n)
+    p = await block(n)
+    n.on_event(frame("answered", p, by="deck"))
+    n.clock.now += 2  # inside the 5 s blocked cooldown
+    _reask(n, p, "r2")
+    await n.flush()
+    assert len(n.t.sent()) == 1
+    n.on_event(frame("answered", p, by="deck"))
+    n.clock.now += 10
+    _reask(n, p, "r3")
+    await n.flush()
+    assert len(n.t.sent()) == 2
