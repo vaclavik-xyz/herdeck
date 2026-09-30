@@ -678,6 +678,12 @@ async def test_409_disables_inbound_and_retries_after_60s(tmp_path, description,
     delay = await n.poll_step()
     assert delay == pytest.approx(60)
     assert n.status()["inbound"] == "disabled"
+    # The Bot API outcome reaches the loop via call_soon_threadsafe from the
+    # client's worker thread, so it may land just after poll_step returns.
+    for _ in range(200):
+        if n.status()["last_error"]:
+            break
+        await asyncio.sleep(0.005)
     assert "Conflict" in n.status()["last_error"]
     assert "disabled" in changes
     polls = len(n.t.polls())
