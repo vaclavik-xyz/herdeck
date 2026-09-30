@@ -1049,3 +1049,24 @@ async def test_blocked_reopen_after_answer_respects_cooldown(tmp_path):
     _reask(n, p, "r3")
     await n.flush()
     assert len(n.t.sent()) == 2
+
+
+async def test_discovery_sees_a_command_addressed_to_the_bot_in_a_topic(tmp_path):
+    """A group bot in privacy mode only receives commands addressed to it (and
+    replies to it): ``/start@<bot>`` sent inside a forum topic is how the setup
+    finds that topic. Discovery records it and never answers."""
+    n = await make(tmp_path, tg={"enabled": False, "chat_id": ""})
+    update = chat_update(5, -100777, "Team", thread=33, topic="deck alerts")
+    update["message"]["text"] = "/start@herdeck_bot"
+    update["message"]["entities"] = [{"type": "bot_command", "offset": 0, "length": 18}]
+    n.t.updates.append([update])
+    await n.poll_step()
+    await n.flush()
+    assert n.status()["recent_chats"][0] == {
+        "chat_id": "-100777",
+        "title": "Team",
+        "type": "supergroup",
+        "message_thread_id": 33,
+        "topic_name": "deck alerts",
+    }
+    assert [m for m, _ in n.t.calls if m != "getUpdates"] == []  # no reply of any kind
