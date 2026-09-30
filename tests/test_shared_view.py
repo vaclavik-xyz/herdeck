@@ -346,3 +346,11 @@ def test_overlaid_shared_keys():
     assert overlaid_shared_keys(data, "missing") == []
     assert overlaid_shared_keys({}, "work") == []
     assert overlaid_shared_keys({"profiles": {"x": {"extends": "x"}}}, "x") == []
+
+
+def test_overlaid_shared_keys_non_table_profile_is_empty():
+    from herdeck.shared_settings import overlaid_shared_keys
+
+    assert overlaid_shared_keys({"profiles": {"x": 3}}, "x") == []
+    assert overlaid_shared_keys({"profiles": {"x": {"extends": "y"}, "y": "s"}}, "x") == []
+    assert overlaid_shared_keys({"profiles": {"x": {"extends": 3}}}, "x") == []

@@ -270,7 +270,9 @@ def overlaid_shared_keys(data: dict, profile: str) -> list[str]:
         return []
     try:
         overlays = _profile_overlays(profiles, profile)
-    except ConfigError:
+    except (ConfigError, AttributeError, TypeError):
+        # A non-table profile (``[profiles] x = 3``) must not break GET /config;
+        # validation reports it on its own.
         return []
     found: list[str] = []
     for section, keys in (("notifications", SHARED_NOTIFICATION_KEYS), ("usage", SHARED_USAGE_KEYS)):
