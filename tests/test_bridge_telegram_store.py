@@ -185,3 +185,51 @@ def test_garbage_token_ignored(tmp_path):
     s2 = mk(tmp_path, {"HERDECK_TELEGRAM_TOKEN": "junk"})
     assert s2.token() is None and s2.token_source() is None
     assert s2.set_token(TOKEN) is None
+
+
+BAD_ENV = "12345678:short-typo-secretish"
+BAD_FILE = "98765432:another-typo-value"
+
+
+def _tg_warnings(caplog):
+    return [r for r in caplog.records
+            if r.name == "herdeck.bridge_telegram" and r.levelname == "WARNING"]
+
+
+def test_invalid_env_token_warned_once_without_value(tmp_path, caplog):
+    caplog.set_level("WARNING", logger="herdeck.bridge_telegram")
+    s = mk(tmp_path, {"HERDECK_TELEGRAM_TOKEN": BAD_ENV})
+    for _ in range(5):
+        assert s.token() is None
+        s.token_source()
+    warned = _tg_warnings(caplog)
+    assert len(warned) == 1
+    assert "HERDECK_TELEGRAM_TOKEN" in warned[0].getMessage()
+    for part in (BAD_ENV, "12345678", "short-typo-secretish", "typo"):
+        assert part not in caplog.text
+
+
+def test_invalid_token_file_warned_once_and_again_after_a_fix(tmp_path, caplog):
+    caplog.set_level("WARNING", logger="herdeck.bridge_telegram")
+    s = mk(tmp_path)
+    s.token_path.write_text(BAD_FILE)
+    for _ in range(5):
+        assert s.token() is None
+    assert len(_tg_warnings(caplog)) == 1
+    s.token_path.write_text(TOKEN)
+    assert s.token() == TOKEN
+    s.token_path.write_text(BAD_FILE)
+    assert s.token() is None
+    assert s.token() is None
+    assert len(_tg_warnings(caplog)) == 2  # a new typo is news again
+    for part in (BAD_FILE, "98765432", "another-typo-value", TOKEN):
+        assert part not in caplog.text
+
+
+def test_missing_or_empty_token_not_warned(tmp_path, caplog):
+    caplog.set_level("WARNING", logger="herdeck.bridge_telegram")
+    s = mk(tmp_path, {"HERDECK_TELEGRAM_TOKEN": "  "})
+    assert s.token() is None
+    s.token_path.write_text("\n")
+    assert s.token() is None
+    assert _tg_warnings(caplog) == []

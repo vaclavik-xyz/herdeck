@@ -152,6 +152,9 @@ class BridgeTelegramStore:
         self.updated_by = ""
         self.raw: dict | None = None
         self.error: str | None = None
+        # Sources ("env"/"file") whose invalid token was already warned about;
+        # a source that turns valid (or empty) is dropped so a new typo warns again.
+        self._invalid_warned: set[str] = set()
         self._load()
 
     @property
@@ -214,10 +217,27 @@ class BridgeTelegramStore:
 
     # -- token -------------------------------------------------------------
 
+    def _checked(self, source: str, v: str) -> str | None:
+        """``v`` when it is a well-formed token. A non-empty malformed value
+        is warned about once per source (never the value, nor any part of it),
+        so a typo does not silently read as "not set"."""
+        if _TOKEN_RE.fullmatch(v):
+            self._invalid_warned.discard(source)
+            return v
+        if not v:
+            self._invalid_warned.discard(source)
+        elif source not in self._invalid_warned:
+            self._invalid_warned.add(source)
+            where = ENV_TOKEN if source == "env" else f"token file {self.token_path}"
+            log.warning(
+                "telegram bot token from %s is malformed (expected <digits>:<30-64 chars>);"
+                " ignoring it", where,
+            )
+        return None
+
     def _env_token(self) -> str | None:
         v = self._env.get(ENV_TOKEN)
-        v = v.strip() if v else ""
-        return v if _TOKEN_RE.fullmatch(v) else None
+        return self._checked("env", v.strip() if v else "")
 
     def token(self) -> str | None:
         env = self._env_token()
@@ -225,9 +245,11 @@ class BridgeTelegramStore:
             return env
         try:
             v = self.token_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            v = ""
         except (OSError, UnicodeDecodeError):
             return None
-        return v if _TOKEN_RE.fullmatch(v) else None
+        return self._checked("file", v)
 
     def token_source(self) -> str | None:
         if self._env_token():
