@@ -726,6 +726,29 @@ describe("ConfigApp bridge shared settings", () => {
     }
   });
 
+  it("a rejected config.toml save never shows 'saved' after a successful bridge put", async () => {
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "config_read") return sharedConfig();
+      if (cmd === "config_bridge_settings") return { status: 200, body: { ok: true, revision: 4 } };
+      if (cmd === "config_write") return { errors: ["safety.approve_always: bad"] };
+      return mockInvoke(cmd);
+    });
+    const { target, cleanup } = renderConfigApp();
+    try {
+      await openSection(target, "Safety");
+      toggle(approveAlways(target)); // bridge draft
+      pick(target, "");
+      toggle(approveAlways(target)); // config.toml edit
+      clickApply(target);
+      await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledWith("config_write", expect.anything()));
+      await vi.waitFor(() => expect(target.querySelector("[data-shared-results]")).not.toBeNull());
+      await new Promise((r) => setTimeout(r, 50));
+      expect(target.querySelector(".banner.success"), "config.toml was not saved").toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
   it("shows no target picker when no bridge offers shared settings", async () => {
     useConfig(() => sharedConfig({ bridges: { m4: sharedBridge({ offered: false, set: false, settings: null }) } }));
     const { target, cleanup } = renderConfigApp();

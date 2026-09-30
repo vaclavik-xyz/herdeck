@@ -710,14 +710,16 @@
       // Bridges first: a config.toml save reloads the runtime and drops every
       // bridge connection, so a put right after it would fail with 503.
       const results = bridgeDirty ? await applyBridges() : [];
+      let localSaved = true;
       if (dirty) {
         const connectedBefore = Object.entries(payload.bridges)
           .filter(([, b]) => b.connected).map(([id]) => id);
-        if (await applyLocal(results)) void settleBridges(connectedBefore, results);
+        localSaved = await applyLocal(results);
+        if (localSaved) void settleBridges(connectedBefore, results);
       }
       if (results.some((r) => !r.ok)) {
         if (banner == null || banner.kind === "success") setBanner("warning", lm.bridge_save_failed);
-      } else if (results.length > 0 && banner == null) {
+      } else if (localSaved && results.length > 0 && banner == null) {
         setBanner("success", lm.saved);
       }
     } finally {
