@@ -27,8 +27,13 @@ from urllib.parse import unquote
 from .. import secrets as _secrets
 from ..bridge_settings import SETTINGS_CAPABILITY
 from ..bridge_telegram import TELEGRAM_CONFIG_CAPABILITY
+from ..telegram import BOT_API_TIMEOUT_S
 
 SETTINGS_WAIT_S = 10.0
+# A test message is one Bot API call on the bridge, which may take up to its
+# timeout: wait longer, so a slow send is not reported as a timeout while the
+# message still arrives.
+TELEGRAM_TEST_WAIT_S = BOT_API_TIMEOUT_S + 5.0
 _ROUTE_RE = re.compile(r"^/bridge-settings/([^/]+)$")
 # Not "st": stats.py owns that prefix (ids hk, ua, st, u, p, r, t are taken).
 _REQ_PREFIX = "sp"
@@ -212,7 +217,7 @@ class SettingsRelayMixin:
         return (422 if error in _TOKEN_ERRORS else 502), {"ok": False, "error": error}
 
     def bridge_telegram_test(
-        self, server_id: str, *, wait_s: float = SETTINGS_WAIT_S
+        self, server_id: str, *, wait_s: float = TELEGRAM_TEST_WAIT_S
     ) -> tuple[int, dict] | None:
         relayed = self._relay(
             server_id,

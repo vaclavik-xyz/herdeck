@@ -367,6 +367,21 @@ pub(crate) async fn config_secret_clear(
 /// other relayed calls so an answer on its way is never cut off.
 pub(crate) const BRIDGE_SETTINGS_TIMEOUT: Duration = Duration::from_secs(16);
 
+/// A Telegram test is one Bot API call on the bridge (up to 25 s); the runtime
+/// waits 30 s for it (settings_relay.py TELEGRAM_TEST_WAIT_S). Outlast that by
+/// 6 s too, so a slow send is not reported as a failure while it arrives.
+pub(crate) const BRIDGE_TELEGRAM_TEST_TIMEOUT: Duration = Duration::from_secs(36);
+
+/// Proxy timeout for `/bridge-telegram/<id>[/token|/test]`: `test` waits for
+/// the Bot API, the rest like a settings put.
+pub(crate) fn bridge_telegram_timeout(sub: &str) -> Duration {
+    if sub == "test" {
+        BRIDGE_TELEGRAM_TEST_TIMEOUT
+    } else {
+        BRIDGE_SETTINGS_TIMEOUT
+    }
+}
+
 /// `/bridge-settings/<id>` with the server id as one percent-encoded path
 /// segment, or `None` for an empty id.
 pub(crate) fn bridge_settings_path(server_id: &str) -> Option<String> {
@@ -433,6 +448,7 @@ pub(crate) async fn config_bridge_telegram(
 ) -> Result<serde_json::Value, String> {
     let path = bridge_telegram_path(&server_id, &sub)
         .ok_or_else(|| "config_bridge_telegram: bad server id or route".to_string())?;
+    let timeout = bridge_telegram_timeout(&sub);
     let d = current_discovery(&state)?;
     run_blocking(move || {
         let (code, text) = http::http_post_json(
@@ -441,7 +457,7 @@ pub(crate) async fn config_bridge_telegram(
             &path,
             (HDR_TOKEN, &d.token),
             &body.to_string(),
-            BRIDGE_SETTINGS_TIMEOUT,
+            timeout,
         )?;
         Ok(crate::agent_card::agent_response(code, &text))
     })

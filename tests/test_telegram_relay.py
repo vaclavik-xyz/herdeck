@@ -382,3 +382,15 @@ def test_mock_source_has_no_route():
             assert _post(app, PATH + suffix, {"action": "clear", **PUT})[0] == 404
     finally:
         app.close()
+
+
+def test_test_waits_longer_than_the_bots_api_call():
+    """A slow sendMessage (up to the Bot API timeout) must not read as a relay
+    timeout while the message still arrives."""
+    import inspect
+
+    from herdeck import telegram
+
+    assert sr.TELEGRAM_TEST_WAIT_S > telegram.BOT_API_TIMEOUT_S
+    default = inspect.signature(LiveSource.bridge_telegram_test).parameters["wait_s"].default
+    assert default == sr.TELEGRAM_TEST_WAIT_S

@@ -28,11 +28,15 @@ class TelegramApiError(RuntimeError):
         self.description = description
 
 
+# Socket timeout of one Bot API call (a getUpdates long poll stays below it).
+BOT_API_TIMEOUT_S = 25
+
+
 def _request_json(token: str, method: str, fields: dict[str, str]):
     data = urllib.parse.urlencode(fields).encode()
     url = f"https://api.telegram.org/bot{token}/{method}"
     try:
-        with urllib.request.urlopen(url, data=data, timeout=25) as resp:
+        with urllib.request.urlopen(url, data=data, timeout=BOT_API_TIMEOUT_S) as resp:
             payload = json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         try:

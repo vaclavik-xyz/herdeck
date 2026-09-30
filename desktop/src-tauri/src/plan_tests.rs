@@ -922,3 +922,12 @@ fn bridge_telegram_path_encodes_the_id_and_limits_sub_routes() {
     assert_eq!(bridge_telegram_path("", "test"), None);
     assert_eq!(bridge_telegram_path("m4", "../x"), None);
 }
+
+// The test route waits for a Bot API call on the bridge (runtime waits 30 s);
+// the proxy must outlast it, the other routes keep the settings timeout.
+#[test]
+fn bridge_telegram_test_timeout_outlasts_the_runtime_wait() {
+    assert!(bridge_telegram_timeout("test") > std::time::Duration::from_secs(30));
+    assert_eq!(bridge_telegram_timeout(""), BRIDGE_SETTINGS_TIMEOUT);
+    assert_eq!(bridge_telegram_timeout("token"), BRIDGE_SETTINGS_TIMEOUT);
+}
