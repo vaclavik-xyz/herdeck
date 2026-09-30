@@ -841,3 +841,19 @@ async def test_hub_closes_even_if_telegram_close_fails(monkeypatch):
     server.close()
     await server.wait_closed()
     assert closed, "hub.close() skipped after telegram.close() raised"
+
+
+@pytest.mark.parametrize(
+    ("env", "file_token", "source"),
+    [({"HERDECK_TELEGRAM_TOKEN": OTHER}, False, "env"), ({}, True, "file"), ({}, False, "none")],
+)
+def test_startup_logs_token_source_never_value(tmp_path, caplog, env, file_token, source):
+    caplog.set_level("INFO", logger="herdeck.bridge")
+    if file_token:
+        (tmp_path / "tg-token").write_text(TOKEN)
+    _build(tmp_path, {}, env=env)
+    lines = [r.getMessage() for r in caplog.records
+             if r.name == "herdeck.bridge" and "token source" in r.getMessage()]
+    assert len(lines) == 1 and f"token source: {source}" in lines[0]
+    for secret in (TOKEN, OTHER):
+        assert secret not in caplog.text and secret.partition(":")[2] not in caplog.text

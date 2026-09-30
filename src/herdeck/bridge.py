@@ -2581,6 +2581,15 @@ def build_bridge_telegram(
     Bridge-side answers go through ``execute_answer`` with the same extras as
     a client's answer (so the same episode guard)."""
     store = BridgeTelegramStore(paths[0], paths[1], env=env)
+    # Where the bot token comes from (never the value): an env token here that
+    # was meant for a runtime's own bot makes this bridge poll that bot too.
+    log.info(
+        "telegram bot token source: %s%s",
+        store.token_source() or "none",
+        " (HERDECK_TELEGRAM_TOKEN; the editor cannot change it)"
+        if store.token_source() == "env"
+        else f" ({store.token_path})",
+    )
     abandon = _Abandon()
 
     def make_client(token: str):
