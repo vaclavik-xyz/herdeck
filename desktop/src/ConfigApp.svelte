@@ -38,6 +38,12 @@
   import DesktopSection from "./lib/sections/DesktopSection.svelte";
   import MaintenanceSection from "./lib/sections/MaintenanceSection.svelte";
   import StatisticsSection from "./lib/sections/StatisticsSection.svelte";
+  import SharedTarget from "./lib/sections/SharedTarget.svelte";
+  import {
+    SHARED_NOTIFICATION_KEYS, SHARED_SECTIONS, SHARED_USAGE_KEYS, SHARED_WHOLE_SECTIONS,
+    composeShared, defaultTarget, extractShared, resolveTarget, saveDrafts, splitShared, stableJson,
+    targetIds, targetMode, type BridgeDraft, type PutOutcome,
+  } from "./lib/bridgeSettings";
   import { settingsRequest } from "./lib/settingsRequest.svelte";
   import { healthState, maintenanceBadge } from "./lib/healthState.svelte";
   import Banner from "./lib/Banner.svelte";
@@ -194,6 +200,8 @@
       hotkey_failed: "saved, but the global shortcut could not be registered: {e}",
       cleanup_failed: "cleaning token '{name}' failed (HTTP {code})",
       orphans_cleaned: "orphaned keychain keys cleaned",
+      bridge_save_failed: "some bridges did not save the shared settings — see the list in the section",
+      adopted: "settings moved to bridge {id}",
     },
     cs: {
       "sec.overview": "Přehled",
@@ -305,6 +313,8 @@
       hotkey_failed: "uloženo, ale globální zkratku se nepodařilo zaregistrovat: {e}",
       cleanup_failed: "úklid tokenu '{name}' selhal (HTTP {code})",
       orphans_cleaned: "osiřelé keychain klíče uklizeny",
+      bridge_save_failed: "některé bridge sdílené nastavení neuložily — seznam je v sekci",
+      adopted: "nastavení přesunuto na bridge {id}",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -409,6 +419,91 @@
   }
   let reloadRev = $state(0); // bumps on every load(); map sections re-seed local rows on change
 
+  // --- bridge shared settings (bridgeSettings.ts, SharedTarget) ---
+  // The shared sections edit a TARGET: an adopted bridge's own document or
+  // This Mac's config.toml (fallback). A bridge edit is a draft (based on the
+  // revision it was read at) until Apply puts it; config.toml edits keep the
+  // `dirty` path unchanged.
+  let sharedTargetPick = $state<string | null>(null); // null = not chosen yet → default
+  let bridgeDrafts = $state<Record<string, BridgeDraft>>({});
+  let sharedApplyAll = $state(false);
+  let sharedResults = $state<PutOutcome[]>([]);
+  const bridges = $derived(payload?.bridges ?? {});
+  const sharedTarget = $derived(resolveTarget(sharedTargetPick, bridges));
+  const sharedMode = $derived(targetMode(bridges, sharedTarget));
+  const sharedOnBridge = $derived(sharedMode === "adopted" || sharedMode === "offline");
+  const sharedReadonly = $derived(sharedMode === "offline");
+  const showSharedTarget = $derived(SHARED_SECTIONS.includes(active) && targetIds(bridges).length > 0);
+  const bridgeDirty = $derived(Object.keys(bridgeDrafts).length > 0);
+  const anyDirty = $derived(dirty || bridgeDirty);
+  // Whole shared sections on a bridge: no profile overlay applies there (S7).
+  const sharedEditProfile = $derived(sharedOnBridge ? null : editProfile);
+  const sectionPayload = $derived(payload && sharedOnBridge
+    ? composeShared(payload, bridgeDrafts[sharedTarget]?.settings ?? bridges[sharedTarget]?.settings ?? {})
+    : payload);
+  const sectionOnChange = $derived(sharedOnBridge ? () => {} : markDirty);
+
+  /** A shared section's edit: on a bridge target, split it into the local
+   *  part (config.toml, `dirty`) and that bridge's draft. */
+  function setSectionPayload(next: ConfigPayload | null): void {
+    if (payload == null || next == null) return;
+    if (!sharedOnBridge) {
+      payload = next;
+      return;
+    }
+    const { payload: local, shared } = splitShared(payload, next);
+    if (stableJson(local) !== stableJson(payload)) {
+      payload = local;
+      markDirty();
+    }
+    const bridge = bridges[sharedTarget];
+    if (sharedReadonly || bridge == null) return;
+    const drafts = { ...bridgeDrafts };
+    if (stableJson(shared) === stableJson(extractShared(bridge.settings ?? {}))) delete drafts[sharedTarget];
+    else drafts[sharedTarget] = { baseRevision: bridgeDrafts[sharedTarget]?.baseRevision ?? bridge.revision, settings: shared };
+    bridgeDrafts = drafts;
+    sharedResults = [];
+  }
+
+  function pickSharedTarget(id: string): void {
+    sharedTargetPick = id;
+    sharedResults = [];
+    reloadRev += 1; // map sections re-seed their rows from the new target
+  }
+
+  /** Re-read only the bridges' state, keeping any unsaved config.toml edit. */
+  async function refreshBridges(): Promise<void> {
+    try {
+      const fresh = parseConfig(await cfg.read());
+      if (fresh == null || payload == null) return;
+      payload = { ...payload, bridges: fresh.bridges, sharedOverlayIgnored: fresh.sharedOverlayIgnored };
+      reloadRev += 1;
+    } catch {
+      setBanner("warning", lm.refresh_failed);
+    }
+  }
+
+  /** Put every bridge draft (Apply). A saved or stale (409) draft is dropped
+   *  and the bridge re-read, so a lost race shows the other editor's values
+   *  ("changed elsewhere — reloaded") instead of overwriting them. */
+  async function applyBridges(): Promise<void> {
+    const fanOut = sharedApplyAll && sharedMode === "adopted" && bridgeDrafts[sharedTarget] != null ? sharedTarget : null;
+    const results = await saveDrafts(cfg.putBridgeSettings, bridges, bridgeDrafts, fanOut);
+    const drafts = { ...bridgeDrafts };
+    for (const r of results) if (r.ok || r.error === "stale_revision") delete drafts[r.serverId];
+    bridgeDrafts = drafts;
+    await refreshBridges();
+    sharedResults = results;
+    if (results.some((r) => !r.ok)) setBanner("warning", lm.bridge_save_failed);
+    else if (banner == null) setBanner("success", lm.saved);
+  }
+
+  async function onAdopted(outcome: PutOutcome): Promise<void> {
+    sharedResults = [];
+    await refreshBridges();
+    if (outcome.ok) setBanner("success", fmt(lm.adopted, { id: outcome.serverId }));
+  }
+
   const editProfile = $derived(validationEditProfile !== undefined
     ? validationEditProfile
     : payload && payload.activeProfile !== "default" ? payload.activeProfile : null);
@@ -446,7 +541,7 @@
 
   const optionLabel = (name: string): string => (name === "default" ? lm.default_base : name);
   const activeValue = $derived(payload?.activeProfile ?? "default");
-  const switcherDisabled = $derived(browserMode || payload == null || payload.envLocked || dirty);
+  const switcherDisabled = $derived(browserMode || payload == null || payload.envLocked || anyDirty);
   const activeLabel = $derived(
     NAV_GROUPS.flatMap((group) => group.items).find((item) => item.key === active)?.label ?? active,
   );
@@ -543,6 +638,7 @@
       }
       payload = fresh;
       appliedPayload = fresh;
+      if (sharedTargetPick == null && targetIds(fresh.bridges).length > 0) sharedTargetPick = defaultTarget(fresh.bridges);
       dirty = false;
       errors = [];
       errorCodes = {};
@@ -584,6 +680,17 @@
     if (!payload) return;
     busy = true;
     try {
+      if (dirty && !(await applyLocal())) return;
+      if (bridgeDirty) await applyBridges();
+    } finally {
+      busy = false;
+    }
+  }
+
+  /** Save config.toml (the pre-existing Apply). True when it was saved. */
+  async function applyLocal(): Promise<boolean> {
+    if (!payload) return false;
+    try {
       const raw = await cfg.write(toWriteBody(payload));
       const res = parseValidate(raw);
       errorCodes = parseValidateCodes(raw);
@@ -597,7 +704,7 @@
           lm.reload,
           () => void load(),
         );
-        return;
+        return false;
       }
       errors = res;
       if (res.length === 0) {
@@ -640,19 +747,20 @@
           // load() surfaces its own warning on a failed refresh — never mask it
           setBanner("success", lm.saved);
         }
+        return true;
       } else {
         // A rejected Apply must SHOW what is wrong, not just count it.
         showErrors = true;
         banner = null;
         const first = classifyValidationErrors(res, payload)[0];
         if (first) await focusValidationIssue(first);
+        return false;
       }
     } catch (e) {
       errors = [String(e)];
       showErrors = true;
       banner = null;
-    } finally {
-      busy = false;
+      return false;
     }
   }
 
@@ -673,6 +781,8 @@
   }
 
   async function discard(): Promise<void> {
+    bridgeDrafts = {};
+    sharedResults = [];
     await load();
   }
 
@@ -684,7 +794,7 @@
         navSearchInput?.focus();
       } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        if (!browserMode && payload && dirty && !busy) void apply();
+        if (!browserMode && payload && anyDirty && !busy) void apply();
       } else if (event.key === "Escape" && document.activeElement === navSearchInput) {
         navQuery = "";
         navSearchInput.blur();
@@ -772,7 +882,7 @@
     // The config window is hidden on close, not destroyed — a payload can be
     // days old when it reappears. Refresh a CLEAN editor on visibility.
     const onVisible = (): void => {
-      if (!document.hidden && payload != null && !dirty) void load();
+      if (!document.hidden && payload != null && !anyDirty) void load();
     };
     document.addEventListener("visibilitychange", onVisible);
     void (async () => {
@@ -835,10 +945,10 @@
     </label>
     {#if payload?.envLocked}
       <span class="hint">{lm.env_locked}</span>
-    {:else if dirty}
+    {:else if anyDirty}
       <span class="hint">{lm.save_to_switch}</span>
     {/if}
-    {#if dirty}
+    {#if anyDirty}
       <span class="dirty" class:bad={errors.length > 0}>
         {lm.unsaved}{errors.length > 0 ? ` · ${errorCountLabel(errors.length, locale.lang)}` : ""}
       </span>
@@ -916,7 +1026,7 @@
           <div>
             <div class="title-line">
               <h1>{activeLabel}</h1>
-              {#if showProfileContext}<span class="scope-badge">{fmt(lm.editing_profile, { name: editProfile ?? lm.default_base })}</span>{/if}
+              {#if showProfileContext && !(showSharedTarget && sharedOnBridge && (SHARED_WHOLE_SECTIONS as readonly string[]).includes(active))}<span class="scope-badge">{fmt(lm.editing_profile, { name: editProfile ?? lm.default_base })}</span>{/if}
             </div>
             <p>{activeDescription}</p>
           </div>
@@ -1002,22 +1112,38 @@
           </div>
         {:else}
           <article class="card form-card">
+            {#if showSharedTarget && sectionPayload}
+              <SharedTarget
+                {bridges}
+                target={sharedTarget}
+                onTarget={pickSharedTarget}
+                applyAll={sharedApplyAll}
+                onApplyAll={(v) => (sharedApplyAll = v)}
+                editingProfile={editProfile != null && editProfile !== "default"}
+                overlayIgnored={payload.sharedOverlayIgnored}
+                results={sharedResults}
+                baseConfig={payload.base}
+                put={browserMode ? null : cfg.putBridgeSettings}
+                onAdopted={(o) => void onAdopted(o)}
+                sharedKeys={active === "notifications" ? SHARED_NOTIFICATION_KEYS : active === "usage" ? SHARED_USAGE_KEYS : null}
+              />
+            {/if}
             {#if active === "view"}
               <ViewSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
             {:else if active === "theme"}
               <ThemeSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
             {:else if active === "macros"}
-              <MacrosSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+              <fieldset class="shared-lock" disabled={sharedReadonly}><MacrosSection bind:payload={() => sectionPayload!, setSectionPayload} editProfile={sharedEditProfile} onChange={sectionOnChange} onError={(m) => setBanner("error", m)} /></fieldset>
             {:else if active === "start_profiles"}
-              <StartProfilesSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+              <fieldset class="shared-lock" disabled={sharedReadonly}><StartProfilesSection bind:payload={() => sectionPayload!, setSectionPayload} editProfile={sharedEditProfile} {reloadRev} onChange={sectionOnChange} onError={(m) => setBanner("error", m)} /></fieldset>
             {:else if active === "notifications"}
-              <NotificationsSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+              <NotificationsSection bind:payload={() => sectionPayload!, setSectionPayload} {editProfile} {reloadRev} {sharedOnBridge} {sharedReadonly} onChange={sectionOnChange} onError={(m) => setBanner("error", m)} />
             {:else if active === "safety"}
-              <SafetySection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+              <fieldset class="shared-lock" disabled={sharedReadonly}><SafetySection bind:payload={() => sectionPayload!, setSectionPayload} editProfile={sharedEditProfile} {reloadRev} onChange={sectionOnChange} onError={(m) => setBanner("error", m)} /></fieldset>
             {:else if active === "usage"}
-              <UsageSection bind:payload {editProfile} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+              <UsageSection bind:payload={() => sectionPayload!, setSectionPayload} {editProfile} {sharedOnBridge} {sharedReadonly} onChange={sectionOnChange} onError={(m) => setBanner("error", m)} />
             {:else if active === "answer_profiles"}
-              <AnswerProfilesSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+              <fieldset class="shared-lock" disabled={sharedReadonly}><AnswerProfilesSection bind:payload={() => sectionPayload!, setSectionPayload} editProfile={sharedEditProfile} {reloadRev} onChange={sectionOnChange} onError={(m) => setBanner("error", m)} /></fieldset>
             {:else if active === "profiles"}
               <ProfilesSection bind:payload onChange={markDirty} onError={(m) => setBanner("error", m)} />
             {:else if active === "desktop"}
@@ -1042,7 +1168,7 @@
   {/if}
 
   <footer class="savebar">
-    <button onclick={discard} disabled={browserMode || !dirty || busy} title={lm.discard_title}>{lm.discard}</button>
+    <button onclick={discard} disabled={browserMode || !anyDirty || busy} title={lm.discard_title}>{lm.discard}</button>
     {#if banner}<Banner kind={banner.kind} message={banner.message} actionLabel={banner.actionLabel} onAction={banner.onAction} />{/if}
     <span class="spacer"></span>
     {#if errors.length > 0}
@@ -1050,7 +1176,7 @@
         ⚠ {errorCountLabel(errors.length, locale.lang)} {showErrors ? "▾" : "▸"}
       </button>
     {/if}
-    <button onclick={apply} disabled={browserMode || !dirty || busy} title={`${lm.apply_title} (⌘S)`}>{lm.apply}<kbd>⌘S</kbd></button>
+    <button onclick={apply} disabled={browserMode || !anyDirty || busy} title={`${lm.apply_title} (⌘S)`}>{lm.apply}<kbd>⌘S</kbd></button>
   </footer>
 </main>
 
@@ -1075,6 +1201,8 @@
   .status-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--st-blocked); }
   .status-dot.ready { background: var(--st-working); }
   .top-spacer, .spacer { flex: 1; }
+  /* A read-only (offline bridge) target disables a whole shared section. */
+  .shared-lock { min-width: 0; margin: 0; padding: 0; border: 0; }
   .profile-picker { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 11px; }
   .topbar select { min-width: 138px; height: 30px; padding: 0 28px 0 9px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--field); color: var(--text); }
   .dirty { color: var(--st-blocked); font-size: 11px; white-space: nowrap; }

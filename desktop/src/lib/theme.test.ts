@@ -123,6 +123,7 @@ const CONVERTED = [
   "lib/sections/DesktopSection.svelte",
   "lib/sections/MaintenanceSection.svelte",
   "lib/sections/StatisticsSection.svelte",
+  "lib/sections/SharedTarget.svelte",
   "lib/StatusRibbon.svelte",
   "lib/DeckView.svelte",
   "lib/AgentCard.svelte",

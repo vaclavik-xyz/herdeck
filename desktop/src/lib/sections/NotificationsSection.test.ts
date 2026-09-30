@@ -348,3 +348,66 @@ describe("NotificationsSection", () => {
     }
   });
 });
+
+// Bridge shared settings (spec S6/S7): the rule fields (on, done_min_work,
+// done_short_delay, remind_after, subagents_done) follow the editor's target.
+describe("NotificationsSection shared rule fields", () => {
+  const RULES = ["remind_after", "done_min_work", "done_short_delay", "subagents_done"];
+  const DELIVERY = ["enabled", "sound", "banner_actions", "skip_focused"];
+
+  // Some rule labels have no prose presentation (no data-config-key): match
+  // the key chip or the raw label text.
+  function labelFor(target: HTMLElement, key: string): HTMLElement | undefined {
+    return Array.from(target.querySelectorAll<HTMLElement>(".fieldlabel"))
+      .find((el) => el.dataset.configKey === key || el.textContent?.trim() === key);
+  }
+  function ruleInput(target: HTMLElement, key: string): HTMLInputElement {
+    const input = labelFor(target, key)?.parentElement?.querySelector("input");
+    if (!(input instanceof HTMLInputElement)) throw new Error(`missing input for ${key}`);
+    return input;
+  }
+  function isOverride(target: HTMLElement, key: string): boolean {
+    return labelFor(target, key)?.parentElement?.classList.contains("override") === true;
+  }
+
+  function mountShared(props: Record<string, unknown>) {
+    const target = document.createElement("div");
+    const instance = mount(NotificationsSection, {
+      target,
+      props: {
+        payload: parseConfig({ base: { notifications: { enabled: true, done_min_work: 5 } }, profiles: { night: {} } })!,
+        onChange: () => {},
+        onError: () => {},
+        ...props,
+      },
+    });
+    flushSync();
+    return { target, cleanup: () => unmount(instance) };
+  }
+
+  it("on an adopted bridge, a profile view edits the rules directly (no overlay controls)", () => {
+    setLang("en");
+    const { target, cleanup } = mountShared({ editProfile: "night", sharedOnBridge: true });
+    try {
+      for (const key of RULES) {
+        expect(isOverride(target, key), `${key} must not offer a profile override`).toBe(false);
+        expect(ruleInput(target, key)).toBeTruthy();
+      }
+      expect(ruleInput(target, "done_min_work").value).toBe("5");
+      for (const key of DELIVERY) expect(isOverride(target, key), key).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("read-only shared fields disable only the rules, never local delivery", () => {
+    setLang("en");
+    const { target, cleanup } = mountShared({ sharedReadonly: true });
+    try {
+      for (const key of RULES) expect(ruleInput(target, key).matches(":disabled"), key).toBe(true);
+      for (const key of DELIVERY) expect(ruleInput(target, key).matches(":disabled"), key).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+});

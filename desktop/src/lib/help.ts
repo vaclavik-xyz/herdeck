@@ -125,6 +125,10 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       next_blocked: "Global shortcut that shows the deck and opens the longest-blocked agent (again = next one); empty = off (default).",
       restart_deck: "Global shortcut that closes and reopens the D200 and redraws it (like the tray's Restart deck); empty = off (default).",
     },
+    shared: {
+      target: "Where these shared fields are edited: a bridge that owns them, or This Mac's config.toml (used by unadopted bridges).",
+      apply_all: "On Apply, write this bridge's shared settings to every connected adopted bridge, each checked against its own revision.",
+    },
   },
   cs: {
     servers: {
@@ -242,6 +246,10 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       toggle_deck: "Globální zkratka pro zobrazení/skrytí decku; výchozí Cmd/Ctrl+Shift+D, prázdné pole = vypnuto.",
       next_blocked: "Globální zkratka: ukáže deck a otevře nejdéle blokovaného agenta (znovu = další); prázdné = vypnuto (výchozí).",
       restart_deck: "Globální zkratka, která zavře a znovu otevře D200 a překreslí ho (jako Restartovat deck v tray); prázdné = vypnuto (výchozí).",
+    },
+    shared: {
+      target: "Kde se sdílená pole upravují: na bridgi, který je vlastní, nebo v config.toml tohoto Macu (pro nepřevzaté bridge).",
+      apply_all: "Při Použít zapíše sdílené nastavení tohoto bridge na všechny připojené převzaté bridge, každý proti vlastní revizi.",
     },
   },
 };

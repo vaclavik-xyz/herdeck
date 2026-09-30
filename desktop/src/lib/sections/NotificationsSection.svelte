@@ -18,8 +18,13 @@
   import { defineMessages, fieldHelp, fmt, locale, t } from "../i18n.svelte";
   import defaults from "../configDefaults.json";
 
-  let { payload = $bindable(), onChange, onError, reloadRev = 0, editProfile = null }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
+  // sharedOnBridge: the editor's target is a bridge that owns the shared rule
+  // fields (on, remind_after, done_min_work, done_short_delay, subagents_done;
+  // bridgeSettings.ts). Profile overlays of them do not apply there, so they
+  // are edited directly even in a profile view. sharedReadonly: that bridge is
+  // offline — the rules are shown but cannot change. Delivery stays local.
+  let { payload = $bindable(), onChange, onError, reloadRev = 0, editProfile = null, sharedOnBridge = false, sharedReadonly = false }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null; sharedOnBridge?: boolean; sharedReadonly?: boolean } = $props();
 
   const cfg = cfgTransport((cmd, args) => invoke(cmd, args));
 
@@ -265,8 +270,10 @@
   function hasEvent(list: string[], event: NotifyEvent): boolean {
     return list.some((item) => String(item).trim() === event);
   }
+  // Rules edited directly (base or a bridge's document) vs as a profile overlay.
+  const rulesOverlay = $derived(overlay && !sharedOnBridge);
   const effectiveOn = $derived(
-    !overlay ? on : overrideState(payload, prof, SEC, "on") === "default" ? effectiveList("on") : ovList("on"),
+    !rulesOverlay ? on : overrideState(payload, prof, SEC, "on") === "default" ? effectiveList("on") : ovList("on"),
   );
   const effectiveBackends = $derived(
     !overlay ? backends : overrideState(payload, prof, SEC, "backends") === "default" ? effectiveList("backends") : ovList("backends"),
@@ -282,7 +289,7 @@
   function enableEvent(event: NotifyEvent): void {
     const next = [...effectiveOn.filter((item) => String(item).trim() !== ""), event];
     onRev += 1;
-    if (overlay) setOvList("on", "custom", next);
+    if (rulesOverlay) setOvList("on", "custom", next);
     else setTri("on", "custom", next);
   }
 
@@ -395,11 +402,23 @@
   }
 </script>
 
+{#snippet rules()}
+  <!-- The shared rule fields as one block, so a read-only (offline bridge)
+       target can disable exactly these and nothing local. -->
+  <fieldset class="shared-fields" disabled={sharedReadonly} data-shared-fields="notifications">
+    <TriStateListField label="on" help={HELP.on} state={onState} list={on} customSeed={NOTIF_LIST_DEFAULTS.on} defaultHint={NOTIF_LIST_DEFAULTS.on.join(" · ")} resetKey={`base:${reloadRev}:${onRev}:notifications:on`} onchange={(s, l) => setTri("on", s, l)} />
+    <NumberField label="remind_after" help={HELP.remind_after} int min={0} max={1440} value={remindAfter} onchange={(v) => set("remind_after", v ?? 0)} />
+    <NumberField label="done_min_work" help={HELP.done_min_work} int min={0} max={1440} value={doneMinWork} onchange={(v) => set("done_min_work", v ?? 0)} />
+    <NumberField label="done_short_delay" help={HELP.done_short_delay} int min={0} max={1440} value={doneShortDelay} onchange={(v) => set("done_short_delay", v ?? 0)} />
+    <BooleanField label="subagents_done" help={HELP.subagents_done} value={subagentsDone} onchange={(v) => set("subagents_done", v)} />
+  </fieldset>
+{/snippet}
+
 {#snippet eventOffWarning(event: NotifyEvent)}
   {#if eventOff(event)}
     <p class="event-off" role="status" data-event-off={event}>
       <span>{event === "done" ? lm.event_off_done : lm.event_off_blocked}</span>
-      <button type="button" class="event-enable" title={fmt(lm.event_enable_title, { event })} onclick={() => enableEvent(event)}>{fmt(lm.event_enable, { event })}</button>
+      {#if !sharedReadonly}<button type="button" class="event-enable" title={fmt(lm.event_enable_title, { event })} onclick={() => enableEvent(event)}>{fmt(lm.event_enable, { event })}</button>{/if}
     </p>
   {/if}
 {/snippet}
@@ -414,7 +433,6 @@
   <OverrideField label="sound" help={HELP.sound} state={scState("sound")} inheritedDisplay={scHint("sound")} onstate={(s) => setScState("sound", s)}>
     <BooleanField label="" value={scBool("sound")} onchange={(v) => setSc("sound", v)} />
   </OverrideField>
-  <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} customSeed={effectiveList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} resetKey={`${prof}:${reloadRev}:${onRev}:notifications:on`} onchange={(s, l) => setOvList("on", s, l)} />
   <OverrideField label="banner_actions" help={HELP.banner_actions} state={scState("banner_actions")} inheritedDisplay={scHint("banner_actions")} onstate={(s) => setScState("banner_actions", s)}>
     <BooleanField label="" value={scBool("banner_actions")} onchange={(v) => setSc("banner_actions", v)} />
   </OverrideField>
@@ -424,18 +442,23 @@
   <OverrideField label="skip_focused" help={HELP.skip_focused} state={scState("skip_focused")} inheritedDisplay={scHint("skip_focused")} onstate={(s) => setScState("skip_focused", s)}>
     <BooleanField label="" value={scBool("skip_focused")} onchange={(v) => setSc("skip_focused", v)} />
   </OverrideField>
-  <OverrideField label="remind_after" help={HELP.remind_after} state={scState("remind_after")} inheritedDisplay={scHint("remind_after")} onstate={(s) => setScState("remind_after", s)}>
-    <NumberField label="" int min={0} max={1440} value={scNumber("remind_after")} onchange={(v) => setSc("remind_after", v ?? 0)} />
-  </OverrideField>
-  <OverrideField label="done_min_work" help={HELP.done_min_work} state={scState("done_min_work")} inheritedDisplay={scHint("done_min_work")} onstate={(s) => setScState("done_min_work", s)}>
-    <NumberField label="" int min={0} max={1440} value={scNumber("done_min_work")} onchange={(v) => setSc("done_min_work", v ?? 0)} />
-  </OverrideField>
-  <OverrideField label="done_short_delay" help={HELP.done_short_delay} state={scState("done_short_delay")} inheritedDisplay={scHint("done_short_delay")} onstate={(s) => setScState("done_short_delay", s)}>
-    <NumberField label="" int min={0} max={1440} value={scNumber("done_short_delay")} onchange={(v) => setSc("done_short_delay", v ?? 0)} />
-  </OverrideField>
-  <OverrideField label="subagents_done" help={HELP.subagents_done} state={scState("subagents_done")} inheritedDisplay={scHint("subagents_done")} onstate={(s) => setScState("subagents_done", s)}>
-    <BooleanField label="" value={scBool("subagents_done")} onchange={(v) => setSc("subagents_done", v)} />
-  </OverrideField>
+  {#if sharedOnBridge}
+    {@render rules()}
+  {:else}
+    <TriStateListField label="on" help={HELP.on} state={overrideState(payload, prof, SEC, "on")} list={ovList("on")} customSeed={effectiveList("on")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("on")}`} resetKey={`${prof}:${reloadRev}:${onRev}:notifications:on`} onchange={(s, l) => setOvList("on", s, l)} />
+    <OverrideField label="remind_after" help={HELP.remind_after} state={scState("remind_after")} inheritedDisplay={scHint("remind_after")} onstate={(s) => setScState("remind_after", s)}>
+      <NumberField label="" int min={0} max={1440} value={scNumber("remind_after")} onchange={(v) => setSc("remind_after", v ?? 0)} />
+    </OverrideField>
+    <OverrideField label="done_min_work" help={HELP.done_min_work} state={scState("done_min_work")} inheritedDisplay={scHint("done_min_work")} onstate={(s) => setScState("done_min_work", s)}>
+      <NumberField label="" int min={0} max={1440} value={scNumber("done_min_work")} onchange={(v) => setSc("done_min_work", v ?? 0)} />
+    </OverrideField>
+    <OverrideField label="done_short_delay" help={HELP.done_short_delay} state={scState("done_short_delay")} inheritedDisplay={scHint("done_short_delay")} onstate={(s) => setScState("done_short_delay", s)}>
+      <NumberField label="" int min={0} max={1440} value={scNumber("done_short_delay")} onchange={(v) => setSc("done_short_delay", v ?? 0)} />
+    </OverrideField>
+    <OverrideField label="subagents_done" help={HELP.subagents_done} state={scState("subagents_done")} inheritedDisplay={scHint("subagents_done")} onstate={(s) => setScState("subagents_done", s)}>
+      <BooleanField label="" value={scBool("subagents_done")} onchange={(v) => setSc("subagents_done", v)} />
+    </OverrideField>
+  {/if}
   <TriStateListField label="backends" help={HELP.backends} state={overrideState(payload, prof, SEC, "backends")} list={ovList("backends")} customSeed={effectiveList("backends")} inheritLabel={t("widget.inherit")} inheritHint={`${t("widget.inherited")} ${listHint("backends")}`} resetKey={`${prof}:${reloadRev}:notifications:backends`} onchange={(s, l) => setOvList("backends", s, l)} />
   <FieldGroup title={lm.group_sounds}>
     <p class="hint">{lm.sounds_hint_overlay}</p>
@@ -479,14 +502,10 @@
 {:else}
   <BooleanField label="enabled" help={HELP.enabled} value={enabled} onchange={(v) => set("enabled", v)} />
   <BooleanField label="sound" help={HELP.sound} value={sound} onchange={(v) => set("sound", v)} />
-  <TriStateListField label="on" help={HELP.on} state={onState} list={on} customSeed={NOTIF_LIST_DEFAULTS.on} defaultHint={NOTIF_LIST_DEFAULTS.on.join(" · ")} resetKey={`base:${reloadRev}:${onRev}:notifications:on`} onchange={(s, l) => setTri("on", s, l)} />
   <BooleanField label="banner_actions" help={HELP.banner_actions} value={bannerActions} onchange={(v) => set("banner_actions", v)} />
   <BooleanField label="banner_prompt" help={HELP.banner_prompt} value={bannerPrompt} onchange={(v) => set("banner_prompt", v)} />
   <BooleanField label="skip_focused" help={HELP.skip_focused} value={skipFocused} onchange={(v) => set("skip_focused", v)} />
-  <NumberField label="remind_after" help={HELP.remind_after} int min={0} max={1440} value={remindAfter} onchange={(v) => set("remind_after", v ?? 0)} />
-  <NumberField label="done_min_work" help={HELP.done_min_work} int min={0} max={1440} value={doneMinWork} onchange={(v) => set("done_min_work", v ?? 0)} />
-  <NumberField label="done_short_delay" help={HELP.done_short_delay} int min={0} max={1440} value={doneShortDelay} onchange={(v) => set("done_short_delay", v ?? 0)} />
-  <BooleanField label="subagents_done" help={HELP.subagents_done} value={subagentsDone} onchange={(v) => set("subagents_done", v)} />
+  {@render rules()}
   <TriStateListField label="backends" help={HELP.backends} state={backendsState} list={backends} customSeed={NOTIF_LIST_DEFAULTS.backends} defaultHint={NOTIF_LIST_DEFAULTS.backends.join(" · ")} resetKey={`base:${reloadRev}:notifications:backends`} onchange={(s, l) => setTri("backends", s, l)} />
   <FieldGroup title={lm.group_sounds}>
     <p class="hint">{lm.sounds_hint}</p>
@@ -507,6 +526,7 @@
 {/if}
 
 <style>
+  .shared-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
   .hint { margin: 0 0 var(--s3); color: var(--text-dim); font: var(--t-help); }
   .event-off {
     display: flex;
