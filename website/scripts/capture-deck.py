@@ -563,6 +563,33 @@ def compact(graph: dict) -> dict:
     }
 
 
+def spritify(graph: dict, out: Path) -> dict:
+    """Join each animated tile's frames into one horizontal strip.
+
+    The browser then animates it with a CSS step animation on the compositor:
+    one request per working tile instead of eight, and no script swapping
+    images every tick. Frames only an animation used are removed."""
+    still = {t for t in graph["tiles"] if isinstance(t, str)}
+    used: set[str] = set()
+    for i, tile in enumerate(graph["tiles"]):
+        if not isinstance(tile, list):
+            continue
+        frames = [Image.open(out / f"{name}.webp").convert("RGB") for name in tile]
+        w, h = frames[0].size
+        strip = Image.new("RGB", (w * len(frames), h))
+        for k, frame in enumerate(frames):
+            strip.paste(frame, (k * w, 0))
+        buf = io.BytesIO()
+        strip.save(buf, "PNG")
+        name = "s" + hashlib.sha1(buf.getvalue()).hexdigest()[:12]
+        strip.save(out / f"{name}.webp", "WEBP", quality=86, method=6)
+        graph["tiles"][i] = {"s": name, "n": len(frames)}
+        used.update(tile)
+    for name in used - still:
+        (out / f"{name}.webp").unlink(missing_ok=True)
+    return graph
+
+
 def main() -> None:
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -572,7 +599,7 @@ def main() -> None:
             out.mkdir(parents=True)
             store = ProjectIconStore()
             graph = explore(lang, store, cache, out)
-            graph = compact(graph)
+            graph = spritify(compact(graph), out)
             (out / "graph.json").write_text(json.dumps(graph, separators=(",", ":")))
             images = len(list(out.glob("*.webp")))
             size = sum(p.stat().st_size for p in out.iterdir()) / 1e6

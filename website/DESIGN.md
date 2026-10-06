@@ -115,7 +115,8 @@ hardware/UI sources.
 triage, confirmations, usage paging, outages) and its tile/panel renderer
 headless against an invented fleet with invented favicons, then explores every
 view reachable by pressing keys. It writes each distinct key/panel image once
-(`public/deck/<lang>/*.webp`) and a graph of press and timed transitions
+(`public/deck/<lang>/*.webp`; a working tile's 8 animation frames as one strip that
+CSS steps through on the compositor) and a graph of press and timed transitions
 (`graph.json`) that `DeckDemo.astro` replays. The config is `tile_fill = solid`
 and `tile_icon = project`, so project favicons replace the agent mark;
 `ledger` has no favicon on purpose and shows the monogram fallback.

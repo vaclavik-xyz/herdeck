@@ -6,7 +6,9 @@ const { lang } = Astro.props as { lang: Lang };
 // The deck is captured from Herdeck's real renderer and press logic
 // (scripts/capture-deck.py). The first view is rendered here so the deck is
 // complete before, and without, JavaScript.
-type Tile = string | string[];
+// A still image, or a working tile's animation: `n` frames side by side in one
+// strip that CSS steps through (see .deck-sprite).
+type Tile = string | { s: string; n: number };
 // views[i].t: 13 key images + the status window, as indexes into `tiles`;
 // views[i].a: the matching screen-reader labels, as indexes into `labels`.
 type Graph = {
@@ -22,7 +24,8 @@ const graph = JSON.parse(
 const view = graph.views[graph.start['needs-you']];
 const first = view.t.map((t) => graph.tiles[t]);
 const label = (i: number) => graph.labels[view.a[i]];
-const src = (tile: Tile) => `/deck/${lang}/${Array.isArray(tile) ? tile[0] : tile}.webp`;
+const src = (tile: Tile) => `/deck/${lang}/${typeof tile === 'string' ? tile : tile.s}.webp`;
+const sprite = (tile: Tile) => (typeof tile === 'string' ? undefined : 'deck-sprite');
 const scenarios = [
   ['needs-you', text(lang, 'Needs you', 'Čeká na tebe')],
   ['big-fleet', text(lang, 'Big fleet', 'Velká flotila')],
@@ -40,7 +43,7 @@ const scenarios = [
     <div class="deck-grid">
       {first.slice(0, 13).map((tile, index) => (
         <button class="deck-key" data-key={index} aria-label={label(index)}>
-          <img src={src(tile)} alt="" width="196" height="196" />
+          <img src={src(tile)} class={sprite(tile)} alt="" width="196" height="196" />
         </button>
       ))}
       <button class="deck-panel" data-key="13" aria-label={label(13)}>
@@ -76,18 +79,19 @@ const scenarios = [
   </noscript>
 </herdeck-demo>
 <script>
-  type Tile = string | string[];
+  type Tile = string | { s: string; n: number };
   type View = { t: number[]; a: number[]; e: Record<string, number>; to?: [number, number] };
   type Graph = { start: Record<string, number>; tiles: Tile[]; labels: string[]; views: View[] };
 
-  const FRAME_MS = 400; // the runtime tick that advances the working animation
+  // One working-animation cycle: 8 frames at the runtime's 0.4s tick. Every
+  // strip starts at the same point of the cycle, so tiles turn together as on
+  // the deck.
+  const CYCLE_MS = 3200;
 
   class HerdeckDemo extends HTMLElement {
     private graph?: Graph;
     private current = 0;
-    private phase = 0;
     private timer?: number;
-    private animation?: number;
     private token = 0;
     private keys: HTMLButtonElement[] = [];
     private images: HTMLImageElement[] = [];
@@ -112,17 +116,10 @@ const scenarios = [
       );
       this.show(this.current, false);
       this.dataset.ready = '';
-      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        this.animation = window.setInterval(() => {
-          this.phase = (this.phase + 1) % 8;
-          this.paint(this.view(), false);
-        }, FRAME_MS);
-      }
     }
 
     disconnectedCallback() {
       clearTimeout(this.timer);
-      clearInterval(this.animation);
     }
 
     private view() {
@@ -130,8 +127,7 @@ const scenarios = [
     }
 
     private url(tile: Tile) {
-      const name = Array.isArray(tile) ? tile[this.phase % tile.length] : tile;
-      return `/deck/${this.dataset.lang}/${name}.webp`;
+      return `/deck/${this.dataset.lang}/${typeof tile === 'string' ? tile : tile.s}.webp`;
     }
 
     private press(key: number) {
@@ -160,7 +156,7 @@ const scenarios = [
       const previous = this.view();
       this.current = index;
       this.dataset.view = String(index);
-      this.paint(view, true);
+      this.paint(view);
       if (announce && previous.a[13] !== view.a[13]) {
         this.querySelector('[data-announce]')!.textContent = this.graph!.labels[view.a[13]];
       }
@@ -171,11 +167,19 @@ const scenarios = [
       this.prefetch(view);
     }
 
-    private paint(view: View, labels: boolean) {
+    private paint(view: View) {
+      const offset = `-${Math.round(performance.now() % CYCLE_MS)}ms`;
       view.t.forEach((t, i) => {
-        const url = this.url(this.graph!.tiles[t]);
-        if (!this.images[i].src.endsWith(url)) this.images[i].src = url;
-        if (labels) this.keys[i].setAttribute('aria-label', this.graph!.labels[view.a[i]]);
+        const tile = this.graph!.tiles[t];
+        const img = this.images[i];
+        const url = this.url(tile);
+        if (!img.src.endsWith(url)) {
+          img.src = url;
+          const animated = typeof tile !== 'string';
+          img.classList.toggle('deck-sprite', animated);
+          img.style.animationDelay = animated ? offset : '';
+        }
+        this.keys[i].setAttribute('aria-label', this.graph!.labels[view.a[i]]);
       });
     }
 
@@ -186,9 +190,8 @@ const scenarios = [
       next.forEach((index) => {
         const target = this.graph!.views[index];
         target.t.forEach((t) => {
-          const tile = this.graph!.tiles[t];
           const img = new Image();
-          img.src = `/deck/${this.dataset.lang}/${Array.isArray(tile) ? tile[0] : tile}.webp`;
+          img.src = this.url(this.graph!.tiles[t]);
         });
       });
     }
