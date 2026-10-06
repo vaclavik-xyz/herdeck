@@ -1,220 +1,195 @@
 ---
-import '@fontsource-variable/inter';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { type Lang, text } from '../lib/copy';
 const { lang } = Astro.props as { lang: Lang };
-// Mirrors the 13-key fleet in design/agent-ui-reference.png, which comes from
-// the real tile renderer. Status words and panel copy are the deck's own
-// strings (src/herdeck/i18n.py), so the demo reads like the hardware.
-const agents = [
-  ['claude', 'Claude', 'herdeck', 'blocked', 'feat/website', '4m'],
-  ['codex', 'Codex', 'api-server', 'working', 'feat/search', '12m'],
-  ['gemini', 'Gemini', 'docs', 'done', 'main', '1m'],
-  ['cursor', 'Cursor', 'web-app', 'working', 'fix/menu', '7m'],
-  ['opencode', 'OpenCode', 'design', 'idle', 'main', '25m'],
-  ['hermes', 'Hermes', 'pipeline', 'working', 'feat/build', '3m'],
-  ['claude', 'Claude', 'auth', 'working', 'fix/login', '9m'],
-  ['codex', 'Codex', 'checkout', 'idle', 'feat/cart', '41m'],
-  ['gemini', 'Gemini', 'search', 'done', 'main', '2m'],
-  ['cursor', 'Cursor', 'dashboard', 'working', 'feat/stats', '6m'],
-  ['opencode', 'OpenCode', 'ui-kit', 'idle', 'main', '1h'],
-  ['hermes', 'Hermes', 'tests', 'working', 'fix/spec', '5m'],
-  ['claude', 'Claude', 'mobile', 'working', 'feat/sync', '8m'],
+// The deck is captured from Herdeck's real renderer and press logic
+// (scripts/capture-deck.py). The first view is rendered here so the deck is
+// complete before, and without, JavaScript.
+type Tile = string | string[];
+// views[i].t: 13 key images + the status window, as indexes into `tiles`;
+// views[i].a: the matching screen-reader labels, as indexes into `labels`.
+type Graph = {
+  start: Record<string, number>;
+  tiles: Tile[];
+  labels: string[];
+  views: { t: number[]; a: number[] }[];
+};
+// Read from the project root: in a build this module runs from a bundled chunk.
+const graph = JSON.parse(
+  readFileSync(join(process.cwd(), 'public', 'deck', lang, 'graph.json'), 'utf8'),
+) as Graph;
+const view = graph.views[graph.start['needs-you']];
+const first = view.t.map((t) => graph.tiles[t]);
+const label = (i: number) => graph.labels[view.a[i]];
+const src = (tile: Tile) => `/deck/${lang}/${Array.isArray(tile) ? tile[0] : tile}.webp`;
+const scenarios = [
+  ['needs-you', text(lang, 'Needs you', 'Čeká na tebe')],
+  ['big-fleet', text(lang, 'Big fleet', 'Velká flotila')],
+  ['outage', text(lang, 'Machine down', 'Výpadek stroje')],
+  ['offline', text(lang, 'All offline', 'Vše offline')],
 ];
-const status: Record<string, string> = {
-  blocked: text(lang, 'BLOCKED', 'BLOKOVÁN'),
-  working: text(lang, 'WORKING', 'PRACUJE'),
-  done: text(lang, 'DONE', 'HOTOVO'),
-  idle: text(lang, 'IDLE', 'NEČINNÝ'),
-};
-const spoken: Record<string, string> = {
-  blocked: text(lang, 'needs you', 'čeká na tebe'),
-  working: text(lang, 'working', 'pracuje'),
-  done: text(lang, 'done', 'hotovo'),
-  idle: text(lang, 'idle', 'nečinný'),
-};
 ---
 
-<herdeck-demo data-lang={lang} data-labels={JSON.stringify({ status, spoken })}>
-  <div class="deck">
+<herdeck-demo data-lang={lang}>
+  <div
+    class="deck"
+    role="group"
+    aria-label={text(lang, 'Simulated Herdeck deck', 'Simulovaný deck Herdecku')}
+  >
     <div class="deck-grid">
-      {agents.map(([icon, name, project, state, branch, elapsed], index) => (
-        <button
-          class={`deck-key ${state}`}
-          style={`--i: ${index}`}
-          data-agent={index}
-          data-name={project}
-          aria-label={`${name}, ${project}, ${spoken[state]}`}
-        >
-          <img src={`/icons/${icon}.svg`} alt="" width="40" height="40" />
-          <span class="k-meta">
-            <span class="k-state">{status[state]}</span>
-            <span class="k-time">{elapsed}</span>
-          </span>
-          <strong class="k-name">{project}</strong>
-          <span class="k-branch">{branch}</span>
-          <i class="k-bar"></i>
+      {first.slice(0, 13).map((tile, index) => (
+        <button class="deck-key" data-key={index} aria-label={label(index)}>
+          <img src={src(tile)} alt="" width="196" height="196" />
         </button>
       ))}
-      <button class="deck-panel" data-panel aria-describedby="deck-panel-title">
-        <span class="p-top">
-          <span class="p-chip">
-            <strong data-waiting>1</strong>
-            <span data-summary>{text(lang, 'Needs you', 'Čeká na tebe')}</span>
-          </span>
-          <span class="p-total">{text(lang, '13 agents', 'agentů: 13')}</span>
-        </span>
-        <strong class="p-title" id="deck-panel-title" data-panel-title>
-          herdeck · claude
-        </strong>
-        <span class="p-sub" data-panel-sub>
-          {text(lang, 'Run the project test suite?', 'Spustit testy projektu?')}
-        </span>
-        <span class="p-foot" data-panel-foot>
-          {text(lang, 'press · answer', 'stiskni · odpovědět')}
-        </span>
+      <button class="deck-panel" data-key="13" aria-label={label(13)}>
+        <img src={src(first[13])} alt="" width="458" height="196" />
       </button>
     </div>
   </div>
-  <div class="demo-prompt" aria-live="polite" aria-atomic="true">
-    <div data-demo-message>
-      <span class="prompt-dot"></span>
-      <span>
-        {text(
-          lang,
-          'Simulated fleet. Press the amber key or the panel to answer Claude.',
-          'Simulovaná flotila. Stiskni oranžové tlačítko nebo panel a odpověz Claudovi.',
-        )}
-      </span>
-    </div>
-    <div class="demo-approval" hidden>
-      <div class="request-copy">
-        <span>Claude · herdeck</span>
-        <strong>{text(lang, 'Run the project test suite?', 'Spustit testy projektu?')}</strong>
-        <code>npm test</code>
-      </div>
-      <div class="demo-buttons">
-        <button data-decision="deny" class="button button-quiet">
-          {text(lang, 'Deny', 'Zamítnout')}
+  <div class="deck-controls">
+    <div class="deck-scenarios" role="group" aria-label={text(lang, 'Scenario', 'Scénář')}>
+      {scenarios.map(([id, label]) => (
+        <button data-scenario={id} aria-pressed={id === 'needs-you' ? 'true' : 'false'}>
+          {label}
         </button>
-        <button data-decision="approve" class="button">
-          {text(lang, 'Approve', 'Schválit')} ✓
-        </button>
-      </div>
+      ))}
     </div>
-    <button class="demo-reset" hidden>
-      {text(lang, 'Try again', 'Zkusit znovu')} ↻
-    </button>
-  </div>
-  <noscript>
-    <p>
+    <p class="deck-note">
       {text(
         lang,
-        'Enable JavaScript to try the interactive controls. This is a simulated fleet, with no connection to real agents.',
-        'Interaktivní ovládání vyžaduje JavaScript. Toto je simulovaná flotila bez připojení ke skutečným agentům.',
+        'Herdeck’s real renderer and key logic, replaying an invented fleet. Press any key or the status window.',
+        'Skutečný renderer a logika kláves Herdecku nad smyšlenou flotilou. Zkus libovolnou klávesu nebo stavové okno.',
+      )}
+    </p>
+  </div>
+  <p class="sr-only" aria-live="polite" data-announce></p>
+  <noscript>
+    <p class="deck-note">
+      {text(
+        lang,
+        'Enable JavaScript to press the keys. The demo runs entirely in your browser, with no connection to real agents.',
+        'Pro mačkání kláves zapni JavaScript. Ukázka běží jen v prohlížeči, bez připojení ke skutečným agentům.',
       )}
     </p>
   </noscript>
 </herdeck-demo>
 <script>
-  type Labels = { status: Record<string, string>; spoken: Record<string, string> };
+  type Tile = string | string[];
+  type View = { t: number[]; a: number[]; e: Record<string, number>; to?: [number, number] };
+  type Graph = { start: Record<string, number>; tiles: Tile[]; labels: string[]; views: View[] };
+
+  const FRAME_MS = 400; // the runtime tick that advances the working animation
+
   class HerdeckDemo extends HTMLElement {
-    connectedCallback() {
-      const cs = this.dataset.lang === 'cs';
-      const labels = JSON.parse(this.dataset.labels || '{}') as Labels;
-      const $ = <T extends HTMLElement>(selector: string) => this.querySelector<T>(selector)!;
-      const message = $('[data-demo-message]');
-      const approval = $('.demo-approval');
-      const reset = $<HTMLButtonElement>('.demo-reset');
-      const first = $<HTMLButtonElement>('[data-agent="0"]');
-      const panel = $<HTMLButtonElement>('[data-panel]');
-      const keys = [...this.querySelectorAll<HTMLButtonElement>('[data-agent]')];
-      const intro = message.innerHTML;
-      let resolved = false;
+    private graph?: Graph;
+    private current = 0;
+    private phase = 0;
+    private timer?: number;
+    private animation?: number;
+    private token = 0;
+    private keys: HTMLButtonElement[] = [];
+    private images: HTMLImageElement[] = [];
 
-      const setState = (key: HTMLButtonElement, state: string) => {
-        key.classList.remove('blocked', 'working', 'done', 'idle');
-        key.classList.add(state);
-        key.querySelector('.k-state')!.textContent = labels.status[state];
-        key.querySelector('.k-time')!.textContent = state === 'blocked' ? '4m' : '0s';
-        key.setAttribute('aria-label', `Claude, herdeck, ${labels.spoken[state]}`);
-      };
-      // The real panel switches between "needs you" and an overview of the fleet.
-      const setPanel = (waiting: boolean) => {
-        panel.classList.toggle('clear', !waiting);
-        $('[data-waiting]').textContent = waiting ? '1' : '0';
-        $('[data-summary]').textContent = waiting
-          ? cs
-            ? 'Čeká na tebe'
-            : 'Needs you'
-          : cs
-            ? 'Vše v klidu'
-            : 'All clear';
-        const count = (state: string) => keys.filter((k) => k.classList.contains(state)).length;
-        $('[data-panel-title]').textContent = waiting
-          ? 'herdeck · claude'
-          : cs
-            ? 'Flotila'
-            : 'Fleet';
-        $('[data-panel-sub]').textContent = waiting
-          ? cs
-            ? 'Spustit testy projektu?'
-            : 'Run the project test suite?'
-          : cs
-            ? `${count('working')} pracuje · ${count('done')} hotovo · ${count('idle')} nečinní`
-            : `${count('working')} working · ${count('done')} done · ${count('idle')} idle`;
-        $('[data-panel-foot]').hidden = !waiting;
-      };
-      const ask = () => {
-        approval.hidden = false;
-        message.hidden = true;
-        $<HTMLButtonElement>('[data-decision="approve"]').focus();
-      };
-
-      keys.forEach((key) =>
-        key.addEventListener('click', () => {
-          if (key === first && !resolved) return ask();
-          approval.hidden = true;
-          message.hidden = false;
-          const state = key.querySelector('.k-state')!.textContent!.toLowerCase();
-          message.textContent = `${key.dataset.name}: ${state}. ${cs ? 'Tato ukázka není připojena ke skutečným agentům.' : 'This demo is not connected to real agents.'}`;
-        }),
+    async connectedCallback() {
+      this.keys = [...this.querySelectorAll<HTMLButtonElement>('[data-key]')];
+      this.images = this.keys.map((key) => key.querySelector('img')!);
+      const response = await fetch(`/deck/${this.dataset.lang}/graph.json`);
+      if (!response.ok) return;
+      this.graph = (await response.json()) as Graph;
+      this.current = this.graph.start['needs-you'];
+      this.keys.forEach((key) =>
+        key.addEventListener('click', () => this.press(Number(key.dataset.key))),
       );
-      panel.addEventListener('click', () => {
-        if (!resolved) return ask();
-        message.hidden = false;
-        approval.hidden = true;
-        message.textContent = cs
-          ? 'Nikdo nečeká. Panel ukazuje přehled flotily.'
-          : 'Nobody is waiting. The panel shows the fleet overview.';
-      });
-      this.querySelectorAll<HTMLButtonElement>('[data-decision]').forEach((button) =>
+      this.querySelectorAll<HTMLButtonElement>('[data-scenario]').forEach((button) =>
         button.addEventListener('click', () => {
-          resolved = true;
-          const approved = button.dataset.decision === 'approve';
-          approval.hidden = true;
-          message.hidden = false;
-          reset.hidden = false;
-          message.textContent = approved
-            ? cs
-              ? 'Schváleno. Claude spouští testy. Všichni mají, co potřebují.'
-              : 'Approved. Claude is running the tests. Everyone has what they need.'
-            : cs
-              ? 'Zamítnuto. Příkaz se nespustil. Claude čeká na další zadání.'
-              : 'Denied. The command did not run. Claude is ready for your next instruction.';
-          setState(first, approved ? 'working' : 'idle');
-          setPanel(false);
-          reset.focus();
+          this.querySelectorAll('[data-scenario]').forEach((other) =>
+            other.setAttribute('aria-pressed', String(other === button)),
+          );
+          this.show(this.graph!.start[button.dataset.scenario!], true);
         }),
       );
-      reset.addEventListener('click', () => {
-        resolved = false;
-        reset.hidden = true;
-        approval.hidden = true;
-        message.hidden = false;
-        setState(first, 'blocked');
-        setPanel(true);
-        message.innerHTML = intro;
-        first.focus();
+      this.show(this.current, false);
+      this.dataset.ready = '';
+      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        this.animation = window.setInterval(() => {
+          this.phase = (this.phase + 1) % 8;
+          this.paint(this.view(), false);
+        }, FRAME_MS);
+      }
+    }
+
+    disconnectedCallback() {
+      clearTimeout(this.timer);
+      clearInterval(this.animation);
+    }
+
+    private view() {
+      return this.graph!.views[this.current];
+    }
+
+    private url(tile: Tile) {
+      const name = Array.isArray(tile) ? tile[this.phase % tile.length] : tile;
+      return `/deck/${this.dataset.lang}/${name}.webp`;
+    }
+
+    private press(key: number) {
+      const next = this.view().e[String(key)];
+      if (next !== undefined) this.show(next, true);
+    }
+
+    // Swap a whole view at once, after its images are decoded, so a press never
+    // shows half old and half new keys.
+    private async show(index: number, announce: boolean) {
+      const token = ++this.token;
+      clearTimeout(this.timer);
+      const view = this.graph!.views[index];
+      const urls = view.t.map((t) => this.url(this.graph!.tiles[t]));
+      await Promise.race([
+        Promise.all(
+          urls.map((u) => {
+            const img = new Image();
+            img.src = u;
+            return img.decode().catch(() => undefined);
+          }),
+        ),
+        new Promise((resolve) => setTimeout(resolve, 400)),
+      ]);
+      if (token !== this.token) return;
+      const previous = this.view();
+      this.current = index;
+      this.dataset.view = String(index);
+      this.paint(view, true);
+      if (announce && previous.a[13] !== view.a[13]) {
+        this.querySelector('[data-announce]')!.textContent = this.graph!.labels[view.a[13]];
+      }
+      if (view.to) {
+        const [ms, target] = view.to;
+        this.timer = window.setTimeout(() => this.show(target, true), ms);
+      }
+      this.prefetch(view);
+    }
+
+    private paint(view: View, labels: boolean) {
+      view.t.forEach((t, i) => {
+        const url = this.url(this.graph!.tiles[t]);
+        if (!this.images[i].src.endsWith(url)) this.images[i].src = url;
+        if (labels) this.keys[i].setAttribute('aria-label', this.graph!.labels[view.a[i]]);
+      });
+    }
+
+    // Warm the cache with every view one press away.
+    private prefetch(view: View) {
+      const next = new Set(Object.values(view.e));
+      if (view.to) next.add(view.to[1]);
+      next.forEach((index) => {
+        const target = this.graph!.views[index];
+        target.t.forEach((t) => {
+          const tile = this.graph!.tiles[t];
+          const img = new Image();
+          img.src = `/deck/${this.dataset.lang}/${Array.isArray(tile) ? tile[0] : tile}.webp`;
+        });
       });
     }
   }

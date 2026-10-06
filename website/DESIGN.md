@@ -3,8 +3,9 @@
 ## Design plan
 
 Herdeck is a tactile control surface for AI coding agents. The memorable element
-is the deck itself: the hero is a live, faithful miniature of the real D200 tile
-UI (colours, anatomy and status words from the renderer), not a picture of it.
+is the deck itself: the hero is a playable D200 whose every key image and every
+transition comes from Herdeck's own renderer and key logic (see "Captured deck"
+below), not an imitation of it.
 Surrounding typography and navigation stay quiet. Status colours are reserved
 for agent state; site chrome never borrows them.
 
@@ -15,23 +16,18 @@ for agent state; site chrome never borrows them.
 - Cool white is also the primary button, so no status colour doubles as "click me".
 - Signal cyan `#78dfed`: text links and finished work.
 - Waiting amber `#edb66b`: a request that needs a person.
-- Deck tiles use the renderer's own fills (working `#0d3d17`/`#28b446`, done
-  `#0f4449`/`#2dc8d7`, idle `#11284a`/`#3278dc`, blocked `#4e3906`/`#e6aa14`),
-  with status words lifted slightly for WCAG AA contrast on the web.
 
 Sora supplies the compact geometric headlines. Manrope carries readable body
 copy. Both are self-hosted with Latin and Latin Extended coverage. Monospace
-appears only in real commands. Inside the simulated deck only, Inter matches the
-tile renderer's typeface.
+appears only in real commands.
 
-Layout: left-aligned hero copy beside the interactive deck (press the amber key or
-panel to answer); a quiet agent strip; three concrete capabilities; a large film
+Layout: left-aligned hero copy beside the playable deck and its scenario switch; a quiet agent strip; three concrete capabilities; a large film
 frame; a hardware / desktop / remote composition; installation CTA.
 Docs use a narrow searchable sidebar and a readable single article column.
 
 ```
 brand       features workflow docs        language / download
-headline / action              interactive deck / request / decision
+headline / action              playable deck / scenarios
 supported agent marks
 capabilities in three columns
 film title                         description
@@ -110,9 +106,29 @@ Both outputs were visually checked for the 5 + 5 + 3 square keys, bottom-right
 horizontal panel, recognizable agent marks and absence of stock app icons.
 The enclosure, stand, camera angle and hand placement follow the source D200.
 
-The browser demo remains an interactive diagram with eight simulated agents,
-five empty keys and the bottom-right display. Both localized Remotion films
-use the same selected images and identify the hardware/UI sources.
+Both localized Remotion films use the same selected images and identify the
+hardware/UI sources.
+
+## Captured deck
+
+`scripts/capture-deck.py` runs Herdeck's real `Orchestrator` (ordering, drills,
+triage, confirmations, usage paging, outages) and its tile/panel renderer
+headless against an invented fleet with invented favicons, then explores every
+view reachable by pressing keys. It writes each distinct key/panel image once
+(`public/deck/<lang>/*.webp`) and a graph of press and timed transitions
+(`graph.json`) that `DeckDemo.astro` replays. The config is `tile_fill = solid`
+and `tile_icon = project`, so project favicons replace the agent mark;
+`ledger` has no favicon on purpose and shows the monogram fallback.
+
+To keep the graph finite, only answers (blocked becomes working) and opening a
+done agent (it becomes idle) change the fleet; Stop and macros play out on the
+deck but leave the agent as it was. Elapsed times are frozen. Presses during a
+fading note resolve against the view right after it. Re-run the script after
+changing the renderer or the deck logic:
+
+```sh
+TZ=Europe/Prague PYTHONPATH=src .venv/bin/python website/scripts/capture-deck.py
+```
 
 ## Film direction
 

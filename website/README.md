@@ -23,8 +23,8 @@ not expose the authenticated Herdeck runtime, bridges, or user configuration.
 Astro 7 runs its dev server in the background; `npx astro dev stop` stops it.
 
 `npm test` starts the production preview on port 4323. Browser coverage checks
-both languages, deep-link language switches, all internal routes/assets, demo
-approval and denial, accent-insensitive docs search, mobile layout/navigation,
+both languages, deep-link language switches, all internal routes/assets, the captured
+deck (triage, usage, scenarios), accent-insensitive docs search, mobile layout/navigation,
 reduced motion, accessibility, and actual MP4 playback.
 
 ## Routes and content
@@ -69,7 +69,11 @@ Product images show the actual D200 form with edited Herdeck screen contents.
 The UI reference comes from the application renderer with synthetic agents;
 OpenAI image generation composed it into the Ulanzi hardware source photos.
 See [DESIGN.md](DESIGN.md) for sources, prompts, rights and hardware geometry.
-The browser demo uses simulated agents in the D200's 5 + 5 + 3 key layout.
+The playable deck in the hero is captured from Herdeck's real renderer and key
+logic with an invented fleet (`scripts/capture-deck.py`, see DESIGN.md). After
+changing the renderer or deck behaviour, re-run it from the repository root:
+`TZ=Europe/Prague PYTHONPATH=src .venv/bin/python website/scripts/capture-deck.py`
+(about 30 minutes; the output in `public/deck/` is committed).
 Local WebP assets live in `public/images/`; no image hotlinks or remote fonts.
 Agent icons and the Herdeck logo reuse repository assets. Font license files are
 in `public/fonts/`; icon attribution is in `../src/herdeck/assets/ATTRIBUTION.md`.

@@ -17,30 +17,33 @@ test('without JavaScript, navigation and native film controls remain available',
 });
 
 for (const lang of ['en', 'cs'] as const) {
-  test(`${lang}: approval, denial, reset and language switching`, async ({ page }) => {
+  test(`${lang}: the captured deck answers, pages and switches scenarios`, async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(`/${lang}/`);
     await expect(page.locator('html')).toHaveAttribute('lang', lang);
-    const key = page.locator('[data-agent="0"]');
-    await key.click();
-    await expect(page.locator('.demo-approval')).toBeVisible();
-    await page.locator('[data-decision="approve"]').click();
-    await expect(page.locator('[data-demo-message]')).toContainText(
-      lang === 'cs' ? 'Schváleno' : 'Approved',
-    );
-    await expect(page.locator('[data-waiting]')).toHaveText('0');
-    await expect(page.locator('[data-panel]')).toHaveClass(/clear/);
-    await page.locator('.demo-reset').click();
-    await expect(page.locator('[data-waiting]')).toHaveText('1');
-    // Like the hardware, the status panel opens the agent that is waiting.
-    await page.locator('[data-panel]').click();
-    await expect(page.locator('.demo-approval')).toBeVisible();
-    await key.click();
-    await page.locator('[data-decision="deny"]').click();
-    await expect(page.locator('[data-demo-message]')).toContainText(
-      lang === 'cs' ? 'Příkaz se nespustil' : 'command did not run',
-    );
+    await expect(page.locator('herdeck-demo[data-ready]')).toBeAttached();
+    const key = (i: number) => page.locator(`[data-key="${i}"]`);
+    const cs = lang === 'cs';
+    // The status window starts the triage loop on the agent waiting longest.
+    await key(13).click();
+    await expect(key(12)).toHaveAttribute('aria-label', cs ? 'Zpět' : 'Back');
+    await expect(key(13)).toHaveAttribute('aria-label', /lumen/);
+    await expect(key(0)).toHaveAttribute('aria-label', /^1 · /);
+    // Answering moves straight on to the next blocked agent.
+    await key(0).click();
+    await expect(key(13)).toHaveAttribute('aria-label', /orbit/);
+    await expect(key(0)).toHaveAttribute('aria-label', /^1 · /);
+    await key(0).click();
+    await expect(key(13)).toHaveAttribute('aria-label', cs ? /Vše v klidu/ : /All clear/, {
+      timeout: 8000,
+    });
+    // A calm deck pages through the usage limits.
+    await key(13).click();
+    await expect(key(13)).toHaveAttribute('aria-label', cs ? /Limity využití/ : /Usage limits/);
+    await page.locator('[data-scenario="offline"]').click();
+    await expect(page.locator('[data-scenario="offline"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(key(13)).toHaveAttribute('aria-label', /Offline/i);
     await page.goto(`/${lang}/docs/connections/`);
     await page.locator('.language-switch').click();
     await expect(page).toHaveURL(`/${lang === 'cs' ? 'en' : 'cs'}/docs/connections/`);
@@ -159,12 +162,10 @@ test('mobile menu, keyboard controls, reduced motion and narrow layouts', async 
   await expect(page.locator('#mobile-nav')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('#mobile-nav')).toBeHidden();
-  const key = page.locator('[data-agent="0"]');
-  await key.focus();
+  await expect(page.locator('herdeck-demo[data-ready]')).toBeAttached();
+  await page.locator('[data-key="13"]').focus();
   await page.keyboard.press('Enter');
-  await expect(page.locator('[data-decision="approve"]')).toBeFocused();
-  await page.keyboard.press('Enter');
-  await expect(page.locator('.demo-reset')).toBeFocused();
+  await expect(page.locator('[data-key="12"]')).toHaveAttribute('aria-label', 'Zpět');
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).scrollBehavior)).toBe(
     'auto',
   );
