@@ -30,7 +30,12 @@ for (const lang of ['en', 'cs'] as const) {
       lang === 'cs' ? 'Schváleno' : 'Approved',
     );
     await expect(page.locator('[data-waiting]')).toHaveText('0');
+    await expect(page.locator('[data-panel]')).toHaveClass(/clear/);
     await page.locator('.demo-reset').click();
+    await expect(page.locator('[data-waiting]')).toHaveText('1');
+    // Like the hardware, the status panel opens the agent that is waiting.
+    await page.locator('[data-panel]').click();
+    await expect(page.locator('.demo-approval')).toBeVisible();
     await key.click();
     await page.locator('[data-decision="deny"]').click();
     await expect(page.locator('[data-demo-message]')).toContainText(

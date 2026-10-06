@@ -3,31 +3,37 @@
 ## Design plan
 
 Herdeck is a tactile control surface for AI coding agents. The memorable element
-is the hardware itself: large, close, grounded on a desk. Surrounding typography
-and navigation stay quiet. The website should feel like a well-made instrument.
+is the deck itself: the hero is a live, faithful miniature of the real D200 tile
+UI (colours, anatomy and status words from the renderer), not a picture of it.
+Surrounding typography and navigation stay quiet. Status colours are reserved
+for agent state; site chrome never borrows them.
 
 - Midnight navy `#09111f`: background, matching the dark-only desktop product.
 - Blue steel `#101c2c`: panel surfaces.
 - Brushed edge `#263549`: meaningful component boundaries.
 - Cool white `#edf3fa`: primary text.
-- Signal cyan `#78dfed`: primary controls and finished work.
+- Cool white is also the primary button, so no status colour doubles as "click me".
+- Signal cyan `#78dfed`: text links and finished work.
 - Waiting amber `#edb66b`: a request that needs a person.
+- Deck tiles use the renderer's own fills (working `#0d3d17`/`#28b446`, done
+  `#0f4449`/`#2dc8d7`, idle `#11284a`/`#3278dc`, blocked `#4e3906`/`#e6aa14`),
+  with status words lifted slightly for WCAG AA contrast on the web.
 
 Sora supplies the compact geometric headlines. Manrope carries readable body
 copy. Both are self-hosted with Latin and Latin Extended coverage. Monospace
-appears only in real commands.
+appears only in real commands. Inside the simulated deck only, Inter matches the
+tile renderer's typeface.
 
-Layout: left-aligned hero copy beside a D200 image with composited Herdeck screens; a
-quiet agent strip; three concrete capabilities; the interactive deck; a large
-film frame; a hardware / desktop / remote composition; installation CTA.
+Layout: left-aligned hero copy beside the interactive deck (press the amber key or
+panel to answer); a quiet agent strip; three concrete capabilities; a large film
+frame; a hardware / desktop / remote composition; installation CTA.
 Docs use a narrow searchable sidebar and a readable single article column.
 
 ```
 brand       features workflow docs        language / download
-headline / action              physical deck
+headline / action              interactive deck / request / decision
 supported agent marks
 capabilities in three columns
-explanation          interactive deck / request / decision
 film title                         description
                   cinematic film
 hardware photography       desktop / remote surfaces
@@ -111,6 +117,7 @@ use the same selected images and identify the hardware/UI sources.
 ## Film direction
 
 A 30-second product film at 128 BPM. The 64-beat structure:
+
 - beats 0–8: reveal the device and the promise;
 - 8–16: waiting vs working;
 - 16–24: the whole fleet;

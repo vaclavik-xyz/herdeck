@@ -12,26 +12,8 @@ const t = copy[lang];
 
 <Layout lang={lang}>
   <section class="hero">
-    <div class="hero-photo">
-      <img
-        src="/images/deck-hero.webp"
-        alt={text(
-          lang,
-          'Ulanzi D200 with Herdeck agent tiles composited onto all 13 keys and its bottom-right status display',
-          'Ulanzi D200 s vizualizovanými dlaždicemi agentů Herdecku na 13 tlačítkách a stavovým panelem vpravo dole',
-        )}
-        width="1254"
-        height="1254"
-        fetchpriority="high"
-      />
-    </div>
     <div class="container hero-inner">
       <div class="hero-copy">
-        <a class="release-note" href={path(lang, 'download')}>
-          <span class="status-dot"></span>
-          {text(lang, 'Meet your new command center', 'Tvůj nový ovládací pult')}
-          <Icon name="arrow" size={16} />
-        </a>
         <h1 class="line-break">{t.hero}</h1>
         <p>{t.intro}</p>
         <div class="button-row">
@@ -49,13 +31,9 @@ const t = copy[lang];
           <span>macOS / Linux</span>
         </span>
       </div>
-    </div>
-    <div class="hero-base container">
-      <span>
-        <i class="status-dot"></i>
-        {text(lang, 'Your next decision. One press away.', 'Další rozhodnutí. Na jeden stisk.')}
-      </span>
-      <span>Ulanzi D200 · Elgato Stream Deck · Desktop</span>
+      <div class="hero-deck">
+        <DeckDemo lang={lang} />
+      </div>
     </div>
   </section>
   <section class="agent-strip container">
@@ -95,34 +73,6 @@ const t = copy[lang];
       {t.more}
       <Icon name="arrow" size={17} />
     </a>
-  </section>
-  <section class="demo-section">
-    <div class="container demo-layout">
-      <div class="demo-intro">
-        <h2>{t.demoTitle}</h2>
-        <p>{t.demoBody}</p>
-        <div class="status-legend">
-          <span>
-            <i class="dot amber"></i>
-            {text(lang, 'Needs you', 'Čeká na tebe')}
-          </span>
-          <span>
-            <i class="dot green"></i>
-            {text(lang, 'Working', 'Pracuje')}
-          </span>
-          <span>
-            <i class="dot cyan"></i>
-            {text(lang, 'Done', 'Hotovo')}
-          </span>
-          <span>
-            <i class="dot blue"></i>
-            {text(lang, 'Idle', 'Nečinný')}
-          </span>
-        </div>
-        <small>{t.demoLabel}</small>
-      </div>
-      <DeckDemo lang={lang} />
-    </div>
   </section>
   <Film lang={lang} />
   <section class="surfaces-section container">

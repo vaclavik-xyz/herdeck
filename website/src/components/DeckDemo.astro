@@ -1,64 +1,78 @@
 ---
+import '@fontsource-variable/inter';
 import { type Lang, text } from '../lib/copy';
 const { lang } = Astro.props as { lang: Lang };
+// Mirrors the 13-key fleet in design/agent-ui-reference.png, which comes from
+// the real tile renderer. Status words and panel copy are the deck's own
+// strings (src/herdeck/i18n.py), so the demo reads like the hardware.
 const agents = [
-  ['claude', 'Claude', 'herdeck', 'blocked'],
-  ['codex', 'Codex', 'api-server', 'working'],
-  ['gemini', 'Gemini', 'docs', 'done'],
-  ['cursor', 'Cursor', 'web-app', 'working'],
-  ['opencode', 'OpenCode', 'design-system', 'idle'],
-  ['hermes', 'Hermes', 'pipeline', 'working'],
-  ['claude', 'Claude', 'auth', 'working'],
-  ['codex', 'Codex', 'checkout', 'idle'],
+  ['claude', 'Claude', 'herdeck', 'blocked', 'feat/website', '4m'],
+  ['codex', 'Codex', 'api-server', 'working', 'feat/search', '12m'],
+  ['gemini', 'Gemini', 'docs', 'done', 'main', '1m'],
+  ['cursor', 'Cursor', 'web-app', 'working', 'fix/menu', '7m'],
+  ['opencode', 'OpenCode', 'design', 'idle', 'main', '25m'],
+  ['hermes', 'Hermes', 'pipeline', 'working', 'feat/build', '3m'],
+  ['claude', 'Claude', 'auth', 'working', 'fix/login', '9m'],
+  ['codex', 'Codex', 'checkout', 'idle', 'feat/cart', '41m'],
+  ['gemini', 'Gemini', 'search', 'done', 'main', '2m'],
+  ['cursor', 'Cursor', 'dashboard', 'working', 'feat/stats', '6m'],
+  ['opencode', 'OpenCode', 'ui-kit', 'idle', 'main', '1h'],
+  ['hermes', 'Hermes', 'tests', 'working', 'fix/spec', '5m'],
+  ['claude', 'Claude', 'mobile', 'working', 'feat/sync', '8m'],
 ];
 const status: Record<string, string> = {
-  blocked: text(lang, 'Needs you', 'Čeká na tebe'),
-  working: text(lang, 'Working', 'Pracuje'),
-  done: text(lang, 'Done', 'Hotovo'),
-  idle: text(lang, 'Idle', 'Nečinný'),
+  blocked: text(lang, 'BLOCKED', 'BLOKOVÁN'),
+  working: text(lang, 'WORKING', 'PRACUJE'),
+  done: text(lang, 'DONE', 'HOTOVO'),
+  idle: text(lang, 'IDLE', 'NEČINNÝ'),
+};
+const spoken: Record<string, string> = {
+  blocked: text(lang, 'needs you', 'čeká na tebe'),
+  working: text(lang, 'working', 'pracuje'),
+  done: text(lang, 'done', 'hotovo'),
+  idle: text(lang, 'idle', 'nečinný'),
 };
 ---
 
-<herdeck-demo data-lang={lang}>
-  <div class="demo-topline">
-    <span>
-      <i class="status-dot"></i>
-      {text(lang, 'Demo fleet', 'Ukázková flotila')}
-    </span>
-    <span>{text(lang, '8 agents · 2 machines', '8 agentů · 2 stroje')}</span>
-  </div>
-  <div class="demo-hardware">
-    <div class="demo-grid">
-      {agents.map(([icon, name, project, state], index) => (
+<herdeck-demo data-lang={lang} data-labels={JSON.stringify({ status, spoken })}>
+  <div class="deck">
+    <div class="deck-grid">
+      {agents.map(([icon, name, project, state, branch, elapsed], index) => (
         <button
-          class={`agent-key ${state}`}
+          class={`deck-key ${state}`}
+          style={`--i: ${index}`}
           data-agent={index}
-          data-name={name}
-          aria-label={`${name}, ${project}, ${status[state]}`}
+          data-name={project}
+          aria-label={`${name}, ${project}, ${spoken[state]}`}
         >
-          <span class="key-brand">
-            <img src={`/icons/${icon}.svg`} alt="" width="27" height="27" />
-            <small>{name}</small>
+          <img src={`/icons/${icon}.svg`} alt="" width="40" height="40" />
+          <span class="k-meta">
+            <span class="k-state">{status[state]}</span>
+            <span class="k-time">{elapsed}</span>
           </span>
-          <strong>{project}</strong>
-          <span class="key-status">{status[state]}</span>
-          <i class="key-bar"></i>
+          <strong class="k-name">{project}</strong>
+          <span class="k-branch">{branch}</span>
+          <i class="k-bar"></i>
         </button>
       ))}
-      {Array.from({ length: 5 }).map(() => (
-        <div class="agent-key empty-key" aria-hidden="true"></div>
-      ))}
-      <div class="demo-status">
-        <strong data-waiting>1</strong>
-        <div>
-          <span data-summary>{text(lang, 'Needs you', 'Čeká na tebe')}</span>
-          <small>{text(lang, 'agent waiting', 'čekající agent')}</small>
-        </div>
-      </div>
-    </div>
-    <div class="demo-bezel">
-      <span>herdeck</span>
-      <span>● ● ●</span>
+      <button class="deck-panel" data-panel aria-describedby="deck-panel-title">
+        <span class="p-top">
+          <span class="p-chip">
+            <strong data-waiting>1</strong>
+            <span data-summary>{text(lang, 'Needs you', 'Čeká na tebe')}</span>
+          </span>
+          <span class="p-total">{text(lang, '13 agents', 'agentů: 13')}</span>
+        </span>
+        <strong class="p-title" id="deck-panel-title" data-panel-title>
+          herdeck · claude
+        </strong>
+        <span class="p-sub" data-panel-sub>
+          {text(lang, 'Run the project test suite?', 'Spustit testy projektu?')}
+        </span>
+        <span class="p-foot" data-panel-foot>
+          {text(lang, 'press · answer', 'stiskni · odpovědět')}
+        </span>
+      </button>
     </div>
   </div>
   <div class="demo-prompt" aria-live="polite" aria-atomic="true">
@@ -67,8 +81,8 @@ const status: Record<string, string> = {
       <span>
         {text(
           lang,
-          'Select the amber Claude tile to see its request.',
-          'Vyber oranžovou dlaždici Claude a přečti si požadavek.',
+          'Simulated fleet. Press the amber key or the panel to answer Claude.',
+          'Simulovaná flotila. Stiskni oranžové tlačítko nebo panel a odpověz Claudovi.',
         )}
       </span>
     </div>
@@ -102,27 +116,77 @@ const status: Record<string, string> = {
   </noscript>
 </herdeck-demo>
 <script>
+  type Labels = { status: Record<string, string>; spoken: Record<string, string> };
   class HerdeckDemo extends HTMLElement {
     connectedCallback() {
       const cs = this.dataset.lang === 'cs';
-      const message = this.querySelector<HTMLElement>('[data-demo-message]')!;
-      const approval = this.querySelector<HTMLElement>('.demo-approval')!;
-      const reset = this.querySelector<HTMLButtonElement>('.demo-reset')!;
-      const first = this.querySelector<HTMLButtonElement>('[data-agent="0"]')!;
+      const labels = JSON.parse(this.dataset.labels || '{}') as Labels;
+      const $ = <T extends HTMLElement>(selector: string) => this.querySelector<T>(selector)!;
+      const message = $('[data-demo-message]');
+      const approval = $('.demo-approval');
+      const reset = $<HTMLButtonElement>('.demo-reset');
+      const first = $<HTMLButtonElement>('[data-agent="0"]');
+      const panel = $<HTMLButtonElement>('[data-panel]');
+      const keys = [...this.querySelectorAll<HTMLButtonElement>('[data-agent]')];
+      const intro = message.innerHTML;
       let resolved = false;
-      this.querySelectorAll<HTMLButtonElement>('[data-agent]').forEach((button) =>
-        button.addEventListener('click', () => {
-          if (button === first && !resolved) {
-            approval.hidden = false;
-            message.hidden = true;
-            this.querySelector<HTMLButtonElement>('[data-decision="approve"]')?.focus();
-          } else {
-            approval.hidden = true;
-            message.hidden = false;
-            message.textContent = `${button.dataset.name}: ${button.querySelector('.key-status')?.textContent}. ${cs ? 'Tato ukázka není připojena ke skutečným agentům.' : 'This demo is not connected to real agents.'}`;
-          }
+
+      const setState = (key: HTMLButtonElement, state: string) => {
+        key.classList.remove('blocked', 'working', 'done', 'idle');
+        key.classList.add(state);
+        key.querySelector('.k-state')!.textContent = labels.status[state];
+        key.querySelector('.k-time')!.textContent = state === 'blocked' ? '4m' : '0s';
+        key.setAttribute('aria-label', `Claude, herdeck, ${labels.spoken[state]}`);
+      };
+      // The real panel switches between "needs you" and an overview of the fleet.
+      const setPanel = (waiting: boolean) => {
+        panel.classList.toggle('clear', !waiting);
+        $('[data-waiting]').textContent = waiting ? '1' : '0';
+        $('[data-summary]').textContent = waiting
+          ? cs
+            ? 'Čeká na tebe'
+            : 'Needs you'
+          : cs
+            ? 'Vše v klidu'
+            : 'All clear';
+        const count = (state: string) => keys.filter((k) => k.classList.contains(state)).length;
+        $('[data-panel-title]').textContent = waiting
+          ? 'herdeck · claude'
+          : cs
+            ? 'Flotila'
+            : 'Fleet';
+        $('[data-panel-sub]').textContent = waiting
+          ? cs
+            ? 'Spustit testy projektu?'
+            : 'Run the project test suite?'
+          : cs
+            ? `${count('working')} pracuje · ${count('done')} hotovo · ${count('idle')} nečinní`
+            : `${count('working')} working · ${count('done')} done · ${count('idle')} idle`;
+        $('[data-panel-foot]').hidden = !waiting;
+      };
+      const ask = () => {
+        approval.hidden = false;
+        message.hidden = true;
+        $<HTMLButtonElement>('[data-decision="approve"]').focus();
+      };
+
+      keys.forEach((key) =>
+        key.addEventListener('click', () => {
+          if (key === first && !resolved) return ask();
+          approval.hidden = true;
+          message.hidden = false;
+          const state = key.querySelector('.k-state')!.textContent!.toLowerCase();
+          message.textContent = `${key.dataset.name}: ${state}. ${cs ? 'Tato ukázka není připojena ke skutečným agentům.' : 'This demo is not connected to real agents.'}`;
         }),
       );
+      panel.addEventListener('click', () => {
+        if (!resolved) return ask();
+        message.hidden = false;
+        approval.hidden = true;
+        message.textContent = cs
+          ? 'Nikdo nečeká. Panel ukazuje přehled flotily.'
+          : 'Nobody is waiting. The panel shows the fleet overview.';
+      });
       this.querySelectorAll<HTMLButtonElement>('[data-decision]').forEach((button) =>
         button.addEventListener('click', () => {
           resolved = true;
@@ -137,21 +201,8 @@ const status: Record<string, string> = {
             : cs
               ? 'Zamítnuto. Příkaz se nespustil. Claude čeká na další zadání.'
               : 'Denied. The command did not run. Claude is ready for your next instruction.';
-          first.classList.remove('blocked');
-          first.classList.add(approved ? 'working' : 'idle');
-          first.querySelector('.key-status')!.textContent = approved
-            ? cs
-              ? 'Pracuje'
-              : 'Working'
-            : cs
-              ? 'Nečinný'
-              : 'Idle';
-          first.setAttribute(
-            'aria-label',
-            `Claude, herdeck, ${first.querySelector('.key-status')!.textContent}`,
-          );
-          this.querySelector('[data-summary]')!.textContent = cs ? 'Vše v pořádku' : 'All clear';
-          this.querySelector('[data-waiting]')!.textContent = '0';
+          setState(first, approved ? 'working' : 'idle');
+          setPanel(false);
           reset.focus();
         }),
       );
@@ -160,18 +211,9 @@ const status: Record<string, string> = {
         reset.hidden = true;
         approval.hidden = true;
         message.hidden = false;
-        first.classList.remove('working', 'idle');
-        first.classList.add('blocked');
-        first.querySelector('.key-status')!.textContent = cs ? 'Čeká na tebe' : 'Needs you';
-        first.setAttribute(
-          'aria-label',
-          `Claude, herdeck, ${first.querySelector('.key-status')!.textContent}`,
-        );
-        this.querySelector('[data-summary]')!.textContent = cs ? 'Čeká na tebe' : 'Needs you';
-        this.querySelector('[data-waiting]')!.textContent = '1';
-        message.textContent = cs
-          ? 'Vyber oranžovou dlaždici Claude a přečti si požadavek.'
-          : 'Select the amber Claude tile to see its request.';
+        setState(first, 'blocked');
+        setPanel(true);
+        message.innerHTML = intro;
         first.focus();
       });
     }

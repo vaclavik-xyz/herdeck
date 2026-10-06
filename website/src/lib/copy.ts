@@ -19,10 +19,6 @@ export const copy = {
     firstTitle: 'Less tab hunting.\nMore making.',
     firstBody:
       'Claude is waiting for a decision. Codex is running tests. Gemini just finished. Bring it all into one view, without losing the thread.',
-    demoTitle: 'Go ahead. Press a key.',
-    demoBody:
-      'Try the moment Herdeck was made for: an agent needs your approval. Select the amber tile, read the request, and decide.',
-    demoLabel: 'Interactive demo · simulated agents',
     filmTitle: 'Find your rhythm.',
     filmBody:
       'Thirty seconds of fewer interruptions, physical controls, and a fleet that moves with you.',
@@ -63,10 +59,6 @@ export const copy = {
     firstTitle: 'Méně hledání oken.\nVíce hotové práce.',
     firstBody:
       'Claude čeká na rozhodnutí. Codex pouští testy. Gemini právě skončil. Měj je všechny na očích a neztrácej nit.',
-    demoTitle: 'Zkus stisknout tlačítko.',
-    demoBody:
-      'Vyzkoušej chvíli, pro kterou Herdeck vznikl: agent potřebuje souhlas. Vyber oranžovou dlaždici, přečti si požadavek a rozhodni.',
-    demoLabel: 'Interaktivní ukázka · simulovaní agenti',
     filmTitle: 'Chyť svůj rytmus.',
     filmBody:
       'Třicet sekund s méně přepínáním, fyzickými tlačítky a agenty, kteří drží tempo s tebou.',
