@@ -1064,6 +1064,10 @@ herdeck-demo {
   max-width: 1000px;
   margin-bottom: 85px;
 }
+.workflow-demo herdeck-demo {
+  max-width: 760px;
+  margin: 0 auto;
+}
 .workflow-demo > .text-link {
   display: flex;
   justify-content: center;
