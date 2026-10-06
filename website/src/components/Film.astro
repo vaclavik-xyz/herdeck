@@ -60,22 +60,25 @@ const t = copy[lang];
 <script>
   const video = document.querySelector<HTMLVideoElement>('#product-film');
   const play = document.querySelector<HTMLButtonElement>('.film-play');
-  // Native controls remain reachable when JavaScript is unavailable.
-  if (play) play.hidden = false;
+  // Native controls remain reachable when JavaScript is unavailable. With
+  // JavaScript the overlay is the single play affordance until playback starts.
+  const showOverlay = () => {
+    if (play) play.hidden = false;
+    if (video) video.controls = false;
+  };
+  showOverlay();
   const start = () => {
     if (!video) return;
     video.muted = false;
-    video.play().catch(() => {
-      if (play) play.hidden = false;
-    });
+    video.controls = true;
+    video.play().catch(showOverlay);
   };
   play?.addEventListener('click', start);
   video?.addEventListener('play', () => {
     if (play) play.hidden = true;
+    video.controls = true;
   });
-  video?.addEventListener('ended', () => {
-    if (play) play.hidden = false;
-  });
+  video?.addEventListener('ended', showOverlay);
   document.querySelectorAll<HTMLAnchorElement>('[data-watch]').forEach((link) =>
     link.addEventListener('click', () => {
       start();

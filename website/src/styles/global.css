@@ -478,6 +478,9 @@ a:hover {
 .dot.cyan {
   background: var(--cyan);
 }
+.dot.blue {
+  background: #7e9fe8;
+}
 herdeck-demo {
   display: block;
   min-width: 0;
@@ -521,7 +524,7 @@ herdeck-demo {
   background: #141b21;
   border-radius: 6px;
   padding: 8px;
-  font-size: 0.63rem;
+  font-size: 0.74rem;
   line-height: 1.7;
 }
 .demo-status span {
@@ -534,7 +537,7 @@ herdeck-demo {
 }
 .demo-status small {
   display: block;
-  font-size: 0.51rem;
+  font-size: 0.62rem;
   color: #a9b6c6;
 }
 .agent-key.empty-key {
@@ -578,15 +581,19 @@ herdeck-demo {
   opacity: 0.95;
 }
 .key-brand small {
-  font-size: 0.49rem;
+  font-size: 0.6rem;
   color: #c0cad6;
 }
 .agent-key > strong {
-  font-size: 0.55rem;
+  font-size: 0.7rem;
   font-weight: 600;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .key-status {
-  font-size: 0.49rem;
+  font-size: 0.62rem;
   color: var(--green);
 }
 .blocked .key-status {
@@ -718,7 +725,7 @@ herdeck-demo {
   justify-content: center;
   align-items: center;
   gap: 20px;
-  background: #07132340;
+  background: radial-gradient(ellipse at center, #050c14b3 0%, #050c1466 45%, #050c1426 100%);
   text-align: left;
   color: white;
   font-size: 1.15rem;
@@ -741,7 +748,7 @@ herdeck-demo {
 .film-play small {
   display: block;
   font-size: 0.73rem;
-  opacity: 0.8;
+  opacity: 0.9;
   font-weight: 400;
   margin-top: 4px;
 }
@@ -955,7 +962,8 @@ herdeck-demo {
   padding-top: 22px;
 }
 .footer-bottom span:last-child {
-  max-width: 68ch;
+  max-width: 90ch;
+  text-wrap: balance;
   text-align: right;
 }
 .page-intro {
@@ -1590,17 +1598,17 @@ herdeck-demo {
     height: 20px;
   }
   .agent-key > strong {
-    font-size: 0.47rem;
+    font-size: 0.58rem;
   }
   .key-status {
-    font-size: 0.45rem;
+    font-size: 0.55rem;
   }
   .demo-status {
     gap: 8px;
-    font-size: 0.54rem;
+    font-size: 0.64rem;
   }
   .demo-status small {
-    font-size: 0.42rem;
+    font-size: 0.55rem;
   }
   .demo-status strong {
     font-size: 1.7rem;
@@ -1927,16 +1935,22 @@ herdeck-demo {
     min-height: 77px;
   }
   .key-status {
-    font-size: 0.4rem;
+    font-size: 0.52rem;
   }
   .agent-key > strong {
-    font-size: 0.43rem;
+    font-size: 0.55rem;
   }
   .docs-card-grid {
     grid-template-columns: 1fr;
   }
   .cta-section .button-row {
     flex-direction: column;
+    align-items: stretch;
+    width: min(100%, 300px);
+    margin-inline: auto;
+  }
+  .cta-section .button-row .button {
+    justify-content: center;
   }
   .hero-copy h1 {
     font-size: 2.4rem;

@@ -49,6 +49,8 @@ for (const lang of ['en', 'cs'] as const) {
     await page.goto(`/${lang}/`);
     expect(await page.locator('video').evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
     expect(filmRequests).toEqual([]);
+    // One play affordance: native controls stay hidden behind the overlay until playback.
+    expect(await page.locator('video').evaluate((v: HTMLVideoElement) => v.controls)).toBe(false);
     await page.locator('.film-play').click();
     await expect
       .poll(() => page.locator('video').evaluate((v: HTMLVideoElement) => v.currentTime))
@@ -67,6 +69,7 @@ for (const lang of ['en', 'cs'] as const) {
     expect(state.width).toBe(1280);
     expect(state.tracks).toBe(1);
     await expect(page.locator('.film-play')).toBeHidden();
+    expect(await page.locator('video').evaluate((v: HTMLVideoElement) => v.controls)).toBe(true);
   });
   test(`${lang}: routes, internal links, images and accessibility`, async ({ page, request }) => {
     const routes = [
