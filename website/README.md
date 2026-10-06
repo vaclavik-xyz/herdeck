@@ -73,7 +73,7 @@ The playable deck in the hero is captured from Herdeck's real renderer and key
 logic with an invented fleet (`scripts/capture-deck.py`, see DESIGN.md). After
 changing the renderer or deck behaviour, re-run it from the repository root:
 `TZ=Europe/Prague PYTHONPATH=src .venv/bin/python website/scripts/capture-deck.py`
-(about 30 minutes; the output in `public/deck/` is committed).
+(about 15 minutes; the output in `public/deck/` is committed).
 Local WebP assets live in `public/images/`; no image hotlinks or remote fonts.
 Agent icons and the Herdeck logo reuse repository assets. Font license files are
 in `public/fonts/`; icon attribution is in `../src/herdeck/assets/ATTRIBUTION.md`.

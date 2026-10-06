@@ -48,7 +48,6 @@ PANEL = 13
 PRESS_GAP_S = 0.35  # > the 0.3s slot guard, like a person pressing
 TICK_S = 0.4  # the runtime tick: timed changes are probed on this grid
 PROBE_LIMIT_S = 8.0  # sent note 3s, settle 2s, confirm 5s, usage hold 6s
-PHASES = 8  # working animation frames (SPINNER_FRAMES)
 MAX_VIEWS = 4000  # a safety net, far above what the scenarios reach
 NOW = datetime(2026, 10, 6, 14, 20, tzinfo=UTC)
 
@@ -344,6 +343,9 @@ def build_config(lang: str, collapse_idle: bool) -> Config:
     )
     cfg.view.language = lang
     cfg.view.tile_fill = "solid"
+    # Still tiles: the deck's 8-frame working animation reads as choppy on a web
+    # page, and "none" is a real setting, so the demo stays truthful.
+    cfg.view.working_animation = "none"
     cfg.view.tile_icon = "project"
     cfg.view.collapse_idle = collapse_idle
     return cfg
@@ -428,7 +430,7 @@ def panel_label(panel, lang: str) -> str:
 
 
 def snapshot(world: DemoWorld, renderer: Renderer):
-    """Render the current view: 13 tiles (animated ones as frame lists) + panel."""
+    """Render the current view: 13 tiles + panel."""
     orch = world.orch
     base = fork(world, renderer.icons._project_icons).orch
     state = base.render()
@@ -436,11 +438,7 @@ def snapshot(world: DemoWorld, renderer: Renderer):
     labels = []
     for tile in state.tiles[:KEYS]:
         labels.append(tile_accessible_label(tile, renderer.lang))
-        if tile.spinner is None:
-            tiles.append(renderer.tile(tile))
-        else:
-            frames = [renderer.tile(replace(tile, spinner=k)) for k in range(PHASES)]
-            tiles.append(frames if len(set(frames)) > 1 else frames[0])
+        tiles.append(renderer.tile(tile))
     panel = renderer.panel(state.panel)
     labels.append(panel_label(state.panel, renderer.lang))
     view = {"t": tiles, "p": panel, "a": labels}
@@ -563,33 +561,6 @@ def compact(graph: dict) -> dict:
     }
 
 
-def spritify(graph: dict, out: Path) -> dict:
-    """Join each animated tile's frames into one horizontal strip.
-
-    The browser then animates it with a CSS step animation on the compositor:
-    one request per working tile instead of eight, and no script swapping
-    images every tick. Frames only an animation used are removed."""
-    still = {t for t in graph["tiles"] if isinstance(t, str)}
-    used: set[str] = set()
-    for i, tile in enumerate(graph["tiles"]):
-        if not isinstance(tile, list):
-            continue
-        frames = [Image.open(out / f"{name}.webp").convert("RGB") for name in tile]
-        w, h = frames[0].size
-        strip = Image.new("RGB", (w * len(frames), h))
-        for k, frame in enumerate(frames):
-            strip.paste(frame, (k * w, 0))
-        buf = io.BytesIO()
-        strip.save(buf, "PNG")
-        name = "s" + hashlib.sha1(buf.getvalue()).hexdigest()[:12]
-        strip.save(out / f"{name}.webp", "WEBP", quality=86, method=6)
-        graph["tiles"][i] = {"s": name, "n": len(frames)}
-        used.update(tile)
-    for name in used - still:
-        (out / f"{name}.webp").unlink(missing_ok=True)
-    return graph
-
-
 def main() -> None:
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -599,7 +570,7 @@ def main() -> None:
             out.mkdir(parents=True)
             store = ProjectIconStore()
             graph = explore(lang, store, cache, out)
-            graph = spritify(compact(graph), out)
+            graph = compact(graph)
             (out / "graph.json").write_text(json.dumps(graph, separators=(",", ":")))
             images = len(list(out.glob("*.webp")))
             size = sum(p.stat().st_size for p in out.iterdir()) / 1e6

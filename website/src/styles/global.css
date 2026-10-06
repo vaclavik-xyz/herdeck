@@ -453,18 +453,6 @@ herdeck-demo {
 .deck-key {
   aspect-ratio: 1;
 }
-/* A working tile: eight frames in one strip, stepped on the compositor. The
-   cycle matches the deck's 0.4s tick (8 x 0.4s). */
-.deck-key img.deck-sprite {
-  width: 800%;
-  max-width: none;
-  animation: deck-frames 3.2s steps(8) infinite;
-}
-@keyframes deck-frames {
-  to {
-    transform: translateX(-100%);
-  }
-}
 .deck-panel {
   grid-column: 4 / span 2;
   grid-row: 3;
