@@ -85,7 +85,9 @@ def test_spotlight_is_amber(provider):
 def test_spotlight_at_392_collapses_the_offline_chip_to_its_glyph(provider, log):
     render(provider, "spotlight_queue_note", 392)
     drawn = texts(log)
-    assert "1m" in drawn  # the first queued chip always keeps its place
+    # the glyph outranks the chip's age: the chip keeps its mark, the age yields
+    assert "1m" not in drawn
+    assert "+2" in drawn
     assert "laptop" not in drawn
 
 
@@ -105,8 +107,8 @@ def test_spotlight_at_392_collapses_the_offline_chip_to_its_glyph(provider, log)
         ([96, 96], [30, 0], 125, (1, 402, 42)),
         # under NOTE_MIN of room: only the glyph
         ([150], [0], 300, (1, 402, 42)),
-        # not even the glyph fits: the first chip keeps its place, no note
-        ([200], [0], 300, (1, None, 0)),
+        # not even the glyph fits beside the first chip: the chip yields to "+N"
+        ([200], [0], 300, (0, 402, 42)),
         # nobody else waits: the note may take the whole row
         ([], [], 300, (0, 198, 246)),
         # one chip, nothing after it: no "+N" reserved
@@ -150,7 +152,7 @@ def test_spotlight_chips_and_plus_n_account_for_the_whole_queue(provider, log, m
     plus = [t for t in texts(log) if t.startswith("+") and t[1:].isdigit()]
     waiting = len(panel_variants()[name].queue) - 1
     assert seen and plus
-    assert seen[0] + int(plus[0][1:]) == waiting
+    assert seen[-1] + int(plus[0][1:]) == waiting
 
 
 def test_queue_row_never_runs_into_the_note():
@@ -444,3 +446,16 @@ def test_detail_keeps_a_prompt_line_under_a_two_line_footer(provider, log, width
     assert any(t.startswith(first_word) or t.endswith("\u2026") and prompt.startswith(t[:-1].rstrip())
                for _, t, _ in entries), [t for _, t, _ in entries]
     assert_text_sane(entries, (width, S), seam=SEAM if width < 420 else None)
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_spotlight_with_a_queue_always_draws_the_offline_indicator(provider, monkeypatch, width):
+    calls = []
+    real = sp.k.offline_glyph
+    monkeypatch.setattr(sp.k, "offline_glyph", lambda *a, **kw: (calls.append(a), real(*a, **kw))[1])
+    noted = render(provider, "spotlight_queue_note", width)
+    assert len(calls) == 1
+    calls.clear()
+    plain = render(provider, "spotlight_many_no_note", width)
+    assert not calls
+    assert noted.tobytes() != plain.tobytes()

@@ -81,15 +81,17 @@ def queue_row_layout(chip_ws, more_ws, x0, xr, note_w):
     avail = xr - x0
     # the first chip, plus the gap and "+N" that trail it when others wait
     first = chip_ws[0] + (16 + more_ws[0] if more_ws[0] else 0) + 12 if chip_ws else 0
-    note_x0, box_w = None, 0
+    note_x0, box_w, forced = None, 0, False
     if note_w:
         room = avail - first
         if room >= note_w:
             box_w = note_w
         elif room >= NOTE_MIN:
             box_w = room
-        elif room >= GLYPH_CHIP:
+        else:
+            # the offline glyph outranks queue chips: they give way to "+N"
             box_w = GLYPH_CHIP
+            forced = room < GLYPH_CHIP
         if box_w:
             note_x0 = xr - box_w
     limit = (note_x0 if note_x0 is not None else xr) - 12
@@ -98,7 +100,7 @@ def queue_row_layout(chip_ws, more_ws, x0, xr, note_w):
         # the first chip is always shown; every chip needs room for the
         # 16 px gap and "+N" that follow it when others remain
         need = w + (16 + more_ws[i] if more_ws[i] else 0)
-        if i > 0 and x + need > limit + (12 if note_x0 is None else 0):
+        if (i > 0 or forced) and x + need > limit + (12 if note_x0 is None else 0):
             break
         x += w + 16
         shown += 1
@@ -128,6 +130,11 @@ def _queue_row(ctx, img, d, others, note, x0, xr, ink) -> None:
         for i in range(len(others))
     ]
     shown, note_x0, box_w = queue_row_layout(chip_ws, more_ws, x0, xr, note_w)
+    if others and not shown:
+        # no room for the first chip's age beside the offline glyph: bare marks
+        ages = [""] * len(others)
+        chip_ws = [58] * len(others)
+        shown, note_x0, box_w = queue_row_layout(chip_ws, more_ws, x0, xr, note_w)
     x = x0
     for other, age, w in zip(others[:shown], ages, chip_ws, strict=False):
         d.rounded_rectangle((x, top, x + 58, top + 58), 14, fill=k.PLATE)
