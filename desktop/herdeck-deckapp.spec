@@ -6,6 +6,8 @@
 # --distpath, so the exe lands at <distpath>/herdeck-deckapp/herdeck-deckapp.
 import os
 
+from PyInstaller.utils.hooks import collect_submodules
+
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))  # repo root (SPECPATH = desktop/)
 CODESIGN_IDENTITY = os.environ.get("APPLE_SIGNING_IDENTITY") or None
 
@@ -22,6 +24,9 @@ a = Analysis(
     # driver stack. websockets is a CORE dep. tomli_w is imported at the top of
     # deckapp.config_service; listed as a safety net against the lazy path.
     hiddenimports=[
+        # Built-in deck themes are imported by NAME (themes/registry.py
+        # BUILTIN_MODULES): bundle every herdeck.themes submodule.
+        *collect_submodules("herdeck.themes"),
         "herdeck.runtime",
         "resvg_py",  # project SVG favicons (imported lazily)
         "herdeck.deckapp.server",
