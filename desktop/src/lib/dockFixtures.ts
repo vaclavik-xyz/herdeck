@@ -8,7 +8,7 @@ import type {
   AgentTransport,
   DetailResult,
 } from "./agentCardClient";
-import type { DockAgent, DockList } from "./dockClient";
+import type { DockAgent, DockList, DockTransport } from "./dockClient";
 
 export function dockAgent(over: Partial<DockAgent> = {}): DockAgent {
   return {
@@ -100,5 +100,33 @@ export function fakeAgentTransport(
       return { kind: "gone" };
     },
     async termClose() {},
+  };
+}
+
+export function fakeDockTransport(first: DockList | null): DockTransport & {
+  calls: Array<{ after: number | null; waitMs: number }>;
+  push(next: DockList | null): void;
+} {
+  const calls: Array<{ after: number | null; waitMs: number }> = [];
+  let pending: ((next: DockList | null) => void) | null = null;
+  let served = false;
+  return {
+    calls,
+    push(next) {
+      const resolve = pending;
+      pending = null;
+      resolve?.(next);
+    },
+    list(after, waitMs) {
+      calls.push({ after, waitMs });
+      if (!served) {
+        served = true;
+        return Promise.resolve(first);
+      }
+      return new Promise((resolve) => {
+        pending = resolve;
+      });
+    },
+    iconUrl: (hash) => `herdeck://localhost/project-icon/${hash}`,
   };
 }
