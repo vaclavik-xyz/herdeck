@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .config import (
     AGENT_ORDERS,
+    DECK_THEME_ID_PATTERN,
     DEFAULT_EVENT_SOUNDS,
     DEFAULT_MACROS,
     DEFAULT_NOTIFY_ON,
@@ -393,6 +394,15 @@ def _view_config(raw: dict | None) -> ViewConfig:
         if not isinstance(raw["collapse_idle"], bool):
             raise ConfigError("view.collapse_idle must be true or false")
         view.collapse_idle = raw["collapse_idle"]
+    if "deck_theme" in raw:
+        val = raw["deck_theme"]
+        # Shape only: user themes are discovered at render time, so an unknown
+        # (but well-formed) id is accepted here and falls back to classic.
+        if not isinstance(val, str) or not re.fullmatch(DECK_THEME_ID_PATTERN, val):
+            raise ConfigError(
+                f"invalid view.deck_theme {val!r}; want an id of a-z, 0-9, '_' or '-'"
+            )
+        view.deck_theme = val
     if "language" in raw:
         val = raw["language"]
         if val not in LANGUAGES:

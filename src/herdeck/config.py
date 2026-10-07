@@ -131,6 +131,10 @@ TILE_FILLS: tuple[str, ...] = ("none", "tint", "solid")
 #   project = the project's favicon instead of the mark (a monogram when none)
 #   both    = the agent's mark plus a small project badge on its corner
 TILE_ICONS: tuple[str, ...] = ("agent", "project", "both")
+# A deck theme id ([view].deck_theme): a built-in (classic, ...) or the file
+# stem of a user theme in <config dir>/themes/<id>.py (themes/registry.py).
+DECK_THEME_ID_PATTERN = r"[a-z0-9_-]+"
+DEFAULT_DECK_THEME = "classic"
 DEFAULT_BOTTOM_ROW: list[str] = ["profiles", "notifications", "safety", "theme", "new_agent"]
 
 
@@ -164,6 +168,9 @@ class ViewConfig:
     # Fold IDLE agents into one "+N idle" overview tile (press = unfold). The
     # Elgato plugin keeps sticky per-key slots and ignores it.
     collapse_idle: bool = False
+    # How the deck draws its keys and status window (themes/registry.py). An
+    # id that is unknown at render time draws classic and logs a warning.
+    deck_theme: str = DEFAULT_DECK_THEME
 
 
 # Actions that need a second confirming press by default. Stop (act_force) is an

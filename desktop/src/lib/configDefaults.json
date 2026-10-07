@@ -24,7 +24,8 @@
     "tile_icon": "agent",
     "project_icons": {},
     "language": "en",
-    "collapse_idle": false
+    "collapse_idle": false,
+    "deck_theme": "classic"
   },
   "safety": {
     "approve_always": true,
