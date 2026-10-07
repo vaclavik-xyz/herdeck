@@ -8,6 +8,8 @@ from herdeck.config import DEFAULT_PROFILES, Config, ServerConfig
 from herdeck.model import AgentKey, AgentState, Status
 from herdeck.orchestrator import Orchestrator
 from herdeck.project_icons import ProjectIconStore
+from herdeck.themes import registry as reg_mod
+from herdeck.themes.registry import ThemeRegistry
 
 
 def _config(theme: str = "classic") -> Config:
@@ -37,15 +39,56 @@ def _orch(theme: str = "classic"):
     return orch, now
 
 
-def test_every_render_is_stamped_with_the_deck_theme():
-    orch, _ = _orch("mine")
+def _install_theme(tmp_path):
+    (tmp_path / "mine.py").write_text(
+        "from herdeck.themes.api import Theme\n\n\n"
+        "class T(Theme):\n    id = 'mine'\n\n\nTHEME = T()\n",
+        encoding="utf-8",
+    )
+    reg_mod.set_default_registry(ThemeRegistry(str(tmp_path)))
+
+
+def _assert_stamped(rs):
+    assert rs.tiles and {t.deck_theme for t in rs.tiles} == {"mine"}
+    assert rs.panel.deck_theme == "mine"
+    assert rs.panel.theme_rev.startswith("mine:")
+
+
+def test_every_render_exit_is_stamped_with_the_deck_theme(tmp_path):
+    _install_theme(tmp_path)
+    try:
+        orch, _ = _orch("mine")
+        orch.apply_snapshot("dev", [_state("p1", Status.BLOCKED, "api")])
+        rs = orch.render()
+        _assert_stamped(rs)
+        assert rs.tiles[0].theme_env.language == "en"
+        assert ("blocked", "amber") in rs.panel.theme_env.colors
+        orch.open_agent(AgentKey("dev", "p1"))
+        orch.set_detection("Allow?\n1. Yes\n2. No")
+        _assert_stamped(orch.render())
+        orch.set_config_error(True, "dev")
+        _assert_stamped(orch.render())
+    finally:
+        reg_mod.set_default_registry(None)
+
+
+def test_launcher_render_is_stamped(tmp_path):
+    _install_theme(tmp_path)
+    try:
+        orch, _ = _orch("mine")
+        orch.on_press(12)
+        _assert_stamped(orch.render())
+    finally:
+        reg_mod.set_default_registry(None)
+
+
+def test_unknown_deck_theme_is_stamped_as_classic():
+    orch, _ = _orch("nope")
     orch.apply_snapshot("dev", [_state("p1", Status.WORKING, "api")])
     rs = orch.render()
-    # "mine" is not an installed theme: the stamp is the RESOLVED id (classic).
     assert {t.deck_theme for t in rs.tiles} == {"classic"}
     assert rs.panel.deck_theme == "classic"
-    assert rs.tiles[0].theme_env.language == "en"
-    assert ("blocked", "amber") in rs.panel.theme_env.colors
+    assert rs.panel.theme_rev == ""
 
 
 def test_overview_tiles_carry_kind_status_and_title():
