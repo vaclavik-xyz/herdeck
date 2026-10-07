@@ -115,3 +115,15 @@ def test_quiet_done_texts_stay_inside_the_ring(provider, log, lang):
     for tile in (agent("done"), agent("done", subagents=12), agent("done", title="x" * 80)):
         quiet.THEME.agent_tile(tile, make_ctx(provider, lang), None)
         assert_text_sane(log.take(), (S, S), inside=(13, 13, S - 13, S - 13), name=lang)
+
+
+@pytest.mark.parametrize("lang", LANGS)
+def test_quiet_done_word_keeps_five_px_from_the_ring(provider, log, lang):
+    """The done ring's inner edge is at S - 13: the status word and "+N"
+    beside the mark end >= 5 px before it."""
+    ctx = make_ctx(provider, lang)
+    quiet.THEME.agent_tile(agent("done", subagents=3), ctx, None)
+    word = ctx.tr("status.done")
+    ink = [box for box, t, _ in log.take() if t in (word, "+3")]
+    assert len(ink) == 2
+    assert all(box[2] <= S - 13 - 5 for box in ink), ink

@@ -18,9 +18,10 @@ AND by the frame's shape, so it reads for colour-blind users and on the D200's
     unknown  thin grey frame
 
 Time shows only on blocked and waiting; no branch, no backend tag. Running
-subagents are a small "+N" pill (top-left; on a waiting tile beside the mark
-when the time took the corner). With any pill in the top row the mark shrinks
-and moves under the pill row, so no pill covers it. Every text is >= 22 px
+subagents are a small "+N" pill (a tight corner pill left of the full-size
+mark; on a waiting tile beside the mark when the time took the corner). With a
+time/label pill in the top row (or a "+N" too wide for the corner) the mark
+shrinks and moves under the pill row, so no pill covers it. Every text is >= 22 px
 (``_kit.MIN_TEXT``).
 
 The status window is drawn by ``_signal_panel``.
@@ -43,6 +44,11 @@ MARK_Y = 20
 # (pills: y 16..48), so no pill ever covers it
 MARK_COMPACT = 60
 MARK_Y_COMPACT = 52
+# a lone "+N" (working/idle/done) keeps the full-size mark: a tight pill in
+# the top-left corner, left of the mark's box (mark x0 = (S - MARK) // 2)
+CORNER_X = 13
+CORNER_PAD = 5
+CORNER_ROOM = (S - MARK) // 2 - 3 - CORNER_X
 TEXT_W = S - 2 * (FRAME + 10)  # text column inside the frame
 
 
@@ -64,6 +70,10 @@ class SignalTheme(Theme):
         img, d = k.new_image((S, S), k.DARK)
         _status_frame(d, status, accent)
         left_pill, side_pill = _top_pills(ctx, d, tile, status)
+        corner_pill = ""
+        if left_pill and status != "waiting" and k.pill_width(ctx, d, left_pill, pad=CORNER_PAD) <= CORNER_ROOM:
+            # a lone "+N" is a tight corner pill left of the full-size mark
+            left_pill, corner_pill = "", left_pill
         # a top pill would cover the mark: the mark shrinks under the pill row
         compact = bool(left_pill or status == "waiting")
         size, top = (MARK_COMPACT, MARK_Y_COMPACT) if compact else (MARK, MARK_Y)
@@ -76,6 +86,8 @@ class SignalTheme(Theme):
             # the slash crosses the mark only, never the text under it
             d.line((mx + 8, top + size - 8, mx + size - 8, top + 8), fill=accent, width=9)
         left = FRAME + 4
+        if corner_pill:
+            k.pill(ctx, d, CORNER_X, CORNER_X, corner_pill, k.EDGE, align="left", pad=CORNER_PAD)
         if left_pill:
             box = k.pill(ctx, d, left, FRAME + 4, left_pill, k.EDGE, align="left")
             left = box[2] + 6

@@ -22,8 +22,8 @@ OFFLINE_INK = (255, 140, 140)
 MARK = 44
 MARK_X, MARK_Y = 30, 28
 # the room beside the mark: "OFFLINE" / "HOTOVO" fit at >= 22 px, inside the
-# done outline (its inner edge is at S - 13) with a little air
-BESIDE_X0, BESIDE_X1 = MARK_X + MARK + 6, S - 16
+# done outline (its inner edge is at S - 13) with >= 5 px of air
+BESIDE_X0, BESIDE_X1 = MARK_X + MARK + 6, S - 18
 
 
 class QuietTheme(Theme):

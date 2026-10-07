@@ -426,3 +426,21 @@ def test_menu_and_config_error_text(provider, log):
 def test_sent_names_who_got_the_answer(provider, log):
     render(provider, "sent", 458)
     assert texts(log) == ["Sent to herdeck", "1 left"]
+
+
+LONG_ASIDE = "lumen, orbit, atlas, ember, nova and quark also wait for your answer here"
+LONG_SENT = "sent to lumen-orbit-atlas-ember-nova-quark-and-more as the last answer"
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("width", WIDTHS)
+def test_detail_keeps_a_prompt_line_under_a_two_line_footer(provider, log, width, lang):
+    """aside and sent both wrapping to two lines must not squeeze the prompt
+    out: at least one prompt line is drawn (ellipsized if need be)."""
+    render(provider, "detail_blocked_short", width, lang, aside=LONG_ASIDE, sent=LONG_SENT)
+    entries = log.take()
+    prompt = panel_variants()["detail_blocked_short"].lines[0]
+    first_word = prompt.split()[0]
+    assert any(t.startswith(first_word) or t.endswith("\u2026") and prompt.startswith(t[:-1].rstrip())
+               for _, t, _ in entries), [t for _, t, _ in entries]
+    assert_text_sane(entries, (width, S), seam=SEAM if width < 420 else None)

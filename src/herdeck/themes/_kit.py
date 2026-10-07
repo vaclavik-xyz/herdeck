@@ -110,20 +110,20 @@ def draw_lines(draw, lines, font, x, y, fill, *, lh=None, center_w=None) -> floa
     return y
 
 
-def pill(ctx, draw, x, top, text, bg, *, size=MIN_TEXT, align="right"):
+def pill(ctx, draw, x, top, text, bg, *, size=MIN_TEXT, align="right", pad=9):
     """A rounded label; ``x`` is its right edge (align="right") or its left
     edge. Returns the pill's box."""
     font = ctx.font(max(MIN_TEXT, size))
-    w = draw.textlength(text, font=font) + 18
+    w = draw.textlength(text, font=font) + 2 * pad
     x0 = x - w if align == "right" else x
     box = (x0, top, x0 + w, top + font.size + 10)
     draw.rounded_rectangle(box, radius=(font.size + 10) // 2, fill=bg)
-    draw.text((x0 + 9, top + 3), text, font=font, fill=ctx.ink_for(bg))
+    draw.text((x0 + pad, top + 3), text, font=font, fill=ctx.ink_for(bg))
     return box
 
 
-def pill_width(ctx, draw, text, *, size=MIN_TEXT) -> float:
-    return draw.textlength(text, font=ctx.font(max(MIN_TEXT, size))) + 18
+def pill_width(ctx, draw, text, *, size=MIN_TEXT, pad=9) -> float:
+    return draw.textlength(text, font=ctx.font(max(MIN_TEXT, size))) + 2 * pad
 
 
 def monogram_source(name: str):

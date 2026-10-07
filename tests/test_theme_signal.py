@@ -118,9 +118,8 @@ def test_waiting_shows_holder_label_and_time(provider, log):
     assert "REVIEW +1" in drawn and "12m" not in drawn
 
 
-def _mark_box(tile):
-    compact = tile.status == "waiting" or bool(tile.subagents)
-    size, top = (signal.MARK_COMPACT, signal.MARK_Y_COMPACT) if compact else (signal.MARK, signal.MARK_Y)
+def _mark_box(size):
+    top = signal.MARK_Y if size == signal.MARK else signal.MARK_Y_COMPACT
     mx = (S - size) // 2
     return (mx, top, mx + size, top + size)
 
@@ -139,13 +138,45 @@ def test_no_pill_or_text_covers_the_mark(provider, log, monkeypatch, name, lang)
         pills.append(box)
         return box
 
+    sizes = []
+    identity_mark = signal.k.identity_mark
+
+    def mark_spy(ctx, t, size, **kw):
+        sizes.append(size)
+        return identity_mark(ctx, t, size, **kw)
+
     monkeypatch.setattr(signal.k, "pill", spy)
+    monkeypatch.setattr(signal.k, "identity_mark", mark_spy)
     signal.THEME.agent_tile(tile, make_ctx(provider, lang), None)
-    mark = _mark_box(tile)
+    mark = _mark_box(sizes[-1])
     for box, text, _ in log.take():
         assert not overlaps(box, mark), (name, text, box, mark)
     for box in pills:
         assert not overlaps(box, mark), (name, box, mark)
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("status", ["working", "idle", "done"])
+@pytest.mark.parametrize("subs", [1, 9])
+def test_lone_subagents_pill_keeps_the_full_mark(provider, log, monkeypatch, status, subs, lang):
+    """A "+N" alone in the top row is a corner pill beside the 84 px mark, not
+    a reason to shrink it."""
+    sizes, pills = [], []
+    identity_mark, pill = signal.k.identity_mark, signal.k.pill
+    monkeypatch.setattr(signal.k, "identity_mark", lambda c, t, size, **kw: (sizes.append(size), identity_mark(c, t, size, **kw))[1])
+    monkeypatch.setattr(signal.k, "pill", lambda *a, **kw: (pills.append(pill(*a, **kw)), pills[-1])[1])
+    signal.THEME.agent_tile(agent(status, subagents=subs), make_ctx(provider, lang), None)
+    assert sizes == [signal.MARK]
+    assert f"+{subs}" in texts(log)
+    assert pills and not any(overlaps(box, _mark_box(signal.MARK)) for box in pills), pills
+
+
+def test_wide_subagents_count_falls_back_to_the_compact_mark(provider, log, monkeypatch):
+    sizes = []
+    identity_mark = signal.k.identity_mark
+    monkeypatch.setattr(signal.k, "identity_mark", lambda c, t, size, **kw: (sizes.append(size), identity_mark(c, t, size, **kw))[1])
+    signal.THEME.agent_tile(agent("working", subagents=12), make_ctx(provider), None)
+    assert sizes == [signal.MARK_COMPACT] and "+12" in texts(log)
 
 
 def test_waiting_keeps_its_subagents_when_they_fit(provider, log):

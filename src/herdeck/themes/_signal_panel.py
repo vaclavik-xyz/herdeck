@@ -426,7 +426,7 @@ def _sent(panel, ctx, width):
     return img
 
 
-def _footer_lines(ctx, d, panel, max_w):
+def _footer_lines(ctx, d, panel, max_w, max_lines=2):
     """The detail footer: who else waits (aside) and where the last answer
     went (sent), each wrapped to <= 2 lines: [(line, font, fill)]."""
     out = []
@@ -435,7 +435,7 @@ def _footer_lines(ctx, d, panel, max_w):
             # wrapped at the row size (never block()'s 24 px wrap: the footer
             # rows are MIN_TEXT + 6 apart)
             font = ctx.font(k.MIN_TEXT, bold=False)
-            lines = ctx.wrap(d, text, font, max_w, 2)
+            lines = ctx.wrap(d, text, font, max_w, max_lines)
             fill = ctx.readable(ctx.color(tone), k.DARK)
             out += [(line, font, fill) for line in lines]
     return out
@@ -491,6 +491,10 @@ def _detail(panel, ctx, width):
     x0, x1 = cols[-1]
     footer = _footer_lines(ctx, d, panel, x1 - x0)
     row = k.MIN_TEXT + 6
+    # the prompt is the point of the panel: when a two-line footer would leave
+    # it no line at all, the footer shrinks to one (ellipsized) line each
+    if len(cols) == 1 and bottom - len(footer) * row - top < row * (len(items) + 1 - len(panel.lines)):
+        footer = _footer_lines(ctx, d, panel, x1 - x0, 1)
     foot_top = bottom - len(footer) * row
     free = _flow(ctx, d, items, cols, top, bottom, last_bottom=foot_top)
     for i, (line, ffont, fill) in enumerate(footer):
