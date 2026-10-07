@@ -15,6 +15,7 @@ from theme_support import (
     key_variants,
     make_ctx,
     make_provider,
+    overlaps,
 )
 
 from herdeck.driver.base import COLORS
@@ -117,6 +118,58 @@ def test_waiting_shows_holder_label_and_time(provider, log):
     assert "REVIEW +1" in drawn and "12m" not in drawn
 
 
+def _mark_box(tile):
+    compact = tile.status == "waiting" or bool(tile.subagents)
+    size, top = (signal.MARK_COMPACT, signal.MARK_Y_COMPACT) if compact else (signal.MARK, signal.MARK_Y)
+    mx = (S - size) // 2
+    return (mx, top, mx + size, top + size)
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("name", [n for n, t in agent_variants().items() if t.status != "blocked"])
+def test_no_pill_or_text_covers_the_mark(provider, log, monkeypatch, name, lang):
+    """The top pills (time, holder label, "+N") sit above or beside the mark,
+    never on it: with a pill in the top row the mark shrinks under it."""
+    tile = agent_variants()[name]
+    pills = []
+    pill = signal.k.pill
+
+    def spy(*args, **kw):
+        box = pill(*args, **kw)
+        pills.append(box)
+        return box
+
+    monkeypatch.setattr(signal.k, "pill", spy)
+    signal.THEME.agent_tile(tile, make_ctx(provider, lang), None)
+    mark = _mark_box(tile)
+    for box, text, _ in log.take():
+        assert not overlaps(box, mark), (name, text, box, mark)
+    for box in pills:
+        assert not overlaps(box, mark), (name, box, mark)
+
+
+def test_waiting_keeps_its_subagents_when_they_fit(provider, log):
+    ctx = make_ctx(provider)
+    # time + holder label in the top row, "+2" beside the mark
+    signal.THEME.agent_tile(agent("waiting", subagents=2), ctx, None)
+    assert {"12m", "CI", "+2"} <= set(texts(log))
+    # a long holder label leaves no room for the time; "+2" still shows
+    signal.THEME.agent_tile(agent("waiting", status_text="REVIEW +1", subagents=2), ctx, None)
+    drawn = texts(log)
+    assert "REVIEW +1" in drawn and "+2" in drawn and "12m" not in drawn
+
+
+@pytest.mark.parametrize("lang", LANGS)
+def test_pinned_hole_label_splits_on_its_separator(provider, log, lang):
+    ctx = make_ctx(provider, lang)
+    for key_name in ("pinned_missing", "pinned_absent"):
+        label = ctx.tr(key_name)
+        signal.THEME.key_tile(key(label, "grey", "pinned_hole", subtext="Unpin"), ctx)
+        entries = log.take()
+        assert [t for _, t, _ in entries] == [*label.split(" · "), "Unpin"], label
+        assert_text_sane(entries, (S, S))
+
+
 def test_offline_slash_crosses_only_the_mark(provider):
     img = signal.THEME.agent_tile(agent("offline"), make_ctx(provider), None).convert("RGB")
     red = COLORS["red"]
@@ -142,6 +195,15 @@ def test_project_mark_first_agent_mark_only_without_project_data(provider):
     assert as_agent.tobytes() == as_project.tobytes()
     no_project = signal.THEME.agent_tile(agent("idle", repo="", project_name=""), ctx, None)
     assert no_project.tobytes() != as_project.tobytes()
+    # ... and what it shows is the agent's own logo
+    from PIL import Image
+
+    expected = Image.new("RGB", (signal.MARK, signal.MARK), signal.k.DARK)
+    logo = ctx.agent_mark("claude", signal.MARK)
+    expected.paste(logo, (0, 0), logo)
+    mx = (S - signal.MARK) // 2
+    shown = no_project.crop((mx, signal.MARK_Y, mx + signal.MARK, signal.MARK_Y + signal.MARK))
+    assert shown.tobytes() == expected.tobytes()
 
 
 # --- key tiles ----------------------------------------------------------------

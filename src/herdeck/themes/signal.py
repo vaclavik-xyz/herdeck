@@ -18,7 +18,10 @@ AND by the frame's shape, so it reads for colour-blind users and on the D200's
     unknown  thin grey frame
 
 Time shows only on blocked and waiting; no branch, no backend tag. Running
-subagents are a small "+N" pill. Every text is >= 22 px (``_kit.MIN_TEXT``).
+subagents are a small "+N" pill (top-left; on a waiting tile beside the mark
+when the time took the corner). With any pill in the top row the mark shrinks
+and moves under the pill row, so no pill covers it. Every text is >= 22 px
+(``_kit.MIN_TEXT``).
 
 The status window is drawn by ``_signal_panel``.
 """
@@ -36,6 +39,10 @@ FRAME = 12  # the status frame's stroke
 RADIUS = 22
 MARK = 84  # the identity mark on a dark key
 MARK_Y = 20
+# with a pill in the top row the mark shrinks and moves under the pill row
+# (pills: y 16..48), so no pill ever covers it
+MARK_COMPACT = 60
+MARK_Y_COMPACT = 52
 TEXT_W = S - 2 * (FRAME + 10)  # text column inside the frame
 
 
@@ -56,33 +63,31 @@ class SignalTheme(Theme):
             return _blocked_tile(tile, ctx, accent)
         img, d = k.new_image((S, S), k.DARK)
         _status_frame(d, status, accent)
-        mark = k.identity_mark(ctx, tile, MARK)
-        mx = (S - MARK) // 2
+        left_pill, side_pill = _top_pills(ctx, d, tile, status)
+        # a top pill would cover the mark: the mark shrinks under the pill row
+        compact = bool(left_pill or status == "waiting")
+        size, top = (MARK_COMPACT, MARK_Y_COMPACT) if compact else (MARK, MARK_Y)
+        mark = k.identity_mark(ctx, tile, size)
+        mx = (S - size) // 2
         if status == "offline":
             mark = k.greyed(mark)
-        img.paste(mark, (mx, MARK_Y), mark)
+        img.paste(mark, (mx, top), mark)
         if status == "offline":
             # the slash crosses the mark only, never the text under it
-            d.line((mx + 8, MARK_Y + MARK - 8, mx + MARK - 8, MARK_Y + 8), fill=accent, width=9)
-        # top-left: the waiting time, else the running subagents — only when
-        # it leaves the holder label (top-right) whole
-        corner = (tile.time_text or "").strip() if status == "waiting" else ""
-        if not corner and tile.subagents:
-            corner = f"+{tile.subagents}"
+            d.line((mx + 8, top + size - 8, mx + size - 8, top + 8), fill=accent, width=9)
         left = FRAME + 4
-        label_w = k.pill_width(ctx, d, _waiting_label(ctx, tile)) if status == "waiting" else 0
-        room = S - 2 * (FRAME + 4)
-        if corner and k.pill_width(ctx, d, corner) + (6 + label_w if label_w else 0) > room:
-            corner = ""
-        if corner:
-            box = k.pill(ctx, d, left, FRAME + 4, corner, k.EDGE, align="left")
+        if left_pill:
+            box = k.pill(ctx, d, left, FRAME + 4, left_pill, k.EDGE, align="left")
             left = box[2] + 6
+        if side_pill:
+            # beside the mark, right of it, vertically centred on it
+            k.pill(ctx, d, S - FRAME - 4, top + (size - 32) // 2, side_pill, k.EDGE)
         if status == "done":
             d.ellipse((S - 48, 18, S - 20, 46), fill=accent)
         elif status == "waiting":
             _waiting_pill(ctx, d, tile, accent, left)
         fill = k.MUTE if status in ("idle", "unknown") else k.LIGHT
-        _text_under_mark(ctx, d, tile, fill, top=MARK_Y + MARK + 6, bottom=S - FRAME - 4)
+        _text_under_mark(ctx, d, tile, fill, top=top + size + 6, bottom=S - FRAME - 4)
         return img
 
     # --- every other key ---------------------------------------------------
@@ -126,6 +131,31 @@ def _status_frame(d, status, accent) -> None:
     if status == "working":
         # open frame: a gap at the top-right corner (drawn before the mark)
         d.rectangle((S - 60, 0, S - 1, 60), fill=k.DARK)
+
+
+def _top_pills(ctx, d, tile, status) -> tuple[str, str]:
+    """(top-left pill, pill beside the mark). Top-left: the waiting time,
+    else the running subagents, only when it leaves the holder label
+    (top-right) whole. A waiting tile whose "+N" lost the top row shows it
+    beside the (compact) mark when it fits there; else it is dropped (the
+    holder label and the time matter more)."""
+    subs = f"+{tile.subagents}" if tile.subagents else ""
+    room = S - 2 * (FRAME + 4)
+    if status != "waiting":
+        return (subs if subs and k.pill_width(ctx, d, subs) <= room else ""), ""
+    label_w = k.pill_width(ctx, d, _waiting_label(ctx, tile)) + 6
+    left = ""
+    for part in ((tile.time_text or "").strip(), subs):
+        if part and k.pill_width(ctx, d, part) + label_w <= room:
+            left = part
+            break
+    side = ""
+    if subs and left != subs:
+        # beside the compact mark: from its right edge (+4) to the frame
+        side_room = S - FRAME - 4 - ((S + MARK_COMPACT) // 2 + 4)
+        if k.pill_width(ctx, d, subs) <= side_room:
+            side = subs
+    return left, side
 
 
 def _waiting_label(ctx, tile) -> str:
@@ -265,7 +295,15 @@ def _pinned_hole(tile, ctx):
     k.dashed_frame(d, k.MUTE, 5, inset=8)
     d.ellipse((S / 2 - 12, 22, S / 2 + 12, 46), outline=k.MUTE, width=5)
     d.line((S / 2, 46, S / 2, 66), fill=k.MUTE, width=5)
-    font, lines = k.block(ctx, d, tile.label or "", S - 40, largest=26)
+    label = tile.label or ""
+    if " · " in label:
+        # "Pinned · missing": one fact per line, never "Pinned ·" / "missing"
+        parts = [p.strip() for p in label.split(" · ") if p.strip()]
+        size = max(k.MIN_TEXT, min(k.fit(ctx, d, p, S - 40, 26)[0].size for p in parts))
+        font = ctx.font(size)
+        lines = [k.ellipsize(ctx, d, p, size, S - 40) for p in parts[:2]]
+    else:
+        font, lines = k.block(ctx, d, label, S - 40, largest=26)
     y = k.draw_lines(d, lines, font, 20, 76, k.LIGHT, center_w=S - 40)
     if tile.subtext:
         sfont, sub = k.fit(ctx, d, tile.subtext, S - 40, 24)
