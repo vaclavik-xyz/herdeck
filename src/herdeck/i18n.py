@@ -79,6 +79,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "idle_group_hide_sub": "idle",
         "others_blocked": "+{n} more waiting",
         "launch_on": "on {server}",
+        # signal deck theme (themes/_signal_panel.py)
+        "signal.waiting_for": "{t} waiting",
+        "signal.n_waiting": "{n} waiting",
         # notification titles (banner / Telegram headline)
         "notify.title_blocked": "{agent} · needs input",
         "notify.title_done": "{agent} · done",
@@ -221,6 +224,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "idle_group_hide_sub": "nečinné",
         "others_blocked": "+{n} další čeká",
         "launch_on": "na {server}",
+        "signal.waiting_for": "čeká {t}",
+        "signal.n_waiting": "čeká: {n}",
         "notify.title_blocked": "{agent} · čeká na tebe",
         "notify.title_done": "{agent} · hotovo",
         "notify.title_subagents_done": "{agent} · subagenti hotovi ({count})",

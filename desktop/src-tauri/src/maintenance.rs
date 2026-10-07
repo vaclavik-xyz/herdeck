@@ -59,6 +59,9 @@ pub enum MaintRoute {
     UpdatePoll { wait_ms: u64 },
     /// GET: the bridges' status history (`/stats?range=&group=`).
     Stats,
+    /// GET: the deck looks the editor offers for `[view].deck_theme`
+    /// (`/themes`, src/herdeck/themes/registry.py).
+    Themes,
     /// GET (status) / POST (install, uninstall): the subagent hooks on a
     /// bridge's machine (deckapp/hooks_relay.py).
     Hooks,
@@ -125,6 +128,7 @@ pub fn maintenance_route(method: &str, path: &str) -> Option<MaintRoute> {
         ("POST", "/maintenance/deck/power-cycle", None) => return Some(MaintRoute::PowerCycle),
         ("GET", "/stats", None) => return Some(MaintRoute::Stats),
         ("GET", "/stats", Some(q)) => return stats_query_ok(q).then_some(MaintRoute::Stats),
+        ("GET", "/themes", None) => return Some(MaintRoute::Themes),
         _ => {}
     }
     let rest = route.strip_prefix("/maintenance/servers/")?;
@@ -157,6 +161,7 @@ pub fn maintenance_timeout(route: &MaintRoute, body: Option<&serde_json::Value>)
         MaintRoute::DeckRestart => DECK_RESTART_TIMEOUT,
         MaintRoute::PowerCycle => POWER_CYCLE_TIMEOUT,
         MaintRoute::Stats => STATS_TIMEOUT,
+        MaintRoute::Themes => STATUS_TIMEOUT,
         MaintRoute::Hooks => HOOKS_TIMEOUT,
         MaintRoute::UsageAgent => USAGE_AGENT_TIMEOUT,
         MaintRoute::UpdateStart => {
@@ -599,6 +604,15 @@ pub(crate) fn restart_deck_from_shell(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_themes_route_is_exact_and_read_only() {
+        assert_eq!(maintenance_route("GET", "/themes"), Some(MaintRoute::Themes));
+        assert_eq!(maintenance_route("GET", "/themes?token=x"), None);
+        assert_eq!(maintenance_route("POST", "/themes"), None);
+        assert_eq!(maintenance_route("GET", "/themes/x"), None);
+        assert_eq!(maintenance_timeout(&MaintRoute::Themes, None), STATUS_TIMEOUT);
+    }
 
     #[test]
     fn the_stats_route_takes_only_a_valid_range_and_group() {

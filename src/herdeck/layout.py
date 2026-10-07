@@ -3,10 +3,10 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 
-from .driver.base import PanelGauge, PanelStat, PanelView, TileView
+from .driver.base import PanelAgent, PanelGauge, PanelStat, PanelView, ThemeEnv, TileView
 from .i18n import tr
 from .model import AgentState, Status
 from .project_icons import ProjectIconStore, tile_icon_fields
@@ -70,6 +70,7 @@ def agent_tile_view(
     server_tag: str | None = None,
     server_accent: str | None = None,
     section: str | None = None,
+    down: bool = False,
 ) -> TileView:
     """The one TileView for an agent tile, shared by the deck (orchestrator)
     and the Elgato plugin session.
@@ -78,7 +79,9 @@ def agent_tile_view(
     type, working_animation, tile_fill, the tile_icon fields) is filled here,
     so a new view setting cannot reach one surface and be missed by the other.
     The keyword extras are what only some surfaces show (animation phase,
-    elapsed time, pins, backend tags, click-to-jump section)."""
+    elapsed time, pins, backend tags, click-to-jump section). ``down`` = the
+    agent's server is disconnected (``status`` becomes "offline")."""
+    themed = getattr(view, "deck_theme", "classic") != "classic"
     return TileView(
         index,
         state.label,
@@ -97,7 +100,11 @@ def agent_tile_view(
         server_accent=server_accent,
         section=section,
         subagents=state.subagents_running,
-        **tile_icon_fields(view, state, project_icons),
+        status="offline" if down else state.status.value,
+        kind="agent",
+        title=state.title,
+        workspace=state.workspace,
+        **tile_icon_fields(view, state, project_icons, resolve_always=themed),
     )
 
 
@@ -234,13 +241,17 @@ class Counts:
     idle: int
     done: int
     waiting: int = 0
+    # active agents on a disconnected server (also counted in their status)
+    offline: int = 0
 
 
-def summary(agents) -> Counts:
+def summary(agents, down: set[str] | frozenset[str] = frozenset()) -> Counts:
     c = Counts(0, 0, 0, 0)
     for s in agents:
         if s.lifecycle != "active":
             continue
+        if s.key.server_id in down:
+            c.offline += 1
         if s.status is Status.BLOCKED:
             c.blocked += 1
         elif s.status is Status.WORKING:
@@ -295,6 +306,7 @@ def panel_overview(
     sent: str = "",
     down_for: str = "",
     left: int | None = None,
+    queue: list[PanelAgent] | None = None,
 ) -> PanelView:
     """The overview status panel: calm counts, NEEDS YOU, or OFFLINE.
 
@@ -307,8 +319,11 @@ def panel_overview(
     ``down_for`` is how long the full outage has lasted; ``left`` is how many
     blocked agents still await an answer (answered episodes excluded — the
     bridge's status change lags the answer), defaulting to ``counts.blocked``.
+    ``queue`` (blocked agents, longest-waiting first) and the counts ride
+    along for deck themes (``kind``/``queue``/``counts``); classic ignores them.
     """
     colors = colors or {}
+    theme_data = {"queue": list(queue or []), "counts": asdict(counts)}
     page = (page_index, page_count) if page_count > 1 else None
     partial = bool(down) and servers is not None and len(down) < servers
     note = ""
@@ -332,6 +347,8 @@ def panel_overview(
             meta=down_for,
             hint=tr(lang, "panel.keep_running"),
             page=page,  # a press still pages the (offline) tiles
+            kind="offline",
+            **theme_data,
         )
     if spotlight is not None:
         spot = spotlight if isinstance(spotlight, Spotlight) else Spotlight(*spotlight)
@@ -361,6 +378,8 @@ def panel_overview(
             page=page,
             note=note,
             sent=sent,
+            kind="spotlight",
+            **theme_data,
         )
     if page is not None:
         hint = tr(lang, "panel.press_next_page")
@@ -376,6 +395,8 @@ def panel_overview(
         page=page,
         note=note,
         sent=sent,
+        kind="sent" if sent else "calm",
+        **theme_data,
     )
     if usage_gauges:
         # Limits take the main area; the counts shrink into the header.
@@ -384,6 +405,57 @@ def panel_overview(
     else:
         view.stats = _status_stat(counts, lang, colors)
     return view
+
+
+def panel_agent(
+    state: AgentState, elapsed: str, view, project_icons: ProjectIconStore | None = None
+) -> PanelAgent:
+    """One blocked agent for ``PanelView.queue`` (a theme draws it as a chip)."""
+    icon = tile_icon_fields(view, state, project_icons, resolve_always=True)
+    return PanelAgent(
+        label=state.label,
+        title=state.title,
+        elapsed=elapsed,
+        agent_type=state.agent_type,
+        project_icon=icon["project_icon"],
+        project_name=icon["project_name"],
+    )
+
+
+def theme_env(config) -> ThemeEnv:
+    """The config a deck theme reads besides the views (themes/api.py)."""
+    return ThemeEnv(
+        config.view.language,
+        tuple(sorted(config.theme.colors.items())),
+        getattr(config.view, "project_icon_fallback", "monogram"),
+    )
+
+
+def stamp_theme(config, tiles: list[TileView], panel: PanelView | None = None) -> None:
+    """Stamp the RESOLVED ``[view].deck_theme`` (an unknown/broken id becomes
+    "classic", like its tile names), language, status colours and, for a
+    non-classic theme, the registry fingerprint onto a render's views.
+
+    Called once at each render exit — Orchestrator.render (overview, drill,
+    launcher, profiles, config error) and ElgatoSession.render_all — instead
+    of at the ~30 places a TileView/PanelView is built."""
+    theme = config.view.deck_theme
+    rev = ""
+    if theme != "classic":
+        from .themes.registry import default_registry
+
+        registry = default_registry()
+        theme = registry.resolve(theme).id
+        if theme != "classic":
+            rev = registry.fingerprint(theme)
+    env = theme_env(config)
+    for tile in tiles:
+        tile.deck_theme = theme
+        tile.theme_env = env
+    if panel is not None:
+        panel.deck_theme = theme
+        panel.theme_env = env
+        panel.theme_rev = rev
 
 
 def _fmt_reset(resets_at: str | None, now) -> str:

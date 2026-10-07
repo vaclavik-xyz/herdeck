@@ -42,6 +42,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       show_profile_on_panel: "Shows the active profile name on the status panel; not used when rendering yet.",
       working_animation: "Working-tile animation: pulse = calm slow breath (fewest repaints), spin/comet/sweep = per-tick motion, none = static.",
       tile_fill: "Fill the tile with the agent status color: none = text and bar only, tint = dimmed shade, solid = full color.",
+      project_icon_fallback: "Project without a favicon: monogram = coloured first letter (default); agent = the agent's logo instead",
       tile_icon: "agent = agent logo; project = repo favicon (letter if none, spin → comet ring); both = logo + favicon badge",
       project_icons: "Repo name → icon file on the deck machine (PNG/ICO/SVG ≤256 KiB); overrides the repo favicon.",
       bottom_row: "Which buttons fill the bottom row in bottom_row mode; only profiles and new_agent (+ New) work for now.",
@@ -50,6 +51,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_secondary: "Second line from built-in fields or $name metadata tokens; unset = session title when available, otherwise tab then branch; empty = off.",
       language: "Language of the deck and this app: en (English) or cs (Czech). Applies after Apply.",
       collapse_idle: "Fold idle agents into one '+N' tile at the end of the overview; press it to show them (off by default; not Elgato).",
+      deck_theme: "Deck look: classic (default), signal, headline, quiet, or a theme file from themes/; unknown falls back to classic.",
     },
     theme: {
       working: "Tile color of an agent that is currently working (default green).",
@@ -178,6 +180,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       show_profile_on_panel: "Ukáže název aktivního profilu na stavovém panelu; zatím se při vykreslování nepoužívá.",
       working_animation: "Animace pracující dlaždice: pulse = klidný pomalý tep (nejméně překreslení), spin/comet/sweep = pohyb každý tick, none = staticky.",
       tile_fill: "Vyplnění dlaždice barvou stavu agenta: none = jen text a proužek, tint = ztmavený odstín, solid = plná barva.",
+      project_icon_fallback: "Projekt bez favicony: monogram = barevné počáteční písmeno (výchozí); agent = místo něj logo agenta",
       tile_icon: "agent = logo agenta; project = favicon repa (bez něj písmeno, spin → comet kruh); both = logo + odznak projektu",
       project_icons: "Název repa → ikona na stroji s deckem (PNG/ICO/SVG ≤256 KiB); přebije favicon z repa.",
       bottom_row: "Která tlačítka obsadí spodní řadu v režimu bottom_row; nyní fungují jen profiles a new_agent (+ New).",
@@ -186,6 +189,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_secondary: "Druhý řádek z polí nebo tokenů $name; nevyplněno = název session, pokud existuje, jinak tab a branch; prázdné = vypnuto.",
       language: "Jazyk decku i této aplikace: en (angličtina) nebo cs (čeština). Projeví se po Použít.",
       collapse_idle: "Sbalí nečinné agenty do jedné dlaždice „+N“ na konci přehledu; stiskem se ukážou (výchozí vypnuto; ne Elgato).",
+      deck_theme: "Vzhled decku: classic (výchozí), signal, headline, quiet nebo motiv ze složky themes/; neznámý = classic.",
     },
     theme: {
       working: "Barva dlaždice agenta, který právě pracuje (výchozí green).",

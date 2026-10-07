@@ -13,12 +13,14 @@ from pathlib import Path
 
 from .config import (
     AGENT_ORDERS,
+    DECK_THEME_ID_PATTERN,
     DEFAULT_EVENT_SOUNDS,
     DEFAULT_MACROS,
     DEFAULT_NOTIFY_ON,
     DEFAULT_PROFILES,
     DEFAULT_REQUIRE_CONFIRM,
     DEFAULT_START_PROFILES,
+    PROJECT_ICON_FALLBACKS,
     TILE_FILLS,
     TILE_ICONS,
     TILE_LINE_TOKENS,
@@ -385,6 +387,13 @@ def _view_config(raw: dict | None) -> ViewConfig:
         if val not in TILE_ICONS:
             raise ConfigError(f"unknown view.tile_icon '{val}'; want one of {TILE_ICONS}")
         view.tile_icon = val
+    if "project_icon_fallback" in raw:
+        val = raw["project_icon_fallback"]
+        if val not in PROJECT_ICON_FALLBACKS:
+            raise ConfigError(
+                f"unknown view.project_icon_fallback '{val}'; want one of {PROJECT_ICON_FALLBACKS}"
+            )
+        view.project_icon_fallback = val
     if "project_icons" in raw:
         view.project_icons = _project_icons(raw["project_icons"])
     if "show_profile_on_panel" in raw:
@@ -393,6 +402,15 @@ def _view_config(raw: dict | None) -> ViewConfig:
         if not isinstance(raw["collapse_idle"], bool):
             raise ConfigError("view.collapse_idle must be true or false")
         view.collapse_idle = raw["collapse_idle"]
+    if "deck_theme" in raw:
+        val = raw["deck_theme"]
+        # Shape only: user themes are discovered at render time, so an unknown
+        # (but well-formed) id is accepted here and falls back to classic.
+        if not isinstance(val, str) or not re.fullmatch(DECK_THEME_ID_PATTERN, val):
+            raise ConfigError(
+                f"invalid view.deck_theme {val!r}; want an id of a-z, 0-9, '_' or '-'"
+            )
+        view.deck_theme = val
     if "language" in raw:
         val = raw["language"]
         if val not in LANGUAGES:

@@ -273,16 +273,20 @@ class ElgatoSession:
         if kind == "stop" and self.is_armed():
             return TileView(
                 0, self._tr("act.stop"), "red",
-                repo=ident or None, status_text=self._tr("act.stop_confirm"),
+                repo=ident or None, status_text=self._tr("act.stop_confirm"), kind="control",
             )
         if kind != "pager" and target is not None and target.key == self._pending_act:
-            return TileView(0, label, "dim", repo=ident or None, status_text=self._tr("act.pending"))
+            return TileView(
+                0, label, "dim", repo=ident or None, status_text=self._tr("act.pending"),
+                kind="control",
+            )
         return TileView(
             0,
             label,
             color if enabled else "dim",
             repo=ident or None,
             status_text=label.upper(),
+            kind="control",  # an action key, though drawn by Theme.agent_tile (repo set)
         )
 
     # --- press handling ---
@@ -407,6 +411,7 @@ class ElgatoSession:
             branch=secondary,
             status_text=layout.tile_status_text(s, self.config.view.language, down),
             project_icons=self._project_icons,
+            down=down,
         )
 
     # --- render ---
@@ -414,9 +419,12 @@ class ElgatoSession:
         out: dict[str, KeyRender] = {}
         for ordinal, iid in enumerate(self._slot_order):
             tile = self._slot_tile(ordinal)
+            layout.stamp_theme(self.config, [tile])  # the plugin's render exit
             out[iid] = KeyRender(self._icons.render_tile_bytes(tile))
         for iid, kind in self._action_keys:
-            out[iid] = KeyRender(self._icons.render_tile_bytes(self._action_tile(iid, kind)))
+            tile = self._action_tile(iid, kind)
+            layout.stamp_theme(self.config, [tile])
+            out[iid] = KeyRender(self._icons.render_tile_bytes(tile))
         return out
 
     def take_render_diff(self) -> dict[str, KeyRender]:

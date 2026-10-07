@@ -1123,7 +1123,8 @@ working animation draws as a `comet` ring around it. The bridge finds the
 favicon in the pane's repository
 (`favicon.png`, `public/favicon.png`, `app/icon.png`, … then `.ico`, then
 `.svg`; at most 256 KiB) and sends it to the deck once; a project without one
-gets a coloured letter badge. When the pane's working directory is not inside
+gets a coloured letter badge (set `[view].project_icon_fallback = "agent"` to show the
+agent's logo instead). When the pane's working directory is not inside
 a Git repository (say a workspace folder holding several repos), the bridge
 looks in that folder itself, so you can drop a `favicon.png` there, and
 otherwise in its direct child repositories in name order, but only when the
@@ -1136,6 +1137,20 @@ running the deck; quote a repo name that contains a dot, e.g.
 SVG icons are rendered with resvg (bundled in the packaged app and the Elgato
 plugin). An SVG that references anything outside itself (a file path or URL in
 `href`/`url(...)`) is refused and shows the monogram.
+
+The whole look is switchable as well: `[view].deck_theme` (editor: **Deck
+look**) picks a deck theme, `classic` (today's look) by default. Built-in looks:
+`classic` (default, the original look), `signal` (the project's favicon and the
+task title on a dark key; status shown by colour and by the frame's shape),
+`headline` (big project name and time on the status colour) and `quiet` (only
+an agent that needs you is loud). A theme only changes how keys and the
+status window are drawn; your status colours, agent order and presses stay the
+same. You can write your own theme as one Python file in
+`~/.config/herdeck/themes/` (next to your `config.toml`) and select it by its
+file name; see [docs/themes.md](docs/themes.md). A theme is code and runs with
+your user
+privileges, so only install themes you have read.
+
 With many agents, set `[view].collapse_idle = true` to fold every idle agent
 into one `+N` tile at the end of the overview. Pressing it unfolds the idle
 agents (the deck jumps to the page with the first one) and a `hide` tile at the

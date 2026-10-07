@@ -6,6 +6,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Deck themes: `[view].deck_theme` (editor: View → Deck look) picks how the
+  deck draws its keys and status window. `classic`, today's look, is the
+  default and renders pixel-identically (same cache files). User themes are
+  Python files in `themes/` next to `config.toml`, written against the
+  versioned API in `herdeck.themes.api` (`API_VERSION = 1`) and documented in
+  `docs/themes.md`; a broken theme is reported in the editor and draws
+  classic. New runtime route `GET /themes`.
+- `[view].project_icon_fallback`: show the agent's logo instead of the monogram
+  for projects without a favicon.
+- Three built-in deck looks for `[view].deck_theme`: `signal` (the project's
+  favicon and the task title on a dark key; status shown by colour AND frame
+  shape: open frame working, thin idle, dot done, dashed waiting, amber key
+  blocked, slashed offline; a status window of favicon queue chips and ring
+  counters, laid out so no text or number sits on the Elgato key seam), `headline` (big
+  project name and time on the status colour) and `quiet` (only an agent that
+  needs you is loud). Every text is at least 22 px so it reads on the D200's
+  72 px keys.
+
 ## [0.15.0] - 2026-10-01
 
 ### Added
