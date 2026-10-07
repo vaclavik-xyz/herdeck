@@ -36,7 +36,6 @@
   class="item st-{agent.status}"
   class:offline={agent.offline}
   class:active
-  title={label}
   aria-label={label}
   onmouseenter={(e) => onenter(top(e))}
   onmouseleave={onleave}

@@ -109,13 +109,6 @@ pub enum Floating {
     Deck,
 }
 
-/// Whether the floating window gets the macOS window shadow. The deck mirror
-/// fills its window, so the shadow traces the card; the dock's window is mostly
-/// transparent room for the card to open into, and a shadow there draws a grey
-/// outline around that empty room. The dock's card carries a CSS shadow instead.
-pub(crate) fn wants_shadow(floating: Floating) -> bool {
-    floating == Floating::Deck
-}
 
 impl Floating {
     pub fn as_str(self) -> &'static str {
@@ -180,12 +173,6 @@ pub fn deck_window_size(f: Floating) -> (f64, f64) {
 
 #[cfg(test)]
 mod tests {
-
-    #[test]
-    fn only_the_deck_mirror_gets_the_window_shadow() {
-        assert!(wants_shadow(Floating::Deck));
-        assert!(!wants_shadow(Floating::Dock));
-    }
 
     use super::*;
 

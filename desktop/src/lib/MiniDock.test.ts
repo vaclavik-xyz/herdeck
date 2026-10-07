@@ -82,7 +82,7 @@ describe("MiniDock strip", () => {
     const { target, cleanup } = render(FLEET);
     try {
       await vi.waitFor(() => expect(items(target)).toHaveLength(4));
-      expect(items(target).map((b) => b.title)).toEqual([
+      expect(items(target).map((b) => b.getAttribute("aria-label"))).toEqual([
         "Blocked long · Needs you",
         "Blocked short · Needs you",
         "Done one · Done",
@@ -134,7 +134,7 @@ describe("MiniDock strip", () => {
   it("follows the runtime's language", async () => {
     const { target, cleanup } = render(dockList([dockAgent({ title: "X" })], { language: "cs" }));
     try {
-      await vi.waitFor(() => expect(items(target)[0]?.title).toBe("X · Potřebuje tě"));
+      await vi.waitFor(() => expect(items(target)[0]?.getAttribute("aria-label")).toBe("X · Potřebuje tě"));
     } finally {
       cleanup();
     }

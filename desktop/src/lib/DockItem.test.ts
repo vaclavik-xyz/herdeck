@@ -28,8 +28,9 @@ describe("DockItem", () => {
     const { button, cleanup } = render(dockAgent({ status: "blocked", title: "Bank API" }));
     try {
       expect(button.classList.contains("st-blocked")).toBe(true);
-      expect(button.title).toBe("Bank API · Needs you");
       expect(button.getAttribute("aria-label")).toBe("Bank API · Needs you");
+      // No native tooltip: WebKit leaves it on the previous item when the pointer moves on.
+      expect(button.hasAttribute("title")).toBe(false);
     } finally {
       cleanup();
     }
@@ -39,7 +40,7 @@ describe("DockItem", () => {
     setLang("cs");
     const { button, cleanup } = render(dockAgent({ status: "working", title: "Bank API" }));
     try {
-      expect(button.title).toBe("Bank API · Pracuje");
+      expect(button.getAttribute("aria-label")).toBe("Bank API · Pracuje");
     } finally {
       cleanup();
     }
@@ -49,7 +50,7 @@ describe("DockItem", () => {
     const { button, target, cleanup } = render(dockAgent({ status: "working", offline: true }));
     try {
       expect(button.classList.contains("offline")).toBe(true);
-      expect(button.title).toBe("Bank API · Server offline");
+      expect(button.getAttribute("aria-label")).toBe("Bank API · Server offline");
       expect(target.querySelector(".slash")).not.toBeNull();
     } finally {
       cleanup();

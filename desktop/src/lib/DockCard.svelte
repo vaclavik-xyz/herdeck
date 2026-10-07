@@ -213,7 +213,7 @@
     <ul class="idle">
       {#each idle as a (rowKey(a))}
         <li>
-          <button type="button" class="row" title={m.open_herdr} onclick={() => void focusAgent(a)}>
+          <button type="button" class="row" aria-label={`${a.title} · ${m.open_herdr}`} onclick={() => void focusAgent(a)}>
             <DockMark agent={a} src={iconUrl(a)} size={20} />
             <span class="row-title">{a.title}</span>
             <span class="row-since">{formatSince(sinceOf(a))}</span>
@@ -237,7 +237,9 @@
     background: var(--panel-raised);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-panel);
-    box-shadow: 0 10px 28px color-mix(in srgb, var(--canvas) 70%, transparent);
+    /* No CSS shadow: macOS draws the window's shadow from the drawn pixels'
+       alpha, and a soft CSS halo made it trace a hard grey outline ~10 px
+       outside the card. The window shadow alone shades the card. */
     color: var(--text);
   }
   header {
