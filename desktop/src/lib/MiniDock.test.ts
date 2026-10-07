@@ -248,6 +248,27 @@ describe("MiniDock card", () => {
     }
   });
 
+  it("closes the card after the pointer leaves even if the hovered item folded away", async () => {
+    const { target, dock, cleanup } = render(FLEET, { hoverCloseMs: 30 });
+    try {
+      await vi.waitFor(() => expect(items(target)).toHaveLength(4));
+      hover(items(target)[3]);
+      await vi.waitFor(() => expect(target.querySelector(".card-slot")).not.toBeNull());
+      await vi.waitFor(() => expect(dock.calls).toHaveLength(2));
+      dock.push({
+        ...FLEET,
+        version: 8,
+        agents: FLEET.agents.map((a) => (a.paneId === "w" ? { ...a, status: "idle" } : a)),
+      });
+      await vi.waitFor(() => expect(items(target)).toHaveLength(3));
+      target.querySelector(".card-slot")!.dispatchEvent(new MouseEvent("mouseenter"));
+      target.querySelector(".card-slot")!.dispatchEvent(new MouseEvent("mouseleave"));
+      await vi.waitFor(() => expect(target.querySelector(".card-slot")).toBeNull());
+    } finally {
+      cleanup();
+    }
+  });
+
   it("opens the idle list from the +N chip", async () => {
     const { target, cleanup } = render(FLEET);
     try {

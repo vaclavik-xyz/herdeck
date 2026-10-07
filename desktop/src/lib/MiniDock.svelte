@@ -85,6 +85,7 @@
   // Read only inside timers, never rendered: plain flags.
   let hoverCard = false;
   let hoverItem = false;
+  let hoverKey: string | null = null; // the agent item under the pointer, if any
 
   const layout = $derived(dockLayout(list?.agents ?? []));
   const neutral = $derived(neutralReason(list));
@@ -222,6 +223,8 @@
   async function hide(): Promise<void> {
     clearTimers();
     hoverCard = false;
+    hoverItem = false;
+    hoverKey = null;
     if (open === null) return;
     open = null;
     pinned = false;
@@ -241,6 +244,7 @@
 
   function enter(target: Target, top: number): void {
     hoverItem = true;
+    hoverKey = target.kind === "agent" ? target.key : null;
     clearTimeout(closeTimer);
     if (pinned) return; // a pinned card stays on its agent
     clearTimeout(openTimer);
@@ -253,6 +257,7 @@
 
   function leave(): void {
     hoverItem = false;
+    hoverKey = null;
     clearTimeout(openTimer);
     if (!pinned) scheduleClose();
   }
@@ -314,6 +319,18 @@
     } else if (kind === "idle" && layout.idle.length === 0) {
       untrack(() => void hide());
     }
+  });
+
+  // A hovered item that left the strip (folded into +N, or gone) never sends
+  // mouseleave; drop the hover flag so the card can still close.
+  $effect(() => {
+    const visible = layout.visible;
+    untrack(() => {
+      if (hoverKey !== null && !visible.some((a) => agentKey(a) === hoverKey)) {
+        hoverItem = false;
+        hoverKey = null;
+      }
+    });
   });
 
   $effect(() => () => clearTimers());
