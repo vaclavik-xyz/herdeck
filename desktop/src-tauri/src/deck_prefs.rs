@@ -174,6 +174,15 @@ pub fn deck_window_size(f: Floating) -> (f64, f64) {
 mod tests {
     use super::*;
 
+    // The editor's default (configDefaults.json desktop.floating, read by
+    // configClient.ts DEFAULT_FLOATING) must be the one Rust applies.
+    #[test]
+    fn the_editor_default_floating_matches_rust() {
+        let defaults: serde_json::Value =
+            serde_json::from_str(include_str!("../../src/lib/configDefaults.json")).unwrap();
+        assert_eq!(defaults["desktop"]["floating"], parse_floating("").as_str());
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("herdeck-wm-{name}"));
         let _ = std::fs::remove_dir_all(&p);

@@ -1,5 +1,6 @@
 <script lang="ts">
   import TextField from "../fields/TextField.svelte";
+  import SelectField from "../fields/SelectField.svelte";
   import BooleanField from "../fields/BooleanField.svelte";
   import { defineMessages, fieldHelp, locale } from "../i18n.svelte";
   import {
@@ -12,6 +13,9 @@
     setRestartDeckHotkey,
     deckAlwaysOnTop,
     setDeckAlwaysOnTop,
+    floatingMode,
+    setFloatingMode,
+    FLOATING_CHOICES,
     type ConfigPayload,
   } from "../configClient";
 
@@ -50,12 +54,18 @@
     payload = setToggleDeckHotkey(payload, v);
     onChange();
   }
+  const floating = $derived(floatingMode(payload));
+  function setFloating(v: string): void {
+    payload = setFloatingMode(payload, v === "deck" ? "deck" : "dock");
+    onChange();
+  }
   function setAlwaysOnTop(v: boolean): void {
     payload = setDeckAlwaysOnTop(payload, v);
     onChange();
   }
 </script>
 
+<SelectField label="floating" help={HELP.floating} value={floating} options={FLOATING_CHOICES} onchange={setFloating} />
 <BooleanField label="deck_always_on_top" help={HELP.deck_always_on_top} value={alwaysOnTop} onchange={setAlwaysOnTop} />
 <p class="hint">
   {lm.hotkey_intro}

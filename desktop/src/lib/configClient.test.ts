@@ -45,6 +45,10 @@ import {
   setNextBlockedHotkey,
   setToggleDeckHotkey,
   deckAlwaysOnTop,
+  floatingMode,
+  setFloatingMode,
+  DEFAULT_FLOATING,
+  FLOATING_CHOICES,
   setDeckAlwaysOnTop,
   type ConfigPayload,
   errorCountLabel,
@@ -1010,9 +1014,15 @@ describe("deck always-on-top", () => {
   const desktop = (over: Record<string, unknown>) =>
     parseConfig({ base: { desktop: over }, profiles: {}, local: {}, secrets: {} })!;
 
-  it("defaults to false when the key is absent and there is no legacy mode", () => {
-    expect(deckAlwaysOnTop(emptyPayload())).toBe(false);
-    expect(deckAlwaysOnTop(desktop({}))).toBe(false);
+  // Row 4, mirroring deck_prefs::resolve_deck_always_on_top: with neither key
+  // the default follows the floating content — on for the dock, off for the
+  // deck mirror.
+  it("defaults on for the dock and off for the deck mirror when no key decides", () => {
+    expect(deckAlwaysOnTop(emptyPayload())).toBe(true);
+    expect(deckAlwaysOnTop(desktop({}))).toBe(true);
+    expect(deckAlwaysOnTop(desktop({ floating: "dock" }))).toBe(true);
+    expect(deckAlwaysOnTop(desktop({ floating: "deck" }))).toBe(false);
+    expect(deckAlwaysOnTop(desktop({ floating: "dock", window_mode: "normal" }))).toBe(false);
   });
 
   it("round-trips through the payload", () => {
@@ -1044,10 +1054,32 @@ describe("deck always-on-top", () => {
   // A wrong-typed key is treated as ABSENT, exactly like the Rust resolver's
   // `as_bool()` — so it defers to the legacy mode rather than reading as false.
   it("treats a wrong-typed key as absent, like the Rust resolver", () => {
-    expect(deckAlwaysOnTop(desktop({ deck_always_on_top: "yes" }))).toBe(false);
+    expect(deckAlwaysOnTop(desktop({ deck_always_on_top: "yes" }))).toBe(true);
+    expect(deckAlwaysOnTop(desktop({ deck_always_on_top: "yes", floating: "deck" }))).toBe(false);
     expect(
       deckAlwaysOnTop(desktop({ deck_always_on_top: "yes", window_mode: "always_on_top" })),
     ).toBe(true);
+  });
+});
+
+describe("floating window content", () => {
+  const desktop = (over: Record<string, unknown>) =>
+    parseConfig({ base: { desktop: over }, profiles: {}, local: {}, secrets: {} })!;
+
+  it("defaults to the dock, like deck_prefs::parse_floating", () => {
+    expect(DEFAULT_FLOATING).toBe("dock");
+    expect(FLOATING_CHOICES).toEqual(["dock", "deck"]);
+    expect(floatingMode(emptyPayload())).toBe("dock");
+    expect(floatingMode(desktop({ floating: "sideways" }))).toBe("dock");
+    expect(floatingMode(desktop({ floating: 3 }))).toBe("dock");
+    expect(floatingMode(desktop({ floating: "deck" }))).toBe("deck");
+  });
+
+  it("round-trips through base.desktop.floating", () => {
+    const p = setFloatingMode(emptyPayload(), "deck");
+    expect(floatingMode(p)).toBe("deck");
+    expect((p.base.desktop as Record<string, unknown>).floating).toBe("deck");
+    expect(floatingMode(setFloatingMode(p, "dock"))).toBe("dock");
   });
 });
 
