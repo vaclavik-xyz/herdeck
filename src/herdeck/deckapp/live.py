@@ -70,7 +70,7 @@ from ..usage_alerts import usage_alert_message, usage_alert_sound
 from . import shared_view as _shared_view
 from .agent_card import AgentCardMixin
 from .bridge_update import BridgeUpdateMixin
-from .dock_data import list_signature
+from .dock_data import icon_fallback_of, list_signature
 from .event_cursor import EventCursorStore
 from .hooks_relay import HooksMixin
 from .live_events import BridgeEventsMixin
@@ -681,7 +681,14 @@ class LiveSource(
         with self._lock:
             agents = list(self._agents.values())
             connected = dict(self._connected)
-        return list_signature(agents, connected, self._config.view.language)
+        view = self._config.view
+        return list_signature(
+            agents,
+            connected,
+            view.language,
+            icon_fallback=icon_fallback_of(view),
+            overrides=view.project_icons,
+        )
 
     def semantic_agent(self, key: AgentKey) -> AgentState | None:
         with self._card_deck_lock(), self._lock:

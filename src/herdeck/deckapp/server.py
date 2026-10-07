@@ -1164,6 +1164,7 @@ class DeckApp:
             "version": version,
             "language": getattr(source, "language", view.language),
             "connected": bool(source.connected),
+            "icon_fallback": dock_data.icon_fallback_of(view),
             "agents": dock_data.agent_rows(
                 agents,
                 since=since,
@@ -1190,6 +1191,12 @@ class DeckApp:
                     self._icon_pngs.pop(next(iter(self._icon_pngs)))
                 self._icon_pngs[icon_hash] = png
         return code, png
+
+    def agent_mark(self, agent_type: str) -> tuple[int, bytes | None]:
+        """GET /agent-mark/<type> (dock_data.agent_mark_png), under the raster
+        lock like every other glyph rasterisation."""
+        with self._raster_lock:
+            return dock_data.agent_mark_png(agent_type, self._icons)
 
     def _state(self) -> dict:
         self._note_state_read()
@@ -1547,6 +1554,20 @@ class DeckApp:
                     if not self._require_query_token(url):
                         return
                     code, png = app.project_icon(path[len("/project-icon/") :])
+                    if png is None:
+                        self._send(code)
+                    else:
+                        self._send(
+                            code,
+                            png,
+                            "image/png",
+                            headers={"Cache-Control": dock_data.PROJECT_ICON_CACHE_CONTROL},
+                        )
+                elif path.startswith("/agent-mark/"):
+                    # The agent's logo as a PNG: the dock's no-favicon fallback.
+                    if not self._require_query_token(url):
+                        return
+                    code, png = app.agent_mark(path[len("/agent-mark/") :])
                     if png is None:
                         self._send(code)
                     else:

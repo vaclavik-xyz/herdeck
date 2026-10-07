@@ -27,6 +27,16 @@ PROJECT_ICON_PX = 96
 # Icons are content-addressed (a hash never names other bytes), so the
 # WebView may keep them for a day.
 PROJECT_ICON_CACHE_CONTROL = "max-age=86400"
+# An agent type as it may appear in /agent-mark/<type> (lowercase slug).
+AGENT_TYPE_RE = re.compile(r"[a-z0-9_-]{1,32}")
+
+
+def icon_fallback_of(view) -> str:
+    """[view].project_icon_fallback as "monogram" | "agent". Read defensively:
+    the config key may not exist on this branch; anything unknown is the
+    default."""
+    value = getattr(view, "project_icon_fallback", "monogram")
+    return "agent" if value == "agent" else "monogram"
 
 
 def row_title(agent: AgentState) -> str:
@@ -90,11 +100,16 @@ def list_signature(
     connections: Mapping[str, bool],
     language: str,
     store: ProjectIconStore | None = None,
+    *,
+    icon_fallback: str = "monogram",
+    overrides: Mapping[str, str] | None = None,
 ) -> tuple:
     """Everything a /agent/list row shows except the ticking ``since_s``: two
     calls return equal tuples exactly when the dock has nothing new to show.
     Order-independent; includes whether each wire icon's bytes are stored, so
-    a favicon arriving after the snapshot counts as a change."""
+    a favicon arriving after the snapshot counts as a change. The icon
+    fallback and the [view.project_icons] overrides are part of it too, so a
+    config edit wakes the dock."""
     target = store if store is not None else default_store()
     rows = sorted(
         (
@@ -118,7 +133,13 @@ def list_signature(
         )
         for a in agents
     )
-    return (tuple(rows), tuple(sorted(connections.items())), language)
+    return (
+        tuple(rows),
+        tuple(sorted(connections.items())),
+        language,
+        icon_fallback,
+        tuple(sorted((overrides or {}).items())),
+    )
 
 
 def project_icon_png(icon_hash: str, store: ProjectIconStore | None = None) -> tuple[int, bytes | None]:
@@ -146,4 +167,22 @@ def project_icon_png(icon_hash: str, store: ProjectIconStore | None = None) -> t
     img = img.resize((PROJECT_ICON_PX, PROJECT_ICON_PX), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, "PNG")
+    return 200, buf.getvalue()
+
+
+def agent_mark_png(agent_type: str, icons) -> tuple[int, bytes | None]:
+    """GET /agent-mark/<type>: the deck's own agent logo as a PROJECT_ICON_PX
+    PNG, the dock's stand-in for a project without a favicon when
+    [view].project_icon_fallback = "agent". 400 for a malformed type, 404 when
+    the mark cannot be rendered (the dock then draws its monogram). A
+    well-formed but unknown type renders the provider's generic letter mark."""
+    if not AGENT_TYPE_RE.fullmatch(agent_type or ""):
+        return 400, None
+    try:
+        img = icons.agent_mark_image(agent_type, PROJECT_ICON_PX)
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+    except Exception as exc:
+        log.debug("agent mark %s could not be rendered: %s", agent_type, exc)
+        return 404, None
     return 200, buf.getvalue()

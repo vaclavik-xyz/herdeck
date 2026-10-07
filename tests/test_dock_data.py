@@ -4,7 +4,13 @@ import io
 
 from PIL import Image
 
-from herdeck.deckapp.dock_data import agent_rows, list_signature, monogram, row_title
+from herdeck.deckapp.dock_data import (
+    agent_mark_png,
+    agent_rows,
+    list_signature,
+    monogram,
+    row_title,
+)
 from herdeck.model import AgentKey, AgentState, Status
 from herdeck.project_icon_discovery import icon_hash
 from herdeck.project_icons import ProjectIconStore
@@ -134,6 +140,16 @@ def test_signature_changes_when_icon_bytes_arrive():
     before = list_signature(agents, {}, "en", store)
     store.put(h, "image/png", png)
     assert list_signature(agents, {}, "en", store) != before
+
+
+def test_signature_changes_with_the_icon_fallback_and_project_icon_overrides():
+    store = ProjectIconStore()
+    agents = [_agent("a", repo="r")]
+    base = list_signature(agents, {}, "en", store)
+    # The default spelling is the same signature as passing nothing.
+    assert list_signature(agents, {}, "en", store, icon_fallback="monogram") == base
+    assert list_signature(agents, {}, "en", store, icon_fallback="agent") != base
+    assert list_signature(agents, {}, "en", store, overrides={"r": "/x.png"}) != base
 
 
 # --- DeckApp.agent_list + GET /agent/list -------------------------------------
@@ -330,3 +346,61 @@ def test_project_icon_png_never_echoes_the_stored_bytes():
     assert code == 200
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
     assert SVG not in png
+
+
+# --- agent-logo fallback: GET /agent-mark/<type> ------------------------------
+
+
+class _MarkIcons(StubIcons):
+    def __init__(self):
+        self.calls = []
+
+    def agent_mark_image(self, agent_type, size):
+        self.calls.append((agent_type, size))
+        if agent_type == "boom":
+            raise RuntimeError("glyph failed")
+        return Image.new("RGBA", (size, size), (255, 255, 255, 255))
+
+
+def test_agent_mark_png_is_a_square_png_and_rejects_bad_types():
+    icons = _MarkIcons()
+    code, png = agent_mark_png("claude", icons)
+    assert code == 200
+    with Image.open(io.BytesIO(png)) as im:
+        assert im.format == "PNG" and im.size == (PROJECT_ICON_PX,) * 2
+    assert icons.calls == [("claude", PROJECT_ICON_PX)]
+    for bad in ("../etc", "", "Claude!", "a" * 33, "claude\n"):
+        assert agent_mark_png(bad, icons) == (400, None), bad
+    assert agent_mark_png("boom", icons) == (404, None)
+
+
+def test_agent_list_reports_the_icon_fallback_and_wakes_when_it_changes():
+    app = DeckApp(MockSource(), serve=False, icon_provider=_MarkIcons())
+    try:
+        first = app.agent_list(None, 0)
+        assert first["icon_fallback"] == "monogram"
+        app._source.config.view.project_icon_fallback = "agent"
+        app.refresh()
+        second = app.agent_list(None, 0)
+        assert second["icon_fallback"] == "agent"
+        assert second["version"] != first["version"]
+        app._source.config.view.project_icon_fallback = "bogus"
+        assert app.agent_list(None, 0)["icon_fallback"] == "monogram"
+    finally:
+        app.close()
+
+
+def test_agent_mark_route_requires_the_token_validates_and_caches():
+    app = DeckApp(MockSource(), host="127.0.0.1", port=0, serve=True, icon_provider=_MarkIcons())
+    try:
+        assert _raw(app, "/agent-mark/claude", token="wrong")[0] == 403
+        assert _raw(app, "/agent-mark/Claude!")[0] == 400
+        assert _raw(app, "/agent-mark/")[0] == 400
+        status, headers, body = _raw(app, "/agent-mark/claude")
+        assert status == 200
+        assert headers["Content-Type"] == "image/png"
+        assert headers["Cache-Control"] == "max-age=86400"
+        assert body.startswith(b"\x89PNG")
+        assert _raw(app, "/agent-mark/boom")[0] == 404
+    finally:
+        app.close()

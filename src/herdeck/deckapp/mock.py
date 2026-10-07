@@ -9,7 +9,7 @@ from ..config import (
 )
 from ..model import AgentKey, AgentState, Status
 from ..orchestrator import Orchestrator
-from .dock_data import list_signature
+from .dock_data import icon_fallback_of, list_signature
 from .source import StateSource
 
 # Two demo servers. Ids are stable and non-secret; the placeholder tokens are
@@ -137,7 +137,14 @@ class MockSource(StateSource):
 
     def agent_list_signature(self) -> tuple:
         """The /agent/list change key: a press cycles a demo agent's status."""
-        return list_signature(self._agents, {}, self._config.view.language)
+        view = self._config.view
+        return list_signature(
+            self._agents,
+            {},
+            view.language,
+            icon_fallback=icon_fallback_of(view),
+            overrides=view.project_icons,
+        )
 
     def semantic_agent(self, key: AgentKey) -> AgentState | None:
         return next((agent for agent in self._agents if agent.key == key), None)
