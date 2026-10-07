@@ -22,9 +22,13 @@ try {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   getCurrentWindow();
 } catch {
-  const label = new URLSearchParams(window.location.search).get("window") ?? "";
-  const role = QUERY_WINDOW_ROLE[label];
+  const params = new URLSearchParams(window.location.search);
+  const role = QUERY_WINDOW_ROLE[params.get("window") ?? ""];
   if (role) document.documentElement.dataset.windowRole = role;
+  // `?floating=deck|dock` picks the floating window's content in a plain
+  // browser (Rust's initialization_script sets it in the real WebView).
+  const floating = params.get("floating");
+  if (floating === "dock" || floating === "deck") document.documentElement.dataset.floating = floating;
 }
 
 const app = mount(App, { target: document.getElementById("app")! });
