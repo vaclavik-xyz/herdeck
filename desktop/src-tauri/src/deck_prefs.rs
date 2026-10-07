@@ -1,9 +1,10 @@
 //! Deck window preference config logic (`[desktop]` in `config.toml`).
 //!
-//! Framework-free (no Tauri types) so it is unit-testable without a GUI. Neither
-//! key here is a creation-time window property: the two windows have fixed
-//! chrome, and `deck_always_on_top` is applied live via `set_always_on_top`, so
-//! nothing in this module can require a restart. The legacy `window_mode` it
+//! Framework-free (no Tauri types) so it is unit-testable without a GUI.
+//! `deck_always_on_top` is applied live via `set_always_on_top`; `floating`
+//! (what the floating window shows: the mini dock or the deck mirror) is
+//! re-applied live by reloading that window's page (`reload_floating`), so
+//! nothing in this module requires a restart. The legacy `window_mode` it
 //! replaced is read once per launch as a migration fallback and never written.
 
 use std::path::{Path, PathBuf};
@@ -72,9 +73,18 @@ pub fn parse_deck_always_on_top(toml_str: &str) -> Option<bool> {
 ///
 /// Applied live via `set_always_on_top`; unlike the `window_mode` it replaces,
 /// it never needs a restart, because it is not a creation-time window property.
+///
+/// With neither key, the default follows `[desktop].floating`: the mini dock
+/// floats by default (its whole point), the deck mirror keeps the old default
+/// of off. `configClient.ts`'s `deckAlwaysOnTop` mirrors every row.
 pub fn resolve_deck_always_on_top(toml_str: &str) -> bool {
-    parse_deck_always_on_top(toml_str)
-        .unwrap_or_else(|| parse_legacy_window_mode(toml_str).as_deref() == Some("always_on_top"))
+    if let Some(flag) = parse_deck_always_on_top(toml_str) {
+        return flag;
+    }
+    match parse_legacy_window_mode(toml_str) {
+        Some(mode) => mode == "always_on_top",
+        None => parse_floating(toml_str) == Floating::Dock,
+    }
 }
 
 /// The pre-roles `[desktop].window_mode`, read ONCE per launch as the migration
@@ -88,6 +98,76 @@ pub fn parse_legacy_window_mode(toml_str: &str) -> Option<String> {
         .parse::<toml::Value>()
         .ok()
         .and_then(|v| Some(v.get("desktop")?.get("window_mode")?.as_str()?.to_string()))
+}
+
+/// What the floating (`main`) window shows: `[desktop].floating`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Floating {
+    /// The mini dock (default): a strip of the agents that need you.
+    Dock,
+    /// The mirror of the hardware deck (13 tiles + panel).
+    Deck,
+}
+
+impl Floating {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Floating::Dock => "dock",
+            Floating::Deck => "deck",
+        }
+    }
+}
+
+/// `[desktop].floating`: exactly `"deck"` selects the mirror; absent, any
+/// other value, a wrong type or an unparseable file is the dock.
+pub fn parse_floating(toml_str: &str) -> Floating {
+    let raw = toml_str
+        .parse::<toml::Value>()
+        .ok()
+        .and_then(|v| Some(v.get("desktop")?.get("floating")?.as_str()?.to_string()));
+    match raw.as_deref() {
+        Some("deck") => Floating::Deck,
+        _ => Floating::Dock,
+    }
+}
+
+/// sessionStorage key `reload_floating` writes before reloading the page: the
+/// initialization script is fixed at window creation, so a live switch must
+/// survive the reload some other way. A new app process starts with an empty
+/// sessionStorage, so the config value wins again at the next launch.
+pub const FLOATING_STORAGE_KEY: &str = "herdeck.floating";
+
+/// Initialization script stamping `<html data-floating>` before first paint
+/// (read by `floatingContent` in desktop/src/lib/appSurface.ts).
+pub fn floating_script(startup: Floating) -> String {
+    format!(
+        "(function(){{var f='{s}';try{{var v=sessionStorage.getItem('{k}');if(v==='dock'||v==='deck')f=v;}}catch(e){{}}document.documentElement.dataset.floating=f;}})();",
+        s = startup.as_str(),
+        k = FLOATING_STORAGE_KEY,
+    )
+}
+
+/// Script `reload_floating` evaluates in the floating window: remember the new
+/// choice for the reload, then reload so the right surface mounts.
+pub fn floating_reload_script(target: Floating) -> String {
+    format!(
+        "try{{sessionStorage.setItem('{k}','{s}');}}catch(e){{}}document.documentElement.dataset.floating='{s}';location.reload();",
+        s = target.as_str(),
+        k = FLOATING_STORAGE_KEY,
+    )
+}
+
+/// Width of the collapsed mini dock strip, in logical points
+/// (`STRIP_WIDTH` in desktop/src/lib/dockModel.ts).
+pub const DOCK_STRIP_WIDTH: f64 = 56.0;
+
+/// The floating window's size at creation: the strip for the dock (it sizes
+/// itself through `dock_layout` once mounted), the classic deck otherwise.
+pub fn deck_window_size(f: Floating) -> (f64, f64) {
+    match f {
+        Floating::Dock => (DOCK_STRIP_WIDTH, 160.0),
+        Floating::Deck => (328.0, 300.0),
+    }
 }
 
 #[cfg(test)]
@@ -208,14 +288,67 @@ mod tests {
         }
     }
 
-    // Row 4: absent or unparseable is the documented default, and a first run
-    // has neither key.
+    // Row 4: no key and no legacy mode. The default follows what the floating
+    // window shows: the mini dock floats (that is its point), the deck mirror
+    // keeps its old default of off. An unparseable file reads as the default
+    // floating content, i.e. the dock.
     #[test]
-    fn no_key_and_no_legacy_mode_leaves_the_flag_off() {
-        assert!(!resolve_deck_always_on_top(""));
-        assert!(!resolve_deck_always_on_top("[desktop]\n"));
-        assert!(!resolve_deck_always_on_top("this is not toml ["));
+    fn no_key_and_no_legacy_mode_follows_the_floating_content() {
+        assert!(resolve_deck_always_on_top(""));
+        assert!(resolve_deck_always_on_top("[desktop]\n"));
+        assert!(resolve_deck_always_on_top("this is not toml ["));
+        assert!(resolve_deck_always_on_top("[desktop]\nfloating = \"dock\"\n"));
+        assert!(!resolve_deck_always_on_top("[desktop]\nfloating = \"deck\"\n"));
+        // A legacy mode that is present decides, whatever the content.
         assert!(!resolve_deck_always_on_top("[desktop]\nwindow_mode = \"sideways\"\n"));
+        assert!(!resolve_deck_always_on_top(
+            "[desktop]\nfloating = \"dock\"\nwindow_mode = \"normal\"\n"
+        ));
+    }
+
+    #[test]
+    fn floating_defaults_to_the_dock_and_reads_deck() {
+        assert_eq!(parse_floating(""), Floating::Dock);
+        assert_eq!(parse_floating("[desktop]\nfloating = \"dock\"\n"), Floating::Dock);
+        assert_eq!(parse_floating("[desktop]\nfloating = \"deck\"\n"), Floating::Deck);
+    }
+
+    #[test]
+    fn unknown_or_unusable_floating_values_fall_back_to_the_dock() {
+        for toml in [
+            "[desktop]\nfloating = \"sideways\"\n",
+            "[desktop]\nfloating = 3\n",
+            "[desktop]\nfloating = \"Deck\"\n",
+            "this is not toml [",
+        ] {
+            assert_eq!(parse_floating(toml), Floating::Dock, "{toml}");
+        }
+    }
+
+    // The frontend's half of this contract is `floatingContent` in
+    // desktop/src/lib/appSurface.ts (dataset key "floating", values dock|deck).
+    #[test]
+    fn the_floating_script_stamps_the_attribute_and_prefers_a_reloaded_choice() {
+        let s = floating_script(Floating::Deck);
+        assert!(s.contains("var f='deck'"), "{s}");
+        assert!(s.contains("sessionStorage.getItem('herdeck.floating')"), "{s}");
+        assert!(s.contains("v==='dock'||v==='deck'"), "{s}");
+        assert!(s.contains("document.documentElement.dataset.floating=f"), "{s}");
+        assert!(floating_script(Floating::Dock).contains("var f='dock'"));
+    }
+
+    #[test]
+    fn the_reload_script_remembers_the_choice_and_reloads() {
+        let s = floating_reload_script(Floating::Deck);
+        assert!(s.contains("sessionStorage.setItem('herdeck.floating','deck')"), "{s}");
+        assert!(s.contains("dataset.floating='deck'"), "{s}");
+        assert!(s.ends_with("location.reload();"), "{s}");
+    }
+
+    #[test]
+    fn the_window_starts_at_the_size_of_its_content() {
+        assert_eq!(deck_window_size(Floating::Deck), (328.0, 300.0));
+        assert_eq!(deck_window_size(Floating::Dock), (DOCK_STRIP_WIDTH, 160.0));
     }
 
     // The new key decides whenever it is present, in EITHER direction. The

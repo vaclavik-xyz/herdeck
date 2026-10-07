@@ -854,7 +854,11 @@ fn an_unreadable_config_leaves_the_live_always_on_top_alone() {
 
     let empty = dir.join("empty.toml");
     std::fs::write(&empty, "").unwrap();
-    assert_eq!(deck_always_on_top_target(&empty), Some(false));
+    // No key, no legacy mode: the default follows the floating content (dock).
+    assert_eq!(deck_always_on_top_target(&empty), Some(true));
+    let mirror = dir.join("mirror.toml");
+    std::fs::write(&mirror, "[desktop]\nfloating = \"deck\"\n").unwrap();
+    assert_eq!(deck_always_on_top_target(&mirror), Some(false));
 
     let on = dir.join("on.toml");
     std::fs::write(&on, "[desktop]\ndeck_always_on_top = true\n").unwrap();
