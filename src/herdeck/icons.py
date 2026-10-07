@@ -721,17 +721,19 @@ def _panel_wrapped(draw, lines, font, max_w, max_lines) -> list[str]:
     return [_truncate(draw, line, font, max_w) for line in out[:max_lines]]
 
 
-def compose_panel(panel: PanelView, width: int = PANEL_W) -> Image.Image:
+def compose_panel(panel: PanelView, width: int = PANEL_W, icons=None) -> Image.Image:
     """Render a PanelView to a width x 196 image.
 
     The default width is the D200 small window's native 458px. The Elgato
     driver composes at 392 so the image splits into two exact 196x196 key
     images; the web simulator and desktop window display the PNG at its true
-    aspect either way. The drawing lives in themes/classic.py.
+    aspect either way. ``panel.deck_theme`` picks the look (themes/); pass
+    the surface's ``icons`` (IconProvider) so a theme can draw favicons and
+    agent marks from its caches.
     """
-    from .themes import classic
+    from .themes.dispatch import draw_panel
 
-    return classic.compose_classic_panel(panel, width)
+    return draw_panel(panel, width, icons)
 
 
 def _truncate(draw, text, font, max_w):
@@ -1124,7 +1126,39 @@ class IconProvider:
         subagents = getattr(tile, "subagents", 0)
         if subagents:
             parts.append(f"sub{subagents}")
+        theme = self._theme_of(tile)
+        if theme is not None:
+            # Only for a non-classic theme: classic names (the D200's files)
+            # stay exactly as they were before themes existed.
+            from .themes.registry import default_registry
+
+            parts.extend(
+                [
+                    "theme",
+                    theme.id,
+                    default_registry().fingerprint(tile.deck_theme),
+                    tile.theme_env,
+                    tile.kind,
+                    tile.status or "",
+                    tile.title,
+                    tile.workspace,
+                    "" if drop_icon else tile.project_icon or "",
+                    tile.project_name,
+                ]
+            )
         return parts
+
+    @staticmethod
+    def _theme_of(tile):
+        """The non-classic theme that draws ``tile`` first, or None when classic
+        does (the default, an unknown id, or a broken user theme)."""
+        theme_id = getattr(tile, "deck_theme", "classic")
+        if theme_id == "classic":
+            return None
+        from .themes.registry import default_registry
+
+        theme = default_registry().resolve(theme_id)
+        return None if theme.id == "classic" else theme
 
     def _tile_name(self, tile, *, drop_icon: bool = False) -> tuple[str, int | None]:
         """The content-addressed cache filename for a TileView (and its bounded
@@ -1132,6 +1166,11 @@ class IconProvider:
         cache reuses a fixed set of frames instead of minting a new PNG per tick."""
         animation = _effective_animation(tile)
         spinner = _anim_phase(tile.spinner, animation)
+        theme = self._theme_of(tile)
+        if theme is not None and not theme.animated:
+            # a static theme: one cache entry per tile, never a per-tick frame
+            # (each distinct frame is a full page reload on the D200)
+            spinner = None
         sig_parts = self._static_sig(tile, drop_icon=drop_icon) + [spinner]
         if spinner is not None:
             sig_parts.append(animation)
@@ -1139,13 +1178,11 @@ class IconProvider:
         return "tile_" + hashlib.sha1(sig.encode()).hexdigest()[:16] + ".png", spinner
 
     def _compose(self, tile, spinner) -> Image.Image:
-        """Agent tiles (tile.repo set) get the rich layout; control tiles render
-        their centred label on a colour."""
-        from .themes import classic
+        """Draw a tile through its deck theme: agent tiles (tile.repo set) via
+        ``Theme.agent_tile``, every other key via ``Theme.key_tile``."""
+        from .themes.dispatch import draw_tile
 
-        if tile.repo is not None:
-            return classic.compose_agent_tile(self, tile, spinner)
-        return classic.compose_label_tile(tile)
+        return draw_tile(tile, spinner, self)
 
     def _compose_checked(self, tile, spinner, name: str) -> tuple[Image.Image, str]:
         """Compose a tile and return it with the name it may be cached under.
