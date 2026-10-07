@@ -1389,6 +1389,16 @@ class DeckApp:
                     if not self._require_query_token(url):
                         return
                     self._send(200, json.dumps(app._health()).encode(), "application/json")
+                elif path == "/themes":
+                    # Deck looks for the editor's [view].deck_theme select:
+                    # built-ins + user themes in <config dir>/themes (with
+                    # their load error, if any). Rescans the folder.
+                    if not self._require_query_token(url):
+                        return
+                    from ..themes.registry import default_registry
+
+                    themes = [info.as_json() for info in default_registry().list()]
+                    self._send(200, json.dumps(themes).encode(), "application/json")
                 elif path == "/maintenance":
                     if not self._require_query_token(url):
                         return
