@@ -1051,8 +1051,8 @@ dock and off for the deck mirror. The dock reads the runtime's token-gated
 `GET /agent/list` (long-polled; it wakes only when an agent changes, not for
 animation frames) and `GET /project-icon/<hash>` (the favicon as a 96 px PNG).
 A project without a favicon shows its monogram; `GET /agent-mark/<type>` (a
-96 px PNG) serves the agent's logo for the fallback mode that shows it instead
-(the `project_icon_fallback` view setting is introduced separately).
+96 px PNG) serves the agent's logo instead when
+`[view].project_icon_fallback = "agent"`.
 
 **Maintenance** (Settings → System → Maintenance) does from the app what used
 to need a terminal: it lists the app, runtime and bridge versions (a mismatch
