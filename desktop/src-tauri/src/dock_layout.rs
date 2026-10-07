@@ -7,7 +7,15 @@
 //! macOS/Linux, global physical pixels on Windows); `css_scale` converts the
 //! frontend's CSS pixels into it.
 
-use crate::window_roles::usable_scale;
+use tauri::{LogicalSize, Manager, PhysicalSize};
+
+use crate::deck_prefs;
+use crate::runtime_plan::default_config_path;
+use crate::sync_util::LockExt;
+use crate::window_roles::{
+    placement_position, placement_space_position, placement_units, usable_scale, DECK_WINDOW,
+};
+use crate::AppState;
 
 /// Gap between the strip and an open card, in CSS px (`CARD_GAP` in
 /// desktop/src/lib/dockModel.ts).
@@ -101,6 +109,131 @@ pub(crate) fn css_scale(is_windows: bool, window_scale: f64) -> f64 {
     }
 }
 
+/// What `dock_layout` tells the frontend: which side the card opens on and
+/// where the strip sits inside the (possibly grown) window, in CSS px.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DockPlacement {
+    pub(crate) side: &'static str,
+    pub(crate) strip_x: f64,
+    pub(crate) strip_y: f64,
+}
+
+pub(crate) fn placement_reply(frame: DockFrame, side: Side, css: f64) -> DockPlacement {
+    DockPlacement {
+        side: side.as_str(),
+        strip_x: frame.strip_dx / css,
+        strip_y: frame.strip_dy / css,
+    }
+}
+
+/// A size in the space `set_size` should get it in (see `placement_position`).
+pub(crate) fn placement_size(is_windows: bool, w: f64, h: f64) -> tauri::Size {
+    if is_windows {
+        PhysicalSize { width: w.round() as u32, height: h.round() as u32 }.into()
+    } else {
+        LogicalSize { width: w, height: h }.into()
+    }
+}
+
+/// Size the floating window for the mini dock: the bare strip (`card_width`
+/// 0) or the strip plus a card beside it. The strip's on-screen position is
+/// kept (see `expanded_frame`); the card opens toward the roomier half of
+/// the monitor the window is on. Sizes are CSS px from the frontend.
+#[tauri::command]
+pub(crate) fn dock_layout(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    strip_width: f64,
+    strip_height: f64,
+    card_width: f64,
+    card_height: f64,
+) -> Result<DockPlacement, String> {
+    let window = app
+        .get_webview_window(DECK_WINDOW)
+        .ok_or_else(|| "dock_layout: floating window missing".to_string())?;
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or_else(|| "dock_layout: no monitor".to_string())?;
+    let is_windows = cfg!(windows);
+    let monitor_scale = monitor.scale_factor();
+    let window_scale = window.scale_factor().unwrap_or(monitor_scale);
+    let units = placement_units(is_windows, monitor_scale, window_scale);
+    let css = css_scale(is_windows, window_scale);
+    let origin = placement_space_position(
+        &window,
+        window.outer_position().map_err(|e| format!("dock_layout: {e}"))?,
+    );
+    let area_raw = monitor.work_area();
+    let div = usable_scale(units.screen_div);
+    let area = Rect {
+        x: area_raw.position.x as f64 / div,
+        y: area_raw.position.y as f64 / div,
+        w: area_raw.size.width as f64 / div,
+        h: area_raw.size.height as f64 / div,
+    };
+    let frame;
+    let side;
+    {
+        // Updated BEFORE the window moves, and released before any window
+        // call: set_position may deliver `Moved` synchronously, and that
+        // handler reads this offset.
+        let mut offset = state.dock_offset.lock_or_recover();
+        let (sx, sy) = strip_origin(origin, *offset);
+        let strip = Rect {
+            x: sx as f64,
+            y: sy as f64,
+            w: strip_width * css,
+            h: strip_height * css,
+        };
+        side = expand_side(strip, area);
+        let gap = if card_width > 0.0 { DOCK_CARD_GAP * css } else { 0.0 };
+        frame = expanded_frame(strip, (card_width * css, card_height * css), gap, side, area);
+        *offset = (frame.strip_dx, frame.strip_dy);
+    }
+    let _ = window.set_size(placement_size(is_windows, frame.window.w, frame.window.h));
+    let _ = window.set_position(placement_position(is_windows, frame.window.x, frame.window.y));
+    Ok(placement_reply(frame, side, css))
+}
+
+/// Put the window back on the strip's own origin and forget the offset (a
+/// switch away from the dock must not leave an expanded window behind).
+fn collapse_offset(window: &tauri::WebviewWindow, state: &AppState) {
+    let offset = std::mem::replace(&mut *state.dock_offset.lock_or_recover(), (0.0, 0.0));
+    if offset == (0.0, 0.0) {
+        return;
+    }
+    if let Ok(pos) = window.outer_position() {
+        let (x, y) = strip_origin(placement_space_position(window, pos), offset);
+        let _ = window.set_position(placement_position(cfg!(windows), x as f64, y as f64));
+    }
+}
+
+/// Re-read `[desktop].floating` and, when it changed, reload the floating
+/// window's page with the new content (the settings editor calls this after
+/// Apply, like `reload_deck_always_on_top`). The init script is fixed at
+/// window creation, so the choice rides through the reload in sessionStorage
+/// (`deck_prefs::floating_reload_script`). An unreadable config changes nothing.
+#[tauri::command]
+pub(crate) fn reload_floating(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    let Ok(text) = std::fs::read_to_string(default_config_path()) else {
+        eprintln!("floating: config unreadable, leaving the window alone");
+        return;
+    };
+    let target = deck_prefs::parse_floating(&text);
+    let previous = std::mem::replace(&mut *state.floating.lock_or_recover(), target);
+    if previous == target {
+        return;
+    }
+    if let Some(window) = app.get_webview_window(DECK_WINDOW) {
+        collapse_offset(&window, &state);
+        let _ = window.eval(&deck_prefs::floating_reload_script(target));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +311,29 @@ mod tests {
         assert_eq!(css_scale(false, 2.0), 1.0);
         assert_eq!(css_scale(true, 1.5), 1.5);
         assert_eq!(css_scale(true, 0.0), 1.0);
+    }
+
+    #[test]
+    fn the_reply_names_the_side_and_the_strip_offset_in_css_pixels() {
+        let strip = Rect { x: 1360.0, y: 120.0, w: 56.0, h: 300.0 };
+        let f = expanded_frame(strip, (300.0, 380.0), 8.0, Side::Left, AREA);
+        assert_eq!(
+            placement_reply(f, Side::Left, 1.0),
+            DockPlacement { side: "left", strip_x: 308.0, strip_y: 0.0 }
+        );
+        // Windows at 150%: placement is physical, CSS is not.
+        let g = expanded_frame(
+            Rect { x: 2040.0, y: 180.0, w: 84.0, h: 450.0 },
+            (450.0, 570.0),
+            12.0,
+            Side::Left,
+            Rect { x: 0.0, y: 0.0, w: 2160.0, h: 1300.0 },
+        );
+        assert_eq!(
+            placement_reply(g, Side::Left, 1.5),
+            DockPlacement { side: "left", strip_x: 308.0, strip_y: 0.0 }
+        );
+        let json = serde_json::to_value(placement_reply(f, Side::Right, 1.0)).unwrap();
+        assert_eq!(json, serde_json::json!({"side": "right", "stripX": 308.0, "stripY": 0.0}));
     }
 }

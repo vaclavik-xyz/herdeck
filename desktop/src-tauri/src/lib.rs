@@ -76,6 +76,13 @@ struct AppState {
     /// (rather than re-read from config) so a failed persist can revert the
     /// checkbox to what is ACTUALLY in effect, not to stale config text.
     deck_always_on_top: Arc<Mutex<bool>>,
+    /// The live `[desktop].floating`: what the floating window shows.
+    floating: Arc<Mutex<deck_prefs::Floating>>,
+    /// Where the mini dock's strip sits inside the floating window, in
+    /// placement units (`dock_layout`): (0, 0) except while a card is open
+    /// beside it. `Moved` adds it back so the remembered position is the
+    /// strip's own.
+    dock_offset: Arc<Mutex<(f64, f64)>>,
     /// Generation-scoped cursor acknowledged only after native delivery.
     notify_cursor: Arc<Mutex<NotifyCursor>>,
     /// True once macOS notification permission is GRANTED. Until then the
@@ -262,6 +269,7 @@ pub fn run() {
     let config_path = default_config_path();
     let config_text = std::fs::read_to_string(&config_path).unwrap_or_default();
     let deck_always_on_top = deck_prefs::resolve_deck_always_on_top(&config_text);
+    let floating = deck_prefs::parse_floating(&config_text);
     let startup = window_state::startup_state(
         window_state::load(&window_state::state_dir()),
         deck_prefs::parse_legacy_window_mode(&config_text).as_deref(),
@@ -275,6 +283,8 @@ pub fn run() {
         discovery,
         window_state: Arc::new(Mutex::new(startup)),
         deck_always_on_top: Arc::new(Mutex::new(deck_always_on_top)),
+        floating: Arc::new(Mutex::new(floating)),
+        dock_offset: Arc::new(Mutex::new((0.0, 0.0))),
         notify_cursor: Arc::new(Mutex::new(NotifyCursor::default())),
         notify_permission: Arc::new(AtomicBool::new(false)),
         rediscover_last: Arc::new(Mutex::new(None)),
@@ -332,6 +342,8 @@ pub fn run() {
             proxy::setup_connect,
             shortcuts::reload_hotkey,
             window_roles::reload_deck_always_on_top,
+            dock_layout::dock_layout,
+            dock_layout::reload_floating,
             window_roles::show_deck,
             window_roles::hide_deck,
             window_roles::show_app,
@@ -381,15 +393,21 @@ pub fn run() {
             // exactly, so one would only pool in the corner notches). macOS
             // derives a transparent window's shadow from the drawn content's
             // alpha, i.e. from the rounded card itself — so let it.
+            let deck_window_size = deck_prefs::deck_window_size(floating);
             let deck_window =
                 WebviewWindowBuilder::new(&app_handle, DECK_WINDOW, WebviewUrl::default())
                     .title(&display_name)
                     .shadow(true)
-                    .initialization_script(window_role_script("deck"))
+                    // Role AND content ([desktop].floating) before first paint.
+                    .initialization_script(format!(
+                        "{};{}",
+                        window_role_script("deck"),
+                        deck_prefs::floating_script(floating)
+                    ))
                     .decorations(false)
                     .transparent(true)
                     .resizable(false)
-                    .inner_size(328.0, 300.0)
+                    .inner_size(deck_window_size.0, deck_window_size.1)
                     .skip_taskbar(true)
                     .visible(false)
                     .build()?;
@@ -452,9 +470,18 @@ pub fn run() {
                     // not overwrite the place the user actually left it.
                     tauri::WindowEvent::Moved(position) => {
                         if deck.is_visible().unwrap_or(false) {
+                            // While a dock card is open the window's origin is
+                            // not the strip's: remember the strip.
+                            let offset = handle
+                                .try_state::<AppState>()
+                                .map(|s| *s.dock_offset.lock_or_recover())
+                                .unwrap_or((0.0, 0.0));
                             remember_deck_position(
                                 &handle,
-                                placement_space_position(&deck, *position),
+                                dock_layout::strip_origin(
+                                    placement_space_position(&deck, *position),
+                                    offset,
+                                ),
                             );
                         }
                     }
