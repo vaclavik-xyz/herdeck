@@ -152,7 +152,7 @@ class ElgatoDriver(DeckDriver):
         # Compose at exactly two cells wide so the halves are 1:1 key images
         # (the default width is the D200 window's native 458px).
         left, right = split_panel(
-            compose_panel(panel, width=PANEL_W_TWO_CELL, icons=self._icons)
+            compose_panel(panel, width=PANEL_W_TWO_CELL, icons=self._icon_provider())
         )
         base = self.slot_count()
         self._dev.set_key_image(base, self._native_resized(left))

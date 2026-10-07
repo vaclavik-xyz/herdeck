@@ -101,6 +101,24 @@ def test_render_panel_writes_the_two_reserved_keys(monkeypatch):
         drv.close()
 
 
+def test_panel_is_composed_with_the_resolved_icon_provider(monkeypatch):
+    import herdeck.icons as icons_mod
+
+    seen = []
+    real = icons_mod.compose_panel
+    monkeypatch.setattr(
+        icons_mod, "compose_panel", lambda panel, **kw: (seen.append(kw.get("icons")), real(panel, **kw))[1]
+    )
+    provider = FakeIcons()
+    drv = ElgatoDriver(device=FakeDeck(key_count=15), icon_provider=provider)
+    monkeypatch.setattr(drv, "_to_native", lambda image: image.tobytes())
+    try:
+        drv._write_panel(PanelView("overview", ["1 working"], "grey"))
+        assert seen == [provider]
+    finally:
+        drv.close()
+
+
 def test_key_down_forwards_index_and_key_up_is_ignored():
     deck = FakeDeck(key_count=15)
     drv = ElgatoDriver(device=deck, icon_provider=FakeIcons())
