@@ -7,7 +7,7 @@
   // actions: the agent card routes (agentCardClient.ts). While a card is open
   // the window grows beside the strip through Rust's `dock_layout`, which
   // keeps the strip where it is on screen.
-  import { untrack } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import DockItem from "./DockItem.svelte";
   import DockCard from "./DockCard.svelte";
   import { visibilityGatedLoop } from "./pollGate";
@@ -56,6 +56,7 @@
     reducedMotion = prefersReducedMotion(),
     hoverOpenMs = HOVER_OPEN_MS,
     hoverCloseMs = HOVER_CLOSE_MS,
+    children,
   }: {
     transport: DockTransport | null;
     agentTransport: AgentTransport | null;
@@ -65,6 +66,8 @@
     reducedMotion?: boolean;
     hoverOpenMs?: number;
     hoverCloseMs?: number;
+    /** Overlay content positioned against the strip (App: the status dot). */
+    children?: Snippet;
   } = $props();
 
   const m = $derived(DOCK_MESSAGES[locale.lang]);
@@ -356,6 +359,7 @@
     >
       <span class="grip-bar" data-tauri-drag-region></span>
     </div>
+    {@render children?.()}
     {#if neutral !== null}
       <button type="button" class="neutral" title={neutralTitle} aria-label={neutralTitle} onclick={onOpenSettings}>
         <span class="neutral-dot" aria-hidden="true"></span>
