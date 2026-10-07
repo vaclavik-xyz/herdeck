@@ -1136,6 +1136,14 @@ running the deck; quote a repo name that contains a dot, e.g.
 SVG icons are rendered with resvg (bundled in the packaged app and the Elgato
 plugin). An SVG that references anything outside itself (a file path or URL in
 `href`/`url(...)`) is refused and shows the monogram.
+The whole look is switchable as well: `[view].deck_theme` (editor: **Deck
+look**) picks a deck theme, `classic` (today's look) by default. A theme only
+changes how keys and the status window are drawn; your status colours, agent
+order and presses stay the same. You can write your own theme as one Python
+file in `~/.config/herdeck/themes/` (next to your `config.toml`); see
+[docs/themes.md](docs/themes.md). A theme is code and runs with your user
+privileges, so only install themes you have read.
+
 With many agents, set `[view].collapse_idle = true` to fold every idle agent
 into one `+N` tile at the end of the overview. Pressing it unfolds the idle
 agents (the deck jumps to the page with the first one) and a `hide` tile at the

@@ -23,3 +23,13 @@ def test_deck_theme_accepts_any_well_formed_id(theme):
 def test_deck_theme_rejects_a_malformed_id(theme):
     with pytest.raises(ConfigError, match="view.deck_theme"):
         _view_config({"deck_theme": theme})
+
+
+def test_example_config_documents_deck_theme():
+    import tomllib
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    view = tomllib.loads(path.read_text(encoding="utf-8"))["view"]
+    assert view["deck_theme"] == "classic"
+    assert _view_config(view).deck_theme == "classic"

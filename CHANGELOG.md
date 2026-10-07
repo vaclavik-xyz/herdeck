@@ -6,6 +6,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Deck themes: `[view].deck_theme` (editor: View → Deck look) picks how the
+  deck draws its keys and status window. `classic`, today's look, is the
+  default and renders pixel-identically (same cache files). User themes are
+  Python files in `themes/` next to `config.toml`, written against the
+  versioned API in `herdeck.themes.api` (`API_VERSION = 1`) and documented in
+  `docs/themes.md`; a broken theme is reported in the editor and draws
+  classic. New runtime route `GET /themes`.
+
 ## [0.15.0] - 2026-10-01
 
 ### Added
