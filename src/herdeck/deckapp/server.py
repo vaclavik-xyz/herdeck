@@ -1172,6 +1172,25 @@ class DeckApp:
             ),
         }
 
+    _ICON_PNG_CACHE_MAX = 64
+
+    def project_icon(self, icon_hash: str) -> tuple[int, bytes | None]:
+        """GET /project-icon/<hash> (dock_data.project_icon_png), memoised by
+        hash. Decoding runs under the raster lock: the SVG rasterizer shares
+        the render path's thread-safety rules."""
+        with self._icon_pngs_lock:
+            hit = self._icon_pngs.get(icon_hash)
+        if hit is not None:
+            return 200, hit
+        with self._raster_lock:
+            code, png = dock_data.project_icon_png(icon_hash)
+        if code == 200 and png is not None:
+            with self._icon_pngs_lock:
+                if len(self._icon_pngs) >= self._ICON_PNG_CACHE_MAX:
+                    self._icon_pngs.pop(next(iter(self._icon_pngs)))
+                self._icon_pngs[icon_hash] = png
+        return code, png
+
     def _state(self) -> dict:
         self._note_state_read()
         self._refresh_if_stale()
@@ -1380,7 +1399,7 @@ class DeckApp:
             def log_message(self, *a):  # never log requests (could carry the token)
                 pass
 
-            def _send(self, code, body=b"", ctype="text/plain; charset=utf-8"):
+            def _send(self, code, body=b"", ctype="text/plain; charset=utf-8", headers=None):
                 # keep-alive safety: a rejected POST (bad token, 404) may leave
                 # its request body unread on the persistent connection — the
                 # next request would be parsed from those leftover bytes.
@@ -1393,6 +1412,8 @@ class DeckApp:
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 if body:
                     self.wfile.write(body)
@@ -1521,6 +1542,20 @@ class DeckApp:
                         return
                     payload = app.agent_list(after, wait_ms)
                     self._send_agent(200 if payload is not None else 404, payload)
+                elif path.startswith("/project-icon/"):
+                    # A project favicon as a small PNG for the mini dock.
+                    if not self._require_query_token(url):
+                        return
+                    code, png = app.project_icon(path[len("/project-icon/") :])
+                    if png is None:
+                        self._send(code)
+                    else:
+                        self._send(
+                            code,
+                            png,
+                            "image/png",
+                            headers={"Cache-Control": dock_data.PROJECT_ICON_CACHE_CONTROL},
+                        )
                 elif path.startswith("/agent/"):
                     if not self._require_query_token(url):
                         return

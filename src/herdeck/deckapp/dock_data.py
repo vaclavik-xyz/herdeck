@@ -9,6 +9,7 @@ the client's job; every row carries ``since_s`` so it can sort and tick.
 
 from __future__ import annotations
 
+import io
 import logging
 import re
 from collections.abc import Iterable, Mapping
@@ -118,3 +119,31 @@ def list_signature(
         for a in agents
     )
     return (tuple(rows), tuple(sorted(connections.items())), language)
+
+
+def project_icon_png(icon_hash: str, store: ProjectIconStore | None = None) -> tuple[int, bytes | None]:
+    """GET /project-icon/<hash>: (HTTP status, PNG bytes). The stored favicon
+    is decoded and normalised by the deck's own decoder (SVG references to
+    outside resources refused there) and re-encoded as a PROJECT_ICON_PX PNG:
+    the WebView never sees raw SVG/ICO bytes from someone else's repo.
+    400 malformed hash, 404 unknown or undecodable (the dock draws its
+    monogram)."""
+    if not ICON_HASH_RE.fullmatch(icon_hash):
+        return 400, None
+    stored = (store if store is not None else default_store()).get(icon_hash)
+    if stored is None:
+        return 404, None
+    # Lazy: Pillow is not needed to import herdeck.deckapp (see server.py).
+    from PIL import Image
+
+    from ..icons import decode_project_icon
+
+    try:
+        img = decode_project_icon(stored)
+    except Exception as exc:
+        log.debug("project icon %s could not be decoded: %s", icon_hash, exc)
+        return 404, None
+    img = img.resize((PROJECT_ICON_PX, PROJECT_ICON_PX), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return 200, buf.getvalue()

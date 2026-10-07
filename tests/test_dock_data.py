@@ -252,3 +252,81 @@ def test_list_route_requires_the_token_and_validates_params():
         assert (code, again["version"]) == (200, body["version"])
     finally:
         app.close()
+
+
+# --- GET /project-icon/<hash> --------------------------------------------------
+
+import urllib.request  # noqa: E402
+
+from herdeck.deckapp.dock_data import PROJECT_ICON_PX, project_icon_png  # noqa: E402
+
+
+def _ico() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGBA", (32, 32), (30, 200, 30, 255)).save(buf, "ICO", sizes=[(32, 32)])
+    return buf.getvalue()
+
+
+SVG = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">'
+    b'<rect width="16" height="16" fill="#1e64c8"/></svg>'
+)
+
+
+def _raw(app, path, token=None):
+    url = f"http://{app.host}:{app.port}{path}?token={token if token is not None else app.token}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
+@pytest.mark.parametrize(
+    "mime,data",
+    [("image/png", _png()), ("image/x-icon", _ico()), ("image/svg+xml", SVG)],
+    ids=["png", "ico", "svg"],
+)
+def test_project_icon_route_serves_a_small_png_with_a_long_cache(mime, data):
+    store = default_store()
+    store.clear()
+    h = icon_hash(data)
+    store.put(h, mime, data)
+    app, src, runner = _serving_live()
+    try:
+        status, headers, body = _raw(app, f"/project-icon/{h}")
+        assert status == 200
+        assert headers["Content-Type"] == "image/png"
+        assert headers["Cache-Control"] == "max-age=86400"
+        with Image.open(io.BytesIO(body)) as im:
+            assert im.format == "PNG"
+            assert im.size == (PROJECT_ICON_PX, PROJECT_ICON_PX)
+    finally:
+        app.close()
+        store.clear()
+
+
+def test_project_icon_route_rejects_bad_tokens_malformed_and_unknown_hashes():
+    store = default_store()
+    store.clear()
+    store.put("aaaaaaaaaaaaaaaa", "image/png", b"not an image at all")
+    app, src, runner = _serving_live()
+    try:
+        assert _raw(app, "/project-icon/0123456789abcdef", token="wrong")[0] == 403
+        for bad in ("0123456789ABCDEF", "abc", "0123456789abcdef0", "0123456789abcdef/x", ""):
+            assert _raw(app, f"/project-icon/{bad}")[0] == 400, bad
+        assert _raw(app, "/project-icon/0123456789abcdef")[0] == 404  # unknown
+        assert _raw(app, "/project-icon/aaaaaaaaaaaaaaaa")[0] == 404  # undecodable
+    finally:
+        app.close()
+        store.clear()
+
+
+def test_project_icon_png_never_echoes_the_stored_bytes():
+    store = ProjectIconStore()
+    h = icon_hash(SVG)
+    store.put(h, "image/svg+xml", SVG)
+    code, png = project_icon_png(h, store)
+    assert code == 200
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    assert SVG not in png
