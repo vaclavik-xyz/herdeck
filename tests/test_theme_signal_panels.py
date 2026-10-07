@@ -43,14 +43,14 @@ def render(provider, name, width, lang="en", **changes):
     return signal.THEME.panel(panel, make_ctx(provider, lang), width)
 
 
-# The kinds drawn so far (Task 5 widens this to every kind).
-DRAWN = {"spotlight", "calm", "offline"}
+# Every panel kind signal draws.
+DRAWN = {"spotlight", "calm", "offline", "config_error", "detail", "usage", "menu", "sent"}
 
 
 @pytest.mark.parametrize("lang", LANGS)
 @pytest.mark.parametrize("width", WIDTHS)
 @pytest.mark.parametrize(
-    "name", [n for n, p in panel_variants().items() if p.kind in DRAWN and not p.sent]
+    "name", [n for n, p in panel_variants().items() if p.kind in DRAWN]
 )
 def test_every_panel_kind_renders_at_both_widths(provider, log, name, width, lang):
     img = render(provider, name, width, lang)
@@ -208,3 +208,47 @@ def test_calm_without_agents_says_so(provider, log):
 def test_offline_says_how_long_and_who_waits(provider, log):
     render(provider, "offline", 458)
     assert texts(log)[:2] == ["Offline", "2m · 2 waiting"]
+
+
+def test_sent_wins_over_calm_and_spotlight(provider):
+    a = render(provider, "spotlight_sent", 458)
+    b = render(provider, "spotlight_sent", 458, kind="sent")
+    assert a.tobytes() == b.tobytes()
+
+
+# --- config error / detail / usage / menu / sent ---------------------------------
+
+
+def test_detail_shows_answer_on_the_keys_only_when_it_fits(provider, log):
+    render(provider, "detail_blocked_short", 458)
+    assert "answer on the keys" in texts(log)
+    long = dict(hint="answer on the keys")
+    render(provider, "detail_long", 458, **long)
+    assert "answer on the keys" not in texts(log)  # the prompt needs every line
+
+
+def test_detail_at_392_moves_the_time_beside_the_chip(provider, log):
+    render(provider, "detail_blocked_short", 392)
+    drawn = texts(log)
+    assert drawn[0] == "BLOCKED"
+    assert drawn[1].startswith("4m")
+
+
+def test_usage_gauges(provider, log):
+    render(provider, "usage", 458)
+    drawn = texts(log)
+    assert {"42%", "87%", "10%", "1/2"} <= set(drawn)
+
+
+def test_menu_and_config_error_text(provider, log):
+    render(provider, "menu", 458)
+    assert texts(log) == ["New agent", "Pick a type", "on macbench"]
+    render(provider, "config_error", 458)
+    drawn = texts(log)
+    assert drawn[0] == "!"  # the glyph
+    assert drawn[1:3] == ["Config error", "No token for macbench"]
+
+
+def test_sent_names_who_got_the_answer(provider, log):
+    render(provider, "sent", 458)
+    assert texts(log) == ["Sent to herdeck", "1 left"]
