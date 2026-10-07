@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import os
 import sys
 
-import pytest
+from golden_support import UPDATE_ENV, check_goldens
 from PIL import Image, ImageDraw, ImageFont
 
 from herdeck import icons, layout
@@ -30,7 +29,6 @@ from herdeck.project_icons import ProjectIconStore
 GOLDEN_FAVICON = "golden-favicon"
 
 GOLDEN_FILE = os.path.join(os.path.dirname(__file__), "goldens", "render.json")
-UPDATE_ENV = "HERDECK_UPDATE_GOLDENS"
 
 
 # --- the vendored font -------------------------------------------------------
@@ -211,13 +209,6 @@ def _favicon_store() -> ProjectIconStore:
     return store
 
 
-def _digest(img: Image.Image) -> str:
-    rgb = img.convert("RGB")
-    h = hashlib.sha256(f"{rgb.width}x{rgb.height}\0".encode())
-    h.update(rgb.tobytes())
-    return h.hexdigest()
-
-
 def _render_all(tmp_path) -> dict[str, Image.Image]:
     # The frozen path's rasterizer: bundled marks come from the committed
     # pre-baked PNGs (no resvg float maths), unknown agents get the letter glyph.
@@ -239,50 +230,19 @@ def _render_all(tmp_path) -> dict[str, Image.Image]:
     return out
 
 
-def _load_goldens() -> dict[str, str]:
-    try:
-        with open(GOLDEN_FILE, encoding="utf-8") as fh:
-            return json.load(fh)
-    except FileNotFoundError:
-        return {}
-
-
 def test_rendered_tiles_and_panels_match_goldens(tmp_path):
-    rendered = _render_all(tmp_path)
-    actual = {name: _digest(img) for name, img in sorted(rendered.items())}
-    if os.environ.get(UPDATE_ENV):
-        os.makedirs(os.path.dirname(GOLDEN_FILE), exist_ok=True)
-        with open(GOLDEN_FILE, "w", encoding="utf-8") as fh:
-            json.dump(actual, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        pytest.skip(f"{UPDATE_ENV} set: rewrote {GOLDEN_FILE}")
-    goldens = _load_goldens()
-    mismatched = sorted(n for n in actual if goldens.get(n) != actual[n])
-    stale = sorted(set(goldens) - set(actual))
-    if not mismatched and not stale:
-        return
-    out_dir = os.environ.get("HERDECK_GOLDEN_OUT") or str(tmp_path / "golden-actual")
-    os.makedirs(out_dir, exist_ok=True)
-    lines = []
-    for name in mismatched:
-        path = os.path.join(out_dir, f"{name}.png")
-        rendered[name].convert("RGB").save(path)
-        lines.append(
-            f"  {name}: expected {goldens.get(name, '<missing>')[:16]}"
-            f" got {actual[name][:16]}  -> {path}"
-        )
-    lines += [f"  {name}: golden has no matching render (remove it)" for name in stale]
-    pytest.fail(
-        "Rendered pixels changed:\n"
-        + "\n".join(lines)
-        + "\n\nIf the change is intended (a composition change also bumps"
-        " icons.TILE_VERSION), look at the PNGs above, then regenerate with\n"
-        f"  {UPDATE_ENV}=1 python -m pytest tests/test_render_golden.py\n"
-        "and commit tests/goldens/render.json. The goldens are OS-independent"
+    check_goldens(
+        _render_all(tmp_path),
+        GOLDEN_FILE,
+        tmp_path,
+        title="Rendered pixels changed",
+        note="If the change is intended (a composition change also bumps"
+        " icons.TILE_VERSION), look at the PNGs above, then regenerate with",
+        after="and commit tests/goldens/render.json. The goldens are OS-independent"
         " (vendored Inter font, pre-baked marks): a mismatch on only one OS is a"
-        " determinism bug, not a golden to regenerate.\n"
-        "New digests:\n" + json.dumps({n: actual[n] for n in mismatched}, indent=2),
-        pytrace=False,
+        " determinism bug, not a golden to regenerate.",
+        regenerate=f"{UPDATE_ENV}=1 python -m pytest tests/test_render_golden.py",
+        show_new_digests=True,
     )
 
 
