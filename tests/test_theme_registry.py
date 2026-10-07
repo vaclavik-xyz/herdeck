@@ -189,3 +189,22 @@ def test_default_registry_is_swappable(tmp_path):
     finally:
         reg_mod.set_default_registry(None)
     assert reg_mod.default_registry() is not custom
+
+
+@pytest.mark.parametrize("bad_name", ["5", "{'en': object()}", "{1: 'x'}", "'Mine'"])
+def test_a_malformed_name_is_listed_with_an_error_and_draws_classic(tmp_path, bad_name):
+    _write(tmp_path, "mine.py", _theme_src("mine").replace(
+        "    name = {'mine': 'mine'}", "").replace(
+        "    name = {'en': 'mine', 'cs': 'mine'}", f"    name = {bad_name}"))
+    reg = ThemeRegistry(str(tmp_path))
+    infos = {i.id: i for i in reg.list()}  # must not raise
+    assert "THEME.name must be a dict" in infos["mine"].error
+    assert infos["mine"].name == {}
+    assert _ids(reg.chain("mine")) == ["classic"]
+
+
+def test_the_shadow_error_names_the_file_not_its_path(tmp_path):
+    _write(tmp_path, "classic.py", _theme_src("classic", base=None))
+    shadow = [i for i in ThemeRegistry(str(tmp_path)).list() if not i.builtin][0]
+    assert shadow.error.startswith("classic.py ignored")
+    assert str(tmp_path) not in shadow.error

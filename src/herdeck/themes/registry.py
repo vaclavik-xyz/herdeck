@@ -97,6 +97,11 @@ def _load_user_theme(theme_id: str, path: str) -> tuple[Theme | None, str | None
             return None, f"THEME.id {theme.id!r} does not match the file name {theme_id!r}"
         if theme.base is not None and not isinstance(theme.base, str):
             return None, "THEME.base must be a theme id or None"
+        name = theme.name
+        if not isinstance(name, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in name.items()
+        ):
+            return None, "THEME.name must be a dict of language -> text"
     except KeyboardInterrupt:
         raise
     except BaseException as exc:  # SyntaxError, SystemExit, anything the file raises
@@ -224,7 +229,7 @@ class ThemeRegistry:
                         theme_id,
                         {},
                         False,
-                        f"{path} ignored: {theme_id!r} is a built-in theme",
+                        f"{os.path.basename(path)} ignored: {theme_id!r} is a built-in theme",
                     )
                 )
             return out

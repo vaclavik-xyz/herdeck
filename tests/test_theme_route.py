@@ -61,3 +61,18 @@ def test_themes_lists_builtins_and_user_themes(app):
         "id": "mine", "name": {"en": "Mine", "cs": "Můj"}, "builtin": False, "error": None
     }
     assert by_id["broken"]["error"].startswith("SyntaxError")
+
+
+def test_a_malformed_name_does_not_break_the_list(app, tmp_path_factory):
+    d = tmp_path_factory.mktemp("themes")
+    (d / "bad.py").write_text(
+        "from herdeck.themes.api import Theme\n\n\n"
+        "class T(Theme):\n    id = 'bad'\n    name = 5\n\n\n"
+        "THEME = T()\n",
+        encoding="utf-8",
+    )
+    reg_mod.set_default_registry(ThemeRegistry(str(d)))
+    with _get(app, f"/themes?token={app.token}") as r:
+        assert r.status == 200
+        by_id = {t["id"]: t for t in json.loads(r.read())}
+    assert "THEME.name" in by_id["bad"]["error"]
