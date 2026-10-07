@@ -134,6 +134,25 @@ def test_spotlight_draws_the_remaining_count(provider, log, name, rest, width):
     assert int(plus[0][1:]) <= waiting
 
 
+@pytest.mark.parametrize("width", WIDTHS)
+@pytest.mark.parametrize("name", ["spotlight_queue_note", "spotlight_many_no_note"])
+def test_spotlight_chips_and_plus_n_account_for_the_whole_queue(provider, log, monkeypatch, name, width):
+    seen = []
+    layout = sp.queue_row_layout
+
+    def spy(*args):
+        out = layout(*args)
+        seen.append(out[0])
+        return out
+
+    monkeypatch.setattr(sp, "queue_row_layout", spy)
+    render(provider, name, width)
+    plus = [t for t in texts(log) if t.startswith("+") and t[1:].isdigit()]
+    waiting = len(panel_variants()[name].queue) - 1
+    assert seen and plus
+    assert seen[0] + int(plus[0][1:]) == waiting
+
+
 def test_queue_row_never_runs_into_the_note():
     for n in range(1, 6):
         for note_w in (0, 42, 120, 260):
@@ -192,6 +211,19 @@ def test_calm_counters_follow_theme_colors(provider):
     assert COLORS["pink"] in {c for _, c in img.getcolors(1 << 16)}
 
 
+@pytest.mark.parametrize("n, shown", [(7, "7"), (99, "99"), (100, "99+"), (1000, "99+"), (123456, "99+")])
+def test_ring_counts_cap_at_99_plus_inside_the_ring(provider, log, n, shown):
+    """A 3+ digit count would touch the ring and "1000" would ellipsize to a
+    misleading "1…": counts over 99 read "99+", always inside the ring."""
+    render(provider, "calm_note", 458, counts={"working": n}, note="")
+    entries = log.take()
+    assert [t for _, t, _ in entries] == [shown]
+    (box, _, _), = entries
+    cx, cy, inner = sp.counter_slots(458, False)[0], 98, sp.COUNTER_R - 8
+    for x, y in ((box[0], box[1]), (box[2], box[1]), (box[0], box[3]), (box[2], box[3])):
+        assert (x - cx) ** 2 + (y - cy) ** 2 <= inner**2, (shown, box)
+
+
 def test_calm_many_pages_falls_back_to_a_page_label(provider, log):
     render(provider, "calm_many_pages", 458)
     assert "5/9" in texts(log)
@@ -208,6 +240,22 @@ def test_calm_without_agents_says_so(provider, log):
 def test_offline_says_how_long_and_who_waits(provider, log):
     render(provider, "offline", 458)
     assert texts(log)[:2] == ["Offline", "2m · 2 waiting"]
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("width", WIDTHS)
+def test_offline_names_the_machine_else_says_reconnecting(provider, log, width, lang):
+    seam = SEAM if width < 420 else None
+    # layout's lines[0] is "<servers>[ · <blocked count>]": the count is
+    # already on the line above, so only the machine is drawn
+    render(provider, "offline", width, lang, lines=["macbench · 5 waiting for you"])
+    entries = log.take()
+    assert [t for _, t, _ in entries][-1] == "macbench"
+    assert_text_sane(entries, (width, S), seam=seam)
+    render(provider, "offline", width, lang, lines=[])
+    entries = log.take()
+    assert [t for _, t, _ in entries][-1] == "Reconnecting…"
+    assert_text_sane(entries, (width, S), seam=seam)
 
 
 def test_sent_wins_over_calm_and_spotlight(provider):
@@ -307,7 +355,63 @@ def test_usage_side_text_falls_back_to_the_reset_time(provider, log):
 def test_usage_gauges(provider, log):
     render(provider, "usage", 458)
     drawn = texts(log)
-    assert {"42%", "87%", "10%", "1/2"} <= set(drawn)
+    assert {"42%", "87%", "10%", "1/2", "press · more"} <= set(drawn)
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_usage_hint_sits_in_the_title_row_left_of_the_page_label(provider, log, width):
+    render(provider, "usage", width)
+    entries = {t: box for box, t, _ in log.take()}
+    if "press · more" in entries:  # whole or not at all
+        assert entries["press · more"][2] < entries["1/2"][0]
+        assert entries["press · more"][3] < 52  # the gauges start at y = 52
+    else:
+        assert width < 420  # only the right key of the pair may lack the room
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("width", WIDTHS)
+def test_config_error_draws_its_hint_only_on_free_rows(provider, log, width, lang):
+    hint = "the deck recovers once it's fixed"
+    seam = SEAM if width < 420 else None
+    render(provider, "config_error", width, lang, lines=[])
+    entries = log.take()
+    drawn = " ".join(t for _, t, _ in entries)
+    assert drawn.endswith(hint) or width < 420, drawn
+    assert not any(t.endswith("…") for _, t, _ in entries)
+    assert_text_sane(entries, (width, S), seam=seam)
+    render(provider, "config_error", width, lang)  # the fix instruction needs the rows
+    entries = log.take()
+    assert hint not in " ".join(t for _, t, _ in entries)
+    assert_text_sane(entries, (width, S), seam=seam)
+
+
+def test_flow_moves_on_until_a_column_has_room(provider, log):
+    """A fresh column can be shorter than one line (the last one ends above a
+    footer): the line must not be placed there anyway."""
+    from PIL import Image, ImageDraw
+
+    d = ImageDraw.Draw(Image.new("RGB", (392, S)))
+    ctx = make_ctx(provider)
+    items = [("word " * 40, 22, False, (255, 255, 255), 6)]
+    free = sp._flow(ctx, d, items, [(14, 186), (206, 378)], 58, 188, last_bottom=70)
+    entries = log.take()
+    assert free == 0
+    assert entries and all(box[2] <= 186 and box[3] <= 188 for box, _, _ in entries)
+    assert entries[-1][1].endswith("…")
+
+
+def test_detail_footer_wraps_at_its_row_size(provider):
+    from PIL import Image, ImageDraw
+
+    d = ImageDraw.Draw(Image.new("RGB", (392, S)))
+    panel = dataclasses.replace(
+        panel_variants()["detail_blocked_short"],
+        aside="lumen, orbit, atlas and ember also wait for your answer",
+    )
+    lines = sp._footer_lines(make_ctx(provider), d, panel, 172)
+    assert len(lines) == 2
+    assert {font.size for _, font, _ in lines} == {22}
 
 
 def test_menu_and_config_error_text(provider, log):

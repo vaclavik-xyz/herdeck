@@ -17,7 +17,8 @@ from __future__ import annotations
 from . import _kit as k
 
 S = k.S
-COUNTER_R = 30
+COUNTER_R = 33  # inner room (r - stroke) holds "99+" at 22 px
+COUNT_CAP = 99  # larger counts read "99+" (never an ellipsized "1…")
 
 
 def draw(panel, ctx, width):
@@ -168,7 +169,8 @@ def ring_counter(ctx, d, cx, cy, r, status, n) -> None:
     else:  # done
         d.ellipse(box, outline=col, width=8)
         d.ellipse((cx + r * 0.55, cy - r - 2, cx + r * 0.55 + 14, cy - r + 12), fill=col)
-    font, txt = k.fit(ctx, d, str(n), 2 * r - 14, 30)
+    label = f"{COUNT_CAP}+" if n > COUNT_CAP else str(n)
+    font, txt = k.fit(ctx, d, label, 2 * (r - 8) - 4, 30)
     bb = d.textbbox((0, 0), txt, font=font)
     d.text((cx - (bb[2] + bb[0]) / 2, cy - (bb[3] + bb[1]) / 2), txt, font=font, fill=k.LIGHT)
 
@@ -176,7 +178,7 @@ def ring_counter(ctx, d, cx, cy, r, status, n) -> None:
 def counter_slots(width, paged) -> list[int]:
     """Counter centres: five across the D200 window, two per key at 392 (the
     seam at x = 196 falls between them); paging gives the last slot to dots."""
-    slots = [52, 144, 248, 340] if width < k.NARROW else [52, 140, 228, 316, 404]
+    slots = [52, 144, 248, 340] if width < k.NARROW else [50, 136, 222, 308, 394]
     return slots[:-1] if paged else slots
 
 
@@ -282,14 +284,28 @@ def _offline(panel, ctx, width):
     col = ctx.color(panel.color)
     img, d = _glyph_panel(ctx, width, col)
     k.offline_glyph(d, 98, S // 2, 46, col, 12)
-    x0, xr = _right_x0(width), width - 28
+    # (the dark inner box ends at width - 15: "Reconnecting…" fits the right key)
+    x0, xr = _right_x0(width), width - 22
     tfont, title = k.fit(ctx, d, panel.title or k.t(ctx, "offline_title"), xr - x0, 46, 26)
-    d.text((x0, 44), title, font=tfont, fill=k.LIGHT)
     waiting = len(getattr(panel, "queue", []) or []) or (getattr(panel, "counts", {}) or {}).get("blocked", 0)
     parts = [p for p in (panel.meta, k.t(ctx, "signal.n_waiting", n=waiting) if waiting else "") if p]
-    if parts:
-        sfont, sub = k.fit(ctx, d, " · ".join(parts), xr - x0, 28)
-        d.text((x0 + 2, 44 + tfont.size + 16), sub, font=sfont, fill=k.MUTE)
+    sub = " · ".join(parts)
+    # which machine is down (layout's lines[0] is "<servers>[ · <blocked
+    # count>]"; the count is already in ``sub``), else "Reconnecting…"
+    where = (panel.lines[0].split(" · ")[0].strip() if panel.lines else "") or (panel.headline or "")
+    rows = [(title, tfont, k.LIGHT)]
+    if sub:
+        sfont, sub = k.fit(ctx, d, sub, xr - x0, 28)
+        rows.append((sub, sfont, k.MUTE))
+    if where:
+        wfont, where = k.fit(ctx, d, where, xr - x0, k.MIN_TEXT, bold=False)
+        rows.append((where, wfont, k.MUTE))
+    gap = 12
+    height = sum(f.size for _, f, _ in rows) + gap * (len(rows) - 1)
+    y = (S - height) / 2 - 4  # optical centre (the ink sits low in its box)
+    for text, font, fill in rows:
+        d.text((x0, y), text, font=font, fill=fill)
+        y += font.size + gap
     return img
 
 
@@ -330,13 +346,17 @@ def _flow(ctx, d, items, columns, top, bottom, *, last_bottom=None) -> int:
         font, lines = k.block(ctx, d, text, x1 - x0, largest=largest, max_lines=max_lines, bold=bold)
         lh = font.size + 6
         for line in lines:
-            if y + lh > floor(col):
+            # a fresh column can still be too short (the last one ends at
+            # ``last_bottom``): keep moving until the line fits or none is left
+            while y + lh > floor(col) and not cut:
                 col += 1
                 if col >= len(columns):
                     col, cut = len(columns) - 1, True
                     break
                 x0, x1 = columns[col]
                 y = top
+            if cut:
+                break
             line = k.ellipsize(ctx, d, line, font.size, x1 - x0, bold=bold)
             placed.append([x0, y, line, font, fill, x1 - x0])
             y += lh
@@ -368,13 +388,29 @@ def _config_error(panel, ctx, width):
         font = ctx.font(44)
         d.text((98 - d.textlength("!", font=font) / 2, 32), "!", font=font, fill=col)
         _flow(ctx, d, [(panel.title, 30, True, k.LIGHT, 2)], [(24, k.SEAM - 10)], 104, S - 16)
-        _flow(ctx, d, rest, [(k.SEAM + 10, width - 20)], 20, S - 16)
+        free = _flow(ctx, d, rest, [(k.SEAM + 10, width - 20)], 20, S - 16)
+        _bottom_hint(ctx, d, panel.hint, k.SEAM + 10, width - 20, S - 16, free)
         return img
     d.ellipse((52, 52, 144, 144), outline=col, width=12)
     font = ctx.font(60)
     d.text((98 - d.textlength("!", font=font) / 2, 62), "!", font=font, fill=col)
-    _flow(ctx, d, [title, *rest], [(162, width - 24)], 22, S - 18)
+    free = _flow(ctx, d, [title, *rest], [(162, width - 24)], 22, S - 18)
+    _bottom_hint(ctx, d, panel.hint, 162, width - 24, S - 18, free)
     return img
+
+
+def _bottom_hint(ctx, d, hint, x0, x1, bottom, free) -> None:
+    """``hint`` ("the deck recovers once it's fixed") on the free rows at the
+    bottom of a column, only when it fits whole (it is the least important
+    text)."""
+    if not hint or free < 1:
+        return
+    font = ctx.font(k.MIN_TEXT, bold=False)
+    lines = ctx.wrap(d, hint, font, x1 - x0, free)
+    if not lines or lines[-1].endswith("…") or " ".join(lines).split() != hint.split():
+        return
+    row = k.MIN_TEXT + 6
+    k.draw_lines(d, lines, font, x0, bottom - row * len(lines), k.MUTE, lh=row)
 
 
 def _sent(panel, ctx, width):
@@ -396,7 +432,10 @@ def _footer_lines(ctx, d, panel, max_w):
     out = []
     for text, tone in ((panel.aside, "amber"), (panel.sent, "green")):
         if text:
-            font, lines = k.block(ctx, d, text, max_w, largest=k.MIN_TEXT, bold=False)
+            # wrapped at the row size (never block()'s 24 px wrap: the footer
+            # rows are MIN_TEXT + 6 apart)
+            font = ctx.font(k.MIN_TEXT, bold=False)
+            lines = ctx.wrap(d, text, font, max_w, 2)
             fill = ctx.readable(ctx.color(tone), k.DARK)
             out += [(line, font, fill) for line in lines]
     return out
@@ -468,10 +507,21 @@ def _usage(panel, ctx, width):
     cols = _columns(width)
     tfont, title = k.fit(ctx, d, panel.title or k.t(ctx, "usage_title"), cols[0][1] - cols[0][0], 26)
     d.text((cols[0][0], 12), title, font=tfont, fill=k.LIGHT)
+    font = ctx.font(k.MIN_TEXT)
+    hint_x1 = width - 14
     if panel.page and panel.page[1] > 1:
-        font = ctx.font(k.MIN_TEXT)
         label = f"{panel.page[0] % panel.page[1] + 1}/{panel.page[1]}"
-        d.text((width - 14 - d.textlength(label, font=font), 14), label, font=font, fill=k.MUTE)
+        label_x = width - 14 - d.textlength(label, font=font)
+        d.text((label_x, 14), label, font=font, fill=k.MUTE)
+        hint_x1 = label_x - 16
+    if panel.hint:
+        # "press · more" in the title row, left of the page label, whole or not
+        # at all (the gauges fill every other row)
+        hfont = ctx.font(k.MIN_TEXT, bold=False)
+        hint_x0 = (k.SEAM + 10) if width < k.NARROW else cols[0][0] + d.textlength(title, font=tfont) + 24
+        hw = d.textlength(panel.hint, font=hfont)
+        if hint_x1 - hw >= hint_x0:
+            d.text((hint_x1 - hw, 14), panel.hint, font=hfont, fill=k.MUTE)
     gauges = panel.gauges[:3]
     if not gauges:
         return img
