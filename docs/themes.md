@@ -175,6 +175,10 @@ Rules:
 | `ctx.project_mark(item, size)` | RGBA favicon of a `TileView` / `PanelAgent`; without one, a coloured monogram, or the agent's mark when `[view].project_icon_fallback = "agent"` |
 | `ctx.agent_mark(agent_type, size, dark=False)` | RGBA agent logo; `dark` for bright backgrounds. It is a shared cached image: never draw on it in place, `.copy()` it first |
 
+In the packaged desktop app and the Stream Deck plugin a theme can only import
+modules bundled into the frozen app (stdlib modules such as `colorsys` may be
+missing), so keep to Pillow and `herdeck.themes.api`.
+
 ## Trying a theme without a deck
 
 The web simulator (`herdeck-web`) and the desktop window draw with the same
@@ -219,6 +223,9 @@ reads without colour vision and on the D200's 72 px keys:
 - blocked: the whole key in the status colour, the mark on a white plate,
   the elapsed time in a pill
 - offline: a full frame, the mark greyed and slashed
+- unknown: a thin grey frame, dimmed like idle
+
+A tile with no project data (no favicon, no repo) shows the agent's own mark.
 
 Time shows only on blocked and waiting; there is no branch and no backend
 tag; running subagents are a small `+N` pill. Drill choices are a big digit
@@ -247,7 +254,7 @@ Only agent tiles are drawn; other keys and the status window are `classic`.
 
 Only a blocked agent is loud: the whole key in the status colour with a big
 wait time. A done agent is an outlined key that says DONE, an offline one a
-dark red key; everything else is dark with a thin colour edge, with the task
+dark red key; everything else is dark with a colour bar on the left, with the task
 title as text like `signal`. Only agent tiles are drawn; other keys and the
 status window are `signal`.
 

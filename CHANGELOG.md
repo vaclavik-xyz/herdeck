@@ -20,7 +20,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   favicon and the task title on a dark key; status shown by colour AND frame
   shape: open frame working, thin idle, dot done, dashed waiting, amber key
   blocked, slashed offline; a status window of favicon queue chips and ring
-  counters, laid out so nothing sits on the Elgato key seam), `headline` (big
+  counters, laid out so no text or number sits on the Elgato key seam), `headline` (big
   project name and time on the status colour) and `quiet` (only an agent that
   needs you is loud). Every text is at least 22 px so it reads on the D200's
   72 px keys.
