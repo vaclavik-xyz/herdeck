@@ -198,6 +198,18 @@ pub(crate) const IMAGE_SCHEME: &str = "herdeck";
 /// Prefix of the runtime's project favicon route (`dock_data.project_icon_png`).
 pub(crate) const PROJECT_ICON_PREFIX: &str = "/project-icon/";
 
+/// Prefix of the runtime's agent-logo route (`dock_data.agent_mark_png`), the
+/// dock's fallback for a project without a favicon.
+pub(crate) const AGENT_MARK_PREFIX: &str = "/agent-mark/";
+
+/// An agent type slug: 1-32 of `[a-z0-9_-]` (the runtime's `AGENT_TYPE_RE`).
+pub(crate) fn is_agent_type(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 32
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
 /// A project icon content hash: exactly 16 lowercase hex digits (the runtime's
 /// `ICON_HASH_RE`). Anything else never reaches the runtime.
 pub(crate) fn is_icon_hash(s: &str) -> bool {
@@ -205,14 +217,17 @@ pub(crate) fn is_icon_hash(s: &str) -> bool {
 }
 
 /// Map a request path on the image scheme to the runtime endpoint it proxies —
-/// only `/panel`, `/tile/<index>` (decimal) and `/project-icon/<hash>` are
-/// served, nothing else.
+/// only `/panel`, `/tile/<index>` (decimal), `/project-icon/<hash>` and
+/// `/agent-mark/<type>` are served, nothing else.
 pub(crate) fn image_proxy_path(uri_path: &str) -> Option<String> {
     if uri_path == "/panel" {
         return Some("/panel".to_string());
     }
     if let Some(hash) = uri_path.strip_prefix(PROJECT_ICON_PREFIX) {
         return is_icon_hash(hash).then(|| format!("{PROJECT_ICON_PREFIX}{hash}"));
+    }
+    if let Some(kind) = uri_path.strip_prefix(AGENT_MARK_PREFIX) {
+        return is_agent_type(kind).then(|| format!("{AGENT_MARK_PREFIX}{kind}"));
     }
     let index = uri_path.strip_prefix("/tile/")?;
     if index.is_empty() || index.len() > 4 || !index.bytes().all(|b| b.is_ascii_digit()) {
@@ -226,7 +241,7 @@ pub(crate) fn image_proxy_path(uri_path: &str) -> Option<String> {
 /// revalidate. A project icon is content-addressed — its hash never names
 /// other bytes — so the WebView may keep it for a day.
 pub(crate) fn image_cache_control(proxied: &str) -> &'static str {
-    if proxied.starts_with(PROJECT_ICON_PREFIX) {
+    if proxied.starts_with(PROJECT_ICON_PREFIX) || proxied.starts_with(AGENT_MARK_PREFIX) {
         "max-age=86400"
     } else {
         "no-cache"

@@ -53,6 +53,30 @@ const FLEET = dockList(
 
 afterEach(() => setLang("en"));
 
+describe("MiniDock icon fallback", () => {
+  const bare = [dockAgent({ paneId: "a", status: "working", icon: null, agentType: "codex" })];
+  it("shows the agent mark for an agent without a favicon when the fallback is agent", async () => {
+    const { target, cleanup } = render(dockList(bare, { iconFallback: "agent" }));
+    try {
+      await vi.waitFor(() => expect(items(target)).toHaveLength(1));
+      expect(target.querySelector("button.item img")?.getAttribute("src")).toBe(
+        "herdeck://localhost/agent-mark/codex",
+      );
+    } finally {
+      cleanup();
+    }
+  });
+  it("keeps the monogram when the fallback is monogram", async () => {
+    const { target, cleanup } = render(dockList(bare));
+    try {
+      await vi.waitFor(() => expect(items(target)).toHaveLength(1));
+      expect(target.querySelector("button.item img")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 describe("MiniDock strip", () => {
   it("shows non-idle agents in order and folds idle ones into +N", async () => {
     const { target, cleanup } = render(FLEET);

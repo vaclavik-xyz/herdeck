@@ -8,7 +8,7 @@ import type {
   AgentTransport,
   DetailResult,
 } from "./agentCardClient";
-import type { DockAgent, DockList, DockTransport } from "./dockClient";
+import { markUrl, type DockAgent, type DockList, type DockTransport } from "./dockClient";
 
 export function dockAgent(over: Partial<DockAgent> = {}): DockAgent {
   return {
@@ -32,7 +32,7 @@ export function dockAgent(over: Partial<DockAgent> = {}): DockAgent {
 }
 
 export function dockList(agents: DockAgent[], over: Partial<DockList> = {}): DockList {
-  return { version: 1, language: "en", connected: true, agents, ...over };
+  return { version: 1, language: "en", connected: true, agents, iconFallback: "monogram", ...over };
 }
 
 export const DOCK_PROMPT =
@@ -128,5 +128,6 @@ export function fakeDockTransport(first: DockList | null): DockTransport & {
       });
     },
     iconUrl: (hash) => `herdeck://localhost/project-icon/${hash}`,
+    markUrl: (agent, fallback) => markUrl("herdeck://localhost", agent, fallback),
   };
 }

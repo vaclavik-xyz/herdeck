@@ -112,7 +112,7 @@
   }
 
   function iconFor(a: DockAgent): string | null {
-    return a.icon && transport ? transport.iconUrl(a.icon) : null;
+    return transport ? transport.markUrl(a, list?.iconFallback ?? "monogram") : null;
   }
 
   // --- data: /agent/list, long-polled while the window is visible ---------

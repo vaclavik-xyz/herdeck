@@ -969,3 +969,18 @@ fn bridge_telegram_test_timeout_outlasts_the_runtime_wait() {
     assert_eq!(bridge_telegram_timeout(""), BRIDGE_SETTINGS_TIMEOUT);
     assert_eq!(bridge_telegram_timeout("token"), BRIDGE_SETTINGS_TIMEOUT);
 }
+
+#[test]
+fn the_image_scheme_proxies_agent_marks_by_safe_type_only() {
+    assert_eq!(image_proxy_path("/agent-mark/claude").as_deref(), Some("/agent-mark/claude"));
+    assert_eq!(
+        image_proxy_path("/agent-mark/open-code_2").as_deref(),
+        Some("/agent-mark/open-code_2")
+    );
+    assert_eq!(image_proxy_path("/agent-mark/").as_deref(), None);
+    assert_eq!(image_proxy_path("/agent-mark/../x").as_deref(), None);
+    assert_eq!(image_proxy_path("/agent-mark/Claude").as_deref(), None);
+    assert_eq!(image_proxy_path("/agent-mark/claude/x").as_deref(), None);
+    assert_eq!(image_proxy_path(&format!("/agent-mark/{}", "a".repeat(33))).as_deref(), None);
+    assert_eq!(image_cache_control("/agent-mark/claude"), "max-age=86400");
+}

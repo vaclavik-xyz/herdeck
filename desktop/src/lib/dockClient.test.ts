@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  agentMarkUrl,
   DOCK_POLL_MS,
   DOCK_RETRY_MS,
   dockNextDelay,
   dockTransport,
+  markUrl,
   parseDockAgent,
   parseDockList,
   projectIconUrl,
 } from "./dockClient";
+import { dockAgent } from "./dockFixtures";
 
 const ROW = {
   server_id: "studio",
@@ -156,5 +159,31 @@ describe("dockTransport", () => {
     const t = dockTransport(vi.fn(), "herdeck://localhost");
     expect(t.iconUrl("0123456789abcdef")).toBe("herdeck://localhost/project-icon/0123456789abcdef");
     expect(t.iconUrl("bad")).toBeNull();
+  });
+});
+
+describe("icon fallback", () => {
+  const env = { version: 1, language: "en", connected: true, agents: [] };
+  it("parses icon_fallback, defaulting to monogram", () => {
+    expect(parseDockList(env)?.iconFallback).toBe("monogram");
+    expect(parseDockList({ ...env, icon_fallback: "agent" })?.iconFallback).toBe("agent");
+    expect(parseDockList({ ...env, icon_fallback: "x" })?.iconFallback).toBe("monogram");
+  });
+  it("builds agent-mark URLs only for safe types", () => {
+    expect(agentMarkUrl("herdeck://x", "claude")).toBe("herdeck://x/agent-mark/claude");
+    expect(agentMarkUrl("herdeck://x", "../a")).toBeNull();
+    expect(agentMarkUrl("herdeck://x", "")).toBeNull();
+  });
+  it("prefers the favicon, then the agent mark, then the monogram", () => {
+    const withIcon = dockAgent({ icon: "0123456789abcdef", agentType: "codex" });
+    const noIcon = dockAgent({ icon: null, agentType: "codex" });
+    expect(markUrl("b", withIcon, "agent")).toBe("b/project-icon/0123456789abcdef");
+    expect(markUrl("b", noIcon, "agent")).toBe("b/agent-mark/codex");
+    expect(markUrl("b", noIcon, "monogram")).toBeNull();
+  });
+  it("exposes the choice on the transport", () => {
+    const t = dockTransport(vi.fn(), "herdeck://localhost");
+    expect(t.markUrl(dockAgent({ icon: null }), "agent")).toBe("herdeck://localhost/agent-mark/claude");
+    expect(t.markUrl(dockAgent({ icon: null }), "monogram")).toBeNull();
   });
 });

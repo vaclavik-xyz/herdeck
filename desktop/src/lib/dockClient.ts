@@ -39,6 +39,8 @@ export interface DockList {
   language: Lang;
   connected: boolean;
   agents: DockAgent[];
+  /** What a project without a favicon shows: its monogram or the agent's logo. */
+  iconFallback: "monogram" | "agent";
 }
 
 export const ICON_HASH_RE = /^[0-9a-f]{16}$/;
@@ -97,6 +99,7 @@ export function parseDockList(raw: unknown): DockList | null {
     version: v.version,
     language: langOf(v.language),
     connected: v.connected === true,
+    iconFallback: v.icon_fallback === "agent" ? "agent" : "monogram",
     agents: v.agents.map(parseDockAgent).filter((a): a is DockAgent => a !== null),
   };
 }
@@ -104,6 +107,25 @@ export function parseDockList(raw: unknown): DockList | null {
 /** `herdeck://localhost/project-icon/<hash>` (Windows: `http://herdeck.localhost/…`). */
 export function projectIconUrl(base: string, hash: string): string | null {
   return ICON_HASH_RE.test(hash) ? `${base}/project-icon/${hash}` : null;
+}
+
+const AGENT_TYPE_RE = /^[a-z0-9_-]{1,32}$/;
+
+/** `herdeck://localhost/agent-mark/<type>`: the agent's own logo (runtime
+ *  `dock_data.agent_mark_png`), the fallback for a project without a favicon. */
+export function agentMarkUrl(base: string, agentType: string): string | null {
+  return AGENT_TYPE_RE.test(agentType) ? `${base}/agent-mark/${agentType}` : null;
+}
+
+/** The favicon when the agent has one, else its agent mark when the fallback
+ *  is "agent", else null (the monogram). */
+export function markUrl(
+  base: string,
+  agent: DockAgent,
+  fallback: "monogram" | "agent",
+): string | null {
+  if (agent.icon) return projectIconUrl(base, agent.icon);
+  return fallback === "agent" ? agentMarkUrl(base, agent.agentType) : null;
 }
 
 /** Delay before the next /agent/list poll (same rules as deckClient's
@@ -124,6 +146,8 @@ export interface DockTransport {
   /** `after` null = a plain poll; else long-poll until the version moves. */
   list(after: number | null, waitMs: number): Promise<DockList | null>;
   iconUrl(hash: string): string | null;
+  /** The image for an agent's dock item, per the list's icon fallback. */
+  markUrl(agent: DockAgent, fallback: "monogram" | "agent"): string | null;
 }
 
 export function dockTransport(invoke: InvokeFn, schemeBase?: string): DockTransport {
@@ -143,5 +167,6 @@ export function dockTransport(invoke: InvokeFn, schemeBase?: string): DockTransp
       }
     },
     iconUrl: (hash) => projectIconUrl(base, hash),
+    markUrl: (agent, fallback) => markUrl(base, agent, fallback),
   };
 }
