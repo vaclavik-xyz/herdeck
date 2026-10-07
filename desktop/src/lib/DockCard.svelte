@@ -50,7 +50,18 @@
   const meta = $derived(agent ? [agent.repo, agent.branch].filter(Boolean).join(" · ") : "");
   const rowKey = (a: DockAgent) => `${a.serverId}/${a.paneId}`;
 
-  async function load(refresh: boolean): Promise<void> {
+  // After an answer was sent while the agent stays blocked, a follow-up prompt
+  // may replace the answered one without a status change: keep re-reading the
+  // detail (never resending) until a new revision shows or the agent unblocks.
+  function repollAfterSent(): void {
+    clearTimeout(repoll);
+    repoll = setTimeout(() => {
+      if (!alive || !sent || untrack(() => agent?.status) !== "blocked") return;
+      void load(true);
+    }, PROMPT_REPOLL_MS);
+  }
+
+  async function load(refresh: boolean, keepNote = false): Promise<void> {
     const t = transport;
     const a = untrack(() => agent);
     if (!t || !a) return;
@@ -62,9 +73,14 @@
       // loaded prompt must be armed again after the user has seen it.
       armed = null;
       if (res.detail.revision !== detail?.revision) sent = false;
+      // A note about an answered/old prompt must not linger over a new one;
+      // a pending note stays while the same prompt is still shown.
+      if (!keepNote && !sent) note = "";
       detail = res.detail;
       if (res.detail.status === "blocked" && res.detail.prompt === null && res.detail.promptPending) {
         repoll = setTimeout(() => void load(false), PROMPT_REPOLL_MS);
+      } else if (sent && res.detail.status === "blocked") {
+        repollAfterSent();
       }
     } else if (res.kind === "gone") {
       note = m.detail_gone;
@@ -115,10 +131,11 @@
       sent = true;
       note = out.code === "pending" ? outcomeText(locale.lang, out) : "";
       onSent();
+      repollAfterSent();
       return;
     }
     note = outcomeText(locale.lang, out);
-    if (out.code === "stale") await load(true);
+    if (out.code === "stale") await load(true, true);
   }
 
   async function focusAgent(target: DockAgent): Promise<void> {

@@ -107,6 +107,49 @@ describe("DockCard (agent)", () => {
     }
   });
 
+  it("after Sent, a follow-up prompt on the still-blocked agent shows its options, never resending", async () => {
+    const transport = fakeAgentTransport({
+      details: [
+        { kind: "ok", detail: agentDetail() },
+        { kind: "ok", detail: agentDetail({ prompt: "Run rm?\n❯ 1. Yes\n  2. No", revision: "rev-2" }) },
+      ],
+    });
+    const { target, cleanup } = render({ agent: dockAgent(), transport });
+    try {
+      await vi.waitFor(() => expect(buttons(target)).toHaveLength(3));
+      buttons(target)[0].click();
+      await vi.waitFor(() => expect(target.textContent).toContain("Sent ✓"));
+      await vi.waitFor(() => expect(target.querySelector(".prompt")?.textContent).toContain("Run rm?"));
+      expect(buttons(target)).toHaveLength(3);
+      expect(target.textContent).not.toContain("Sent ✓");
+      expect(transport.actCalls).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("clears an old error note once a fresh prompt is read", async () => {
+    const transport = fakeAgentTransport({
+      details: [
+        { kind: "ok", detail: agentDetail() },
+        { kind: "ok", detail: agentDetail({ revision: "rev-2" }) },
+      ],
+      outcomes: [{ ok: false, code: "error", message: "boom" }, { ok: true, code: "sent", message: "" }],
+    });
+    const { target, cleanup } = render({ agent: dockAgent(), transport });
+    try {
+      await vi.waitFor(() => expect(buttons(target)).toHaveLength(3));
+      buttons(target)[0].click();
+      await vi.waitFor(() => expect(target.querySelector(".note")).not.toBeNull());
+      buttons(target)[0].click();
+      await vi.waitFor(() => expect(target.textContent).toContain("Sent ✓"));
+      await vi.waitFor(() => expect(buttons(target)).toHaveLength(3));
+      expect(target.querySelector(".note")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
   it("shows Reading the prompt… and re-polls while the runtime reads it", async () => {
     const transport = fakeAgentTransport({
       details: [
