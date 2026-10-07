@@ -38,3 +38,17 @@ export function swatchColor(value: string): string {
   // hasOwn, not `?? `: PALETTE["constructor"] would otherwise return a function.
   return Object.hasOwn(PALETTE, value) ? PALETTE[value] : "transparent";
 }
+
+/** Monogram fills for a project without a favicon — mirrors
+ *  src/herdeck/icons.py MONOGRAM_PALETTE so the dock and the deck agree on
+ *  the palette (the dock picks by FNV-1a, the deck by sha1). */
+export const MONOGRAM_PALETTE: readonly string[] = [
+  "rgb(66,133,244)",
+  "rgb(219,68,55)",
+  "rgb(244,160,0)",
+  "rgb(15,157,88)",
+  "rgb(171,71,188)",
+  "rgb(0,172,193)",
+  "rgb(255,112,67)",
+  "rgb(92,107,192)",
+];
