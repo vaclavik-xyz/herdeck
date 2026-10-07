@@ -80,6 +80,17 @@ def test_the_documented_example_theme_loads(tmp_path):
         ("raises.py", "raise RuntimeError('boom')\n", "RuntimeError: boom"),
         ("empty.py", "X = 1\n", "THEME"),
         ("future.py", _theme_src("future", api_version=2), "api_version is 2"),
+        ("exits.py", "import sys\nsys.exit(3)\n", "SystemExit"),
+        (
+            "prop.py",
+            _theme_src("prop").replace(
+                "    base = 'classic'\n",
+                "    base = 'classic'\n    @property\n    def api_version(self):\n"
+                "        raise RuntimeError('prop boom')\n",
+            ).replace("    api_version = 1\n", ""),
+            "prop boom",
+        ),
+        ("listbase.py", _theme_src("listbase", base=["a"]), "base must be"),
         ("named.py", _theme_src("other"), "does not match the file name"),
     ],
 )

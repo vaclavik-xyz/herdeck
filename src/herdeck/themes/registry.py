@@ -85,18 +85,22 @@ def _load_user_theme(theme_id: str, path: str) -> tuple[Theme | None, str | None
         except BaseException:
             sys.modules.pop(module_name, None)
             raise
-    except Exception as exc:  # SyntaxError, ImportError, anything the file raises
+        theme = getattr(module, "THEME", None)
+        if not isinstance(theme, Theme):
+            return None, "the file does not define THEME = <a herdeck.themes.api.Theme instance>"
+        if theme.api_version != API_VERSION:
+            return None, (
+                f"THEME.api_version is {theme.api_version!r}; "
+                f"this herdeck supports {API_VERSION}"
+            )
+        if theme.id != theme_id:
+            return None, f"THEME.id {theme.id!r} does not match the file name {theme_id!r}"
+        if theme.base is not None and not isinstance(theme.base, str):
+            return None, "THEME.base must be a theme id or None"
+    except KeyboardInterrupt:
+        raise
+    except BaseException as exc:  # SyntaxError, SystemExit, anything the file raises
         return None, f"{type(exc).__name__}: {exc}"
-    theme = getattr(module, "THEME", None)
-    if not isinstance(theme, Theme):
-        return None, "the file does not define THEME = <a herdeck.themes.api.Theme instance>"
-    if getattr(theme, "api_version", None) != API_VERSION:
-        return None, (
-            f"THEME.api_version is {getattr(theme, 'api_version', None)!r}; "
-            f"this herdeck supports {API_VERSION}"
-        )
-    if theme.id != theme_id:
-        return None, f"THEME.id {theme.id!r} does not match the file name {theme_id!r}"
     return theme, None
 
 
