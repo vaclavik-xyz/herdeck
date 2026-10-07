@@ -4,7 +4,9 @@ Only a blocked agent is loud: the whole key in the status colour with a huge
 wait time. A done agent is an outlined "unseen" key; offline is a dark red key;
 everything else (working, idle, waiting) is dark and quiet with a colour edge
 on the left — the deck's hierarchy is the design. The text is the task title
-(fallback workspace -> repo), like ``signal``.
+(fallback workspace -> repo), like ``signal``. The status word (DONE,
+OFFLINE, the holder label) and the running subagents' "+N" stack beside the
+mark; a word too wide for that gets its own row under the mark.
 
 Every other key and the status window come from ``signal`` (``base``).
 """
@@ -17,6 +19,11 @@ from .api import Theme
 S = k.S
 OFFLINE_BG = (70, 22, 22)
 OFFLINE_INK = (255, 140, 140)
+MARK = 44
+MARK_X, MARK_Y = 30, 28
+# the room beside the mark: "OFFLINE" / "HOTOVO" fit at >= 22 px, inside the
+# done outline (its inner edge is at S - 13) with a little air
+BESIDE_X0, BESIDE_X1 = MARK_X + MARK + 6, S - 16
 
 
 class QuietTheme(Theme):
@@ -36,25 +43,31 @@ class QuietTheme(Theme):
             d.rounded_rectangle((4, 4, S - 5, S - 5), 14, outline=accent, width=9)
         elif status != "offline":
             d.rectangle((0, 0, 12, S), fill=accent)
-        mark = k.identity_mark(ctx, tile, 52)
+        mark = k.identity_mark(ctx, tile, MARK)
         if status == "offline":
             mark = k.greyed(mark)
-        img.paste(mark, (30, 26), mark)
+        img.paste(mark, (MARK_X, MARK_Y), mark)
         word = {
             "done": k.t(ctx, "status.done"),
             "offline": k.t(ctx, "status.offline"),
             "waiting": (tile.status_text or "").strip() or k.t(ctx, "status.waiting"),
         }.get(status)
-        if tile.subagents and status in ("working", "idle", "unknown"):
-            word = f"+{tile.subagents}"
+        fill = OFFLINE_INK if status == "offline" else ctx.readable(accent, (20, 22, 26))
+        # beside the mark: two rows (the status word, then "+N"); a word too
+        # wide for them even at MIN_TEXT ("V POZADÍ") gets its own row under it
+        rows = [MARK_Y - 2, MARK_Y + 28]
         if word:
-            fill = OFFLINE_INK if status == "offline" else ctx.readable(accent, (20, 22, 26))
-            font, top_right = k.fit(ctx, d, word, S - 18 - 92, 26)
-            if top_right == word:
-                d.text((S - 18 - d.textlength(word, font=font), 40), word, font=font, fill=fill)
-            else:  # too wide beside the mark ("V POZADÍ"): its own row under it
+            font, beside = k.fit(ctx, d, word, BESIDE_X1 - BESIDE_X0, 26)
+            if beside == word:
+                d.text((BESIDE_X0, rows.pop(0)), word, font=font, fill=fill)
+            else:
                 font, word = k.fit(ctx, d, word, S - 44, 24)
-                d.text((30, 84), word, font=font, fill=fill)
+                d.text((MARK_X, 84), word, font=font, fill=fill)
+        if tile.subagents:
+            subs = f"+{tile.subagents}"
+            font, shown = k.fit(ctx, d, subs, BESIDE_X1 - BESIDE_X0, 26)
+            if shown == subs:  # never a cut count
+                d.text((BESIDE_X0, rows[0]), subs, font=font, fill=fill)
         light = (236, 238, 242) if status in ("done", "waiting", "offline") else (190, 196, 206)
         font, lines = k.block(ctx, d, k.text_line(tile), S - 48, largest=34)
         lh = font.size + 6

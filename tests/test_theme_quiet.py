@@ -81,10 +81,37 @@ def test_quiet_done_is_outlined_and_says_so(provider, log):
 
 def test_quiet_long_status_word_moves_under_the_mark_whole(provider, log):
     quiet.THEME.agent_tile(agent("waiting", status_text=""), make_ctx(provider, "cs"), None)
-    assert "V POZADÍ" in texts(log)
+    (box, _, _), = [e for e in log.take() if e[1] == "V POZADÍ"]
+    assert quiet.MARK_X <= box[0] < quiet.MARK_X + 4 and box[1] >= 84  # own row, under the mark
 
 
 def test_quiet_blocked_shows_the_wait_big(provider, log):
     quiet.THEME.agent_tile(agent("blocked"), make_ctx(provider), None)
     entries = log.take()
     assert entries[0][1] == "12m" and entries[0][2] >= 48
+
+
+@pytest.mark.parametrize("status", ["waiting", "done", "offline", "working", "idle"])
+def test_quiet_shows_subagents_on_every_quiet_status(provider, log, status):
+    quiet.THEME.agent_tile(agent(status, subagents=3), make_ctx(provider, "cs"), None)
+    assert "+3" in texts(log), status
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("status", ["done", "offline"])
+def test_quiet_status_word_sits_beside_the_mark(provider, log, lang, status):
+    """Like the prototype: DONE / HOTOVO / OFFLINE beside the mark (>= 22 px)."""
+    ctx = make_ctx(provider, lang)
+    quiet.THEME.agent_tile(agent(status, subagents=3), ctx, None)
+    entries = log.take()
+    word = ctx.tr(f"status.{status}")
+    (box, _, px), = [e for e in entries if e[1] == word]
+    assert box[0] >= quiet.BESIDE_X0 and box[1] < quiet.MARK_Y + quiet.MARK
+    assert px >= 22
+
+
+@pytest.mark.parametrize("lang", LANGS)
+def test_quiet_done_texts_stay_inside_the_ring(provider, log, lang):
+    for tile in (agent("done"), agent("done", subagents=12), agent("done", title="x" * 80)):
+        quiet.THEME.agent_tile(tile, make_ctx(provider, lang), None)
+        assert_text_sane(log.take(), (S, S), inside=(13, 13, S - 13, S - 13), name=lang)
