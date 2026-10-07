@@ -72,12 +72,14 @@ def queue_row_layout(chip_ws, more_ws, x0, xr, note_w):
     ``chip_ws[i]`` is chip i's width (mark + age), ``more_ws[i]`` the width
     of the "+N" left over after i + 1 chips (0 when none remain), ``note_w``
     the offline chip's natural width (0 = none). The first queue chip always
-    keeps its place; the offline chip takes what is left (cut, or just its
-    glyph), and further chips fill the room before it.
+    keeps its place, with room kept for the "+N" after it; the offline chip
+    takes what is left (cut, or just its glyph), and further chips fill the
+    room before it, each leaving room for "+N".
 
     Returns (chips shown, note box left x or None, note box width)."""
     avail = xr - x0
-    first = chip_ws[0] + 12 if chip_ws else 0
+    # the first chip, plus the gap and "+N" that trail it when others wait
+    first = chip_ws[0] + (16 + more_ws[0] if more_ws[0] else 0) + 12 if chip_ws else 0
     note_x0, box_w = None, 0
     if note_w:
         room = avail - first
@@ -92,8 +94,9 @@ def queue_row_layout(chip_ws, more_ws, x0, xr, note_w):
     limit = (note_x0 if note_x0 is not None else xr) - 12
     x, shown = x0, 0
     for i, w in enumerate(chip_ws):
-        # the first chip is always shown; a later one also needs room for "+N"
-        need = w if i == 0 else w + more_ws[i]
+        # the first chip is always shown; every chip needs room for the
+        # 16 px gap and "+N" that follow it when others remain
+        need = w + (16 + more_ws[i] if more_ws[i] else 0)
         if i > 0 and x + need > limit + (12 if note_x0 is None else 0):
             break
         x += w + 16

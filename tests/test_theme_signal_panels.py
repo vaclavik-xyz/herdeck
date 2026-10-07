@@ -73,7 +73,8 @@ def test_spotlight_names_the_head_and_its_wait(provider, log):
     assert drawn[0] == "lumen"
     assert "4m waiting" in drawn
     assert "1m" in drawn  # the next in the queue, as a favicon chip + age
-    assert "laptop" in drawn  # the offline machine chip, without the word
+    assert "+2" in drawn  # the queue's remainder is never dropped
+    # (the offline chip gives way to its glyph to make room for it)
 
 
 def test_spotlight_is_amber(provider):
@@ -91,23 +92,46 @@ def test_spotlight_at_392_collapses_the_offline_chip_to_its_glyph(provider, log)
 @pytest.mark.parametrize(
     "chip_ws, more_ws, note_w, expect",
     [
-        # no offline note: chips fill the row, a later chip also needs its "+N"
+        # no offline note: chips fill the row, each one leaves room for "+N"
         ([96], [0], 0, (1, None, 0)),
-        ([96, 96, 96], [30, 30, 0], 0, (2, None, 0)),
-        # the note fits whole beside the first chip
-        ([96, 96], [30, 0], 125, (1, 319, 125)),
-        # too wide: cut to the room left after the first chip
-        ([96, 96], [30, 0], 300, (1, 306, 138)),
+        # (a second 96 px chip would push the "+2" past the edge: 1 chip + "+2")
+        ([96, 96, 96], [30, 30, 0], 0, (1, None, 0)),
+        ([60, 60, 60], [30, 30, 0], 0, (3, None, 0)),
+        # the note fits whole beside the first chip (and its "+N")
+        ([60, 60], [30, 0], 100, (1, 344, 100)),
+        # too wide: cut to the room left after the first chip and its "+N"
+        ([60, 60], [30, 0], 300, (1, 316, 128)),
+        # the "+N" after the first chip takes the room: glyph only
+        ([96, 96], [30, 0], 125, (1, 402, 42)),
         # under NOTE_MIN of room: only the glyph
         ([150], [0], 300, (1, 402, 42)),
         # not even the glyph fits: the first chip keeps its place, no note
         ([200], [0], 300, (1, None, 0)),
         # nobody else waits: the note may take the whole row
         ([], [], 300, (0, 198, 246)),
+        # one chip, nothing after it: no "+N" reserved
+        ([96], [0], 300, (1, 306, 138)),
     ],
 )
 def test_queue_row_layout(chip_ws, more_ws, note_w, expect):
     assert sp.queue_row_layout(chip_ws, more_ws, 198, 444, note_w) == expect
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+@pytest.mark.parametrize("name,rest", [("spotlight_queue_note", 2), ("spotlight_many_no_note", None)])
+def test_spotlight_draws_the_remaining_count(provider, log, name, rest, width):
+    panel = panel_variants()[name]
+    render(provider, name, width)
+    drawn = log.take()
+    waiting = len(panel.queue) - 1
+    plus = [t for _, t, _ in drawn if t.startswith("+") and t[1:].isdigit()]
+    assert len(plus) == 1, (name, width, [t for _, t, _ in drawn])
+    if rest is not None:
+        assert plus == [f"+{rest}"]
+    assert plus  # chips shown + "+N" account for the whole queue
+    seam = SEAM if width < 420 else None
+    assert_text_sane(drawn, (width, S), seam=seam, name=f"{name}@{width}")
+    assert int(plus[0][1:]) <= waiting
 
 
 def test_queue_row_never_runs_into_the_note():
