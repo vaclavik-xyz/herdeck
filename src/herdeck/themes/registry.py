@@ -33,6 +33,9 @@ log = logging.getLogger(__name__)
 # herdeck.themes submodule via collect_submodules).
 BUILTIN_MODULES: dict[str, str] = {
     "classic": "herdeck.themes.classic",
+    "signal": "herdeck.themes.signal",
+    "headline": "herdeck.themes.headline",
+    "quiet": "herdeck.themes.quiet",
 }
 RESCAN_S = 2.0
 _ID_RE = re.compile(DECK_THEME_ID_PATTERN)
