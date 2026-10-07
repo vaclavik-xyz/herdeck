@@ -25,6 +25,7 @@ mod banner_native;
 pub mod banners;
 pub mod build_channel;
 pub mod deck_prefs;
+mod dock_layout;
 pub mod hotkey;
 pub mod http;
 mod maintenance;
