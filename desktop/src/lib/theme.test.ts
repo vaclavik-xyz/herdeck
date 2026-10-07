@@ -137,6 +137,8 @@ const CONVERTED = [
   "ConfigApp.svelte",
   "App.svelte",
   "lib/Onboarding.svelte",
+  "lib/DockMark.svelte",
+  "lib/DockItem.svelte",
 ];
 
 // Walk src/ once and return every .svelte path relative to src/ — the same
