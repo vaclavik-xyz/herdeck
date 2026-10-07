@@ -134,3 +134,121 @@ def test_signature_changes_when_icon_bytes_arrive():
     before = list_signature(agents, {}, "en", store)
     store.put(h, "image/png", png)
     assert list_signature(agents, {}, "en", store) != before
+
+
+# --- DeckApp.agent_list + GET /agent/list -------------------------------------
+
+import threading  # noqa: E402
+import time  # noqa: E402
+import urllib.error  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+import pytest  # noqa: E402
+from test_agent_card import _get, _serving_live, blocked, make  # noqa: E402
+from test_deckapp_live import StubIcons  # noqa: E402
+
+from herdeck.deckapp import DeckApp, MockSource  # noqa: E402
+from herdeck.project_icons import default_store  # noqa: E402
+
+
+def _idle(pane="p1", **kw):
+    return AgentState(
+        AgentKey("prod", pane), "codex", pane, Status.IDLE, repo="shop", branch="dev", workspace="Shop", **kw
+    )
+
+
+def test_list_carries_since_and_only_active_agents():
+    app, src, runner, clock = make()
+    src._on_snapshot("prod", [blocked(title="Bank API"), _idle(), _idle("p2", lifecycle="closed")])
+    clock[0] += 260
+    body = app.agent_list(None, 0)
+    assert body["connected"] is True and body["language"] == "en"
+    assert isinstance(body["version"], int)
+    rows = {a["pane_id"]: a for a in body["agents"]}
+    assert set(rows) == {"p0", "p1"}
+    assert rows["p0"]["since_s"] == 260
+    assert rows["p0"]["title"] == "Bank API" and rows["p0"]["status"] == "blocked"
+    assert rows["p1"]["title"] == "Shop" and rows["p1"]["monogram"] == "S"
+
+
+def test_list_marks_a_down_servers_agents_offline_and_keeps_their_status():
+    app, src, runner, clock = make()
+    src._on_snapshot("prod", [blocked()])
+    src._on_connection("prod", False)
+    body = app.agent_list(None, 0)
+    assert body["connected"] is False
+    assert [(a["status"], a["offline"]) for a in body["agents"]] == [("blocked", True)]
+
+
+def test_list_does_not_order_rows_by_status():
+    app, src, runner, clock = make()
+    src._on_snapshot("prod", [_idle("a"), blocked("b"), _idle("c")])
+    assert sorted(a["pane_id"] for a in app.agent_list(None, 0)["agents"]) == ["a", "b", "c"]
+
+
+def test_list_long_poll_ignores_a_re_render_and_wakes_on_an_agent_change():
+    app, src, runner, clock = make()
+    src._on_snapshot("prod", [blocked(), _idle()])
+    v = app.agent_list(None, 0)["version"]
+    app.refresh()  # a frame with no row change (what an animation tick is)
+    started = time.monotonic()
+    same = app.agent_list(v, 200)
+    assert same["version"] == v
+    assert time.monotonic() - started >= 0.18
+
+    out = {}
+    waiter = threading.Thread(target=lambda: out.update(app.agent_list(v, 5000)))
+    started = time.monotonic()
+    waiter.start()
+    time.sleep(0.05)
+    src._on_snapshot("prod", [blocked(), _idle(status_since_ms=None, title="now busy")])
+    waiter.join(timeout=5)
+    assert out["version"] != v
+    assert time.monotonic() - started < 4
+    assert {a["pane_id"]: a["title"] for a in out["agents"]}["p1"] == "now busy"
+
+
+def test_icon_arrival_bumps_the_list_version_and_fills_the_row():
+    store = default_store()
+    store.clear()
+    png = _png()
+    h = icon_hash(png)
+    try:
+        app, src, runner, clock = make()
+        src._on_snapshot("prod", [blocked(project_icon=h)])
+        before = app.agent_list(None, 0)
+        assert before["agents"][0]["icon"] is None
+        src._on_project_icon("prod", SimpleNamespace(hash=h, mime="image/png", data=png))
+        after = app.agent_list(None, 0)
+        assert after["agents"][0]["icon"] == h
+        assert after["version"] != before["version"]
+    finally:
+        store.clear()
+
+
+def test_mock_source_lists_the_demo_fleet():
+    app = DeckApp(MockSource(), serve=False, icon_provider=StubIcons())
+    try:
+        body = app.agent_list(None, 0)
+        assert body["agents"]
+        assert all(a["offline"] is False for a in body["agents"])
+    finally:
+        app.close()
+
+
+def test_list_route_requires_the_token_and_validates_params():
+    app, src, runner = _serving_live()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _get(app, "/agent/list", token="wrong")
+        assert e.value.code == 403
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _get(app, "/agent/list?after=x")
+        assert e.value.code == 400
+        code, body = _get(app, "/agent/list")
+        assert code == 200
+        assert [a["pane_id"] for a in body["agents"]] == ["p0"]
+        code, again = _get(app, f"/agent/list?after={body['version']}&wait_ms=100")
+        assert (code, again["version"]) == (200, body["version"])
+    finally:
+        app.close()

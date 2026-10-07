@@ -70,6 +70,7 @@ from ..usage_alerts import usage_alert_message, usage_alert_sound
 from . import shared_view as _shared_view
 from .agent_card import AgentCardMixin
 from .bridge_update import BridgeUpdateMixin
+from .dock_data import list_signature
 from .event_cursor import EventCursorStore
 from .hooks_relay import HooksMixin
 from .live_events import BridgeEventsMixin
@@ -672,6 +673,15 @@ class LiveSource(
     def semantic_agents(self) -> list[AgentState]:
         with self._card_deck_lock(), self._lock:
             return list(self._agents.values())
+
+    def agent_list_signature(self) -> tuple:
+        """The /agent/list change key (dock_data.list_signature). Takes ONLY
+        the source lock: DeckApp calls it while holding the deck lock, and
+        semantic_agents() would take that lock again."""
+        with self._lock:
+            agents = list(self._agents.values())
+            connected = dict(self._connected)
+        return list_signature(agents, connected, self._config.view.language)
 
     def semantic_agent(self, key: AgentKey) -> AgentState | None:
         with self._card_deck_lock(), self._lock:

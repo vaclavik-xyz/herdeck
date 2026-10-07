@@ -19,7 +19,15 @@ from ..orchestrator import Orchestrator
 from ..pins import PinStore
 from ..protocol import WIRE_PROTOCOL
 from ..shared_settings import overlaid_shared_keys
-from . import agent_card, bridge_update, hooks_relay, settings_relay, stats, usage_agent_relay
+from . import (
+    agent_card,
+    bridge_update,
+    dock_data,
+    hooks_relay,
+    settings_relay,
+    stats,
+    usage_agent_relay,
+)
 from .sinks import RenderFrame
 from .source import StateSource
 
@@ -201,6 +209,15 @@ class DeckApp:
         # version on a digest change too — else long-poll waiters sleep on
         # stale data until their timeout.
         self._state_digest: str | None = None
+        # /agent/list (the desktop mini dock) has its OWN version: it moves only
+        # when a row would change (dock_data.list_signature), never for an
+        # animation frame, so a dock beside a spinning deck is not woken every
+        # tick. Shares _state_changed for its waiters.
+        self._agent_list_version = 0
+        self._agent_list_sig: tuple | None = None
+        # Decoded /project-icon PNGs by hash (content-addressed, so never stale).
+        self._icon_pngs: dict[str, bytes] = {}
+        self._icon_pngs_lock = threading.Lock()
         # Rasterization (IconProvider + Pillow) is not thread-safe, but it must
         # not hold self._lock either: the ticker rasterizes OUTSIDE the state
         # lock under this one. Lock order is always self._lock -> _raster_lock.
@@ -481,6 +498,11 @@ class DeckApp:
         if digest != self._state_digest:
             self._state_digest = digest
             self._bump()
+        sig = self._agent_list_signature_locked()
+        if sig != self._agent_list_sig:
+            self._agent_list_sig = sig
+            self._agent_list_version += 1
+            self._state_changed.notify_all()
 
     def _state_meta_locked(self) -> dict:
         """The /state fields derived from the source/bridges rather than from
@@ -1099,6 +1121,57 @@ class DeckApp:
                 self._state_waiters -= 1
         return self._state()
 
+    def _agent_list_signature_locked(self):
+        """The source's /agent/list change key (None without one). Callers
+        hold self._lock; must not raise (see _apply_rendered_locked)."""
+        fn = getattr(self._source, "agent_list_signature", None)
+        if not callable(fn):
+            return None
+        try:
+            return fn()
+        except Exception:
+            log.debug("agent list signature failed", exc_info=True)
+            return self._agent_list_sig
+
+    def agent_list(self, after: int | None, wait_ms: int) -> dict | None:
+        """GET /agent/list (dock_data.py): every active agent as a row for
+        the desktop mini dock. With ``after``, a long-poll like /state: return
+        once the list version differs from it, or after ``wait_ms`` (clamped to
+        STATE_WAIT_MAX_MS). None when the source has no agents API."""
+        semantic = getattr(self._source, "semantic_agents", None)
+        if not callable(semantic):
+            return None
+        if after is not None:
+            timeout = min(self.STATE_WAIT_MAX_MS, max(0, wait_ms)) / 1000.0
+            with self._lock:
+                self._state_changed.wait_for(
+                    lambda: self._agent_list_version != after, timeout=timeout
+                )
+        with self._lock:
+            # Read BEFORE the rows: a change landing in between then shows up
+            # as a newer version on the client's next poll, never a lost one.
+            version = self._agent_list_version
+        source = self._source
+        agents = semantic()  # takes the deck lock itself: never hold it here
+        with self._lock:
+            orch = self._orch
+            since = {a.key: orch.status_elapsed(a.key) for a in agents}
+        connections = getattr(source, "connections", None)
+        if not isinstance(connections, dict):
+            connections = {}
+        view = source.config.view
+        return {
+            "version": version,
+            "language": getattr(source, "language", view.language),
+            "connected": bool(source.connected),
+            "agents": dock_data.agent_rows(
+                agents,
+                since=since,
+                connections=connections,
+                overrides=view.project_icons or {},
+            ),
+        }
+
     def _state(self) -> dict:
         self._note_state_read()
         self._refresh_if_stale()
@@ -1435,6 +1508,19 @@ class DeckApp:
                     if not self._require_query_token(url):
                         return
                     self._send(200, json.dumps(app._setup_status()).encode(), "application/json")
+                elif path == "/agent/list":
+                    # The desktop mini dock's fleet (dock_data.py), long-polled.
+                    if not self._require_query_token(url):
+                        return
+                    params = parse_qs(url.query)
+                    try:
+                        after = int(params["after"][0]) if "after" in params else None
+                        wait_ms = int(params.get("wait_ms", ["0"])[0])
+                    except (TypeError, ValueError):
+                        self._send(400)
+                        return
+                    payload = app.agent_list(after, wait_ms)
+                    self._send_agent(200 if payload is not None else 404, payload)
                 elif path.startswith("/agent/"):
                     if not self._require_query_token(url):
                         return
