@@ -300,44 +300,80 @@ def _columns(width):
     return [(18, width - 18)]
 
 
-def _flow(ctx, d, items, columns, top, bottom) -> int:
+def _cut_mark(d, line, font, max_w) -> str:
+    """``line`` ending in "…" (the text goes on but the room is gone),
+    trimmed until it fits ``max_w``."""
+    if line.endswith("…"):
+        return line
+    head = line.rstrip()
+    while head and d.textlength(head + "…", font=font) > max_w:
+        head = head[:-1].rstrip()
+    return head + "…"
+
+
+def _flow(ctx, d, items, columns, top, bottom, *, last_bottom=None) -> int:
     """Lay ``items`` — (text, largest, bold, fill, max_lines) — down the
     columns: each wrapped to the column width, continuing in the next column
-    when one is full. Returns how many rows stayed free in the last column."""
-    col = 0
-    y = top
+    when one is full. ``last_bottom`` (default ``bottom``) ends the last
+    column higher, to keep a footer row free. When the text runs out of room,
+    the last line drawn ends in "…". Returns how many rows stayed free in the
+    last column."""
+    def floor(col):
+        return last_bottom if (last_bottom is not None and col == len(columns) - 1) else bottom
+
+    placed = []  # [x, y, line, font, fill, column width]
+    col, y, cut = 0, top, False
     for text, largest, bold, fill, max_lines in items:
-        if not text:
+        if not text or cut:
             continue
         x0, x1 = columns[col]
         font, lines = k.block(ctx, d, text, x1 - x0, largest=largest, max_lines=max_lines, bold=bold)
         lh = font.size + 6
         for line in lines:
-            if y + lh > bottom:
+            if y + lh > floor(col):
                 col += 1
                 if col >= len(columns):
-                    return 0
+                    col, cut = len(columns) - 1, True
+                    break
                 x0, x1 = columns[col]
                 y = top
             line = k.ellipsize(ctx, d, line, font.size, x1 - x0, bold=bold)
-            d.text((x0, y), line, font=font, fill=fill)
+            placed.append([x0, y, line, font, fill, x1 - x0])
             y += lh
-    return int((bottom - y) // (k.MIN_TEXT + 6))
+    if cut and placed:
+        last = placed[-1]
+        last[2] = _cut_mark(d, last[2], last[3], last[5])
+    for x, ly, line, font, fill, _ in placed:
+        d.text((x, ly), line, font=font, fill=fill)
+    if cut:
+        return 0
+    if col < len(columns) - 1:  # the last column is still empty
+        y = top
+    return int((floor(len(columns) - 1) - y) // (k.MIN_TEXT + 6))
 
 
 def _config_error(panel, ctx, width):
     col = ctx.color(panel.color)
     img, d = _glyph_panel(ctx, width, col)
+    title = (panel.title, 30, True, k.LIGHT, 1)
+    rest = [
+        (panel.headline, 26, True, k.LIGHT, 2),
+        # the fix instruction ("… → Maintenance") gets the lines it needs
+        *[(line, k.MIN_TEXT, False, k.MUTE, 3) for line in panel.lines],
+    ]
+    if width < k.NARROW:
+        # the key pair: a smaller ring with the title under it on the left key,
+        # so the right key keeps room for the whole fix instruction
+        d.ellipse((64, 26, 132, 94), outline=col, width=10)
+        font = ctx.font(44)
+        d.text((98 - d.textlength("!", font=font) / 2, 32), "!", font=font, fill=col)
+        _flow(ctx, d, [(panel.title, 30, True, k.LIGHT, 2)], [(24, k.SEAM - 10)], 104, S - 16)
+        _flow(ctx, d, rest, [(k.SEAM + 10, width - 20)], 20, S - 16)
+        return img
     d.ellipse((52, 52, 144, 144), outline=col, width=12)
     font = ctx.font(60)
     d.text((98 - d.textlength("!", font=font) / 2, 62), "!", font=font, fill=col)
-    x0, xr = _right_x0(width), width - 28
-    items = [
-        (panel.title, 34, True, k.LIGHT, 1),
-        (panel.headline, 26, True, k.LIGHT, 2),
-        *[(line, k.MIN_TEXT, False, k.MUTE, 2) for line in panel.lines],
-    ]
-    _flow(ctx, d, items, [(x0, xr)], 26, S - 24)
+    _flow(ctx, d, [title, *rest], [(162, width - 24)], 22, S - 18)
     return img
 
 
@@ -354,39 +390,76 @@ def _sent(panel, ctx, width):
     return img
 
 
+def _footer_lines(ctx, d, panel, max_w):
+    """The detail footer: who else waits (aside) and where the last answer
+    went (sent), each wrapped to <= 2 lines: [(line, font, fill)]."""
+    out = []
+    for text, tone in ((panel.aside, "amber"), (panel.sent, "green")):
+        if text:
+            font, lines = k.block(ctx, d, text, max_w, largest=k.MIN_TEXT, bold=False)
+            fill = ctx.readable(ctx.color(tone), k.DARK)
+            out += [(line, font, fill) for line in lines]
+    return out
+
+
 def _detail(panel, ctx, width):
-    """An agent's prompt: status chip, who it is, the prompt text; "answer on
-    the keys" only when a whole free line is left for it."""
+    """An agent's prompt: status chip, who it is, the prompt text; a footer
+    with the other waiting agents and the last answer sent; "answer on the
+    keys" only when a whole free line is left for it."""
     tone = ctx.color(panel.color)
     img, d = k.new_image((width, S), k.DARK)
     cols = _columns(width)
-    chip_max = (cols[0][1] - cols[0][0]) if len(cols) > 1 else (width - 28) * 0.6
+    col_w = cols[0][1] - cols[0][0]
+    chip_max = col_w if len(cols) > 1 else (width - 28) * 0.6
     font = ctx.font(k.MIN_TEXT)
-    chip, metas = panel.title or "", [panel.meta]
+    chip, metas, extra = panel.title or "", [panel.meta], ""
     if d.textlength(chip, font=font) > chip_max - 20 and " · " in chip:
         # "BLOCKED · 4m" too wide for the left key: the time joins the meta
         chip, extra = chip.split(" · ", 1)
-        metas = [f"{extra} · {panel.meta}" if panel.meta else extra, extra]
-    chip = k.ellipsize(ctx, d, chip, k.MIN_TEXT, chip_max - 20)
-    chip_w = d.textlength(chip, font=font) + 20
-    d.rounded_rectangle((14, 12, 14 + chip_w, 12 + font.size + 12), 17, fill=tone)
-    d.text((24, 16), chip, font=font, fill=ctx.ink_for(tone))
-    meta_x0 = cols[1][0] if len(cols) > 1 else 14 + chip_w + 16
-    for meta in metas:
-        if meta and d.textlength(meta, font=font) <= width - 14 - meta_x0:
-            d.text((width - 14 - d.textlength(meta, font=font), 16), meta, font=font, fill=k.MUTE)
-            break
+        metas = [f"{extra} · {panel.meta}" if panel.meta else extra, panel.meta, extra]
+    if d.textlength(chip, font=font) > chip_max - 20:
+        chip_max = col_w  # an unsplittable title ("Press again to confirm") takes the column
     items = []
+    if d.textlength(chip, font=font) <= chip_max - 20:
+        chip_w = d.textlength(chip, font=font) + 20
+        if chip:
+            d.rounded_rectangle((14, 12, 14 + chip_w, 12 + font.size + 12), 17, fill=tone)
+            d.text((24, 16), chip, font=font, fill=ctx.ink_for(tone))
+        meta_x0 = cols[1][0] if len(cols) > 1 else 14 + chip_w + 16
+        mfont = ctx.font(k.MIN_TEXT, bold=False)
+        shown = ""
+        for meta in metas:
+            if meta and d.textlength(meta, font=mfont) <= width - 14 - meta_x0:
+                d.text((width - 14 - d.textlength(meta, font=mfont), 16), meta, font=mfont, fill=k.MUTE)
+                shown = meta
+                break
+        # who it is and how long it has waited are never lost: what the top
+        # row could not hold leads the text
+        lead = [m for m in (extra, panel.meta) if m and m not in shown]
+        if lead:
+            items.append((" · ".join(lead), k.MIN_TEXT, False, k.MUTE, 1))
+        top = 58
+    else:
+        # never cut the title: it leads the text, whole, in the status colour
+        items.append((panel.title, 26, True, ctx.readable(tone, k.DARK), 3))
+        if panel.meta:
+            items.append((panel.meta, k.MIN_TEXT, False, k.MUTE, 1))
+        top = 12
     if panel.headline:
         items.append((panel.headline, 26, True, k.LIGHT, 1))
     items += [(line, k.MIN_TEXT, False, k.LIGHT, 6) for line in panel.lines]
     bottom = S - 8
-    free = _flow(ctx, d, items, cols, 58, bottom)
+    x0, x1 = cols[-1]
+    footer = _footer_lines(ctx, d, panel, x1 - x0)
+    row = k.MIN_TEXT + 6
+    foot_top = bottom - len(footer) * row
+    free = _flow(ctx, d, items, cols, top, bottom, last_bottom=foot_top)
+    for i, (line, ffont, fill) in enumerate(footer):
+        d.text((x0, foot_top + i * row), line, font=ffont, fill=fill)
     if panel.hint and free >= 1:
         hfont = ctx.font(k.MIN_TEXT)
-        x0, x1 = cols[-1]
         if d.textlength(panel.hint, font=hfont) <= x1 - x0:
-            d.text((x0, bottom - k.MIN_TEXT - 6), panel.hint, font=hfont, fill=k.MUTE)
+            d.text((x0, foot_top - row), panel.hint, font=hfont, fill=k.MUTE)
     return img
 
 
@@ -412,13 +485,14 @@ def _usage(panel, ctx, width):
         label_max = (k.SEAM - 10 - 14) if width < k.NARROW else (width - 28) * 0.5
         label = k.ellipsize(ctx, d, f"{g.label} · {g.window}", k.MIN_TEXT, label_max)
         d.text((14, y), label, font=font, fill=k.LIGHT)
-        side = g.pace or g.hint
-        if side:
-            x_min = (k.SEAM + 10) if width < k.NARROW else 14 + d.textlength(label, font=font) + 16
-            x_max = width - 14 - pct_w - 12
-            sw = d.textlength(side, font=font)
-            if x_max - sw >= x_min:
-                d.text((x_max - sw, y), side, font=font, fill=ctx.color("amber") if g.pace else k.MUTE)
+        # the pace projection, else (no room for it) the reset time
+        x_min = (k.SEAM + 10) if width < k.NARROW else 14 + d.textlength(label, font=font) + 16
+        x_max = width - 14 - pct_w - 12
+        for side, fill in ((g.pace, ctx.color("amber")), (g.hint, k.MUTE)):
+            sw = d.textlength(side, font=font) if side else 0
+            if side and x_max - sw >= x_min:
+                d.text((x_max - sw, y), side, font=font, fill=fill)
+                break
         bar_y = y + 30
         d.rounded_rectangle((14, bar_y, width - 14, bar_y + 10), 5, fill=k.TRACK)
         used = max(0, min(100, g.used_percent))

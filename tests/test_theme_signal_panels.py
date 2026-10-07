@@ -231,7 +231,77 @@ def test_detail_at_392_moves_the_time_beside_the_chip(provider, log):
     render(provider, "detail_blocked_short", 392)
     drawn = texts(log)
     assert drawn[0] == "BLOCKED"
-    assert drawn[1].startswith("4m")
+    assert "claude · herdeck" in drawn  # which agent it is is never lost
+    assert "4m" in drawn  # nor how long it waits (it leads the text)
+
+
+def _tr(provider, lang, key, **fmt):
+    text = make_ctx(provider, lang).tr(key)
+    return text.format(**fmt) if fmt else text
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("width", WIDTHS)
+def test_flow_overflow_ends_in_an_ellipsis(provider, log, width, lang):
+    render(provider, "detail_long", width, lang)
+    drawn = texts(log)
+    assert drawn[-1].endswith("…"), drawn
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("width", WIDTHS)
+def test_config_error_draws_the_whole_fix_hint(provider, log, width, lang):
+    hint = _tr(provider, lang, "config_error_hint")
+    render(
+        provider, "config_error", width, lang,
+        title=_tr(provider, lang, "config_error_title"),
+        headline=_tr(provider, lang, "config_error_token", name="macbench"),
+        lines=[hint],
+    )
+    entries = log.take()
+    drawn = [t for _, t, _ in entries]
+    assert not any(t.endswith("…") for t in drawn), drawn
+    assert hint.split() == " ".join(drawn).split()[-len(hint.split()):], drawn
+    assert_text_sane(entries, (width, S), seam=SEAM if width < 420 else None)
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("width", WIDTHS)
+@pytest.mark.parametrize("fields", [("aside",), ("sent",), ("aside", "sent")])
+def test_detail_footer_draws_aside_and_sent_before_the_hint(provider, log, width, lang, fields):
+    values = {
+        "aside": _tr(provider, lang, "others_blocked", n=2),
+        "sent": _tr(provider, lang, "sent", label="lumen"),
+    }
+    changes = {f: values[f] for f in fields}
+    render(provider, "detail_blocked_short", width, lang, **changes)
+    entries = log.take()
+    drawn = [t for _, t, _ in entries]
+    for f in fields:
+        assert values[f] in drawn, (f, drawn)
+    assert_text_sane(entries, (width, S), seam=SEAM if width < 420 else None)
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("width", WIDTHS)
+def test_armed_stop_confirmation_is_never_cut(provider, log, width, lang):
+    title = _tr(provider, lang, "press_to_confirm")
+    render(provider, "detail_blocked_short", width, lang, title=title, color="red", hint="")
+    entries = log.take()
+    drawn = [t for _, t, _ in entries]
+    assert not any(t.endswith("…") and title.startswith(t[:-1]) for t in drawn), drawn
+    assert title.split() == " ".join(drawn).split()[: len(title.split())], drawn
+    assert "claude · herdeck" in drawn
+    assert_text_sane(entries, (width, S), seam=SEAM if width < 420 else None)
+
+
+def test_usage_side_text_falls_back_to_the_reset_time(provider, log):
+    panel = panel_variants()["usage"]
+    gauges = [dataclasses.replace(panel.gauges[0], hint="reset Mon"), *panel.gauges[1:]]
+    render(provider, "usage", 392, gauges=gauges)
+    drawn = texts(log)
+    assert "full ~40m early" not in drawn  # no room for the pace in the right key
+    assert drawn.count("reset Mon") == 2  # the session row falls back to its reset
 
 
 def test_usage_gauges(provider, log):
