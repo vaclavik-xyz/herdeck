@@ -5,6 +5,7 @@ import { setLang } from "./i18n.svelte";
 import { agentDetail, dockAgent, fakeAgentTransport, DOCK_PROMPT } from "./dockFixtures";
 import type { DockAgent } from "./dockClient";
 import type { AgentTransport } from "./agentCardClient";
+import { flushState } from "./dockCardHarness.svelte";
 
 function render(props: { agent?: DockAgent | null; idle?: DockAgent[]; transport: AgentTransport }) {
   const onClose = vi.fn();
@@ -216,6 +217,47 @@ describe("DockCard (idle list)", () => {
       expect(transport.detailCalls).toHaveLength(0);
     } finally {
       cleanup();
+    }
+  });
+});
+
+describe("DockCard (armed confirm)", () => {
+  it("does not carry an armed confirm over to a newly read prompt", async () => {
+    const confirmOpt = (label: string) => ({ key: "3", label, id: "deny", kind: "option", confirm: true }) as const;
+    const transport = fakeAgentTransport({
+      details: [
+        { kind: "ok", detail: agentDetail({ options: [confirmOpt("No")] }) },
+        { kind: "ok", detail: agentDetail({ options: [confirmOpt("Delete everything")], revision: "rev-2" }) },
+      ],
+    });
+    const state = flushState();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const instance = mount(DockCard, {
+      target,
+      props: {
+        get agent() { return state.agent; },
+        sinceOf: (a: DockAgent) => a.sinceS,
+        iconUrl: () => null,
+        transport,
+        onClose: vi.fn(),
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(buttons(target)).toHaveLength(1));
+      buttons(target)[0].click();
+      flushSync();
+      expect(buttons(target)[0].textContent?.trim()).toBe("Sure? Click again");
+      state.agent = dockAgent({ status: "working" });
+      flushSync();
+      state.agent = dockAgent({ status: "blocked" });
+      await vi.waitFor(() => expect(buttons(target)[0]?.textContent?.trim()).toBe("3. Delete everything"));
+      buttons(target)[0].click();
+      flushSync();
+      expect(transport.actCalls).toHaveLength(0);
+    } finally {
+      unmount(instance);
+      target.remove();
     }
   });
 });

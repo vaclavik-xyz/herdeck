@@ -58,6 +58,10 @@
     const res = await t.detail({ serverId: a.serverId, paneId: a.paneId }, refresh);
     if (!alive) return;
     if (res.kind === "ok") {
+      // An armed confirm belongs to the prompt it was armed on: a freshly
+      // loaded prompt must be armed again after the user has seen it.
+      armed = null;
+      if (res.detail.revision !== detail?.revision) sent = false;
       detail = res.detail;
       if (res.detail.status === "blocked" && res.detail.prompt === null && res.detail.promptPending) {
         repoll = setTimeout(() => void load(false), PROMPT_REPOLL_MS);
