@@ -1180,7 +1180,7 @@
               />
             {/if}
             {#if active === "view"}
-              <ViewSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+              <ViewSection bind:payload {editProfile} {reloadRev} invoke={browserMode ? null : (cmd, args) => invoke(cmd, args)} onChange={markDirty} onError={(m) => setBanner("error", m)} />
             {:else if active === "theme"}
               <ThemeSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
             {:else if active === "macros"}
