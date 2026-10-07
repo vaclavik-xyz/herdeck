@@ -43,6 +43,9 @@
     "alert_reset": false,
     "source": "auto"
   },
+  "desktop": {
+    "floating": "dock"
+  },
   "hardware": {
     "brightness": 80,
     "debounce": 0.25,

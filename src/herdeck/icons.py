@@ -1265,6 +1265,12 @@ class IconProvider:
         self._remember_layer(key, out)
         return out
 
+    def agent_mark_image(self, agent_type: str, size: int) -> Image.Image:
+        """The agent's logo as a ``size`` px square (light ink on transparent),
+        for the desktop dock's project-icon fallback. An unknown type gets the
+        generic letter mark."""
+        return self._logo(agent_type, False, size)
+
     def _is_light_glyph(self, agent_type: str) -> bool:
         hit = self._light_glyph.get(agent_type)
         if hit is None:

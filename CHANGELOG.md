@@ -24,6 +24,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   project name and time on the status colour) and `quiet` (only an agent that
   needs you is loud). Every text is at least 22 px so it reads on the D200's
   72 px keys.
+- Mini dock: the desktop app's floating window is now a narrow, always-on-top,
+  draggable strip of the agents that are not idle (status rings, idle folded
+  into `+N`). Hover, focus or click an agent for a card with its task, elapsed
+  time, the blocked prompt with deck-coloured answer buttons, and **Open in
+  herdr**. The strip keeps its place on screen while cards open beside it.
+- Runtime routes `GET /agent/list` (token-gated; `after`/`wait_ms` long-poll
+  capped at 25 s, with its own version that ignores animation frames) and
+  `GET /project-icon/<hash>` (the project favicon as a 96 px PNG,
+  `Cache-Control: max-age=86400`; 400 for a malformed hash, 404 when unknown).
+- `GET /agent-mark/<type>` (96 px PNG, `Cache-Control: max-age=86400`; 400 for a
+  malformed type) serves the agent logo the mini dock uses as a favicon
+  fallback when `[view].project_icon_fallback` is `"agent"`; `/agent/list`
+  reports it as `icon_fallback`.
+
+### Changed
+- `[desktop].floating` (`"dock"` default, `"deck"` = the hardware mirror)
+  picks what the floating window shows; Apply switches it live. With no
+  `deck_always_on_top` and no legacy `window_mode`, the floating window now
+  stays on top in dock mode (the deck mirror keeps the old default, off).
 
 ## [0.15.0] - 2026-10-01
 

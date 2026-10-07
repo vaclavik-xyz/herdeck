@@ -124,12 +124,17 @@ function render(): { target: HTMLElement; cleanup: () => void } {
 // component construction — so setting the attribute only for the
 // synchronous `mount()` call, then clearing it immediately after, gives this
 // one instance the "deck" role without affecting any other mounted here.
-function renderWithRole(role: "app" | "deck"): { target: HTMLElement; cleanup: () => void } {
+function renderWithRole(role: "app" | "deck", floating: "deck" | "dock" = "deck"): { target: HTMLElement; cleanup: () => void } {
   const t = document.createElement("div");
   document.body.appendChild(t);
-  if (role === "deck") document.documentElement.dataset.windowRole = "deck";
+  if (role === "deck") {
+    document.documentElement.dataset.windowRole = "deck";
+    // These tests cover the hardware mirror; the dock default has its own file.
+    document.documentElement.dataset.floating = floating;
+  }
   const instance = mount(App, { target: t });
   delete document.documentElement.dataset.windowRole;
+  delete document.documentElement.dataset.floating;
   return { target: t, cleanup: () => { unmount(instance); t.remove(); } };
 }
 
@@ -281,6 +286,26 @@ describe("App update check across windows", () => {
         expect(deck.target.querySelector("[data-notice]")).toBeNull();
         // Confirms the deck never ran a check of its own to get there.
         expect(check).toHaveBeenCalledTimes(1);
+      } finally {
+        app.cleanup();
+      }
+    } finally {
+      deck.cleanup();
+    }
+  });
+
+  it("keeps the update dot on the mini dock strip too", async () => {
+    const check = vi.fn().mockResolvedValue({ version: "0.2.0", current_version: "0.1.0" });
+    invokeMock.mockImplementation(mockInvoke(check));
+    const deck = renderWithRole("deck", "dock");
+    try {
+      const app = render();
+      try {
+        await vi.waitFor(() => expect(deck.target.querySelector(".mini-dock .strip")).not.toBeNull());
+        await vi.waitFor(() => {
+          expect(deckDotTitle(deck.target)).toContain("Herdeck 0.2.0 is available");
+        });
+        expect(deck.target.querySelector(".strip button.dot")).not.toBeNull();
       } finally {
         app.cleanup();
       }

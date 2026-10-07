@@ -122,7 +122,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       servers: "Which servers the profile uses; inheriting takes the parent's or base selection, empty = a profile with no servers.",
     },
     desktop: {
-      deck_always_on_top: "Keeps the floating deck window above other windows; applied immediately, no restart.",
+      floating: "What the floating window shows: dock (a narrow strip of agents that need you; default) or deck (the hardware mirror).",
+      deck_always_on_top: "Keeps the floating window above other windows; default on for the dock, off for the deck; applied immediately.",
       toggle_deck: "Global shortcut to show/hide the deck; default Cmd/Ctrl+Shift+D, empty field = disabled.",
       next_blocked: "Global shortcut that shows the deck and opens the longest-blocked agent (again = next one); empty = off (default).",
       restart_deck: "Global shortcut that closes and reopens the D200 and redraws it (like the tray's Restart deck); empty = off (default).",
@@ -260,7 +261,8 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       servers: "Které servery profil používá; při dědění přebírá výběr rodiče či báze, prázdný výběr = profil bez serverů.",
     },
     desktop: {
-      deck_always_on_top: "Drží plovoucí okno decku nad ostatními okny; použije se hned, bez restartu.",
+      floating: "Co ukazuje plovoucí okno: dock (úzký pruh agentů, kteří tě potřebují; výchozí) nebo deck (zrcadlo hardwaru).",
+      deck_always_on_top: "Drží plovoucí okno nad ostatními okny; výchozí zapnuto pro dock, vypnuto pro deck; použije se hned.",
       toggle_deck: "Globální zkratka pro zobrazení/skrytí decku; výchozí Cmd/Ctrl+Shift+D, prázdné pole = vypnuto.",
       next_blocked: "Globální zkratka: ukáže deck a otevře nejdéle blokovaného agenta (znovu = další); prázdné = vypnuto (výchozí).",
       restart_deck: "Globální zkratka, která zavře a znovu otevře D200 a překreslí ho (jako Restartovat deck v tray); prázdné = vypnuto (výchozí).",

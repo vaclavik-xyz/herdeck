@@ -44,7 +44,7 @@ function demoPayload(): ConfigPayload {
       notifications: { enabled: true, telegram: { token_env: "TG_TOKEN", chat_id: "1" } },
       safety: { approve_always: true, require_confirm_for: ["act_force"] },
       usage: { providers: ["claude"], paid_only: true, refresh_secs: 300, codexbar_path: "codexbar" },
-      desktop: { deck_always_on_top: true },
+      desktop: { deck_always_on_top: true, floating: "dock" },
     },
     profiles: { night: { view: { tile_fill: "solid", project_icons: { web: "~/w.png" } } } },
     local: { local: { deck: "d200", web_port: 8800 }, hardware: { brightness: 80 } },

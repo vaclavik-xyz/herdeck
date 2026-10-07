@@ -94,6 +94,8 @@ describe("theme tokens", () => {
 // and must stay free of colour literals. Paths are relative to src/. The list
 // grows task by task; the final task asserts it covers every .svelte file.
 const CONVERTED = [
+  "lib/DockCard.svelte",
+  "lib/MiniDock.svelte",
   "lib/fields/FieldCopy.svelte",
   "lib/fields/TextField.svelte",
   "lib/fields/SelectField.svelte",
@@ -137,6 +139,8 @@ const CONVERTED = [
   "ConfigApp.svelte",
   "App.svelte",
   "lib/Onboarding.svelte",
+  "lib/DockMark.svelte",
+  "lib/DockItem.svelte",
 ];
 
 // Walk src/ once and return every .svelte path relative to src/ — the same

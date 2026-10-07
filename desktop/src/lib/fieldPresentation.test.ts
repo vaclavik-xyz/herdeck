@@ -40,3 +40,10 @@ describe("fieldPresentation", () => {
     });
   });
 });
+
+describe("floating window field", () => {
+  it("has a label in both languages", () => {
+    expect(fieldPresentation("floating", "en").label).toBe("Floating window");
+    expect(fieldPresentation("floating", "cs").label).toBe("Plovoucí okno");
+  });
+});

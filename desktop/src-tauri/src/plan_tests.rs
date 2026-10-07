@@ -305,6 +305,40 @@ fn image_responses_carry_type_and_cache_policy() {
 }
 
 #[test]
+fn the_image_scheme_proxies_project_icons_by_hash_only() {
+    assert_eq!(
+        image_proxy_path("/project-icon/0123456789abcdef").as_deref(),
+        Some("/project-icon/0123456789abcdef")
+    );
+    for bad in [
+        "/project-icon/",
+        "/project-icon/0123456789ABCDEF",
+        "/project-icon/0123456789abcde",
+        "/project-icon/0123456789abcdef0",
+        "/project-icon/0123456789abcdef/x",
+        "/project-icon/../config",
+        "/project-icon/0123456789abcdeg",
+        "/project-icon",
+    ] {
+        assert_eq!(image_proxy_path(bad), None, "{bad} must not be proxied");
+    }
+    assert!(is_icon_hash("0123456789abcdef"));
+    assert!(!is_icon_hash("0123456789abcdef\n"));
+}
+
+#[test]
+fn project_icons_are_cached_for_a_day_and_tiles_revalidate() {
+    assert_eq!(image_cache_control("/project-icon/0123456789abcdef"), "max-age=86400");
+    assert_eq!(image_cache_control("/tile/3"), "no-cache");
+    assert_eq!(image_cache_control("/panel"), "no-cache");
+    let icon = image_response_cached(200, vec![1], "max-age=86400");
+    assert_eq!(icon.headers()["Cache-Control"], "max-age=86400");
+    assert_eq!(icon.headers()["Content-Type"], "image/png");
+    let missing = image_response_cached(404, Vec::new(), "max-age=86400");
+    assert_eq!(missing.headers()["Cache-Control"], "no-store");
+}
+
+#[test]
 fn main_window_capability_allows_compact_window_control() {
     let capability: serde_json::Value = serde_json::from_str(include_str!(
         "../capabilities/default.json"
@@ -820,7 +854,11 @@ fn an_unreadable_config_leaves_the_live_always_on_top_alone() {
 
     let empty = dir.join("empty.toml");
     std::fs::write(&empty, "").unwrap();
-    assert_eq!(deck_always_on_top_target(&empty), Some(false));
+    // No key, no legacy mode: the default follows the floating content (dock).
+    assert_eq!(deck_always_on_top_target(&empty), Some(true));
+    let mirror = dir.join("mirror.toml");
+    std::fs::write(&mirror, "[desktop]\nfloating = \"deck\"\n").unwrap();
+    assert_eq!(deck_always_on_top_target(&mirror), Some(false));
 
     let on = dir.join("on.toml");
     std::fs::write(&on, "[desktop]\ndeck_always_on_top = true\n").unwrap();
@@ -930,4 +968,19 @@ fn bridge_telegram_test_timeout_outlasts_the_runtime_wait() {
     assert!(bridge_telegram_timeout("test") > std::time::Duration::from_secs(30));
     assert_eq!(bridge_telegram_timeout(""), BRIDGE_SETTINGS_TIMEOUT);
     assert_eq!(bridge_telegram_timeout("token"), BRIDGE_SETTINGS_TIMEOUT);
+}
+
+#[test]
+fn the_image_scheme_proxies_agent_marks_by_safe_type_only() {
+    assert_eq!(image_proxy_path("/agent-mark/claude").as_deref(), Some("/agent-mark/claude"));
+    assert_eq!(
+        image_proxy_path("/agent-mark/open-code_2").as_deref(),
+        Some("/agent-mark/open-code_2")
+    );
+    assert_eq!(image_proxy_path("/agent-mark/").as_deref(), None);
+    assert_eq!(image_proxy_path("/agent-mark/../x").as_deref(), None);
+    assert_eq!(image_proxy_path("/agent-mark/Claude").as_deref(), None);
+    assert_eq!(image_proxy_path("/agent-mark/claude/x").as_deref(), None);
+    assert_eq!(image_proxy_path(&format!("/agent-mark/{}", "a".repeat(33))).as_deref(), None);
+    assert_eq!(image_cache_control("/agent-mark/claude"), "max-age=86400");
 }

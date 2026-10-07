@@ -820,3 +820,38 @@ describe("ConfigApp bridge Telegram status poll", () => {
     }
   });
 });
+
+describe("ConfigApp Apply re-applies [desktop].floating", () => {
+  it("invokes reload_floating after a successful save", async () => {
+    const { target, cleanup } = renderConfigApp();
+    try {
+      const desktopNav = Array.from(target.querySelectorAll<HTMLButtonElement>(".sidebar button"))
+        .find((b) => b.textContent?.includes("Window"));
+      expect(desktopNav, "desktop nav item not found").toBeTruthy();
+      desktopNav!.click();
+      flushSync();
+      await vi.waitFor(() => {
+        expect(target.querySelector(".loading-card")).toBeNull();
+      });
+
+      const select = target.querySelector<HTMLSelectElement>(".content select");
+      expect(select, "floating select not rendered").toBeTruthy();
+      expect(select!.value).toBe("dock");
+      select!.value = "deck";
+      select!.dispatchEvent(new Event("change", { bubbles: true }));
+      flushSync();
+
+      const applyButton = Array.from(target.querySelectorAll<HTMLButtonElement>(".savebar button"))
+        .find((b) => b.title.startsWith("Save the config"));
+      expect(applyButton, "Apply button not found").toBeTruthy();
+      applyButton!.click();
+      await vi.waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("reload_floating");
+      });
+      const write = invokeMock.mock.calls.find(([cmd]) => cmd === "config_write");
+      expect((write?.[1] as { body: { base: { desktop: { floating: string } } } }).body.base.desktop.floating).toBe("deck");
+    } finally {
+      cleanup();
+    }
+  });
+});

@@ -1029,6 +1029,31 @@ the card or hide the window, and the runtime stops any preview nobody has
 polled for 15 s. The runtime runs at most two previews at once (the bridge
 allows three per connection) and drops the oldest when you open another.
 
+**Mini dock.** By default the floating window is the *mini dock*: a narrow,
+always-on-top strip with one favicon (or monogram) per agent that is not idle,
+inside a status ring: blocked (amber, pulsing, longest-waiting first), waiting
+(dashed), done (ring and dot), working (open arc). Idle agents fold into one
+**+N** chip, and an agent whose server is offline is greyed and struck
+through. Hover an agent (or focus it with Tab) and a card opens beside the
+strip with the task title, repo · branch and how long it has been in its
+status. For a blocked agent the card shows the prompt and one button per
+numbered option, coloured like the deck: approve green, approve-always amber,
+deny red, anything else blue. Options that `[safety].require_confirm_for`
+covers ask for a second click. **Open in herdr** focuses the pane. Click an
+agent to keep its card open until Esc or a click elsewhere. Drag the strip by
+its grip; it remembers where you left it and opens cards toward the side of
+the screen with more room. Answers go through the same guarded `/agent/*`
+routes as the agent card, so if the prompt changed while you read it the
+answer is refused as stale and the new prompt is shown. Set
+`[desktop].floating = "deck"` (Settings → Window → `floating`) to get the
+mirror of the hardware deck back. `deck_always_on_top` defaults to on for the
+dock and off for the deck mirror. The dock reads the runtime's token-gated
+`GET /agent/list` (long-polled; it wakes only when an agent changes, not for
+animation frames) and `GET /project-icon/<hash>` (the favicon as a 96 px PNG).
+A project without a favicon shows its monogram; `GET /agent-mark/<type>` (a
+96 px PNG) serves the agent's logo for the fallback mode that shows it instead
+(the `project_icon_fallback` view setting is introduced separately).
+
 **Maintenance** (Settings → System → Maintenance) does from the app what used
 to need a terminal: it lists the app, runtime and bridge versions (a mismatch
 is flagged), says where the runtime comes from and can make it a service of
