@@ -448,7 +448,9 @@ class DeckApp:
             buf = io.BytesIO()
             # The desktop window shows the panel in a 2-cells-wide grid box, so
             # compose at the two-cell width — the native 458px would be squeezed.
-            compose_panel(rs.panel, width=PANEL_W_TWO_CELL).convert("RGB").save(buf, "PNG")
+            compose_panel(rs.panel, width=PANEL_W_TWO_CELL, icons=icon_provider).convert(
+                "RGB"
+            ).save(buf, "PNG")
             panel_png = buf.getvalue()
             self._panel_memo = (panel_key, panel_png)
         sections = {t.index: t.section for t in rs.tiles if t.index < slots and t.section}

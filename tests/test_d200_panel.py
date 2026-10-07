@@ -435,9 +435,9 @@ def test_d200_unchanged_panel_skips_recompose_but_still_writes(tmp_path, monkeyp
     calls = {"n": 0}
     real = d200_mod.compose_panel
 
-    def counting(panel):
+    def counting(panel, **kwargs):
         calls["n"] += 1
-        return real(panel)
+        return real(panel, **kwargs)
 
     monkeypatch.setattr(d200_mod, "compose_panel", counting)
     dev = _FakeDev()
@@ -593,7 +593,7 @@ def test_frame_with_failed_panel_compose_never_blanks_the_panel(tmp_path, monkey
         #    before the worker ever processed the failing frame).
         composed = threading.Event()
 
-        def _boom(_panel):
+        def _boom(_panel, **_kwargs):
             composed.set()
             raise RuntimeError()
 
