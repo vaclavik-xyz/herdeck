@@ -173,6 +173,27 @@ def test_a_raising_part_is_drawn_by_the_base_and_logged_once(themes, provider, c
     assert sum("boom" in r.getMessage() for r in caplog.records) == 1
 
 
+def test_a_truncated_wrong_sized_image_falls_back_to_the_base(themes, provider, caplog):
+    directory, _ = themes
+    _theme_file(
+        directory,
+        "trunc",
+        """
+        import io
+
+        def agent_tile(self, tile, ctx, frame):
+            buf = io.BytesIO()
+            Image.new("RGB", (300, 300), (255, 0, 255)).save(buf, "PNG")
+            return Image.open(io.BytesIO(buf.getvalue()[:100]))
+        """,
+    )
+    with caplog.at_level(logging.WARNING, logger="herdeck.themes.dispatch"):
+        a = _img(provider, _agent(deck_theme="trunc", repo="one"))
+        _img(provider, _agent(deck_theme="trunc", repo="two"))
+    assert a.tobytes() == _img(provider, _agent(repo="one")).tobytes()
+    assert sum("trunc" in r.getMessage() for r in caplog.records) == 1
+
+
 def test_a_wrong_size_is_resized(themes, provider, caplog):
     directory, _ = themes
     _theme_file(

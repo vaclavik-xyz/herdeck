@@ -39,27 +39,8 @@ def _run(
     size: tuple[int, int],
     mode: str,
 ) -> Image.Image:
-    for theme in chain:
-        if theme.id == "classic":
-            img = draw(theme)  # the reference look: errors propagate as before
-        else:
-            try:
-                img = draw(theme)
-            except Exception:
-                _warn_once(
-                    theme.id,
-                    part,
-                    "deck theme %s raised while drawing %s; its base draws it",
-                    theme.id,
-                    part,
-                    exc_info=True,
-                )
-                continue
-            if img is None:
-                continue
-            if not isinstance(img, Image.Image):
-                _warn_once(theme.id, part + ":type", "deck theme %s returned a non-image for %s", theme.id, part)
-                continue
+    def normalise(theme: Theme, img: Image.Image) -> Image.Image:
+        img.load()  # a lazily opened (e.g. truncated) file fails here, not later
         if img.size != size:
             _warn_once(
                 theme.id,
@@ -72,6 +53,28 @@ def _run(
             )
             img = img.resize(size, Image.LANCZOS)
         return img if img.mode == mode else img.convert(mode)
+
+    for theme in chain:
+        if theme.id == "classic":
+            img = draw(theme)  # the reference look: errors propagate as before
+            return normalise(theme, img)
+        try:
+            img = draw(theme)
+            if img is None:
+                continue
+            if not isinstance(img, Image.Image):
+                _warn_once(theme.id, part + ":type", "deck theme %s returned a non-image for %s", theme.id, part)
+                continue
+            return normalise(theme, img)
+        except Exception:
+            _warn_once(
+                theme.id,
+                part,
+                "deck theme %s raised while drawing %s; its base draws it",
+                theme.id,
+                part,
+                exc_info=True,
+            )
     raise RuntimeError(f"no deck theme drew {part}")  # unreachable: classic always draws
 
 
