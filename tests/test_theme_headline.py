@@ -86,3 +86,47 @@ def test_headline_status_word_only_where_it_is_news(provider, log):
         drawn = " ".join(texts(log))
         has_word = any(w in drawn for w in ("BLOCKED", "CI", "OFFLINE"))
         assert has_word == (status in ("blocked", "waiting", "offline")), status
+
+
+def test_headline_mark_has_a_contour_in_the_ink_colour(provider):
+    """A monogram in the status colour (green on the green working fill)
+    would vanish: the mark carries a contour in the ink colour."""
+    ctx = make_ctx(provider)
+    tile = agent("working")
+    img = headline.THEME.agent_tile(tile, ctx, None)
+    ink = ctx.ink_for(COLORS[tile.color])
+    assert img.getpixel((11, 42)) == ink
+    assert img.getpixel((42, 11)) == ink
+
+
+def test_headline_subagents_are_a_pill_apart_from_the_holder_label(provider, log, monkeypatch):
+    pills = []
+    pill = headline.k.pill
+
+    def spy(ctx, d, x, top, text, *args, **kw):
+        pills.append(text)
+        return pill(ctx, d, x, top, text, *args, **kw)
+
+    monkeypatch.setattr(headline.k, "pill", spy)
+    headline.THEME.agent_tile(agent("waiting", status_text="REVIEW +1", subagents=2), make_ctx(provider), None)
+    drawn = texts(log)
+    assert "REVIEW +1" in drawn  # whole, never "REVIEW +1  +2"
+    assert pills == ["+2"]
+
+
+def test_headline_word_wins_over_the_subagent_pill(provider, log):
+    long_word = "WAITING ON REVIEW"
+    headline.THEME.agent_tile(agent("waiting", status_text=long_word, subagents=12), make_ctx(provider), None)
+    drawn = texts(log)
+    assert "+12" not in drawn
+    assert any(t.startswith("WAITING") for t in drawn)
+
+
+@pytest.mark.parametrize("elapsed", ["0s", "55s", "1m", "59m", "1h", "23h", "999h"])
+def test_headline_time_is_never_cut(provider, log, elapsed):
+    """Every orchestrator._fmt_elapsed shape fits the time slot whole (the
+    font shrinks first)."""
+    headline.THEME.agent_tile(agent("working", time_text=elapsed), make_ctx(provider), None)
+    entries = log.take()
+    assert elapsed in [t for _, t, _ in entries]
+    assert_text_sane(entries, (S, S))
