@@ -97,7 +97,6 @@ def block(ctx, draw, text: str, max_w: float, *, largest: int, max_lines: int = 
         lines = ctx.wrap(draw, text, font, max_w, max_lines)
         if size == MIN_TEXT or (lines and not lines[-1].endswith("…")):
             return font, lines
-    return ctx.font(MIN_TEXT, bold=bold), []  # unreachable
 
 
 def draw_lines(draw, lines, font, x, y, fill, *, lh=None, center_w=None) -> float:
@@ -140,28 +139,44 @@ def _has_project(item) -> bool:
     )
 
 
+def _project_mark(ctx, item, size: int, *, dark: bool, name: str):
+    """A COPY of the project mark of ``item``. With the "agent" fallback and no
+    favicon the agent logo is drawn here (so ``dark`` is honoured and the
+    shared logo cache is never handed out); a tile with repo/label but no
+    ``project_name`` and no favicon gets a monogram of ``name``, not "?"."""
+    env = getattr(ctx, "_env", None)
+    fallback = getattr(env, "project_icon_fallback", "monogram")
+    agent_type = getattr(item, "agent_type", "") or ""
+    icon = getattr(item, "project_icon", None)
+    if not icon and agent_type and fallback == "agent":
+        return ctx.agent_mark(agent_type, size, dark=dark).copy()
+    if not icon and not getattr(item, "project_name", ""):
+        return ctx.project_mark(monogram_source(name), size).copy()
+    return ctx.project_mark(item, size).copy()
+
+
 def identity_mark(ctx, tile, size: int, *, on_light: bool = False):
-    """The tile's identity at ``size`` px (RGBA): the PROJECT mark first
-    (``ctx.project_mark``: favicon, monogram, or the agent logo when
+    """The tile's identity at ``size`` px (RGBA, always a copy): the PROJECT
+    mark first (favicon, monogram, or the agent logo when
     [view].project_icon_fallback = "agent"); the agent's own logo (black when
     ``on_light``: it sits on a white plate) only for a tile with no project
     data; else a monogram of its text line. Not keyed on tile.tile_icon."""
     if _has_project(tile):
-        return ctx.project_mark(tile, size)
+        return _project_mark(ctx, tile, size, dark=on_light, name=name_line(tile))
     agent_type = getattr(tile, "agent_type", None)
     if agent_type:
         return ctx.agent_mark(agent_type, size, dark=on_light).copy()
-    return ctx.project_mark(monogram_source(text_line(tile)), size)
+    return ctx.project_mark(monogram_source(text_line(tile)), size).copy()
 
 
 def queue_mark(ctx, agent, size: int):
-    """A PanelAgent's mark on a white plate: the project mark, else the agent
-    mark in black, else a monogram of its label."""
+    """A PanelAgent's mark on a white plate (always a copy): the project mark,
+    else the agent mark in black, else a monogram of its label."""
     if _has_project(agent):
-        return ctx.project_mark(agent, size)
+        return _project_mark(ctx, agent, size, dark=True, name=name_line(agent))
     if getattr(agent, "agent_type", ""):
         return ctx.agent_mark(agent.agent_type, size, dark=True).copy()
-    return ctx.project_mark(monogram_source(getattr(agent, "label", "")), size)
+    return ctx.project_mark(monogram_source(getattr(agent, "label", "")), size).copy()
 
 
 def greyed(img: Image.Image) -> Image.Image:

@@ -100,3 +100,46 @@ def test_greyed_keeps_size_and_alpha_shape():
     out = k.greyed(img)
     r, g, b, a = out.getpixel((5, 5))
     assert out.size == (10, 10) and max(r, g, b) - min(r, g, b) <= 4 and a > 0
+
+
+def _fallback_ctx(tmp_path):
+    from herdeck.driver.base import ThemeEnv
+    from herdeck.themes.api import ThemeContext
+
+    return ThemeContext(ThemeEnv("en", (), "agent"), make_provider(tmp_path))
+
+
+def test_agent_fallback_project_mark_is_a_copy_and_honours_on_light(tmp_path):
+    ctx = _fallback_ctx(tmp_path)
+    tile = agent("idle", project_name="x", project_icon=None)
+    before = ctx.agent_mark("claude", 40).tobytes()
+    before_dark = ctx.agent_mark("claude", 40, dark=True).tobytes()
+    light = k.identity_mark(ctx, tile, 40)
+    dark = k.identity_mark(ctx, tile, 40, on_light=True)
+    assert light.tobytes() == before and dark.tobytes() == before_dark
+    for img in (
+        light,
+        dark,
+        k.queue_mark(
+            ctx,
+            SimpleNamespace(agent_type="claude", label="x", project_name="x", project_icon=None),
+            40,
+        ),
+    ):
+        img.paste((255, 0, 0, 255), (0, 0, 40, 40))
+    assert ctx.agent_mark("claude", 40).tobytes() == before
+    assert ctx.agent_mark("claude", 40, dark=True).tobytes() == before_dark
+
+
+def test_project_branch_mark_is_a_copy(ctx):
+    tile = agent("idle", project_name="x")
+    before = ctx.project_mark(tile, 40).tobytes()
+    k.identity_mark(ctx, tile, 40).paste((255, 0, 0, 255), (0, 0, 40, 40))
+    assert ctx.project_mark(tile, 40).tobytes() == before
+
+
+def test_repo_only_tile_gets_a_repo_monogram_not_question_mark(ctx):
+    tile = agent("idle", project_name="", repo="herdeck", project_icon=None)
+    got = k.identity_mark(ctx, tile, 40)
+    assert got.tobytes() == ctx.project_mark(k.monogram_source("herdeck"), 40).tobytes()
+    assert got.tobytes() != ctx.project_mark(k.monogram_source(""), 40).tobytes()
