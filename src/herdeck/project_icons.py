@@ -200,4 +200,7 @@ def tile_icon_fields(
     resolved = target.resolve(
         name, getattr(state, "project_icon", ""), getattr(view, "project_icons", None) or {}
     )
+    if resolved is None and getattr(view, "project_icon_fallback", "monogram") == "agent":
+        # No favicon: draw the tile exactly as tile_icon="agent" would.
+        return {"tile_icon": "agent", "project_icon": None, "project_name": ""}
     return {"tile_icon": mode, "project_icon": resolved, "project_name": name}

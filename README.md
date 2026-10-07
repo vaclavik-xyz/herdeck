@@ -1123,7 +1123,8 @@ working animation draws as a `comet` ring around it. The bridge finds the
 favicon in the pane's repository
 (`favicon.png`, `public/favicon.png`, `app/icon.png`, … then `.ico`, then
 `.svg`; at most 256 KiB) and sends it to the deck once; a project without one
-gets a coloured letter badge. When the pane's working directory is not inside
+gets a coloured letter badge (set `[view].project_icon_fallback = "agent"` to show the
+agent's logo instead). When the pane's working directory is not inside
 a Git repository (say a workspace folder holding several repos), the bridge
 looks in that folder itself, so you can drop a `favicon.png` there, and
 otherwise in its direct child repositories in name order, but only when the
@@ -1136,6 +1137,7 @@ running the deck; quote a repo name that contains a dot, e.g.
 SVG icons are rendered with resvg (bundled in the packaged app and the Elgato
 plugin). An SVG that references anything outside itself (a file path or URL in
 `href`/`url(...)`) is refused and shows the monogram.
+
 The whole look is switchable as well: `[view].deck_theme` (editor: **Deck
 look**) picks a deck theme, `classic` (today's look) by default. A theme only
 changes how keys and the status window are drawn; your status colours, agent

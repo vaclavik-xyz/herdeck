@@ -20,6 +20,7 @@ from .config import (
     DEFAULT_PROFILES,
     DEFAULT_REQUIRE_CONFIRM,
     DEFAULT_START_PROFILES,
+    PROJECT_ICON_FALLBACKS,
     TILE_FILLS,
     TILE_ICONS,
     TILE_LINE_TOKENS,
@@ -386,6 +387,13 @@ def _view_config(raw: dict | None) -> ViewConfig:
         if val not in TILE_ICONS:
             raise ConfigError(f"unknown view.tile_icon '{val}'; want one of {TILE_ICONS}")
         view.tile_icon = val
+    if "project_icon_fallback" in raw:
+        val = raw["project_icon_fallback"]
+        if val not in PROJECT_ICON_FALLBACKS:
+            raise ConfigError(
+                f"unknown view.project_icon_fallback '{val}'; want one of {PROJECT_ICON_FALLBACKS}"
+            )
+        view.project_icon_fallback = val
     if "project_icons" in raw:
         view.project_icons = _project_icons(raw["project_icons"])
     if "show_profile_on_panel" in raw:

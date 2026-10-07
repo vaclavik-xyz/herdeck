@@ -131,6 +131,8 @@ TILE_FILLS: tuple[str, ...] = ("none", "tint", "solid")
 #   project = the project's favicon instead of the mark (a monogram when none)
 #   both    = the agent's mark plus a small project badge on its corner
 TILE_ICONS: tuple[str, ...] = ("agent", "project", "both")
+# [view].project_icon_fallback: what stands in for a missing project favicon.
+PROJECT_ICON_FALLBACKS: tuple[str, ...] = ("monogram", "agent")
 # A deck theme id ([view].deck_theme): a built-in (classic, ...) or the file
 # stem of a user theme in <config dir>/themes/<id>.py (themes/registry.py).
 DECK_THEME_ID_PATTERN = r"[a-z0-9_-]+"
@@ -160,6 +162,7 @@ class ViewConfig:
     working_animation: str = "spin"
     tile_fill: str = "none"
     tile_icon: str = "agent"
+    project_icon_fallback: str = "monogram"
     # Repo name -> icon file on the RUNTIME machine ("~" is expanded when the
     # file is read); overrides the favicon the bridge discovers in the repo.
     project_icons: dict[str, str] = field(default_factory=dict)

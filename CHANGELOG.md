@@ -14,6 +14,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   versioned API in `herdeck.themes.api` (`API_VERSION = 1`) and documented in
   `docs/themes.md`; a broken theme is reported in the editor and draws
   classic. New runtime route `GET /themes`.
+- `[view].project_icon_fallback`: show the agent's logo instead of the monogram
+  for projects without a favicon.
 
 ## [0.15.0] - 2026-10-01
 

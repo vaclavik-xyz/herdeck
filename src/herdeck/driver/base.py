@@ -57,6 +57,7 @@ class ThemeEnv:
 
     language: str = "en"
     colors: tuple[tuple[str, str], ...] = ()
+    project_icon_fallback: str = "monogram"
 
 
 @dataclass

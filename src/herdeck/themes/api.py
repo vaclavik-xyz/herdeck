@@ -147,8 +147,12 @@ class ThemeContext:
     def project_mark(self, item, size: int) -> Image.Image:
         """RGBA ``size`` x ``size`` project mark of a TileView or PanelAgent:
         its favicon (``project_icon``), else a coloured monogram of
-        ``project_name``. No contrast plate — the theme decides the backdrop."""
+        ``project_name`` (or the agent's mark when the item has no favicon and
+        ``[view].project_icon_fallback = "agent"``). No contrast plate — the theme decides the backdrop."""
         icon_hash = getattr(item, "project_icon", None) or ""
+        agent_type = getattr(item, "agent_type", "") or ""
+        if not icon_hash and agent_type and self._env.project_icon_fallback == "agent":
+            return self.agent_mark(agent_type, size)
         name = getattr(item, "project_name", "") or ""
         base_of = getattr(self._icons, "_project_base", None)
         if base_of is not None:

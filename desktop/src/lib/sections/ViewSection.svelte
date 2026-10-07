@@ -77,6 +77,8 @@
   const collapseIdle = $derived((getAt(payload, "base", SEC, "collapse_idle") as boolean) ?? defaults.view.collapse_idle);
   const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? defaults.view.working_animation);
   const tileFill = $derived((getAt(payload, "base", SEC, "tile_fill") as string) ?? defaults.view.tile_fill);
+  const ICON_FALLBACKS = ["monogram", "agent"];
+  const iconFallback = $derived((getAt(payload, "base", SEC, "project_icon_fallback") as string) ?? defaults.view.project_icon_fallback);
   const tileIcon = $derived((getAt(payload, "base", SEC, "tile_icon") as string) ?? defaults.view.tile_icon);
   const uiLanguage = $derived((getAt(payload, "base", SEC, "language") as string) ?? defaults.view.language);
   const deckTheme = $derived((getAt(payload, "base", SEC, "deck_theme") as string) ?? defaults.view.deck_theme);
@@ -258,6 +260,7 @@
     <SelectField label="working_animation" help={HELP.working_animation} value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
     <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
     <SelectField label="tile_icon" help={HELP.tile_icon} value={tileIcon} options={TILE_ICONS} onchange={(v) => set("tile_icon", v)} />
+    <SelectField label="project_icon_fallback" help={HELP.project_icon_fallback} value={iconFallback} options={ICON_FALLBACKS} onchange={(v) => set("project_icon_fallback", v)} />
     <ProjectIconsField label="project_icons" help={HELP.project_icons} entries={stringMap(getAt(payload, "base", SEC, "project_icons"))} resetKey={`base:${reloadRev}:view:project_icons`} onchange={setProjectIcons} {onError} />
   </FieldGroup>
   <FieldGroup title={lm.content}>

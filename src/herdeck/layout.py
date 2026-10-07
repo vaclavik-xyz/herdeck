@@ -424,7 +424,11 @@ def panel_agent(
 
 def theme_env(config) -> ThemeEnv:
     """The config a deck theme reads besides the views (themes/api.py)."""
-    return ThemeEnv(config.view.language, tuple(sorted(config.theme.colors.items())))
+    return ThemeEnv(
+        config.view.language,
+        tuple(sorted(config.theme.colors.items())),
+        getattr(config.view, "project_icon_fallback", "monogram"),
+    )
 
 
 def stamp_theme(config, tiles: list[TileView], panel: PanelView | None = None) -> None:

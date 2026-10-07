@@ -22,6 +22,7 @@
     "working_animation": "spin",
     "tile_fill": "none",
     "tile_icon": "agent",
+    "project_icon_fallback": "monogram",
     "project_icons": {},
     "language": "en",
     "collapse_idle": false,
