@@ -28,6 +28,7 @@
     floatingViewport,
     readFloatingScale,
     writeFloatingScale,
+    DOCK_SCALE_STORAGE_KEY,
     type FloatingScaleCommand,
   } from "./lib/floatingScale";
   import {
@@ -75,6 +76,26 @@
   // reloads the page (Rust `reload_floating`), so a constant is enough.
   const dockMode =
     borderless && floatingContent(typeof document !== "undefined" ? document : undefined) === "dock";
+  // The dock's own zoom (context menu Zoom in/out/Actual size, ⌘= ⌘− ⌘0).
+  let dockScale = $state((() => {
+    if (!dockMode || typeof localStorage === "undefined") return 1;
+    try {
+      return readFloatingScale(localStorage, DOCK_SCALE_STORAGE_KEY);
+    } catch {
+      return 1;
+    }
+  })());
+
+  function applyDockScale(command: FloatingScaleCommand): void {
+    const next = changeFloatingScale(dockScale, command);
+    if (next === dockScale) return;
+    dockScale = next;
+    try {
+      writeFloatingScale(localStorage, next, DOCK_SCALE_STORAGE_KEY);
+    } catch {
+      // Zoom still applies when WebView storage is unavailable.
+    }
+  }
 
   let shell = $state<HTMLElement | undefined>(undefined);
   let desktopSetupOverlay = $state<HTMLElement | undefined>(undefined);
@@ -430,7 +451,7 @@
       if (typeof event.payload === "string") requestSettingsSection(event.payload);
     });
     const onFloatingScaleKey = (event: KeyboardEvent): void => {
-      if (!borderless || dockMode) return;
+      if (!borderless) return;
       const target = event.target;
       if (
         target instanceof HTMLElement
@@ -439,7 +460,8 @@
       const command = floatingScaleCommandForKey(event);
       if (!command) return;
       event.preventDefault();
-      void applyFloatingScale(command);
+      if (dockMode) applyDockScale(command);
+      else void applyFloatingScale(command);
     };
     window.addEventListener("keydown", onFloatingScaleKey);
 
@@ -466,9 +488,11 @@
     // the `ResizeObserver` below) carries the same guard so none of them
     // depends solely on Rust never widening the `emit_to` target.
     const zoomListener = listen(DECK_ZOOM_EVENT, (event) => {
-      if (!borderless || dockMode) return;
+      if (!borderless) return;
       const command = floatingScaleCommandFromEvent(event.payload);
-      if (command) void applyFloatingScale(command);
+      if (!command) return;
+      if (dockMode) applyDockScale(command);
+      else void applyFloatingScale(command);
     });
 
     // Rust emits this to the APP window only (tray's "Check for updates" item
@@ -663,6 +687,7 @@
     transport={dock}
     {agentTransport}
     windowLayout={dockWindowLayout}
+    scale={dockScale}
     startDrag={startWindowDrag}
     onOpenSettings={openSettingsWindow}
   >

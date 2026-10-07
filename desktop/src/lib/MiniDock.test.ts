@@ -108,6 +108,19 @@ describe("MiniDock strip", () => {
     }
   });
 
+  it("asks for a window scaled by its zoom and lays the strip out in unzoomed px", async () => {
+    const { target, layouts, cleanup } = render(FLEET, { scale: 1.2 });
+    try {
+      await vi.waitFor(() => expect(layouts.length).toBeGreaterThan(0));
+      expect(layouts[0].stripWidth).toBeCloseTo(STRIP_WIDTH * 1.2);
+      expect(layouts[0].cardWidth).toBe(0);
+      const root = target.querySelector<HTMLElement>(".mini-dock")!;
+      expect(root.style.zoom).toBe("1.2");
+    } finally {
+      cleanup();
+    }
+  });
+
   it("starts collapsed to the strip", async () => {
     const { layouts, cleanup } = render(FLEET);
     try {

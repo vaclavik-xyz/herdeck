@@ -7,6 +7,7 @@ import {
   floatingViewport,
   readFloatingScale,
   writeFloatingScale,
+  DOCK_SCALE_STORAGE_KEY,
 } from "./floatingScale";
 
 describe("floating scale", () => {
@@ -19,6 +20,18 @@ describe("floating scale", () => {
     expect(readFloatingScale(reader)).toBe(1.2);
     storage.set("herdeck.floatingScale", "not-a-number");
     expect(readFloatingScale(reader)).toBe(1);
+  });
+
+  it("keeps the dock's zoom under its own key, apart from the deck mirror's", () => {
+    const storage = new Map<string, string>();
+    const io = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    };
+    writeFloatingScale(io, 1.3, DOCK_SCALE_STORAGE_KEY);
+    expect(readFloatingScale(io, DOCK_SCALE_STORAGE_KEY)).toBe(1.3);
+    expect(readFloatingScale(io)).toBe(1);
+    expect(storage.get("herdeck.dockScale")).toBe("1.3");
   });
 
   it("changes scale in 10% steps and clamps it to 80–140%", () => {

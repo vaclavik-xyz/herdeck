@@ -1,4 +1,6 @@
 export const FLOATING_SCALE_STORAGE_KEY = "herdeck.floatingScale";
+/** The mini dock keeps its own zoom: it and the deck mirror differ in size. */
+export const DOCK_SCALE_STORAGE_KEY = "herdeck.dockScale";
 export const FLOATING_BASE_WIDTH = 328;
 export const MIN_FLOATING_SCALE = 0.8;
 export const MAX_FLOATING_SCALE = 1.4;
@@ -32,8 +34,11 @@ interface Size {
 
 interface Rect extends Point, Size {}
 
-export function readFloatingScale(storage: ScaleReader): number {
-  const value = Number(storage.getItem(FLOATING_SCALE_STORAGE_KEY));
+export function readFloatingScale(
+  storage: ScaleReader,
+  key: string = FLOATING_SCALE_STORAGE_KEY,
+): number {
+  const value = Number(storage.getItem(key));
   return Number.isFinite(value) && value > 0 ? boundedScale(value) : 1;
 }
 
@@ -41,9 +46,13 @@ function boundedScale(value: number): number {
   return Math.min(MAX_FLOATING_SCALE, Math.max(MIN_FLOATING_SCALE, value));
 }
 
-export function writeFloatingScale(storage: ScaleWriter, scale: number): number {
+export function writeFloatingScale(
+  storage: ScaleWriter,
+  scale: number,
+  key: string = FLOATING_SCALE_STORAGE_KEY,
+): number {
   const value = Number.isFinite(scale) ? boundedScale(scale) : 1;
-  storage.setItem(FLOATING_SCALE_STORAGE_KEY, String(value));
+  storage.setItem(key, String(value));
   return value;
 }
 

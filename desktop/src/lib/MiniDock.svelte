@@ -51,6 +51,7 @@
     transport,
     agentTransport,
     windowLayout,
+    scale = 1,
     startDrag = () => {},
     onOpenSettings = () => {},
     reducedMotion = prefersReducedMotion(),
@@ -61,6 +62,10 @@
     transport: DockTransport | null;
     agentTransport: AgentTransport | null;
     windowLayout: WindowLayoutFn;
+    /** Zoom (the context menu's Zoom items). Everything inside lays out in
+     *  unzoomed CSS px; only the window size and the placement Rust returns
+     *  (window px) cross the zoom, so they are scaled at that boundary. */
+    scale?: number;
     startDrag?: (event: PointerEvent) => void;
     onOpenSettings?: () => void;
     reducedMotion?: boolean;
@@ -100,10 +105,13 @@
         : m.neutral_loading,
   );
   const openAgent = $derived(findAgent(open, list));
+  // Rust's placement is in window px; the zoomed content lays out in px / scale.
+  const stripX = $derived(placement.stripX / scale);
+  const stripY = $derived(placement.stripY / scale);
   const cardLeft = $derived(
     placement.side === "right"
-      ? placement.stripX + STRIP_WIDTH + CARD_GAP
-      : placement.stripX - CARD_GAP - CARD_WIDTH,
+      ? stripX + STRIP_WIDTH + CARD_GAP
+      : stripX - CARD_GAP - CARD_WIDTH,
   );
 
   function findAgent(target: Target | null, current: DockList | null): DockAgent | null {
@@ -170,10 +178,10 @@
     let next: DockPlacement;
     try {
       next = await windowLayout({
-        stripWidth: STRIP_WIDTH,
-        stripHeight: Math.max(stripHeight, STRIP_WIDTH),
-        cardWidth: expanded ? CARD_WIDTH : 0,
-        cardHeight: expanded ? anchorTop + CARD_MAX_HEIGHT : 0,
+        stripWidth: STRIP_WIDTH * scale,
+        stripHeight: Math.max(stripHeight, STRIP_WIDTH) * scale,
+        cardWidth: expanded ? CARD_WIDTH * scale : 0,
+        cardHeight: expanded ? (anchorTop + CARD_MAX_HEIGHT) * scale : 0,
       });
     } catch {
       next = { side: "right", stripX: 0, stripY: 0 }; // plain browser preview
@@ -193,6 +201,7 @@
 
   $effect(() => {
     void stripHeight; // the strip grew or shrank: refit the window
+    void scale; // …or the zoom changed
     untrack(() => void applyLayout(open !== null));
   });
 
@@ -341,13 +350,13 @@
 
 <svelte:window onkeydown={onKey} onblur={() => void hide()} />
 
-<div class="mini-dock" class:reduced={reducedMotion} class:stale role="presentation" onclick={onBackdrop}>
+<div class="mini-dock" class:reduced={reducedMotion} class:stale role="presentation" style:zoom={scale === 1 ? undefined : String(scale)} onclick={onBackdrop}>
   <nav
     class="strip"
     aria-label={m.strip_label}
     bind:this={stripEl}
-    style:left="{placement.stripX}px"
-    style:top="{placement.stripY}px"
+    style:left="{stripX}px"
+    style:top="{stripY}px"
   >
     <div
       class="grip"
@@ -402,7 +411,7 @@
       bind:this={cardEl}
       role="presentation"
       style:left="{cardLeft}px"
-      style:top="{placement.stripY + anchorTop}px"
+      style:top="{stripY + anchorTop}px"
       onmouseenter={cardEnter}
       onmouseleave={cardLeave}
     >
