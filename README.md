@@ -1050,9 +1050,9 @@ mirror of the hardware deck back. `deck_always_on_top` defaults to on for the
 dock and off for the deck mirror. The dock reads the runtime's token-gated
 `GET /agent/list` (long-polled; it wakes only when an agent changes, not for
 animation frames) and `GET /project-icon/<hash>` (the favicon as a 96 px PNG).
-A project without a favicon shows its monogram; set
-`[view].project_icon_fallback = "agent"` to show the agent's logo instead
-(served by `GET /agent-mark/<type>` as a 96 px PNG).
+A project without a favicon shows its monogram; `GET /agent-mark/<type>` (a
+96 px PNG) serves the agent's logo for the fallback mode that shows it instead
+(the `project_icon_fallback` view setting is introduced separately).
 
 **Maintenance** (Settings → System → Maintenance) does from the app what used
 to need a terminal: it lists the app, runtime and bridge versions (a mismatch

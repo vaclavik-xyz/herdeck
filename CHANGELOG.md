@@ -16,10 +16,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   capped at 25 s, with its own version that ignores animation frames) and
   `GET /project-icon/<hash>` (the project favicon as a 96 px PNG,
   `Cache-Control: max-age=86400`; 400 for a malformed hash, 404 when unknown).
-- `[view].project_icon_fallback = "agent"` makes the mini dock show the agent's
-  logo for projects without a favicon (default `"monogram"`), served by
-  `GET /agent-mark/<type>` (96 px PNG, `Cache-Control: max-age=86400`; 400 for a
-  malformed type); `/agent/list` reports it as `icon_fallback`.
+- `GET /agent-mark/<type>` (96 px PNG, `Cache-Control: max-age=86400`; 400 for a
+  malformed type) serves the agent logo the mini dock uses as a favicon
+  fallback when the view's `project_icon_fallback` is `"agent"` (setting
+  introduced separately; always `"monogram"` until then); `/agent/list`
+  reports it as `icon_fallback`.
 
 ### Changed
 - `[desktop].floating` (`"dock"` default, `"deck"` = the hardware mirror)

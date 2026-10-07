@@ -33,8 +33,9 @@ AGENT_TYPE_RE = re.compile(r"[a-z0-9_-]{1,32}")
 
 def icon_fallback_of(view) -> str:
     """[view].project_icon_fallback as "monogram" | "agent". Read defensively:
-    the config key may not exist on this branch; anything unknown is the
-    default."""
+    the key is introduced by the deck-themes work and is not parsed by
+    settings yet, so until then this is always "monogram"; anything unknown
+    is the default."""
     value = getattr(view, "project_icon_fallback", "monogram")
     return "agent" if value == "agent" else "monogram"
 
