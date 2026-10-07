@@ -397,7 +397,7 @@ pub fn run() {
             let deck_window =
                 WebviewWindowBuilder::new(&app_handle, DECK_WINDOW, WebviewUrl::default())
                     .title(&display_name)
-                    .shadow(true)
+                    .shadow(deck_prefs::wants_shadow(floating))
                     // Role AND content ([desktop].floating) before first paint.
                     .initialization_script(format!(
                         "{};{}",

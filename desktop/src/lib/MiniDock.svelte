@@ -447,10 +447,10 @@
     align-items: center;
     gap: var(--s1);
     padding: 0 0 var(--s2);
-    background: color-mix(in srgb, var(--panel) 90%, transparent);
+    /* Opaque: a translucent, blurred strip smeared whatever sat behind it. */
+    background: var(--panel);
     border: 1px solid var(--line-strong);
     border-radius: 28px;
-    backdrop-filter: blur(14px);
     transition: opacity var(--dur) var(--ease);
   }
   .stale .strip { opacity: .55; }

@@ -45,7 +45,7 @@
   onclick={(e) => onclick(top(e))}
 >
   <span class="ring" aria-hidden="true"></span>
-  <span class="face"><DockMark {agent} src={iconSrc} size={40} /></span>
+  <span class="face"><DockMark {agent} src={iconSrc} size={30} /></span>
   {#if agent.status === "done"}<span class="done-dot" aria-hidden="true"></span>{/if}
   {#if agent.offline}<span class="slash" aria-hidden="true"></span>{/if}
 </button>
@@ -64,11 +64,13 @@
     cursor: pointer;
     flex: none;
   }
+  /* The mark (30 px) sits wholly inside the ring's 48 px circle: a bigger,
+     square mark poked its corners through the ring and hid the spinning arc. */
   .ring {
     position: absolute;
     inset: 0;
     border-radius: 50%;
-    border: 2.5px solid var(--st-idle);
+    border: 3px solid var(--st-idle);
     pointer-events: none;
   }
   .face { position: relative; display: grid; place-items: center; }

@@ -230,6 +230,7 @@ pub(crate) fn reload_floating(app: tauri::AppHandle, state: tauri::State<'_, App
     }
     if let Some(window) = app.get_webview_window(DECK_WINDOW) {
         collapse_offset(&window, &state);
+        let _ = window.set_shadow(deck_prefs::wants_shadow(target));
         let _ = window.eval(&deck_prefs::floating_reload_script(target));
     }
 }
