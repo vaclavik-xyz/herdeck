@@ -29,9 +29,10 @@ You can also write your own: one Python file, described below.
    set it; or wherever `$HERDECK_THEMES_DIR` points). The **file name is the
    theme id**: `themes/minimal.py` is `deck_theme = "minimal"`. Ids are
    `[a-z0-9_-]+`; a file named like a built-in (`classic`) cannot shadow it: it
-   is ignored and listed under **Not loaded**.
+   is ignored and listed under **Not loaded**. A file whose name falls outside
+   that set (say `MyTheme.py`) is skipped silently, without any message.
 2. Set `[view].deck_theme` to the id (or pick it in the editor, which lists
-   every theme the runtime found).
+   every theme that loaded; broken ones are reported under **Not loaded**).
 3. Edit freely: the folder is rescanned every couple of seconds and the deck
    redraws when the file changes.
 
@@ -140,6 +141,7 @@ Rules:
 | `status_text`, `time_text` | the localized status word and the time in that status ("4m") |
 | `agent_type`, `project_icon`, `project_name` | for `ctx.agent_mark` / `ctx.project_mark` |
 | `subagents`, `pinned`, `server_tag` | running subagents, pinned, backend label |
+| `index`, `spinner` | the key position; the rotation phase of a working tile (`None` otherwise) |
 | `color` | the colour name the user configured for this tile's state |
 | `tile_fill`, `tile_icon`, `working_animation` | the user's classic look settings (use them or not) |
 
@@ -152,6 +154,8 @@ Rules:
 | `counts` | overview panels: `blocked`, `working`, `idle`, `done`, `waiting`, `offline` |
 | `title`, `headline`, `lines`, `meta`, `hint`, `note`, `aside`, `sent` | the localized texts classic draws (chip, big line, body, header right, footer) |
 | `stats`, `gauges`, `page` | count cards, usage gauges, (page, pages) |
+| `PanelStat` | `label`, `value` (int), `color` (colour name) |
+| `PanelGauge` | `label`, `window`, `used_percent` (int), `hint`, `color`, `pace` (projection text, `""` = none) |
 | `color`, `solid`, `chip_dot` | the tone colour name; fill the whole panel; the chip's status dot |
 
 ### Helpers (`ThemeContext`)
@@ -168,7 +172,7 @@ Rules:
 | `ctx.readable(rgb, bg)` | `rgb` lightened just enough to read on a dark `bg` |
 | `ctx.color(name)` | RGB of a `[theme.colors]` key (`blocked`, ...) or a palette name (`amber`, ...) |
 | `ctx.status_color(status)` | RGB of `tile.status`, honouring the user's colours |
-| `ctx.project_mark(item, size)` | RGBA favicon (or coloured monogram) of a `TileView` / `PanelAgent` |
+| `ctx.project_mark(item, size)` | RGBA favicon of a `TileView` / `PanelAgent`; without one, a coloured monogram, or the agent's mark when `[view].project_icon_fallback = "agent"` |
 | `ctx.agent_mark(agent_type, size, dark=False)` | RGBA agent logo; `dark` for bright backgrounds. It is a shared cached image: never draw on it in place, `.copy()` it first |
 
 ## Trying a theme without a deck
