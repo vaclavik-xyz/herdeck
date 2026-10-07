@@ -51,7 +51,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_secondary: "Second line from built-in fields or $name metadata tokens; unset = session title when available, otherwise tab then branch; empty = off.",
       language: "Language of the deck and this app: en (English) or cs (Czech). Applies after Apply.",
       collapse_idle: "Fold idle agents into one '+N' tile at the end of the overview; press it to show them (off by default; not Elgato).",
-      deck_theme: "How the deck draws keys and the status window: classic (default) or a theme from themes/ beside config.toml.",
+      deck_theme: "How the deck draws keys and the status window: classic (default), signal, headline, quiet or a theme from themes/ beside config.toml.",
     },
     theme: {
       working: "Tile color of an agent that is currently working (default green).",
@@ -189,7 +189,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_secondary: "Druhý řádek z polí nebo tokenů $name; nevyplněno = název session, pokud existuje, jinak tab a branch; prázdné = vypnuto.",
       language: "Jazyk decku i této aplikace: en (angličtina) nebo cs (čeština). Projeví se po Použít.",
       collapse_idle: "Sbalí nečinné agenty do jedné dlaždice „+N“ na konci přehledu; stiskem se ukážou (výchozí vypnuto; ne Elgato).",
-      deck_theme: "Jak deck kreslí klávesy a stavové okno: classic (výchozí) nebo motiv ze složky themes/ vedle config.toml.",
+      deck_theme: "Jak deck kreslí klávesy a stavové okno: classic (výchozí), signal, headline, quiet nebo motiv ze složky themes/ vedle config.toml.",
     },
     theme: {
       working: "Barva dlaždice agenta, který právě pracuje (výchozí green).",

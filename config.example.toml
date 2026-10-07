@@ -44,10 +44,11 @@ language = "en"
 # unfold them, "hide" folds them back). Handy with 15-20 agents; the Elgato
 # plugin ignores it.
 collapse_idle = false
-# Deck look: how keys and the status window are drawn. "classic" (default) or
-# the id of a user theme, a Python file in the themes/ folder next to this
-# config (themes/<id>.py; see docs/themes.md). A theme is code and runs with
-# your user privileges. An unknown or broken theme draws classic.
+# Deck look: "classic" (default, the original look) | "signal" (favicon + task
+# title, status as colour AND shape) | "headline" (big project name on the
+# status colour) | "quiet" (only "needs you" is loud) | the id of a user theme
+# in <config dir>/themes/<id>.py (see docs/themes.md). A theme is code and runs
+# with your user privileges. An unknown or broken theme draws classic.
 deck_theme = "classic"
 # Tile icon: "agent" (default) = the agent's logo, "project" = the project's
 # favicon (found in the repo by the bridge; a coloured letter when none),

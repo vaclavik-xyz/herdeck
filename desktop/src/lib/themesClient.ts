@@ -8,7 +8,7 @@ import type { InvokeFn } from "./deckClient";
 
 /** Built-in deck theme ids in the runtime's order (themes/registry.py
  *  BUILTIN_MODULES). A new built-in theme adds its id here as well. */
-export const BUILTIN_DECK_THEMES: readonly string[] = ["classic"];
+export const BUILTIN_DECK_THEMES: readonly string[] = ["classic", "signal", "headline", "quiet"];
 
 export interface DeckTheme {
   id: string;

@@ -1139,10 +1139,14 @@ plugin). An SVG that references anything outside itself (a file path or URL in
 `href`/`url(...)`) is refused and shows the monogram.
 
 The whole look is switchable as well: `[view].deck_theme` (editor: **Deck
-look**) picks a deck theme, `classic` (today's look) by default. A theme only
+look**) picks a deck theme, `classic` (today's look) by default. Built-in looks:
+`classic` (default, the original look), `signal` (the project's favicon and the
+task title on a dark key; status shown by colour and by the frame's shape),
+`headline` (big project name and time on the status colour) and `quiet` (only
+an agent that needs you is loud). A theme only
 changes how keys and the status window are drawn; your status colours, agent
 order and presses stay the same. You can write your own theme as one Python
-file in `~/.config/herdeck/themes/` (next to your `config.toml`); see
+file in `~/.config/herdeck/themes/` (next to your `config.toml`) and select it by its file name; see
 [docs/themes.md](docs/themes.md). A theme is code and runs with your user
 privileges, so only install themes you have read.
 

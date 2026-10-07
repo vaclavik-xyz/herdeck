@@ -191,3 +191,65 @@ tile = TileView(0, "api", "amber", agent_type="claude", repo="api",
 open("/tmp/tile.png", "wb").write(icons.render_tile_bytes(tile))
 compose_panel(PanelView("Needs you", deck_theme="minimal"), 458, icons).save("/tmp/panel.png")
 ```
+
+## Built-in themes
+
+| id | Draws | Everything else from |
+|---|---|---|
+| `classic` | every key and the status window (the original look, default) | none |
+| `signal` | every key and every status-window kind | `classic` (kinds added later) |
+| `headline` | agent tiles | `classic` |
+| `quiet` | agent tiles | `signal` |
+
+An unknown or broken theme id draws `classic`.
+
+### `signal` (Signal / Signál)
+
+A dark key per agent: the project's mark (its favicon, or a monogram; with
+`[view].project_icon_fallback = "agent"` the agent's own logo instead of the
+monogram) and under it the herdr task title (falling back to the workspace,
+then the repo). The status is shown by colour AND by the frame's shape, so it
+reads without colour vision and on the D200's 72 px keys:
+
+- working: a frame open at the top-right corner
+- idle: a thin, dimmed frame (dimmed text)
+- done: a full frame with a dot (finished, unseen)
+- waiting: a dashed frame; the holder label (CI, REVIEW) top-right, the
+  waiting time top-left when both fit
+- blocked: the whole key in the status colour, the mark on a white plate,
+  the elapsed time in a pill
+- offline: a full frame, the mark greyed and slashed
+
+Time shows only on blocked and waiting; there is no branch and no backend
+tag; running subagents are a small `+N` pill. Drill choices are a big digit
+with the choice text wrapped on the choice's colour; Back, Stop, Pin and menu
+entries are dark keys with a coloured outline; "+ New" is a dashed empty slot
+with a plus; the New-agent menu shows each agent's mark.
+
+The status window: when agents wait for you it turns amber with the
+longest-waiting agent's mark on a plate, its name and wait, the rest of the
+queue as favicon chips with their ages and, during a partial outage, the
+offline machine as a red chip. A calm fleet is a row of ring counters drawn in
+the tiles' shapes plus the fullest usage window per provider. Offline, config
+error and "sent" put a big glyph on the left with the words beside it; an
+agent's detail shows its prompt with a status chip. At 392 px (two Elgato
+keys) every word stays inside one key.
+
+### `headline` (Headline / Titulek)
+
+The project is the headline: the whole key is the status colour, the name line
+(the project name, not the task title) is big at the bottom, the time in the
+current status top-right and the project mark small top-left. A status word
+appears only where it is news (blocked, waiting's holder label, offline).
+Only agent tiles are drawn; other keys and the status window are `classic`.
+
+### `quiet` (Quiet / Klid)
+
+Only a blocked agent is loud: the whole key in the status colour with a big
+wait time. A done agent is an outlined key that says DONE, an offline one a
+dark red key; everything else is dark with a thin colour edge, with the task
+title as text like `signal`. Only agent tiles are drawn; other keys and the
+status window are `signal`.
+
+All built-ins keep every text at 22 px or more (in the 196 px key image) and
+take their colours from `[theme.colors]`.
