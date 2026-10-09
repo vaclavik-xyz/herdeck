@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  fetchDockPrefs,
   agentMarkUrl,
   DOCK_POLL_MS,
   DOCK_RETRY_MS,
@@ -11,6 +12,7 @@ import {
   projectIconUrl,
 } from "./dockClient";
 import { dockAgent } from "./dockFixtures";
+import { DEFAULT_DOCK_PREFS } from "./dockStrip";
 
 const ROW = {
   server_id: "studio",
@@ -185,5 +187,23 @@ describe("icon fallback", () => {
     const t = dockTransport(vi.fn(), "herdeck://localhost");
     expect(t.markUrl(dockAgent({ icon: null }), "agent")).toBe("herdeck://localhost/agent-mark/claude");
     expect(t.markUrl(dockAgent({ icon: null }), "monogram")).toBeNull();
+  });
+});
+
+describe("fetchDockPrefs", () => {
+  it("reads base.desktop from config_read", async () => {
+    const invoke = vi.fn(async () => ({ base: { desktop: { dock_group: false, dock_show: "all" } } }));
+    expect(await fetchDockPrefs(invoke)).toEqual({ group: false, show: "all", autohide: false });
+    expect(invoke).toHaveBeenCalledWith("config_read");
+  });
+
+  it("defaults a config without [desktop] and is null when the read fails", async () => {
+    expect(await fetchDockPrefs(async () => ({ base: {} }))).toEqual(DEFAULT_DOCK_PREFS);
+    expect(await fetchDockPrefs(async () => null)).toBeNull();
+    expect(
+      await fetchDockPrefs(async () => {
+        throw new Error("no runtime");
+      }),
+    ).toBeNull();
   });
 });

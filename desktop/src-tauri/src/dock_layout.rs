@@ -7,7 +7,7 @@
 //! macOS/Linux, global physical pixels on Windows); `css_scale` converts the
 //! frontend's CSS pixels into it.
 
-use tauri::{LogicalSize, Manager, PhysicalSize};
+use tauri::{Emitter, LogicalSize, Manager, PhysicalSize};
 
 use crate::deck_prefs;
 use crate::runtime_plan::default_config_path;
@@ -214,7 +214,8 @@ fn collapse_offset(window: &tauri::WebviewWindow, state: &AppState) {
 
 /// Re-read `[desktop].floating` and, when it changed, reload the floating
 /// window's page with the new content (the settings editor calls this after
-/// Apply, like `reload_deck_always_on_top`). The init script is fixed at
+/// Apply, like `reload_deck_always_on_top`); when it is still the dock, tell
+/// the dock to re-read its own `[desktop]` keys (`DOCK_PREFS_EVENT`). The init script is fixed at
 /// window creation, so the choice rides through the reload in sessionStorage
 /// (`deck_prefs::floating_reload_script`). An unreadable config changes nothing.
 #[tauri::command]
@@ -225,12 +226,17 @@ pub(crate) fn reload_floating(app: tauri::AppHandle, state: tauri::State<'_, App
     };
     let target = deck_prefs::parse_floating(&text);
     let previous = std::mem::replace(&mut *state.floating.lock_or_recover(), target);
-    if previous == target {
-        return;
-    }
-    if let Some(window) = app.get_webview_window(DECK_WINDOW) {
-        collapse_offset(&window, &state);
-        let _ = window.eval(&deck_prefs::floating_reload_script(target));
+    match deck_prefs::floating_apply(previous, target) {
+        deck_prefs::FloatingApply::Reload(target) => {
+            if let Some(window) = app.get_webview_window(DECK_WINDOW) {
+                collapse_offset(&window, &state);
+                let _ = window.eval(&deck_prefs::floating_reload_script(target));
+            }
+        }
+        deck_prefs::FloatingApply::RefreshDock => {
+            let _ = app.emit_to(DECK_WINDOW, deck_prefs::DOCK_PREFS_EVENT, ());
+        }
+        deck_prefs::FloatingApply::Nothing => {}
     }
 }
 

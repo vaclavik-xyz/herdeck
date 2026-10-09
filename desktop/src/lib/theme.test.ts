@@ -141,6 +141,7 @@ const CONVERTED = [
   "lib/Onboarding.svelte",
   "lib/DockMark.svelte",
   "lib/DockItem.svelte",
+  "lib/DockGroup.svelte",
 ];
 
 // Walk src/ once and return every .svelte path relative to src/ — the same

@@ -158,6 +158,33 @@ pub fn floating_reload_script(target: Floating) -> String {
     )
 }
 
+/// Event `reload_floating` sends the floating window when it stays the dock:
+/// the dock re-reads its `[desktop]` keys (`dock_group`, `dock_show`,
+/// `dock_autohide`) from the config, so they apply after Apply without a
+/// reload (`desktop/src/App.svelte` listens for it).
+pub const DOCK_PREFS_EVENT: &str = "dock-prefs-changed";
+
+/// What `reload_floating` does after Apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatingApply {
+    /// The content changed: reload the page into the new one.
+    Reload(Floating),
+    /// Still the dock: tell it to re-read its prefs.
+    RefreshDock,
+    /// Still the deck mirror: nothing it shows depends on `[desktop]`.
+    Nothing,
+}
+
+pub fn floating_apply(previous: Floating, target: Floating) -> FloatingApply {
+    if previous != target {
+        FloatingApply::Reload(target)
+    } else if target == Floating::Dock {
+        FloatingApply::RefreshDock
+    } else {
+        FloatingApply::Nothing
+    }
+}
+
 /// Width of the collapsed mini dock strip, in logical points
 /// (`STRIP_WIDTH` in desktop/src/lib/dockModel.ts).
 pub const DOCK_STRIP_WIDTH: f64 = 56.0;
@@ -183,6 +210,14 @@ mod tests {
         let defaults: serde_json::Value =
             serde_json::from_str(include_str!("../../src/lib/configDefaults.json")).unwrap();
         assert_eq!(defaults["desktop"]["floating"], parse_floating("").as_str());
+    }
+
+    #[test]
+    fn apply_reloads_a_switch_and_refreshes_a_dock_that_stays() {
+        assert_eq!(floating_apply(Floating::Dock, Floating::Deck), FloatingApply::Reload(Floating::Deck));
+        assert_eq!(floating_apply(Floating::Deck, Floating::Dock), FloatingApply::Reload(Floating::Dock));
+        assert_eq!(floating_apply(Floating::Dock, Floating::Dock), FloatingApply::RefreshDock);
+        assert_eq!(floating_apply(Floating::Deck, Floating::Deck), FloatingApply::Nothing);
     }
 
     fn scratch(name: &str) -> PathBuf {

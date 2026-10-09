@@ -44,7 +44,10 @@
     "source": "auto"
   },
   "desktop": {
-    "floating": "dock"
+    "floating": "dock",
+    "dock_group": true,
+    "dock_show": "active",
+    "dock_autohide": false
   },
   "hardware": {
     "brightness": 80,

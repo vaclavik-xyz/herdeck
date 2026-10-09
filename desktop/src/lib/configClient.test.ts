@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { DEFAULT_STATUS_COLORS } from "./statusColors";
+import configDefaults from "./configDefaults.json";
+import { DEFAULT_DOCK_PREFS } from "./dockStrip";
 import {
   parseConfig,
   effectiveStatusColors,
@@ -46,6 +48,13 @@ import {
   setToggleDeckHotkey,
   deckAlwaysOnTop,
   floatingMode,
+  dockAutohide,
+  dockGroup,
+  dockPrefs,
+  dockShow,
+  setDockAutohide,
+  setDockGroup,
+  setDockShow,
   setFloatingMode,
   DEFAULT_FLOATING,
   FLOATING_CHOICES,
@@ -1080,6 +1089,33 @@ describe("floating window content", () => {
     expect(floatingMode(p)).toBe("deck");
     expect((p.base.desktop as Record<string, unknown>).floating).toBe("deck");
     expect(floatingMode(setFloatingMode(p, "dock"))).toBe("dock");
+  });
+});
+
+describe("dock prefs (dock_group / dock_show / dock_autohide)", () => {
+  const desktop = (over: Record<string, unknown>) =>
+    parseConfig({ base: { desktop: over }, profiles: {}, local: {}, secrets: {} })!;
+
+  it("defaults match configDefaults.json and the dock's own defaults", () => {
+    expect(configDefaults.desktop).toMatchObject({ dock_group: true, dock_show: "active", dock_autohide: false });
+    expect(dockGroup(emptyPayload())).toBe(DEFAULT_DOCK_PREFS.group);
+    expect(dockShow(emptyPayload())).toBe(DEFAULT_DOCK_PREFS.show);
+    expect(dockAutohide(emptyPayload())).toBe(DEFAULT_DOCK_PREFS.autohide);
+    expect(dockPrefs(emptyPayload())).toEqual(DEFAULT_DOCK_PREFS);
+  });
+
+  it("ignores wrong types like the dock does", () => {
+    const p = desktop({ dock_group: "no", dock_show: "everyone", dock_autohide: 1 });
+    expect(dockPrefs(p)).toEqual(DEFAULT_DOCK_PREFS);
+  });
+
+  it("round-trips through base.desktop", () => {
+    let p = setDockGroup(emptyPayload(), false);
+    p = setDockShow(p, "needs_you");
+    p = setDockAutohide(p, true);
+    expect(p.base.desktop).toMatchObject({ dock_group: false, dock_show: "needs_you", dock_autohide: true });
+    expect(dockPrefs(p)).toEqual({ group: false, show: "needs_you", autohide: true });
+    expect(dockShow(setDockShow(p, "all"))).toBe("all");
   });
 });
 

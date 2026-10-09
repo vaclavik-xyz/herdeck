@@ -17,7 +17,8 @@ export const HOVER_CLOSE_MS = 250;
 /** Re-poll while the runtime is still reading a blocked prompt. */
 export const PROMPT_REPOLL_MS = 800;
 
-const RANK: Record<DockStatus, number> = {
+/** Urgency order of the statuses (lower = more urgent). */
+export const STATUS_RANK: Record<DockStatus, number> = {
   blocked: 0,
   waiting: 1,
   done: 2,
@@ -36,7 +37,7 @@ export function agentKey(a: { serverId: string; paneId: string }): string {
  *  idle; inside a group longest-in-status first, then identity. */
 export function orderAgents(agents: DockAgent[]): DockAgent[] {
   return [...agents].sort(
-    (p, q) => RANK[p.status] - RANK[q.status] || q.sinceS - p.sinceS || cmp(agentKey(p), agentKey(q)),
+    (p, q) => STATUS_RANK[p.status] - STATUS_RANK[q.status] || q.sinceS - p.sinceS || cmp(agentKey(p), agentKey(q)),
   );
 }
 

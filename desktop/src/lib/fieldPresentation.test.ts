@@ -41,6 +41,14 @@ describe("fieldPresentation", () => {
   });
 });
 
+describe("dock fields", () => {
+  it("label the [desktop] dock keys in both languages", () => {
+    expect(fieldPresentation("dock_show", "en").label).toBe("Dock shows");
+    expect(fieldPresentation("dock_group", "cs").label).toBe("Seskupit podle projektu");
+    expect(fieldPresentation("dock_autohide", "en").configKey).toBe("dock_autohide");
+  });
+});
+
 describe("floating window field", () => {
   it("has a label in both languages", () => {
     expect(fieldPresentation("floating", "en").label).toBe("Floating window");

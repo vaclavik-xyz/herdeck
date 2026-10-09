@@ -20,6 +20,7 @@
   let {
     agent = null,
     idle = [],
+    heading = null,
     sinceOf,
     iconUrl,
     transport,
@@ -28,6 +29,8 @@
   }: {
     agent?: DockAgent | null;
     idle?: DockAgent[];
+    /** The fold list's heading (default: "Idle agents (n)"). */
+    heading?: string | null;
     sinceOf: (a: DockAgent) => number;
     iconUrl: (a: DockAgent) => string | null;
     transport: AgentTransport | null;
@@ -209,7 +212,7 @@
       <button type="button" class="focus" onclick={() => agent && void focusAgent(agent)}>{m.open_herdr}</button>
     {/if}
   {:else}
-    <h2 class="title">{fmt(m.idle_heading, { n: idle.length })}</h2>
+    <h2 class="title">{heading ?? fmt(m.idle_heading, { n: idle.length })}</h2>
     <ul class="idle">
       {#each idle as a (rowKey(a))}
         <li>

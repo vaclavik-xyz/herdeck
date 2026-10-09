@@ -11,6 +11,7 @@ import {
   type InvokeFn,
 } from "./deckClient";
 import { langOf, type Lang } from "./i18n.svelte";
+import { parseDockPrefs, type DockPrefs } from "./dockStrip";
 
 export type DockStatus = "blocked" | "waiting" | "done" | "working" | "idle" | "unknown";
 const STATUSES: readonly string[] = ["blocked", "waiting", "done", "working", "idle", "unknown"];
@@ -169,4 +170,17 @@ export function dockTransport(invoke: InvokeFn, schemeBase?: string): DockTransp
     iconUrl: (hash) => projectIconUrl(base, hash),
     markUrl: (agent, fallback) => markUrl(base, agent, fallback),
   };
+}
+
+/** The dock's `[desktop]` prefs from the runtime's redacted config (Rust
+ *  `config_read` → GET /config), or null when it cannot be read (keep what
+ *  the dock has). Re-read on `dock-prefs-changed` after the editor's Apply. */
+export async function fetchDockPrefs(invoke: InvokeFn): Promise<DockPrefs | null> {
+  try {
+    const raw = (await invoke("config_read")) as { base?: unknown } | null;
+    if (raw == null || typeof raw !== "object" || raw.base == null || typeof raw.base !== "object") return null;
+    return parseDockPrefs((raw.base as Record<string, unknown>).desktop);
+  } catch {
+    return null;
+  }
 }

@@ -111,3 +111,47 @@ describe("DockItem", () => {
     }
   });
 });
+
+describe("DockItem as a group head", () => {
+  it("draws a count badge, takes the group's name and says whether it is open", () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const instance = mount(DockItem, {
+      target,
+      props: {
+        agent: dockAgent({ status: "working" }),
+        iconSrc: null,
+        label: "herdeck · 3 agents · Working",
+        count: 3,
+        expanded: false,
+        onenter: vi.fn(),
+        onleave: vi.fn(),
+        onfocus: vi.fn(),
+        onblur: vi.fn(),
+        onclick: vi.fn(),
+      },
+    });
+    flushSync();
+    try {
+      const button = target.querySelector<HTMLButtonElement>("button.item")!;
+      expect(button.classList.contains("group")).toBe(true);
+      expect(button.querySelector(".count")?.textContent).toBe("3");
+      expect(button.getAttribute("aria-label")).toBe("herdeck · 3 agents · Working");
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(button.querySelector(".arc")).not.toBeNull(); // the ring still animates its status
+    } finally {
+      unmount(instance);
+      target.remove();
+    }
+  });
+
+  it("has no badge or aria-expanded as a plain agent", () => {
+    const { button, cleanup } = render(dockAgent({ status: "done" }));
+    try {
+      expect(button.querySelector(".count")).toBeNull();
+      expect(button.hasAttribute("aria-expanded")).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+});

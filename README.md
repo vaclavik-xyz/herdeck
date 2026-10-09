@@ -1054,6 +1054,20 @@ A project without a favicon shows its monogram; `GET /agent-mark/<type>` (a
 96 px PNG) serves the agent's logo instead when
 `[view].project_icon_fallback = "agent"`.
 
+Who gets an item of their own follows `[desktop].dock_show`: `"active"` (the
+default: every agent that is not idle), `"all"` (idle agents too, after the
+rest) or `"needs_you"` (only blocked and done agents; everything else folds
+into **+N**, whose card then lists the other agents most urgent first). With
+`[desktop].dock_group = true` (the default) two or more agents of one project
+(same repo, else same workspace) fold into one item: the project's mark in a
+ring of its most urgent member (waiting, then done, then working) with a count
+badge. Hover or focus it and the members slide out under it, each a normal
+item with its own card; it folds back 400 ms after the pointer leaves (or on
+Esc), and stays open while one of its members' cards is open. A blocked agent
+never folds into a group: it always stands alone at the top. `dock_autohide`
+(off by default) slides a dock snapped to a screen edge out of the way. All
+three keys are in Settings → Window and apply live after Apply.
+
 **Maintenance** (Settings → System → Maintenance) does from the app what used
 to need a terminal: it lists the app, runtime and bridge versions (a mismatch
 is flagged), says where the runtime comes from and can make it a service of

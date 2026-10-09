@@ -37,6 +37,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   malformed type) serves the agent logo the mini dock uses as a favicon
   fallback when `[view].project_icon_fallback` is `"agent"`; `/agent/list`
   reports it as `icon_fallback`.
+- Mini dock project groups and strip filter: `[desktop].dock_group` (default
+  on) folds two or more non-blocked agents of one project (repo, else
+  workspace) into one item — project mark, ring in the most urgent member's
+  status, count badge — that expands inline on hover/focus (members slide out
+  staggered) and folds back 400 ms after the pointer leaves; blocked agents
+  never fold. `[desktop].dock_show` (`"active"` default, `"all"`,
+  `"needs_you"`) picks who gets an item; the rest fold into `+N`.
+  `[desktop].dock_autohide` (default off) is in the editor. All three apply
+  live after Apply (`reload_floating` emits `dock-prefs-changed` to the dock).
 
 ### Changed
 - `[desktop].floating` (`"dock"` default, `"deck"` = the hardware mirror)

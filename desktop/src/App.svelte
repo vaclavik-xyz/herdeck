@@ -11,7 +11,8 @@
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport } from "./lib/deckClient";
   import { agentCallTransport } from "./lib/agentCardClient";
-  import { dockTransport } from "./lib/dockClient";
+  import { dockTransport, fetchDockPrefs } from "./lib/dockClient";
+  import { DEFAULT_DOCK_PREFS, type DockPrefs } from "./lib/dockStrip";
   import { parsePlacement, type WindowLayoutFn } from "./lib/dockModel";
   import {
     DECK_ZOOM_EVENT,
@@ -156,6 +157,25 @@
   // strip still on screen; it answers where the strip sits in the window.
   const dockWindowLayout: WindowLayoutFn = async (req) =>
     parsePlacement(await invoke("dock_layout", { ...req }));
+  // The dock's [desktop] keys (dock_group, dock_show, dock_autohide), read
+  // from the runtime's config once it is reachable and again whenever Rust's
+  // `reload_floating` says the editor applied a change (`dock-prefs-changed`),
+  // so they apply live. A failed read keeps what the dock has.
+  let dockPrefs = $state<DockPrefs>(DEFAULT_DOCK_PREFS);
+  $effect(() => {
+    if (!dockMode || !discovery) return;
+    let alive = true;
+    const refresh = async () => {
+      const next = await fetchDockPrefs((cmd, args) => invoke(cmd, args));
+      if (alive && next) dockPrefs = next;
+    };
+    untrack(() => void refresh());
+    const unlisten = listen("dock-prefs-changed", () => void refresh());
+    return () => {
+      alive = false;
+      void unlisten.then((stop) => stop());
+    };
+  });
   function openSettingsWindow(): void {
     void invoke("show_app").catch(() => {});
   }
@@ -688,6 +708,7 @@
     {agentTransport}
     windowLayout={dockWindowLayout}
     scale={dockScale}
+    prefs={dockPrefs}
     startDrag={startWindowDrag}
     onOpenSettings={openSettingsWindow}
   >

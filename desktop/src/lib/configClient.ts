@@ -5,6 +5,7 @@
 // token-free config_* commands (see src-tauri/src/proxy.rs).
 import defaults from "./configDefaults.json";
 import type { FloatingContent } from "./appSurface";
+import { parseDockPrefs, type DockPrefs, type DockShow } from "./dockStrip";
 import { DEFAULT_STATUS_COLORS } from "./statusColors";
 import { parseBridges, parseOverlayIgnored, type BridgeShared } from "./bridgeSettings";
 
@@ -1115,6 +1116,44 @@ export function floatingMode(payload: ConfigPayload): FloatingContent {
 /** NEW payload with base.desktop.floating set. */
 export function setFloatingMode(payload: ConfigPayload, value: FloatingContent): ConfigPayload {
   return setAt(payload, "base", "desktop", "floating", value);
+}
+
+/** The mini dock's `[desktop]` prefs as the dock reads them (dockStrip.ts
+ *  parseDockPrefs: a missing or wrong-typed key keeps its default). The dock
+ *  re-reads them live after Apply (Rust `reload_floating` emits
+ *  `dock-prefs-changed` to the floating window). */
+export function dockPrefs(payload: ConfigPayload): DockPrefs {
+  return parseDockPrefs(asDict(payload.base).desktop);
+}
+
+/** `[desktop].dock_group`: fold a project's agents into one strip item. */
+export function dockGroup(payload: ConfigPayload): boolean {
+  return dockPrefs(payload).group;
+}
+
+/** NEW payload with base.desktop.dock_group set. */
+export function setDockGroup(payload: ConfigPayload, value: boolean): ConfigPayload {
+  return setAt(payload, "base", "desktop", "dock_group", value);
+}
+
+/** `[desktop].dock_show`: who gets an item of their own on the strip. */
+export function dockShow(payload: ConfigPayload): DockShow {
+  return dockPrefs(payload).show;
+}
+
+/** NEW payload with base.desktop.dock_show set. */
+export function setDockShow(payload: ConfigPayload, value: DockShow): ConfigPayload {
+  return setAt(payload, "base", "desktop", "dock_show", value);
+}
+
+/** `[desktop].dock_autohide`: slide the edge-snapped strip away when unused. */
+export function dockAutohide(payload: ConfigPayload): boolean {
+  return dockPrefs(payload).autohide;
+}
+
+/** NEW payload with base.desktop.dock_autohide set. */
+export function setDockAutohide(payload: ConfigPayload, value: boolean): ConfigPayload {
+  return setAt(payload, "base", "desktop", "dock_autohide", value);
 }
 
 export function commandTransport(invoke: InvokeFn): ConfigTransport {

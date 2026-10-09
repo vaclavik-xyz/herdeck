@@ -124,6 +124,9 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     desktop: {
       floating: "What the floating window shows: dock (a narrow strip of agents that need you; default) or deck (the hardware mirror).",
       deck_always_on_top: "Keeps the floating window above other windows; default on for the dock, off for the deck; applied immediately.",
+      dock_show: "Who gets a dock item: active (all but idle; default), all (idle too), needs_you (blocked + done); the rest fold into +N.",
+      dock_group: "Folds 2+ agents of one project (repo, else workspace) into one dock item that expands on hover; blocked never fold; default on.",
+      dock_autohide: "Slides the dock off a screen edge it is snapped to, leaving a thin sliver; stays out while an agent is blocked; default off.",
       toggle_deck: "Global shortcut to show/hide the deck; default Cmd/Ctrl+Shift+D, empty field = disabled.",
       next_blocked: "Global shortcut that shows the deck and opens the longest-blocked agent (again = next one); empty = off (default).",
       restart_deck: "Global shortcut that closes and reopens the D200 and redraws it (like the tray's Restart deck); empty = off (default).",
@@ -263,6 +266,9 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
     desktop: {
       floating: "Co ukazuje plovoucí okno: dock (úzký pruh agentů, kteří tě potřebují; výchozí) nebo deck (zrcadlo hardwaru).",
       deck_always_on_top: "Drží plovoucí okno nad ostatními okny; výchozí zapnuto pro dock, vypnuto pro deck; použije se hned.",
+      dock_show: "Kdo má v docku vlastní položku: active (kromě nečinných; výchozí), all (i nečinní), needs_you (blokovaní + hotoví); zbytek ve +N.",
+      dock_group: "Sloučí 2+ agenty jednoho projektu (repo, jinak workspace) do jedné položky, která se rozbalí najetím; blokovaní nikdy; výchozí zapnuto.",
+      dock_autohide: "Schová dock přichycený k okraji obrazovky, zůstane jen tenký proužek; vysune se, když je agent blokovaný; výchozí vypnuto.",
       toggle_deck: "Globální zkratka pro zobrazení/skrytí decku; výchozí Cmd/Ctrl+Shift+D, prázdné pole = vypnuto.",
       next_blocked: "Globální zkratka: ukáže deck a otevře nejdéle blokovaného agenta (znovu = další); prázdné = vypnuto (výchozí).",
       restart_deck: "Globální zkratka, která zavře a znovu otevře D200 a překreslí ho (jako Restartovat deck v tray); prázdné = vypnuto (výchozí).",

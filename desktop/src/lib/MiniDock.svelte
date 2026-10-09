@@ -6,10 +6,13 @@
   // /agent/list long-polled via the Rust `agent_call` proxy (dockClient.ts);
   // actions: the agent card routes (agentCardClient.ts). While a card is open
   // the window grows beside the strip through Rust's `dock_layout`, which
-  // keeps the strip where it is on screen.
+  // keeps the strip where it is on screen. What the strip shows follows
+  // `[desktop].dock_show` / `dock_group` (dockStrip.ts): a project's agents
+  // can fold into one group item that expands inline on hover or focus.
   import { untrack, type Snippet } from "svelte";
   import DockItem from "./DockItem.svelte";
   import DockCard from "./DockCard.svelte";
+  import DockGroup from "./DockGroup.svelte";
   import { visibilityGatedLoop } from "./pollGate";
   import {
     DOCK_POLL_MS,
@@ -25,7 +28,6 @@
     CARD_GAP,
     CARD_MAX_HEIGHT,
     CARD_WIDTH,
-    dockLayout,
     HOVER_CLOSE_MS,
     HOVER_OPEN_MS,
     liveSince,
@@ -35,6 +37,14 @@
     type WindowLayoutFn,
   } from "./dockModel";
   import { DOCK_MESSAGES } from "./dockMessages";
+  import {
+    DEFAULT_DOCK_PREFS,
+    GROUP_COLLAPSE_MS,
+    stripLayoutDelay,
+    stripModel,
+    type DockPrefs,
+    type MemberHandlers,
+  } from "./dockStrip";
   import { fmt, locale, setLang } from "./i18n.svelte";
 
   type Target = { kind: "agent"; key: string } | { kind: "idle" };
@@ -52,11 +62,13 @@
     agentTransport,
     windowLayout,
     scale = 1,
+    prefs = DEFAULT_DOCK_PREFS,
     startDrag = () => {},
     onOpenSettings = () => {},
     reducedMotion = prefersReducedMotion(),
     hoverOpenMs = HOVER_OPEN_MS,
     hoverCloseMs = HOVER_CLOSE_MS,
+    groupCollapseMs = GROUP_COLLAPSE_MS,
     children,
   }: {
     transport: DockTransport | null;
@@ -66,6 +78,10 @@
      *  unzoomed CSS px; only the window size and the placement Rust returns
      *  (window px) cross the zoom, so they are scaled at that boundary. */
     scale?: number;
+    /** `[desktop]` dock keys (App re-reads them live after Apply). */
+    prefs?: DockPrefs;
+    /** An expanded group folds back this long after pointer and focus left. */
+    groupCollapseMs?: number;
     startDrag?: (event: PointerEvent) => void;
     onOpenSettings?: () => void;
     reducedMotion?: boolean;
@@ -95,7 +111,29 @@
   let hoverItem = false;
   let hoverKey: string | null = null; // the agent item under the pointer, if any
 
-  const layout = $derived(dockLayout(list?.agents ?? []));
+  const strip = $derived(stripModel(list?.agents ?? [], prefs));
+  const folded = $derived(strip.folded);
+  const foldTitle = $derived(
+    fmt(strip.foldedIdleOnly ? m.idle_title : m.more_title, { n: folded.length }),
+  );
+  const foldHeading = $derived(
+    fmt(strip.foldedIdleOnly ? m.idle_heading : m.more_heading, { n: folded.length }),
+  );
+  // The expanded project group, if any (one at a time).
+  let expandedGroup = $state<string | null>(null);
+  const expanded = $derived(
+    strip.items.find((it) => it.kind === "group" && it.key === expandedGroup) ?? null,
+  );
+  // Keys of the agent items a pointer can be on: standalone items plus the
+  // members of the expanded group.
+  const shownKeys = $derived.by(() => {
+    const keys = new Set<string>();
+    for (const it of strip.items) {
+      if (it.kind === "agent") keys.add(it.key);
+      else if (it.key === expandedGroup) for (const a of it.members) keys.add(agentKey(a));
+    }
+    return keys;
+  });
   const neutral = $derived(neutralReason(list));
   const neutralTitle = $derived(
     neutral === "empty"
@@ -113,6 +151,22 @@
       ? stripX + STRIP_WIDTH + CARD_GAP
       : stripX - CARD_GAP - CARD_WIDTH,
   );
+
+  const openKey = $derived(open?.kind === "agent" ? open.key : null);
+
+  // A group's members act like standalone items.
+  const memberHandlers: MemberHandlers = {
+    enter: (a, top) => enter({ kind: "agent", key: agentKey(a) }, top),
+    leave: () => leave(),
+    focus: (a, top) => focusItem({ kind: "agent", key: agentKey(a) }, top),
+    blur: () => blurItem(),
+    click: (a, top) => clickItem({ kind: "agent", key: agentKey(a) }, top),
+  };
+
+  function holdsOpenCard(members: DockAgent[]): boolean {
+    const key = openKey;
+    return key !== null && members.some((a) => agentKey(a) === key);
+  }
 
   function findAgent(target: Target | null, current: DockList | null): DockAgent | null {
     if (target === null || target.kind !== "agent" || current === null) return null;
@@ -173,15 +227,19 @@
 
   // --- window size: Rust dock_layout keeps the strip still on screen --------
   let layoutSeq = 0;
-  async function applyLayout(expanded: boolean): Promise<void> {
+  // The strip height the window was last fitted to (unzoomed CSS px).
+  let fittedStripHeight = 0;
+  let shrinkTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function applyLayout(withCard: boolean): Promise<void> {
     const seq = ++layoutSeq;
     let next: DockPlacement;
     try {
       next = await windowLayout({
         stripWidth: STRIP_WIDTH * scale,
-        stripHeight: Math.max(stripHeight, STRIP_WIDTH) * scale,
-        cardWidth: expanded ? CARD_WIDTH * scale : 0,
-        cardHeight: expanded ? (anchorTop + CARD_MAX_HEIGHT) * scale : 0,
+        stripHeight: Math.max(fittedStripHeight, STRIP_WIDTH) * scale,
+        cardWidth: withCard ? CARD_WIDTH * scale : 0,
+        cardHeight: withCard ? (anchorTop + CARD_MAX_HEIGHT) * scale : 0,
       });
     } catch {
       next = { side: "right", stripX: 0, stripY: 0 }; // plain browser preview
@@ -189,20 +247,53 @@
     if (seq === layoutSeq) placement = next;
   }
 
+  /** The strip's height once every group box has finished opening or
+   *  closing: its current height, with each animating box swapped for its
+   *  end height. Constant through an animation, so the window is refitted
+   *  once per change, not once per frame (animated window frames stutter). */
+  function finalStripHeight(el: HTMLElement): number {
+    let h = el.offsetHeight;
+    for (const box of el.querySelectorAll<HTMLElement>("[data-group-members]")) {
+      const end = box.dataset.open === "true" ? (box.firstElementChild as HTMLElement | null)?.scrollHeight ?? 0 : 0;
+      h += end - box.offsetHeight;
+    }
+    return h;
+  }
+
   $effect(() => {
     const el = stripEl;
     if (!el) return;
-    stripHeight = el.offsetHeight;
+    stripHeight = finalStripHeight(el);
     if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => (stripHeight = el.offsetHeight));
+    const ro = new ResizeObserver(() => (stripHeight = finalStripHeight(el)));
     ro.observe(el);
     return () => ro.disconnect();
   });
 
+  // A group opened or closed (or the items changed): measure right after the
+  // DOM update, before its box has moved, so the window grows first.
   $effect(() => {
-    void stripHeight; // the strip grew or shrank: refit the window
+    void expandedGroup;
+    void strip;
+    const el = stripEl;
+    if (el) untrack(() => (stripHeight = finalStripHeight(el)));
+  });
+
+  // Grow the window at once (content must never be clipped), shrink it only
+  // after a collapsing group has finished animating (stripLayoutDelay).
+  $effect(() => {
+    const h = stripHeight; // the strip grew or shrank: refit the window
     void scale; // …or the zoom changed
-    untrack(() => void applyLayout(open !== null));
+    untrack(() => {
+      clearTimeout(shrinkTimer);
+      const fit = () => {
+        fittedStripHeight = h;
+        void applyLayout(open !== null);
+      };
+      const delay = stripLayoutDelay(fittedStripHeight, h, reducedMotion);
+      if (delay === 0) fit();
+      else shrinkTimer = setTimeout(fit, delay);
+    });
   });
 
   // --- open / close ----------------------------------------------------------
@@ -242,7 +333,70 @@
     pinned = false;
     revealed = false;
     sentKey = null;
+    scheduleGroupCollapse(); // a member's card no longer holds its group open
     await applyLayout(false);
+  }
+
+  // --- project groups: expand inline on hover/focus, fold back after -------
+  let groupHover = false; // pointer on a group (head or members)
+  let groupFocus = false; // keyboard focus inside a group
+  let groupOpenTimer: ReturnType<typeof setTimeout> | undefined;
+  let groupCloseTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function clearGroupTimers(): void {
+    clearTimeout(groupOpenTimer);
+    clearTimeout(groupCloseTimer);
+    groupOpenTimer = undefined;
+    groupCloseTimer = undefined;
+  }
+
+  /** The open card belongs to a member of the expanded group. */
+  function memberCardOpen(): boolean {
+    const g = expanded;
+    return g !== null && g.kind === "group" && holdsOpenCard(g.members);
+  }
+
+  function expandGroup(key: string): void {
+    clearGroupTimers();
+    expandedGroup = key;
+  }
+
+  function collapseGroup(): void {
+    clearGroupTimers();
+    expandedGroup = null;
+  }
+
+  function scheduleGroupCollapse(): void {
+    clearTimeout(groupCloseTimer);
+    if (expandedGroup === null) return;
+    groupCloseTimer = setTimeout(() => {
+      if (groupHover || groupFocus || memberCardOpen()) return;
+      expandedGroup = null;
+    }, groupCollapseMs);
+  }
+
+  function groupPointerEnter(key: string): void {
+    groupHover = true;
+    clearTimeout(groupCloseTimer);
+    if (expandedGroup === key) return;
+    clearTimeout(groupOpenTimer);
+    groupOpenTimer = setTimeout(() => expandGroup(key), hoverOpenMs);
+  }
+
+  function groupPointerLeave(): void {
+    groupHover = false;
+    clearTimeout(groupOpenTimer);
+    scheduleGroupCollapse();
+  }
+
+  function groupFocusIn(): void {
+    groupFocus = true;
+    clearTimeout(groupCloseTimer);
+  }
+
+  function groupFocusOut(): void {
+    groupFocus = false;
+    scheduleGroupCollapse();
   }
 
   function scheduleClose(): void {
@@ -301,7 +455,13 @@
   }
 
   function onKey(event: KeyboardEvent): void {
-    if (event.key !== "Escape" || open === null) return;
+    if (event.key !== "Escape") return;
+    if (open === null) {
+      if (expandedGroup === null) return;
+      event.preventDefault();
+      collapseGroup(); // Esc folds an expanded group when no card is open
+      return;
+    }
     event.preventDefault();
     (document.activeElement as HTMLElement | null)?.blur?.();
     void hide();
@@ -314,7 +474,9 @@
 
   $effect(() => {
     const onVisibility = () => {
-      if (document.hidden) void hide();
+      if (!document.hidden) return;
+      void hide();
+      collapseGroup();
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
@@ -328,24 +490,50 @@
       untrack(() => void hide()); // the agent left the fleet
     } else if (a !== null && sentKey === agentKey(a) && a.status !== "blocked") {
       untrack(() => void hide()); // answered, and it moved on
-    } else if (kind === "idle" && layout.idle.length === 0) {
+    } else if (kind === "idle" && folded.length === 0) {
       untrack(() => void hide());
     }
   });
 
-  // A hovered item that left the strip (folded into +N, or gone) never sends
-  // mouseleave; drop the hover flag so the card can still close.
+  // A hovered item that left the strip (folded into +N or a group, or gone)
+  // never sends mouseleave; drop the hover flag so the card can still close.
   $effect(() => {
-    const visible = layout.visible;
+    const keys = shownKeys;
     untrack(() => {
-      if (hoverKey !== null && !visible.some((a) => agentKey(a) === hoverKey)) {
+      if (hoverKey !== null && !keys.has(hoverKey)) {
         hoverItem = false;
         hoverKey = null;
       }
     });
   });
 
-  $effect(() => () => clearTimers());
+  // The expanded group dissolved (members left, grouping turned off): forget it.
+  $effect(() => {
+    if (expandedGroup !== null && expanded === null) {
+      untrack(() => {
+        collapseGroup();
+        groupHover = false;
+        groupFocus = false;
+      });
+    }
+  });
+
+  // An open card's agent just folded into a group (a second agent of its
+  // project appeared): open that group so the card keeps its item.
+  $effect(() => {
+    const target = open;
+    if (target === null || target.kind !== "agent" || shownKeys.has(target.key)) return;
+    const home = strip.items.find(
+      (it) => it.kind === "group" && it.members.some((a) => agentKey(a) === target.key),
+    );
+    if (home) untrack(() => expandGroup(home.key));
+  });
+
+  $effect(() => () => {
+    clearTimers();
+    clearGroupTimers();
+    clearTimeout(shrinkTimer);
+  });
 </script>
 
 <svelte:window onkeydown={onKey} onblur={() => void hide()} />
@@ -374,31 +562,46 @@
         <span class="neutral-dot" aria-hidden="true"></span>
       </button>
     {:else}
-      {#each layout.visible as agent (agentKey(agent))}
-        <DockItem
-          {agent}
-          iconSrc={iconFor(agent)}
-          active={open?.kind === "agent" && open.key === agentKey(agent)}
-          onenter={(top) => enter({ kind: "agent", key: agentKey(agent) }, top)}
-          onleave={leave}
-          onfocus={(top) => focusItem({ kind: "agent", key: agentKey(agent) }, top)}
-          onblur={blurItem}
-          onclick={(top) => clickItem({ kind: "agent", key: agentKey(agent) }, top)}
-        />
+      {#each strip.items as item (item.key)}
+        {#if item.kind === "agent"}
+          <DockItem
+            agent={item.agent}
+            iconSrc={iconFor(item.agent)}
+            active={openKey === item.key}
+            onenter={(top) => enter({ kind: "agent", key: item.key }, top)}
+            onleave={leave}
+            onfocus={(top) => focusItem({ kind: "agent", key: item.key }, top)}
+            onblur={blurItem}
+            onclick={(top) => clickItem({ kind: "agent", key: item.key }, top)}
+          />
+        {:else}
+          <DockGroup
+            group={item}
+            {iconFor}
+            expanded={expandedGroup === item.key}
+            {openKey}
+            onpointerenter={() => groupPointerEnter(item.key)}
+            onpointerleave={groupPointerLeave}
+            onfocusin={groupFocusIn}
+            onfocusout={groupFocusOut}
+            onexpand={() => expandGroup(item.key)}
+            member={memberHandlers}
+          />
+        {/if}
       {/each}
-      {#if layout.idle.length > 0}
+      {#if folded.length > 0}
         <button
           type="button"
           class="idle-chip"
           class:active={open?.kind === "idle"}
-          title={fmt(m.idle_title, { n: layout.idle.length })}
-          aria-label={fmt(m.idle_title, { n: layout.idle.length })}
+          title={foldTitle}
+          aria-label={foldTitle}
           onmouseenter={(e) => enter({ kind: "idle" }, e.currentTarget.offsetTop)}
           onmouseleave={leave}
           onfocus={(e) => focusItem({ kind: "idle" }, e.currentTarget.offsetTop)}
           onblur={blurItem}
           onclick={(e) => clickItem({ kind: "idle" }, e.currentTarget.offsetTop)}
-        >+{layout.idle.length}</button>
+        >+{folded.length}</button>
       {/if}
     {/if}
     {#if stale}
@@ -428,7 +631,8 @@
         {/key}
       {:else if open.kind === "idle"}
         <DockCard
-          idle={layout.idle}
+          idle={folded}
+          heading={foldHeading}
           sinceOf={(a) => liveSince(a.sinceS, receivedAt, now)}
           iconUrl={iconFor}
           transport={agentTransport}

@@ -16,8 +16,15 @@
     floatingMode,
     setFloatingMode,
     FLOATING_CHOICES,
+    dockAutohide,
+    dockGroup,
+    dockShow,
+    setDockAutohide,
+    setDockGroup,
+    setDockShow,
     type ConfigPayload,
   } from "../configClient";
+  import { DOCK_SHOW_CHOICES, type DockShow } from "../dockStrip";
 
   let { payload = $bindable(), onChange }:
     { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void } = $props();
@@ -59,6 +66,25 @@
     payload = setFloatingMode(payload, v === "deck" ? "deck" : "dock");
     onChange();
   }
+  // The mini dock's own keys: they matter only while the floating window is
+  // the dock, so they show only then. Applied live after Apply (the dock
+  // re-reads them when Rust's reload_floating tells it to).
+  const show = $derived(dockShow(payload));
+  const group = $derived(dockGroup(payload));
+  const autohide = $derived(dockAutohide(payload));
+  function setShow(v: string): void {
+    if (!DOCK_SHOW_CHOICES.includes(v as DockShow)) return;
+    payload = setDockShow(payload, v as DockShow);
+    onChange();
+  }
+  function setGroup(v: boolean): void {
+    payload = setDockGroup(payload, v);
+    onChange();
+  }
+  function setAutohide(v: boolean): void {
+    payload = setDockAutohide(payload, v);
+    onChange();
+  }
   function setAlwaysOnTop(v: boolean): void {
     payload = setDeckAlwaysOnTop(payload, v);
     onChange();
@@ -67,6 +93,11 @@
 
 <SelectField label="floating" help={HELP.floating} value={floating} options={FLOATING_CHOICES} onchange={setFloating} />
 <BooleanField label="deck_always_on_top" help={HELP.deck_always_on_top} value={alwaysOnTop} onchange={setAlwaysOnTop} />
+{#if floating === "dock"}
+  <SelectField label="dock_show" help={HELP.dock_show} value={show} options={DOCK_SHOW_CHOICES} onchange={setShow} />
+  <BooleanField label="dock_group" help={HELP.dock_group} value={group} onchange={setGroup} />
+  <BooleanField label="dock_autohide" help={HELP.dock_autohide} value={autohide} onchange={setAutohide} />
+{/if}
 <p class="hint">
   {lm.hotkey_intro}
   <code>{DEFAULT_TOGGLE_DECK_HOTKEY}</code>{lm.hotkey_rest}

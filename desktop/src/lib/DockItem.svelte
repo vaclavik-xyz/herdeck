@@ -11,6 +11,9 @@
     agent,
     iconSrc,
     active = false,
+    label: labelOverride = null,
+    count = 0,
+    expanded = undefined,
     onenter,
     onleave,
     onfocus,
@@ -20,6 +23,12 @@
     agent: DockAgent;
     iconSrc: string | null;
     active?: boolean;
+    /** Accessible name instead of "title · status" (a project group). */
+    label?: string | null;
+    /** A project group's member count, drawn as a badge (0 = none). */
+    count?: number;
+    /** A project group: whether its members are shown (aria-expanded). */
+    expanded?: boolean;
     onenter: (top: number) => void;
     onleave: () => void;
     onfocus: (top: number) => void;
@@ -27,7 +36,7 @@
     onclick: (top: number) => void;
   } = $props();
 
-  const label = $derived(`${agent.title} · ${statusLabel(locale.lang, agent.status, agent.offline)}`);
+  const label = $derived(labelOverride ?? `${agent.title} · ${statusLabel(locale.lang, agent.status, agent.offline)}`);
   const top = (event: Event): number => (event.currentTarget as HTMLElement).offsetTop;
 </script>
 
@@ -36,7 +45,9 @@
   class="item st-{agent.status}"
   class:offline={agent.offline}
   class:active
+  class:group={count > 0}
   aria-label={label}
+  aria-expanded={expanded}
   onmouseenter={(e) => onenter(top(e))}
   onmouseleave={onleave}
   onfocus={(e) => onfocus(top(e))}
@@ -52,6 +63,7 @@
   <span class="face"><DockMark {agent} src={iconSrc} size={30} /></span>
   {#if agent.status === "done"}<span class="done-dot" aria-hidden="true"></span>{/if}
   {#if agent.offline}<span class="slash" aria-hidden="true"></span>{/if}
+  {#if count > 0}<span class="count" aria-hidden="true">{count}</span>{/if}
 </button>
 
 <style>
@@ -124,6 +136,26 @@
     height: 50px;
     background: var(--st-offline);
     transform: rotate(45deg);
+    pointer-events: none;
+  }
+  /* A project group's member count: a small pill cut out of the ring at the
+     bottom right (the done dot owns the top right). */
+  .count {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    min-width: 17px;
+    height: 17px;
+    box-sizing: border-box;
+    padding: 0 4px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: var(--key);
+    color: var(--text);
+    font: 700 10px/1 var(--font-ui);
+    font-variant-numeric: tabular-nums;
+    box-shadow: 0 0 0 2px var(--panel), inset 0 0 0 1px var(--line-strong);
     pointer-events: none;
   }
   .active .ring, .item:focus-visible .ring { box-shadow: 0 0 0 2px var(--accent-ring); }
