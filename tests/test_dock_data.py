@@ -270,6 +270,46 @@ def test_list_route_requires_the_token_and_validates_params():
         app.close()
 
 
+# --- GET /usage -----------------------------------------------------------------
+
+
+def test_usage_route_requires_the_token_and_returns_the_hub_snapshot():
+    from herdeck.usage import ProviderUsage, UsageWindow
+
+    app, src, runner = _serving_live()
+    try:
+        app._usage_poller = SimpleNamespace(
+            snapshot=lambda: [
+                ProviderUsage(
+                    provider="claude",
+                    subscription="max",
+                    plan="Max",
+                    windows=[UsageWindow(label="5h", used_percent=38.0, resets_at=None, full_early_s=None)],
+                )
+            ]
+        )
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _get(app, "/usage", token="wrong")
+        assert e.value.code == 403
+        code, body = _get(app, "/usage")
+        assert code == 200
+        assert body["providers"][0]["provider"] == "claude"
+        assert body["providers"][0]["windows"][0]["label"] == "5h"
+        assert body["providers"][0]["windows"][0]["used_percent"] == 38.0
+    finally:
+        app.close()
+
+
+def test_usage_route_is_empty_without_a_hub():
+    app, src, runner = _serving_live()
+    try:
+        app._usage_poller = None
+        code, body = _get(app, "/usage")
+        assert (code, body) == (200, {"providers": []})
+    finally:
+        app.close()
+
+
 # --- GET /project-icon/<hash> --------------------------------------------------
 
 import urllib.request  # noqa: E402

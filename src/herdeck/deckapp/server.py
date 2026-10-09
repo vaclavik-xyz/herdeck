@@ -1135,6 +1135,20 @@ class DeckApp:
             log.debug("agent list signature failed", exc_info=True)
             return self._agent_list_sig
 
+    def usage_payload(self) -> dict:
+        """GET /usage: the usage hub's snapshot in wire form (the same shape a
+        frame's ``providers`` carries); empty when usage is off."""
+        from ..usage import usage_to_wire
+
+        poller = getattr(self, "_usage_poller", None)
+        if poller is None:
+            return {"providers": []}
+        try:
+            return {"providers": usage_to_wire(poller.snapshot())}
+        except Exception:
+            log.debug("usage snapshot failed", exc_info=True)
+            return {"providers": []}
+
     def agent_list(self, after: int | None, wait_ms: int) -> dict | None:
         """GET /agent/list (dock_data.py): every active agent as a row for
         the desktop mini dock. With ``after``, a long-poll like /state: return
@@ -1561,6 +1575,11 @@ class DeckApp:
                         return
                     payload = app.agent_list(after, wait_ms)
                     self._send_agent(200 if payload is not None else 404, payload)
+                elif path == "/usage":
+                    # Provider usage for the desktop dock's footer rings.
+                    if not self._require_query_token(url):
+                        return
+                    self._send_agent(200, app.usage_payload())
                 elif path.startswith("/project-icon/"):
                     # A project favicon as a small PNG for the mini dock.
                     if not self._require_query_token(url):
