@@ -795,3 +795,96 @@ describe("MiniDock card preview + reply", () => {
     }
   });
 });
+
+// A click on an item whose card the hover already opened used to re-run the
+// whole open path: a second dock_layout round trip (the native window set to
+// the same frame again, which repaints the transparent webview = a blink).
+describe("MiniDock click on a hovered item", () => {
+  const USAGE = (): ProviderUsage[] => [
+    {
+      provider: "claude",
+      subscription: "paid",
+      plan: "Max",
+      windows: [{ label: "5h", usedPercent: 62, resetsAt: null, fullEarlyS: null }],
+    },
+  ];
+  const ring = (t: HTMLElement) => t.querySelector<HTMLButtonElement>("button.usage-ring")!;
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+
+  async function pinsWithoutRelayout(
+    pick: (t: HTMLElement) => HTMLElement,
+    cardSel: string,
+    extra: Record<string, unknown> = {},
+  ) {
+    const { target, layouts, cleanup } = render(FLEET, { hoverCloseMs: 20, ...extra });
+    try {
+      await vi.waitFor(() => expect(pick(target)).toBeTruthy());
+      const el = pick(target);
+      hover(el);
+      await vi.waitFor(() => expect(target.querySelector(`.card-slot ${cardSel}`)).not.toBeNull());
+      await settle();
+      const slot = target.querySelector(".card-slot");
+      const before = layouts.length;
+
+      el.click(); // pin the hovered card
+      await settle();
+      expect(layouts.length - before).toBeLessThanOrEqual(1);
+      expect(layouts.length).toBe(before); // nothing about the window changed
+      expect(target.querySelector(".card-slot")).toBe(slot); // not closed + reopened
+
+      el.dispatchEvent(new MouseEvent("mouseleave"));
+      await settle();
+      expect(target.querySelector(".card-slot")).toBe(slot); // pinned: stays
+
+      el.dispatchEvent(new MouseEvent("mouseenter"));
+      el.click(); // second click: unpin + close
+      await vi.waitFor(() => expect(target.querySelector(".card-slot")).toBeNull());
+      expect(layouts.length).toBe(before + 1);
+      expect(layouts.at(-1)).toMatchObject({ cardWidth: 0, cardHeight: 0 });
+      await settle();
+      expect(target.querySelector(".card-slot")).toBeNull(); // no reopen
+      expect(layouts.length).toBe(before + 1);
+    } finally {
+      cleanup();
+    }
+  }
+
+  it("pins a hovered usage ring's card in place, and a second click closes it", async () => {
+    await pinsWithoutRelayout(ring, ".usage-card", { usageSource: vi.fn(async () => USAGE()) });
+  });
+
+  it("pins a hovered agent's card in place, and a second click closes it", async () => {
+    await pinsWithoutRelayout((t) => items(t)[3], ".title");
+  });
+
+  it("re-entering the open item does not lay the window out again", async () => {
+    const { target, layouts, cleanup } = render(FLEET);
+    try {
+      await vi.waitFor(() => expect(items(target)).toHaveLength(4));
+      const el = items(target)[3];
+      hover(el);
+      await vi.waitFor(() => expect(target.querySelector(".card-slot")).not.toBeNull());
+      await settle();
+      const before = layouts.length;
+      el.dispatchEvent(new MouseEvent("mouseleave"));
+      hover(el);
+      await settle();
+      expect(layouts.length).toBe(before);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a click on another item moves the pinned card there", async () => {
+    const { target, cleanup } = render(FLEET);
+    try {
+      await vi.waitFor(() => expect(items(target)).toHaveLength(4));
+      items(target)[3].click();
+      await vi.waitFor(() => expect(target.querySelector(".card-slot .title")?.textContent).toBe("Working one"));
+      items(target)[2].click();
+      await vi.waitFor(() => expect(target.querySelector(".card-slot .title")?.textContent).toBe("Done one"));
+    } finally {
+      cleanup();
+    }
+  });
+});

@@ -2,7 +2,8 @@
   // The mini dock: the floating window's default content ([desktop].floating
   // = "dock"). A narrow strip of the agents that are not idle, idle ones
   // folded into "+N", one card on hover (after an intent delay), keyboard
-  // focus or click (click pins it until Esc / a click elsewhere). Data:
+  // focus or click (click pins it until Esc / a click elsewhere / a second
+  // click on the same item). Data:
   // /agent/list long-polled via the Rust `agent_call` proxy (dockClient.ts);
   // actions: the agent card routes (agentCardClient.ts). While a card is open
   // the window grows beside the strip through Rust's `dock_layout`, which
@@ -493,6 +494,10 @@
     clearTimers();
     const wasOpen = open !== null;
     pinned = pin || (sameTarget(open, target) && pinned);
+    // Already showing this card at this anchor: the window is right as it is.
+    // Asking Rust again re-sets the native frame, which on macOS repaints the
+    // transparent webview — a visible blink on every click/re-hover.
+    if (revealed && sameTarget(open, target) && anchorTop === top) return;
     anchorTop = top;
     open = target;
     if (!wasOpen) revealed = false;
@@ -616,8 +621,15 @@
     if (!pinned) scheduleClose();
   }
 
+  /** Click = pin; a click on the card that is already pinned closes it.
+   *  A click on the card the hover already opened only pins it (no re-open,
+   *  no second window layout). */
   function clickItem(target: Target, top: number): void {
     keyboard = false; // the mouse took over: no key legend, Tab moves focus
+    if (revealed && pinned && sameTarget(open, target)) {
+      void hide();
+      return;
+    }
     void show(target, top, true);
   }
 
